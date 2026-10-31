@@ -1,7 +1,7 @@
 //! Paged observation of a delivery branch and its provider identities.
 
 use chrono::{DateTime, Utc};
-use orbit_automation::AutomationError;
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_types::workflow::automation::*;
 use serde_json::Value;
 use std::{collections::BTreeMap, time::Duration};
@@ -55,7 +55,7 @@ impl<'a> Source<'a> {
         let head = head_override.unwrap_or(configured_head);
 
         if repository != state.repository {
-            return Err(AutomationError::Deferred("repository_changed".into()));
+            return Err(AutomationError::Deferred(DeferredReason::RepositoryChanged));
         }
 
         self.git(&[
@@ -64,7 +64,7 @@ impl<'a> Source<'a> {
             &state.observed.commit,
             &head.commit,
         ])
-        .map_err(|_| AutomationError::Deferred("history_diverged".into()))?;
+        .map_err(|_| AutomationError::Deferred(DeferredReason::HistoryDiverged))?;
 
         let range = format!("{}..{}", state.observed.commit, head.commit);
 
@@ -73,7 +73,7 @@ impl<'a> Source<'a> {
         let count = self
             .git(&["rev-list", "--first-parent", "--count", &range])?
             .parse::<usize>()
-            .map_err(|_| AutomationError::Deferred("source_count_invalid".into()))?;
+            .map_err(|_| AutomationError::Deferred(DeferredReason::SourceCountInvalid))?;
 
         let through = if count > limits.commits {
             self.revision(&format!("{}~{}", head.commit, count - limits.commits))?
@@ -156,14 +156,15 @@ impl<'a> Source<'a> {
                 }
             };
 
-            let prs: Value =
-                serde_json::from_str(&raw).map_err(|e| AutomationError::Deferred(e.to_string()))?;
+            let prs: Value = serde_json::from_str(&raw).map_err(|e| {
+                AutomationError::Deferred(DeferredReason::ProviderResponseDecode(e.into()))
+            })?;
 
             // Exactly one merged pull request into this branch is an identity;
             // several are ambiguous and none simply leaves the commit unresolved.
             let matching = prs
                 .as_array()
-                .ok_or_else(|| AutomationError::Deferred("provider_response_invalid".into()))?
+                .ok_or_else(|| AutomationError::Deferred(DeferredReason::ProviderResponseInvalid))?
                 .iter()
                 .filter(|pr| {
                     pr["merged_at"].is_string()

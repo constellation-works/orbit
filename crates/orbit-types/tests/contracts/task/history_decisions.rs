@@ -191,3 +191,157 @@ fn an_invalid_flaky_record_is_refused_in_either_shape() {
     let legacy = entry(FLAKY_VALIDATION_EVENT, record.text(), None);
     assert_eq!(FlakyValidation::from_entry(&legacy), None);
 }
+
+/// Binding invalidation must not erase a recorded answer or change expiry
+/// while the bound hold remains current.
+#[test]
+fn invalidated_decision_bindings_preserve_answers_and_current_expiry() {
+    use orbit_types::task::{
+        DECISION_ANSWERED_EVENT, DecisionBinding, DecisionGate, DecisionRequest,
+        DecisionRequestState, DecisionResolution, decision_requests_from_history,
+    };
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-25T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let task: orbit_types::task::Task = serde_json::from_value(json!({
+        "id": "ORB-1", "title": "Held task", "description": "Fixture.",
+        "context_files": [], "status": "backlog", "priority": "medium",
+        "task_type": "chore", "created_at": now, "updated_at": now,
+    }))
+    .unwrap();
+    let request = DecisionRequest::new(
+        "ORB-1".into(),
+        DecisionGate::PilotAdmission,
+        vec![],
+        DecisionBinding::PilotOperation {
+            operation_id: "held-assessment".into(),
+        },
+        "task_pilot".into(),
+        now,
+    );
+    let mut history = vec![request.history_entry("task-pilot")];
+    assert_eq!(
+        decision_requests_from_history(&task, &history, Some("held-assessment"), now)[0].state,
+        DecisionRequestState::Open
+    );
+    assert_eq!(
+        decision_requests_from_history(
+            &task,
+            &history,
+            Some("held-assessment"),
+            request.expires_at
+        )[0]
+        .state,
+        DecisionRequestState::Expired
+    );
+    assert_eq!(
+        decision_requests_from_history(&task, &history, None, now)[0].state,
+        DecisionRequestState::Superseded
+    );
+    let resolution = DecisionResolution {
+        request_id: request.id.clone(),
+        answer_id: "clear".into(),
+        answered_by: "human:fixture".into(),
+        provenance: None,
+        note: None,
+        answered_at: now,
+    };
+    history.push(entry(
+        DECISION_ANSWERED_EVENT,
+        serde_json::to_string(&resolution).unwrap(),
+        None,
+    ));
+    let answered = decision_requests_from_history(&task, &history, None, request.expires_at);
+    assert_eq!(answered[0].state, DecisionRequestState::Answered);
+    assert_eq!(answered[0].resolution.as_ref(), Some(&resolution));
+}
+
+/// A task-revision approval request stays superseded once an edit, status
+/// move or candidate change follows its raise, even if the task is restored.
+#[test]
+fn a_task_revision_request_stays_superseded_after_the_task_is_restored() {
+    use orbit_types::task::{
+        DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState,
+        TASK_FIELDS_UPDATED_EVENT, TaskStatus, decision_requests_from_history,
+        task_fields_updated_note,
+    };
+    let raised_at = chrono::DateTime::parse_from_rfc3339("2026-10-25T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let task: orbit_types::task::Task = serde_json::from_value(json!({
+        "id": "ORB-1", "title": "Proposal", "description": "Fixture.",
+        "context_files": [], "status": "proposed", "priority": "medium",
+        "task_type": "chore", "created_at": raised_at, "updated_at": raised_at,
+    }))
+    .unwrap();
+    let request = DecisionRequest::new(
+        "ORB-1".into(),
+        DecisionGate::ProposedApproval,
+        vec![],
+        DecisionBinding::for_task(&task, None),
+        "digest".into(),
+        raised_at,
+    );
+    let state = |history: &[TaskHistoryEntry]| {
+        decision_requests_from_history(&task, history, None, raised_at)[0].state
+    };
+    let later =
+        |event: &str, note: Option<String>, from: Option<TaskStatus>, to: Option<TaskStatus>| {
+            let mut entry = entry(event, String::new(), None);
+            entry.at = raised_at + chrono::Duration::seconds(1);
+            entry.note = note;
+            entry.from_status = from;
+            entry.to_status = to;
+            entry
+        };
+    let raise = request.history_entry("digest");
+    assert_eq!(
+        state(std::slice::from_ref(&raise)),
+        DecisionRequestState::Open
+    );
+
+    // Bookkeeping that does not change what the request rendered is harmless.
+    let bookkeeping = later(
+        TASK_FIELDS_UPDATED_EVENT,
+        Some(task_fields_updated_note(&["plan"])),
+        None,
+        None,
+    );
+    assert_eq!(
+        state(&[raise.clone(), bookkeeping]),
+        DecisionRequestState::Open
+    );
+
+    // A spec edit supersedes it permanently although the task now reads as
+    // it did when raised.
+    let edit = later(
+        TASK_FIELDS_UPDATED_EVENT,
+        Some(task_fields_updated_note(&["description"])),
+        None,
+        None,
+    );
+    assert_eq!(
+        state(&[raise.clone(), edit]),
+        DecisionRequestState::Superseded
+    );
+
+    // So does leaving the status and coming back.
+    let moves = [
+        later(
+            "status_changed",
+            None,
+            Some(TaskStatus::Proposed),
+            Some(TaskStatus::Backlog),
+        ),
+        later(
+            "status_changed",
+            None,
+            Some(TaskStatus::Backlog),
+            Some(TaskStatus::Proposed),
+        ),
+    ];
+    assert_eq!(
+        state(&[raise, moves[0].clone(), moves[1].clone()]),
+        DecisionRequestState::Superseded
+    );
+}

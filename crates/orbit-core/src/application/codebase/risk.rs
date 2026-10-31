@@ -3,14 +3,17 @@
 //! files fare once agents are.
 //!
 //! A mark is pushed into the prompt, compact and gated; the drill-down stays
-//! with `orbit codebase show` and the `orbit.codebase.*` tools. A `file:`
-//! selector's path is marked when, among the tasks done in the trailing
-//! window whose declared footprint named it, at least `min_support` did so
-//! and at least `threshold_percent` of them were named by a
+//! with `orbit codebase show` and the `orbit.codebase.*` tools. The path of a
+//! `file:` or `symbol:` selector is marked when, among the tasks done in the
+//! trailing window whose declared footprint named it, at least `min_support`
+//! did so and at least `threshold_percent` of them were named by a
 //! `regression_from` link. Low-support paths and hub files every task
 //! touches therefore stay unmarked, and a fixed hotspot drops out once its
 //! regressed tasks age out of the window. At most `max_files` paths are
-//! marked, by the Regressions ranking's order.
+//! marked, highest rate first. Marks count a regressed task against every
+//! path it declared, as the Regressions ranking did before it attributed
+//! regressions to recorded sites: a site names only where the defect was,
+//! not every file a later task should be warned about.
 //!
 //! Each mark carries the two natures and escapes most of its links record
 //! (an unrecorded one reads `unclassified`, never a guess) and one lesson:
@@ -32,9 +35,11 @@ use orbit_types::task::{
 use regex::Regex;
 use serde_json::{Value, json};
 
-use super::facts::{Anchor, CodebaseFacts, TaskFacts};
+use super::facts::{Anchor, CodebaseFacts, HistoryCompleteness, TaskFacts};
 use super::regression::{RegressionFilter, RegressionLink, top_categories};
-use super::sections::{Params, ROW_LIMIT, Rollup, Tally, rank, rate_fields, regression_rows};
+use super::sections::{
+    Params, ROW_LIMIT, Rollup, Tally, footprint_regression_rows, rank, rate_fields,
+};
 use crate::OrbitRuntime;
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 
@@ -54,8 +59,8 @@ struct Mark<'a> {
 impl OrbitRuntime {
     /// The `regression_risk` section of the prompt `run_id` builds for
     /// `activity` on `task_id`, whose canonical context selectors are
-    /// `selectors`, or `None` when marks are off or no `file:` path
-    /// qualifies. Marks it returns are recorded on the task first; a record
+    /// `selectors`, or `None` when marks are off or no `file:` or `symbol:`
+    /// file qualifies. Marks it returns are recorded on the task first; a record
     /// that cannot be written is logged and does not withhold them.
     pub(crate) fn regression_risk_section(
         &self,
@@ -67,7 +72,10 @@ impl OrbitRuntime {
         let settings = self.regression_risk_settings();
         let paths: BTreeSet<String> = selectors
             .iter()
-            .filter(|selector| selector.trim_start().starts_with("file:"))
+            .filter(|selector| {
+                let selector = selector.trim_start();
+                selector.starts_with("file:") || selector.starts_with("symbol:")
+            })
             .filter_map(|selector| Anchor::parse(selector))
             .map(|anchor| anchor.path)
             .collect();
@@ -75,7 +83,7 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let since = Utc::now() - Duration::days(i64::from(settings.window_days));
-        let facts = super::facts::scan_regressions(self, since)?;
+        let facts = super::facts::scan_regressions(self, since, HistoryCompleteness::Strict)?;
         let marks = marks(&facts, &paths, &settings, since);
         if marks.is_empty() {
             return Ok(None);
@@ -149,7 +157,7 @@ fn marks<'a>(
         rollup: Rollup::File,
         filter: RegressionFilter::default(),
     };
-    let (mut rows, _) = regression_rows(facts, &params);
+    let mut rows = footprint_regression_rows(facts, &params);
     rows.retain(|path, row| {
         let Tally {
             numerator,

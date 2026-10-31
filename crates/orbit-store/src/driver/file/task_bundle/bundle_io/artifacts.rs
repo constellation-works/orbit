@@ -1,6 +1,7 @@
 //! Artifact manifests and blobs: manifest reads with optional payload
 //! verification, blob copies and manifest-to-file validation.
 
+use crate::fs::path_safety::read_contained_artifact_blob;
 use crate::fs::yaml::parse_yaml_with;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_bytes, create_private_dir_all};
@@ -78,17 +79,18 @@ pub(crate) fn copy_artifact_blobs(
     create_private_dir_all(&dest_files_dir)
         .map_err(|err| OrbitError::from_write_io(&dest_files_dir, err))?;
     for file in &manifest.files {
+        // Containment is against the source root. The destination does not
+        // exist yet; checking it would refuse every ordinary copy.
         let source = source_artifact_dir.join(&file.blob);
-        let bytes = fs::read(&source).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                OrbitError::Store(format!(
+        let bytes = match read_contained_artifact_blob(&source_artifact_dir, &file.blob)? {
+            Some(bytes) => bytes,
+            None => {
+                return Err(OrbitError::Store(format!(
                     "artifact source missing for blob {}",
                     source.display()
-                ))
-            } else {
-                OrbitError::Io(err.to_string())
+                )));
             }
-        })?;
+        };
         if bytes.len() as u64 != file.size_bytes {
             return Err(OrbitError::Store(format!(
                 "artifact source size mismatch for {}",
@@ -114,16 +116,15 @@ fn validate_artifact_manifest_files(
 ) -> Result<(), OrbitError> {
     for file in &manifest.files {
         let blob_path = artifact_dir.join(&file.blob);
-        let bytes = fs::read(&blob_path).map_err(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                OrbitError::Store(format!(
+        let bytes = match read_contained_artifact_blob(artifact_dir, &file.blob)? {
+            Some(bytes) => bytes,
+            None => {
+                return Err(OrbitError::Store(format!(
                     "artifact manifest references missing file {}",
                     blob_path.display()
-                ))
-            } else {
-                OrbitError::Io(err.to_string())
+                )));
             }
-        })?;
+        };
         if bytes.len() as u64 != file.size_bytes {
             return Err(OrbitError::Store(format!(
                 "artifact manifest size mismatch for {}",

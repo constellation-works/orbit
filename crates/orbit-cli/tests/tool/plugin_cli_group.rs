@@ -42,23 +42,15 @@ impl Fixture {
             home,
             work,
         };
-        fixture
-            .orbit()
-            .args([
-                "init",
-                "--non-interactive",
-                "--machine-name",
-                "plugin-cli-host",
-                "--task-prefix",
-                "TST",
-            ])
-            .assert()
-            .success();
-        fixture
-            .orbit()
-            .args(["workspace", "init", "--name", "plugin-cli"])
-            .assert()
-            .success();
+        fixture.success([
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "plugin-cli-host",
+            "--task-prefix",
+            "TST",
+        ]);
+        fixture.success(["workspace", "init", "--name", "plugin-cli"]);
         fixture
     }
 
@@ -66,7 +58,24 @@ impl Fixture {
     /// authority — including the managed-run activity allowlist, which would
     /// otherwise decide whether a plugin tool may be called at all.
     fn orbit(&self) -> assert_cmd::Command {
-        let mut command = cargo_bin_cmd!("orbit");
+        self.pinned(cargo_bin_cmd!("orbit"))
+    }
+
+    /// `orbit` started inside a Seatbelt profile, as a macOS worker's agent
+    /// runs it: any profile applied here makes a nested `sandbox-exec` exit
+    /// 71 with `sandbox_apply: Operation not permitted`.
+    #[cfg(target_os = "macos")]
+    fn orbit_inside_seatbelt(&self) -> assert_cmd::Command {
+        let mut command = assert_cmd::Command::new("/usr/bin/sandbox-exec");
+        command.args([
+            "-p",
+            "(version 1) (allow default)",
+            env!("CARGO_BIN_EXE_orbit"),
+        ]);
+        self.pinned(command)
+    }
+
+    fn pinned(&self, mut command: assert_cmd::Command) -> assert_cmd::Command {
         test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
         });
@@ -91,6 +100,72 @@ impl Fixture {
 
     fn source(&self, namespace: &str) -> std::path::PathBuf {
         self.home.join("plugin-sources").join(namespace)
+    }
+
+    fn command(
+        &self,
+        args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+    ) -> assert_cmd::Command {
+        let mut command = self.orbit();
+        command.args(args);
+        command
+    }
+
+    fn operator_command(
+        &self,
+        args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+    ) -> assert_cmd::Command {
+        let mut command = self.orbit_as_operator();
+        command.args(args);
+        command
+    }
+
+    #[track_caller]
+    fn success(
+        &self,
+        args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+    ) -> assert_cmd::assert::Assert {
+        self.command(args).assert().success()
+    }
+
+    #[track_caller]
+    fn json(&self, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> Value {
+        self.command(args).args(["--format", "json"]).success_json()
+    }
+
+    #[track_caller]
+    fn add(&self, source: &Path, options: &[&str]) -> assert_cmd::assert::Assert {
+        self.command(["plugin", "add"])
+            .arg(source)
+            .args(options)
+            .assert()
+            .success()
+    }
+
+    fn status_source(&self, namespace: &str, extra_spec: &str) -> std::path::PathBuf {
+        let source = self.source(namespace);
+        write_status_plugin(&source, namespace, extra_spec);
+        source
+    }
+
+    fn install_status(&self, namespace: &str, extra_spec: &str, options: &[&str]) {
+        self.add(&self.status_source(namespace, extra_spec), options);
+    }
+
+    fn install_shapes(&self) {
+        let source = self.source("shapes");
+        write_fixture_plugin(&source);
+        self.add(&source, &[]);
+    }
+
+    #[track_caller]
+    fn scaffold(&self, namespace: &str) -> std::path::PathBuf {
+        let source = self.source(namespace);
+        self.command(["plugin", "scaffold", namespace, "--dir"])
+            .arg(&source)
+            .assert()
+            .success();
+        source
     }
 
     /// Audit rows for one tool, as `(command, subcommand, target_type,
@@ -124,20 +199,11 @@ impl Fixture {
 /// echoes the input back, so the two spellings can be compared by result.
 /// Written into the source's `.orbit-plugin/`.
 fn write_fixture_plugin(source: &Path) {
-    let root = &source.join(".orbit-plugin");
-    std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
-    let backend = root.join("bin/backend.sh");
-    std::fs::write(
-        &backend,
+    let root = write_shell_backend(
+        source,
         "#!/bin/sh\ninput=$(cat)\ncase \"$input\" in *'shapes.fail'*) exit 91;; esac\nprintf '{\"ok\":true,\"output\":{\"echo\":%s}}\\n' \"$input\"\n",
-    )
-    .expect("write backend");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod backend");
-    }
+    );
+
     std::fs::write(
         root.join("plugin.yaml"),
         r#"schemaVersion: 2
@@ -185,20 +251,11 @@ spec:
 
 /// A one-tool plugin written into the source's `.orbit-plugin/`.
 fn write_status_plugin(source: &Path, namespace: &str, extra_spec: &str) {
-    let root = &source.join(".orbit-plugin");
-    std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
-    let backend = root.join("bin/backend.sh");
-    std::fs::write(
-        &backend,
+    let root = write_shell_backend(
+        source,
         "#!/bin/sh\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
-    )
-    .expect("write backend");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod backend");
-    }
+    );
+
     std::fs::write(
         root.join("plugin.yaml"),
         format!(
@@ -218,13 +275,9 @@ fn upgrade_refuses_a_tampered_recorded_source_and_accepts_an_explicit_source() {
     let payload = "upgrade-payload.txt";
     std::fs::write(source.join(".orbit-plugin").join(payload), b"trusted-v1")
         .expect("write trusted payload");
-    fixture
-        .orbit()
-        .args([
-            "plugin", "add", source_arg, "--enable", "--grant", "network",
-        ])
-        .assert()
-        .success();
+    fixture.success([
+        "plugin", "add", source_arg, "--enable", "--grant", "network",
+    ]);
 
     // A backend with orbit_tools can write its own state tree and orbit.db,
     // but cannot write the victim's installed tree or grant witness.
@@ -294,11 +347,7 @@ fn upgrade_refuses_a_tampered_recorded_source_and_accepts_an_explicit_source() {
 
     std::fs::write(source.join(".orbit-plugin").join(payload), b"trusted-v2")
         .expect("update trusted payload");
-    fixture
-        .orbit()
-        .args(["plugin", "upgrade", "victim", source_arg])
-        .assert()
-        .success();
+    fixture.success(["plugin", "upgrade", "victim", source_arg]);
     assert_eq!(
         std::fs::read(installed.join(payload)).expect("read upgraded payload"),
         b"trusted-v2",
@@ -317,6 +366,7 @@ fn upgrade_refuses_a_tampered_recorded_source_and_accepts_an_explicit_source() {
     );
 }
 
+#[track_caller]
 fn stdout_json(output: &std::process::Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
@@ -335,23 +385,14 @@ fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
         return;
     }
     let fixture = Fixture::new();
-    let source = fixture.source("errors");
-    write_status_plugin(&source, "errors", "");
+    let source = fixture.status_source("errors", "");
     std::fs::write(
         source.join(".orbit-plugin/bin/backend.sh"),
         "#!/bin/sh\nprintf '{\"ok\":false,\"error\":{\"code\":\"budget_exceeded\",\"message\":\"wait\",\"retryable\":true,\"detail\":{\"retry_after\":30}}}\\n'\n",
     )
     .expect("write error backend");
-    fixture
-        .orbit()
-        .args(["plugin", "add", source.to_str().expect("utf8 source")])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args(["plugin", "enable", "errors"])
-        .assert()
-        .success();
+    fixture.add(&source, &[]);
+    fixture.success(["plugin", "enable", "errors"]);
 
     let output = fixture
         .orbit()
@@ -361,12 +402,7 @@ fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
         .expect("run plugin tool");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
-    let error: Value = serde_json::from_slice(&output.stderr).unwrap_or_else(|parse_error| {
-        panic!(
-            "JSON error on stderr ({parse_error}): {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-    });
+    let error: Value = stderr_json(&output);
     assert_eq!(
         error,
         json!({
@@ -380,18 +416,8 @@ fn plugin_error_is_json_on_tool_run_with_a_nonzero_exit() {
 #[test]
 fn derived_plugin_groups_expand_tilde_roots_and_anchor_relative_roots() {
     let fixture = Fixture::new();
-    let source = fixture.source("shapes");
-    write_fixture_plugin(&source);
-    fixture
-        .orbit()
-        .args(["plugin", "add", source.to_str().expect("UTF-8 source")])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args(["plugin", "enable", "shapes"])
-        .assert()
-        .success();
+    fixture.install_shapes();
+    fixture.success(["plugin", "enable", "shapes"]);
 
     for raw in ["~/.orbit", "~//.orbit", ".orbit"] {
         let cwd = if raw == ".orbit" {
@@ -438,32 +464,19 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
         return;
     }
     let fixture = Fixture::new();
-    let source = fixture.source("shapes");
-    write_fixture_plugin(&source);
-
     // Installed but not enabled: no group, and `orbit shapes` is the
     // ordinary unknown-command error rather than a passthrough.
+    fixture.install_shapes();
     fixture
-        .orbit()
-        .args(["plugin", "add", source.to_str().expect("utf8 source")])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args(["shapes", "recommend", "leakage"])
+        .command(["shapes", "recommend", "leakage"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unrecognized subcommand"));
 
-    fixture
-        .orbit()
-        .args(["plugin", "enable", "shapes"])
-        .assert()
-        .success();
+    fixture.success(["plugin", "enable", "shapes"]);
 
     let explained = fixture
-        .orbit_as_operator()
-        .args(["shapes", "fail", "--explain", "--format", "json"])
+        .operator_command(["shapes", "fail", "--explain", "--format", "json"])
         .output()
         .expect("explain the derived tool call");
     assert!(
@@ -479,10 +492,7 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
 
     // `orbit <ns> --help` lists the verbs with the manifest's descriptions.
     fixture
-        .orbit()
-        .args(["shapes", "--help"])
-        .assert()
-        .success()
+        .success(["shapes", "--help"])
         .stdout(predicate::str::contains("recommend"))
         .stdout(predicate::str::contains("Recommend files for a query."))
         .stdout(predicate::str::contains("Rebuild the index."));
@@ -499,8 +509,7 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
         ));
 
     let flags = fixture
-        .orbit_as_operator()
-        .args([
+        .operator_command([
             "shapes",
             "recommend",
             "leakage",
@@ -518,9 +527,7 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
             "--format",
             "json",
         ])
-        .output()
-        .expect("run the derived group");
-    assert!(flags.status.success(), "{flags:?}");
+        .success_output();
 
     let input = json!({
         "query": "leakage",
@@ -531,8 +538,7 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
         "filters": { "since": "2026-01-01" },
     });
     let via_tool_run = fixture
-        .orbit_as_operator()
-        .args([
+        .operator_command([
             "tool",
             "run",
             "shapes.recommend",
@@ -541,9 +547,7 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
             "--format",
             "json",
         ])
-        .output()
-        .expect("run the tool directly");
-    assert!(via_tool_run.status.success(), "{via_tool_run:?}");
+        .success_output();
 
     assert_eq!(
         stdout_json(&flags),
@@ -570,8 +574,7 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
 
     // `--input` overrides the flags beside it.
     let overridden = fixture
-        .orbit_as_operator()
-        .args([
+        .operator_command([
             "shapes",
             "recommend",
             "ignored",
@@ -582,9 +585,7 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
             "--format",
             "json",
         ])
-        .output()
-        .expect("run with --input");
-    assert!(overridden.status.success(), "{overridden:?}");
+        .success_output();
     assert_eq!(
         stdout_json(&overridden)["echo"]["input"],
         json!({ "query": "explicit" })
@@ -592,21 +593,15 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
 
     // Dry-run reaches the same validation path as `orbit tool run --dry-run`.
     fixture
-        .orbit_as_operator()
-        .args(["shapes", "maintain", "--dry-run"])
+        .operator_command(["shapes", "maintain", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains("shapes.maintain"));
 
     // A disabled plugin's group disappears again.
+    fixture.success(["plugin", "disable", "shapes"]);
     fixture
-        .orbit()
-        .args(["plugin", "disable", "shapes"])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args(["shapes", "recommend", "leakage"])
+        .command(["shapes", "recommend", "leakage"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("unrecognized subcommand"));
@@ -621,18 +616,8 @@ fn unmanaged_cli_can_read_a_plugin_but_cannot_run_its_mutating_tool() {
         return;
     }
     let fixture = Fixture::new();
-    let source = fixture.source("shapes");
-    write_fixture_plugin(&source);
-    fixture
-        .orbit()
-        .args(["plugin", "add", source.to_str().expect("utf8 source")])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args(["plugin", "enable", "shapes"])
-        .assert()
-        .success();
+    fixture.install_shapes();
+    fixture.success(["plugin", "enable", "shapes"]);
 
     for args in [
         vec!["shapes", "recommend", "cli", "--format", "json"],
@@ -692,29 +677,14 @@ fn enable_prints_the_projected_refusal_and_returns_inactive_json() {
     ];
 
     for (namespace, extra_spec, expected) in cases {
-        let source = fixture.source(namespace);
-        write_status_plugin(&source, namespace, extra_spec);
-        fixture
-            .orbit()
-            .args(["plugin", "add", source.to_str().expect("utf8 source")])
-            .assert()
-            .success();
+        fixture.install_status(namespace, extra_spec, &[]);
 
         fixture
-            .orbit()
-            .args(["plugin", "enable", namespace])
-            .assert()
-            .success()
+            .success(["plugin", "enable", namespace])
             .stdout(predicate::str::contains("Plugin is inactive"))
             .stdout(predicate::str::contains(expected));
 
-        let json = fixture
-            .orbit()
-            .args(["plugin", "enable", namespace, "--format", "json"])
-            .output()
-            .expect("enable with JSON output");
-        assert!(json.status.success(), "{json:?}");
-        let json = stdout_json(&json);
+        let json = fixture.json(["plugin", "enable", namespace]);
         assert_eq!(json["status"], "inactive", "{json}");
         assert!(
             json["diagnostic"]
@@ -724,12 +694,8 @@ fn enable_prints_the_projected_refusal_and_returns_inactive_json() {
         );
         let tool = format!("{namespace}.status");
         let preview = fixture
-            .orbit_as_operator()
-            .args(["tool", "run", &tool, "--dry-run", "--format", "json"])
-            .output()
-            .expect("preview inactive plugin");
-        assert!(preview.status.success(), "{preview:?}");
-        let preview = stdout_json(&preview);
+            .operator_command(["tool", "run", &tool, "--dry-run", "--format", "json"])
+            .success_json();
         assert_eq!(preview["policy_allowed"], false, "{preview}");
         assert_eq!(preview["policy_denial_reason"], json["diagnostic"]);
     }
@@ -739,32 +705,15 @@ fn enable_prints_the_projected_refusal_and_returns_inactive_json() {
 #[test]
 fn enable_warns_when_a_grant_was_not_requested() {
     let fixture = Fixture::new();
-    let source = fixture.source("plain");
-    write_status_plugin(&source, "plain", "");
-    fixture
-        .orbit()
-        .args(["plugin", "add", source.to_str().expect("utf8 source")])
-        .assert()
-        .success();
+    fixture.install_status("plain", "", &[]);
 
     fixture
-        .orbit()
-        .args(["plugin", "enable", "plain", "--grant", "fs"])
-        .assert()
-        .success()
+        .success(["plugin", "enable", "plain", "--grant", "fs"])
         .stdout(predicate::str::contains("warning:"))
         .stdout(predicate::str::contains("grant `fs`"))
         .stdout(predicate::str::contains("does not request"));
 
-    let json = fixture
-        .orbit()
-        .args([
-            "plugin", "enable", "plain", "--grant", "network", "--format", "json",
-        ])
-        .output()
-        .expect("enable with JSON output");
-    assert!(json.status.success(), "{json:?}");
-    let json = stdout_json(&json);
+    let json = fixture.json(["plugin", "enable", "plain", "--grant", "network"]);
     assert_eq!(json["status"], "active", "{json}");
     assert!(
         json["warnings"][0]
@@ -781,32 +730,16 @@ fn enable_warns_when_a_grant_was_not_requested() {
 #[test]
 fn enable_records_bare_fs_roots_that_load_as_the_same_roots() {
     let fixture = Fixture::new();
-    let source = fixture.source("scoped");
-    write_status_plugin(
-        &source,
+    fixture.install_status(
         "scoped",
         "  permissions:\n    fs:\n      read: [\"{{plugin_state}}\"]\n",
+        &[],
     );
-    fixture
-        .orbit()
-        .args(["plugin", "add", source.to_str().expect("utf8 source")])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args([
-            "plugin", "enable", "scoped", "--grant", "fs=data", "--grant", "fs=cache",
-        ])
-        .assert()
-        .success();
+    fixture.success([
+        "plugin", "enable", "scoped", "--grant", "fs=data", "--grant", "fs=cache",
+    ]);
 
-    let shown = fixture
-        .orbit()
-        .args(["plugin", "show", "scoped", "--format", "json"])
-        .output()
-        .expect("show the plugin from a fresh process");
-    assert!(shown.status.success(), "{shown:?}");
-    let shown = stdout_json(&shown);
+    let shown = fixture.json(["plugin", "show", "scoped"]);
     assert_eq!(shown["status"], "active", "{shown}");
     assert!(shown["diagnostic"].is_null(), "{shown}");
     assert_eq!(shown["granted"], json!(["fs=data,./cache"]), "{shown}");
@@ -833,47 +766,19 @@ fn enable_records_bare_fs_roots_that_load_as_the_same_roots() {
 #[test]
 fn enable_accepts_grants_with_host_scope_and_refuses_workspace_scope() {
     let fixture = Fixture::new();
-    let source = fixture.source("grantable");
-    write_status_plugin(&source, "grantable", "  permissions:\n    network: any\n");
-    fixture
-        .orbit()
-        .args(["plugin", "add", source.to_str().expect("utf8 source")])
-        .assert()
-        .success();
+    fixture.install_status("grantable", "  permissions:\n    network: any\n", &[]);
 
-    let implicit_host = fixture
-        .orbit()
-        .args([
-            "plugin",
-            "enable",
-            "grantable",
-            "--grant",
-            "network",
-            "--format",
-            "json",
-        ])
-        .output()
-        .expect("enable with implicit host scope");
-    assert!(implicit_host.status.success(), "{implicit_host:?}");
-    let implicit_host = stdout_json(&implicit_host);
+    let implicit_host = fixture.json(["plugin", "enable", "grantable", "--grant", "network"]);
 
-    let explicit_host = fixture
-        .orbit()
-        .args([
-            "plugin",
-            "enable",
-            "grantable",
-            "--scope",
-            "host",
-            "--grant",
-            "network",
-            "--format",
-            "json",
-        ])
-        .output()
-        .expect("enable with explicit host scope");
-    assert!(explicit_host.status.success(), "{explicit_host:?}");
-    let explicit_host = stdout_json(&explicit_host);
+    let explicit_host = fixture.json([
+        "plugin",
+        "enable",
+        "grantable",
+        "--scope",
+        "host",
+        "--grant",
+        "network",
+    ]);
     assert_eq!(explicit_host, implicit_host);
     assert_eq!(
         explicit_host["granted"],
@@ -882,8 +787,7 @@ fn enable_accepts_grants_with_host_scope_and_refuses_workspace_scope() {
     );
 
     let workspace = fixture
-        .orbit()
-        .args([
+        .command([
             "plugin",
             "enable",
             "grantable",
@@ -907,29 +811,13 @@ fn enable_accepts_grants_with_host_scope_and_refuses_workspace_scope() {
 #[test]
 fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
     let fixture = Fixture::new();
-    fixture
-        .orbit()
-        .args(["plugin", "doctor"])
-        .assert()
-        .success()
-        .code(0);
+    fixture.success(["plugin", "doctor"]).code(0);
 
-    let source = fixture.source("future");
-    write_status_plugin(&source, "future", "  requires:\n    orbit: \">=99.0.0\"\n");
-    fixture
-        .orbit()
-        .args(["plugin", "add", source.to_str().expect("utf8 source")])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args(["plugin", "enable", "future"])
-        .assert()
-        .success();
+    fixture.install_status("future", "  requires:\n    orbit: \">=99.0.0\"\n", &[]);
+    fixture.success(["plugin", "enable", "future"]);
 
     fixture
-        .orbit()
-        .args(["plugin", "doctor"])
+        .command(["plugin", "doctor"])
         .assert()
         .failure()
         .code(1)
@@ -944,35 +832,18 @@ fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
 #[test]
 fn a_workspace_disable_is_reported_and_refuses_cli_dry_run_with_typed_code() {
     let fixture = Fixture::new();
-    let source = fixture.source("switch");
-    write_status_plugin(&source, "switch", "");
-    fixture
-        .orbit()
-        .args([
-            "plugin",
-            "add",
-            source.to_str().expect("utf8 source"),
-            "--enable",
-        ])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args(["plugin", "disable", "switch", "--scope", "workspace"])
-        .assert()
-        .success();
+    fixture.install_status("switch", "", &["--enable"]);
+    fixture.success(["plugin", "disable", "switch", "--scope", "workspace"]);
 
     let listed = stdout_json(
         &fixture
-            .orbit()
-            .args(["plugin", "list", "--format", "json"])
+            .command(["plugin", "list", "--format", "json"])
             .output()
             .expect("run plugin list"),
     );
     let shown = stdout_json(
         &fixture
-            .orbit()
-            .args(["plugin", "show", "switch", "--format", "json"])
+            .command(["plugin", "show", "switch", "--format", "json"])
             .output()
             .expect("run plugin show"),
     );
@@ -991,8 +862,7 @@ fn a_workspace_disable_is_reported_and_refuses_cli_dry_run_with_typed_code() {
     }
 
     let doctor = fixture
-        .orbit()
-        .args(["plugin", "doctor", "--format", "json"])
+        .command(["plugin", "doctor", "--format", "json"])
         .output()
         .expect("run plugin doctor");
     assert!(
@@ -1008,66 +878,29 @@ fn a_workspace_disable_is_reported_and_refuses_cli_dry_run_with_typed_code() {
         .expect("a doctor row for the plugin");
     assert_eq!(finding["intentional"], true, "{finding}");
 
-    let refused = fixture
-        .orbit_as_operator()
-        .args(["--format", "json", "switch", "status"])
-        .output()
-        .expect("run the derived group");
-    assert!(!refused.status.success(), "{refused:?}");
-    let error: Value = serde_json::from_slice(&refused.stderr).unwrap_or_else(|parse_error| {
-        panic!(
-            "JSON error on stderr ({parse_error}): {}",
-            String::from_utf8_lossy(&refused.stderr)
-        )
-    });
-    assert_eq!(error["code"], "plugin_disabled_in_workspace", "{error}");
-
-    let ordinary_run = fixture
-        .orbit_as_operator()
-        .args(["tool", "run", "switch.status", "--format", "json"])
-        .output()
-        .expect("run the disabled plugin tool");
-    assert!(!ordinary_run.status.success(), "{ordinary_run:?}");
-    let ordinary_error: Value =
-        serde_json::from_slice(&ordinary_run.stderr).unwrap_or_else(|parse_error| {
-            panic!(
-                "JSON error on stderr ({parse_error}): {}",
-                String::from_utf8_lossy(&ordinary_run.stderr)
-            )
-        });
-
-    let dry_run = fixture
-        .orbit_as_operator()
-        .args([
-            "tool",
-            "run",
-            "switch.status",
-            "--dry-run",
-            "--format",
-            "json",
-        ])
-        .output()
-        .expect("preview the disabled plugin tool");
-    assert!(!dry_run.status.success(), "{dry_run:?}");
-    let dry_run_error: Value =
-        serde_json::from_slice(&dry_run.stderr).unwrap_or_else(|parse_error| {
-            panic!(
-                "JSON error on stderr ({parse_error}): {}",
-                String::from_utf8_lossy(&dry_run.stderr)
-            )
-        });
-    assert_eq!(ordinary_error["code"], "plugin_disabled_in_workspace");
-    assert_eq!(dry_run_error["code"], ordinary_error["code"]);
+    for (case, args) in [
+        ("derived", &["switch", "status"][..]),
+        ("tool run", &["tool", "run", "switch.status"]),
+        ("dry run", &["tool", "run", "switch.status", "--dry-run"]),
+    ] {
+        use std::io::Write as _;
+        writeln!(std::io::stderr(), "workspace disable: {case}").expect("case identity");
+        let refused = fixture
+            .operator_command(["--format", "json"])
+            .args(args)
+            .assert()
+            .failure();
+        let error = stderr_json(refused.get_output());
+        assert_eq!(
+            error["code"], "plugin_disabled_in_workspace",
+            "{case}: {error}"
+        );
+    }
 
     // A host disable leaves nothing for a workspace enable to widen.
-    fixture
-        .orbit()
-        .args(["plugin", "disable", "switch"])
-        .assert()
-        .success();
+    fixture.success(["plugin", "disable", "switch"]);
     let refused = fixture
-        .orbit()
-        .args([
+        .command([
             "--format",
             "json",
             "plugin",
@@ -1079,12 +912,7 @@ fn a_workspace_disable_is_reported_and_refuses_cli_dry_run_with_typed_code() {
         .output()
         .expect("run plugin enable");
     assert!(!refused.status.success(), "{refused:?}");
-    let error: Value = serde_json::from_slice(&refused.stderr).unwrap_or_else(|parse_error| {
-        panic!(
-            "JSON error on stderr ({parse_error}): {}",
-            String::from_utf8_lossy(&refused.stderr)
-        )
-    });
+    let error: Value = stderr_json(&refused);
     assert_eq!(error["code"], "plugin_disabled_on_host", "{error}");
 }
 
@@ -1093,14 +921,9 @@ fn plugin_inspection_from_unregistered_cwd_creates_no_files() {
     let fixture = Fixture::new();
     let scratch = fixture._temp.path().join("scratch");
     std::fs::create_dir(&scratch).expect("create unregistered cwd");
-    let source = fixture.source("sample");
-    write_status_plugin(&source, "sample", "");
+    let source = fixture.status_source("sample", "");
     let source_arg = source.to_str().expect("utf8 source");
-    fixture
-        .orbit()
-        .args(["plugin", "add", source_arg, "--enable"])
-        .assert()
-        .success();
+    fixture.success(["plugin", "add", source_arg, "--enable"]);
 
     for args in [
         vec!["plugin", "list"],
@@ -1129,10 +952,7 @@ fn plugin_inspection_from_unregistered_cwd_creates_no_files() {
         .args([
             "plugin", "validate", source_arg, "--render", "--format", "json",
         ])
-        .output()
-        .expect("render plugin from unregistered cwd");
-    assert!(rendered.status.success(), "{rendered:?}");
-    let rendered = stdout_json(&rendered);
+        .success_json();
     assert_eq!(
         rendered["rendered"]["workspace"],
         fixture.home.join(".orbit").to_string_lossy().as_ref()
@@ -1149,8 +969,7 @@ fn plugin_inspection_from_unregistered_cwd_creates_no_files() {
 #[test]
 fn plugin_validate_warns_when_timeout_exceeds_the_host_ceiling() {
     let fixture = Fixture::new();
-    let source = fixture.source("timeout");
-    write_status_plugin(&source, "timeout", "");
+    let source = fixture.status_source("timeout", "");
     let manifest = source.join(".orbit-plugin/plugin.yaml");
     let original = std::fs::read_to_string(&manifest).expect("read manifest");
     let command = "    command: bin/backend.sh\n";
@@ -1161,11 +980,8 @@ fn plugin_validate_warns_when_timeout_exceeds_the_host_ceiling() {
     )
     .expect("set timeout at the host ceiling");
     let boundary = fixture
-        .orbit()
-        .args(["plugin", "validate", source.to_str().expect("utf8 source")])
-        .output()
-        .expect("validate timeout at the host ceiling");
-    assert!(boundary.status.success(), "{boundary:?}");
+        .command(["plugin", "validate", source.to_str().expect("utf8 source")])
+        .success_output();
     assert!(
         !String::from_utf8_lossy(&boundary.stdout).contains("backend.timeout_ms"),
         "the host ceiling itself should not warn: {}",
@@ -1179,24 +995,15 @@ fn plugin_validate_warns_when_timeout_exceeds_the_host_ceiling() {
     .expect("set timeout above the host ceiling");
     let source_arg = source.to_str().expect("utf8 source");
     let text = fixture
-        .orbit()
-        .args(["plugin", "validate", source_arg])
-        .output()
-        .expect("validate timeout in text format");
-    assert!(text.status.success(), "{text:?}");
+        .command(["plugin", "validate", source_arg])
+        .success_output();
     let text = String::from_utf8_lossy(&text.stdout);
     assert!(
         text.contains("PLUGIN_TIMEOUT_CEILING_MS") && text.contains("300000 ms"),
         "text output must name the host ceiling: {text}"
     );
 
-    let json = fixture
-        .orbit()
-        .args(["plugin", "validate", source_arg, "--format", "json"])
-        .output()
-        .expect("validate timeout in JSON format");
-    assert!(json.status.success(), "{json:?}");
-    let json = stdout_json(&json);
+    let json = fixture.json(["plugin", "validate", source_arg]);
     assert!(
         json["warnings"]
             .as_array()
@@ -1254,35 +1061,18 @@ fn scaffold_defaults_to_the_current_directory_and_honors_explicit_dir() {
 #[test]
 fn add_enable_renders_the_seeded_skill_and_warning_report_like_enable() {
     let fixture = Fixture::new();
-    let source = fixture.source("demo");
+    let source = fixture.scaffold("demo");
     let source_arg = source.to_str().expect("utf8 source");
 
     fixture
-        .orbit()
-        .args(["plugin", "scaffold", "demo", "--dir", source_arg])
-        .assert()
-        .success();
-
-    fixture
-        .orbit()
-        .args(["plugin", "add", source_arg, "--enable"])
-        .assert()
-        .success()
+        .success(["plugin", "add", source_arg, "--enable"])
         .stdout(predicate::str::contains("auto_task demo-review created"))
         .stdout(predicate::str::contains(
             "Seeded schedules are disabled; review one, then set `enabled: true` to run it.",
         ))
         .stdout(predicate::str::contains("skill demo-demo linked at"));
 
-    let json = fixture
-        .orbit()
-        .args([
-            "plugin", "add", source_arg, "--enable", "--force", "--format", "json",
-        ])
-        .output()
-        .expect("re-add enabled plugin with json output");
-    assert!(json.status.success(), "{json:?}");
-    let json = stdout_json(&json);
+    let json = fixture.json(["plugin", "add", source_arg, "--enable", "--force"]);
     assert_eq!(json["seeded"][0]["name"], "demo-review", "{json}");
     assert_eq!(json["seeded"][0]["kind"], "auto_task", "{json}");
     assert!(
@@ -1302,13 +1092,8 @@ fn overridden_root_enable_and_sync_keep_skill_links_out_of_home() {
         ("job/.orbit/tmp/jrun-test/orbit-root2", true),
     ] {
         let fixture = Fixture::new();
-        let source = fixture.source("demo");
+        let source = fixture.scaffold("demo");
         let source_arg = source.to_str().expect("utf8 source");
-        fixture
-            .orbit()
-            .args(["plugin", "scaffold", "demo", "--dir", source_arg])
-            .assert()
-            .success();
 
         let selected_root = fixture._temp.path().join(root_relative);
         let root_arg = selected_root.to_str().expect("utf8 selected root");
@@ -1323,32 +1108,24 @@ fn overridden_root_enable_and_sync_keep_skill_links_out_of_home() {
             }
         });
 
-        fixture
-            .orbit()
-            .args([
-                "--root",
-                root_arg,
-                "init",
-                "--non-interactive",
-                "--machine-name",
-                "isolated-root-host",
-                "--task-prefix",
-                "ISO",
-            ])
-            .assert()
-            .success();
-        fixture
-            .orbit()
-            .args([
-                "--root",
-                root_arg,
-                "workspace",
-                "init",
-                "--name",
-                "isolated-plugin",
-            ])
-            .assert()
-            .success();
+        fixture.success([
+            "--root",
+            root_arg,
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "isolated-root-host",
+            "--task-prefix",
+            "ISO",
+        ]);
+        fixture.success([
+            "--root",
+            root_arg,
+            "workspace",
+            "init",
+            "--name",
+            "isolated-plugin",
+        ]);
 
         let action_output = if sync {
             std::fs::write(
@@ -1360,19 +1137,13 @@ fn overridden_root_enable_and_sync_keep_skill_links_out_of_home() {
             )
             .expect("write workspace plugin pin");
             fixture
-                .orbit()
-                .args(["--root", root_arg, "plugin", "sync"])
+                .command(["--root", root_arg, "plugin", "sync"])
                 .output()
                 .expect("sync pinned plugin")
         } else {
+            fixture.success(["--root", root_arg, "plugin", "add", source_arg]);
             fixture
-                .orbit()
-                .args(["--root", root_arg, "plugin", "add", source_arg])
-                .assert()
-                .success();
-            fixture
-                .orbit()
-                .args(["--root", root_arg, "plugin", "enable", "demo"])
+                .command(["--root", root_arg, "plugin", "enable", "demo"])
                 .output()
                 .expect("enable installed plugin")
         };
@@ -1467,9 +1238,7 @@ fn rendered_validation_redacts_credentials_without_changing_backend_environment(
                 "--format",
                 format,
             ])
-            .output()
-            .expect("render synthetic credential environment");
-        assert!(rendered.status.success(), "{rendered:?}");
+            .success_output();
         for bytes in [&rendered.stdout, &rendered.stderr] {
             assert!(
                 !String::from_utf8_lossy(bytes).contains(credentials[0].1),
@@ -1509,29 +1278,23 @@ fn rendered_validation_redacts_credentials_without_changing_backend_environment(
         assert!(!marker.exists(), "validation must not execute the backend");
     }
 
-    fixture
-        .orbit()
-        .args([
-            "plugin",
-            "add",
-            source_arg,
-            "--enable",
-            "--grant",
-            "env_pass",
-            "--grant",
-            "unsandboxed",
-        ])
-        .assert()
-        .success();
+    fixture.success([
+        "plugin",
+        "add",
+        source_arg,
+        "--enable",
+        "--grant",
+        "env_pass",
+        "--grant",
+        "unsandboxed",
+    ]);
     let called = fixture
         .orbit_as_operator()
         .envs(credentials)
         .env("SERVICE_REGION", "fixture-east")
         .env("SERVICE_ECHO", credentials[0].1)
         .args(["redaction", "status", "--format", "json"])
-        .output()
-        .expect("call backend with admitted credentials");
-    assert!(called.status.success(), "{called:?}");
+        .success_output();
     assert_eq!(stdout_json(&called)["credentials_intact"], true);
     assert!(marker.exists(), "the actual call must execute the backend");
 }
@@ -1549,31 +1312,20 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
     let root_arg = root.to_str().expect("utf8 path").to_string();
 
     let scaffold = fixture
-        .orbit()
-        .args(["plugin", "scaffold", "demo", "--dir", &root_arg])
-        .output()
-        .expect("scaffold plugin");
-    assert!(scaffold.status.success(), "{scaffold:?}");
+        .command(["plugin", "scaffold", "demo", "--dir", &root_arg])
+        .success_output();
     let scaffold_stdout = String::from_utf8_lossy(&scaffold.stdout);
     assert!(scaffold_stdout.contains("plugin.yaml"), "{scaffold_stdout}");
     assert!(root.join(".orbit-plugin/plugin.yaml").is_file());
 
-    let rendered = fixture
-        .orbit()
-        .args([
-            "plugin",
-            "validate",
-            &root_arg,
-            "--render",
-            "--workspace",
-            fixture.work.to_str().expect("utf8 workspace"),
-            "--format",
-            "json",
-        ])
-        .output()
-        .expect("render the validated backend profile");
-    assert!(rendered.status.success(), "{rendered:?}");
-    let rendered = stdout_json(&rendered);
+    let rendered = fixture.json([
+        "plugin",
+        "validate",
+        &root_arg,
+        "--render",
+        "--workspace",
+        fixture.work.to_str().expect("utf8 workspace"),
+    ]);
     let canonical_workspace = fixture
         .work
         .canonicalize()
@@ -1620,28 +1372,17 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
     for step in printed_steps {
         if step.starts_with("demo status") {
             fixture
-                .orbit_as_operator()
-                .args(step.split_whitespace())
+                .operator_command(step.split_whitespace())
                 .assert()
                 .success();
         } else {
-            fixture
-                .orbit()
-                .args(step.split_whitespace())
-                .assert()
-                .success();
+            fixture.success(step.split_whitespace());
         }
     }
 
     // The certification the passing run recorded is what `plugin show`
     // prints back.
-    let shown = fixture
-        .orbit()
-        .args(["plugin", "show", "demo", "--format", "json"])
-        .output()
-        .expect("show the plugin");
-    assert!(shown.status.success(), "{shown:?}");
-    let shown = stdout_json(&shown);
+    let shown = fixture.json(["plugin", "show", "demo"]);
     assert_eq!(
         shown["certified_orbit_version"],
         Value::String(env!("CARGO_PKG_VERSION").to_string())
@@ -1649,11 +1390,8 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
 
     // The scaffolded plugin is callable through its derived group.
     let called = fixture
-        .orbit_as_operator()
-        .args(["demo", "status", "conformance", "--format", "json"])
-        .output()
-        .expect("call the scaffolded tool");
-    assert!(called.status.success(), "{called:?}");
+        .operator_command(["demo", "status", "conformance", "--format", "json"])
+        .success_output();
     assert_eq!(stdout_json(&called)["subject"], "conformance");
 
     // A deliberately wrong expectation fails, naming the test.
@@ -1661,16 +1399,14 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
     std::fs::write(&golden, contents.replace("status: ready", "status: broken"))
         .expect("write the golden");
     fixture
-        .orbit()
-        .args(["plugin", "test", &root_arg])
+        .command(["plugin", "test", &root_arg])
         .assert()
         .failure()
         .stdout(predicate::str::contains("status_reports_ready"))
         .stdout(predicate::str::contains("failed"));
 
     fixture
-        .orbit()
-        .args([
+        .success([
             "plugin",
             "test",
             &root_arg,
@@ -1678,8 +1414,6 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
             "status_reports_ready",
             "--update-goldens",
         ])
-        .assert()
-        .success()
         .stdout(predicate::str::contains("updated"));
     let updated = std::fs::read_to_string(&golden).expect("read updated golden");
     assert!(updated.contains("status: ready"), "{updated}");
@@ -1692,16 +1426,13 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
     )
     .expect("break the unselected case");
     fixture
-        .orbit()
-        .args([
+        .success([
             "plugin",
             "test",
             &root_arg,
             "--case",
             "status_reports_ready",
         ])
-        .assert()
-        .success()
         .stdout(predicate::str::contains("1 of 1"));
 }
 
@@ -1709,21 +1440,9 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
 #[test]
 fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
     let fixture = Fixture::new();
-    let source = fixture.source("demo");
+    let source = fixture.scaffold("demo");
     let source_arg = source.to_str().expect("utf8 source");
-
-    fixture
-        .orbit()
-        .args(["plugin", "scaffold", "demo", "--dir", source_arg])
-        .assert()
-        .success();
-    let added = fixture
-        .orbit()
-        .args(["plugin", "add", source_arg, "--enable", "--format", "json"])
-        .output()
-        .expect("add enabled plugin");
-    assert!(added.status.success(), "{added:?}");
-    let added = stdout_json(&added);
+    let added = fixture.json(["plugin", "add", source_arg, "--enable"]);
     let install_path = Path::new(added["install_path"].as_str().expect("install_path string"));
     let state_dir = fixture.home.join(".orbit/state/plugins/demo");
     std::fs::create_dir_all(&state_dir).expect("plugin state");
@@ -1741,19 +1460,12 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
     }
 
     fixture
-        .orbit()
-        .args(["plugin", "remove", "demo"])
+        .command(["plugin", "remove", "demo"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("pass --yes to proceed"));
 
-    let removed = fixture
-        .orbit()
-        .args(["plugin", "remove", "demo", "--yes", "--format", "json"])
-        .output()
-        .expect("remove plugin");
-    assert!(removed.status.success(), "{removed:?}");
-    let removed = stdout_json(&removed);
+    let removed = fixture.json(["plugin", "remove", "demo", "--yes"]);
     assert_eq!(removed["name"], "demo");
     assert_eq!(removed["removed"], true);
     assert_eq!(removed["plugin_data_retained"], true);
@@ -1785,11 +1497,7 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
             .expect("create dangling plugin-owned link");
     }
 
-    fixture
-        .orbit()
-        .args(["plugin", "add", source_arg, "--enable"])
-        .assert()
-        .success();
+    fixture.success(["plugin", "add", source_arg, "--enable"]);
     for root in &link_roots {
         assert_eq!(
             root.join("demo-demo")
@@ -1804,29 +1512,16 @@ fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
         );
     }
 
-    fixture
-        .orbit()
-        .args(["plugin", "remove", "demo", "--yes"])
-        .assert()
-        .success();
+    fixture.success(["plugin", "remove", "demo", "--yes"]);
 }
 
 #[test]
 fn remove_prints_retained_state_path_and_purge_removes_only_that_state() {
     for purge_state in [false, true] {
         let fixture = Fixture::new();
-        let source = fixture.source("demo");
+        let source = fixture.scaffold("demo");
         let source_arg = source.to_str().expect("utf8 source");
-        fixture
-            .orbit()
-            .args(["plugin", "scaffold", "demo", "--dir", source_arg])
-            .assert()
-            .success();
-        fixture
-            .orbit()
-            .args(["plugin", "add", source_arg])
-            .assert()
-            .success();
+        fixture.success(["plugin", "add", source_arg]);
         let state_dir = fixture.home.join(".orbit/state/plugins/demo");
         let other_state = fixture.home.join(".orbit/state/plugins/other");
         let outside = fixture.home.join("notes");
@@ -1839,8 +1534,7 @@ fn remove_prints_retained_state_path_and_purge_removes_only_that_state() {
         if purge_state {
             args.push("--purge-state");
         }
-        let output = fixture.orbit().args(args).output().expect("remove plugin");
-        assert!(output.status.success(), "{output:?}");
+        let output = fixture.command(args).success_output();
         let stdout = String::from_utf8(output.stdout).expect("utf8 output");
         assert!(
             stdout.contains(&state_dir.display().to_string()),
@@ -1870,16 +1564,13 @@ fn tool_scaffold_still_works_and_points_at_plugin_scaffold() {
     let script = fixture.home.join("legacy/hello_orbit.py");
 
     fixture
-        .orbit()
-        .args([
+        .success([
             "tool",
             "scaffold",
             script.to_str().expect("utf8 path"),
             "--name",
             "demo.hello",
         ])
-        .assert()
-        .success()
         .stderr(predicate::str::contains("deprecated"))
         .stderr(predicate::str::contains("orbit plugin scaffold"))
         .stdout(predicate::str::contains("Created starter plugin"));
@@ -1906,16 +1597,8 @@ fn lifecycle_verbs_refuse_a_relocated_row_and_record_only_clears_it() {
     let fixture = Fixture::new();
     let source = fixture.source("demo");
     let source_arg = source.to_str().expect("utf8 source").to_string();
-    fixture
-        .orbit()
-        .args(["plugin", "scaffold", "demo", "--dir", &source_arg])
-        .assert()
-        .success();
-    fixture
-        .orbit()
-        .args(["plugin", "add", &source_arg, "--enable"])
-        .assert()
-        .success();
+    fixture.success(["plugin", "scaffold", "demo", "--dir", &source_arg]);
+    fixture.success(["plugin", "add", &source_arg, "--enable"]);
 
     // An operator directory Orbit never installed into, with a file that has
     // to be there afterwards.
@@ -1947,8 +1630,7 @@ fn lifecycle_verbs_refuse_a_relocated_row_and_record_only_clears_it() {
         vec!["plugin", "disable", "demo"],
     ] {
         fixture
-            .orbit()
-            .args(&args)
+            .command(&args)
             .assert()
             .failure()
             .stderr(predicate::str::contains(sentinel_arg.clone()))
@@ -1964,21 +1646,7 @@ fn lifecycle_verbs_refuse_a_relocated_row_and_record_only_clears_it() {
 
     // The refusals left the row, so the command they recommend still has
     // something to clear.
-    let removed = fixture
-        .orbit()
-        .args([
-            "plugin",
-            "remove",
-            "demo",
-            "--yes",
-            "--record-only",
-            "--format",
-            "json",
-        ])
-        .output()
-        .expect("record-only removal");
-    assert!(removed.status.success(), "{removed:?}");
-    let removed = stdout_json(&removed);
+    let removed = fixture.json(["plugin", "remove", "demo", "--yes", "--record-only"]);
     assert_eq!(removed["record_only"], true);
     assert_eq!(removed["install_removed"], false);
     assert_eq!(
@@ -1986,8 +1654,7 @@ fn lifecycle_verbs_refuse_a_relocated_row_and_record_only_clears_it() {
         "operator data"
     );
     fixture
-        .orbit()
-        .args(["plugin", "show", "demo"])
+        .command(["plugin", "show", "demo"])
         .assert()
         .failure();
 }
@@ -2056,10 +1723,7 @@ fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgr
     let shipped = tree_listing(&source);
 
     fixture
-        .orbit()
-        .args(["plugin", "test", &source_arg])
-        .assert()
-        .success()
+        .success(["plugin", "test", &source_arg])
         .stdout(predicate::str::contains("1 of 1"));
     assert_eq!(
         tree_listing(&source),
@@ -2067,19 +1731,11 @@ fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgr
         "the conformance run must build nothing inside the plugin root"
     );
 
-    fixture
-        .orbit()
-        .args(["plugin", "add", &source_arg, "--enable", "--grant", "fs"])
-        .assert()
-        .success();
+    fixture.success(["plugin", "add", &source_arg, "--enable", "--grant", "fs"]);
     let call = || {
-        let output = fixture
-            .orbit_as_operator()
-            .args(["uvdemo", "status", "--format", "json"])
-            .output()
-            .expect("call the uv backend");
-        assert!(output.status.success(), "{output:?}");
-        stdout_json(&output)
+        fixture
+            .operator_command(["uvdemo", "status", "--format", "json"])
+            .success_json()
     };
     let first = call();
     assert_eq!(first["dependency_version"], "1.0.0", "{first}");
@@ -2116,11 +1772,7 @@ fn a_uv_locked_python_backend_runs_from_plugin_state_and_follows_a_lockfile_upgr
         .expect("run uv lock");
     assert!(relock.status.success(), "{relock:?}");
 
-    fixture
-        .orbit()
-        .args(["plugin", "upgrade", "uvdemo", &source_arg])
-        .assert()
-        .success();
+    fixture.success(["plugin", "upgrade", "uvdemo", &source_arg]);
     let upgraded = call();
     assert_eq!(
         upgraded["dependency_version"], "2.0.0",
@@ -2148,15 +1800,7 @@ fn migrate_legacy_sidecars_through_cli_preserves_sources_and_refuses_overwrite()
         "schemaVersion: 1\nname: legacy.status\ndescription: Local status.\nparameters: []\n";
     std::fs::write(&sidecar, sidecar_bytes).unwrap();
     let binary = backend.to_str().unwrap();
-    let printed = || {
-        let output = fixture
-            .orbit()
-            .args(["plugin", "migrate", binary, "--format", "json"])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        stdout_json(&output)
-    };
+    let printed = || fixture.json(["plugin", "migrate", binary]);
     let first = printed();
     assert_eq!(first["path"], Value::Null);
     assert_eq!(printed(), first, "print-only migration is deterministic");
@@ -2177,9 +1821,7 @@ fn migrate_legacy_sidecars_through_cli_preserves_sources_and_refuses_overwrite()
         "--format",
         "json",
     ];
-    let output = fixture.orbit().args(args).output().unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let migrated = stdout_json(&output);
+    let migrated = fixture.command(args).success_json();
     let root = destination.join(".orbit-plugin");
     let manifest = root.join("plugin.yaml");
     assert_eq!(migrated["path"], manifest.to_string_lossy().as_ref());
@@ -2194,15 +1836,10 @@ fn migrate_legacy_sidecars_through_cli_preserves_sources_and_refuses_overwrite()
     );
     let copied = root.join("bin/legacy-backend");
     assert_eq!(std::fs::read(&copied).unwrap(), backend_bytes);
-    fixture
-        .orbit()
-        .args(["plugin", "validate", destination_arg])
-        .assert()
-        .success();
+    fixture.success(["plugin", "validate", destination_arg]);
 
     fixture
-        .orbit()
-        .args(args)
+        .command(args)
         .assert()
         .failure()
         .stderr(predicate::str::contains("refusing to overwrite"));
@@ -2215,8 +1852,7 @@ fn migrate_legacy_sidecars_through_cli_preserves_sources_and_refuses_overwrite()
     std::fs::write(&invalid, "schemaVersion: 2\nname: legacy.invalid\n").unwrap();
     let refused_destination = fixture.source("refused-migration");
     fixture
-        .orbit()
-        .args([
+        .command([
             "plugin",
             "migrate",
             binary,
@@ -2239,35 +1875,13 @@ fn migrate_legacy_sidecars_through_cli_preserves_sources_and_refuses_overwrite()
 #[test]
 fn plugin_show_and_derived_groups_accept_the_global_json_shorthand() {
     let fixture = Fixture::new();
-    let source = fixture.source("jsonfixture");
-    write_status_plugin(&source, "jsonfixture", "");
-    fixture
-        .orbit()
-        .args([
-            "plugin",
-            "add",
-            source.to_str().expect("utf8 source"),
-            "--enable",
-        ])
-        .assert()
-        .success();
+    fixture.install_status("jsonfixture", "", &["--enable"]);
     for args in [
         &["plugin", "show", "jsonfixture", "--json"][..],
         &["jsonfixture", "status", "--explain", "--json"],
         &["--json", "jsonfixture", "status", "--explain"],
     ] {
-        let output = fixture
-            .orbit()
-            .args(args)
-            .output()
-            .expect("run JSON shorthand");
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let document: Value = serde_json::from_slice(&output.stdout).expect("one JSON document");
+        let document = fixture.command(args).success_json();
         assert!(document.is_object(), "{args:?}");
     }
 }
@@ -2275,22 +1889,12 @@ fn plugin_show_and_derived_groups_accept_the_global_json_shorthand() {
 #[test]
 fn plugin_json_tool_input_keeps_its_meaning_alongside_global_output_json() {
     let fixture = Fixture::new();
-    let source = fixture.source("jsoninput");
-    write_status_plugin(&source, "jsoninput", "");
+    let source = fixture.status_source("jsoninput", "");
     let manifest = source.join(".orbit-plugin/plugin.yaml");
     let mut text = std::fs::read_to_string(&manifest).expect("fixture manifest");
     text.push_str("      input_schema:\n        type: object\n        properties:\n          json: { type: boolean }\n");
     std::fs::write(manifest, text).expect("write tool-input schema");
-    fixture
-        .orbit()
-        .args([
-            "plugin",
-            "add",
-            source.to_str().expect("source"),
-            "--enable",
-        ])
-        .assert()
-        .success();
+    fixture.add(&source, &["--enable"]);
     for args in [
         &["--json", "jsoninput", "status", "--json", "--explain"][..],
         &["jsoninput", "--json", "status", "--json", "--explain"],
@@ -2303,14 +1907,7 @@ fn plugin_json_tool_input_keeps_its_meaning_alongside_global_output_json() {
             "--explain",
         ],
     ] {
-        let output = fixture.orbit().args(args).output().expect("plugin explain");
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let document: Value = serde_json::from_slice(&output.stdout).expect("JSON output");
+        let document = fixture.command(args).success_json();
         assert_eq!(document["input"], json!({"json": true}));
     }
 }
@@ -2319,13 +1916,8 @@ fn plugin_json_tool_input_keeps_its_meaning_alongside_global_output_json() {
 #[test]
 fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     let fixture = Fixture::new();
-    let plugin_dir = fixture.source("open");
-    let dir = plugin_dir.to_str().expect("plugin directory");
-    fixture
-        .orbit()
-        .args(["plugin", "scaffold", "open", "--dir", dir])
-        .assert()
-        .success();
+    let plugin_dir = fixture.scaffold("open");
+    let dir = plugin_dir.to_str().expect("utf8 source");
     let manifest_path = plugin_dir.join(".orbit-plugin/plugin.yaml");
     let manifest = std::fs::read_to_string(&manifest_path).expect("scaffold manifest");
     let patched = manifest
@@ -2334,11 +1926,7 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
             "  permissions:\n    fs:\n      write: [\"/Users/daniel\"]\n    network: any\n    env_pass: [\"HOME\"]\n", 1);
     assert_ne!(patched, manifest, "the scaffold manifest shape changed");
     std::fs::write(&manifest_path, patched).expect("unconfined manifest");
-    let refused = fixture
-        .orbit()
-        .args(["plugin", "test", dir])
-        .assert()
-        .failure();
+    let refused = fixture.command(["plugin", "test", dir]).assert().failure();
     let message = String::from_utf8_lossy(&refused.get_output().stderr);
     for needle in [
         "Requested grants:",
@@ -2359,8 +1947,7 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     )
     .expect("fixture-owned write root");
     let missing = fixture
-        .orbit()
-        .args(["plugin", "test", dir, "--accept-requested", "--json"])
+        .command(["plugin", "test", dir, "--accept-requested", "--json"])
         .assert()
         .code(1)
         .get_output()
@@ -2379,13 +1966,326 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
         "the host must not create the manifest-named absolute write root"
     );
     std::fs::create_dir_all(&consented_write).expect("consented write root");
-    fixture
-        .orbit()
-        .args(["plugin", "test", dir, "--accept-requested"])
-        .assert()
-        .success();
+    fixture.success(["plugin", "test", dir, "--accept-requested"]);
     assert!(
         consented_write.is_dir(),
         "the consented absolute write root is opened"
     );
+}
+
+/// A conformance fixture whose backend tries to write `marker`, outside every
+/// root the plugin declares, before it answers. Under its declared sandbox the
+/// write is refused; only a backend started with weaker containment leaves
+/// the file behind.
+#[cfg(target_os = "macos")]
+fn write_contained_conformance_plugin(source: &Path, namespace: &str, marker: &Path) {
+    let root = write_shell_backend(
+        source,
+        format!(
+            "#!/bin/sh\ncat > /dev/null\n: > '{}' 2>/dev/null\nprintf              '{{\"ok\":true,\"output\":{{\"subject\":\"world\"}}}}\\n'\n",
+            marker.display()
+        ),
+    );
+    std::fs::create_dir_all(root.join("tests/conformance")).expect("create conformance dir");
+    write_greet_conformance_files(&root, namespace);
+}
+
+/// [ORB-19224] `orbit plugin test` inside a macOS worker's Seatbelt profile.
+/// Before, every case failed with the nested `sandbox_apply` refusal (exit
+/// 71) and the worker escalated. Now no backend starts there: a gate run that
+/// asked for a validation summary defers every case with the sanctioned
+/// Seatbelt notice and exits 0, and Orbit derives the deferred sandbox
+/// validation the claim host replays; any other run is refused, typed. The
+/// replay outside the profile runs the case under the plugin's own sandbox.
+/// No route ever starts the backend with weaker containment than declared.
+#[cfg(target_os = "macos")]
+#[test]
+fn plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay() {
+    use orbit_types::workflow::{
+        DeferralLane, EvidenceHostOs, HostValidationGates, NamespaceProbe, SEATBELT_APPLY_PROBE,
+        SEATBELT_DEFERRAL_PREFIX, ValidationGates, deferral_handoff,
+    };
+
+    // The outer profile must apply here: this test plays the worker.
+    if !orbit_exec::macos_sandbox_test_guard(
+        "plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let source = fixture.source("nested");
+    let marker = fixture.home.join("backend-escaped");
+    write_contained_conformance_plugin(&source, "nested", &marker);
+    let dir = source.to_str().expect("plugin directory");
+    let gate = format!("orbit plugin test {dir}");
+    let base = "0123456789abcdef0123456789abcdef01234567";
+
+    // Without a summary to defer through, the run is refused with the typed
+    // marker, and no case ran.
+    let refused = fixture
+        .orbit_inside_seatbelt()
+        .args(["plugin", "test", dir])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&refused.get_output().stderr);
+    assert!(
+        stderr.contains("[validation_route_unavailable]")
+            && stderr.contains("ORBIT_VALIDATION_SUMMARY"),
+        "{stderr}"
+    );
+    assert!(!marker.exists(), "no backend ran unconfined");
+
+    // A summary path alone does not identify a required gate for host replay.
+    // It must be refused before writing a command-less summary that the claim
+    // host cannot derive into a deferred validation handoff.
+    let summary_only_path = fixture.home.join("summary-only.json");
+    let summary_only = fixture
+        .orbit_inside_seatbelt()
+        .args(["plugin", "test", dir])
+        .env("ORBIT_VALIDATION_SUMMARY", &summary_only_path)
+        .env_remove("ORBIT_VALIDATION_GATE")
+        .env_remove("ORBIT_VALIDATION_BASE")
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&summary_only.get_output().stderr);
+    assert!(
+        stderr.contains("[validation_route_unavailable]")
+            && stderr.contains("ORBIT_VALIDATION_GATE"),
+        "{stderr}"
+    );
+    assert!(
+        !summary_only_path.exists(),
+        "a gate-less run must not write a null-command summary"
+    );
+    assert!(!marker.exists(), "no backend ran unconfined");
+
+    // As a gate: deferred, exit 0, one sanctioned notice per case.
+    let summary_path = fixture.home.join("gate-summary.json");
+    let deferred = fixture
+        .orbit_inside_seatbelt()
+        .args(["plugin", "test", dir])
+        .env("ORBIT_VALIDATION_SUMMARY", &summary_path)
+        .env("ORBIT_VALIDATION_GATE", &gate)
+        .env("ORBIT_VALIDATION_BASE", base)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&deferred.get_output().stdout);
+    let notice_prefix = format!("{SEATBELT_DEFERRAL_PREFIX} nested/greet_answers:");
+    assert!(
+        stdout.lines().any(|line| line.starts_with(&notice_prefix)),
+        "{stdout}"
+    );
+    assert!(stdout.contains("sandbox_apply"), "{stdout}");
+    assert!(!marker.exists(), "no backend ran with weaker containment");
+    let summary_bytes = std::fs::read(&summary_path).expect("the gate wrote its summary");
+    let summary: Value = serde_json::from_slice(&summary_bytes).expect("summary JSON");
+    assert_eq!(summary["command"], gate);
+    assert_eq!(summary["base"], base);
+    assert_eq!(summary["exit_code"], 0);
+    assert_eq!(summary["tests_run"], 1);
+    assert_eq!(summary["selection"]["cases"], json!(["greet_answers"]));
+
+    // Orbit accepts it as the implementer's deferred sandbox validation,
+    // with the probe it runs in the worker's lane.
+    let handoff = deferral_handoff(&json!({
+        "deferred_sandbox_validation": {"summary": summary_path.display().to_string()}
+    }))
+    .expect("handoff shape")
+    .expect("handoff present");
+    let pending = handoff
+        .derive(
+            &summary_bytes,
+            &HostValidationGates::local(ValidationGates {
+                required_validation_commands: vec![gate.clone()],
+                baseline_commands: Vec::new(),
+                light_delivery_paths: None,
+                review_skip_tags: None,
+            }),
+            Some(base),
+            DeferralLane {
+                claimed: true,
+                os: Some(EvidenceHostOs::Macos),
+            },
+        )
+        .expect("the summary is a deferrable gate run");
+    let probe = std::process::Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1) (allow default)"])
+        .args(pending.probes()[0].argv)
+        .output()
+        .expect("run the Seatbelt probe inside the worker profile");
+    assert_eq!(pending.probes()[0].command, SEATBELT_APPLY_PROBE);
+    let record = pending
+        .complete(vec![NamespaceProbe {
+            command: SEATBELT_APPLY_PROBE.to_string(),
+            exit_code: probe.status.code().unwrap_or(-1),
+            output: String::from_utf8_lossy(&probe.stderr).into_owned(),
+        }])
+        .expect("the worker lane refuses the nested profile");
+    assert_eq!(record.command, gate);
+
+    // The host replay, outside the worker profile, runs the case under the
+    // plugin's declared sandbox, which still refuses the escape.
+    let replay_summary = fixture.home.join("replay-summary.json");
+    let replay = fixture
+        .command(["plugin", "test", dir])
+        .env("ORBIT_VALIDATION_SUMMARY", &replay_summary)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&replay.get_output().stdout);
+    assert!(!stdout.contains(SEATBELT_DEFERRAL_PREFIX), "{stdout}");
+    let replayed: Value =
+        serde_json::from_slice(&std::fs::read(&replay_summary).expect("replay summary"))
+            .expect("replay summary JSON");
+    assert_eq!(replayed["tests_run"], 1);
+    assert_eq!(replayed["notices"], json!([]));
+    assert!(
+        !marker.exists(),
+        "the backend ran under its declared sandbox, which refused the write"
+    );
+}
+
+/// [ORB-19525] The `ORBIT_TEST_FORCE_SEATBELT_REFUSAL` test seam must not
+/// reroute a production `orbit plugin test` run. The shipped binary carries
+/// no reader for the variable, so with it set the run executes exactly as
+/// without it; before the fix the same run refused with
+/// `validation_route_unavailable` on a host that is not inside Seatbelt.
+#[cfg(unix)]
+#[test]
+fn plugin_test_ignores_forced_seatbelt_refusal_in_the_shipped_binary() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "plugin_test_ignores_forced_seatbelt_refusal_in_the_shipped_binary",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let source = fixture.source("forcedrefusal");
+    write_greet_conformance_plugin(&source, "forcedrefusal");
+    let dir = source.to_str().expect("plugin directory");
+
+    for forced in [false, true] {
+        let mut command = fixture.orbit();
+        command.args(["plugin", "test", dir]);
+        if forced {
+            command.env("ORBIT_TEST_FORCE_SEATBELT_REFUSAL", "1");
+        } else {
+            command.env_remove("ORBIT_TEST_FORCE_SEATBELT_REFUSAL");
+        }
+        for name in [
+            "ORBIT_VALIDATION_SUMMARY",
+            "ORBIT_VALIDATION_GATE",
+            "ORBIT_VALIDATION_BASE",
+            "ORBIT_REQUIRE_SANDBOX_EXEC",
+        ] {
+            command.env_remove(name);
+        }
+        let run = command.assert().success();
+        let stdout = String::from_utf8_lossy(&run.get_output().stdout);
+        assert!(
+            stdout.contains("1 of 1 conformance test(s) passed"),
+            "forced={forced}: the case executes and passes:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("SKIP: sandbox-exec cannot apply a profile:")
+                && !stdout.contains("deferred to a host replay"),
+            "forced={forced}: the run must not defer:\n{stdout}"
+        );
+    }
+
+    // With a validation-gate route named, the forced run still executes
+    // instead of deferring every case to a host replay.
+    let summary_path = fixture.home.join("forced-gate-summary.json");
+    let gate = format!("orbit plugin test {dir}");
+    let gated = fixture
+        .command(["plugin", "test", dir])
+        .env("ORBIT_TEST_FORCE_SEATBELT_REFUSAL", "1")
+        .env("ORBIT_VALIDATION_SUMMARY", &summary_path)
+        .env("ORBIT_VALIDATION_GATE", &gate)
+        .env("ORBIT_VALIDATION_BASE", "base-sha")
+        .env_remove("ORBIT_REQUIRE_SANDBOX_EXEC")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&gated.get_output().stdout);
+    assert!(
+        stdout.contains("1 of 1 conformance test(s) passed"),
+        "the gated run executes under the forced variable:\n{stdout}"
+    );
+    let summary: Value =
+        serde_json::from_slice(&std::fs::read(&summary_path).expect("gated summary"))
+            .expect("summary JSON");
+    assert_eq!(summary["tests_run"], 1);
+    assert_eq!(summary["notices"], json!([]));
+}
+
+/// A one-case conformance plugin whose backend answers `world`.
+#[cfg(unix)]
+fn write_greet_conformance_plugin(source: &Path, namespace: &str) {
+    let root = write_shell_backend(
+        source,
+        "#!/bin/sh\ncat > /dev/null\nprintf '{\"ok\":true,\"output\":{\"subject\":\"world\"}}\\n'\n",
+    );
+    std::fs::create_dir_all(root.join("tests/conformance")).expect("create conformance dir");
+    write_greet_conformance_files(&root, namespace);
+}
+
+#[track_caller]
+fn stderr_json(output: &std::process::Output) -> Value {
+    serde_json::from_slice(&output.stderr).unwrap_or_else(|parse_error| {
+        panic!(
+            "JSON error on stderr ({parse_error}): {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+/// Keep command diagnostics and the test call site when sharing output checks.
+trait CheckedPluginOutput {
+    #[track_caller]
+    fn success_output(&mut self) -> std::process::Output;
+    #[track_caller]
+    fn success_json(&mut self) -> Value;
+}
+
+impl CheckedPluginOutput for assert_cmd::Command {
+    fn success_output(&mut self) -> std::process::Output {
+        self.assert().success().get_output().clone()
+    }
+
+    fn success_json(&mut self) -> Value {
+        stdout_json(&self.success_output())
+    }
+}
+
+fn write_shell_backend(source: &Path, script: impl AsRef<[u8]>) -> std::path::PathBuf {
+    let root = source.join(".orbit-plugin");
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin bin dir");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(&backend, script).expect("write backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod backend");
+    }
+    root
+}
+
+#[cfg(unix)]
+fn write_greet_conformance_files(root: &Path, namespace: &str) {
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 1.0.0\n  \
+             description: Conformance fixture.\nspec:\n  backend:\n    type: exec\n    command: \
+             bin/backend.sh\n  tools:\n    - name: greet\n      description: Greet.\n      \
+             execution_kind: read_only\n      mcp_scope: workspace\n  tests: \
+             [tests/conformance/*.yaml]\n"
+        ),
+    )
+    .expect("write manifest");
+    std::fs::write(
+        root.join("tests/conformance/greet.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: greet_answers\n    tool: greet\n    \
+         input: {}\n    expect:\n      output:\n        subject: world\n",
+    )
+    .expect("write golden");
 }

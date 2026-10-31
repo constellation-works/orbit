@@ -17,6 +17,8 @@ use orbit_types::workflow::{ExecutorDef, ExecutorType, JobRunState, JobRunTrigge
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod readiness;
+
 /// Muse weighs far more than sol. A Linux draw still selects sol, because the
 /// muse executor's `host_os` removes muse-wonder before the draw.
 const POOL: &str = r#"
@@ -60,13 +62,14 @@ fn runtime_on(os: HostOs, config: &str) -> (TempDir, OrbitRuntime) {
         .expect("build runtime")
         .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
         .with_host_os(Some(os));
-    // A fresh runtime has no executor store. Init seeds the shipped muse asset;
-    // this fixture installs that same macOS-only declaration.
+    // A fresh runtime has no executor store. This fixture explicitly installs
+    // a macOS-only muse declaration to exercise the general `host_os`
+    // contract; the shipped muse asset itself is unrestricted.
     declare_muse_macos(&runtime);
     (root, runtime)
 }
 
-/// The shipped muse executor: macOS only. Other providers stay undeclared.
+/// An explicitly constrained muse executor: macOS only. Other providers stay undeclared.
 pub(crate) fn declare_muse_macos(runtime: &OrbitRuntime) {
     runtime
         .upsert_executor_def(&ExecutorDef {
@@ -74,6 +77,8 @@ pub(crate) fn declare_muse_macos(runtime: &OrbitRuntime) {
             executor_type: ExecutorType::DirectAgent,
             command: Some("muse".to_string()),
             args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,
@@ -525,9 +530,13 @@ fn a_supported_explicit_run_crew_survives_discovery_and_replay() {
             "{listed}"
         );
     }
+    // The task records the crew its run used [ORB-19416], under an automatic
+    // source, so the override does not pin it.
+    let recorded = linux.get_task(&task.id).unwrap();
+    assert_eq!(recorded.crew.as_deref(), Some("sol"));
     assert_eq!(
-        linux.get_task(&task.id).unwrap().crew,
-        None,
+        recorded.crew_source.as_deref(),
+        Some("redraw:run_crew"),
         "run override does not pin the task"
     );
     // Even a matching frozen selection does not release a task's stored pin
@@ -725,8 +734,9 @@ fn activity_defaults_and_unrestricted_crews_remain_consistent() {
     );
 }
 
-/// Public init loads the shipped declarations and upgrades an installed default
-/// only when its host constraint is absent. Operator choices survive refresh.
+/// Public init loads the shipped declarations: no shipped executor carries
+/// a `host_os` restriction (Muse runs on macOS and Linux), the seeded muse
+/// sandbox is translated for this host, and operator choices survive refresh.
 fn init_seeds_host_os_and_preserves_operator_constraints() {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
@@ -745,12 +755,18 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
     let store = orbit_store::compose::global_executor_def_store(global.join("resources/executors"));
     let defs = store.list_executor_defs().expect("load seeded catalog");
     assert!(defs.len() > 1, "the shipped catalog is more than muse");
-    let mut muse = store
+    let muse = store
         .get_executor_def("muse")
         .unwrap()
         .expect("muse seeded");
-    assert_eq!(muse.host_os, Some(BTreeSet::from([HostOs::Macos])));
-    for def in defs.into_iter().filter(|def| def.name != "muse") {
+    assert_eq!(muse.host_os, None, "shipped muse is unrestricted");
+    let expected_sandbox = match std::env::consts::OS {
+        "linux" => Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+        "macos" => Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
+        _ => muse.sandbox,
+    };
+    assert_eq!(muse.sandbox, expected_sandbox, "seeded muse sandbox");
+    for def in &defs {
         assert!(
             def.host_os.is_none(),
             "{} declared host_os {:?}",
@@ -759,18 +775,7 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
         );
     }
 
-    muse.host_os = None;
-    store
-        .upsert_executor_def(&muse)
-        .expect("installed default without host_os");
-    seed();
-    let copied = store
-        .get_executor_def("muse")
-        .unwrap()
-        .expect("muse present");
-    assert_eq!(copied.host_os, Some(BTreeSet::from([HostOs::Macos])));
-
-    let mut customized = copied;
+    let mut customized = muse;
     customized.host_os = Some(BTreeSet::from([HostOs::Linux, HostOs::Macos]));
     store
         .upsert_executor_def(&customized)
@@ -797,8 +802,8 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
             .unwrap()
             .expect("muse present")
             .host_os,
-        Some(BTreeSet::from([HostOs::Macos])),
-        "clearing host_os restores the shipped declaration"
+        None,
+        "clearing host_os keeps the shipped unrestricted declaration"
     );
 }
 
@@ -1019,7 +1024,7 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
     let dependent = entry(&dependent.id);
     assert_eq!(dependent["reason"], "unmet_dependency", "{dependent}");
     assert_eq!(
-        dependent["host_os_wait"], "waits for a macos host (os:macos)",
+        dependent["host_os_wait"], "On this linux host: waits for a macos host (os:macos)",
         "{dependent}"
     );
     assert_eq!(dependent["host_fleet"], fleet, "{dependent}");

@@ -75,3 +75,21 @@ now include the runner display closing delimiter before runtime output; that
 repairs their log shape without changing their original behavioral guarantee.
 The public engine PR completion regression independently checks the bounded
 repair mandate and refuses incomplete/truncated attribution.
+
+The supply-chain fixtures reconstruct a passing `check-error-translation.sh`
+guard timing followed 830 lines later by cargo-deny's labelled diagnostic and a
+nonzero supply-chain phase exit. The companion case puts guard identifiers and
+environment names after a bare diagnostic. Both exercise filing, signature and
+bounded excerpt selection, without a live GitHub or cargo-deny dependency.
+
+| Surface | Fixture | Snapshot |
+|---|---|---|
+| CI filing | `supply_chain_diagnostic_outranks_passing_guard_timings` | `parsed.json` |
+| CI filing | `guard_identifiers_after_diagnostic_do_not_replace_it` | `parsed.json` |
+
+Signatures prefer compiler, test/panic and runner annotations before labelled
+diagnostics and bare markers; ties select the last diagnostic before process
+exit. Marker words inside identifiers or paths do not qualify. Existing red-run
+sweep identities may re-key once as the selected signature changes. Persisted
+compiler-owner and per-job test-owner lookups retain the shipped first-match
+substring algorithm.

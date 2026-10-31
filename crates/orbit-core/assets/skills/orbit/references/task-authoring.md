@@ -110,8 +110,22 @@ chosen for delegation. On an authorized takeover, correct a stale assignment
 before continuing; do not leave another crew named for work it is not doing.
 `model` is tool-call provenance (agent family), while `orchestrator` identifies
 who prepared/supervised the work; neither substitutes for execution `crew`.
+On `orbit.task.add`, `model` may be your full model id (`claude-opus-5-5`):
+`created_by` keeps the family and the full id is recorded once as
+`created_by_model`.
 `model` never sets `orchestrator_model`: that comes from the `orchestrator`
 crew's configuration unless you override it.
+
+Implicit complexity, tag and context-file edits preserve the crew and crew source
+of admitted work, including work awaiting setup, in progress or under review.
+Stopped deliveries and preserved candidates keep that attribution until a fresh
+admission or explicit audited correction replaces it. Those edits still update
+the task's scope under the existing authority rules.
+They do not change a recorded run's crew or model. Before admission, automatic
+assignments can rerate; explicit pins stay pinned. After an authorized recovery
+or requeue, a fresh admission evaluates the current scope and records the crew
+it actually selects. Resuming a candidate retains its admission provenance.
+An explicit authorized crew correction remains an audited assignment.
 
 Task IDs come from the store. Use task tools to change records, never edit their
 filesystem projections. Reuse existing tags. Use `feature`, `bug`, `refactor` or
@@ -167,10 +181,10 @@ The next admission honours it. A task already running or claimed is not moved.
 Tag every task whose change a user will see (a dashboard, web pages, a docs
 site, a desktop app UI) `ui`. Topical tags such as `dashboard` or `website`
 may stay alongside it, but `ui` is the one tooling reads; don't invent
-variants (`web-ui`, `frontend`). Its delivery owes screenshots of each changed
-view as task artifacts ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)),
-and its reviewer checks them. The tag carries those two rules into the
-implementer's and reviewer's prompts as tag instructions (below).
+variants (`web-ui`, `frontend`). The tag routes work to a verified browser kit
+and selects the optional PR screenshots section. It does not make screenshots
+a PR-opening prerequisite. Task artifact evidence follows the workspace guide
+and actual diff, not the tag.
 
 The tag also routes the task to a host with a verified headless browser kit
 (the orbit-setup browser-checks reference). Admission reads the kit every
@@ -187,20 +201,22 @@ ignoring case.
 
 When task-pilot finds a task's criteria or context files are user-facing UI
 and the task has no `ui` tag, it adds one; QA sweeps add it to the UI
-findings they file. Neither ever removes a `ui` tag someone set. The
-screenshot rule follows the diff, not the tag: an untagged UI change still
-owes screenshots.
+findings they file. Neither ever removes a `ui` tag someone set. The workspace
+guide's task-artifact evidence rule follows the diff, not the tag. The PR
+screenshots section remains optional, including for `ui` tasks.
 
 ## Tags that carry instructions
 
 Some tags add trusted instructions to the prompts of the activities that work
 on the task. Orbit ships them for `no-diff-expected` (the read-only handoff
 rule, for implementers), `skip-validation` (no local validation while the
-change stays light, for implementers) and `ui` (the screenshot rule, for
-implementers and reviewers). A workspace can map any tag to a repository file per role
+change stays light, for implementers) and `ui` (browser-kit routing and the
+optional PR screenshots section). A workspace can map any tag to a repository file per role
 (implement, review, recovery) under `[workflow.tag_instructions.<tag>]`,
-replace a shipped default, or switch one off (docs/CONFIG.md). QA sweeps are
-implement tasks tagged `qa-sweep`, so that tag's implement file instructs QA.
+replace a shipped default, or switch one off ([tag instructions in the published
+configuration reference](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).
+QA sweeps are implement tasks tagged `qa-sweep`, so that tag's implement file
+instructs QA.
 
 The text comes only from those defaults and from the mapped file as committed
 at the delivery's base revision. Nothing you write on the task supplies it:
@@ -235,7 +251,9 @@ Any other changed path makes delivery ignore
 both tags and review and validate normally, and the task's history records
 why. A reviewer that does run keeps its own checks, so tag a task with both to
 skip everything. Don't tag code changes in the hope they stay small: the
-allow-list, not the tag, decides.
+allow-list, not the tag, decides. For low-risk work outside those paths, a
+workspace can map its own tag to a review-only skip — see
+[review-skip tags](../../orbit-setup/references/configuration.md#review-skip-tags).
 
 ## Modification footprint
 
@@ -252,6 +270,28 @@ in the description instead of reserving locks for them. Prefer
 precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
 
+### Selector granularity
+
+Declare at symbol level when you can, so Orbit learns which symbols changes
+and regressions concentrate in. Locks stay per file: a `symbol:` selector
+locks its whole file, so granularity changes the record, not admission.
+
+- Use `symbol:<path>#<name>:<kind>` for each existing source symbol the
+  change modifies or deletes. `<name>` is the identifier as declared,
+  qualified by its enclosing type or impl for a member (`Store::claim`);
+  `<kind>` is one of `function`, `method`, `struct`, `enum`, `trait`,
+  `impl`, `class`, `interface`, `type`, `const`, `static`, `macro`,
+  `module` or `test`. The name must occur in the file at the revision you
+  scoped.
+- Use `file:` instead when the change is file-wide: a new file, new
+  top-level items, imports or module wiring, a large refactor or move, more
+  than about five symbols in the file, or a file with no symbols —
+  Markdown, configuration, manifests, lockfiles, generated output, data and
+  goldens.
+- Never declare a symbol you expect to create; declare its file. Mixing is
+  fine: `symbol:` selectors for the edited functions and `file:` for a file
+  the change rewrites.
+
 For substantive source targets, inspect the repository's generator or
 synchronization evidence at the revision being scoped. Declare each exact
 generated companion that the planned source change is expected to alter
@@ -265,6 +305,46 @@ authorization still apply: use the supported creation-intent path below for a
 known missing companion; a generator relationship alone grants no creation
 intent. Task-pilot records an expected missing output without authorization
 as an evidence gap rather than proposing an undeclared missing selector.
+
+If the workspace documents a generated unit-test identity baseline, follow its
+inventory scope. When a plan adds, renames, moves or retires a test function
+within that scope, declare the exact baseline as a `file:` companion and cite
+the planned test and ratchet in the description or authoring evidence.
+Regenerate it with the workspace's documented command, never by hand, and raise
+it only for tests admitted by its test strategy. Tests outside that scope, tests
+only read or run, body-only edits and plans with no unit-test identity change do
+not trigger this declaration.
+
+Follow a planned source change into any exact existing handwritten
+expected-value fixture it necessarily invalidates: a hand-maintained
+inventory, table or fixture whose asserted values the change must extend or
+alter (for example, an independently handwritten expected inventory that a
+new registry entry extends). Declare only that exact existing fixture, cite
+its pinned source evidence (`path:line` at the revision being scoped), and
+record the source-to-expectation dependency in the description or authoring
+evidence. Such a fixture is neither generated output nor a test only
+consulted or run: do not declare fixtures that are merely read, executed or
+unchanged, do not reserve every affected test or a whole test directory, and
+do not derive the expectation dynamically from the source it guards, which
+would remove its independent check. A required fixture that does not yet
+exist follows the creation-intent rules below; without that authorization,
+name it as an evidence gap rather than declaring its missing selector, and
+never invent a filename.
+
+When the planned change establishes a new or renamed action, or a changed
+cross-module interface, follow it through the existing registration wiring
+it requires and declare the exact existing sites that source evidence shows
+must change: the typed action catalog or registry declaration, any embedding
+or asset registry that must resolve the new or renamed reference, the
+dispatcher that routes typed actions to implementations, and module
+declarations or re-exports that expose a changed interface. Record each
+wiring dependency and its source reason in the description or authoring
+evidence. Declare only sites that must change: do not reserve every registry
+or caller, and add no unchanged registry selector for an existing same-name
+action-body-only change. A required wiring target that does not yet exist
+follows the creation-intent rules below; without that authorization, name it
+as an evidence gap rather than declaring its missing selector, and never
+predict an unspecified new filename.
 
 For review-filed tasks, task-pilot keeps selectors the finding names as change
 targets. It may omit a selector it verifies as read-only evidence or an
@@ -300,9 +380,11 @@ response lists the stored-but-unresolved selectors as
 keeps the strict check. Task writes on every surface return the same advisory
 `warnings` (on add: a disabled required tool, an unreadable parent, or a
 proposed task added without `context_files` and without the `no-diff-expected`
-tag, regardless of type; on add and update: an unreadable dependency or a
-backlog task with no footprint; and on approval: task-pilot blockers and a
-backlog task with no footprint); they never refuse the write.
+tag, regardless of type; on add and update: an unreadable dependency;
+on add, approval, or updates to status, tags, context files or complexity:
+a backlog task with no footprint; and on approval: task-pilot blockers).
+Comments and other metadata edits do not repeat the footprint warning;
+readiness remains visible in the task response. Warnings never refuse the write.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an
@@ -318,7 +400,8 @@ empty `context_files` while a drain is live.** File it `proposed`, run the
 pilot or set selectors, then promote. On 2026-10-10 three tasks filed into a
 live four-slot drain's backlog with no selectors all edited
 `website/src/styles/custom.css` concurrently, and two of their runs were
-cancelled. Add and update warn when they leave such a task in the backlog.
+cancelled. Creation, approval and readiness-field updates warn when they leave
+such a task in the backlog.
 
 A `proposed` or `backlog` task reports its `readiness`: `{ready, gaps}`,
 each gap with `code`, `severity`, `message` and `fix`. The `orbit.task.add`

@@ -17,32 +17,46 @@ pub const SYSTEM_AUDIT_IDENTITY: &str = "system";
 
 pub(crate) mod admission;
 pub mod agents;
+pub mod assistance;
 pub mod audit_event;
 pub mod auto_tasks;
+pub mod change_watch;
 pub mod codebase;
 pub mod config;
+pub mod contracts;
+pub mod crew_ladder;
+pub mod delivery_quality;
 pub mod distributed;
 pub(crate) mod executor;
 pub(crate) mod executor_host_os;
+pub mod experiment;
 pub mod gc;
 pub mod health;
+pub(crate) mod host_labels;
 pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
+pub(crate) mod mock_admission;
 pub mod plugin;
 pub(crate) mod pull_drain;
 pub mod review;
 pub mod routines;
 pub(crate) mod search;
+pub mod seeding_policy;
 pub mod skill;
 pub(crate) mod sweep_filing;
 pub(crate) mod tag_instructions;
 pub mod task;
+pub mod task_quality;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod vision_probe;
+pub mod visual_capture;
+pub(crate) mod visual_delivery;
 pub(crate) mod workflow;
+mod workspace;
 pub(crate) mod workspace_auto;
-pub mod workspace_sync;
+pub use workspace::{preset as workspace_preset, sync as workspace_sync};
 
 #[cfg(test)]
 mod tests;

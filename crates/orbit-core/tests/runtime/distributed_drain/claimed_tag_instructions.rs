@@ -292,3 +292,171 @@ crate::scenario_table!(
     authoritative_claimed_tag_instructions_scenarios,
     a_pull_captures_the_shipping_modes_authoritative_tag_instructions,
 );
+
+/// The owner's brief travels in the claim; implement dispatch can read task
+/// material but cannot fetch artifacts from the owner.
+struct BriefOwner(CaptureOwner);
+
+impl OwnerCoordinator for BriefOwner {
+    fn call(
+        &self,
+        name: &str,
+        input: Value,
+        session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        assert_ne!(
+            name, "orbit.task.artifact.get",
+            "dispatch must use the capture"
+        );
+        assert_ne!(input["_worker_read"], "artifacts", "no owner artifact read");
+        self.0.call(name, input, session)
+    }
+}
+
+fn a_claimed_leaf_receives_the_same_brief_and_rechecks_material() {
+    use orbit_core::application::task::TaskUpdateParams;
+
+    for (changed_code, changed_material) in [(false, false), (true, false), (false, true)] {
+        let pair = Pair::with_configs(
+            "[workflow.explore_brief]\nenabled = true\n\
+             [workflow.task_pilot_freshness]\n\
+             material_fields = [\"title\", \"description\", \"criteria\", \"plan\", \"selectors\", \"tags\"]\n",
+            // Delivery and freshness are deliberately different on the replica.
+            "[workflow.explore_brief]\nenabled = false\n",
+            &[None],
+        );
+        let owner = &pair.wire.owner;
+        let task = &pair.tasks[0];
+        let repo = &pair.owner_repo;
+        std::fs::write(repo.join(".gitignore"), "/.orbit/\n").unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/lib.rs"), "pub fn greet() {}\n").unwrap();
+        std::fs::write(repo.join("README.md"), "fixture\n").unwrap();
+        git(repo, &["init", "-q", "-b", "main"]);
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-q", "-m", "Inspected base"]);
+        let inspected = revision(repo, "HEAD").commit;
+        super::super::explore_brief::pilot_brief(owner, repo, task);
+        if changed_code {
+            std::fs::write(
+                repo.join("src/lib.rs"),
+                "pub fn greet() {}\npub fn wave() {}\n",
+            )
+            .unwrap();
+            git(repo, &["commit", "-q", "-am", "Move base"]);
+        }
+        let base = revision(repo, "HEAD").commit;
+        git(repo, &["update-ref", "refs/remotes/origin/main", &base]);
+        git(&pair.follower_repo, &["init", "-q", "-b", "main"]);
+        git(
+            &pair.follower_repo,
+            &["fetch", "-q", repo.to_str().unwrap(), "main"],
+        );
+        git(
+            &pair.follower_repo,
+            &["reset", "-q", "--hard", "FETCH_HEAD"],
+        );
+        if changed_material {
+            owner
+                .update_task_as_human(
+                    task,
+                    TaskUpdateParams {
+                        description: Some("Return a farewell instead of a greeting.".into()),
+                        ..Default::default()
+                    },
+                    "operator".into(),
+                )
+                .unwrap();
+        }
+        let drain = pair.run_drain();
+        let leaf = pair.launched_leaf(&drain, 1, std::process::id());
+        let record = pair.admission(&leaf);
+        let receipt = record.receipt.as_ref().unwrap();
+        let captured = receipt
+            .explore_brief
+            .as_ref()
+            .expect("the owner captures its current brief");
+        let artifact = owner
+            .get_task_artifact(task, orbit_types::task::EXPLORE_BRIEF_ARTIFACT)
+            .unwrap()
+            .unwrap();
+        assert_eq!(captured.document.as_bytes(), artifact.content);
+        assert!(
+            receipt.tag_instructions.is_some(),
+            "both guidance sources travel in the claim"
+        );
+        let mut older = serde_json::to_value(receipt).unwrap();
+        older.as_object_mut().unwrap().remove("explore_brief");
+        let older: orbit_store::contracts::AdmissionReceipt =
+            serde_json::from_value(older).unwrap();
+        assert!(
+            older.explore_brief.is_none(),
+            "older receipts remain readable"
+        );
+        let claim = receipt.claim.clone().unwrap();
+        let bound = pair
+            .follower
+            .clone()
+            .with_worker_invocation(
+                WorkerInvocation {
+                    owner_machine_id: super::OWNER.into(),
+                    owner_workspace_id: record.destination.owner_workspace_id,
+                    owner_destination: record.destination.selector,
+                    task_id: task.clone(),
+                    claim_id: claim.claim_id,
+                    execution: claim.executed_on,
+                    bound_run_id: leaf.clone(),
+                },
+                Arc::new(BriefOwner(CaptureOwner(owner.clone()))),
+            )
+            .unwrap();
+        let mut state = pair.follower_jobs.read_run_state(&leaf).unwrap().unwrap();
+        state.pipeline = json!({"worktree": {"base_sha": base}});
+        pair.follower_jobs.write_run_state(&leaf, &state).unwrap();
+        let received = RuntimeHost::explore_brief_for_activity(
+            &bound,
+            &leaf,
+            "agent_implement",
+            &json!({"task_id": task}),
+        )
+        .unwrap();
+        let expected = if changed_material {
+            "dropped: material_changed"
+        } else if changed_code {
+            "drifted"
+        } else {
+            "fresh"
+        };
+        assert_eq!(received.record.label(), expected, "{:?}", received.record);
+        assert_eq!(
+            received.record.inspection_revision.as_deref(),
+            Some(inspected.as_str())
+        );
+        if changed_material {
+            assert!(
+                received.brief.is_none(),
+                "a material edit without a new receipt drops"
+            );
+        } else {
+            let brief = received
+                .brief
+                .expect("the owner's brief reaches the follower");
+            assert_eq!(brief["base_sha"], base);
+            assert_eq!(
+                brief["brief"]["change"][0]["target"],
+                "symbol:src/lib.rs#greet:function"
+            );
+            if changed_code {
+                assert_eq!(
+                    brief["drift"]["files"],
+                    json!([{"path": "src/lib.rs", "added": 1, "deleted": 0}])
+                );
+            }
+        }
+    }
+}
+
+crate::scenario_table!(
+    claimed_explore_brief_scenarios,
+    a_claimed_leaf_receives_the_same_brief_and_rechecks_material,
+);

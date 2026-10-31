@@ -1,10 +1,13 @@
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_core::application::task::task_record_json;
+use orbit_core::application::task::{
+    TaskWriteMetadata, TaskWriteResponsePolicy, task_write_response_from_tool_answer,
+    task_write_response_json,
+};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::TaskHistoryEntry;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::output::color::Domain;
 
@@ -35,11 +38,16 @@ pub(crate) fn task_to_json_for_runtime(
     runtime: &OrbitRuntime,
     task: &orbit_core::Task,
 ) -> Result<Value, OrbitError> {
-    let status_by_id = runtime.dependency_status_index([task])?;
-    let row = runtime.task_row_with_sidecars(task.clone())?;
-    let doc = task_record_json(runtime, &row, &status_by_id)?;
-    warn_unresolved_crew(&doc);
-    Ok(Value::Object(doc))
+    let document = task_write_response_json(
+        runtime,
+        task,
+        &TaskWriteResponsePolicy::FullRecord,
+        &TaskWriteMetadata::default(),
+    )?;
+    if let Some(doc) = document.as_object() {
+        warn_unresolved_crew(doc);
+    }
+    Ok(document)
 }
 
 /// A crew this host cannot resolve is a configuration gap, not a corrupt
@@ -52,57 +60,26 @@ pub(super) fn warn_unresolved_crew(doc: &serde_json::Map<String, Value>) {
     }
 }
 
-/// A task write's document: the stored task's full record, carrying the
-/// write's `warnings` and `context_files_unverified` selectors from the
-/// tool's answer when there are any, and its redactions when it applied
-/// any. Each warning is also printed to stderr so a text-mode caller sees it.
+/// A task write's document: the shared full-record projection of the
+/// stored task, carrying the tool answer's write metadata. Rendering
+/// stays here: each warning is also printed to stderr so a text-mode
+/// caller sees it, as is an unresolved crew.
 pub(super) fn task_write_json(
     runtime: &OrbitRuntime,
     answer: &Value,
 ) -> Result<(Value, orbit_core::Task), OrbitError> {
-    let id = answer.get("id").and_then(Value::as_str).ok_or_else(|| {
-        OrbitError::Execution("task write answer did not name the task".to_string())
-    })?;
-    let task = runtime.get_task(id)?;
-    let mut document = task_to_json_for_runtime(runtime, &task)?;
-    let strings = |key: &str| {
-        answer
-            .get(key)
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    };
-    let warnings = strings("warnings");
-    let unverified = strings("context_files_unverified");
-    for warning in &warnings {
+    let (document, task, metadata) = task_write_response_from_tool_answer(runtime, answer)?;
+    for warning in &metadata.warnings {
         eprintln!("warning: {warning}");
     }
-    if !unverified.is_empty() {
+    if !metadata.context_files_unverified.is_empty() {
         eprintln!(
             "warning: context selectors stored without a verified target: {}",
-            unverified.join(", ")
+            metadata.context_files_unverified.join(", ")
         );
     }
-    if let Some(object) = document.as_object_mut() {
-        if !unverified.is_empty() {
-            object.insert("context_files_unverified".to_string(), json!(unverified));
-        }
-        if !warnings.is_empty() {
-            object.insert("warnings".to_string(), json!(warnings));
-        }
-        if answer.get("redactions_applied") == Some(&Value::Bool(true)) {
-            object.insert("redactions_applied".to_string(), Value::Bool(true));
-            object.insert(
-                "redactions".to_string(),
-                answer.get("redactions").cloned().unwrap_or(Value::Null),
-            );
-        }
+    if let Some(doc) = document.as_object() {
+        warn_unresolved_crew(doc);
     }
     Ok((document, task))
 }
@@ -115,11 +92,39 @@ pub(super) struct TaskTableFilters {
     pub(super) priority: bool,
     pub(super) task_type: bool,
     pub(super) runs_on: bool,
+    pub(super) scheduled: bool,
 }
 
 /// Build the list view for `orbit task list` from the tool's task records.
 /// The renderer decides how it is projected; this only describes the columns
 /// and the rows.
+/// The `RUNS ON` cell: the effective OS requirement, the capability labels
+/// the task requires, and the named wait while no host carrying them pulls.
+fn runs_on_cell(task: &Value, crew_unassigned: bool) -> String {
+    let mut cell = task
+        .get("os_requirement")
+        .and_then(|os| os.get("describe"))
+        .and_then(Value::as_str)
+        .unwrap_or(if crew_unassigned {
+            "any host from OS tags (crew unassigned)"
+        } else {
+            "any host"
+        })
+        .to_string();
+    let labels = task
+        .get("requires_labels")
+        .and_then(Value::as_array)
+        .map(|labels| labels.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if !labels.is_empty() {
+        cell.push_str(&format!("; labels: {}", labels.join(", ")));
+    }
+    if let Some(wait) = task.get("placement_wait").and_then(Value::as_str) {
+        cell.push_str(&format!("; {wait}"));
+    }
+    cell
+}
+
 pub(super) fn task_table(
     tasks: &[Value],
     full: bool,
@@ -127,6 +132,13 @@ pub(super) fn task_table(
 ) -> crate::output::table::Table {
     use crate::output::table::Column;
     use comfy_table::Cell;
+    let show_tools = tasks.iter().any(|task| {
+        ["required_tools", "granted_tools"].iter().any(|key| {
+            task.get(*key)
+                .and_then(Value::as_array)
+                .is_some_and(|tools| !tools.is_empty())
+        })
+    });
     // `orbit task show <id>` prints the untruncated title and body of any row.
     let mut columns = vec![
         Column::new("ID").fixed(),
@@ -136,11 +148,22 @@ pub(super) fn task_table(
         Column::new("TYPE").fixed().filtered(filtered.task_type),
         Column::new("RUNS ON").filtered(
             filtered.runs_on
-                || tasks
-                    .iter()
-                    .any(|task| task.get("os_requirement").is_some()),
+                || tasks.iter().any(|task| {
+                    task.get("os_requirement").is_some() || task.get("requires_labels").is_some()
+                }),
         ),
     ];
+    let show_schedule =
+        filtered.scheduled || tasks.iter().any(|task| task["not_before"].is_string());
+    if show_schedule {
+        columns.push(Column::new("SCHEDULED").fixed().filtered(true));
+    }
+    if show_tools {
+        columns.extend([
+            Column::new("REQUIRED TOOLS").filtered(true),
+            Column::new("GRANTED TOOLS").filtered(true),
+        ]);
+    }
     if full {
         columns.extend([
             Column::new("IMPLEMENTED_BY").fixed(),
@@ -158,17 +181,17 @@ pub(super) fn task_table(
             crate::output::color::cell(field("status"), Domain::TaskStatus),
             crate::output::color::cell(field("priority"), Domain::Priority),
             crate::output::color::cell(field("type"), Domain::TaskType),
-            Cell::new(
-                task.get("os_requirement")
-                    .and_then(|os| os.get("describe"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(if field("crew").is_empty() {
-                        "any host from OS tags (crew unassigned)"
-                    } else {
-                        "any host"
-                    }),
-            ),
+            Cell::new(runs_on_cell(task, field("crew").is_empty())),
         ];
+        if show_schedule {
+            row.push(Cell::new(field("not_before")));
+        }
+        if show_tools {
+            row.extend([
+                Cell::new(json_str_list(&task["required_tools"])),
+                Cell::new(json_str_list(&task["granted_tools"])),
+            ]);
+        }
         if full {
             row.extend([
                 Cell::new(
@@ -195,7 +218,8 @@ pub(crate) fn format_task_locks(locks: &Value) -> String {
         .map_or(&[][..], Vec::as_slice);
 
     let mut out = String::new();
-    if by_task.is_empty() && by_reservation.is_empty() {
+    let by_lease = locks["by_lease"].as_array().map_or(&[][..], Vec::as_slice);
+    if by_task.is_empty() && by_reservation.is_empty() && by_lease.is_empty() {
         out.push_str("No files currently locked.\n");
         return out;
     }
@@ -248,6 +272,20 @@ pub(crate) fn format_task_locks(locks: &Value) -> String {
         }
     }
 
+    if !by_lease.is_empty() {
+        out.push_str("\nLeases:\n");
+        for lease in by_lease {
+            let id = lease["lease_id"].as_str().unwrap_or_default();
+            let mode = lease["mode"].as_str().unwrap_or_default();
+            let principal = lease["principal"].as_str().unwrap_or_default();
+            let files = json_str_list(&lease["selectors"]);
+            let expires_at = lease["expires_at"].as_str().unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "[{id}] mode={mode} principal={principal} files=[{files}] expires_at={expires_at}"
+            );
+        }
+    }
     out
 }
 

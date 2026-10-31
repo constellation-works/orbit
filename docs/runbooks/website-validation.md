@@ -4,14 +4,15 @@ summary: Build, preview, and validate Orbit website changes with Playwright insi
 tags: [operations, website, sandbox, playwright, validation]
 paths: ["website/**"]
 related_features: [orbit-docs]
-related_artifacts: ["ORB-11329", "ORB-11379"]
-last_validated: 2026-10-19
+related_artifacts: ["ORB-11329", "ORB-11379", "F2026-10-688"]
+last_validated: 2026-10-29
 ---
 
 # Validate Website Changes in a Job-Run Sandbox
 
 Use this runbook when a website task needs rendered-page evidence from an Orbit job-run
-sandbox, including a working `astro preview` and a Chromium launch.
+sandbox. Managed agents keep preview and validation in a foreground-owned process; an
+operator may start a background preview for interactive inspection.
 
 ## Prerequisites and safety
 
@@ -29,11 +30,11 @@ mkdir -p "$npm_config_cache"
 ```
 
 Keep the Playwright package and browser, npm cache, downloaded `.deb` files, extracted
-libraries, and logs under `SANDBOX_ROOT` in `.orbit/tmp/`. `npm ci` for interactive preview
-populates `website/node_modules`; record whether that directory existed before the run and
-remove it at handoff only when this run created it. Disposable Playwright packages
-and browsers stay under `.orbit/tmp/`; a prepared host kit stays outside the
-checkout and is read-only.
+libraries, and logs under `SANDBOX_ROOT` in `.orbit/tmp/`. `npm ci` for an in-checkout
+website build or preview populates `website/node_modules`; record whether that directory
+existed before the run and remove it at handoff only when this run created it. Disposable
+Playwright packages and browsers stay under `.orbit/tmp/`; a prepared host kit stays outside
+the checkout and is read-only.
 
 ## Establish the Node and npm environment
 
@@ -177,8 +178,104 @@ library directory with the directory shown by `find "$LIB_ROOT" -type d -name '*
 
 ## Build, preview, and collect evidence
 
-Build before previewing, then start an Astro-managed preview bound to loopback on a known
-port. Stop it with the command under "Stop the server after validation":
+Build before previewing. The managed-agent route below uses Astro's public JavaScript
+`preview()` API from the installed `astro` package. It serves the already-built `dist/` and
+lets the same foreground Node process own both server and checks. Its `finally` block stops
+the server whether a check passes or throws. Do not use `--background` for managed-agent
+validation. The API does not run npm's `prepreview` hook; `npm run build` runs the matching
+`prebuild` cleanup first. The current lockfile resolves Astro 7.4.2; `preview()` is exported
+from the package root and returns a public server object with the bound `port`
+and `stop()`.
+
+Run the smoke check in one command. It serves only on `127.0.0.1`, checks the selected routes
+at desktop and mobile widths, and stops preview even if Chromium cannot launch or a check
+fails:
+
+```bash
+npm --prefix "$REPO/website" run build
+export PREVIEW_PORT=4321
+export PREVIEW_URL="http://127.0.0.1:$PREVIEW_PORT"
+PAGES=(/ /getting-started/install/ /getting-started/first-task/ /reference/cli/)
+run_foreground_preview_check() {
+  local mode="$1"
+  shift
+  (cd "$REPO/website" && ASTRO_TELEMETRY_DISABLED=1 node --input-type=module - \
+    "$PLAYWRIGHT_MODULE" "$REPO" "$PREVIEW_PORT" "$mode" "$@" <<'NODE'
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { preview } from 'astro';
+
+const [playwrightEntry, repoRoot, portText, mode, ...args] = process.argv.slice(2);
+const port = Number(portText);
+const server = await preview({
+  root: process.cwd(),
+  server: { host: '127.0.0.1', port, open: false },
+});
+let browser;
+try {
+  if (server.port !== port) {
+    throw new Error(`PREVIEW_PORT ${port} is in use; Astro bound ${server.port}. Free that port or choose another.`);
+  }
+  const baseUrl = `http://127.0.0.1:${server.port}`;
+  if (mode === 'command') {
+    const [command, ...commandArgs] = args;
+    if (!command) throw new Error('missing validation command');
+    const child = spawn(command, commandArgs, {
+      cwd: repoRoot,
+      detached: false,
+      stdio: 'inherit',
+    });
+    const [code, signal] = await once(child, 'close');
+    if (code !== 0) throw new Error(`validation exited ${code ?? signal}`);
+  } else if (mode === 'smoke') {
+    const pages = args;
+    const { chromium } = await import(`file://${playwrightEntry}`);
+    browser = await chromium.launch({ headless: true });
+    const failures = [];
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      const page = await browser.newPage({ viewport });
+      page.on('console', message => console.log(JSON.stringify({ type: 'console', viewport, level: message.type(), text: message.text() })));
+      page.on('pageerror', error => failures.push({ type: 'pageerror', viewport, text: error.message }));
+      for (const route of pages) {
+        const response = await page.goto(`${baseUrl}${route}`, { waitUntil: 'networkidle' });
+        const result = await page.evaluate(() => ({
+          h1: document.querySelector('h1')?.textContent?.trim() ?? null,
+          textLength: document.body.innerText.length,
+          scrollWidth: document.documentElement.scrollWidth,
+          viewportWidth: window.innerWidth,
+        }));
+        console.log(JSON.stringify({ viewport, route, status: response?.status() ?? null, ...result }));
+        if (!response || response.status() >= 400 || result.scrollWidth > result.viewportWidth) {
+          failures.push({ type: 'page-check', viewport, route, status: response?.status(), ...result });
+        }
+      }
+      await page.close();
+    }
+    if (failures.length) throw new Error(JSON.stringify({ failures }, null, 2));
+  } else throw new Error(`unknown validation mode: ${mode}`);
+} finally {
+  try {
+    if (browser) await browser.close();
+  } finally {
+    await server.stop();
+  }
+}
+NODE
+  )
+}
+run_foreground_preview_check smoke "${PAGES[@]}"
+```
+
+Keep this shell session open to use `run_foreground_preview_check` for the task-specific
+browser scripts below. In `command` mode the wrapper waits for the child in the foreground
+inside the `try`; a nonzero exit or spawn error still reaches `finally` and stops Astro. The
+child is not detached and must not start its own preview. If Astro binds a port
+other than `PREVIEW_PORT`, which happens when that port is already in use, the wrapper
+throws before any check runs and `finally` stops the server it started. A command check
+therefore receives `$PREVIEW_URL` only for the server this run owns.
+
+Operators doing interactive inspection may use the background CLI flow instead. Keep it
+separate from a managed-agent validation run:
 
 ```bash
 npm --prefix "$REPO/website" run build
@@ -219,52 +316,26 @@ UTF-8, and HTML fallback content. The Orbit maintainers own renewal: review the
 file before its `Expires` timestamp and renew it annually. A local build proves
 only that the asset is packaged; it does not prove public publication.
 
-Launch Chromium through the staged Playwright package at both representative desktop and
-mobile sizes. The following smoke check records HTTP status, heading, rendered text length,
-console/page errors, and horizontal overflow; extend `PAGES` with the routes changed by the
-task:
-
-```bash
-PAGES=(/ /getting-started/install/ /getting-started/first-task/ /reference/cli/)
-node --input-type=module - "$PLAYWRIGHT_MODULE" "$PREVIEW_URL" "${PAGES[@]}" <<'NODE'
-const [playwrightEntry, baseUrl, ...pages] = process.argv.slice(2);
-const { chromium } = await import(`file://${playwrightEntry}`);
-const browser = await chromium.launch({ headless: true });
-const failures = [];
-for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-  const page = await browser.newPage({ viewport });
-  page.on('console', message => console.log(JSON.stringify({ type: 'console', viewport, level: message.type(), text: message.text() })));
-  page.on('pageerror', error => failures.push({ type: 'pageerror', viewport, text: error.message }));
-  for (const route of pages) {
-    const response = await page.goto(`${baseUrl}${route}`, { waitUntil: 'networkidle' });
-    const result = await page.evaluate(() => ({
-      h1: document.querySelector('h1')?.textContent?.trim() ?? null,
-      textLength: document.body.innerText.length,
-      scrollWidth: document.documentElement.scrollWidth,
-      viewportWidth: window.innerWidth,
-    }));
-    console.log(JSON.stringify({ viewport, route, status: response?.status() ?? null, ...result }));
-    if (!response || response.status() >= 400 || result.scrollWidth > result.viewportWidth) failures.push({ type: 'page-check', viewport, route, status: response?.status(), ...result });
-  }
-  await page.close();
-}
-await browser.close();
-if (failures.length) { console.error(JSON.stringify({ failures }, null, 2)); process.exit(1); }
-NODE
-```
+The foreground wrapper's inline smoke check records HTTP status, heading, rendered text
+length, console/page errors, and horizontal overflow at 1440 × 900 and 390 × 844. Extend
+`PAGES` with the routes changed by the task.
 
 For changes involving search or navigation, add checks for the live Pagefind UI and the
 documentation journeys affected by the change. For example, enter a query in the search
 control and assert that a result is visible, then click the links for the relevant
 getting-started or how-to journey and assert each destination response is below 400. Save the
-command output and the preview log with the job evidence; do not copy either into the
-worktree.
+command output with the job evidence. The foreground API flow has no separate preview log;
+when an operator uses the background flow, save its preview log too. Do not copy logs into
+the worktree.
 
-Stop the server after validation:
+For an operator-owned interactive preview only, stop the background server after inspection:
 
 ```bash
 (cd "$REPO/website" && node node_modules/astro/bin/astro.mjs preview stop)
 ```
+
+Managed-agent validation stops through the foreground wrapper's `finally` block; do not run
+the CLI stop command for that route.
 
 ### Dashboard tour and run screenshot
 
@@ -296,11 +367,12 @@ publish or access a live dashboard as part of this local regression check.
 
 ### Project overview card navigation
 
-After `npm run build`, start `npm run preview -- --background` as shown above and run
-the browser check against the local preview using the staged Playwright module and Chromium:
+After `npm run build`, run this browser check through the foreground wrapper above. The
+wrapper owns preview on `PREVIEW_PORT` until the checker exits, and refuses to start the
+checker if that port is taken:
 
 ```bash
-node website/scripts/check-project.mjs \
+run_foreground_preview_check command node "$REPO/website/scripts/check-project.mjs" \
   "$PLAYWRIGHT_MODULE" "$PREVIEW_URL" .orbit/tmp/project-links-browser
 ```
 
@@ -310,13 +382,14 @@ It saves the visited URLs, response statuses, and headings under the evidence di
 
 ### Inline code layout checks
 
-After `npm run check` and `npm run build`, serve `dist/` with `npm run preview`
-and run the browser regression check from the repository root with an installed
-Playwright module and Chromium (the staged package from "Stage Playwright and
-Chromium" above satisfies this):
+After `npm run check` and `npm run build`, run this browser regression check through the
+foreground wrapper above. It keeps the built `dist/` served on loopback at
+`PREVIEW_PORT` until the checker exits, and refuses to start if that port is taken; the
+staged Playwright package from "Stage Playwright and Chromium" above satisfies
+the browser requirement:
 
 ```bash
-node website/scripts/check-inline-code.mjs \
+run_foreground_preview_check command node "$REPO/website/scripts/check-inline-code.mjs" \
   "$PLAYWRIGHT_MODULE" "$PREVIEW_URL" .orbit/tmp/inline-code-browser
 ```
 
@@ -412,9 +485,13 @@ After the maintainer's manual publication, verify the public result independentl
 ```bash
 curl --fail --show-error --silent --dump-header /tmp/security-txt.headers \
   --output "$SANDBOX_ROOT/security.txt" https://orbit-cli.com/.well-known/security.txt
-grep -Eiq '^content-type:[[:space:]]*text/plain(?:;|$)' /tmp/security-txt.headers
+grep -Eiq '^content-type:[[:space:]]*text/plain[[:space:]]*(;.*)?$' /tmp/security-txt.headers
 npm --prefix "$REPO/website" run validate:security-txt -- "$SANDBOX_ROOT/security.txt"
 ```
+
+The header check accepts `text/plain` in any case, with or without parameters such
+as `charset=utf-8`, and with CRLF or LF line endings. It rejects `text/html` and
+`text/plainx`.
 
 Then rerun the security scan. A 404, HTML response, stale `Expires`, failed
 HSTS check, or missing redirect is evidence that the maintainer's external publication

@@ -21,7 +21,10 @@ pub(crate) fn sort_tasks_for_automatic_dispatch<T: Borrow<Task>>(
     order.sort(tasks, expiring);
 }
 
-pub(super) fn task_root_id(task: &Task, task_lookup: &BTreeMap<String, Task>) -> String {
+pub(in crate::application::admission) fn task_root_id(
+    task: &Task,
+    task_lookup: &BTreeMap<String, Task>,
+) -> String {
     let mut path = vec![task.id.clone()];
     let mut root_id = task.id.clone();
     let mut next_parent_id = task.parent_id().map(ToOwned::to_owned);

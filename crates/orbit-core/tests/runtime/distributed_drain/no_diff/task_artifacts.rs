@@ -11,13 +11,31 @@ fn task_artifact(fixture: &mut CleanLeaf, path: &str, bytes: &[u8]) {
 }
 
 fn assert_owner_artifact(fixture: &CleanLeaf, path: &str, content: &[u8], media: &str) {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+
     let owner = &fixture.pair.wire.owner;
-    owner
+    let public = owner
         .run_tool(
             "orbit.task.artifact.get",
             json!({"id": fixture.task, "path": path}),
         )
         .expect("the artifact is readable through the owner's public tool");
+    assert_eq!(public["media_type"], media);
+    if let Ok(expected_text) = std::str::from_utf8(content) {
+        assert_eq!(public["encoding"], "utf8");
+        assert_eq!(public["content"], expected_text);
+    } else {
+        assert_eq!(public["encoding"], "base64");
+        let encoded = public["content_base64"]
+            .as_str()
+            .expect("binary artifacts are returned as base64 through the public tool");
+        let decoded = BASE64_STANDARD
+            .decode(encoded)
+            .expect("the public artifact payload is valid base64");
+        assert_eq!(decoded, content);
+    }
+
     let stored = owner
         .get_task_artifact(&fixture.task, path)
         .unwrap()

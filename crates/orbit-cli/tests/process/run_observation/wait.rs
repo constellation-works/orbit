@@ -310,11 +310,14 @@ fn explicit_task_pilot_refuses_unsupported_status_before_submission() {
                 )
                 .unwrap();
         }
+        let observed_revision = crate::git_repo::run(&fixture.work, &["rev-parse", "HEAD"]);
+        let observed_tree = crate::git_repo::run(&fixture.work, &["rev-parse", "HEAD^{tree}"]);
         fs::write(
             &response,
             serde_json::json!({
                 "schemaVersion": 1, "status": "success", "error": null,
-                "result": {"partition_index": 0, "task_ids": [task.id], "tasks": [{
+                "result": {"partition_index": 0, "observed_revision": observed_revision,
+                    "observed_tree": observed_tree, "task_ids": [task.id], "tasks": [{
                     "task_id": task.id, "context_files_after": ["file:README.md"],
                     "disposition": "selectors", "recommended_crew": "sol",
                     "recommended_complexity": "low", "confidence": "high",
@@ -363,12 +366,168 @@ fn explicit_task_pilot_refuses_unsupported_status_before_submission() {
     assert_eq!(fs::read_to_string(calls).unwrap().lines().count(), 2);
 }
 
+/// A provider-capacity pilot failure ends `held`: an accepted async
+/// submission still exits zero, while `--wait` exits nonzero with
+/// `state=held` and the provider diagnostic in both text and JSON.
+#[cfg(unix)]
+fn task_pilot_wait_held_provider_capacity_exits_nonzero() {
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_core::{OrbitRuntime, TaskStatus};
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::terminal();
+    fs::write(fixture.work.join("README.md"), "fixture\n").unwrap();
+    for args in [
+        vec!["config", "user.name", "Orbit Test"],
+        vec!["config", "user.email", "orbit-test@example.com"],
+        vec!["config", "commit.gpgsign", "false"],
+        vec!["add", "README.md"],
+        vec!["commit", "-m", "seed"],
+    ] {
+        crate::git_repo::run(&fixture.work, &args);
+    }
+    let runtime =
+        OrbitRuntime::from_roots(&fixture.home.join(".orbit"), &fixture.work.join(".orbit"))
+            .unwrap();
+    let calls = fixture.home.join("provider-calls-held");
+    fs::write(&calls, "").unwrap();
+    let provider = fixture.home.join("empty-bin/codex");
+    fs::write(
+        &provider,
+        format!(
+            "#!/bin/sh\n/bin/cat > /dev/null\nprintf 'call\\n' >> '{}'\nprintf '%s\\n' '{{\"type\":\"turn.failed\",\"error\":{{\"message\":\"Selected model is at capacity. Please try a different model.\"}}}}'\nexit 1\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&provider, fs::Permissions::from_mode(0o755)).unwrap();
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../orbit-core/assets");
+    let mut executor: orbit_types::resource::ExecutorResource =
+        serde_yaml::from_str(&fs::read_to_string(assets.join("executors/codex.yaml")).unwrap())
+            .unwrap();
+    executor.spec.command = Some(provider.display().to_string());
+    executor.spec.sandbox = Some(orbit_types::workflow::ExecutorSandboxKind::Off);
+    runtime
+        .upsert_executor_def(&orbit_types::workflow::ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+    let add = |title: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Held pilot fixture".into(),
+                acceptance_criteria: vec!["Assess only eligible tasks".into()],
+                plan: "Inspect README.md".into(),
+                tags: vec!["delivery:task_local_pipeline".into()],
+                status: Some(TaskStatus::Proposed),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+    };
+
+    // Accepted asynchronous submission exits zero even though the run
+    // later holds; poll the durable record until it reaches held.
+    let async_task = add("held async pilot");
+    let output = fixture
+        .orbit()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .args(["run", "task-pilot", &async_task, "--json"])
+        .timeout(std::time::Duration::from_secs(60))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "async submission: {output:?}");
+    let submitted: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        matches!(submitted["state"].as_str(), Some("submitted" | "queued")),
+        "{submitted}"
+    );
+    let async_run = submitted["run_id"].as_str().unwrap().to_string();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while fixture.run_state(&async_run) != "held" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "async run {async_run} did not reach held; state={}",
+            fixture.run_state(&async_run)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    for as_json in [true, false] {
+        let task = add(if as_json {
+            "held json pilot"
+        } else {
+            "held text pilot"
+        });
+        let mut command = fixture.orbit();
+        command
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .args([
+                "run",
+                "task-pilot",
+                &task,
+                "--wait",
+                "--timeout-seconds",
+                "120",
+            ])
+            .timeout(std::time::Duration::from_secs(180));
+        if as_json {
+            command.arg("--json");
+        }
+        let output = command.output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "held --wait must exit nonzero: {output:?}"
+        );
+        if as_json {
+            let result: Value = serde_json::from_slice(&output.stdout)
+                .unwrap_or_else(|_| panic!("held JSON: {output:?}"));
+            assert_eq!(result["state"], "held", "{result}");
+            assert_eq!(result["wait_timeout"], false, "{result}");
+            let diagnostic = format!(
+                "{} {}",
+                result["error_code"].as_str().unwrap_or(""),
+                result["error_message"].as_str().unwrap_or("")
+            );
+            assert!(
+                diagnostic.contains("capacity") || diagnostic.contains("at capacity"),
+                "held JSON must retain the provider diagnostic: {result}"
+            );
+            assert_eq!(
+                fixture.run_state(result["run_id"].as_str().unwrap()),
+                "held"
+            );
+        } else {
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            assert!(text.contains("state=held"), "{text}");
+            assert!(
+                text.contains("capacity"),
+                "held text must retain the provider diagnostic: {text}"
+            );
+        }
+    }
+    assert!(
+        fs::read_to_string(&calls).unwrap().lines().count() >= 3,
+        "provider must have been invoked for each pilot run"
+    );
+}
+
 #[test]
 fn wait_contracts() {
     if !isolated_run_observation("run_observation::wait::wait_contracts") {
         return;
     }
     for (name, check) in [
+        #[cfg(unix)]
+        (
+            "task_pilot_wait_held_provider_capacity_exits_nonzero",
+            task_pilot_wait_held_provider_capacity_exits_nonzero as fn(),
+        ),
         #[cfg(unix)]
         (
             "explicit_task_pilot_refuses_unsupported_status_before_submission",

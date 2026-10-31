@@ -5,6 +5,9 @@ use orbit_agent::loop_engine::audit::NullSink;
 use orbit_engine::activity_job::cli_runner::run_cli_backend;
 use orbit_engine::{DispatchError, V2AuditWriter};
 use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, V2AuditEventKind};
+use orbit_types::workflow::{
+    ExperimentActivityOverlay, ExperimentOverlayRecord, TagInstructionRole,
+};
 use std::{
     fs,
     path::Path,
@@ -278,6 +281,304 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{"policy":"ok"},"e
             .as_slice()
         )
     );
+}
+
+/// An allowlisted activity gets the same claimed-mode guard as a deny-listed
+/// one: an allowlist the removal empties refuses every tool (an empty
+/// `ORBIT_ACTIVITY_TOOLS` reads as unrestricted), and a wildcard covering
+/// `orbit.task.update` keeps its other tools but not that one.
+#[test]
+fn run_cli_backend_claimed_allowlist_never_widens_or_keeps_owner_task_updates() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::run_cli_backend_claimed_allowlist_never_widens_or_keeps_owner_task_updates"
+    )) {
+        return;
+    }
+
+    for (tools, expected) in [
+        (vec!["orbit.task.update"], "orbit.activity-policy.none"),
+        (
+            vec!["orbit.task.*", "orbit.search"],
+            "orbit.task.show,orbit.search",
+        ),
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let script = temp.path().join("grok");
+        write_executable(
+            &script,
+            &format!(
+                r#"#!/bin/sh
+cat > /dev/null
+if [ "$ORBIT_ACTIVITY_TOOLS" = "{expected}" ]; then
+  printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{"policy":"ok"}},"error":null}}'
+else
+  printf '{{"schemaVersion":1,"status":"failed","error":{{"code":"tools_widened","message":"%s","details":null}}}}\n' "$ORBIT_ACTIVITY_TOOLS"
+  exit 1
+fi
+"#
+            ),
+        );
+        let audit = persisted_writer(
+            &temp.path().join("audit"),
+            "job-claimed-allowlist",
+            "grok:grok-build",
+        );
+        let host = TestHost::with_command(script.display().to_string())
+            .with_additional_tools(&["orbit.task.update"]);
+        let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+        spec.tools = tools.iter().map(|tool| (*tool).to_string()).collect();
+
+        let outcome = run_cli_backend(
+            &host,
+            &spec,
+            "custom_allowlist",
+            "job-claimed-allowlist",
+            audit,
+            &serde_json::json!({"prompt": "hi", "claimed": true}),
+            None,
+        )
+        .expect("run succeeds");
+
+        assert!(
+            outcome.success,
+            "{tools:?}: child saw unexpected tools: {:?} {:?}",
+            outcome.output, outcome.message
+        );
+    }
+}
+
+fn experiment_tool_overlay(add: &[&str], remove: &[&str]) -> ExperimentActivityOverlay {
+    ExperimentActivityOverlay {
+        experiment: "exp-overlay-audit".to_string(),
+        arm: "treatment".to_string(),
+        segment: 1,
+        role: TagInstructionRole::Implement,
+        instruction: None,
+        suppress_default_instructions: false,
+        tools_add: add.iter().map(|tool| (*tool).to_string()).collect(),
+        tools_remove: remove.iter().map(|tool| (*tool).to_string()).collect(),
+        skills: Vec::new(),
+    }
+}
+
+fn experiment_overlay_records(
+    overlay: ExperimentActivityOverlay,
+    required_tools: &[&str],
+    claimed: bool,
+    deny_mode: bool,
+    spec_tools: &[&str],
+) -> Vec<ExperimentOverlayRecord> {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r##"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
+"##,
+    );
+    let audit = persisted_writer(
+        &temp.path().join("audit"),
+        "job-exp-overlay",
+        "grok:grok-build",
+    );
+    let host = TestHost::with_command(script.display().to_string())
+        .with_experiment_overlays(vec![overlay])
+        .with_required_tools(required_tools);
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    if deny_mode {
+        spec.tool_disallow_list = Some(Vec::new());
+    } else {
+        spec.tools = spec_tools.iter().map(|tool| (*tool).to_string()).collect();
+    }
+    let mut input = serde_json::json!({"prompt": "hi"});
+    if claimed {
+        input["claimed"] = serde_json::json!(true);
+    }
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "agent_implement",
+        "job-exp-overlay",
+        audit.clone(),
+        &input,
+        None,
+    )
+    .expect("run succeeds");
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.output);
+    audit
+        .events_snapshot()
+        .expect("audit snapshot")
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            V2AuditEventKind::ExperimentOverlayApplied { overlays, .. } => Some(overlays),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn experiment_overlay_claimed_denied_addition_emits_no_applied_record() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_claimed_denied_addition_emits_no_applied_record"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&["orbit.task.update"], &[]),
+        &[],
+        true,
+        true,
+        &[],
+    );
+    assert!(
+        records.is_empty(),
+        "claimed-denied addition is a no-op: {records:?}"
+    );
+}
+
+#[test]
+fn experiment_overlay_required_tool_removal_emits_no_applied_record() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_required_tool_removal_emits_no_applied_record"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&[], &["github.run.list"]),
+        &["github.run.list"],
+        false,
+        true,
+        &[],
+    );
+    assert!(
+        records.is_empty(),
+        "required-tool removal is filtered: {records:?}"
+    );
+}
+
+#[test]
+fn experiment_overlay_already_effective_addition_emits_no_applied_record() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_already_effective_addition_emits_no_applied_record"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&["orbit.search"], &[]),
+        &[],
+        false,
+        true,
+        &[],
+    );
+    assert!(
+        records.is_empty(),
+        "already-effective addition is a no-op: {records:?}"
+    );
+}
+
+#[test]
+fn experiment_overlay_wildcard_effective_addition_emits_no_applied_record() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_wildcard_effective_addition_emits_no_applied_record"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&["orbit.task.show"], &[]),
+        &[],
+        false,
+        false,
+        &["orbit.task.*"],
+    );
+    assert!(
+        records.is_empty(),
+        "wildcard-effective addition is a no-op: {records:?}"
+    );
+}
+
+#[test]
+fn experiment_overlay_actual_removal_records_only_removed_tool() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_actual_removal_records_only_removed_tool"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&[], &["github.run.list"]),
+        &[],
+        false,
+        true,
+        &[],
+    );
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].tools_removed, ["github.run.list"], "{records:?}");
+    assert!(records[0].tools_added.is_empty(), "{records:?}");
+}
+
+/// A blob the audit store cannot write is counted as an audit failure and
+/// recorded as no ref, never as an `error:` string standing in for one.
+#[test]
+fn run_cli_backend_counts_a_failed_blob_write_and_records_no_ref() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::run_cli_backend_counts_a_failed_blob_write_and_records_no_ref"
+    )) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r##"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
+"##,
+    );
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-blob-failure", "grok:grok-build");
+    // A file where the blob directory belongs makes every blob write fail.
+    fs::create_dir_all(&audit_root).expect("audit root");
+    fs::write(audit_root.join("blobs"), b"not a directory").expect("block blob directory");
+    let host = TestHost::with_command(script.display().to_string());
+    let spec = test_agent_loop_spec_for("grok", Duration::from_secs(10));
+
+    run_cli_backend(
+        &host,
+        &spec,
+        "agent_implement",
+        "job-blob-failure",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("provider output is still projected");
+
+    assert!(audit.degraded_audit(), "lost blobs degrade the audit trail");
+    assert!(audit.audit_failure_count() >= 3, "stdin, stdout and stderr");
+    for event in audit.events_snapshot().expect("audit snapshot") {
+        match event.kind {
+            V2AuditEventKind::CliInvocationStarted { stdin_blob_ref, .. } => {
+                assert_eq!(stdin_blob_ref, None);
+            }
+            V2AuditEventKind::CliInvocationFinished {
+                stdout_blob_ref,
+                stderr_blob_ref,
+                ..
+            } => {
+                assert_eq!((stdout_blob_ref, stderr_blob_ref), (None, None));
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A live env value the provider echoes back on any stream is redacted

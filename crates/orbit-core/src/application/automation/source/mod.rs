@@ -30,10 +30,6 @@ use std::{
 /// Overall budget for every git and provider command one source pass runs.
 pub(super) const SOURCE_DEADLINE: Duration = Duration::from_secs(30);
 
-/// A delivery pass could not fetch `origin/<branch>`. Observation is not
-/// advanced and the local branch is not consulted in its place.
-pub(crate) const SOURCE_FETCH_FAILED: &str = "source_fetch_failed";
-
 struct ObservationLimits {
     commits: usize,
     lookups: usize,

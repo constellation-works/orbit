@@ -103,8 +103,12 @@ implementation with the old candidate discarded. See
 | Prepare/promote work and supervise progress | [Operating loop](references/loop.md) |
 | Scope completion authority and dispatch windows | [Authorization](references/authorization.md) |
 | Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
+| Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
 | Jobs, activities, run commands and CI sweep | [Workflows](references/workflows.md) |
 | Diagnose a specific failed or stuck run | [Run debugging](references/run-debugging.md) |
+| Tell an inherited red base from candidate damage in hosted CI | [Hosted-check diagnosis](references/run-debugging.md#hosted-check-failures-and-inherited-red-bases) |
+| Diagnose a failed local required-validation command and its replay evidence | [Local validation replay](references/run-debugging.md#local-required-validation-replay) |
+| Find or answer a human decision request on held work | [Decision requests](references/run-debugging.md#decision-requests-on-held-work) |
 | Match an observed failure to a remedy | [Common failures](references/common-failures.md) |
 | Route CI findings, recover delivery and verify deployment | [Recovery](references/recovery.md) |
 | Salvage an incomplete or stopped candidate instead of starting over | [Salvage an incomplete candidate](references/recovery.md#salvage-an-incomplete-candidate) |

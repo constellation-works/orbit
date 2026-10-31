@@ -2,8 +2,8 @@ use orbit_types::identity::OrbitId;
 
 use super::paths::ContextCreationAuthorization;
 use orbit_types::task::{
-    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskHistoryEntry, TaskOrigin,
-    TaskPriority, TaskRelation, TaskStatus, TaskType,
+    ExternalRef, TaskArtifact, TaskComment, TaskComplexity, TaskDecision, TaskHistoryEntry,
+    TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
 };
 
 #[derive(Default, Clone)]
@@ -20,6 +20,9 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) dependencies: Option<Vec<String>>,
     pub(crate) relations: Option<Vec<TaskRelation>>,
     pub(crate) tags: Option<Vec<String>>,
+    pub(crate) granted_tools: Option<Vec<String>>,
+    pub(crate) requires_labels: Option<Vec<String>>,
+    pub(crate) not_before: Option<Option<chrono::DateTime<chrono::Utc>>>,
     pub(crate) plan: Option<String>,
     pub(crate) execution_summary: Option<String>,
     pub(crate) context_files: Option<Vec<String>>,
@@ -63,6 +66,9 @@ impl TaskRecordUpdateParams {
             || self.dependencies.is_some()
             || self.relations.is_some()
             || self.tags.is_some()
+            || self.granted_tools.is_some()
+            || self.requires_labels.is_some()
+            || self.not_before.is_some()
             || self.plan.is_some()
             || self.execution_summary.is_some()
             || self.context_files.is_some()
@@ -106,6 +112,13 @@ pub struct TaskAddParams {
     pub tags: Vec<String>,
     /// Exact canonical tools to add to the selected activity baseline.
     pub required_tools: Vec<String>,
+    /// Operator-granted tools. Only the tool chokepoint's operator gate
+    /// admits a caller-supplied grant; in-process filers leave it empty.
+    pub granted_tools: Vec<String>,
+    /// Capability labels a host must all carry to run the task.
+    pub requires_labels: Vec<String>,
+    /// The instant before which no dispatcher starts the task.
+    pub not_before: Option<chrono::DateTime<chrono::Utc>>,
     pub plan: String,
     pub comment: Option<String>,
     pub context_files: Vec<String>,
@@ -134,11 +147,16 @@ pub struct TaskAddParams {
     /// for an interactive filing; a `system_created` filing or a sweep finding
     /// its provenance tag marks records [`TaskOrigin::Automation`] instead.
     pub origin: Option<TaskOrigin>,
+    /// Rule-result fingerprint the rule-findings filer stamps at filing.
+    /// Every other creator leaves it unset.
+    pub rule_fingerprint: Option<String>,
     /// Creation intent an operator surface's selector screening established
     /// for `context_files` ([`OrbitRuntime::add_task_screened`]).
     ///
     /// [`OrbitRuntime::add_task_screened`]: crate::OrbitRuntime::add_task_screened
     pub context_creation: ContextCreationAuthorization,
+    /// Typed decision recorded on the task's `created` history event.
+    pub creation_decision: Option<TaskDecision>,
 }
 
 impl Default for TaskAddParams {
@@ -152,6 +170,9 @@ impl Default for TaskAddParams {
             relations: Vec::new(),
             tags: Vec::new(),
             required_tools: Vec::new(),
+            granted_tools: Vec::new(),
+            requires_labels: Vec::new(),
+            not_before: None,
             plan: String::new(),
             comment: None,
             context_files: Vec::new(),
@@ -167,7 +188,9 @@ impl Default for TaskAddParams {
             orchestrator: None,
             orchestrator_model: None,
             origin: None,
+            rule_fingerprint: None,
             context_creation: ContextCreationAuthorization::default(),
+            creation_decision: None,
         }
     }
 }
@@ -182,6 +205,13 @@ pub struct TaskUpdateParams {
     pub dependencies: Option<Vec<OrbitId>>,
     pub relations: Option<Vec<TaskRelation>>,
     pub tags: Option<Vec<String>>,
+    /// Replacement operator-granted tools; an empty list clears the grant.
+    /// Admitted only before the task has a live attempt.
+    pub granted_tools: Option<Vec<String>>,
+    /// Replacement capability labels; an empty list clears the requirement.
+    pub requires_labels: Option<Vec<String>>,
+    /// Replacement scheduled start; `Some(None)` clears it.
+    pub not_before: Option<Option<chrono::DateTime<chrono::Utc>>>,
     pub plan: Option<String>,
     pub execution_summary: Option<String>,
     pub comment: Option<String>,
@@ -233,6 +263,9 @@ impl TaskUpdateParams {
             dependencies,
             relations,
             tags,
+            granted_tools,
+            requires_labels,
+            not_before,
             plan,
             execution_summary,
             comment,
@@ -259,6 +292,9 @@ impl TaskUpdateParams {
             && dependencies.is_none()
             && relations.is_none()
             && tags.is_none()
+            && granted_tools.is_none()
+            && requires_labels.is_none()
+            && not_before.is_none()
             && plan.is_none()
             && execution_summary.is_none()
             && status.is_none()
@@ -289,6 +325,9 @@ impl From<TaskUpdateParams> for TaskRecordUpdateParams {
             dependencies: p.dependencies,
             relations: p.relations,
             tags: p.tags,
+            granted_tools: p.granted_tools,
+            requires_labels: p.requires_labels,
+            not_before: p.not_before,
             plan: p.plan,
             execution_summary: p.execution_summary,
             status: p.status,

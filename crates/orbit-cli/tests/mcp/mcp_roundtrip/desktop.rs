@@ -251,16 +251,16 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
 
 /// [ORB-14173] A replica's routine projection matches what it can actually
 /// change: an operator lists and enables its worktree GC, while owner work —
-/// ship sweep, auto-task minting and toggles — is refused with the owner
+/// CI-failure sweep, auto-task minting and toggles — is refused with the owner
 /// named and leaves every definition byte-identical.
 fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_rest() {
     let workspace = McpWorkspace::init_replica_of("hm_remote_owner");
     let selector = workspace.work.to_str().unwrap();
     let routines = workspace.work.join(".orbit/routines");
     let gc_path = routines.join("worktree_gc.yaml");
-    let ship_path = routines.join("ship_sweep.yaml");
+    let ci_sweep_path = routines.join("ci_failure_sweep.yaml");
     let auto_task_path = workspace.work.join(".orbit/auto_tasks/qa-sweep.yaml");
-    let ship_before = std::fs::read(&ship_path).unwrap();
+    let ci_sweep_before = std::fs::read(&ci_sweep_path).unwrap();
     let auto_task_before = std::fs::read(&auto_task_path).unwrap();
     let mut client = workspace.serve_with_args(&["--operator"]);
 
@@ -280,14 +280,14 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
     let gc = row("worktree-gc-mcp-roundtrip");
     assert_eq!(gc["toggle_available"], true, "{gc}");
     assert_eq!(gc["enabled"], false, "{gc}");
-    let ship = row("ship-sweep-mcp-roundtrip");
-    assert_eq!(ship["toggle_available"], false, "{ship}");
-    assert_eq!(ship["state"], "owner_only", "{ship}");
+    let ci_sweep = row("ci-failure-sweep-mcp-roundtrip");
+    assert_eq!(ci_sweep["toggle_available"], false, "{ci_sweep}");
+    assert_eq!(ci_sweep["state"], "owner_only", "{ci_sweep}");
     assert!(
-        ship["toggle_reason"]
+        ci_sweep["toggle_reason"]
             .as_str()
             .is_some_and(|reason| reason.contains("hm_remote_owner")),
-        "an unavailable toggle explains owner authority: {ship}"
+        "an unavailable toggle explains owner authority: {ci_sweep}"
     );
 
     let enabled = client.call_tool_ok(
@@ -305,8 +305,8 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
 
     let refused = client.call_tool_err(
         "orbit_routine_control",
-        json!({"workspace":selector,"action":"toggle","name":"ship-sweep-mcp-roundtrip",
-            "target":"job:workspace_ship_pipeline","expected_enabled":false,"enabled":true}),
+        json!({"workspace":selector,"action":"toggle","name":"ci-failure-sweep-mcp-roundtrip",
+            "target":"job:ci_failure_sweep_pipeline","expected_enabled":false,"enabled":true}),
     );
     assert_eq!(refused["code"], "capability_refused", "{refused}");
     assert!(
@@ -332,11 +332,11 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
         let refused = client.call_tool_err(tool, input);
         assert_eq!(refused["code"], "capability_refused", "{tool}: {refused}");
     }
-    assert_eq!(std::fs::read(&ship_path).unwrap(), ship_before);
+    assert_eq!(std::fs::read(&ci_sweep_path).unwrap(), ci_sweep_before);
     assert_eq!(std::fs::read(&auto_task_path).unwrap(), auto_task_before);
 
     // The enabled replica GC is the host clock's to fire: the host listing
-    // schedules it, and keeps the ship sweep as the owner's.
+    // schedules it, and keeps the CI-failure sweep as the owner's.
     drop(client);
     let listed = orbit_ok(
         McpWorkspace::orbit_command(&workspace.work, &workspace.home)
@@ -356,7 +356,7 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["name"] == "ship-sweep-mcp-roundtrip"),
+            .any(|row| row["name"] == "ci-failure-sweep-mcp-roundtrip"),
         "{listed}"
     );
 }
@@ -529,7 +529,9 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
 
 /// The bounded run detail reads a fixed metadata budget however long the
 /// run's audit trail is, yet still counts every log, places early logs in
-/// their step, reports the newest provider child and redacts previews.
+/// their step, reports the newest provider child and redacts previews. Its
+/// bounded-excerpt log records and `orbit run logs`' raw records of the same
+/// run keep their own profiles of the shared projection.
 fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
     const RUN_ID: &str = "jrun-20261011-0000-bd";
     const INVOCATIONS: usize = 600;
@@ -658,6 +660,68 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
         "previews are redacted and bounded: {preview}"
     );
     assert_eq!(items[0]["stdout_truncated"], true);
+    assert_eq!(logs["excerpt_max_bytes"], 4096);
+    assert_eq!(
+        items[1]
+            .as_object()
+            .expect("log item")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "event_id",
+            "ts",
+            "step_id",
+            "step_index",
+            "provider",
+            "stdout",
+            "stderr",
+            "stdout_truncated",
+            "stderr_truncated",
+            "exit_code",
+            "timed_out",
+            "duration_ms",
+        ],
+        "the bounded excerpt carries no run id or blob refs"
+    );
+    assert_eq!(
+        (&items[1]["stdout"], &items[1]["stdout_truncated"]),
+        (&json!("done\n"), &json!(false)),
+        "a short capture is complete in the excerpt"
+    );
+
+    // The same run through `orbit run logs` keeps its raw profile: the six
+    // record fields and every captured byte, with no truncation flags.
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "run",
+            "logs",
+            RUN_ID,
+            "--step",
+            "implement",
+            "--no-reconcile",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).expect("run logs JSON");
+    assert_eq!(
+        (&cli["run_id"], &cli["job_id"]),
+        (&json!(RUN_ID), &json!("task_pr_pipeline"))
+    );
+    let records = cli["records"].as_array().expect("CLI records");
+    assert_eq!(records.len(), INVOCATIONS - 1);
+    assert_eq!(
+        records[0],
+        json!({
+            "step_id": "implement",
+            "provider": "codex",
+            "stdout_blob_ref": long_stdout,
+            "stderr_blob_ref": null,
+            "stdout": String::from_utf8(blobs.read(&long_stdout).expect("stored capture")).unwrap(),
+            "stderr": "",
+        }),
+        "the raw profile returns the stored capture whole"
+    );
 
     input["log_offset"] = json!(150);
     input["limit"] = json!(1);

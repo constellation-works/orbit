@@ -33,6 +33,15 @@
 //! `user_facing_ui` finding adds the `ui` tag to a task that lacks it; apply
 //! never removes one.
 //!
+//! A task whose preparation requested an explore brief may carry one in its
+//! assessment. Apply validates it and writes the system-written
+//! `explore-brief.json` artifact before the receipt; an invalid brief is
+//! dropped with its reason in the audit and never fails the assessment.
+//!
+//! An implement dispatch then receives that brief only while it is current:
+//! the task's material is still what the receipt sealed, and the code it
+//! covers has not drifted too far from the run's base (`brief_delivery`).
+//!
 //! An applied assessment also holds or gates the task: backlog holds from
 //! applied findings (`admission`), prerequisite resolution (`blockers`) and
 //! verified-no-diff holds (`no_diff`).
@@ -42,7 +51,10 @@ mod apply;
 mod assessment;
 mod attachment_budget;
 mod blockers;
+mod brief_delivery;
+mod cfg_gate;
 mod drain_promotion;
+mod explore_brief;
 mod freshness;
 pub(crate) mod input;
 mod no_diff;
@@ -76,12 +88,19 @@ use post_deploy::post_deploy;
 pub(crate) use prepare::prepare;
 pub use promotion::task_pilot_warnings;
 pub(crate) use promotion::{
-    PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
+    HeldPilotWarnings, PromotionFindings, auto_approval_opted_out, held_pilot_warnings,
+    promotion_findings, recommendation_has_evidence, warning_hold_findings,
 };
 pub(crate) use source::requested_base_branch;
 
 use orbit_types::task::{CommentReceipt, TaskComment, TaskStatus};
 use serde_json::{Value, json};
+
+/// Whether an explicit pilot selection may assess a task in `status`. Prepare
+/// and an operator surface's pre-submission check share the predicate.
+pub(crate) fn pilot_assessable_status(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::Proposed | TaskStatus::Backlog)
+}
 
 /// Actor that seals a task-pilot replay receipt on its audit comment.
 const PILOT_ACTOR: &str = "task-pilot";
@@ -106,7 +125,7 @@ fn pilot_receipts(
 }
 
 /// Operation id of the newest task-pilot receipt comment.
-fn latest_pilot_operation_id(comments: &[TaskComment]) -> Option<&str> {
+pub(super) fn latest_pilot_operation_id(comments: &[TaskComment]) -> Option<&str> {
     pilot_receipts(comments)
         .next()
         .map(|(_, receipt)| receipt.operation_id)
@@ -144,6 +163,13 @@ pub(super) const VALIDATION_TOOL_WARNINGS: &str = "validation_tool_warnings";
 pub(super) const CONTEXT_CREATION_SELECTORS: &str = "context_creation_selectors";
 pub(super) const CONTEXT_CREATION_IDENTITY: &str = "context_creation_identity";
 
+/// Prepared-snapshot field marking a task the configuration requests an
+/// explore brief for, and the partition field listing those tasks for the
+/// pilot (`workflow.explore_brief.*`). Both are written only when a task
+/// requests one, so a workspace without briefs keeps its prepared shape.
+pub(super) const EXPLORE_BRIEF_REQUESTED: &str = "explore_brief_requested";
+pub(super) const EXPLORE_BRIEF_TASK_IDS: &str = "explore_brief_task_ids";
+
 /// Assessment fields apply attaches: granted creation targets the pilot
 /// omitted and apply kept, and dropped missing selectors no grant covers,
 /// each naming the operator reauthorization path.
@@ -157,6 +183,11 @@ pub(super) const CONTEXT_EVIDENCE_RETAINED: &str = "context_evidence_retained";
 /// Optional agent-proposed selector/reason records, validated before review
 /// evidence can leave the lock footprint and persisted in the assessment.
 pub(super) const CONTEXT_EVIDENCE_DROPPED: &str = "context_evidence_dropped";
+
+/// The pilot's finding that a review-filed bug's defect does not exist at
+/// the pinned revision: null, or `{"evidence": "..."}` citing `path:line`.
+/// Apply records it as a REJECTED finding verdict and rejects the task.
+pub(super) const FINDING_INVALID: &str = "finding_invalid";
 
 /// Assessment field apply attaches when it rewrote a model formatting slip
 /// (today a scalar or missing `evidence_gaps`) instead of rejecting it.

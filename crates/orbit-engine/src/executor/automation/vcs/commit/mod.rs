@@ -5,6 +5,7 @@ mod checkpoint;
 mod clean_tree;
 mod detached;
 mod diagnostics;
+mod finding_invalid;
 mod git_ops;
 mod implementer;
 mod message;

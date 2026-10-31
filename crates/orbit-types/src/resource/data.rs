@@ -19,6 +19,7 @@ pub enum ResourceKind {
     Activity,
     Policy,
     Executor,
+    Script,
 }
 
 impl std::fmt::Display for ResourceKind {
@@ -28,6 +29,7 @@ impl std::fmt::Display for ResourceKind {
             ResourceKind::Activity => write!(f, "Activity"),
             ResourceKind::Policy => write!(f, "Policy"),
             ResourceKind::Executor => write!(f, "Executor"),
+            ResourceKind::Script => write!(f, "Script"),
         }
     }
 }
@@ -40,6 +42,7 @@ impl std::str::FromStr for ResourceKind {
             "activity" | "activities" => Ok(ResourceKind::Activity),
             "policy" | "policies" => Ok(ResourceKind::Policy),
             "executor" | "executors" => Ok(ResourceKind::Executor),
+            "script" | "scripts" => Ok(ResourceKind::Script),
             _ => Err(format!("unknown resource kind: {s}")),
         }
     }
@@ -177,6 +180,12 @@ pub struct ExecutorResourceSpec {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// See [`crate::workflow::ExecutorDef::inspection_args`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspection_args: Option<Vec<String>>,
+    /// See [`crate::workflow::ExecutorDef::image_input`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<crate::workflow::ExecutorImageInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout_format: Option<StdoutFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -16,7 +16,7 @@ const baseURL = new URL(siteURL);
 const projectURL = new URL('/project/', baseURL);
 const cards = [
   { text: 'Contributing', route: '/contributing/', heading: 'Contributing' },
-  { text: 'Privacy', route: '/privacy/', heading: 'Privacy Policy' },
+  { text: 'Privacy', route: '/privacy/', heading: 'Privacy' },
 ];
 const evidence = { projectURL: projectURL.href, cards: [] };
 const browser = await chromium.launch();

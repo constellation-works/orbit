@@ -183,6 +183,20 @@ mod read_only_observation {
         panic!("the writer process never reached '{step}'");
     }
 
+    /// Publish `contents` at `path` atomically: the waiter polls for
+    /// existence, so writing directly to `path` lets it observe a
+    /// half-written file (an empty commit request reads back as `""` and
+    /// commits an empty row). Writing to a staging file in the same directory
+    /// and renaming makes the handoff appear all at once.
+    fn publish_bytes(path: &Path, contents: &[u8]) {
+        let staging = PathBuf::from(format!("{}.staging-{}", path.display(), std::process::id()));
+        fs::write(&staging, contents).unwrap_or_else(|error| {
+            panic!("stage {}: {error}", staging.display());
+        });
+        fs::rename(&staging, path)
+            .unwrap_or_else(|error| panic!("publish {}: {error}", path.display()));
+    }
+
     /// A writer holding the database open in another process.
     ///
     /// It has to be another process: SQLite shares one wal-index mapping per
@@ -237,7 +251,7 @@ mod read_only_observation {
             self.commits += 1;
             let request = self.control.join(format!("commit-{}", self.commits));
             let confirmation = self.control.join(format!("committed-{}", self.commits));
-            fs::write(&request, value).expect("request a commit");
+            publish_bytes(&request, value.as_bytes());
             wait_for(&confirmation, "commit");
             let outcome = fs::read_to_string(&confirmation).expect("read commit outcome");
             assert_eq!(outcome, "ok", "the writer process failed to commit");
@@ -284,8 +298,10 @@ mod read_only_observation {
                 Ok(_) => "ok".to_string(),
                 Err(error) => format!("failed: {error}"),
             };
-            fs::write(control.join(format!("committed-{commits}")), outcome)
-                .expect("confirm the commit");
+            publish_bytes(
+                &control.join(format!("committed-{commits}")),
+                outcome.as_bytes(),
+            );
         }
     }
 
@@ -363,4 +379,63 @@ mod read_only_observation {
             "only the writer may change the file set"
         );
     }
+}
+
+/// A SQLite busy result keeps its lock-busy class through the translators, and
+/// reads, codes and serializes exactly as the `Store` or `Migration` error it
+/// would otherwise have been; quoting SQLite's words is not the class.
+#[test]
+fn busy_sqlite_error_classifies_as_lock_busy_and_reads_as_its_layer() {
+    use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+    use orbit_common::{OrbitError, StorageLayer};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("busy.db");
+    let holder = rusqlite::Connection::open(&path).expect("open holder");
+    holder
+        .execute_batch("CREATE TABLE t(v TEXT); BEGIN IMMEDIATE;")
+        .expect("hold the writer lock");
+    let busy = || {
+        let waiter = rusqlite::Connection::open(&path).expect("open waiter");
+        waiter
+            .busy_timeout(std::time::Duration::ZERO)
+            .expect("no busy wait");
+        waiter
+            .execute_batch("BEGIN IMMEDIATE;")
+            .expect_err("the writer lock is held")
+    };
+
+    let error = busy();
+    assert_eq!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy),
+        "{error}"
+    );
+    let text = error.to_string();
+    let store = sqlite_store_error(error);
+    assert!(store.is_lock_busy(), "{store:?}");
+    assert!(!store.is_readonly_or_access_failure(), "{store:?}");
+    assert_eq!(store.storage_layer(), Some(StorageLayer::Store));
+    let plain = OrbitError::Store(text.clone());
+    assert_eq!(store.to_string(), plain.to_string());
+    assert_eq!(
+        serde_json::to_value(&store).expect("serialize"),
+        serde_json::to_value(&plain).expect("serialize"),
+        "the classified error must serialize as Store(string)"
+    );
+
+    let migration = sqlite_error(StorageLayer::Migration, &busy(), format!("apply: {text}"));
+    assert!(migration.is_lock_busy(), "{migration:?}");
+    let plain = OrbitError::Migration(format!("apply: {text}"));
+    assert_eq!(migration.to_string(), plain.to_string());
+    assert_eq!(
+        serde_json::to_value(&migration).expect("serialize"),
+        serde_json::to_value(&plain).expect("serialize"),
+        "the classified error must serialize as Migration(string)"
+    );
+
+    assert!(
+        !OrbitError::Store(text).is_lock_busy(),
+        "a Store error that only quotes SQLite's words is not lock-busy"
+    );
 }

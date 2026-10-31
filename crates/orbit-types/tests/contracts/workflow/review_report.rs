@@ -43,3 +43,74 @@ fn control_and_sources_tolerate_drift_and_name_an_unknown_kind() {
         "{error}"
     );
 }
+
+/// A complete Git diff may name a legal Git path that the selector cannot
+/// normalize. That uncertainty must never certify a non-match.
+#[test]
+fn unrepresentable_changed_path_holds_selection_and_owner_snapshot_is_bound() {
+    use orbit_types::workflow::{
+        SelectiveBeforeLandingMode, SelectiveBeforeLandingPolicy, SelectiveEvaluationInputs,
+        SelectiveReviewResult, SelectiveUnknownRisk, evaluate_selective_review,
+    };
+    let mut policy = SelectiveBeforeLandingPolicy::new(
+        SelectiveBeforeLandingMode::Enforce,
+        Some("0.5".into()),
+        vec!["**".into()],
+        SelectiveUnknownRisk::Skip,
+        Default::default(),
+    );
+    policy.freeze_risk_model("owner-risk-model/unknown".into());
+    policy.validate().expect("owner snapshot sealed");
+    let receipt = evaluate_selective_review(
+        &policy,
+        "workspace",
+        "run",
+        &["ORB-20087".into()],
+        ("base", "base-tree"),
+        ("head", "head-tree"),
+        SelectiveEvaluationInputs {
+            changed_paths: vec![(None, Some("~".into()))],
+            ..Default::default()
+        },
+    );
+    assert_eq!(receipt.result, SelectiveReviewResult::Unavailable);
+    assert!(!receipt.gaps.is_empty());
+    policy.risk_model_identity = Some("leaf intercept=-100 slope=0".into());
+    assert!(
+        policy.validate().is_err(),
+        "a receipt cannot substitute a leaf fit"
+    );
+}
+
+/// A fixed vision finding is not resolved by an unavailable recapture.
+#[test]
+fn fixed_visual_finding_requires_established_recapture() {
+    use orbit_types::task::VisualReviewRecord;
+    use serde_json::json;
+    let mut value = json!({
+        "schema_version":1,"purpose":"visual_review","mode":"live","task_id":"T-1",
+        "candidate_sha":"original","outcome":"reviewed","recorded_only":false,
+        "budget":{"max_mocks":1,"max_images":2,"max_image_tokens":1000,"max_findings":1,
+            "images_shown":2,"estimated_image_tokens":1000},
+        "invalid_evidence_dropped":0,"over_max_findings_dropped":0,
+        "findings":[{"finding_id":"f1","source":"comparison","question":"1","mock":"mocks/view.png",
+            "title":"missing action","detail":"action absent","severity":"high",
+            "verdict":{"verdict":"confirmed","reasoning":"verified"},
+            "disposition":"must_address","resolution":"fixed"}]
+    });
+    for outcome in [None, Some("not_established"), Some("incomplete")] {
+        if let Some(outcome) = outcome {
+            value["recapture"] =
+                json!({"candidate_sha":"fixed","outcome":outcome,"still_failing":[]});
+        }
+        let record = VisualReviewRecord::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(
+            record.unresolved_blocking().len(),
+            1,
+            "unavailable recapture must hold: {outcome:?}"
+        );
+    }
+    value["recapture"] = json!({"candidate_sha":"fixed","outcome":"passed","still_failing":[]});
+    let record = VisualReviewRecord::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(record.unresolved_blocking().is_empty());
+}

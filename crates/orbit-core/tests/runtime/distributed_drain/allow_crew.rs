@@ -30,8 +30,13 @@ fn before_pr_owner(crew: &str) -> String {
 /// refill and after a resume, while tasks on crews it can run but was not
 /// allowed stay in the owner's backlog with their crews unchanged.
 fn a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume() {
-    let pair = Pair::with_crews(&[Some("opus"), Some("sol"), Some("antigravity"), Some("luna")]);
-    let (opus, sol, antigravity, luna) = (
+    let pair = Pair::with_crews(&[
+        Some("opus"),
+        Some("sol"),
+        Some("gemini-flash"),
+        Some("luna"),
+    ]);
+    let (opus, sol, gemini_flash, luna) = (
         pair.tasks[0].clone(),
         pair.tasks[1].clone(),
         pair.tasks[2].clone(),
@@ -72,7 +77,7 @@ fn a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume(
             "{pull}"
         );
     }
-    for (task, crew) in [(&opus, "opus"), (&antigravity, "antigravity")] {
+    for (task, crew) in [(&opus, "opus"), (&gemini_flash, "gemini-flash")] {
         let shown = pair.owner_task(task);
         assert_eq!(shown["status"], "backlog", "{shown}");
         assert_eq!(
@@ -89,7 +94,7 @@ fn a_restricted_pull_drain_claims_only_allowed_crews_on_every_refill_and_resume(
         .filter(|record| record.phase == LocalPullPhase::Idle)
         .find_map(|record| record.receipt)
         .expect("the owner answered idle");
-    for task in [&opus, &antigravity] {
+    for task in [&opus, &gemini_flash] {
         assert!(
             idle.crew_unavailable
                 .iter()
@@ -164,10 +169,10 @@ fn a_restricted_drain_refuses_before_claiming_when_the_reviewer_cannot_run() {
 /// When nothing the restriction allows can run here, the drain says so and
 /// requests nothing, rather than idling or falling back to another crew.
 fn a_restriction_with_no_runnable_crew_refuses_without_requesting() {
-    let pair = Pair::with_crews(&[Some("sol"), Some("antigravity")]);
+    let pair = Pair::with_crews(&[Some("sol"), Some("gemini-flash")]);
     pair.follower_cli("antigravity", "orbit-test-no-such-provider-cli");
     let drain = pair.run_drain_with_input(
-        json!({"destination": pair.destination, "allowed_crews": ["antigravity"]}),
+        json!({"destination": pair.destination, "allowed_crews": ["gemini-flash"]}),
     );
 
     let pass = pair.pass(&drain);

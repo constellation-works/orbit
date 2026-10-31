@@ -721,6 +721,8 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         Ok(ResolvedCliExecutor {
             command: self.codex.to_string_lossy().into_owned(),
             args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
         })
     }
 
@@ -774,11 +776,13 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 #[cfg(unix)]
 pub(super) fn implementation_job(provider: Provider) -> JobV2 {
     let spec = AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,
@@ -794,6 +798,7 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     };
     let asset = json!({
         "schemaVersion": 2,

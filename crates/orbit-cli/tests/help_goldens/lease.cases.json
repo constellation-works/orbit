@@ -1,0 +1,16 @@
+[
+  {"argv": ["lease"], "golden": "lease/root.txt"},
+  {"argv": ["lease", "request"], "golden": "lease/request.txt"},
+  {"argv": ["lease", "renew"], "golden": "lease/renew.txt"},
+  {"argv": ["lease", "expand"], "golden": "lease/expand.txt"},
+  {"argv": ["lease", "release"], "golden": "lease/release.txt"},
+  {"argv": ["lease", "show"], "golden": "lease/show.txt"},
+  {"argv": ["lease", "list"], "golden": "lease/list.txt"},
+  {"argv": ["lease", "check"], "golden": "lease/check.txt"},
+  {"argv": ["lease", "token"], "golden": "lease/token.txt"},
+  {"argv": ["lease", "token", "create"], "golden": "lease/token-create.txt"},
+  {"argv": ["lease", "token", "list"], "golden": "lease/token-list.txt"},
+  {"argv": ["lease", "token", "revoke"], "golden": "lease/token-revoke.txt"},
+  {"argv": ["lease", "listen"], "golden": "lease/listen.txt"},
+  {"argv": ["lease", "notices"], "golden": "lease/notices.txt"}
+]

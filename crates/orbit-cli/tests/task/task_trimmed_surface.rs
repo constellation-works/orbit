@@ -13,7 +13,9 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use chrono::Utc;
 use orbit_common::test_env;
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -292,6 +294,126 @@ fn task_update_and_add_accept_valid_context_selectors(workspace: &TestWorkspace)
     assert_eq!(updated["context_files"], json!(["file:existing.rs"]));
 }
 
+/// [ORB-12490] A restoration reports the surface it leaves behind. A task whose
+/// pruned selectors were just re-declared must not still read as declaring no
+/// usable context, while a task with nothing to restore stays actionable.
+fn lint_sweep_reports_the_surface_a_restoration_leaves(workspace: &TestWorkspace) {
+    let pruned_history = || {
+        vec![TaskHistoryEntry {
+            at: Utc::now(),
+            by: "system".into(),
+            event: "context_files_pruned".into(),
+            note: Some("dropped: file:pruned.rs (selector anchor not found in workspace)".into()),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        }]
+    };
+    let mut proposed = workspace.task_seed("Pruned while proposed");
+    proposed.history = pruned_history();
+    let mut backlog = workspace.task_seed("Pruned while backlog");
+    backlog.status = TaskStatus::Backlog;
+    backlog.history = pruned_history();
+    let mut empty = workspace.task_seed("Declares nothing");
+    empty.status = TaskStatus::Backlog;
+    let seeded = workspace.seed_tasks(&[proposed, backlog, empty]);
+    let proposed_id = seeded[0]["id"].as_str().expect("proposed id");
+    let backlog_id = seeded[1]["id"].as_str().expect("backlog id");
+    let empty_id = seeded[2]["id"].as_str().expect("empty id");
+    let restores_recorded = |id: &str| {
+        workspace.task_json(&["task", "show", id, "--json"])["history"]
+            .as_array()
+            .expect("task history")
+            .iter()
+            .filter(|entry| entry["event"] == json!("context_files_restored"))
+            .count()
+    };
+
+    // A dry run plans the restoration and leaves the declaration alone.
+    let planned = workspace.task_json(&["task", "lint", "--json"]);
+    let planned_entry = sweep_entry(&planned, proposed_id);
+    assert_eq!(planned_entry["empty_surface"], json!(true));
+    assert_eq!(planned_entry["restorable"], json!(["file:pruned.rs"]));
+    assert_eq!(planned_entry["written"], json!(false));
+    assert_eq!(
+        workspace.task_json(&["task", "show", proposed_id, "--json"])["context_files"],
+        json!([])
+    );
+
+    // The report for a restored task must describe the declaration it now has.
+    let restored = workspace.task_json(&[
+        "task",
+        "lint",
+        "--status",
+        "proposed",
+        "--restore-pruned",
+        "--json",
+    ]);
+    let restored_entry = sweep_entry(&restored, proposed_id);
+    assert_eq!(restored_entry["written"], json!(true));
+    assert_eq!(
+        restored_entry["empty_surface"],
+        json!(false),
+        "a restored selector is a usable declaration"
+    );
+    assert_eq!(restored_entry["restorable"], json!(["file:pruned.rs"]));
+    assert_eq!(
+        workspace.task_json(&["task", "show", proposed_id, "--json"])["context_files"],
+        json!(["file:pruned.rs"])
+    );
+
+    let output = workspace.run(
+        &["task", "lint", "--status", "backlog", "--restore-pruned"],
+        "restore backlog pruned selectors",
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line_for = |id: &str| {
+        text.lines()
+            .find(|line| line.starts_with(&format!("{id}:")))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let restored_line = line_for(backlog_id);
+    assert!(
+        restored_line.contains("restored: file:pruned.rs"),
+        "{restored_line}"
+    );
+    assert!(
+        !restored_line.contains("declares no usable context"),
+        "{restored_line}"
+    );
+    assert!(
+        line_for(empty_id).contains("declares no usable context"),
+        "a task with nothing to restore stays actionable"
+    );
+    assert_eq!(
+        workspace.task_json(&["task", "show", backlog_id, "--json"])["context_files"],
+        json!(["file:pruned.rs"])
+    );
+
+    // Repeating the repair finds nothing left to write.
+    let repeat = workspace.task_json(&["task", "lint", "--restore-pruned", "--json"]);
+    assert_eq!(repeat["tasks_written"], json!(0));
+    assert!(sweep_entry(&repeat, proposed_id).is_null());
+    assert!(sweep_entry(&repeat, backlog_id).is_null());
+    assert_eq!(sweep_entry(&repeat, empty_id)["empty_surface"], json!(true));
+    assert_eq!(restores_recorded(proposed_id), 1);
+    assert_eq!(restores_recorded(backlog_id), 1);
+}
+
+/// The context repair sweep's entry for one task, or `Value::Null` when the
+/// sweep reports nothing for it.
+fn sweep_entry(sweep: &Value, id: &str) -> Value {
+    sweep["tasks"]
+        .as_array()
+        .expect("sweep tasks")
+        .iter()
+        .find(|entry| entry["id"] == json!(id))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 /// [ORB-13753] Scope extensions must send the full union: a tool update with
 /// only additions previously dropped the task's original selectors.
 fn tool_task_update_context_preserves_omissions_replaces_lists_and_clears(
@@ -436,9 +558,10 @@ fn task_show_and_write_tools_report_readiness_gaps(workspace: &TestWorkspace) {
     assert!(!String::from_utf8_lossy(&shown.stdout).contains("Readiness:"));
 }
 
-/// [ORB-15191] A write that leaves a task in the backlog with no
-/// `context_files` warns that it holds no file lock, on the CLI and MCP
-/// surfaces alike. The warning is the task's own advisory backlog readiness
+/// A creation or readiness-field write that leaves a task in the backlog with
+/// no `context_files` warns that it holds no file lock, on the CLI and MCP
+/// surfaces alike. Metadata writes do not repeat it.
+/// The warning is the task's own advisory backlog readiness
 /// gap with its fix, so the assertion pins that consistency rather than the
 /// wording. A task with selectors or tagged `no-diff-expected` gets none.
 fn backlog_writes_without_context_warn_about_the_missing_file_lock(workspace: &TestWorkspace) {
@@ -486,14 +609,22 @@ fn backlog_writes_without_context_warn_about_the_missing_file_lock(workspace: &T
 
     let id = cold["id"].as_str().expect("task id");
     let updated = workspace.task_json(&["task", "update", id, "--priority", "high", "--json"]);
-    assert_eq!(updated["warnings"], expected(&updated), "{updated}");
+    assert!(updated.get("warnings").is_none(), "{updated}");
+    assert_eq!(updated["readiness"], cold["readiness"], "{updated}");
     let input = json!({"id": id, "model": "codex", "priority": "low"}).to_string();
     let tool = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
-    assert_eq!(tool["warnings"], expected(&tool), "{tool}");
+    assert!(tool.get("warnings").is_none(), "{tool}");
+    assert_eq!(tool["readiness"], cold["readiness"], "{tool}");
     let input =
         json!({"id": id, "model": "codex", "context_files": ["file:existing.rs"]}).to_string();
     let prepared = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
     assert!(prepared.get("warnings").is_none(), "{prepared}");
+
+    // Removing the footprint still warns; unrelated writes must not hide a
+    // subsequent readiness edit that reintroduces the missing-context gap.
+    let input = json!({"id": id, "context_files": []}).to_string();
+    let cleared = workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &input]);
+    assert_eq!(cleared["warnings"], expected(&cleared), "{cleared}");
 }
 
 /// The existence guard is an operator-surface default, not a wall: work that
@@ -725,6 +856,7 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
         );
         let managed: Value = serde_json::from_slice(&output.stdout).expect("managed task JSON");
         assert_eq!(managed["created_by"], json!("codex"));
+        assert_eq!(managed["created_by_model"], json!("gpt-5.6-terra"));
     }
 
     let after = ambient.task_json(&["task", "list", "--json"]);
@@ -739,6 +871,52 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
             .all(|task| task["created_by"] == json!("codex")),
         "full model strings normalize to the canonical family"
     );
+}
+
+/// [ORB-19636] A create that names a full model keeps it as
+/// `created_by_model` beside the family `created_by`; a family-only create
+/// records none, and no update rewrites it.
+fn task_add_records_a_full_creator_model_once(workspace: &TestWorkspace) {
+    let add = json!({
+        "title": "Full creator model",
+        "description": "Filed with a full model string.",
+        "complexity": "low",
+        "workspace": "trimmed-surface-test",
+        "model": "claude-opus-5-5",
+    })
+    .to_string();
+    let added = workspace.task_json(&["tool", "run", "orbit.task.add", "--input", &add]);
+    let id = added["id"].as_str().expect("task id").to_string();
+    assert_eq!(added["created_by"], json!("claude"));
+    assert_eq!(added["created_by_model"], json!("claude-opus-5-5"));
+
+    let family = workspace.task_json(&[
+        "task",
+        "add",
+        "--title",
+        "Family creator",
+        "--description",
+        "Filed with a bare family",
+        "--complexity",
+        "low",
+        "--model",
+        "claude",
+        "--json",
+    ]);
+    assert_eq!(family["created_by"], json!("claude"));
+    assert_eq!(family["created_by_model"], Value::Null);
+
+    let rewrite = json!({"id": id, "model": "codex", "created_by_model": "gpt-6-sol"}).to_string();
+    let refused = workspace.run_raw(&["tool", "run", "orbit.task.update", "--input", &rewrite]);
+    assert!(
+        !refused.status.success(),
+        "task.update must not accept created_by_model"
+    );
+    let retitle = json!({"id": id, "model": "gpt-6-sol", "title": "Retitled"}).to_string();
+    workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &retitle]);
+    let shown = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(shown["title"], json!("Retitled"));
+    assert_eq!(shown["created_by_model"], json!("claude-opus-5-5"));
 }
 
 fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability(
@@ -948,6 +1126,10 @@ fn candidate_and_context_updates() {
             "task_update_and_add_accept_valid_context_selectors",
             task_update_and_add_accept_valid_context_selectors as fn(&TestWorkspace),
         ),
+        (
+            "lint_sweep_reports_the_surface_a_restoration_leaves",
+            lint_sweep_reports_the_surface_a_restoration_leaves as fn(&TestWorkspace),
+        ),
     ] {
         tracing::info!(case = name, "CLI contract row");
         check(&workspace);
@@ -974,6 +1156,10 @@ fn scope_readiness_and_creation_grants() {
         (
             "allow_missing_context_records_durable_exact_creation_intent",
             allow_missing_context_records_durable_exact_creation_intent as fn(&TestWorkspace),
+        ),
+        (
+            "task_add_records_a_full_creator_model_once",
+            task_add_records_a_full_creator_model_once as fn(&TestWorkspace),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

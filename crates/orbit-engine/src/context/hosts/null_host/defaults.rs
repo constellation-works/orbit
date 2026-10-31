@@ -12,8 +12,8 @@ use orbit_types::task::{
 };
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
-    DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
-    TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
+    JobRunState, NamespaceProbe, PipelineState, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -26,10 +26,11 @@ use crate::activity_job::{
 };
 
 use super::super::{
-    ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
-    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
-    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
+    HandoffLandingContext, HandoffLandingUpdate, PluginBrokerHandle, PluginBrokerRun,
+    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
@@ -76,6 +77,12 @@ pub trait NullRuntimeHost: Send + Sync {
         None
     }
     fn record_direct_landing_intent(
+        &self,
+        _request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
+    fn record_direct_landing(
         &self,
         _request: &orbit_types::workflow::automation::DirectLandingRequest,
     ) -> Result<(), OrbitError> {
@@ -155,6 +162,19 @@ pub trait NullRuntimeHost: Send + Sync {
     fn get_task_history(&self, _task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
         Ok(Vec::new())
     }
+    fn get_dependency_task(&self, task_id: &str) -> Result<Option<Task>, OrbitError> {
+        match NullRuntimeHost::get_task(self, task_id) {
+            Ok(task) => Ok(Some(task)),
+            Err(OrbitError::NotFound { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+    fn get_dependency_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        Ok(Some(NullRuntimeHost::get_task_history(self, task_id)?))
+    }
     fn list_tasks_filtered(
         &self,
         status: Option<TaskStatus>,
@@ -207,6 +227,14 @@ pub trait NullRuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability(
             "apply_task_automation_update",
         ))
+    }
+    fn reject_invalid_finding(
+        &self,
+        report: &orbit_types::workflow::handoff::FindingInvalidReport,
+        base_branch: &str,
+    ) -> Result<(), OrbitError> {
+        let _ = (report, base_branch);
+        Err(unsupported_runtime_capability("reject_invalid_finding"))
     }
 
     fn widen_task_context_files(
@@ -294,6 +322,16 @@ pub trait NullRuntimeHost: Send + Sync {
             "no base update ledger".into(),
         ))
     }
+    fn admit_ci_rerun(
+        &self,
+        _task_ids: &[String],
+        _handoff_id: Option<&str>,
+        _plan: &orbit_types::workflow::CiRerunPlan,
+    ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
+        Ok(orbit_types::workflow::CiRerunAdmission::Refused(
+            "this host keeps no CI retry ledger".into(),
+        ))
+    }
     fn admit_pr_infrastructure(
         &self,
         _execution: &str,
@@ -351,6 +389,27 @@ pub trait NullRuntimeHost: Send + Sync {
 
     fn record_handoff_landing(&self, _update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
         Err(unsupported_runtime_capability("record_handoff_landing"))
+    }
+
+    fn record_handoff_landing_wait(
+        &self,
+        _handoff_id: &str,
+        _reason: &str,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability(
+            "record_handoff_landing_wait",
+        ))
+    }
+
+    fn record_handoff_landing_history(
+        &self,
+        _handoff_id: &str,
+        _event: &str,
+        _note: &str,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability(
+            "record_handoff_landing_history",
+        ))
     }
 
     // ── Claimed distributed leaf execution [ORB-12616] ─────────────────
@@ -432,6 +491,11 @@ pub trait NullRuntimeHost: Send + Sync {
         Vec::new()
     }
 
+    /// The `workflow.base_branch` default.
+    fn workspace_base_branch(&self) -> String {
+        "main".to_string()
+    }
+
     fn unlocked_path_validation(&self) -> crate::context::UnlockedPathValidation {
         crate::context::UnlockedPathValidation::default()
     }
@@ -459,6 +523,7 @@ pub trait NullRuntimeHost: Send + Sync {
             required_validation_commands: NullRuntimeHost::required_validation_commands(self),
             baseline_commands: NullRuntimeHost::review_baseline_commands(self),
             light_delivery_paths: None,
+            review_skip_tags: None,
         })
     }
 
@@ -631,6 +696,25 @@ pub trait NullRuntimeHost: Send + Sync {
         Err(unsupported_dispatch_capability(provider))
     }
 
+    fn run_script_step(
+        &self,
+        request: &crate::context::ScriptStepRequest,
+    ) -> crate::context::ScriptStepRun {
+        crate::context::ScriptStepRun::Refused {
+            code: orbit_types::workflow::activity_job::script_refusal::SANDBOX_UNAVAILABLE,
+            message: "this host runs no script steps".to_string(),
+            record: Box::new(orbit_types::workflow::activity_job::ScriptExecutionRecord {
+                script: request.script.clone(),
+                outcome: "refused".to_string(),
+                refusal_code: Some(
+                    orbit_types::workflow::activity_job::script_refusal::SANDBOX_UNAVAILABLE
+                        .to_string(),
+                ),
+                ..Default::default()
+            }),
+        }
+    }
+
     fn resolve_local_shell_executor(
         &self,
         _executor: &str,
@@ -697,6 +781,24 @@ pub trait NullRuntimeHost: Send + Sync {
         Ok(Vec::new())
     }
 
+    fn explore_brief_for_activity(
+        &self,
+        _run_id: &str,
+        _activity_name: &str,
+        _input: &Value,
+    ) -> Option<ExploreBriefAdmission> {
+        None
+    }
+
+    fn experiment_overlays_for_activity(
+        &self,
+        _run_id: &str,
+        _activity_name: &str,
+        _input: &Value,
+    ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
+        Ok(Vec::new())
+    }
+
     fn acquire_deferred_footprint(
         &self,
         _run_id: &str,
@@ -725,6 +827,7 @@ pub trait NullRuntimeHost: Send + Sync {
             requested_tools: Vec::new(),
             effective_tools: baseline_tools.to_vec(),
             omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
         })
     }
 
@@ -775,6 +878,15 @@ pub trait NullRuntimeHost: Send + Sync {
         _candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
         Err(unsupported_runtime_capability("admit_steering_round"))
+    }
+
+    fn completion_observation_admission(
+        &self,
+        _run_id: &str,
+        _task_id: &str,
+        _step_id: &str,
+    ) -> Result<CompletionObservationAdmission, OrbitError> {
+        Ok(CompletionObservationAdmission::Unavailable)
     }
 
     fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
@@ -846,6 +958,17 @@ pub trait NullRuntimeHost: Send + Sync {
         _proc_allowed_programs: Option<&[String]>,
     ) -> ToolContext {
         ToolContext::default()
+    }
+
+    fn begin_agent_execution(
+        &self,
+        _run_id: &str,
+        _activity_id: &str,
+        _provider: &str,
+        _model: Option<&str>,
+        _identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<Option<i64>, OrbitError> {
+        Ok(None)
     }
 
     fn persist_invocation_trace(

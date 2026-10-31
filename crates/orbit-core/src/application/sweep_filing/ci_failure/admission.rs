@@ -9,41 +9,41 @@ use orbit_engine::DispatchError;
 use orbit_types::task::{CI_FAILURE_KEY_TAG_PREFIX, NO_AUTO_APPROVE_TAG, Task, TaskStatus};
 use serde_json::{Value, json};
 
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::task::pilot::input::{required_string, required_string_array};
 use crate::application::task::pilot::{
     PromotionFindings, auto_approval_opted_out, promotion_findings, recommendation_has_evidence,
 };
-use crate::application::task::{PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
+use crate::application::task::{
+    CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence, PILOT_VERIFIED_NO_DIFF,
+    PromotionDecision, VerifiedNoDiff,
+};
 
-use super::filing::CI_FAILURE_TAG;
-
-pub(crate) enum AdmissionOutcome {
-    Decision(Value),
-    Superseded(Value),
-}
-
-pub(crate) fn assess(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assess_ci_sweep_admission(
     action: &str,
     task_id: &str,
     task: &Task,
     assessment: &Value,
     selectors: &[String],
-    filing: &Value,
+    filing: &CiSweepFilingEvidence,
     promotion_authorized: bool,
-) -> Result<AdmissionOutcome, DispatchError> {
-    let filed_task_id = required_string(filing, "task_id", action)?;
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Result<CiSweepAdmission, DispatchError> {
+    let filed_task_id = filing.required_task_id(action)?;
     if filed_task_id != task_id {
         return Err(DispatchError::action_failed(
             action,
             format!("CI-sweep filing names task {filed_task_id}, expected {task_id}"),
         ));
     }
-    let failure_key = required_string(filing, "failure_key", action)?;
-    let tested_commit = required_string(filing, "tested_commit", action)?;
-    let workflow = required_string(filing, "workflow", action)?;
-    let job = required_string(filing, "job", action)?;
-    let step = required_string(filing, "step", action)?;
-    let run_urls = required_string_array(filing, "run_urls", action)?;
+    let failure_key = filing.required_failure_key(action)?;
+    let tested_commit = filing.required_tested_commit(action)?;
+    let workflow = filing.required_workflow(action)?;
+    let job = filing.required_job(action)?;
+    let step = filing.required_step(action)?;
+    let run_urls = filing.required_run_urls(action)?;
     if run_urls.is_empty() {
         return Err(DispatchError::action_failed(
             action,
@@ -60,7 +60,7 @@ pub(crate) fn assess(
         ));
     }
     if matches!(task.status, TaskStatus::Rejected | TaskStatus::Archived) {
-        return Ok(AdmissionOutcome::Superseded(json!({
+        return Ok(CiSweepAdmission::Superseded(json!({
             "task_id": task_id,
             "outcome": "superseded",
             "reason": "operator_rejected",
@@ -83,22 +83,13 @@ pub(crate) fn assess(
         duplicate_of,
         already_landed,
         warnings,
-    } = promotion_findings(action, task_id, assessment)?;
+    } = promotion_findings(action, task_id, assessment, dependencies, is_done)?;
 
     // A release failure may share a cluster with a pull-request run of the
     // same commit. It is release-only for remediation purposes as long as no
     // integration-head run is in that cluster.
-    let ref_kinds = filing.get("ref_kinds").and_then(Value::as_array);
-    let release_head_failure = ref_kinds.is_some_and(|kinds| {
-        kinds.iter().any(|kind| kind.as_str() == Some("release"))
-            && !kinds
-                .iter()
-                .any(|kind| kind.as_str() == Some("integration"))
-    });
-    let head_branches = filing
-        .get("head_branches")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
+    let release_head_failure = filing.release_head_failure();
+    let head_branches = &filing.head_branches;
     let red_failure = json!({
         "head_branches": head_branches,
         "tested_commit": tested_commit,
@@ -112,13 +103,13 @@ pub(crate) fn assess(
     // instead of being converted into automatic repository edits.
     let (decision, classification, evidence) = if auto_approval_opted_out(&task.tags) {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             NO_AUTO_APPROVE_TAG,
             json!("the task is tagged no-auto-approve; a human must approve it"),
         )
     } else if let Some(finding) = release_action {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             "release_publication_or_operator_action_needed",
             json!({
                 "red_failure": red_failure,
@@ -132,7 +123,7 @@ pub(crate) fn assess(
         )
     } else if !already_landed.is_null() && release_head_failure {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             "release_promotion_or_hotfix_needed",
             json!({
                 "red_release": red_failure,
@@ -142,25 +133,37 @@ pub(crate) fn assess(
             }),
         )
     } else if !already_landed.is_null() {
-        ("withhold", "already_landed", already_landed.clone())
+        (
+            PromotionDecision::Withhold,
+            "already_landed",
+            already_landed.clone(),
+        )
     } else if !duplicate_of.is_null() {
-        ("withhold", "duplicate", duplicate_of.clone())
+        (
+            PromotionDecision::Withhold,
+            "duplicate",
+            duplicate_of.clone(),
+        )
     } else if !warnings.is_empty() {
-        ("withhold", "warnings", json!(warnings))
+        (PromotionDecision::Withhold, "warnings", json!(warnings))
     } else if let Some(finding) = VerifiedNoDiff::from_assessment(assessment) {
         // Never promoted. The apply step archives the task once a cited
         // commit is proven on the base branch, the same rule an approval
         // drain applies; without that proof it stays proposed.
-        ("withhold", PILOT_VERIFIED_NO_DIFF, finding.to_json())
+        (
+            PromotionDecision::Withhold,
+            PILOT_VERIFIED_NO_DIFF,
+            finding.to_json(),
+        )
     } else if disposition != "selectors" || selectors.is_empty() {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             "no_actionable_selectors",
             assessment.get("evidence").cloned().unwrap_or(Value::Null),
         )
     } else if !promotion_authorized {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             "promotion_not_authorized",
             json!(
                 "pilot results were applied, but this run carried no CI-sweep promotion authority"
@@ -168,7 +171,7 @@ pub(crate) fn assess(
         )
     } else {
         (
-            "promote",
+            PromotionDecision::Promote,
             "current_actionable_regression",
             json!(
                 "pilot validated non-empty canonical selectors with no duplicate, already-landed, conflict, or warning finding"
@@ -176,23 +179,26 @@ pub(crate) fn assess(
         )
     };
 
-    Ok(AdmissionOutcome::Decision(json!({
-        "task_id": task_id,
-        "decision": decision,
-        "classification": classification,
-        "promotion_authorized": promotion_authorized,
-        "failure_key": failure_key,
-        "source": {
-            "workflow": workflow,
-            "job": job,
-            "step": step,
-            "tested_commit": tested_commit,
-            "run_urls": run_urls,
-            "ref_kinds": filing.get("ref_kinds").cloned().unwrap_or_else(|| json!([])),
-            "head_branches": filing.get("head_branches").cloned().unwrap_or_else(|| json!([])),
+    Ok(CiSweepAdmission::Decision(Box::new(
+        CiSweepAdmissionDecision {
+            task_id: task_id.to_string(),
+            decision,
+            classification: classification.to_string(),
+            promotion_authorized,
+            failure_key: failure_key.to_string(),
+            source: json!({
+                "workflow": workflow,
+                "job": job,
+                "step": step,
+                "tested_commit": tested_commit,
+                "run_urls": run_urls,
+                "ref_kinds": filing.ref_kinds_echo(),
+                "head_branches": filing.head_branches,
+            }),
+            evidence,
+            closure: Default::default(),
         },
-        "evidence": evidence,
-    })))
+    )))
 }
 
 /// A CI-sweep prepare can lose its one filed task to another active pilot.

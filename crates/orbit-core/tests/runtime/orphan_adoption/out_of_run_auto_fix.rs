@@ -33,6 +33,26 @@ fn repair_leaf_job() -> String {
     .to_string()
 }
 
+/// The shipped leaf's completion rounds after a reviewed head conflicted:
+/// each round rebases the head for re-review, and the next round completes
+/// the head its re-review republished.
+fn rereviewed_leaf_job() -> String {
+    let step = |id: &str, action: &str| json!({"id": id, "spec": {"type": "deterministic", "action": action, "config": {}}});
+    json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_pr_pipeline"},
+    "spec": {"state": "enabled", "kind": "workflow", "task_delivery": {}, "steps": [
+        step("worktree", "pipeline_success_guard"),
+        step("push", "git_push"),
+        step("pr_open", "pr_open"),
+        step("promote_tasks", "pr_promote"),
+        step("complete_pr", "pr_complete"),
+        step("re_push", "git_push"),
+        step("complete_reviewed_pr", "pr_complete"),
+        step("re_push_2", "git_push"),
+        step("complete_reviewed_pr_2", "pr_complete"),
+    ]}})
+    .to_string()
+}
+
 /// How a stopped leaf left its task.
 #[derive(Clone, Copy)]
 enum Shelf {
@@ -56,9 +76,13 @@ struct Leaf {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(&repair_leaf_job())
+}
+
+fn fixture_with(job: &str) -> Fixture {
     let fx = Fixture::new();
     let jobs = fx.activities.parent().unwrap().join("jobs");
-    std::fs::write(jobs.join("task_pr_pipeline.yaml"), repair_leaf_job()).unwrap();
+    std::fs::write(jobs.join("task_pr_pipeline.yaml"), job).unwrap();
     fx
 }
 
@@ -83,7 +107,7 @@ impl Fixture {
             })
             .unwrap()
             .id;
-        let head = format!("orbit/{task}-leaf");
+        let head = format!("orbit/{task}-0123abcd");
         let input = json!({"task_ids": [task], "completion": completion, "auto_fix": false});
         let run = self
             .jobs
@@ -118,7 +142,8 @@ impl Fixture {
             state.record_pipeline_output(id, output.clone());
             self.step(&run, index, id, JobRunState::Success, None);
         }
-        state.record_step(4, JobRunState::Failed, None, None);
+        // Production checkpoints only a step that succeeded, so the failed
+        // `complete_pr` leaves no entry in `step_states`.
         self.jobs.write_run_state(&run, &state).unwrap();
         self.step(
             &run,
@@ -223,6 +248,8 @@ impl Fixture {
                 head_sha: head_sha.to_string(),
                 conflicting: conflict,
                 failed_required_checks: failed.iter().map(|name| name.to_string()).collect(),
+                pending_required_checks: Vec::new(),
+                passed_required_checks: Vec::new(),
             },
         );
     }
@@ -500,6 +527,126 @@ fn full_capacity_still_reports_the_pull_requests_left_alone() {
     );
 }
 
+/// Record `rounds` as the checkpoints of steps 4.. as production writes them:
+/// each is a Success, and a step that failed or never ran has no entry.
+fn checkpoint_rounds(fx: &Fixture, leaf: &Leaf, rounds: &[(&str, Value)]) {
+    let mut state = fx.jobs.read_run_state(&leaf.run).unwrap().unwrap();
+    for (index, (id, output)) in (4..).zip(rounds) {
+        state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+        state.record_pipeline_output(id, output.clone());
+    }
+    fx.jobs.write_run_state(&leaf.run, &state).unwrap();
+}
+
+/// The resumed run of `leaf`, repaired once: its seeded state.
+fn repaired_state(fx: &Fixture, leaf: &Leaf, head: &str, completion: &str) -> PipelineState {
+    fx.blocked(leaf, head, "orbit-bot", true, &[]);
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, completion, true);
+    started(&pass, &leaf.task).unwrap_or_else(|| panic!("{pass}"));
+    let retries = fx.retries(&leaf.run);
+    assert_eq!(retries.len(), 1, "{pass}");
+    fx.jobs.read_run_state(&retries[0].run_id).unwrap().unwrap()
+}
+
+fn assert_reused(seeded: &PipelineState, indices: std::ops::Range<u32>) {
+    for index in indices {
+        assert_eq!(
+            seeded.step_states.get(&index),
+            Some(&JobRunState::Success),
+            "step {index} is reused"
+        );
+    }
+}
+
+fn rebased_round() -> Value {
+    json!({"phase": "complete", "re_review_required": true})
+}
+
+fn republished(leaf: &Leaf, local: &str, before: &str) -> Value {
+    json!({"phase": "push", "branch": leaf.head, "local_sha": local, "remote_sha_before": before})
+}
+
+/// ORB-18204: ORB-18124's leaf rebased and republished its reviewed head in
+/// two re-review rounds, then a third base advance stopped its last round.
+/// The repair reran the first round, pinned the initial publication, and
+/// failed as `delivery_evidence_stale` against the head the leaf's own
+/// `re_push_2` had published. The failed round is absent from the checkpoints,
+/// as production leaves it [ORB-18217].
+fn a_repair_reruns_the_completion_round_that_published_the_pull_requests_head() {
+    let fx = fixture_with(&rereviewed_leaf_job());
+    let leaf = fx.stopped_leaf(85, "done", Shelf::Escalated);
+    checkpoint_rounds(
+        &fx,
+        &leaf,
+        &[
+            ("complete_pr", rebased_round()),
+            ("re_push", republished(&leaf, "ddd2", "ddd1")),
+            ("complete_reviewed_pr", rebased_round()),
+            ("re_push_2", republished(&leaf, "ddd3", "ddd2")),
+        ],
+    );
+
+    let seeded = repaired_state(&fx, &leaf, "ddd3", "done");
+    assert_reused(&seeded, 0..8);
+    assert!(
+        !seeded.step_states.contains_key(&8),
+        "the last round reruns"
+    );
+    assert_eq!(seeded.next_step_index, 8);
+    assert_eq!(
+        seeded.pipeline["re_push_2"]["local_sha"], "ddd3",
+        "the rerun round pins the head the pull request carries"
+    );
+}
+
+/// A round that failed right after a re-review republished the head reruns
+/// against that publication, not the one before it.
+fn a_repair_reruns_the_second_round_when_it_is_the_one_that_failed() {
+    let fx = fixture_with(&rereviewed_leaf_job());
+    let leaf = fx.stopped_leaf(86, "done", Shelf::Escalated);
+    checkpoint_rounds(
+        &fx,
+        &leaf,
+        &[
+            ("complete_pr", rebased_round()),
+            ("re_push", republished(&leaf, "eee2", "eee1")),
+        ],
+    );
+
+    let seeded = repaired_state(&fx, &leaf, "eee2", "done");
+    assert_reused(&seeded, 0..6);
+    assert!(!seeded.step_states.contains_key(&6), "the round reruns");
+    assert_eq!(seeded.next_step_index, 6);
+    assert_eq!(seeded.pipeline["re_push"]["local_sha"], "eee2");
+}
+
+/// Rounds that rebased without a republication, and conditional steps that
+/// checkpointed Success with null output, are not publications: the repair
+/// reruns the round that follows the original push.
+fn a_repair_does_not_count_a_skipped_republication_as_published() {
+    let fx = fixture_with(&rereviewed_leaf_job());
+    let leaf = fx.stopped_leaf(87, "done", Shelf::Escalated);
+    checkpoint_rounds(
+        &fx,
+        &leaf,
+        &[
+            ("complete_pr", rebased_round()),
+            ("re_push", Value::Null),
+            ("complete_reviewed_pr", Value::Null),
+            ("re_push_2", Value::Null),
+        ],
+    );
+
+    let seeded = repaired_state(&fx, &leaf, "fff1", "done");
+    assert_reused(&seeded, 0..4);
+    assert!(
+        !seeded.step_states.contains_key(&4),
+        "the first round reruns"
+    );
+    assert_eq!(seeded.next_step_index, 4);
+}
+
 fn red_checks_and_review_or_requeued_tasks_are_repaired_too() {
     let fx = fixture();
     let red = fx.stopped_leaf(82, "review", Shelf::Escalated);
@@ -587,12 +734,23 @@ fn holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired() 
     fx.blocked(&foreign, "ccc3", "someone-else", true, &[]);
     let wants_merge = fx.stopped_leaf(94, "done", Shelf::Escalated);
     fx.blocked(&wants_merge, "ccc4", "orbit-bot", true, &[]);
+    let claimed = fx.stopped_leaf(96, "review", Shelf::Review);
+    fx.blocked(&claimed, "claimed-head", "orbit-bot", true, &[]);
+    let mut claimed_run = fx.jobs.get_job_run(&claimed.run).unwrap().unwrap();
+    claimed_run.input.as_mut().unwrap()["claimed"] = json!(true);
+    fx.runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&fx.runtime.workspace_id().unwrap(), &claimed_run, None)
+        .unwrap();
     let clean = fx.stopped_leaf(95, "review", Shelf::Review);
     fx.blocked(&clean, "ccc5", "orbit-bot", false, &[]);
     let drain = fx.drain();
 
     let pass = fx.pass(&drain, "review", true);
     assert_eq!(pass["auto_fix"]["started"], json!([]), "{pass}");
+    assert_eq!(repair_skip(&pass, &claimed.task), None, "{pass}");
+    assert!(fx.retries(&claimed.run).is_empty());
     for (leaf, reason) in [
         (&held, "operator_hold"),
         (&opted_out, "opted_out"),
@@ -611,6 +769,119 @@ fn holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired() 
         fx.runtime.get_task(&held.task).unwrap().status,
         TaskStatus::Blocked,
         "an operator's block stays"
+    );
+}
+
+/// ORB-18801: a run whose failure hook published the pull request never
+/// recorded `pr_open`, so the drain used to skip with `no_pull_request`
+/// ("the run did not open a pull request"). The handoff checkpoint names an
+/// open pull request on the same terms as a run-opened one for readiness: the
+/// skip names the requeue action that can continue the published candidate.
+fn a_failure_handoff_pull_request_without_pr_open_names_the_requeue_action() {
+    let fx = fixture();
+    let leaf = fx.stopped_leaf(97, "review", Shelf::Escalated);
+    // The source run opened no pull request: drop its `pr_open` checkpoint
+    // and keep only the failure hook's publication of the task's PR.
+    let mut state = fx.jobs.read_run_state(&leaf.run).unwrap().unwrap();
+    if let Some(pipeline) = state.pipeline.as_object_mut() {
+        pipeline.remove("pr_open");
+    }
+    state.record_failure_activity(
+        "pr_failure_handoff".into(),
+        "complete_pr".into(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "blocked_conflict_pr",
+            "task_id": leaf.task,
+            "pr_number": leaf.number.to_string(),
+            "branch": leaf.head,
+            "head_sha": "handoff-head",
+            "task_spec_digest": "spec-digest",
+        }),
+    );
+    fx.jobs.write_run_state(&leaf.run, &state).unwrap();
+    fx.blocked(&leaf, "handoff-head", "orbit-bot", true, &[]);
+    // A handoff naming another pull request is not this task's publication.
+    let other = fx.stopped_leaf(98, "review", Shelf::Escalated);
+    let mut other_state = fx.jobs.read_run_state(&other.run).unwrap().unwrap();
+    if let Some(pipeline) = other_state.pipeline.as_object_mut() {
+        pipeline.remove("pr_open");
+    }
+    other_state.record_failure_activity(
+        "pr_failure_handoff".into(),
+        "complete_pr".into(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "blocked_conflict_pr",
+            "task_id": other.task,
+            "pr_number": "999",
+            "branch": other.head,
+            "head_sha": "other-head",
+            "task_spec_digest": "spec-digest",
+        }),
+    );
+    fx.jobs.write_run_state(&other.run, &other_state).unwrap();
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+    assert_eq!(pass["auto_fix"]["started"], json!([]), "{pass}");
+    assert_eq!(
+        repair_skip(&pass, &other.task).as_deref(),
+        Some("no_pull_request"),
+        "a handoff for another pull request keeps the old skip: {pass}"
+    );
+    let skip = pass["auto_fix"]["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == leaf.task)
+        .unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(skip["reason"], "failure_handoff", "{pass}");
+    assert_ne!(skip["reason"], "no_pull_request", "{pass}");
+    assert_eq!(skip["pr_number"], leaf.number.to_string(), "{pass}");
+    let detail = skip["detail"].as_str().unwrap_or("");
+    assert!(
+        detail.contains("orbit task requeue <task-id>"),
+        "the skip names the requeue action with placeholders only: {pass}"
+    );
+    assert!(
+        detail.contains("--reason '<why this candidate can continue>'"),
+        "the skip names the requeue reason placeholder: {pass}"
+    );
+    assert!(
+        !detail.contains(&leaf.task),
+        "the detail uses placeholders, not the task id: {pass}"
+    );
+    assert!(
+        !detail.contains(&leaf.number.to_string()),
+        "the detail uses placeholders, not the pull request number: {pass}"
+    );
+    assert!(
+        fx.retries(&leaf.run).is_empty(),
+        "a handoff is not resumed: {pass}"
+    );
+    assert!(
+        fx.retries(&other.run).is_empty(),
+        "a mismatched handoff is not resumed: {pass}"
+    );
+
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    let skipped = readiness["out_of_run_auto_fix"].as_array().unwrap();
+    assert!(
+        skipped.iter().any(|entry| entry["pr_number"] == "97"
+            && entry["state"] == "skipped"
+            && entry["reason"] == "failure_handoff"),
+        "{readiness}"
+    );
+    assert!(
+        skipped
+            .iter()
+            .filter(|entry| entry["pr_number"] == "97")
+            .all(|entry| entry["reason"] != "no_pull_request"),
+        "{readiness}"
     );
 }
 
@@ -721,12 +992,143 @@ fn a_newer_finished_delivery_of_the_task_keeps_its_older_stopped_leaf_from_resum
     assert!(fx.retries(&leaf.run).is_empty());
 }
 
+/// The dashboard's Fix PR starts one task's repair through the drain pass's
+/// own verdict, ledger and start, with no drain, and refuses with the pass's
+/// reason everything the pass would leave alone.
+fn one_tasks_repair_starts_without_a_drain_and_refusals_are_typed() {
+    use orbit_core::application::job::TaskAutoFixError;
+    let fx = fixture();
+    let refusal = |task: &str, completion_done: bool| -> String {
+        let readiness = fx
+            .runtime
+            .task_pr_auto_fix_readiness(task, completion_done)
+            .unwrap();
+        assert_eq!(readiness["available"], false, "{readiness}");
+        match fx
+            .runtime
+            .start_task_pr_auto_fix(task, completion_done, Some("dashboard"))
+        {
+            Err(TaskAutoFixError::Refused(refusal)) => {
+                assert_eq!(readiness["reason"], refusal.reason(), "{readiness}");
+                assert_eq!(
+                    refusal.code(),
+                    format!("task_auto_fix_{}", refusal.reason())
+                );
+                refusal.reason().to_string()
+            }
+            other => panic!("{task}: expected a refusal, got {other:?}"),
+        }
+    };
+
+    let leaf = fx.stopped_leaf(121, "review", Shelf::Review);
+    fx.blocked(&leaf, "fff1", "orbit-bot", true, &[]);
+    let readiness = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&leaf.task, false)
+        .unwrap();
+    assert_eq!(readiness["available"], true, "{readiness}");
+    assert_eq!(readiness["blocker"], "conflict", "{readiness}");
+    assert!(fx.retries(&leaf.run).is_empty(), "readiness starts nothing");
+    let started = fx
+        .runtime
+        .start_task_pr_auto_fix(&leaf.task, false, Some("dashboard"))
+        .unwrap();
+    let retries = fx.retries(&leaf.run);
+    assert_eq!(retries.len(), 1, "{started}");
+    assert_eq!(started["resumed_run_id"], retries[0].run_id);
+    let input = retries[0].input.as_ref().unwrap();
+    assert_eq!(input["auto_fix"], true);
+    assert_eq!(input["footprint_deferred"], true);
+    assert_eq!(
+        input["completion"], "review",
+        "a dashboard repair never gains merge authority the leaf lacked"
+    );
+    assert_eq!(input["out_of_run_auto_fix"]["drain_run_id"], Value::Null);
+    let history = fx.runtime.get_task_history(&leaf.task).unwrap();
+    let recorded: Vec<Value> = history
+        .iter()
+        .filter(|entry| entry.event == "pr_auto_fix_out_of_run")
+        .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+        .collect();
+    assert_eq!(recorded.len(), 1, "{history:?}");
+    assert_eq!(recorded[0]["resumed_run_id"], retries[0].run_id);
+    assert!(recorded[0].get("drain_run_id").is_none(), "{}", recorded[0]);
+    // The resumed leaf is live now.
+    assert_eq!(refusal(&leaf.task, false), "live_run");
+
+    // A dashboard start spends the same ledger a drain pass reads.
+    fx.fail(&retries[0].run_id);
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, "review", true);
+    assert_eq!(
+        repair_skip(&pass, &leaf.task).as_deref(),
+        Some("already_started"),
+        "{pass}"
+    );
+
+    let held = fx.stopped_leaf(122, "review", Shelf::OperatorHold);
+    fx.blocked(&held, "fff2", "orbit-bot", true, &[]);
+    let opted_out = fx.stopped_leaf(123, "review", Shelf::OptedOut);
+    fx.blocked(&opted_out, "fff3", "orbit-bot", true, &[]);
+    let foreign = fx.stopped_leaf(124, "review", Shelf::Review);
+    fx.blocked(&foreign, "fff4", "someone-else", true, &[]);
+    let wants_merge = fx.stopped_leaf(125, "done", Shelf::Review);
+    fx.blocked(&wants_merge, "fff5", "orbit-bot", true, &[]);
+    let clean = fx.stopped_leaf(126, "review", Shelf::Review);
+    fx.blocked(&clean, "fff6", "orbit-bot", false, &[]);
+    let closed = fx.stopped_leaf(127, "review", Shelf::Review);
+    let undelivered = fx
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Never delivered".into(),
+            description: "No delivery run of its own.".into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    for (task, completion_done, reason) in [
+        (held.task.as_str(), true, "operator_hold"),
+        (&opted_out.task, true, "opted_out"),
+        (&foreign.task, true, "not_orbit_pull_request"),
+        (&wants_merge.task, false, "authority"),
+        (&clean.task, true, "no_blocker"),
+        (&closed.task, true, "pull_request_not_open"),
+        (&undelivered, true, "no_delivery_leaf"),
+    ] {
+        assert_eq!(refusal(task, completion_done), reason, "{task}");
+    }
+    for leaf in [&held, &opted_out, &foreign, &wants_merge, &clean, &closed] {
+        assert!(fx.retries(&leaf.run).is_empty(), "{}", leaf.task);
+    }
+    assert!(matches!(
+        fx.runtime
+            .start_task_pr_auto_fix("ORB-99999", true, Some("dashboard")),
+        Err(TaskAutoFixError::Runtime(OrbitError::NotFound { .. }))
+    ));
+
+    // A leaf started with `--complete` resumes under completion authority,
+    // and keeps that grant.
+    let started = fx
+        .runtime
+        .start_task_pr_auto_fix(&wants_merge.task, true, Some("dashboard"))
+        .unwrap();
+    let resumed = &fx.retries(&wants_merge.run)[0];
+    assert_eq!(started["resumed_run_id"], resumed.run_id);
+    assert_eq!(resumed.input.as_ref().unwrap()["completion"], "done");
+}
+
 crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
+    one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
+    a_repair_reruns_the_completion_round_that_published_the_pull_requests_head,
+    a_repair_reruns_the_second_round_when_it_is_the_one_that_failed,
+    a_repair_does_not_count_a_skipped_republication_as_published,
     skipped_repairs_are_checkpointed_and_visible_in_readiness,
     full_capacity_still_reports_the_pull_requests_left_alone,
     red_checks_and_review_or_requeued_tasks_are_repaired_too,
+    a_failure_handoff_pull_request_without_pr_open_names_the_requeue_action,
     a_genuine_forge_failure_still_defers_later_blocker_reads,
     holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired,
     the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs,
@@ -738,4 +1140,106 @@ crate::scenario_table!(
 crate::scenario_table!(
     unknown_mergeability_scenarios,
     unknown_mergeability_on_the_newest_pull_request_does_not_defer_older_repairs,
+);
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+struct EnvelopeSelections(Arc<AtomicUsize>);
+impl<S: tracing::Subscriber> Layer<S> for EnvelopeSelections {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        if matches!(
+            attrs.metadata().name(),
+            "task_envelope_selection" | "task_metadata_read"
+        ) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+fn idle_pass_reads_only_stopped_leaf_tasks_and_sees_new_candidates() {
+    let fx = fixture();
+    for index in 0..64 {
+        fx.runtime
+            .add_task(TaskAddParams {
+                title: format!("Closed history {index}"),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let leaf = fx.stopped_leaf(112, "review", Shelf::Review);
+    fx.blocked(&leaf, "newly-eligible-head", "orbit-bot", true, &[]);
+    let other = OrbitRuntime::from_roots(
+        &fx._root.path().join("home/.orbit"),
+        &fx._root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    other
+        .apply_task_automation_update(
+            &leaf.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let malformed = fx
+        .jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": ["not-a-task", "ORB-999999"], "task_id": "../foreign"})),
+            None,
+        )
+        .unwrap();
+    fx.fail(&malformed.run_id);
+    let drain = fx.drain();
+    // Warm the normal freshness proofs, outside the observed candidate query.
+    fx.runtime.list_task_metadata().unwrap();
+    for _ in 0..2 {
+        let selections = Arc::new(AtomicUsize::new(0));
+        let subscriber =
+            tracing_subscriber::registry().with(EnvelopeSelections(Arc::clone(&selections)));
+        let pass =
+            tracing::subscriber::with_default(subscriber, || fx.pass(&drain, "review", true));
+        assert_eq!(
+            pass["auto_fix"],
+            json!({"started":[],"skipped":[]}),
+            "{pass}"
+        );
+        assert_eq!(
+            selections.load(Ordering::Relaxed),
+            2,
+            "idle adoption probes only stopped-leaf bindings, not unrelated closed history"
+        );
+    }
+    // A second runtime publishes the status change: no process-local cache may
+    // hide it, even immediately after the previous idle pass.
+    other
+        .apply_task_automation_update(
+            &leaf.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let pass = fx.pass(&drain, "review", true);
+    assert!(started(&pass, &leaf.task).is_some(), "{pass}");
+    assert_eq!(fx.retries(&leaf.run).len(), 1);
+    let new = fx.stopped_leaf(113, "review", Shelf::Requeued);
+    fx.blocked(&new, "new-task-head", "orbit-bot", false, &["Test"]);
+    let pass = fx.pass(&drain, "review", true);
+    assert!(started(&pass, &new.task).is_some(), "{pass}");
+    assert_eq!(fx.retries(&new.run).len(), 1);
+}
+crate::scenario_table!(
+    candidate_population_scenarios,
+    idle_pass_reads_only_stopped_leaf_tasks_and_sees_new_candidates
 );

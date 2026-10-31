@@ -4,8 +4,10 @@ type: design
 title: "User Interface — Overview"
 owner: gemini
 last_updated: 2026-10-20
-last_validated: 2026-10-19
+last_validated: 2026-10-30
 status: Draft
+stage: shipped
+next: "—"
 feature: user-interface
 doc_role: overview
 tags: ["user-interface"]
@@ -40,28 +42,31 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
   aggregate views without a selected workspace) is shown as unknown. Lock refreshes
   update open details without discarding unsaved editors.
 
-WORK › Drain (`#drain`) shows the auto-drain state, forecast, how the live
-window was started, admission passes and waits, fleet drains and locked files.
-Its **Start a window** view (`#drain/start`) composes any `orbit run auto`
-start, local or pull, and its Log view is `#drain/log`. The same dock, with the
-Auto-drain status card, a simple Start a window card, Locks held and the Log
-view, sits beside the task list on Tasks and gives way to the task pane when a
-task opens; the composer stays on Drain. On a replica checkout, the simple
-local Start stays disabled with the runtime checkout refusal and a link to
-`#drain/start` to pull from the owner.
-The Drain page shows the fleet drains, including in **All workspaces** mode,
-grouped under one heading per host: one line per workspace with its drain
-phase and used/ceiling leaf slots, live drains first. Eligible tasks, the most
-common wait reason, admission/provider holds and queued windows (naming any
-Claude crew a queued window would run without a credential) add a second line
-only when present. Selecting a row switches host and workspace using the dashboard scope
-controls. The top-bar fleet indicator remains visible when an idle
-workspace is selected; opening it selects the fleet overview.
+The Tasks dock holds the Auto-drain status and forecast, a simple **Start a
+window** card, **Locks held** and **Log**. It gives way to the task pane when
+a task opens. Below 1000px the list keeps the full width, and an explicit Drain,
+Locks held or Log link shows the dock in its place until **Back to tasks**.
+Locks held lists holders by task or locked paths by file, marking a path more
+than one task holds, with a
+filter by task ID. On a replica checkout, Start pulls directly from the
+owner; the Auto-drain card can stop that pull's admissions.
+
+The top-bar fleet indicator opens the Tasks dock in **All workspaces** mode.
+There the Auto-drain card lists fleet drains, one tab per host when more
+than one is registered (the chosen tab is remembered), with phase and
+used/ceiling leaf slots for each workspace. Live drains lead; eligible work,
+waits, holds and queued windows add a second line only when present.
+Selecting a row switches host and workspace. The indicator remains visible
+when an idle workspace is selected. Legacy `#drain`, `#drain/start` and
+`#drain/log` links open the corresponding Tasks dock content.
 
 `GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered
 workspace on the addressed host. Each row includes `workspace_id`, `workspace_name`,
 `phase`, `slots_used`, `slots_ceiling`, `eligible_count`, `top_wait_reason`,
-`holds`, and `queued_drains` (readiness's windows waiting for the live one). Failed/inactive workspaces stay visible with `phase: "unavailable"`, an
+`holds`, and `queued_drains` (readiness's windows waiting for the live one).
+`drain_phase`, `pull_active`, and `pull_admissions_stopped` preserve independent
+drain/pull states for Settings Hosts, including a pull concurrent with a drain.
+These fields are null on unavailable workspaces. Failed/inactive workspaces stay visible with `phase: "unavailable"`, an
 `error`, and null counts. Counts use the read-only readiness snapshot (up to 500
 tasks); `counts_truncated` marks a lower bound, displayed with `+`. The top wait
 is the most frequent reason among those tasks, with alphabetical ties. Slots
@@ -69,6 +74,10 @@ include shared leaf occupancy, matching the workspace Drain card.
 
 The browser combines this endpoint across the serving host's registered hosts
 through `/api/on/<host>/fleet/drains`, with at most three requests in flight.
+Completed hosts are shown as partial results while outstanding hosts are
+marked `loading` (distinct from idle and unavailable); when a pending host
+succeeds or fails, only its rows update and ready rows and the selected
+workspace are preserved. Partial results are not cached as a fresh snapshot.
 A snapshot is kept for 60 seconds, longer than the dashboard's 30-second panel
 poll, and that poll paints the indicator from the snapshot instead of asking
 again. The snapshot is warmed once hosts are known and refreshed on its own

@@ -6,6 +6,7 @@ use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::LandingObservationStatus;
 use serde_json::Value;
 
+use crate::LandedDiffStats;
 use crate::OrbitRuntime;
 use crate::application::job::CodebaseDeliveryScan;
 use crate::application::task::{
@@ -28,6 +29,24 @@ pub(super) struct Scanner {
 }
 
 impl Scanner {
+    /// A notice is about this base only when its local ref actually contains
+    /// the landed commit. Missing objects or refs cannot establish that fact.
+    pub(super) fn base_contains(&self, base: &str, commit: &str) -> bool {
+        let Some(repo) = &self.repo else {
+            return false;
+        };
+        let Ok(base) = repo
+            .revparse_single(base)
+            .and_then(|object| object.peel_to_commit())
+        else {
+            return false;
+        };
+        let Ok(commit) = git2::Oid::from_str(commit) else {
+            return false;
+        };
+        base.id() == commit || repo.graph_descendant_of(base.id(), commit).unwrap_or(false)
+    }
+
     pub(super) fn new(runtime: &OrbitRuntime) -> Self {
         Self {
             repo: git2::Repository::open(&runtime.paths().repo_root).ok(),
@@ -114,7 +133,34 @@ fn landing_completed(history: &[TaskHistoryEntry]) -> Option<(String, DateTime<U
     })
 }
 
+impl OrbitRuntime {
+    /// Read each delivery's distinct old and new file paths from its recorded
+    /// base to its landed commit, in input order. Opens the local repository
+    /// once and never fetches. Missing repositories or Git objects yield
+    /// `None`, distinct from an empty diff (`Some` with an empty set).
+    pub fn landed_diff_file_paths(
+        &self,
+        deliveries: &[LandedDiffStats],
+    ) -> Vec<Option<BTreeSet<String>>> {
+        let repo = git2::Repository::open(&self.paths().repo_root).ok();
+        deliveries
+            .iter()
+            .map(|row| {
+                changed_paths_between(repo.as_ref()?, &row.landed_commit, Some(&row.base_commit))
+            })
+            .collect()
+    }
+}
+
 fn changed_paths(repo: &git2::Repository, commit: &str) -> Option<BTreeSet<String>> {
+    changed_paths_between(repo, commit, None)
+}
+
+fn changed_paths_between(
+    repo: &git2::Repository,
+    commit: &str,
+    base: Option<&str>,
+) -> Option<BTreeSet<String>> {
     let _span = tracing::trace_span!(
         target: "orbit.core.codebase",
         "codebase_landed_diff",
@@ -123,7 +169,14 @@ fn changed_paths(repo: &git2::Repository, commit: &str) -> Option<BTreeSet<Strin
     .entered();
     let landed = repo.find_commit(git2::Oid::from_str(commit).ok()?).ok()?;
     let tree = landed.tree().ok()?;
-    let parent = if landed.parent_count() == 0 {
+    let parent = if let Some(base) = base {
+        Some(
+            repo.find_commit(git2::Oid::from_str(base).ok()?)
+                .ok()?
+                .tree()
+                .ok()?,
+        )
+    } else if landed.parent_count() == 0 {
         None
     } else {
         Some(landed.parent(0).ok()?.tree().ok()?)

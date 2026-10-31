@@ -134,6 +134,7 @@ fn a_launch_failure_cancels_the_leaf_releases_the_task_and_suppresses_the_host()
 /// An operator cancellation of a launched claimed leaf reaches its owner as a
 /// release, so the task keeps its candidate in backlog with the cancel reason.
 fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
+    let cancel_reason = "preserve this candidate for later";
     let pair = Pair::new(1);
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
@@ -157,7 +158,7 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
             &leaf,
             "operator",
             "cli",
-            Some("preserve this candidate for later"),
+            Some(cancel_reason),
             false,
             false,
         )
@@ -172,7 +173,8 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
     assert!(
         failure["reason"]
             .as_str()
-            .is_some_and(|reason| !reason.is_empty())
+            .is_some_and(|reason| reason.contains(cancel_reason)),
+        "settlement failure should preserve the operator reason: {failure:?}"
     );
     let owner_task = pair.owner_task(&task);
     let comments = owner_task["comments"].as_array().expect("owner comments");
@@ -180,7 +182,8 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
     assert!(
         comments.last().unwrap()["message"]
             .as_str()
-            .is_some_and(|note| !note.is_empty())
+            .is_some_and(|note| note.contains(cancel_reason)),
+        "owner comment should preserve the operator reason: {comments:?}"
     );
     let claim = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
     assert_eq!(claim.settlement_phase, "settled");
@@ -307,6 +310,60 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
 const PROTECTED_PATH_WIDENING: &str =
     "footprint widening refused protected path: .orbit/config.toml";
 
+/// A recovered claim must be refused before observing the obsolete PR head:
+/// otherwise a forge error hides the revocation and every sweep retries it.
+fn a_recovered_claim_closes_its_pending_handoff_before_observing_the_pr() {
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let claim = pair.owner_claim_for_leaf(&leaf);
+    pair.leaf_hands_off(&leaf);
+    pair.wire
+        .owner
+        .recover_claim_as_operator(
+            claim["claim"]["claim_id"].as_str().unwrap(),
+            "running",
+            orbit_types::task::TaskStatus::Blocked,
+            "operator",
+            "The follower stopped; the PR was rescued by hand",
+            "recover-pending-handoff",
+        )
+        .unwrap();
+    // Ended claims reach the real owner rather than the transport's fake PR.
+    // This checkout has no published candidate, so observing it would fail.
+    let log = pair._root.path().join("obsolete-settlement.log");
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::sync::Mutex::new(std::fs::File::create(&log).unwrap()))
+        .finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    let closed = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
+    assert_eq!(closed.settlement_phase, "settled");
+    assert!(closed.refusal.as_deref().unwrap().contains("already ended"));
+    assert_eq!(pair.owner_status(&task), "blocked");
+    let calls = pair.wire.calls("orbit.drain.claim.settle").len();
+    pair.pass(&drain);
+    assert_eq!(
+        pair.wire.calls("orbit.drain.claim.settle").len(),
+        calls,
+        "a closed settlement is not sent again"
+    );
+    let warnings = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        warnings
+            .matches("closing an undeliverable pull settlement")
+            .count(),
+        1,
+        "{warnings}"
+    );
+}
+
 impl Pair {
     /// Let `leaf`'s settlement backoff elapse, as the clock passing it would.
     pub(super) fn elapse_settlement_backoff(&self, leaf: &str) -> SettlementRefusal {
@@ -340,13 +397,21 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
     let pulls = pair.wire.calls("orbit.task.pull").len();
 
     for _ in 0..5 {
-        let pass = pair.pass(&drain);
+        // The pending settlement occupies only one of two slots. Even the
+        // pass that first observes the policy refusal must hold new claims.
+        let pass = pair.pass_with(&drain, 2);
+        assert_eq!(
+            pair.wire.calls("orbit.task.pull").len(),
+            pulls,
+            "a newly observed policy refusal must hold the free slot: {pass}"
+        );
         assert!(
             pass["error"].is_null(),
             "a refusal is not a failed pass: {pass}"
         );
         assert_eq!(pass["admitting"], false, "{pass}");
         assert_eq!(pass["settlement_refused"], 1, "{pass}");
+        assert_eq!(pass["settlement_refused_holding"], 1, "{pass}");
         assert_eq!(pass["degraded"], false, "{pass}");
         assert!(
             error_of(&pass).is_empty()
@@ -372,6 +437,7 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
         .pull_drain_refused_settlements(&drain)
         .unwrap();
     assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].code.as_deref(), Some("policy_denied"));
     assert!(
         refused[0].reason.contains("refused protected path"),
         "{refused:?}"
@@ -418,6 +484,135 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
         pair.wire.calls("orbit.task.pull").len() > pulls,
         "requests resume once nothing owed is refused"
     );
+}
+
+/// A newly refused settlement holds fresh admission without preventing the
+/// same pass from reconciling the other pending records for that owner.
+fn a_new_policy_refusal_holds_new_claims_but_reconciles_other_pending_records() {
+    let pair = Pair::new(3);
+    let drain = pair.run_drain();
+    let first = pair.running_leaf(&drain, 1);
+    let second = pair.running_leaf(&drain, 2);
+    pair.leaf_hands_off(&first);
+    pair.leaf_hands_off(&second);
+    *pair.wire.refuse_settle.lock().unwrap() = Some(PROTECTED_PATH_WIDENING.into());
+    let pulls = pair.wire.calls("orbit.task.pull").len();
+
+    let pass = pair.pass_with(&drain, 3);
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        pulls,
+        "policy refusals must hold the spare slot: {pass}"
+    );
+    assert!(pass["error"].is_null(), "{pass}");
+    assert_eq!(pass["settlement_refused_holding"], 2, "{pass}");
+    assert_eq!(pair.wire.calls("orbit.drain.claim.settle").len(), 2);
+    for leaf in [&first, &second] {
+        let record = pair.admission(leaf);
+        assert_eq!(record.phase, LocalPullPhase::Settling);
+        assert_eq!(
+            record.settlement_refusal.unwrap().code.as_deref(),
+            Some("policy_denied"),
+            "both pending records must reconcile in the held pass"
+        );
+    }
+}
+
+/// A delivery-evidence refusal (the PR head moved past the published
+/// candidate) backs off its own settlement but does not hold the pass:
+/// other work is still claimed, and once the owner ends the claim the
+/// refused settlement closes as obsolete.
+#[cfg(unix)]
+fn a_delivery_refused_settlement_backs_off_closes_and_lets_other_work_proceed() {
+    let pair = Pair::new(2);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 2);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_hands_off(&leaf);
+    let bin = std::path::PathBuf::from(std::env::var_os("HOME").unwrap()).join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    let admission = pair.admission(&leaf);
+    let candidate = handoff(&admission).candidate;
+    let status = json!({
+        "number": 42, "state": "OPEN", "headRefName": candidate.source_branch,
+        "baseRefName": candidate.base_branch, "headRefOid": "moved-by-hand",
+        "url": "https://github.com/owner/repository/pull/42"
+    });
+    std::fs::write(&gh, format!("#!/bin/sh\nprintf '%s' '{}'\n", status)).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Use the owner's real observation path; the provider reports a head
+    // different from the candidate in the follower's handoff.
+    *pair.wire.observe_handoffs.lock().unwrap() = true;
+    let pulls = pair.wire.calls("orbit.task.pull").len();
+
+    let pass = pair.pass_with(&drain, 2);
+    assert_eq!(pass["settlement_refused"], 1, "{pass}");
+    assert_eq!(pass["settlement_refused_holding"], 0, "{pass}");
+    let refused = pair
+        .admission(&leaf)
+        .settlement_refusal
+        .clone()
+        .expect("refused");
+    assert_eq!(
+        refused.code.as_deref(),
+        Some("delivery_head_changed"),
+        "{refused:?}"
+    );
+    assert!(refused.retry_after > refused.last_refused_at, "{refused:?}");
+    assert!(
+        pair.wire.calls("orbit.task.pull").len() > pulls,
+        "a delivery refusal must not stop other claims: {pass}"
+    );
+    assert_eq!(pair.leaf_runs().len(), 2, "other work was claimed");
+
+    let handoff_settles = pair
+        .wire
+        .calls("orbit.drain.claim.settle")
+        .iter()
+        .filter(|call| call["settlement"].get("AcceptHandoff").is_some())
+        .count();
+    pair.pass_with(&drain, 2);
+    assert_eq!(
+        pair.wire
+            .calls("orbit.drain.claim.settle")
+            .iter()
+            .filter(|call| call["settlement"].get("AcceptHandoff").is_some())
+            .count(),
+        handoff_settles,
+        "no redelivery before the backoff elapses"
+    );
+
+    let claim = pair.owner_claim_for_leaf(&leaf);
+    pair.wire
+        .owner
+        .recover_claim_as_operator(
+            claim["claim"]["claim_id"].as_str().unwrap(),
+            "running",
+            orbit_types::task::TaskStatus::Blocked,
+            "operator",
+            "The follower stopped; the PR was rescued by hand",
+            "recover-delivery-refused-handoff",
+        )
+        .unwrap();
+    pair.elapse_settlement_backoff(&leaf);
+    let closed = pair.pass_with(&drain, 2);
+    assert!(
+        closed["error"].is_null() || launch_refused(&closed),
+        "{closed}"
+    );
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    let claim_view = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
+    assert_eq!(claim_view.settlement_phase, "settled");
+    assert!(
+        claim_view
+            .refusal
+            .as_deref()
+            .unwrap()
+            .contains("already ended")
+    );
+    assert_eq!(pair.owner_status(&task), "blocked");
 }
 
 /// [ORB-13979] An operator who fixed the owner need not wait out the
@@ -594,6 +789,439 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
     );
 }
 
+/// [ORB-19486] A replayed settlement returns its original receipt but must
+/// not re-apply its crew attribution after an operator re-pinned the task.
+fn replayed_settlement_leaves_newer_crew_unchanged(
+    mutation: ClaimMutation,
+    expected_phase: orbit_store::contracts::ExecutionClaimPhase,
+) {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    let session = ToolSessionContext {
+        caller_machine_id: Some(FOLLOWER.into()),
+        process_machine_id: Some(OWNER.into()),
+        transport: Some(McpTransport::SshMcp),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let attribution = orbit_store::contracts::ClaimAttribution {
+        crew: Some("luna".into()),
+        ..Default::default()
+    };
+    let crew_entries_before = pair.owner_task(&task)["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["event"] == "crew_assigned")
+        .count();
+    let first = pair
+        .wire
+        .owner
+        .serve_claim_settle(
+            &session,
+            &claim.claim_id,
+            Some(&leaf),
+            mutation.clone(),
+            attribution.clone(),
+        )
+        .expect("first settlement");
+    assert_eq!(first.phase, expected_phase);
+    let after_first = pair.owner_task(&task);
+    assert_eq!(after_first["crew"], "luna", "{after_first:#}");
+    assert_eq!(
+        after_first["crew_source"], "redraw:claimed_leaf",
+        "{after_first:#}"
+    );
+    assert_eq!(
+        after_first["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "crew_assigned")
+            .count(),
+        crew_entries_before + 1,
+        "first settlement writes its crew exactly once: {after_first:#}"
+    );
+
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &task,
+            orbit_core::application::task::TaskUpdateParams {
+                crew: Some(Some("opus".into())),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("operator crew update");
+    let after_update = pair.owner_task(&task);
+    assert_eq!(after_update["crew"], "opus", "{after_update:#}");
+
+    let replay = pair
+        .wire
+        .owner
+        .serve_claim_settle(
+            &session,
+            &claim.claim_id,
+            Some(&leaf),
+            mutation,
+            attribution,
+        )
+        .expect("replayed settlement returns the original receipt");
+    assert_eq!(replay, first);
+    let after_replay = pair.owner_task(&task);
+    for field in ["crew", "crew_source", "history"] {
+        assert_eq!(
+            after_replay[field], after_update[field],
+            "{field} changed on replay"
+        );
+    }
+    assert_eq!(
+        after_replay["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "crew_assigned")
+            .count(),
+        // The operator update may add its own entry; the first settlement
+        // added exactly one and the replay added none.
+        after_update["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "crew_assigned")
+            .count(),
+        "{after_replay:#}"
+    );
+}
+
+fn a_replayed_fail_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged() {
+    replayed_settlement_leaves_newer_crew_unchanged(
+        ClaimMutation::Fail(ClaimEvidence {
+            summary: Some("leaf failed".into()),
+            ..Default::default()
+        }),
+        orbit_store::contracts::ExecutionClaimPhase::Failed,
+    );
+}
+
+fn a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged() {
+    replayed_settlement_leaves_newer_crew_unchanged(
+        ClaimMutation::Release(ClaimEvidence {
+            summary: Some("leaf released".into()),
+            ..Default::default()
+        }),
+        orbit_store::contracts::ExecutionClaimPhase::Revoked,
+    );
+}
+
+/// [ORB-19521] A replay that read the claim unsettled, then paused while
+/// another identical call settled it and an operator re-pinned the crew,
+/// returns the original receipt and leaves the newer crew alone.
+fn an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim_id = record
+        .receipt
+        .as_ref()
+        .unwrap()
+        .claim
+        .as_ref()
+        .unwrap()
+        .claim_id
+        .clone();
+    let session = ToolSessionContext {
+        caller_machine_id: Some(FOLLOWER.into()),
+        process_machine_id: Some(OWNER.into()),
+        transport: Some(McpTransport::SshMcp),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let attribution = orbit_store::contracts::ClaimAttribution {
+        crew: Some("luna".into()),
+        ..Default::default()
+    };
+    let fail = ClaimMutation::Fail(ClaimEvidence {
+        summary: Some("leaf failed".into()),
+        ..Default::default()
+    });
+    let crew_entries = |task: &Value| {
+        task["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "crew_assigned")
+            .count()
+    };
+    let crew_entries_before = crew_entries(&pair.owner_task(&task));
+
+    // The other settlement's receipt, and the task once it settled and once
+    // the operator re-pinned its crew.
+    let settled = Rc::new(RefCell::new(None));
+    let hook = {
+        let owner = pair.wire.owner.clone();
+        let (session, claim_id, leaf, task) = (
+            session.clone(),
+            claim_id.clone(),
+            leaf.clone(),
+            task.clone(),
+        );
+        let (fail, attribution, settled) = (fail.clone(), attribution.clone(), settled.clone());
+        move || {
+            let first = owner
+                .serve_claim_settle(&session, &claim_id, Some(&leaf), fail, attribution)
+                .expect("the settlement that wins the commit");
+            let show = |owner: &OrbitRuntime| {
+                owner
+                    .run_tool("orbit.task.show", json!({"id": task}))
+                    .expect("owner task")
+            };
+            let after_first = show(&owner);
+            owner
+                .update_task_as_human(
+                    &task,
+                    orbit_core::application::task::TaskUpdateParams {
+                        crew: Some(Some("opus".into())),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .expect("operator crew update");
+            *settled.borrow_mut() = Some((first, after_first, show(&owner)));
+        }
+    };
+    let replay = orbit_core::test_support::with_claim_settle_checkpoint(hook, || {
+        pair.wire
+            .owner
+            .serve_claim_settle(&session, &claim_id, Some(&leaf), fail, attribution)
+    })
+    .expect("the overlapping replay returns the original receipt");
+
+    let (first, after_first, after_update) = settled
+        .borrow_mut()
+        .take()
+        .expect("the checkpoint ran the other settlement");
+    assert_eq!(
+        first.phase,
+        orbit_store::contracts::ExecutionClaimPhase::Failed
+    );
+    assert_eq!(after_first["crew"], "luna", "{after_first:#}");
+    assert_eq!(
+        after_first["crew_source"], "redraw:claimed_leaf",
+        "{after_first:#}"
+    );
+    assert_eq!(
+        crew_entries(&after_first),
+        crew_entries_before + 1,
+        "the winning settlement writes its crew exactly once: {after_first:#}"
+    );
+    assert_eq!(after_update["crew"], "opus", "{after_update:#}");
+
+    assert_eq!(replay, first, "the replay returns the original receipt");
+    let after_replay = pair.owner_task(&task);
+    for field in ["crew", "crew_source", "history"] {
+        assert_eq!(
+            after_replay[field], after_update[field],
+            "{field} changed on the overlapping replay: {after_replay:#}"
+        );
+    }
+}
+
+/// [ORB-19602] A claimed leaf whose crew the follower reported inside its
+/// failure evidence, with no top-level attribution, still writes that crew
+/// back: the evidence is the executor's report of the crew that ran.
+fn a_fail_settlement_reporting_its_crew_in_evidence_writes_it_back() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    let session = ToolSessionContext {
+        caller_machine_id: Some(FOLLOWER.into()),
+        process_machine_id: Some(OWNER.into()),
+        transport: Some(McpTransport::SshMcp),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let settled = pair
+        .wire
+        .owner
+        .serve_claim_settle(
+            &session,
+            &claim.claim_id,
+            Some(&leaf),
+            ClaimMutation::Fail(ClaimEvidence {
+                summary: Some("leaf failed".into()),
+                crew: Some("luna".into()),
+                ..Default::default()
+            }),
+            orbit_store::contracts::ClaimAttribution::default(),
+        )
+        .expect("a failure reporting its crew settles");
+    assert_eq!(
+        settled.phase,
+        orbit_store::contracts::ExecutionClaimPhase::Failed
+    );
+    let after = pair.owner_task(&task);
+    assert_eq!(after["crew"], "luna", "{after:#}");
+    assert_eq!(after["crew_source"], "redraw:claimed_leaf", "{after:#}");
+}
+
+/// [ORB-19602] The backfill recovers a settled claimed leaf's crew from the
+/// owner's settlement record: the owner keeps no local delivery run for work
+/// a follower executed, only the settlement's report of the crew that ran.
+fn backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    // Store the settlement without the settle write-back, like a claim that
+    // settled before the owner wrote leaf crews back: the record keeps the
+    // crew, the task keeps its own.
+    let context = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        Some(ClaimRun {
+            machine_id: claim.executed_on.machine_id.clone(),
+            run_id: leaf.clone(),
+        }),
+    );
+    pair.wire
+        .owner
+        .mutate_execution_claim(
+            Some(&context),
+            "backfill-fixture-fail",
+            &ClaimMutation::Fail(ClaimEvidence {
+                summary: Some("leaf failed".into()),
+                crew: Some("luna".into()),
+                ..Default::default()
+            }),
+        )
+        .expect("a direct claim failure stores its settlement");
+    assert_eq!(pair.owner_task(&task)["crew"], "sol");
+    let report = pair
+        .wire
+        .owner
+        .backfill_admitted_task_crews()
+        .expect("backfill runs over settled claims");
+    assert_eq!(report.changed, 1, "{report:?}");
+    let after = pair.owner_task(&task);
+    assert_eq!(after["crew"], "luna", "{after:#}");
+    assert_eq!(after["crew_source"], "backfill:admission", "{after:#}");
+}
+
+/// [ORB-19624] The backfill leaves a task alone when its newest local run
+/// selected no crew after its claimed leaf settled: the older settlement is
+/// not the latest delivery, so its crew must not replace the task's.
+fn backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    // Store the settlement without the settle write-back, like a claim that
+    // settled before the owner wrote leaf crews back: the record keeps the
+    // crew, the task keeps its own.
+    let context = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        Some(ClaimRun {
+            machine_id: claim.executed_on.machine_id.clone(),
+            run_id: leaf.clone(),
+        }),
+    );
+    pair.wire
+        .owner
+        .mutate_execution_claim(
+            Some(&context),
+            "backfill-fixture-fail",
+            &ClaimMutation::Fail(ClaimEvidence {
+                summary: Some("leaf failed".into()),
+                crew: Some("luna".into()),
+                ..Default::default()
+            }),
+        )
+        .expect("a direct claim failure stores its settlement");
+    assert_eq!(pair.owner_task(&task)["crew"], "sol");
+    let settled_at = pair
+        .wire
+        .owner
+        .inspect_execution_claims()
+        .expect("owner claims")
+        .into_iter()
+        .find(|inspection| inspection.claim.task_id == task)
+        .and_then(|inspection| inspection.settlement)
+        .map(|settlement| {
+            chrono::DateTime::parse_from_rfc3339(&settlement.settled_at)
+                .expect("settlement timestamp")
+                .with_timezone(&Utc)
+        })
+        .expect("the settled claim");
+    // A newer owner-local delivery run that selected no crew: its input names
+    // the task but carries no crew selection, and it keeps no run state.
+    let store = orbit_store::compose::workspace_job_run_store(
+        pair.wire.owner.sqlite_store().expect("owner store"),
+        pair.wire.owner.workspace_id().expect("owner workspace"),
+    );
+    let inserted = store
+        .insert_job_run(
+            "task_local_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_id": task})),
+            None,
+        )
+        .expect("a newer owner-local run");
+    // `insert_job_run` stamps `created_at` itself, so lift the run strictly
+    // past the settlement when the clock did not move between the two writes.
+    if inserted.created_at <= settled_at {
+        let mut run = inserted.clone();
+        run.created_at = settled_at + chrono::Duration::seconds(1);
+        run.scheduled_at = run.created_at;
+        pair.wire
+            .owner
+            .sqlite_store()
+            .expect("owner store")
+            .upsert_job_run_for_workspace(
+                &pair.wire.owner.workspace_id().expect("owner workspace"),
+                &run,
+                None,
+            )
+            .expect("the newer run stays newer");
+    }
+    let report = pair
+        .wire
+        .owner
+        .backfill_admitted_task_crews()
+        .expect("backfill runs over the newer run");
+    assert!(
+        report.tasks.iter().all(|change| change.task_id != task),
+        "{report:?}"
+    );
+    let after = pair.owner_task(&task);
+    assert_eq!(after["crew"], "sol", "{after:#}");
+    assert_ne!(
+        after["crew_source"], "backfill:admission",
+        "the older settlement must not write back: {after:#}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
@@ -602,8 +1230,22 @@ crate::scenario_table!(
     operator_cancelled_claimed_leaf_returns_to_backlog_with_reason,
     lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once,
     a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once,
+    a_recovered_claim_closes_its_pending_handoff_before_observing_the_pr,
     a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_accepts,
+    a_new_policy_refusal_holds_new_claims_but_reconciles_other_pending_records,
     an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff,
     a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends,
-    a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep
+    a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep,
+    a_replayed_fail_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged,
+    a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged,
+    an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged,
+    a_fail_settlement_reporting_its_crew_in_evidence_writes_it_back,
+    backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement,
+    backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
+);
+
+#[cfg(unix)]
+crate::scenario_table!(
+    delivery_refused_settlement_scenarios,
+    a_delivery_refused_settlement_backs_off_closes_and_lets_other_work_proceed,
 );

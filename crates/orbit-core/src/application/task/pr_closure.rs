@@ -190,7 +190,19 @@ impl OrbitRuntime {
         };
         let candidates = open
             .into_iter()
-            .filter(|pr| names_task_delivery_pull_request(&pr.head_branch, &pr.body, &task.id))
+            .filter(|pr| {
+                names_task_delivery_pull_request(
+                    &self
+                        .context
+                        .settings()
+                        .pr_settings()
+                        .conventions
+                        .branch_name,
+                    &pr.head_branch,
+                    &pr.body,
+                    &task.id,
+                )
+            })
             .collect::<Vec<_>>();
         if candidates.is_empty() {
             return true;

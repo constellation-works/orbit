@@ -32,7 +32,7 @@ use super::worker_limit::{
     DrainWorkerLimitChange, DrainWorkerLimitRequest, validate_drain_worker_ceiling,
 };
 use crate::OrbitRuntime;
-use crate::application::distributed::PULL_DRAIN_JOB;
+use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::workflow::{
     AUTO_WORKFLOW_ALIAS, MAX_DRAIN_WINDOW_SECONDS, find_workflow, validate_drain_window,
 };

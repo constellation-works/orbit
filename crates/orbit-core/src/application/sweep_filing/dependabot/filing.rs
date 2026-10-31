@@ -7,8 +7,9 @@ use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::DEPENDABOT_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
-    DuplicateTaskLookup, DuplicateTaskMatch, MATCH_REJECTED_OWNER, find_covering_task,
+    DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
 };
 use crate::application::sweep_filing::{bounded_u64, digest, display, truncate_chars};
 use crate::application::task::TaskAddParams;
@@ -24,10 +25,8 @@ use super::duplicates::{
 };
 
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
-pub(crate) const DEPENDABOT_TAG: &str = "dependabot-sweep";
 pub(super) const DEPENDABOT_KEY_PREFIX: &str = "dependabot:";
 const DEPENDABOT_TITLE_PREFIX: &str = "[dependabot-sweep] ";
-pub(crate) const CODE_TAG: &str = "code-scanning-sweep";
 pub(super) const CODE_KEY_PREFIX: &str = "code-scanning:";
 pub(super) const CODE_GROUP_KEY_PREFIX: &str = "code-scanning-group:";
 pub(super) const CODE_TITLE_PREFIX: &str = "[code-scanning-sweep] ";
@@ -265,7 +264,7 @@ where
         {
             // A rejected owner suppresses re-filing but owns nothing: the
             // alert's siblings must not be told open work covers it.
-            if match_kind == MATCH_REJECTED_OWNER {
+            if match_kind == DuplicateMatchKind::RejectedOwner {
                 suppressed_code_alerts += 1;
             } else {
                 covered_by_cause

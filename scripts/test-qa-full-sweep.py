@@ -209,7 +209,10 @@ def source_contracts(repo: Path):
     }
     mcp_snapshot = json.loads((repo / "crates/orbit-cli/tests/snapshots/mcp_tools_list.json").read_text())
     mcp = {entry["name"] for entry in mcp_snapshot}
+    # `routes.rs` merges `lease_router`, which declares the lease routes in
+    # `leases.rs` so the lease listener serves the same ones.
     api_source = (repo / "crates/orbit-web/src/api/routes.rs").read_text()
+    api_source += (repo / "crates/orbit-web/src/api/leases.rs").read_text()
     api = set(re.findall(r'\.route\(\s*"([^"]+)"', api_source))
     web_source = (repo / "crates/orbit-web/src/serve.rs").read_text()
     web_source += (repo / "crates/orbit-web/src/assets.rs").read_text()
@@ -581,15 +584,18 @@ def finalize_result(evidence, assertions, candidate_id, failure=None, accept_non
 
     An exit-zero command whose evidence is otherwise valid is NOT_RUN when it
     only lacks a capability. A nonzero exit (unless the caller accepts that
-    exit), a validation failure, or truncated output is FAIL. Notices and the
-    original diagnostics stay on the row in either case.
+    exit), an unknown exit status, unverified cleanup, a validation failure, or
+    truncated output is FAIL. Notices and the original diagnostics stay on the
+    row in either case.
     """
     evidence["assertions"] = assertions
     evidence["candidate_id"] = candidate_id
     notices = execution_notices(evidence)
     if evidence.get("output_truncated"):
         failure = (failure + "; " if failure else "") + "command output was truncated; execution evidence is incomplete"
-    failed = (evidence["exit_code"] != 0 and not accept_nonzero) or bool(failure)
+    failed = (type(evidence["exit_code"]) is not int
+              or (evidence["exit_code"] != 0 and not accept_nonzero)
+              or evidence.get("cleanup_verified") is False or bool(failure))
     if notices:
         evidence["missing_capabilities"] = notices
     if notices and not failed:
@@ -1069,8 +1075,8 @@ updated_at: 2026-01-01T00:00:00Z
             work, ["task-list-contains-created-task"], listed)
 
     def refused(evidence):
-        if evidence["exit_code"] == 0:
-            raise ValueError("cross-workspace task show was not refused")
+        if type(evidence["exit_code"]) is not int or evidence["exit_code"] == 0:
+            raise ValueError("command did not complete with a nonzero refusal status")
 
     checked("workspace-boundary",
             [orbit_bin, "--root", str(root), "--workspace", str(other), "task", "show", task_id, "--json"],
@@ -1295,7 +1301,7 @@ updated_at: 2026-01-01T00:00:00Z
         body = parse_json(evidence, "job list")
         rows = body if isinstance(body, list) else body.get("items", [])
         names = {row.get("name") or row.get("id") or row.get("job_id") for row in rows}
-        expected = {"task_pilot_pipeline", "worktree_gc_pipeline"}
+        expected = {"task_pilot_pipeline", "worktree_gc_pipeline", "task_publication_pipeline"}
         if not expected.issubset(names):
             raise ValueError(f"job catalog missing {sorted(expected-names)}")
     checked("workflow-definition-boundary",
@@ -1310,6 +1316,15 @@ updated_at: 2026-01-01T00:00:00Z
             [orbit_bin, "--root", str(root), "--workspace", str(work), "job", "show",
              "task_pilot_pipeline", "--format", "json"],
             work, ["job-show-names-step-activities"], step_activities)
+
+    def publication_activity(evidence):
+        body = parse_json(evidence, "publication job show")
+        if "activity:task_publication" not in json.dumps(body.get("steps")):
+            raise ValueError("publication job does not name its deterministic activity")
+    checked("workflow-definition-boundary",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "job", "show",
+             "task_publication_pipeline", "--format", "json"],
+            work, ["publication-job-names-task-publication-activity"], publication_activity)
 
     def search_result(evidence):
         body = parse_json(evidence, "search")
@@ -1335,9 +1350,19 @@ updated_at: 2026-01-01T00:00:00Z
             [orbit_bin, "--root", str(root), "--workspace", str(work), "tool", "run", "orbit.task.show",
              "--input", json.dumps({"id":task_id,"model":"codex"}), "--format", "json"],
             work, [], lambda evidence: parse_json(evidence, "tool task.show"))
+
+    def reindex_stats(evidence):
+        body = parse_json(evidence, "search reindex")
+        # The isolated workspace contains the seeded task with nonempty text.
+        # Counts are usize fields, so booleans and coercible strings are invalid.
+        if (not isinstance(body, dict)
+                or any(type(body.get(key)) is not int for key in ("tasks", "chunks"))
+                or body["tasks"] < 1 or body["chunks"] < body["tasks"]):
+            raise ValueError("search reindex did not report positive task/chunk statistics for seeded data")
+
     checked("search-observability-boundary",
             [orbit_bin, "--root", str(root), "--workspace", str(work), "search", "reindex", "--json"],
-            work, ["search-reindex-reports-chunks"], lambda evidence: parse_json(evidence, "search reindex"))
+            work, ["search-reindex-reports-chunks"], reindex_stats)
     checked("search-observability-boundary",
             [orbit_bin, "--root", str(root), "--workspace", str(work), "doctor", "--json"],
             work, ["doctor-reports-isolated-workspace-health"], lambda evidence: parse_json(evidence, "doctor"))
@@ -1438,19 +1463,56 @@ spec:
                        timeout=30)
     failure = None
     try:
-        responses = {body["id"]: body for line in mcp_evidence["stdout"].splitlines()
-                     if line.strip() and (body := json.loads(line)).get("id") is not None}
+        responses = {}
+        for line in mcp_evidence["stdout"].splitlines():
+            if not line.strip():
+                continue
+            body = json.loads(line)
+            if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
+                raise ValueError("MCP response is not a JSON-RPC 2.0 envelope")
+            response_id = body.get("id")
+            if (type(response_id) is not int or response_id not in range(1, 6)
+                    or response_id in responses
+                    or ("result" in body) == ("error" in body)):
+                raise ValueError("MCP response has an invalid/duplicate id or result/error envelope")
+            responses[response_id] = body
+        if set(responses) != set(range(1, 6)):
+            raise ValueError("MCP did not respond to every request")
+        for response_id in range(1, 5):
+            body = responses[response_id]
+            if "error" in body or not isinstance(body["result"], dict) or body["result"].get("isError"):
+                raise ValueError(f"MCP request {response_id} failed")
+        negotiated = responses[1]["result"]
+        capabilities = negotiated.get("capabilities")
+        if (negotiated.get("protocolVersion") != initialize["params"]["protocolVersion"]
+                or not isinstance(capabilities, dict)
+                or not isinstance(capabilities.get("tools"), dict)):
+            raise ValueError("MCP initialize did not negotiate the supported protocol and tools capability")
         tool_names = {tool["name"] for tool in responses[2]["result"]["tools"]}
         if "orbit_task_show" not in tool_names:
             raise ValueError("tools/list omitted orbit_task_show")
-        if task_id not in json.dumps(responses[4]) or "error" in responses[4]:
-            raise ValueError("MCP task.show did not return the bound task")
-        if "error" not in responses[5] and not responses[5].get("result", {}).get("isError"):
-            raise ValueError("MCP cross-workspace task.show was not refused")
+        task_payload = responses[4]["result"].get("structuredContent")
+        if (not isinstance(task_payload, dict) or task_payload.get("id") != task_id
+                or task_payload.get("title") != "QA behavioral fixture"
+                or task_payload.get("acceptance_criteria") != ["fixture round trip"]):
+            raise ValueError("MCP task.show did not return the bound task payload")
+        refusal = responses[5]
+        if "error" in refusal:
+            error = refusal["error"]
+            if (not isinstance(error, dict) or type(error.get("code")) is not int
+                    or not isinstance(error.get("message"), str) or not error["message"]):
+                raise ValueError("MCP cross-workspace response is not an RPC refusal")
+        else:
+            refusal_payload = refusal["result"].get("structuredContent")
+            if (refusal["result"].get("isError") is not True
+                    or not isinstance(refusal_payload, dict)
+                    or not isinstance(refusal_payload.get("code"), str) or not refusal_payload["code"]
+                    or not isinstance(refusal_payload.get("message"), str) or not refusal_payload["message"]):
+                raise ValueError("MCP cross-workspace task.show was not a structured refusal")
         workspace_names = {item.get("name") for item in responses[3]["result"]["structuredContent"]["workspaces"]}
         if "qa-primary" not in workspace_names:
             raise ValueError("MCP workspace.list omitted the bound workspace")
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         failure = str(error)
     add_result(results, "mcp-wire-boundary", finalize_result(mcp_evidence,
         ["initialize-negotiates-jsonrpc", "tools-list-is-structured", "workspace-list-returns-bound-checkout",
@@ -1609,7 +1671,9 @@ def record_native_execution(command, repo, directory):
         json.dump(evidence, stream, indent=2)
     print(evidence.get("stdout", ""), end="")
     print(evidence.get("stderr", ""), end="", file=sys.stderr)
-    return evidence["exit_code"]
+    # SystemExit(None) means shell success; retain unknown status in the raw
+    # evidence while making supervision/cleanup failures fail the workflow step.
+    return evidence["exit_code"] if evidence["exit_code"] is not None else 1
 
 
 def process_self_test():
@@ -2255,6 +2319,12 @@ def self_test():
             raise AssertionError("hosted evidence passed for a dirty candidate")
 
 
+def expand_scenario_command(command, playwright_module, evidence_dir):
+    """Expand only the declared runtime paths, identically on execution and import."""
+    return [part.replace("{playwright_module}", str(playwright_module))
+            .replace("{evidence_dir}", str(evidence_dir)) for part in command]
+
+
 def import_platform_evidence(paths, inventory, candidate, repo):
     imported = []
     candidate_id = candidate["candidate_id"]
@@ -2279,12 +2349,23 @@ def import_platform_evidence(paths, inventory, candidate, repo):
         if body.get("schema_version") != 2 or body.get("candidate", {}).get("id") != candidate_id:
             raise ValueError(f"{path}: evidence is for a different or unsupported candidate")
         for result in body.get("results", []):
+            # These are harness diagnostics, never behavioral scenario evidence.
+            if result.get("scenario") in {"inventory-guard", "platform-evidence-import"}:
+                continue
             scenario = scenarios.get(result.get("scenario"))
             if not scenario:
                 raise ValueError(f"{path}: imported scenario is not declared")
             if scenario.get("capability") == "local" or result.get("outcome") != "PASS":
                 continue
-            if result.get("command") != scenario.get("command"):
+            expected_command = scenario.get("command")
+            if scenario.get("capability") == "browser":
+                module = body.get("browser", {}).get("playwright_module")
+                retained = result.get("retained_evidence") or {}
+                directory = retained.get("directory")
+                if not isinstance(module, str) or not module or not isinstance(directory, str) or not directory:
+                    raise ValueError(f"{path}: browser evidence lacks its recorded runtime paths")
+                expected_command = expand_scenario_command(expected_command, module, directory)
+            if result.get("command") != expected_command:
                 raise ValueError(f"{path}: imported command does not match the required check")
             if result.get("candidate_id") != candidate_id:
                 raise ValueError(f"{path}: result candidate does not match report candidate")
@@ -2392,7 +2473,7 @@ def main():
                 "assertions":["all-source-surfaces-explicitly-covered-or-gapped"],
                 "candidate_id":candidate_id}]
 
-    builtin_halt = None
+    builtin_halt = "candidate binary has no passing source-build attestation"
     binary = None if args.build_candidate else (Path(args.orbit_bin).resolve() if args.orbit_bin else None)
     browser_inputs_valid = bool(args.playwright_module and args.playwright_module.is_file()
                                 and args.playwright_browsers_path and args.playwright_browsers_path.is_dir()
@@ -2402,8 +2483,7 @@ def main():
                     "website-build": args.website_build,
                     "macos": platform.system() == "Darwin",
                     "linux": platform.system() == "Linux"}
-    binary_record = {"path":str(binary) if binary else None, "version":None,
-                     "sha256":hashlib.sha256(binary.read_bytes()).hexdigest() if binary else None}
+    binary_record = {"path":str(binary) if binary else None, "version":None, "sha256":None}
     browser_record = {
         "playwright_module": str(args.playwright_module) if args.playwright_module else None,
         "playwright_module_sha256": (hashlib.sha256(args.playwright_module.read_bytes()).hexdigest()
@@ -2416,7 +2496,12 @@ def main():
     }
     scratch = repo / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch) as tmp:
+    # A fixture child that outlives its test can write into this tree while it
+    # is removed (observed OSError 66 from host-resource-pressure.json). That
+    # cleanup failure must never take the report with it, so ignore it here
+    # and record anything left behind as a warning below instead.
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch,
+                                     ignore_cleanup_errors=True) as tmp:
         temp = Path(tmp)
         env = isolated_environment(temp)
         browser_env = browser_environment(env, args.playwright_browsers_path,
@@ -2434,8 +2519,17 @@ def main():
             build = run(["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit",
                          "--target-dir", str(temp / "candidate-target")], cwd=repo, env=env, timeout=1800)
             binary = temp / "candidate-target/debug/orbit"
+            binary_record["path"] = "<disposable-candidate-build>"
             unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
-            failure = None if build["exit_code"] == 0 and binary.is_file() and unchanged else "candidate build failed or source changed during build"
+            failure = None
+            if not (build["exit_code"] == 0 and binary.is_file()
+                    and os.access(binary, os.X_OK) and unchanged):
+                failure = "candidate build failed, executable unavailable, or source changed during build"
+            if failure is None:
+                try:
+                    binary_record["sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+                except OSError as error:
+                    failure = f"candidate executable could not be hashed: {error}"
             provenance = finalize_result(build,
                 ["binary-built-from-current-source", "source-stable-through-build", "binary-hash-recorded"],
                 candidate_id, failure)
@@ -2443,13 +2537,17 @@ def main():
             results.append(provenance)
         elif binary:
             evidence = run([str(binary), "--version"], cwd=repo, env=env)
+            binary_record["version"] = evidence["stdout"].strip() if evidence["exit_code"] == 0 else None
+            failure = "external binary has no build attestation; use --build-candidate"
+            try:
+                if binary.is_file():
+                    binary_record["sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+            except OSError as error:
+                failure += f"; executable could not be hashed: {error}"
             results.append({"scenario":"source-binary-provenance",
-                **finalize_result(evidence, [], candidate_id,
-                    "external binary has no build attestation; use --build-candidate")})
-        if binary and not errors:
-            binary_record = {"path":"<disposable-candidate-build>",
-                             "version":run([str(binary), "--version"], cwd=repo, env=env)["stdout"].strip(),
-                             "sha256":hashlib.sha256(binary.read_bytes()).hexdigest()}
+                **finalize_result(evidence, [], candidate_id, failure)})
+        if provenance and provenance["outcome"] == "PASS" and not errors:
+            binary_record["version"] = run([str(binary), "--version"], cwd=repo, env=env)["stdout"].strip()
             builtin_results, builtin_halt = run_builtins(repo, str(binary), temp, env, candidate_id)
             results.extend(builtin_results)
         browser_run_dir = None
@@ -2466,9 +2564,8 @@ def main():
                 continue
             if args.run_commands and capabilities.get(scenario["capability"], False):
                 scenario_evidence_dir = browser_run_dir / scenario["id"] if browser_run_dir else browser_evidence_dir
-                command = [part.replace("{playwright_module}", str(args.playwright_module))
-                           .replace("{evidence_dir}", str(scenario_evidence_dir))
-                           for part in scenario["command"]]
+                command = expand_scenario_command(scenario["command"], args.playwright_module,
+                                                  scenario_evidence_dir)
                 scenario_env = browser_env if scenario["capability"] == "browser" else env
                 if scenario["id"] == "website-build":
                     evidence = website_build_evidence(repo, temp, env, command)
@@ -2532,6 +2629,25 @@ def main():
                             "stdout":"", "stderr":str(error), "outcome":"FAIL",
                             "assertions":[], "candidate_id":candidate_id})
 
+    # The scratch TemporaryDirectory above ignores cleanup errors, so a late
+    # fixture write can leave paths behind. They are evidence of the race,
+    # not of a scenario outcome, so record them as a warning on the report.
+    scratch_leftovers = []
+    scratch_leftover_error = None
+    if Path(tmp).exists():
+        try:
+            scratch_leftovers = sorted(
+                str(path.relative_to(tmp)) for path in Path(tmp).rglob("*"))
+        except OSError as error:
+            scratch_leftover_error = str(error)
+    scratch_cleanup_warning = None
+    if scratch_leftover_error:
+        scratch_cleanup_warning = ("harness scratch cleanup did not finish; leftover walk failed: "
+                                   f"{scratch_leftover_error}")
+    elif scratch_leftovers:
+        scratch_cleanup_warning = (f"harness scratch cleanup did not finish; {len(scratch_leftovers)} "
+                                   "leftover path(s) remain under the scratch temp dir")
+
     covered = {result["scenario"] for result in results}
     for scenario in inventory["scenarios"]:
         if scenario["id"] not in covered:
@@ -2556,6 +2672,8 @@ def main():
         "environment": {"os":platform.system(), "release":platform.release(), "architecture":platform.machine(),
                         "capabilities":capabilities},
         "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
+        "scratch_cleanup": {"leftover_paths": scratch_leftovers,
+                            "warning": scratch_cleanup_warning},
         "results": results, "findings": decision_failures,
         "post_publish_handoff": {"npm_freshness":"PENDING", "website_freshness":"PENDING",
                                   "part_of_pre_release_decision":False},

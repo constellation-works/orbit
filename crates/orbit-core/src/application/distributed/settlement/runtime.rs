@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_store::contracts::{ClaimMutation, LocalPullPhase};
 use orbit_types::workflow::{
     CrewExclusion, CrewExclusionSource, PullAuthExclusion, PullCrewPreflight,
@@ -14,7 +14,21 @@ use super::crew_window::{
     CapacityFailures, OwnerBusyReleases, OwnerBusyVerdict, PullCrewWindow, phase_guidance,
     phase_name,
 };
-use super::entries::{ClaimedLeafStage, DrainClaimedLeaf, PullLeafClaim, RefusedPullSettlement};
+use super::entries::{PullLeafClaim, RefusedPullSettlement};
+use crate::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
+
+/// A raw weekly pressure as milli-units for the pull capability
+/// [ORB-17773]. Non-finite or negative readings read neutral; the clamp
+/// keeps the conversion exact and the ordering key bounded.
+fn pressure_milli(pressure: f64) -> u64 {
+    if !pressure.is_finite() || pressure < 0.0 {
+        return orbit_types::task::NEUTRAL_PRESSURE_MILLI;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (pressure * 1000.0).round().clamp(0.0, 1.0e12) as u64
+    }
+}
 
 impl crate::OrbitRuntime {
     /// The admissions a pull drain carries that still hold a slot: every one
@@ -30,7 +44,7 @@ impl crate::OrbitRuntime {
         let Some(run) = jobs.get_job_run(drain_run_id)? else {
             return Ok(Vec::new());
         };
-        if run.job_id != super::super::PULL_DRAIN_JOB {
+        if run.job_id != crate::application::contracts::PULL_DRAIN_JOB {
             return Ok(Vec::new());
         }
         let inherits = (!run.state.is_terminal())
@@ -71,7 +85,7 @@ impl crate::OrbitRuntime {
     ) -> Result<Option<orbit_store::contracts::DrainLeafOccupancy>, OrbitError> {
         let jobs = self.stores().jobs();
         match jobs.get_job_run(drain_run_id)? {
-            Some(run) if run.job_id == super::super::PULL_DRAIN_JOB => {
+            Some(run) if run.job_id == crate::application::contracts::PULL_DRAIN_JOB => {
                 jobs.drain_leaf_occupancy().map(Some)
             }
             _ => Ok(None),
@@ -129,6 +143,55 @@ impl crate::OrbitRuntime {
         Ok(leaves)
     }
 
+    /// The claimed leaf stage for one task, from this host's unsettled
+    /// pull admissions: the leaf's stage, run id and state. This is the
+    /// task-keyed form of [`Self::pull_drain_claimed_leaves`] for a reader
+    /// (the task detail projection) that holds a task, not a drain run.
+    /// `None` when this host holds no live admission for the task — the
+    /// caller must not guess a stage for a run it cannot read.
+    pub fn claimed_leaf_stage_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<(ClaimedLeafStage, String, String)>, OrbitError> {
+        use LocalPullPhase as Phase;
+        let jobs = self.stores().jobs();
+        for record in jobs.unsettled_local_pull_admissions()? {
+            if !matches!(
+                record.phase,
+                Phase::Launching | Phase::Launched | Phase::Settling
+            ) {
+                continue;
+            }
+            let claimed_task = record
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.claim.as_ref())
+                .map(|claim| claim.task_id.as_str());
+            if claimed_task != Some(task_id) {
+                continue;
+            }
+            let Some(leaf) = record.leaf_run_id.as_deref() else {
+                continue;
+            };
+            let Some(run) = jobs.get_job_run(leaf)? else {
+                continue;
+            };
+            if run.state.is_terminal() {
+                continue;
+            }
+            let stage = if self
+                .read_run_state(leaf)?
+                .is_some_and(|state| state.in_landing_review())
+            {
+                ClaimedLeafStage::Reviewing
+            } else {
+                ClaimedLeafStage::Implementing
+            };
+            return Ok(Some((stage, run.run_id.clone(), run.state.to_string())));
+        }
+        Ok(None)
+    }
+
     /// The settlements a pull drain carries that its owner refused while
     /// still holding their claims [ORB-13979]. Empty for every other run.
     pub fn pull_drain_refused_settlements(
@@ -149,7 +212,7 @@ impl crate::OrbitRuntime {
     ) -> Result<Option<PullCrewWindow>, OrbitError> {
         let jobs = self.stores().jobs();
         match jobs.get_job_run(drain_run_id)? {
-            Some(run) if run.job_id == super::super::PULL_DRAIN_JOB => {}
+            Some(run) if run.job_id == crate::application::contracts::PULL_DRAIN_JOB => {}
             _ => return Ok(None),
         }
         let preflight = self
@@ -426,6 +489,30 @@ impl crate::OrbitRuntime {
                     .collect(),
             }),
         };
+        // [ORB-17773] Per-crew weekly pressure from this host's own
+        // readings, recomputed each pass like the limit gate above. Under
+        // `static` nothing is reported, so admission and offer order are
+        // unchanged.
+        let usage_pressure = if self.provider_limit_policy().usage_pressure.applies() {
+            let read = self.usage_pressure_read(now);
+            let mut crews: Vec<_> = self
+                .context
+                .settings()
+                .crews()
+                .values()
+                .filter(|crew| crew.enabled)
+                .collect();
+            crews.sort_by(|left, right| left.name.cmp(&right.name));
+            crews
+                .into_iter()
+                .map(|crew| orbit_store::contracts::AdmissionCrewPressure {
+                    crew: crew.name.clone(),
+                    pressure_milli: pressure_milli(read.crew(crew).pressure),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ok(PullCrewWindow {
             checked_at: preflight.as_ref().map(|preflight| preflight.checked_at),
             runnable,
@@ -443,6 +530,7 @@ impl crate::OrbitRuntime {
             host_suppressed,
             host_suppressed_by_busy_owner,
             owner_busy_backoff,
+            usage_pressure,
         })
     }
 
@@ -560,24 +648,41 @@ impl crate::OrbitRuntime {
 /// the owner also confirms it holds no receipt for it. A delivery miss, a lost
 /// answer or a store failure says nothing about whether an earlier send of the
 /// same request committed, so the request stays pending and is retried.
-pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
+/// The stable refusal code an owner answer carries, when it carries one.
+pub(crate) fn owner_refusal_code(error: &OrbitError) -> Option<String> {
     match error {
-        OrbitError::RemoteTool { code, .. } => matches!(
-            code.as_str(),
-            "invalid_input"
-                | "capability_refused"
-                | "capability_denied"
-                | "policy_denied"
-                | "protocol_skew"
-        ),
-        OrbitError::InvalidInput(_)
-        | OrbitError::ClaimRefused { .. }
-        | OrbitError::ProtocolSkew(_)
-        | OrbitError::CapabilityRefused(_)
-        | OrbitError::CapabilityDenied(_)
-        | OrbitError::PolicyDenied(_) => true,
-        _ => false,
+        OrbitError::DeliveryRefused { refusal, .. } => Some(refusal.error_code().to_string()),
+        OrbitError::RemoteTool { code, .. } => Some(code.as_str().to_string()),
+        OrbitError::ClaimRefused { kind, .. } => Some(kind.message().to_string()),
+        _ => None,
     }
+}
+
+/// Whether `code` is a delivery-evidence refusal code.
+pub(crate) fn is_delivery_refusal_code(code: Option<&str>) -> bool {
+    code.is_some_and(|code| orbit_types::workflow::DeliveryRefusal::from_error_code(code).is_some())
+}
+
+pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
+    matches!(error, OrbitError::DeliveryRefused { .. })
+        || matches!(error, OrbitError::RemoteTool { code, .. }
+            if orbit_types::workflow::DeliveryRefusal::from_error_code(code.as_str()).is_some())
+        || matches!(
+            error,
+            OrbitError::RemoteTool {
+                code: RemoteToolCode::ProtocolSkew
+                    | RemoteToolCode::InvalidInput
+                    | RemoteToolCode::CapabilityRefused
+                    | RemoteToolCode::CapabilityDenied
+                    | RemoteToolCode::PolicyDenied,
+                ..
+            } | OrbitError::InvalidInput(_)
+                | OrbitError::ClaimRefused { .. }
+                | OrbitError::ProtocolSkew(_)
+                | OrbitError::CapabilityRefused(_)
+                | OrbitError::CapabilityDenied(_)
+                | OrbitError::PolicyDenied(_)
+        )
 }
 
 /// Whether an error says the owner could not be reached or did not answer

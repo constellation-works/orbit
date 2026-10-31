@@ -1,0 +1,5 @@
+[
+  {"argv": ["automation"], "golden": "automation/root.txt"},
+  {"argv": ["automation", "explain"], "golden": "automation/explain.txt"},
+  {"argv": ["automation", "clear-stall"], "golden": "automation/clear-stall.txt"}
+]

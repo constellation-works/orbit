@@ -1,0 +1,42 @@
+schema_version = 1
+
+[app.website]
+setup = ["npm", "--prefix", "website", "run", "preview", "--", "--host", "127.0.0.1", "--port", "4321"]
+setup_timeout_s = 120
+themes = ["light", "dark"]
+color_scheme_invariant = false
+design_rules = ["website/DESIGN.md"]
+tokens = []
+
+[[view]]
+id = "site-home"
+app = "website"
+title = "Website home"
+route = "/"
+fixture = "static"
+ready = "main"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "site-changelog"
+app = "website"
+title = "Website changelog"
+route = "/changelog"
+fixture = "static"
+ready = "main"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "site-tasks"
+app = "website"
+title = "Website tasks"
+route = "/tasks"
+fixture = "static"
+ready = "main"
+responsive = true
+states = ["default"]
+mask = []

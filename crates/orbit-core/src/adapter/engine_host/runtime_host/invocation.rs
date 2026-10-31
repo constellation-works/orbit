@@ -24,6 +24,7 @@ pub(super) fn persist_invocation_trace(
 ) -> Result<(), DispatchError> {
     let DispatchInvocationTrace {
         provider,
+        agent_execution_id,
         model,
         account,
         trace,
@@ -38,6 +39,7 @@ pub(super) fn persist_invocation_trace(
     );
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: *agent_execution_id,
             job_run_id: job_run_id.to_string(),
             activity_id: activity_id.to_string(),
             agent: agent.unwrap_or_else(|| provider.to_ascii_lowercase()),
@@ -68,4 +70,39 @@ pub(super) fn persist_invocation_trace(
     }
 
     Ok(())
+}
+
+pub(super) fn resolved_agent_model_pair(
+    runtime: &OrbitRuntime,
+    agent_cli: &str,
+) -> Option<orbit_types::identity::AgentModelPair> {
+    runtime.configured_agent_model_pair(agent_cli)
+}
+
+pub(super) fn invocation_records(
+    runtime: &OrbitRuntime,
+    query: orbit_store::contracts::InvocationQuery,
+) -> Result<Vec<orbit_store::contracts::InvocationRecord>, orbit_common::OrbitError> {
+    crate::runtime::RuntimeKernel::invocation_records(runtime, query)
+}
+
+pub(super) fn record_provider_limit(
+    runtime: &OrbitRuntime,
+    observation: &orbit_types::telemetry::ProviderLimitObservation,
+) -> Result<(), orbit_common::OrbitError> {
+    crate::runtime::RuntimeKernel::record_provider_limit(runtime, observation).map(|_| ())
+}
+
+pub(super) fn activity_implementer_identity(
+    runtime: &OrbitRuntime,
+    input: &Value,
+) -> Result<(Option<String>, Option<String>), orbit_common::OrbitError> {
+    runtime.implementer_identity_for_activity_input(input)
+}
+
+pub(super) fn provider_cli_config(
+    runtime: &OrbitRuntime,
+    _provider: &str,
+) -> std::collections::HashMap<String, String> {
+    orbit_engine::RuntimeHost::agent_provider_config(runtime)
 }

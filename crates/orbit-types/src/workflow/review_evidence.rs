@@ -14,6 +14,16 @@ pub const REVIEW_EVIDENCE_HOLD_ARTIFACT: &str = "review-evidence-hold.json";
 /// named check arrived. Its note begins `run=<hold run>;`.
 pub const REVIEW_EVIDENCE_RECEIVED_EVENT: &str = "review_evidence_received";
 
+/// [ORB-18660] The task history event that queues a held task to repair its
+/// kept candidate after an owner evidence run reported findings on it. Its
+/// note begins `run=<hold run>;`.
+pub const REVIEW_EVIDENCE_FINDINGS_EVENT: &str = "review_evidence_findings";
+
+/// [ORB-18660] The findings an owner evidence run reported on a held
+/// candidate, written by Orbit's system writer only. The candidate's repair
+/// starts from them.
+pub const REVIEW_EVIDENCE_FINDINGS_ARTIFACT: &str = "review-evidence-findings.json";
+
 /// External environments whose evidence can arrive after the reviewer stops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -230,5 +240,96 @@ impl ReviewExternalEvidence {
             && self.kind == requirement.kind
             && self.command == requirement.command
             && requirement.os.is_none_or(|os| self.os == Some(os))
+    }
+}
+
+/// [ORB-18660] What an owner evidence run reported on a held candidate: each
+/// result's rule, location and data flow, bounded. Stored at
+/// [`REVIEW_EVIDENCE_FINDINGS_ARTIFACT`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewEvidenceFindings {
+    pub schema_version: u32,
+    /// The held run whose candidate the findings were reported on.
+    pub hold_run_id: String,
+    /// The fulfilment run that reported them.
+    pub run_id: String,
+    pub attempt_id: String,
+    pub candidate: SourceRevision,
+    pub results: Vec<ReviewEvidenceFinding>,
+    /// Results reported beyond those listed.
+    #[serde(default)]
+    pub omitted: usize,
+}
+
+/// One reported result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewEvidenceFinding {
+    /// The requirement's display name.
+    pub check: String,
+    pub rule: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// The result's first data flow, source first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_flow: Vec<ReviewEvidenceFlowStep>,
+}
+
+/// One step of a result's data flow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewEvidenceFlowStep {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl ReviewEvidenceFinding {
+    /// `file:line`, `file`, or `unknown location`.
+    pub fn location(&self) -> String {
+        location_text(self.file.as_deref(), self.line)
+    }
+}
+
+impl ReviewEvidenceFindings {
+    /// One line per result, its data flow indented beneath it, then how many
+    /// results were left out.
+    pub fn summary_text(&self) -> String {
+        let mut text = String::new();
+        for result in &self.results {
+            text.push_str(&format!(
+                "- {} `{}` at {}: {}\n",
+                result.check,
+                result.rule,
+                result.location(),
+                result.message
+            ));
+            for step in &result.code_flow {
+                text.push_str(&format!(
+                    "  - {}{}\n",
+                    location_text(step.file.as_deref(), step.line),
+                    step.message
+                        .as_deref()
+                        .map(|message| format!(": {message}"))
+                        .unwrap_or_default()
+                ));
+            }
+        }
+        if self.omitted > 0 {
+            text.push_str(&format!("- {} more result(s) not listed\n", self.omitted));
+        }
+        text
+    }
+}
+
+fn location_text(file: Option<&str>, line: Option<u64>) -> String {
+    match (file, line) {
+        (Some(file), Some(line)) => format!("{file}:{line}"),
+        (Some(file), None) => file.to_string(),
+        (None, _) => "unknown location".to_string(),
     }
 }

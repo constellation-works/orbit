@@ -1,15 +1,17 @@
 ---
 title: Auto-concurrency — Overview
 owner: claude
-last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Draft
+stage: shipped
+next: "Operator decides when admission moves from shadow to forecast mode"
 feature: auto-concurrency
 doc_role: overview
 type: design
 summary: Partly implemented predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/application/admission/**", "crates/orbit-core/src/runtime/host_resource/**", "crates/orbit-core/src/application/job/pipeline/worker/**", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-types/src/workflow/run/state/drain/mod.rs"]
+paths: ["crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-core/src/application/admission/**", "crates/orbit-runtime/src/host_resource/**", "crates/orbit-core/src/application/job/pipeline/worker/**", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-types/src/workflow/run/state/drain/mod.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757]
 ---
@@ -125,34 +127,21 @@ alongside the original implementation work; source links follow the current
 
 | Concern | Current source | Task |
 |---------|---------------|------|
-| Linux per-task sampling from the worker scope | [worker/usage.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage.rs) | ORB-15768 |
+| Linux per-task sampling from the worker scope | [worker/usage/sampler.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs) | ORB-15768 |
 | Per-task and host resource-minute storage | [resource_usage_store.rs](../../../crates/orbit-store/src/driver/sqlite/resource_usage_store.rs) | ORB-15768 |
-| Resource profiles and `orbit run profiles` | [host_resource/profile/](../../../crates/orbit-core/src/runtime/host_resource/profile/mod.rs), [run/profiles.rs](../../../crates/orbit-cli/src/command/run/profiles.rs) | ORB-15770 |
+| Resource profiles and `orbit run profiles` | [host_resource/profile/](../../../crates/orbit-runtime/src/host_resource/profile/mod.rs), [run/profiles.rs](../../../crates/orbit-cli/src/command/run/profiles.rs) | ORB-15770 |
 | Analytics › Resources: profile charts in the dashboard | [api/resource_profiles.rs](../../../crates/orbit-web/src/api/resource_profiles.rs), [js/resources.js](../../../crates/orbit-web/assets/dashboard/js/resources.js) | ORB-16616 |
-| Host-load forecast and admission reservations | [host_resource/forecast/](../../../crates/orbit-core/src/runtime/host_resource/forecast/mod.rs), [admission_load_store.rs](../../../crates/orbit-store/src/driver/sqlite/admission_load_store.rs) | ORB-15771 |
+| Host-load forecast and admission reservations | [host_resource/forecast/](../../../crates/orbit-runtime/src/host_resource/forecast/mod.rs), [admission_load_store.rs](../../../crates/orbit-store/src/driver/sqlite/admission_load_store.rs) | ORB-15771 |
 | Gap-fit admission in local drains | [workspace_auto/classify/](../../../crates/orbit-core/src/application/workspace_auto/classify/mod.rs), [admission/gap_fit.rs](../../../crates/orbit-core/src/application/admission/gap_fit.rs) | ORB-15772 |
 | Forecast admission for pull drains | [pull_drain/refill/pass.rs](../../../crates/orbit-core/src/application/pull_drain/refill/pass.rs), [distributed/work_fit.rs](../../../crates/orbit-core/src/application/distributed/work_fit.rs) | ORB-15774 |
 | Host-only `[machine.auto_concurrency]` settings | [settings/machine.rs](../../../crates/orbit-config/src/registry/settings/machine.rs) | ORB-15769 |
 | Admission reasons in drain state, `orbit run show`, and readiness | [run/state/drain/mod.rs](../../../crates/orbit-types/src/workflow/run/state/drain/mod.rs), [run/admission_forecast.rs](../../../crates/orbit-cli/src/command/run/admission_forecast.rs) | ORB-15773 |
-| Forecast recording and `orbit run profiles --accuracy` | [host_resource/forecast/record.rs](../../../crates/orbit-core/src/runtime/host_resource/forecast/record.rs), [host_resource/accuracy/report.rs](../../../crates/orbit-core/src/runtime/host_resource/accuracy/report.rs) | ORB-15775 |
-| macOS worker sampling from the process tree | [worker/usage_tree.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage_tree.rs), [process/ancestry.rs](../../../crates/orbit-common/src/process/ancestry.rs) | ORB-15776 |
-| Native macOS worker CPU-unit calibration and provenance | [worker/usage_tree.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage_tree.rs) | ORB-15994 |
-| Native macOS host CPU and memory measurements | [host_resource/usage.rs](../../../crates/orbit-core/src/runtime/host_resource/usage.rs), [host_resource/platform.rs](../../../crates/orbit-core/src/runtime/host_resource/platform.rs) | ORB-15980 |
+| Forecast recording and `orbit run profiles --accuracy` | [host_resource/forecast/record.rs](../../../crates/orbit-runtime/src/host_resource/forecast/record.rs), [host_resource/accuracy/report.rs](../../../crates/orbit-runtime/src/host_resource/accuracy/report.rs) | ORB-15775 |
+| macOS worker sampling from the process tree | [worker/usage/tree.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage/tree.rs), [process/ancestry.rs](../../../crates/orbit-common/src/process/ancestry.rs) | ORB-15776 |
+| Native macOS worker CPU-unit calibration and provenance | [worker/usage/tree.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage/tree.rs) | ORB-15994 |
+| Native macOS host CPU and memory measurements | [host_resource/usage.rs](../../../crates/orbit-runtime/src/host_resource/usage.rs), [host_resource/platform.rs](../../../crates/orbit-runtime/src/host_resource/platform.rs) | ORB-15980 |
 | Protected-head starvation signal and friction | [admission/gap_fit.rs](../../../crates/orbit-core/src/application/admission/gap_fit.rs), [admission/stuck_head.rs](../../../crates/orbit-core/src/application/admission/stuck_head.rs) | ORB-15894 |
 | Threshold-one retry deduplication repair | [admission/stuck_head.rs](../../../crates/orbit-core/src/application/admission/stuck_head.rs), [workspace_auto/classify/](../../../crates/orbit-core/src/application/workspace_auto/classify/mod.rs) | ORB-16014 |
-
-## Task References
-
-- [ORB-15757] — authored the original proposal.
-- ORB-15768–ORB-15776 — delivered the original implementation steps; see the
-  table for each task's source.
-- ORB-15980 and ORB-15994 — completed native macOS measurement repairs.
-- ORB-15894 and ORB-16014 — delivered and repaired the protected-head
-  starvation signal.
-
-The links above point to the source in the current tree. Task records carry
-the delivery and native operational evidence; the Mac pair reported on 2026-10-13
-does not demonstrate forecast accuracy or enforcement readiness.
 
 ## Per-drain control
 
@@ -164,3 +153,33 @@ Local and pull drains reload host thresholds and effective provider-limit
 policy on the next pass, caching unchanged configuration by mtime; invalid
 configuration warns and retains the previous policies. Pull drains inherit
 executor host mode and reject explicit per-drain overrides. See [surfaces and configuration](2_design.md#7-surfaces-and-configuration).
+
+## Task References
+
+- [ORB-15757] — authored the original proposal.
+- [ORB-15768] — recorded per-task CPU and memory minutes from the worker
+  scope.
+- [ORB-15769] — added the host-level `[machine.auto_concurrency]` settings.
+- [ORB-15770] — built resource profiles and the `orbit run profiles` report.
+- [ORB-15771] — forecast host load and serialized admissions with
+  reservations.
+- [ORB-15772] — built gap-fit admission in local drains.
+- [ORB-15773] — showed forecast admission reasons in `orbit run show` and
+  readiness.
+- [ORB-15774] — built gap-fit admission for pull drains.
+- [ORB-15775] — recorded forecasts and reported their accuracy against
+  measured host load.
+- [ORB-15776] — sampled macOS workers from their process tree.
+- [ORB-15894] — delivered the protected-head starvation signal.
+- [ORB-15980] — measured native macOS host load for shadow forecasts.
+- [ORB-15994] — calibrated native macOS worker CPU-unit accounting.
+- [ORB-16014] — repaired threshold-one retry deduplication for the stuck
+  head.
+- [ORB-16616] — charted delivery resource profiles in the dashboard's
+  Analytics tab.
+
+The links above point to the source in the current tree. Task records carry
+the delivery and native operational evidence; the Mac pair reported on 2026-10-13
+does not demonstrate forecast accuracy or enforcement readiness.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

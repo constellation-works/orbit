@@ -1,4 +1,4 @@
-use orbit_common::{LOCK_BUSY_ERROR_CODE, NotFoundKind, OrbitError};
+use orbit_common::{LOCK_BUSY_ERROR_CODE, NotFoundKind, OrbitError, RemoteToolCode};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 
@@ -80,22 +80,19 @@ fn error_code(err: &OrbitError) -> &str {
             | NotFoundKind::Skill
             | NotFoundKind::Job
             | NotFoundKind::JobRun
-            | NotFoundKind::Activity
-            | NotFoundKind::DesignFeature
-            | NotFoundKind::AgentSession
-            | NotFoundKind::Workspace => "not_found",
+            | NotFoundKind::Workspace => const { RemoteToolCode::NotFound.as_str() },
         },
-        OrbitError::PolicyDenied(_) => "policy_denied",
-        OrbitError::CapabilityDenied(_) => "capability_denied",
+        OrbitError::PolicyDenied(_) => const { RemoteToolCode::PolicyDenied.as_str() },
+        OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
         OrbitError::UnknownSelector(_) => "unknown_selector",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
-        OrbitError::AmbiguousCaller(_) => "ambiguous_caller",
         OrbitError::UnreachableDestination(_) => "unreachable_destination",
         OrbitError::StaleRoute(_) => "stale_route",
         OrbitError::UnhealthyCheckout(_) => "unhealthy_checkout",
         OrbitError::ToolNotOnThisHost(_) => "tool_not_on_this_host",
-        OrbitError::CapabilityRefused(_) => "capability_refused",
-        OrbitError::ProtocolSkew(_) => "protocol_skew",
+        OrbitError::CapabilityRefused(_) => const { RemoteToolCode::CapabilityRefused.as_str() },
+        OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
+        OrbitError::DecisionRefused { code, .. } => code.as_str(),
         OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::PluginDisabledInWorkspace { .. } => "plugin_disabled_in_workspace",
         OrbitError::PluginDisabledOnHost { .. } => "plugin_disabled_on_host",
@@ -104,13 +101,11 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
-        | OrbitError::ClaimRefused { .. } => "invalid_input",
+        | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
-        OrbitError::TaskStatusTransition(_) | OrbitError::JobRunStateTransition(_) => {
-            "invalid_transition"
-        }
+        OrbitError::JobRunStateTransition(_) => "invalid_transition",
         // [ORB-10965] Not "invalid_transition": a duplicate start losing to the
         // incumbent owner is an expected race, and the caller yields rather
         // than treating its own request as malformed.
@@ -121,6 +116,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::DependencyNotDelivered { .. } => "dependency_not_delivered",
         OrbitError::ShipRunInFlight { .. } => "ship_run_in_flight",
         OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
+        OrbitError::TaskScheduled { .. } => "task_scheduled",
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         OrbitError::WorkspaceClaimHeld(_) => "workspace_claim_held",
         OrbitError::RemoteArtifactUnavailable { .. } => "remote_artifact_unavailable",
@@ -132,6 +128,7 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::OwnerNegotiation(_) => "owner_negotiation",
         OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
         OrbitError::RemoteTool { code, .. } => code.as_str(),
+        OrbitError::DeliveryRefused { refusal, .. } => refusal.error_code(),
         OrbitError::Execution(_)
         | OrbitError::PrivateVcs(_)
         | OrbitError::ExecutionTimeout { .. } => "execution_failed",
@@ -145,7 +142,8 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
         OrbitError::Migration(_) => "migration_failed",
-        OrbitError::StorageAccessDenied { layer, .. } => layer.error_code(),
+        OrbitError::StorageAccessDenied { layer, .. }
+        | OrbitError::StorageLockBusy { layer, .. } => layer.error_code(),
         // OrbitError is non-exhaustive so newly added errors can cross this
         // crate boundary without forcing an MCP release. Unknown variants are
         // intentionally classified conservatively until given a stable code.

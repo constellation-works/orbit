@@ -7,13 +7,15 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Utc};
+use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
-use orbit_core::TaskStatus;
 use orbit_core::application::codebase::CodebaseQuery;
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskWriteScreen};
+use orbit_core::{Task, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
-    RegressionClassification, RegressionEscape, RegressionNature, TaskRelation, TaskRelationType,
+    DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
+    TaskRelation, TaskRelationType,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -74,11 +76,14 @@ impl Fixture {
         let broke = Some(RegressionClassification {
             nature: RegressionNature::BrokeExisting,
             escape: RegressionEscape::NoTest,
+            severity: DefectSeverity::Medium,
+            severity_source: SeveritySource::Filer,
+            sites: Vec::new(),
         });
         fx.fix(
             &format!("Restore the cache key in {}", hot[0]),
             &hot[0],
-            broke,
+            broke.clone(),
         );
         fx.fix(
             &format!("Restore the eviction in {}", hot[1]),
@@ -376,9 +381,286 @@ fn shipped_implement_and_review_activities_ask_for_marks() {
     }
 }
 
+/// An operator surface's `regression.sites` are canonicalized against the
+/// checkout the way its `context_files` are, so one path has one spelling.
+fn regression_sites_are_canonicalized_against_the_workspace() {
+    let fx = Fixture::new();
+    let checkout = fx.workspace.parent().unwrap();
+    let inside = format!("file:{}", checkout.join(HOT).display());
+    let outside = format!(
+        "file:{}",
+        fx._root.path().join("elsewhere/outside.rs").display()
+    );
+    let screen = TaskWriteScreen::unbound(true);
+    let regressed = fx.task.clone();
+    let linked = |site: &str| TaskAddParams {
+        title: "Guard the retry budget".into(),
+        description: "regression risk fixture".into(),
+        relations: vec![TaskRelation {
+            relation_type: TaskRelationType::RegressionFrom,
+            target: regressed.parse().unwrap(),
+            regression: Some(RegressionClassification {
+                nature: RegressionNature::BrokeExisting,
+                escape: RegressionEscape::NoTest,
+                severity: DefectSeverity::Medium,
+                severity_source: SeveritySource::Filer,
+                sites: vec![site.into()],
+            }),
+        }],
+        ..Default::default()
+    };
+    let stored_sites = |task: &Task| -> Vec<String> {
+        task.relations
+            .iter()
+            .filter_map(|relation| relation.regression.as_ref())
+            .flat_map(|regression| regression.sites.clone())
+            .collect()
+    };
+
+    let site_task = fx
+        .runtime
+        .add_task_screened(linked(&inside), &screen, None, None)
+        .unwrap()
+        .task;
+    let context_task = fx
+        .runtime
+        .add_task_screened(
+            TaskAddParams {
+                title: "Scope the retry budget".into(),
+                description: "regression risk fixture".into(),
+                context_files: vec![inside.clone()],
+                ..Default::default()
+            },
+            &screen,
+            None,
+            None,
+        )
+        .unwrap()
+        .task;
+    assert_eq!(
+        stored_sites(&site_task),
+        context_task.context_files,
+        "a site for a workspace path is stored in the form its context selector takes"
+    );
+    assert_eq!(stored_sites(&site_task), [format!("file:{HOT}")]);
+
+    match fx
+        .runtime
+        .add_task_screened(linked(&outside), &screen, None, None)
+        .unwrap_err()
+    {
+        OrbitError::InvalidInput(message) => assert!(
+            message.contains(&format!("`{outside}`")),
+            "the refusal names the entry as written: {message}"
+        ),
+        other => panic!("an outside-workspace site is invalid input, not {other:?}"),
+    }
+}
+
+fn regression_sites_invalid_writes_are_rejected() {
+    let fx = Fixture::new();
+    let target = fx.task.clone();
+    let checkout = fx.workspace.parent().unwrap().to_path_buf();
+    let holder = fx
+        .runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Holder for invalid site updates", "complexity": "low", "model": "codex",
+                "description": "Regression sites fixture", "workspace": checkout,
+            }),
+        )
+        .unwrap();
+    let cases = [
+        vec!["module:orbit_core".to_string()],
+        (0..9).map(|n| format!("file:src/site{n}.rs")).collect(),
+        vec!["symbol:".to_string()],
+        vec!["file:src/hot.rs".to_string(); 2],
+    ];
+    for sites in cases {
+        let relation = json!({
+            "type": "regression_from", "target": target,
+            "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "low", "sites": sites}
+        });
+        for (tool, args) in [
+            (
+                "orbit.task.add",
+                json!({"title": "Reject invalid sites", "complexity": "low",
+                "model": "codex", "description": "Regression sites fixture", "workspace": checkout, "relations": [relation.clone()]}),
+            ),
+            (
+                "orbit.task.update",
+                json!({"id": holder["id"], "model": "codex", "relations": [relation]}),
+            ),
+        ] {
+            assert!(
+                matches!(
+                    fx.runtime.run_tool(tool, args),
+                    Err(OrbitError::InvalidInput(message)) if message.contains("`regression.sites`")
+                ),
+                "sites are always validated and rejected when malformed: {sites:?}"
+            );
+        }
+    }
+}
+
+fn regression_sites_are_kept_without_configuration() {
+    let fx = Fixture::new();
+    let target = fx.task.clone();
+    let checkout = fx.workspace.parent().unwrap().to_path_buf();
+    let added = fx
+        .runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Keep regression sites", "complexity": "low", "model": "codex",
+                "description": "Regression sites fixture", "workspace": checkout,
+                "relations": [{"type": "regression_from", "target": target,
+                 "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "low", "sites": ["file:src/hot.rs"]}}]
+            }),
+        )
+        .unwrap();
+    let stored = fx.runtime.get_task(added["id"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        stored
+            .relations
+            .iter()
+            .find_map(|r| r.regression.as_ref())
+            .unwrap()
+            .sites,
+        ["file:src/hot.rs"],
+        "sites persist with no configuration"
+    );
+    let updated = fx
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({
+                "id": added["id"], "model": "codex",
+                "relations": [{"type": "regression_from", "target": target,
+                 "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "low", "sites": ["file:src/cold.rs"]}}]
+            }),
+        )
+        .unwrap();
+    let stored = fx
+        .runtime
+        .get_task(updated["id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        stored
+            .relations
+            .iter()
+            .find_map(|r| r.regression.as_ref())
+            .unwrap()
+            .sites,
+        ["file:src/cold.rs"]
+    );
+}
+
+fn regression_sites_relink_keeps_inherited_sites() {
+    let fx = Fixture::new();
+    let target = fx.task.clone();
+    let checkout = fx.workspace.parent().unwrap().to_path_buf();
+    let added = fx.runtime.run_tool("orbit.task.add", json!({
+        "title": "Retain the regression classification", "complexity": "low", "model": "codex",
+        "description": "Regression sites fixture", "workspace": checkout,
+        "relations": [
+            {"type": "regression_from", "target": target,
+             "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "low", "sites": ["file:src/hot.rs"]}},
+            {"type": "related_to", "target": fx.ids[0]}
+        ]
+    })).unwrap();
+    let relink = json!({"id": added["id"], "model": "codex", "source_task_id": target});
+    fx.runtime
+        .run_tool("orbit.task.update", relink.clone())
+        .unwrap();
+    let recorded = fx.runtime.get_task(added["id"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        recorded
+            .relations
+            .iter()
+            .find_map(|r| r.regression.as_ref())
+            .unwrap()
+            .sites,
+        ["file:src/hot.rs"]
+    );
+    let stored = fx.runtime.get_task(added["id"].as_str().unwrap()).unwrap();
+    assert_eq!(stored.source_task_id(), Some(target.as_str()));
+    assert!(
+        stored
+            .relations
+            .iter()
+            .any(|r| r.relation_type == TaskRelationType::RelatedTo
+                && r.target.as_str() == fx.ids[0])
+    );
+}
+
+fn regression_severity_verified_resend_keeps_the_recorded_source() {
+    let fx = Fixture::new();
+    let target = fx.task.clone();
+    let checkout = fx.workspace.parent().unwrap().to_path_buf();
+    for (recorded, source) in [
+        ("filer", SeveritySource::Filer),
+        ("operator", SeveritySource::Operator),
+    ] {
+        let link = |severity_source: &str| {
+            json!({
+                "type": "regression_from", "target": target,
+                "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "high", "severity_source": severity_source}
+            })
+        };
+        let added = fx
+            .runtime
+            .run_tool(
+                "orbit.task.add",
+                json!({
+                    "title": "Hold a rated regression link", "complexity": "low", "model": "codex",
+                    "description": "Regression severity fixture", "workspace": checkout,
+                    "relations": [link(recorded)]
+                }),
+            )
+            .unwrap();
+        let id = added["id"].as_str().unwrap();
+        let stamped = fx.runtime.run_tool(
+            "orbit.task.update",
+            json!({"id": id, "model": "codex", "relations": [link("verified")]}),
+        );
+        assert!(
+            matches!(stamped, Err(OrbitError::InvalidInput(_))),
+            "a {recorded}-rated link re-sent as verified is refused, not stamped"
+        );
+        let stored = fx.runtime.get_task(id).unwrap();
+        let rated = stored
+            .relations
+            .iter()
+            .find_map(|r| r.regression.as_ref())
+            .unwrap();
+        assert_eq!(
+            rated.severity_source, source,
+            "the refused re-send leaves the {recorded} source in place"
+        );
+    }
+}
+
+crate::scenario_table!(
+    regression_severity_write_scenarios,
+    regression_severity_verified_resend_keeps_the_recorded_source,
+);
+
+crate::scenario_table!(
+    regression_sites_write_invalid_scenarios,
+    regression_sites_invalid_writes_are_rejected,
+    regression_sites_are_kept_without_configuration,
+);
+crate::scenario_table!(
+    regression_sites_write_relink_scenarios,
+    regression_sites_relink_keeps_inherited_sites,
+);
+
 crate::scenario_table!(
     regression_risk_scenarios,
     qualifying_paths_are_marked_highest_risk_first_and_recorded_once_per_prompt,
     support_cap_and_switch_are_configurable_and_off_marks_nothing,
-    shipped_implement_and_review_activities_ask_for_marks
+    shipped_implement_and_review_activities_ask_for_marks,
+    regression_sites_are_canonicalized_against_the_workspace
 );

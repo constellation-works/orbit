@@ -42,6 +42,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/vendor/purify.min.js"),
     ),
     (
+        "/static/js/change-stream.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/change-stream.js"),
+    ),
+    (
         "/static/js/fleet-drains.js",
         JS,
         include_bytes!("../assets/dashboard/js/fleet-drains.js"),
@@ -50,6 +55,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/host-resources.js",
         JS,
         include_bytes!("../assets/dashboard/js/host-resources.js"),
+    ),
+    (
+        "/static/js/provider-usage.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/provider-usage.js"),
     ),
     (
         "/static/app.js",
@@ -67,19 +77,9 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/config.js"),
     ),
     (
-        "/static/js/config-effective.js",
+        "/static/js/config-topics.js",
         JS,
-        include_bytes!("../assets/dashboard/js/config-effective.js"),
-    ),
-    (
-        "/static/js/config-workspace-file.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/config-workspace-file.js"),
-    ),
-    (
-        "/static/js/config-global-file.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/config-global-file.js"),
+        include_bytes!("../assets/dashboard/js/config-topics.js"),
     ),
     (
         "/static/js/hosts.js",
@@ -107,6 +107,96 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/tasks.js"),
     ),
     (
+        "/static/js/task-lifecycle.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-lifecycle.js"),
+    ),
+    (
+        "/static/js/task-detail.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-detail.js"),
+    ),
+    (
+        "/static/js/task-pane.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-pane.js"),
+    ),
+    (
+        "/static/js/task-shared.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-shared.js"),
+    ),
+    (
+        "/static/js/task-crew.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-crew.js"),
+    ),
+    (
+        "/static/js/task-data.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-data.js"),
+    ),
+    (
+        "/static/js/task-history.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-history.js"),
+    ),
+    (
+        "/static/js/task-readiness.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-readiness.js"),
+    ),
+    (
+        "/static/js/task-evidence.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-evidence.js"),
+    ),
+    (
+        "/static/js/task-fields.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-fields.js"),
+    ),
+    (
+        "/static/js/task-comments.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-comments.js"),
+    ),
+    (
+        "/static/js/task-why-stuck.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-why-stuck.js"),
+    ),
+    (
+        "/static/js/task-nav.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-nav.js"),
+    ),
+    (
+        "/static/js/task-relations.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-relations.js"),
+    ),
+    (
+        "/static/js/task-quick-actions.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-quick-actions.js"),
+    ),
+    (
+        "/static/js/task-agent-actions.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-agent-actions.js"),
+    ),
+    (
+        "/static/js/task-status-controls.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-status-controls.js"),
+    ),
+    (
+        "/static/js/task-actions.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-actions.js"),
+    ),
+    (
         "/static/js/field-editor.js",
         JS,
         include_bytes!("../assets/dashboard/js/field-editor.js"),
@@ -125,11 +215,6 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/agents.js",
         JS,
         include_bytes!("../assets/dashboard/js/agents.js"),
-    ),
-    (
-        "/static/js/agents-implementers.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/agents-implementers.js"),
     ),
     (
         "/static/js/agents-orchestrators.js",
@@ -167,9 +252,49 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/metrics.js"),
     ),
     (
+        "/static/js/metrics-tokens.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/metrics-tokens.js"),
+    ),
+    (
+        "/static/js/metrics-turns.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/metrics-turns.js"),
+    ),
+    (
+        "/static/js/metrics-diff.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/metrics-diff.js"),
+    ),
+    (
+        "/static/js/metrics-running.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/metrics-running.js"),
+    ),
+    (
+        "/static/js/metrics-friction.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/metrics-friction.js"),
+    ),
+    (
         "/static/js/resources.js",
         JS,
         include_bytes!("../assets/dashboard/js/resources.js"),
+    ),
+    (
+        "/static/js/forecast.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/forecast.js"),
+    ),
+    (
+        "/static/js/experiments.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/experiments.js"),
+    ),
+    (
+        "/static/js/experiment-form.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/experiment-form.js"),
     ),
     (
         "/static/js/doctor.js",
@@ -227,19 +352,69 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/drain-start.js"),
     ),
     (
-        "/static/js/drain-started.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/drain-started.js"),
-    ),
-    (
         "/static/js/task-runtime.js",
         JS,
         include_bytes!("../assets/dashboard/js/task-runtime.js"),
     ),
     (
+        "/static/js/task-riskiness.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-riskiness.js"),
+    ),
+    (
         "/static/js/operations.js",
         JS,
         include_bytes!("../assets/dashboard/js/operations.js"),
+    ),
+    (
+        "/static/js/operations-drain.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-drain.js"),
+    ),
+    (
+        "/static/js/operations-drain-controls.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-drain-controls.js"),
+    ),
+    (
+        "/static/js/operations-drain-capacity.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-drain-capacity.js"),
+    ),
+    (
+        "/static/js/operations-shared.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-shared.js"),
+    ),
+    (
+        "/static/js/operations-forecast.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-forecast.js"),
+    ),
+    (
+        "/static/js/operations-fleet.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-fleet.js"),
+    ),
+    (
+        "/static/js/operations-routines.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-routines.js"),
+    ),
+    (
+        "/static/js/operations-auto-tasks.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-auto-tasks.js"),
+    ),
+    (
+        "/static/js/operations-jobs.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-jobs.js"),
+    ),
+    (
+        "/static/js/schedule-editor.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/schedule-editor.js"),
     ),
     (
         "/static/js/automation.js",
@@ -250,6 +425,16 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/plugins.js",
         JS,
         include_bytes!("../assets/dashboard/js/plugins.js"),
+    ),
+    (
+        "/static/js/leases.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/leases.js"),
+    ),
+    (
+        "/static/js/locks.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/locks.js"),
     ),
 ];
 pub(super) const DASHBOARD_CSP: &str = concat!(

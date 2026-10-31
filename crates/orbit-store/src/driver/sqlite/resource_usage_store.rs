@@ -5,34 +5,29 @@
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
 //! so SQLite orders and compares them as text.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
-use rusqlite::{TransactionBehavior, params, params_from_iter};
+use rusqlite::{OptionalExtension, TransactionBehavior, params, params_from_iter};
 
 use crate::Store;
 use crate::contracts::{
-    AdmissionForecastPoint, AdmissionForecastRecord, DeliveryRunInterval, DeliveryRunResources,
-    DeliveryRunsFreshness, HostResourceMinute, ResourceMinuteLoad, ResourceMinutesTable,
-    ResourceUsageStoreBackend, RunResourceMinute,
+    AdmissionForecastPoint, AdmissionForecastRecord, CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS,
+    CPU_ACCOUNTING_MACOS_TREE_ONLY, DeliveryRunInterval, DeliveryRunResources,
+    DeliveryRunsFreshness, HostResourceMinute, ResourceHistoryKeep, ResourceMinuteLoad,
+    ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
 };
 
-fn stamp(at: DateTime<Utc>) -> String {
-    at.to_rfc3339_opts(SecondsFormat::Micros, true)
-}
+use super::codec::{RUN_MINUTE_COLUMNS, host_minutes, run_minute_from_row, stamp, unsigned};
 
 /// SQLite integers are signed; a byte count past `i64::MAX` saturates.
 fn bytes(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-fn unsigned(value: i64) -> u64 {
-    u64::try_from(value).unwrap_or(0)
-}
-
-fn encode<T: serde::Serialize>(value: &T) -> Result<String, OrbitError> {
+fn encode<T: serde::Serialize>(value: &T, what: &str) -> Result<String, OrbitError> {
     serde_json::to_string(value)
-        .map_err(|error| OrbitError::Store(format!("encode an admission forecast: {error}")))
+        .map_err(|error| OrbitError::Store(format!("encode {what}: {error}")))
 }
 
 /// A JSON column read back; a value this binary cannot read is a
@@ -52,8 +47,9 @@ impl ResourceUsageStoreBackend for Store {
                     INSERT INTO run_resource_minutes (
                         workspace_id, run_id, minute_index, minute_started_at, task_id,
                         work_class, complexity, resumed, delivery_admitted_at,
-                        cpu_cores, memory_bytes, samples, cpu_accounting
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                        cpu_cores, memory_bytes, samples, cpu_accounting,
+                        crew_model, orbit_version
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                     ON CONFLICT (workspace_id, run_id, minute_index) DO UPDATE SET
                         minute_started_at = excluded.minute_started_at,
                         task_id = excluded.task_id,
@@ -64,7 +60,9 @@ impl ResourceUsageStoreBackend for Store {
                         cpu_cores = excluded.cpu_cores,
                         memory_bytes = excluded.memory_bytes,
                         samples = excluded.samples,
-                        cpu_accounting = excluded.cpu_accounting
+                        cpu_accounting = excluded.cpu_accounting,
+                        crew_model = excluded.crew_model,
+                        orbit_version = excluded.orbit_version
                     "#,
                     params![
                         minute.workspace_id,
@@ -80,6 +78,8 @@ impl ResourceUsageStoreBackend for Store {
                         bytes(minute.memory_bytes),
                         minute.samples,
                         minute.cpu_accounting,
+                        minute.crew_model,
+                        minute.orbit_version,
                     ],
                 )
                 .map(|_| ())
@@ -120,38 +120,15 @@ impl ResourceUsageStoreBackend for Store {
     ) -> Result<Vec<RunResourceMinute>, OrbitError> {
         let conn = self.read()?;
         let mut statement = conn
-            .prepare(
-                r#"
-                SELECT workspace_id, run_id, minute_index, minute_started_at, task_id,
-                       work_class, complexity, resumed, delivery_admitted_at,
-                       cpu_cores, memory_bytes, samples, cpu_accounting
-                FROM run_resource_minutes
-                WHERE workspace_id = ?1 AND run_id = ?2
-                ORDER BY minute_index
-                "#,
-            )
+            .prepare(&format!(
+                "SELECT {RUN_MINUTE_COLUMNS}
+                 FROM run_resource_minutes
+                 WHERE workspace_id = ?1 AND run_id = ?2
+                 ORDER BY minute_index",
+            ))
             .map_err(sqlite_store_error)?;
         let rows = statement
-            .query_map(params![workspace_id, run_id], |row| {
-                Ok(RunResourceMinute {
-                    workspace_id: row.get(0)?,
-                    run_id: row.get(1)?,
-                    minute_index: row.get(2)?,
-                    minute_started_at: crate::parse_timestamp(&row.get::<_, String>(3)?)?,
-                    task_id: row.get(4)?,
-                    work_class: row.get(5)?,
-                    complexity: row.get(6)?,
-                    resumed: row.get(7)?,
-                    delivery_admitted_at: row
-                        .get::<_, Option<String>>(8)?
-                        .map(|at| crate::parse_timestamp(&at))
-                        .transpose()?,
-                    cpu_cores: row.get(9)?,
-                    memory_bytes: unsigned(row.get(10)?),
-                    samples: row.get(11)?,
-                    cpu_accounting: row.get(12)?,
-                })
-            })
+            .query_map(params![workspace_id, run_id], run_minute_from_row)
             .map_err(sqlite_store_error)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_store_error)
@@ -167,7 +144,8 @@ impl ResourceUsageStoreBackend for Store {
                 r#"
                 SELECT r.workspace_id, r.run_id, j.job_id, r.task_id, r.work_class,
                        r.complexity, r.resumed, r.delivery_admitted_at, j.finished_at,
-                       r.minute_started_at, r.cpu_cores, r.memory_bytes, r.cpu_accounting, r.samples
+                       r.minute_started_at, r.cpu_cores, r.memory_bytes, r.cpu_accounting, r.samples,
+                       COALESCE(r.crew_model, j.crew_model), r.orbit_version
                 FROM run_resource_minutes r
                 LEFT JOIN job_runs j
                   ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
@@ -191,6 +169,8 @@ impl ResourceUsageStoreBackend for Store {
                         .get::<_, Option<String>>(8)?
                         .map(|at| crate::parse_timestamp(&at))
                         .transpose()?,
+                    crew_model: row.get(14)?,
+                    orbit_version: row.get(15)?,
                     minutes: Vec::new(),
                 };
                 let minute = ResourceMinuteLoad {
@@ -211,6 +191,14 @@ impl ResourceUsageStoreBackend for Store {
                     if last.workspace_id == run.workspace_id && last.run_id == run.run_id =>
                 {
                     last.resumed |= run.resumed;
+                    // Minutes come oldest first: the newest that recorded a
+                    // crew model or version names the run's.
+                    if run.crew_model.is_some() {
+                        last.crew_model = run.crew_model;
+                    }
+                    if run.orbit_version.is_some() {
+                        last.orbit_version = run.orbit_version;
+                    }
                     last.minutes.push(minute);
                 }
                 _ => {
@@ -226,6 +214,9 @@ impl ResourceUsageStoreBackend for Store {
 
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
         let conn = self.read()?;
+        // Every sampled run counts from its first recorded minute, whatever its
+        // index: a failed first read or insert can leave no minute-zero row. The
+        // probe reads only retained minute rows, never all of `job_runs`.
         let (newest, finished) = conn
             .query_row(
                 r#"
@@ -246,49 +237,54 @@ impl ResourceUsageStoreBackend for Store {
         })
     }
 
+    fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
+        let conn = self.read()?;
+        // A write-free reader may open a store migrated before the counter.
+        let kept: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                               WHERE type = 'table' AND name = 'delivery_runs_stamp')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_store_error)?;
+        if !kept {
+            return Ok(None);
+        }
+        conn.query_row(
+            "SELECT stamp FROM delivery_runs_stamp WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sqlite_store_error)
+    }
+
     fn host_resource_minutes(
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<HostResourceMinute>, OrbitError> {
-        let conn = self.read()?;
-        let mut statement = conn
-            .prepare(
-                r#"
-                SELECT minute_at, cpu_cores, cpu_count, memory_bytes, memory_total_bytes,
-                       samples, recorded_by_run_id
-                FROM host_resource_minutes
-                WHERE minute_at >= ?1
-                ORDER BY minute_at
-                "#,
-            )
-            .map_err(sqlite_store_error)?;
-        let rows = statement
-            .query_map(params![stamp(since)], |row| {
-                Ok(HostResourceMinute {
-                    minute_at: crate::parse_timestamp(&row.get::<_, String>(0)?)?,
-                    cpu_cores: row.get(1)?,
-                    cpu_count: row.get(2)?,
-                    memory_bytes: unsigned(row.get(3)?),
-                    memory_total_bytes: unsigned(row.get(4)?),
-                    samples: row.get(5)?,
-                    recorded_by_run_id: row.get(6)?,
-                })
-            })
-            .map_err(sqlite_store_error)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(sqlite_store_error)
+        host_minutes(&*self.read()?, since)
     }
 
     fn record_admission_forecast(
         &self,
         record: &AdmissionForecastRecord,
     ) -> Result<(), OrbitError> {
-        let points = encode(&record.points)?;
-        let admitted = encode(&record.admitted)?;
-        let fit_admitted = encode(&record.fit_admitted)?;
-        let fit_skipped = encode(&record.fit_skipped)?;
-        let pull = record.pull.as_ref().map(encode).transpose()?;
-        let covered = record.covered_deliveries.as_ref().map(encode).transpose()?;
+        let points = encode(&record.points, "an admission forecast")?;
+        let admitted = encode(&record.admitted, "an admission forecast")?;
+        let fit_admitted = encode(&record.fit_admitted, "an admission forecast")?;
+        let fit_skipped = encode(&record.fit_skipped, "an admission forecast")?;
+        let pull = record
+            .pull
+            .as_ref()
+            .map(|value| encode(value, "an admission forecast"))
+            .transpose()?;
+        let covered = record
+            .covered_deliveries
+            .as_ref()
+            .map(|value| encode(value, "an admission forecast"))
+            .transpose()?;
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
                 .execute(
@@ -374,20 +370,16 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
     ) -> Result<u64, OrbitError> {
         let conn = self.read()?;
-        let sql = match table {
-            ResourceMinutesTable::Run => {
-                "SELECT COUNT(*) FROM run_resource_minutes WHERE minute_started_at < ?1"
-            }
-            ResourceMinutesTable::Host => {
-                "SELECT COUNT(*) FROM host_resource_minutes WHERE minute_at < ?1"
-            }
-            ResourceMinutesTable::AdmissionForecast => {
-                "SELECT COUNT(*) FROM admission_forecasts WHERE forecast_at < ?1"
-            }
-        };
-        conn.query_row(sql, params![stamp(cutoff)], |row| row.get::<_, i64>(0))
+        let sql = format!(
+            "SELECT COUNT(*) FROM {} WHERE {}",
+            table.table_name(),
+            prunable(table)
+        );
+        let (cutoff, kept) = prune_bounds(table, cutoff, keep);
+        conn.query_row(&sql, params![cutoff, kept], |row| row.get::<_, i64>(0))
             .map(unsigned)
             .map_err(sqlite_store_error)
     }
@@ -396,29 +388,160 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
         limit: usize,
     ) -> Result<usize, OrbitError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let sql = match table {
-            ResourceMinutesTable::Run => {
-                "DELETE FROM run_resource_minutes WHERE rowid IN ( \
-                     SELECT rowid FROM run_resource_minutes \
-                     WHERE minute_started_at < ?1 LIMIT ?2)"
-            }
-            ResourceMinutesTable::Host => {
-                "DELETE FROM host_resource_minutes WHERE rowid IN ( \
-                     SELECT rowid FROM host_resource_minutes WHERE minute_at < ?1 LIMIT ?2)"
-            }
-            ResourceMinutesTable::AdmissionForecast => {
-                "DELETE FROM admission_forecasts WHERE rowid IN ( \
-                     SELECT rowid FROM admission_forecasts WHERE forecast_at < ?1 LIMIT ?2)"
-            }
+        // Keep an ineligible marker until its good siblings have been pruned.
+        // Otherwise the next batch can mistake a partial delivery for a profile.
+        let order = if matches!(table, ResourceMinutesTable::Run) {
+            format!(
+                " ORDER BY CASE WHEN resumed != 0 OR \
+                 (cpu_accounting IS NULL AND {}) OR \
+                 (cpu_accounting IS NOT NULL AND cpu_accounting NOT IN ('{}', '{}', '{}')) OR \
+                 NOT EXISTS (SELECT 1 FROM job_runs j WHERE j.workspace_id = r.workspace_id \
+                     AND j.run_id = r.run_id AND j.job_id IS NOT NULL AND j.finished_at IS NOT NULL) \
+                 THEN 1 ELSE 0 END, CASE WHEN minute_index = 0 THEN 1 ELSE 0 END",
+                if cfg!(target_os = "linux") { 0 } else { 1 },
+                CPU_ACCOUNTING_LINUX,
+                CPU_ACCOUNTING_MACOS,
+                CPU_ACCOUNTING_MACOS_TREE_ONLY
+            )
+        } else {
+            String::new()
         };
+        let sql = format!(
+            "DELETE FROM {table} WHERE rowid IN ( \
+                 SELECT r.rowid FROM {table} r WHERE {predicate}{order} LIMIT ?3)",
+            table = table.table_name(),
+            predicate = prunable(table)
+        );
+        let (cutoff, kept) = prune_bounds(table, cutoff, keep);
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
-                .execute(sql, params![stamp(cutoff), limit])
+                .execute(&sql, params![cutoff, kept, limit])
                 .map_err(sqlite_store_error)
         })
+    }
+}
+
+/// [`prunable`]'s `?1`, the cutoff, and `?2`, how many of the table's own
+/// kind `keep` holds: deliveries per key for run minutes, forecasts for
+/// forecasts and host minutes.
+fn prune_bounds(
+    table: ResourceMinutesTable,
+    cutoff: DateTime<Utc>,
+    keep: ResourceHistoryKeep,
+) -> (String, i64) {
+    let kept = match table {
+        ResourceMinutesTable::Run => keep.deliveries_per_key,
+        ResourceMinutesTable::Host | ResourceMinutesTable::AdmissionForecast => keep.forecasts,
+    };
+    (stamp(cutoff), i64::try_from(kept).unwrap_or(i64::MAX))
+}
+
+/// The rows of `table` retention may remove: older than the cutoff `?1` and
+/// not among the `?2` that [`ResourceHistoryKeep`] holds.
+///
+/// - A run minute stays for the newest `?2` deliveries by admission, and
+///   the newest `?2` profile-eligible deliveries by finish time, per key
+///   and, for each crew model, per key and crew model. A delivery with
+///   recent minutes keeps its older minutes too.
+/// - A forecast stays while it is among the newest `?2`.
+/// - A host minute stays from the minute the oldest of the newest `?2`
+///   forecasts was made in, so every kept forecast can still pair with the
+///   minutes it forecast.
+fn prunable(table: ResourceMinutesTable) -> String {
+    match table {
+        ResourceMinutesTable::Run => {
+            // One text key per delivery: SQLite builds a scalar `NOT IN`
+            // list once, where a row-value one is rescanned per row.
+            format!(
+                "minute_started_at < ?1 AND (delivery_admitted_at IS NULL \
+                 OR workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                 NOT IN ( \
+                     SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                     FROM ( \
+                         SELECT workspace_id, task_id, delivery_admitted_at, \
+                                ROW_NUMBER() OVER ( \
+                                    PARTITION BY workspace_id, work_class, IFNULL(complexity, '') \
+                                    ORDER BY delivery_admitted_at DESC, task_id DESC) AS newest \
+                         FROM (SELECT DISTINCT workspace_id, task_id, delivery_admitted_at, \
+                                      work_class, complexity \
+                               FROM run_resource_minutes \
+                               WHERE delivery_admitted_at IS NOT NULL)) \
+                     WHERE newest <= ?2) \
+                 AND workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                 NOT IN ( \
+                     SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                     FROM (SELECT *, ROW_NUMBER() OVER ( \
+                         PARTITION BY workspace_id, work_class, \
+                             CASE WHEN substr(work_class, 1, 10) = 'auto-task:' THEN '' ELSE IFNULL(complexity, '') END \
+                         ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS newest \
+                         FROM (SELECT r.workspace_id, r.task_id, r.delivery_admitted_at, \
+                                      MIN(r.work_class) AS work_class, MIN(r.complexity) AS complexity, \
+                                      MAX(julianday(j.finished_at)) AS finished \
+                               FROM run_resource_minutes r LEFT JOIN job_runs j \
+                                 ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id \
+                               WHERE r.delivery_admitted_at IS NOT NULL \
+                               GROUP BY r.workspace_id, r.task_id, r.delivery_admitted_at \
+                               HAVING MAX(CASE WHEN r.resumed != 0 OR j.job_id IS NULL \
+                                   OR j.finished_at IS NULL OR \
+                                   (r.cpu_accounting IS NULL AND {null_untrusted}) OR \
+                                   (r.cpu_accounting IS NOT NULL AND r.cpu_accounting NOT IN \
+                                       ('{linux}', '{macos}', '{macos_tree}')) \
+                                   THEN 1 ELSE 0 END) = 0)) \
+                     WHERE newest <= ?2) \
+                 AND workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                 NOT IN ( \
+                     WITH eligible AS ( \
+                         SELECT r.workspace_id, r.task_id, r.delivery_admitted_at, \
+                             MIN(r.work_class) AS work_class, \
+                             CASE WHEN substr(MIN(r.work_class), 1, 10) = 'auto-task:' \
+                                  THEN '' ELSE IFNULL(MIN(r.complexity), '') END AS complexity, \
+                             MAX(julianday(j.finished_at)) AS finished, \
+                             (SELECT (SELECT COALESCE(m.crew_model, jj.crew_model) FROM run_resource_minutes m \
+                                  WHERE m.workspace_id = rr.workspace_id AND m.run_id = rr.run_id \
+                                    AND (m.crew_model IS NOT NULL OR jj.crew_model IS NOT NULL) \
+                                  ORDER BY m.minute_index DESC LIMIT 1) AS model \
+                              FROM run_resource_minutes rr LEFT JOIN job_runs jj \
+                                ON jj.workspace_id = rr.workspace_id AND jj.run_id = rr.run_id \
+                              WHERE rr.workspace_id = r.workspace_id AND rr.task_id = r.task_id \
+                                AND rr.delivery_admitted_at = r.delivery_admitted_at \
+                              GROUP BY rr.run_id HAVING model IS NOT NULL ORDER BY rr.run_id LIMIT 1) AS model \
+                         FROM run_resource_minutes r LEFT JOIN job_runs j \
+                           ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id \
+                         WHERE r.delivery_admitted_at IS NOT NULL \
+                         GROUP BY r.workspace_id, r.task_id, r.delivery_admitted_at \
+                         HAVING MAX(CASE WHEN r.resumed != 0 OR j.job_id IS NULL \
+                             OR j.finished_at IS NULL OR (r.cpu_accounting IS NULL AND {null_untrusted}) OR \
+                             (r.cpu_accounting IS NOT NULL AND r.cpu_accounting NOT IN \
+                                 ('{linux}', '{macos}', '{macos_tree}')) THEN 1 ELSE 0 END) = 0), \
+                     ranked AS (SELECT *, \
+                         ROW_NUMBER() OVER (PARTITION BY workspace_id, work_class, complexity, model \
+                             ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS newest \
+                         FROM eligible WHERE model IS NOT NULL) \
+                     SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                     FROM ranked WHERE newest <= ?2) \
+                 AND workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                 NOT IN (SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                     FROM run_resource_minutes WHERE delivery_admitted_at IS NOT NULL \
+                     AND minute_started_at >= ?1))",
+                null_untrusted = if cfg!(target_os = "linux") { 0 } else { 1 },
+                linux = CPU_ACCOUNTING_LINUX,
+                macos = CPU_ACCOUNTING_MACOS,
+                macos_tree = CPU_ACCOUNTING_MACOS_TREE_ONLY
+            )
+        }
+        ResourceMinutesTable::Host => "minute_at < ?1 AND minute_at < IFNULL(( \
+                 SELECT substr(MIN(forecast_at), 1, 17) || '00.000000Z' FROM ( \
+                     SELECT forecast_at FROM admission_forecasts \
+                     ORDER BY forecast_at DESC LIMIT ?2)), ?1)"
+            .into(),
+        ResourceMinutesTable::AdmissionForecast => "forecast_at < ?1 AND rowid NOT IN ( \
+                 SELECT rowid FROM admission_forecasts \
+                 ORDER BY forecast_at DESC LIMIT ?2)"
+            .into(),
     }
 }
 
@@ -477,5 +600,37 @@ impl Store {
             }
         }
         Ok(intervals)
+    }
+}
+
+impl crate::contracts::WorkerResourceLimitStoreBackend for Store {
+    fn record_worker_resource_limit_evidence(
+        &self,
+        evidence: &crate::contracts::WorkerResourceLimitEvidence,
+    ) -> Result<(), OrbitError> {
+        let encoded = encode(evidence, "resource evidence")?;
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.connection()
+                .execute(
+                    "INSERT INTO worker_resource_limits (workspace_id, run_id, evidence_json)
+                 VALUES (?1, ?2, ?3) ON CONFLICT (workspace_id, run_id)
+                 DO UPDATE SET evidence_json = excluded.evidence_json",
+                    params![evidence.workspace_id, evidence.run_id, encoded],
+                )
+                .map(|_| ())
+                .map_err(sqlite_store_error)
+        })
+    }
+
+    fn worker_resource_limit_evidence(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Option<crate::contracts::WorkerResourceLimitEvidence>, OrbitError> {
+        self.read()?.query_row(
+            "SELECT evidence_json FROM worker_resource_limits WHERE workspace_id = ?1 AND run_id = ?2",
+            params![workspace_id, run_id],
+            |row| decode(0, &row.get::<_, String>(0)?),
+        ).optional().map_err(sqlite_store_error)
     }
 }

@@ -271,6 +271,55 @@ fn a_superseded_attempt_replaced_by_the_same_check_is_coverage() {
     }
 }
 
+/// [ORB-19519] Two rustdoc attempts whose explicit `check` keeps the
+/// `RUSTDOCFLAGS` assignment are replaced by the required passes of the same
+/// commands, which derive their identity without it. Shaped like
+/// jrun-20261028-1120-c1, whose settlement stayed `incomplete` on this pair.
+#[test]
+fn a_superseded_check_with_an_env_prefixed_explicit_identity_is_replaced_by_its_pass() {
+    let mut records = Vec::new();
+    for package in ["orbit-core", "orbit-exec"] {
+        let attempt = format!("RUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps -p {package}");
+        records.push(superseded(&attempt, Some(&attempt)));
+        records.push(required(
+            &format!("cargo doc --no-deps -p {package}"),
+            None,
+            true,
+        ));
+    }
+    for order in ["attempts first", "passes first"] {
+        assert_eq!(
+            validation_evidence(&records, &ValidationContext::default()),
+            Ok(()),
+            "{order}"
+        );
+        assert_eq!(
+            certificate_acceptable(&certificate(records.clone())),
+            Ok(()),
+            "{order}"
+        );
+        records.reverse();
+    }
+}
+
+/// [ORB-19519] Normalizing the explicit identity strips only the assignment:
+/// the same env-prefixed check for another command still leaves the attempt
+/// unreplaced.
+#[test]
+fn an_env_prefixed_explicit_identity_naming_another_command_still_refuses() {
+    let attempt = "RUSTDOCFLAGS=\"-D warnings\" cargo doc --no-deps -p orbit-core";
+    let records = vec![
+        superseded(attempt, Some(attempt)),
+        required("cargo doc --no-deps -p orbit-exec", None, true),
+    ];
+    assert_eq!(
+        validation_evidence(&records, &ValidationContext::default()),
+        Err(ValidationDefect::SupersededWithoutReplacement {
+            command: attempt.to_string(),
+        })
+    );
+}
+
 /// Without any replacement question, a required check that did not pass and
 /// a set with no required pass are refused at both boundaries too.
 #[test]

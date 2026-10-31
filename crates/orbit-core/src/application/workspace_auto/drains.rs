@@ -1,12 +1,14 @@
 use chrono::SecondsFormat;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
-use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, JobRun, PipelineState};
+use orbit_types::workflow::{
+    AutoConcurrencyMode, DrainAdmissionsStop, DrainWorkerLimit, JobRun, PipelineState,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::admission::pass_error::PassError;
-use crate::application::distributed::PULL_DRAIN_JOB;
+use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::runtime::engine::crew::crew_allowlist_names_from_input;
 
 /// The job that ships loose leaves. Its live runs are read for two things at
@@ -81,6 +83,62 @@ impl ActiveDrain {
         self.limit
             .as_ref()
             .map_or(self.submitted, |limit| limit.max_active_leaf_runs)
+    }
+}
+
+/// The leaf-run ceiling the live drain admits under, and where it comes
+/// from: the live local drain's (an operator adjustment, else its submitted
+/// value), then the live pull drain's, else the job default.
+pub(super) fn drain_ceiling(
+    active: Option<&ActiveDrain>,
+    pull: Option<&LivePullDrain>,
+) -> (u64, &'static str) {
+    match (active, pull) {
+        (Some(drain), _) => (
+            u64::from(drain.effective_max_active_leaf_runs()),
+            if drain.limit.is_some() {
+                "run_control"
+            } else {
+                "run_input"
+            },
+        ),
+        (None, Some(drain)) => (
+            u64::from(drain.effective_max_active_leaf_runs()),
+            if drain.limit.is_some() {
+                "pull_run_control"
+            } else {
+                "pull_run_input"
+            },
+        ),
+        (None, None) => (DEFAULT_MAX_ACTIVE_LEAF_RUNS, "default"),
+    }
+}
+
+impl OrbitRuntime {
+    /// The leaf-run ceiling a drain is admitting under right now, and its
+    /// source, as readiness reports it without `--concurrency`: `run_control`
+    /// or `run_input` for the live local drain, `pull_run_control` or
+    /// `pull_run_input` for a live pull drain, else `default`.
+    pub fn drain_concurrency_ceiling(&self) -> Result<(u64, &'static str), OrbitError> {
+        let (active, _) = workspace_drains(self)?;
+        let pull = live_pull_drain(self)?;
+        Ok(drain_ceiling(active.as_ref(), pull.as_ref()))
+    }
+
+    /// The auto-concurrency mode the live local drain admits under (its own
+    /// override, else the host's configured mode) and `live_drain`; with no
+    /// live local drain, the configured mode and `configured`.
+    pub(crate) fn drain_auto_concurrency_mode(
+        &self,
+    ) -> Result<(AutoConcurrencyMode, &'static str), OrbitError> {
+        let (active, _) = workspace_drains(self)?;
+        Ok(match active {
+            Some(drain) => (
+                super::mode::effective_mode(self, &drain.input)?,
+                "live_drain",
+            ),
+            None => (super::mode::effective_mode(self, &json!({}))?, "configured"),
+        })
     }
 }
 

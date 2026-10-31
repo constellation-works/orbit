@@ -41,6 +41,7 @@ fn record(
         .insert_invocation_trace_record(
             "ws_ledger",
             &InvocationInsertParams {
+                agent_execution_id: None,
                 job_run_id: "run".to_string(),
                 account: None,
                 activity_id: "implement_one".to_string(),
@@ -175,6 +176,7 @@ fn an_existing_store_gains_the_provider_column_additively() {
     drop(Store::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
     // Recreate schema v41, with a row the older binary wrote.
+    crate::support::drop_replayed_migration_tables(&conn).unwrap();
     conn.execute_batch(
         "ALTER TABLE invocations DROP COLUMN provider;
         DROP INDEX idx_v2_audit_events_ws_event_type_ts;

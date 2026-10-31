@@ -3,22 +3,23 @@
 use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use crate::context::{HandoffLandingStep, RuntimeHost};
 
 use super::super::operations;
-use super::super::pr::diagnostics;
 use super::super::pr::{
     BlockedCheckWait, OwedHostedChecks, PrMergeState, UnreportedChecks, checked_pr_state,
     classify_pr_state, owed_hosted_checks, read_pr_status, read_pr_status_before,
     resolve_permitted_merge,
 };
+use super::super::pr::{diagnostics, draft_recovery};
 use super::super::remote_probe::fixed_wait as sleep;
 use super::checks::{CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks};
 use super::intent::LandingView;
 use super::observe::{adopt_base_update, landing_tip, observe_candidate, pin_for};
-use super::record::{behind_base, complete, describe, record, refuse_pr, stop_pr};
+use super::record::{behind_base, complete, describe, hold_pr, record, refuse_pr, stop_pr};
 use super::run::{LandingBudget, LandingPass, transport_failure};
 
 pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
@@ -36,11 +37,12 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
 
     let LandingBudget {
         max_wait_seconds,
+        max_base_ci_cycles,
         poll_interval_seconds,
         started,
         deadline_ms,
     } = *budget;
-    let mut recovery = CheckRecovery::before(deadline_ms);
+    let mut recovery = CheckRecovery::before(deadline_ms, max_base_ci_cycles);
     let mut unreported = UnreportedChecks::new();
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
@@ -67,7 +69,26 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
         } else {
             read_pr_status_before(host, &workspace, &pr_number, deadline_ms)?
         };
+        let has_failures = !failed_checks(&status).is_empty();
+        super::checks::rerun_diagnostic::observe_ci_rerun_head(
+            host,
+            std::slice::from_ref(&context.task_id),
+            &context.handoff_id,
+            status.head_sha.as_deref(),
+            has_failures,
+        );
+        if recovery
+            .rerun_diagnostic
+            .as_ref()
+            .is_some_and(|previous| previous.head_sha != status.head_sha || !has_failures)
+        {
+            recovery.rerun_diagnostic = None;
+            if let Some(diagnostic) = diagnostic.as_object_mut() {
+                diagnostic.remove("ci_rerun_diagnostic");
+            }
+        }
         diagnostic["pr"] = diagnostics::status(&status);
+        diagnostic["base_suspicion"] = Value::Null;
         diagnostic["required_checks"] = json!({"state":"not_collected"});
         diagnostic["unreported_wait"] = json!({"state":"not_collected"});
         diagnostic["status_observations"] = json!(
@@ -135,6 +156,9 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             let observed = observe_candidate(context, Some(&status), view).map_err(|error| {
                 stop_pr(host, context, &diagnostic, false, &error.to_string()).unwrap_or(error)
             })?;
+            // A merge with no intent of ours is the operator's; the completion
+            // record carries that in its history note.
+            evidence["external_merge"] = json!(intent.is_none());
             if let Some(intent_id) = intent {
                 record(
                     host,
@@ -161,6 +185,62 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 &error.to_string(),
             )?);
         }
+        // A follower can hand off a PR drafted for missing evidence. Send
+        // that candidate through the existing repair flow, whose pr_open
+        // refreshes the body and marks it ready only once every gap is filled.
+        // Configured and unrelated drafts still require the operator.
+        if status.is_draft || status.merge_state_status.as_deref() == Some("DRAFT") {
+            let configured = host.pr_config().conventions.draft;
+            // Only an explicit draft carries a body to repair. A DRAFT merge
+            // state without isDraft is an older answer without body evidence,
+            // so refuse without an extra view.
+            if !configured && status.is_draft {
+                let missing =
+                    draft_recovery::handed_off_section_gaps(host, &workspace, &pr_number)?;
+                if !missing.is_empty() {
+                    let action = if context.automatic_repair_spent {
+                        "return the preserved candidate to the backlog for a repair round"
+                    } else {
+                        "return the claim for one automatic repair round"
+                    };
+                    let reason = format!(
+                        "pull request #{pr_number} is still a section-gap draft; missing required \
+                         sections: {}; next action: {action}. Fill the named sections or attach \
+                         their required evidence, then resume pr_open to refresh the body and \
+                         mark the PR ready before a new validated handoff",
+                        missing.join(", ")
+                    );
+                    return Err(if context.automatic_repair_spent {
+                        refuse_pr(
+                            host,
+                            context,
+                            &diagnostic,
+                            HandoffLandingStep::StopForRequeue,
+                            &reason,
+                        )?
+                    } else {
+                        stop_pr(host, context, &diagnostic, true, &reason)?
+                    });
+                }
+            }
+            let reason = if configured {
+                "pr.draft is configured; next action: explicitly mark the PR ready on the \
+                 forge, then retry landing"
+            } else {
+                "no section-gap recovery evidence; next action: mark the PR ready on the \
+                 forge, then retry landing"
+            };
+            return Err(hold_pr(
+                host,
+                context,
+                &diagnostic,
+                false,
+                DeliveryRefusal::PullRequestDraft,
+                &format!(
+                    "pull request #{pr_number} cannot be merged (the pull request is still a draft); {reason}"
+                ),
+            )?);
+        }
         let checked = checked_pr_state(
             host,
             &workspace,
@@ -184,7 +264,12 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                     return Err(error);
                 }
                 diagnostic["classification"] = diagnostics::text("required_check_refusal");
-                return Err(stop_pr(host, context, &diagnostic, false, &message)?);
+                return Err(match error {
+                    OrbitError::DeliveryRefused { refusal, .. } => {
+                        hold_pr(host, context, &diagnostic, false, refusal, &message)?
+                    }
+                    _ => stop_pr(host, context, &diagnostic, false, &message)?,
+                });
             }
         };
         diagnostic["classification"] = diagnostics::text(&describe(&state));
@@ -274,9 +359,31 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             if let Some(observation) = recovery.required_observation.take() {
                 diagnostic["required_checks"] = observation;
             }
+            if let Some(observation) = &recovery.rerun_diagnostic {
+                diagnostic["ci_rerun_diagnostic"] = json!(observation);
+            } else if let Some(diagnostic) = diagnostic.as_object_mut() {
+                diagnostic.remove("ci_rerun_diagnostic");
+            }
             match recovered {
-                CheckRecoveryStep::Acted => continue,
+                CheckRecoveryStep::Acted => {
+                    recovery.waiting_for_base = None;
+                    continue;
+                }
                 CheckRecoveryStep::Wait => waiting_on_recovery = true,
+                CheckRecoveryStep::WaitForBase(reason) => {
+                    diagnostic["base_suspicion"] = json!(reason);
+                    if recovery.waiting_for_base.as_deref() != Some(&reason) {
+                        let note = json!({
+                            "state": "waiting_for_base",
+                            "reason": reason,
+                            "head": status.head_sha,
+                            "deadline_ms": deadline_ms,
+                        });
+                        host.record_handoff_landing_wait(&context.handoff_id, &note.to_string())?;
+                        recovery.waiting_for_base = Some(reason);
+                    }
+                    waiting_on_recovery = true;
+                }
                 CheckRecoveryStep::Repair(evidence) => {
                     return Err(stop_pr(host, context, &diagnostic, true, &evidence)?);
                 }
@@ -298,11 +405,12 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             _ if waiting_on_recovery => {}
             PrMergeState::Merged => unreachable!("merged is handled above"),
             PrMergeState::Closed => {
-                return Err(stop_pr(
+                return Err(hold_pr(
                     host,
                     context,
                     &diagnostic,
                     false,
+                    DeliveryRefusal::PullRequestClosed,
                     &format!(
                         "pull request #{pr_number} was closed without merging; the candidate \
                          stays in review"
@@ -322,6 +430,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
             PrMergeState::Blocked(reason) => {
+                let refusal = reason.refusal;
                 let reason = format!(
                     "pull request #{pr_number} cannot be merged ({reason}); branch \
                      protection and required checks are not bypassed"
@@ -330,16 +439,19 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 // the repair brings it up to date and revalidates it.
                 return Err(if behind_base(&status) {
                     stop_pr(host, context, &diagnostic, true, &reason)?
+                } else if let Some(refusal) = refusal {
+                    hold_pr(host, context, &diagnostic, false, refusal, &reason)?
                 } else {
                     stop_pr(host, context, &diagnostic, false, &reason)?
                 });
             }
             PrMergeState::Conflict => {
-                return Err(stop_pr(
+                return Err(hold_pr(
                     host,
                     context,
                     &diagnostic,
                     true,
+                    DeliveryRefusal::LandingConflict,
                     &format!(
                         "pull request #{pr_number} conflicts with its base; the owner does not \
                          rebase unvalidated code, so a repair needs fresh validation and a new \
@@ -504,6 +616,19 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
         format!(" (owed hosted checks not yet passed: {})", owed.join(", "))
     };
     waiting.push_str(&unreported.timeout_note());
+    if let Some(suspicion) = diagnostic["base_suspicion"].as_str() {
+        return hold_pr(
+            host,
+            context,
+            diagnostic,
+            false,
+            DeliveryRefusal::BaseChecksPending,
+            &format!(
+                "pull request #{number} is waiting for the base's own check result after \
+                 {max_wait_seconds}s: the base never recovered before the landing deadline; {suspicion}; the candidate stays in review"
+            ),
+        );
+    }
     stop_pr(
         host,
         context,

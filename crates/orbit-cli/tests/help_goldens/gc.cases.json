@@ -1,0 +1,9 @@
+[
+  {"argv": ["gc"], "golden": "gc/root.txt"},
+  {"argv": ["gc", "audit"], "golden": "gc/audit.txt"},
+  {"argv": ["gc", "deployments"], "golden": "gc/deployments.txt"},
+  {"argv": ["gc", "journal"], "golden": "gc/journal.txt"},
+  {"argv": ["gc", "runs"], "golden": "gc/runs.txt"},
+  {"argv": ["gc", "tmp"], "golden": "gc/tmp.txt"},
+  {"argv": ["gc", "worktrees"], "golden": "gc/worktrees.txt"}
+]

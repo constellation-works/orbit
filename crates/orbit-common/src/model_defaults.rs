@@ -19,9 +19,7 @@
 //! ## Aliases vs. version pins
 //!
 //! The Claude CLI accepts the unversioned `opus`/`sonnet`/`haiku` aliases and resolves
-//! them to the current flagship, so the CLI defaults never drift. The Anthropic
-//! **HTTP Messages API** rejects bare aliases and requires a fully-qualified
-//! model id, so [`ANTHROPIC_HTTP_DEFAULT_MODEL`] stays version pinned. codex,
+//! them to the current flagship, so the CLI defaults never drift. codex,
 //! gemini, and grok use provider-specific version pins because no stable
 //! unversioned aliases are available for those CLIs.
 
@@ -39,15 +37,11 @@ pub const CLAUDE_HAIKU_MODEL: &str = "haiku";
 /// Claude CLI alias used by the standard Fable crew.
 pub const CLAUDE_FABLE_MODEL: &str = "fable";
 
-/// Default model for the Anthropic **HTTP Messages API** path.
-///
-/// Unlike the CLI, the Messages API requires a fully-qualified model id and
-/// rejects bare aliases like `opus`/`sonnet`, so this default stays version
-/// pinned. Bump it in lockstep with Anthropic's published API model ids.
-pub const ANTHROPIC_HTTP_DEFAULT_MODEL: &str = "claude-sonnet-4-5";
-
 /// Codex model used by the standard Sol crew.
 pub const CODEX_SOL_MODEL: &str = "gpt-6.1-sol";
+
+/// Codex model used by the standard Terra crew.
+pub const CODEX_TERRA_MODEL: &str = "gpt-6.1-terra";
 
 /// Codex model used by the standard Luna crew.
 pub const CODEX_LUNA_MODEL: &str = "gpt-6-luna";
@@ -55,13 +49,15 @@ pub const CODEX_LUNA_MODEL: &str = "gpt-6-luna";
 /// Codex model used by the standard Astra crew and provider default.
 pub const CODEX_ASTRA_MODEL: &str = "gpt-6-astra";
 
-/// Default gemini model seeded into crew roles.
-pub const GEMINI_CREW_MODEL: &str = "gemini-3.8-flash";
-
 /// Default Antigravity (`agy`) model: a slug from `agy models` (verified
 /// against Antigravity CLI 1.1.27). Bare Gemini CLI ids such as
 /// `gemini-3.8-flash` are not remapped. [ORB-11299]
 pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-3.8-flash-high";
+
+/// Antigravity (`agy`) model for the built-in `argon` crew: a slug from
+/// `agy models`, verified against Antigravity CLI 1.4.7 (`agy --version`),
+/// which lists `gemini-4-argon-high` alongside the Gemini 3.8 Flash slugs.
+pub const ANTIGRAVITY_ARGON_MODEL: &str = "gemini-4-argon-high";
 
 /// Default Grok Build model (the canonical model listed by `grok models`).
 pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";
@@ -76,33 +72,6 @@ pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";
 /// regardless of which vendor supplies the model. [ORB-10946]
 pub const COPILOT_DEFAULT_MODEL: &str = "claude-sonnet-5";
 
-/// Default model for the Cursor execution lane.
-///
-/// Cursor routes to multiple model vendors, but the persisted provider remains
-/// `cursor`. Orbit passes this documented current CLI model id explicitly so a
-/// run never depends on an interactive session's ambient model selection.
-/// [ORB-10945]
-pub const CURSOR_DEFAULT_MODEL: &str = "gpt-5";
-
-/// Default model for the Pi execution lane.
-///
-/// Pi routes to many model vendors and resolves `--model` as a *pattern*
-/// against a catalog it refreshes on its own schedule, so a version-pinned id
-/// would rot faster than the alias does. `sonnet` is the unversioned pattern
-/// Pi's own documented examples use. The persisted provider identity stays
-/// `pi` whichever vendor the pattern resolves to. [ORB-11296]
-pub const PI_DEFAULT_MODEL: &str = "sonnet";
-
-/// Default model for the OpenCode execution lane.
-///
-/// OpenCode addresses models as a `provider/model` coordinate, where the
-/// leading segment names the *model vendor* inside the OpenCode lane — never
-/// the Orbit executor, which stays `opencode` whichever vendor is selected.
-/// The coordinate must be fully qualified: OpenCode splits on the first `/`
-/// and looks the vendor up in its provider catalog, so a bare model id does
-/// not resolve. [ORB-11295]
-pub const OPENCODE_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
-
 /// Default model for the Muse Code execution lane.
 ///
 /// Muse Code is Meta's terminal coding agent; its `--model` takes an id from
@@ -110,3 +79,9 @@ pub const OPENCODE_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5";
 /// The executor identity stays `muse` whichever model the crew selects, so
 /// the lane is never inferred from this string. [ORB-16577]
 pub const MUSE_DEFAULT_MODEL: &str = "muse-spark-1.3";
+
+/// Muse Code's mid-tier model, the built-in `muse-wonder` crew's.
+pub const MUSE_WONDER_MODEL: &str = "muse-wonder-1.0";
+
+/// Muse Code's strongest model, the built-in `muse-wonder-full` crew's.
+pub const MUSE_WONDER_FULL_MODEL: &str = "muse-wonder-full-1.0";

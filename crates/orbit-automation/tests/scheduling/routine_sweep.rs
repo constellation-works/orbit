@@ -11,7 +11,7 @@ use orbit_automation::routines::sweep::{
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::{RoutineFireIntentParams, RoutineFireRecord, RoutineFireState, Store};
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{JobRunState, automation::AutomationDiagnostic};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -61,8 +61,6 @@ struct FakeDispatch {
     /// Owner liveness per run id. Absent means `Stopped`, the historical
     /// assumption that a terminal run has finished working.
     liveness: RefCell<HashMap<String, RunOwnerLiveness>>,
-    /// Running workspace drain, when the sweep should yield a ship slot.
-    live_drain: RefCell<Option<String>>,
 }
 
 impl FakeDispatch {
@@ -72,10 +70,6 @@ impl FakeDispatch {
 }
 
 impl RoutineDispatch for FakeDispatch {
-    fn live_workspace_drain(&self, _dir: &Path) -> Result<Option<String>, OrbitError> {
-        Ok(self.live_drain.borrow().clone())
-    }
-
     fn submit(
         &self,
         dir: &Path,
@@ -102,6 +96,23 @@ impl RoutineDispatch for FakeDispatch {
             .copied()
             .unwrap_or(RunOwnerLiveness::Stopped)
     }
+
+    fn evaluate_delivery(
+        &self,
+        _routine: &LoadedRoutine,
+        _dry_run: bool,
+        _now: DateTime<Utc>,
+    ) -> Result<AutomationDiagnostic, OrbitError> {
+        Ok(AutomationDiagnostic {
+            reason: "debouncing".into(),
+            state: None,
+            receipts: Vec::new(),
+            waivers: Vec::new(),
+            ownership: None,
+            batch: Vec::new(),
+            refusals: Vec::new(),
+        })
+    }
 }
 
 fn fires(store: &Store, name: &str) -> Vec<RoutineFireRecord> {
@@ -117,9 +128,6 @@ fn a_dispatch_that_exhausts_the_deadline_defers_the_following_workspace() {
         deadline: std::time::Instant,
     }
     impl RoutineDispatch for BlockingDispatch {
-        fn live_workspace_drain(&self, _: &Path) -> Result<Option<String>, OrbitError> {
-            Ok(None)
-        }
         fn submit(
             &self,
             dir: &Path,
@@ -498,15 +506,7 @@ fn overlap_forbid_holds_across_newer_skipped_slots() {
         return;
     }
     let store = Store::open_in_memory().expect("in-memory store");
-    let job = routine_spec(
-        "ship",
-        "* * * * *",
-        "skip",
-        "forbid",
-        "workspace_ship_pipeline",
-        (0, 1),
-        120,
-    );
+    let job = routine_spec("ship", "* * * * *", "skip", "forbid", "noop", (0, 1), 120);
     store
         .routine_record_baseline("ship", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
         .unwrap();
@@ -664,153 +664,6 @@ fn failed_fire_with_retry_budget_survives_skipped_slots() {
     );
 }
 
-/// A drain-skipped retry occupies its attempt key. Later ticks must not
-/// report `slot_already_claimed` for that key: while the drain is live the
-/// sweep yields without writing another row, and once the drain is gone it
-/// dispatches the next free attempt. [ORB-16417]
-#[test]
-fn drain_skipped_retry_dispatches_on_the_next_free_attempt() {
-    if super::isolated("routine_sweep::drain_skipped_retry_dispatches_on_the_next_free_attempt") {
-        return;
-    }
-    let store = Store::open_in_memory().expect("in-memory store");
-    let job = routine_spec(
-        "ship",
-        "0 * * * *",
-        "skip",
-        "allow",
-        "workspace_ship_pipeline",
-        (1, 1),
-        30,
-    );
-    let slot = ts(2026, 1, 1, 0, 0, 0);
-    let slot_s = slot.to_rfc3339();
-    store
-        .routine_record_baseline("ship", &slot_s)
-        .expect("baseline");
-    claim(
-        &store,
-        "ship",
-        slot,
-        RoutineFireState::Failed,
-        Some("dispatch failed"),
-    );
-    store
-        .routine_record_fire_intent(&RoutineFireIntentParams {
-            routine_name: "ship".to_string(),
-            slot: slot_s.clone(),
-            attempt: 2,
-            source_workspace: "polaris".to_string(),
-        })
-        .expect("claim the drain-skipped retry");
-    store
-        .routine_mark_fire_outcome(
-            "ship",
-            &slot_s,
-            2,
-            RoutineFireState::Skipped,
-            Some("workspace_drain_live: drain-1"),
-        )
-        .expect("record the drain skip");
-    store
-        .connection()
-        .lock()
-        .expect("store")
-        .execute(
-            "UPDATE routine_fires SET updated_at = '2026-01-01T00:10:00+00:00' \
-             WHERE routine_name = 'ship' AND state = 'failed'",
-            [],
-        )
-        .expect("backdate the failure past its backoff");
-
-    let dispatch = FakeDispatch::default();
-    *dispatch.live_drain.borrow_mut() = Some("drain-1".to_string());
-    let now = ts(2026, 1, 1, 0, 30, 0);
-    let held = run_sweep_core(
-        &store,
-        &collection(vec![job]),
-        &dispatch,
-        SweepOptions::default(),
-        now,
-    )
-    .unwrap();
-    assert_ne!(
-        held[0].reason.as_deref(),
-        Some("slot_already_claimed"),
-        "a drain-skipped retry must not stick later ticks on slot_already_claimed"
-    );
-    assert_eq!(
-        held[0].reason.as_deref(),
-        Some("workspace_drain_live: drain-1")
-    );
-    assert_eq!(dispatch.submit_count(), 0);
-    assert_eq!(
-        fires(&store, "ship").len(),
-        2,
-        "a live drain must not record another skipped retry"
-    );
-
-    *dispatch.live_drain.borrow_mut() = None;
-    let job = routine_spec(
-        "ship",
-        "0 * * * *",
-        "skip",
-        "allow",
-        "workspace_ship_pipeline",
-        (1, 1),
-        30,
-    );
-    let reports = run_sweep_core(
-        &store,
-        &collection(vec![job]),
-        &dispatch,
-        SweepOptions::default(),
-        now,
-    )
-    .unwrap();
-    assert_ne!(
-        reports[0].reason.as_deref(),
-        Some("slot_already_claimed"),
-        "clearing the drain must dispatch the retry, not repeat slot_already_claimed"
-    );
-    assert_eq!(reports[0].action, "retry_fired");
-    assert_eq!(dispatch.submit_count(), 1);
-    let retry = fires(&store, "ship")
-        .into_iter()
-        .find(|fire| fire.slot == slot_s && fire.attempt == 3)
-        .expect("fresh attempt");
-    assert_eq!(retry.state, RoutineFireState::Dispatched);
-    let skipped = fires(&store, "ship")
-        .into_iter()
-        .find(|fire| fire.attempt == 2)
-        .expect("drain-skipped attempt");
-    assert_eq!(skipped.state, RoutineFireState::Skipped);
-
-    let job = routine_spec(
-        "ship",
-        "0 * * * *",
-        "skip",
-        "allow",
-        "workspace_ship_pipeline",
-        (1, 1),
-        30,
-    );
-    let again = run_sweep_core(
-        &store,
-        &collection(vec![job]),
-        &dispatch,
-        SweepOptions::default(),
-        now,
-    )
-    .unwrap();
-    assert_ne!(again[0].reason.as_deref(), Some("slot_already_claimed"));
-    assert_eq!(
-        dispatch.submit_count(),
-        1,
-        "the fresh attempt is not re-fired"
-    );
-}
-
 /// A long gap is recorded oldest-first in a bounded batch. The natural slot
 /// waits until that batch has caught the cursor up.
 #[test]
@@ -861,4 +714,109 @@ fn skip_records_a_bounded_batch_before_the_next_natural_fire() {
         reports[0].slot.as_deref(),
         Some(ts(2026, 1, 1, 2, 0, 0).to_rfc3339().as_str())
     );
+}
+
+/// A state-triggered routine shaped like the seeded triage definitions.
+fn state_routine(name: &str, kind: &str) -> LoadedRoutine {
+    let yaml = format!(
+        r#"schemaVersion: 1
+name: {name}
+enabled: true
+trigger:
+  state:
+    kind: {kind}
+    owner_machine: hm_test
+    branch: agent-main
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    batch_size: 5
+    retries: 1
+    deadline_minutes: 90
+target: job:escalation_triage_pipeline
+policy:
+  timeout_minutes: 90
+  overlap: forbid
+  retries: {{ max: 1, backoff_minutes: 5 }}
+"#
+    );
+    LoadedRoutine {
+        definition: parse_routine_yaml(&yaml).expect("valid state routine yaml"),
+        origin: RoutineOrigin::Workspace,
+        source_workspace: "polaris".to_string(),
+        source_orbit_dir: PathBuf::from(SOURCE_DIR),
+        path: PathBuf::from(format!("{SOURCE_DIR}/routines/{name}.yaml")),
+    }
+}
+
+/// The seeded pilot-warning and blocked-task triage routines share
+/// `job:escalation_triage_pipeline` but watch different trigger kinds. Each
+/// owns its own consumer and member set, so enabling both runs both rather
+/// than skipping both as duplicate owners. [ORB-17918]
+#[test]
+fn state_routines_of_different_kinds_on_one_target_both_run() {
+    let store = Store::open_in_memory().expect("in-memory store");
+    let coll = collection(vec![
+        state_routine("pilot-warning-triage", "pilot_warnings_held"),
+        state_routine("blocked-task-triage", "block_escalated"),
+    ]);
+
+    let reports = run_sweep_core(
+        &store,
+        &coll,
+        &FakeDispatch::default(),
+        SweepOptions::default(),
+        ts(2026, 1, 1, 0, 0, 0),
+    )
+    .unwrap();
+
+    for report in &reports {
+        assert_eq!(report.action, "state", "{} should evaluate", report.routine);
+        assert_eq!(report.reason.as_deref(), Some("debouncing"));
+    }
+}
+
+/// The migration guard keeps the cases it was written for: a temporal routine
+/// and a state routine on one target, or two state routines of one kind, still
+/// skip each other as duplicate owners. [ORB-11331]
+#[test]
+fn temporal_and_same_kind_state_routines_on_one_target_still_skip_as_duplicates() {
+    let store = Store::open_in_memory().expect("in-memory store");
+    let temporal_and_state = collection(vec![
+        routine_spec(
+            "temporal-triage",
+            "0 * * * *",
+            "skip",
+            "allow",
+            "escalation_triage_pipeline",
+            (0, 1),
+            30,
+        ),
+        state_routine("pilot-warning-triage", "pilot_warnings_held"),
+    ]);
+    let same_kind = collection(vec![
+        state_routine("pilot-warning-triage", "pilot_warnings_held"),
+        state_routine("pilot-warning-copy", "pilot_warnings_held"),
+    ]);
+
+    for coll in [temporal_and_state, same_kind] {
+        let reports = run_sweep_core(
+            &store,
+            &coll,
+            &FakeDispatch::default(),
+            SweepOptions::default(),
+            ts(2026, 1, 1, 0, 0, 0),
+        )
+        .unwrap();
+
+        for report in &reports {
+            assert_eq!(report.action, "skipped", "{}", report.routine);
+            assert_eq!(
+                report.reason.as_deref(),
+                Some("duplicate_routine_ownership"),
+                "{}",
+                report.routine
+            );
+        }
+    }
 }

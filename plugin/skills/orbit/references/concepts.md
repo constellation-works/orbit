@@ -62,6 +62,57 @@ See [publication.md](../../orbit-setup/references/publication.md).
 have been. A ledger of experience, not a queue of work; see
 [friction.md](friction.md).
 
+## Task-flow analytics
+
+Use `orbit task flow` to see whether a filtered task population is growing,
+flat, or draining over time:
+
+```sh
+orbit task flow
+orbit task flow --tag security-review --window 14d --buckets 4
+orbit task flow --type bug --json
+```
+
+The report defaults to six 7-day buckets, with the most recent bucket last.
+Choose `--window` with a duration in seconds, minutes, hours, days, or weeks
+(`s`, `m`, `h`, `d`, or `w`); `--buckets` accepts 1 through 520. Filter by
+task type (`feature`, `bug`, `refactor`, or `chore`), and use `--tag` to select
+tags. Repeat `--tag` or pass comma-separated tags to require every selected
+tag, matching task-list filtering. These options select task records by their
+current type and tags; the report includes each selected task's creation and
+status events within the requested span.
+
+Each bucket covers its start instant through, but not including, its end
+instant. The rows are oldest first. `FILED` counts task creations,
+`REOPENED` counts transitions from a terminal status back to an open status,
+`CLOSED` counts departures into `done`, and `DROPPED` counts departures into
+`rejected` or `archived`. A terminal-to-terminal relabeling is not another
+departure. For older terminal tasks with no status history, the report uses
+their last-updated time as an approximate departure time. A task that closes
+or drops and later reopens contributes both events in their respective
+buckets.
+
+`NET` is `FILED + REOPENED - CLOSED - DROPPED`; a negative value means more
+tasks left the backlog than entered during that bucket. `OPEN AT END` is the
+filtered population still open at that bucket's end. The overall verdict uses
+the net across all reported buckets: negative is draining, zero is flat, and
+positive is growing. `OPEN NOW` is the current open count, so it is a snapshot,
+not another flow event. If all event totals and the current open count are
+zero, the verdict says there is no data rather than calling the result flat.
+
+With `--json`, each bucket includes its ISO `start` and `end`, the four event
+counts, `net`, and `open_at_end`. `totals` contains those event totals, the
+span's net, and `open_now`; `verdict` contains the overall interpretation.
+
+To verify a report, run the same filters in JSON and table form. Confirm that
+the bucket count and order match the requested window, each bucket's net uses
+the formula above, event totals equal the sum of their bucket values, and total
+net equals the sum of bucket nets. Check the verdict against the overall net,
+treating the no-data message as its own case. Read `open_at_end` as a historical
+snapshot and `open_now` as the current one; neither is added to the inflow or
+outflow arithmetic. Run `orbit task flow --help` to confirm the available
+options and examples on the installed version.
+
 ## Execution
 
 **Activity** — one named step definition: `agent_implement`, `git_commit`,
@@ -98,7 +149,8 @@ declared explicitly.
 **Routine** — a definition (`.orbit/routines/*.yaml`) pointing at a
 `job:<name>` target, with a retry and overlap policy. The trigger is cron, or
 a state predicate (`preparation_eligible` for task-pilot,
-`finding_unverified` for finding-verification). Definitions are per-user
+`finding_unverified` for finding-verification, `pilot_warnings_held` for
+pilot-warning triage). Definitions are per-user
 checkout state. An owner checkout evaluates its routines. A replica checkout
 schedules only cron routines whose job is `worktree_gc_pipeline` or
 `store_gc_pipeline`.

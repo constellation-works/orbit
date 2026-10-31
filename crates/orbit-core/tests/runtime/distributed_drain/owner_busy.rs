@@ -254,6 +254,7 @@ fn the_owner_honours_the_busy_owner_mark_only_on_a_transient_release() {
             summary: Some("released by follower drain: the owner's store stayed locked".into()),
             failure: Some(orbit_store::contracts::ClaimFailure {
                 class,
+                review_decision_pending: false,
                 reason: "database is locked".into(),
                 crew: Some("sol".into()),
                 candidate: None,

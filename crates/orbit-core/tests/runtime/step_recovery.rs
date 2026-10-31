@@ -117,6 +117,7 @@ struct Case<'a> {
     producer: &'a str,
     response: &'a str,
     retry_succeeds: bool,
+    retry_refusal: bool,
     read_failure: bool,
     claimed: bool,
     change_validation_env: bool,
@@ -137,6 +138,7 @@ impl Default for Case<'_> {
             producer: "",
             response: FRAME_ONLY,
             retry_succeeds: true,
+            retry_refusal: false,
             read_failure: false,
             claimed: false,
             change_validation_env: false,
@@ -204,6 +206,7 @@ struct RecoveryHost<'a> {
     runtime: &'a OrbitRuntime,
     provider: PathBuf,
     retry_succeeds: bool,
+    retry_refusal: bool,
     read_failure: bool,
     claimed: bool,
     change_validation_env: bool,
@@ -262,6 +265,13 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
             git_stdout(worktree, &["status", "--porcelain"]),
         ));
         let call = self.deliveries.fetch_add(1, Ordering::SeqCst);
+        if call > 0 && self.retry_refusal {
+            return Err(DispatchError::DeliveryRefused {
+                action: action.to_string(),
+                refusal: orbit_types::workflow::DeliveryRefusal::HeadChanged,
+                message: "delivery_evidence_stale: pull request reports head other".to_string(),
+            });
+        }
         if call > 0 && self.retry_succeeds {
             return Ok(json!({"delivered": true}));
         }
@@ -280,6 +290,8 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
         Ok(ResolvedCliExecutor {
             command: self.provider.display().to_string(),
             args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
         })
     }
 
@@ -329,11 +341,13 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
                     || key == "workflow.purpose_crews.auto_fix"
             });
         Ok(recovery.then(|| orbit_engine::CrewConfig {
+            name: None,
             provider: None,
             model: Some(model.to_string()),
             reasoning_effort: None,
             env: Vec::new(),
             account: None,
+            vision_disabled: false,
         }))
     }
 
@@ -540,6 +554,7 @@ fn run(fixture: &Fixture, case: &Case<'_>) -> Observed {
         runtime: &fixture.runtime,
         provider: provider(&dir, case),
         retry_succeeds: case.retry_succeeds,
+        retry_refusal: case.retry_refusal,
         read_failure: case.read_failure,
         claimed: case.claimed,
         change_validation_env: case.change_validation_env,
@@ -1257,6 +1272,38 @@ fn an_external_blocker_decision_skips_the_retry_and_final_recovery() {
             .as_str()
             .and_then(orbit_types::workflow::task_blocked_by_agent_kind),
         Some("missing_credentials")
+    );
+}
+
+/// A typed delivery refusal from the post-recovery re-attempt stays typed.
+#[test]
+fn a_typed_refusal_from_the_post_recovery_attempt_stays_held() {
+    if !isolated("step_recovery::a_typed_refusal_from_the_post_recovery_attempt_stays_held") {
+        return;
+    }
+    let fixture = fixture();
+    let observed = run(
+        &fixture,
+        &Case {
+            name: "typed_refusal_retry",
+            producer: r#"bound retry "tried a fix" > "$path""#,
+            retry_refusal: true,
+            ..Case::default()
+        },
+    );
+    assert_eq!(observed.deliveries, 2, "exactly one post-recovery attempt");
+    let error = observed.result.as_ref().unwrap_err();
+    assert!(
+        error.contains("delivery_evidence_stale"),
+        "the typed refusal diagnostic is preserved: {error}"
+    );
+    assert!(
+        error.contains("original error before recovery"),
+        "the original error note is kept: {error}"
+    );
+    assert!(
+        !error.contains("job executor: post-recovery attempt"),
+        "the typed hold is not flattened to a job execution failure: {error}"
     );
 }
 

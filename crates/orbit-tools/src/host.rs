@@ -5,12 +5,18 @@ use std::path::PathBuf;
 use orbit_common::OrbitError;
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::crew::CrewVerb;
+use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
+use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::lease::LeaseVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::TaskVerb;
+use orbit_common::governance::visual::VisualVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
@@ -104,15 +110,23 @@ pub enum OrbitBuiltinAction {
     AgentInvoke,
     /// Read-only agent scorecard verbs.
     Agents(AgentsVerb),
+    /// Read-only automation verbs: condition explain.
+    Automation(AutomationVerb),
     /// Read-only codebase analytics verbs.
     Codebase(CodebaseVerb),
     CommandExec,
+    /// Read-only crew verbs: the crew ladder report.
+    Crew(CrewVerb),
+    /// Human decision-request verbs.
+    Decision(DecisionVerb),
     DesktopRead,
     DesktopAutomation,
     DesktopTaskSnapshot,
     DesktopTaskWrite,
     /// Distributed-drain verbs, including the historical task pull tool.
     Drain(DrainVerb),
+    /// Experiment verbs: lifecycle writes and their reads.
+    Experiment(ExperimentVerb),
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),
@@ -129,11 +143,45 @@ pub enum OrbitBuiltinAction {
     Workflow(WorkflowVerb),
     /// Workspace coordination-hold verbs.
     WorkspaceClaim(WorkspaceClaimVerb),
+    /// Principal-held path leases on the workspace owner.
+    Lease(LeaseVerb),
+    /// Visual capture verbs: the implementer's mock self-check.
+    Visual(VisualVerb),
+}
+
+impl From<DecisionVerb> for OrbitBuiltinAction {
+    fn from(verb: DecisionVerb) -> Self {
+        Self::Decision(verb)
+    }
+}
+
+impl From<ExperimentVerb> for OrbitBuiltinAction {
+    fn from(verb: ExperimentVerb) -> Self {
+        Self::Experiment(verb)
+    }
 }
 
 impl From<CodebaseVerb> for OrbitBuiltinAction {
     fn from(verb: CodebaseVerb) -> Self {
         Self::Codebase(verb)
+    }
+}
+
+impl From<AutomationVerb> for OrbitBuiltinAction {
+    fn from(verb: AutomationVerb) -> Self {
+        Self::Automation(verb)
+    }
+}
+
+impl From<CrewVerb> for OrbitBuiltinAction {
+    fn from(verb: CrewVerb) -> Self {
+        Self::Crew(verb)
+    }
+}
+
+impl From<VisualVerb> for OrbitBuiltinAction {
+    fn from(verb: VisualVerb) -> Self {
+        Self::Visual(verb)
     }
 }
 
@@ -152,6 +200,12 @@ impl From<OrchestratorVerb> for OrbitBuiltinAction {
 impl From<DrainVerb> for OrbitBuiltinAction {
     fn from(verb: DrainVerb) -> Self {
         Self::Drain(verb)
+    }
+}
+
+impl From<LeaseVerb> for OrbitBuiltinAction {
+    fn from(verb: LeaseVerb) -> Self {
+        Self::Lease(verb)
     }
 }
 
@@ -237,6 +291,21 @@ pub trait OrbitToolHost: Send + Sync {
         _actor: Option<&str>,
     ) -> Result<(), OrbitError> {
         Ok(())
+    }
+
+    /// Run one callback a plugin backend's child forwarded over its host
+    /// route (`plugin::HOST_ROUTED_CALLBACK_TOOLS`), through the same audited
+    /// dispatch a callback the child ran itself would take.
+    ///
+    /// The route calls this with the child's callback session resolved for
+    /// the current thread, so the dispatch derives the caller from that
+    /// session. Implementations must not add authority of their own: the
+    /// spawning caller's capabilities are not the callback's. Hosts without a
+    /// workspace runtime refuse.
+    fn execute_host_routed_callback(&self, tool: &str, _input: Value) -> Result<Value, OrbitError> {
+        Err(OrbitError::PolicyDenied(format!(
+            "this host cannot answer '{tool}' for a plugin backend"
+        )))
     }
 
     fn task_scope(&self) -> OrbitTaskScope;

@@ -15,7 +15,7 @@ use orbit_store::contracts::{
 };
 use orbit_store::contracts::{TaskCreateParams, TaskReservationReleaseReason};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
-use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{ChildDispatch, JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
@@ -27,8 +27,10 @@ use super::{
     test_runtime, worker_checkpoint,
 };
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 use crate::application::test_support::{admission_receipt, admission_request};
 use crate::application::tests::run_isolated_test;
+use crate::task_params_test_support::task_create_params;
 
 #[test]
 fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control() {
@@ -40,7 +42,7 @@ fn graceful_cancel_initialization_preserves_worker_checkpoint_and_merges_control
     for worker_wins in [false, true] {
         let (_root, runtime) = test_runtime();
         let run =
-            running_run_without_state(&runtime, crate::application::distributed::PULL_DRAIN_JOB);
+            running_run_without_state(&runtime, crate::application::contracts::PULL_DRAIN_JOB);
         let checkpoint = worker_wins.then(|| worker_checkpoint(&runtime, &run));
         let reached = std::rc::Rc::new(std::cell::Cell::new(false));
         let worker = runtime.clone();
@@ -105,10 +107,8 @@ fn graceful_cancel_initialization_refuses_concurrent_terminalization() {
     for terminal in [JobRunState::Success, JobRunState::Failed] {
         for worker_wins in [false, true] {
             let (_root, runtime) = test_runtime();
-            let run = running_run_without_state(
-                &runtime,
-                crate::application::distributed::PULL_DRAIN_JOB,
-            );
+            let run =
+                running_run_without_state(&runtime, crate::application::contracts::PULL_DRAIN_JOB);
             let checkpoint = worker_wins.then(|| worker_checkpoint(&runtime, &run));
             let worker = runtime.clone();
             let run_id = run.run_id.clone();
@@ -248,36 +248,15 @@ fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
         .stores()
         .task_records()
         .create(TaskCreateParams {
-            actor: "test".into(),
-            parent_id: None,
-            title: "cancel candidate".into(),
-            description: "candidate should remain available".into(),
-            acceptance_criteria: Vec::new(),
-            dependencies: Vec::new(),
-            relations: Vec::new(),
-            tags: Vec::new(),
-            required_tools: Vec::new(),
             plan: "Resume the candidate after cancellation".into(),
-            execution_summary: String::new(),
             context_files: vec!["file:src/candidate.rs".into()],
-            repo_root: None,
-            created_by: Some("test".into()),
-            planned_by: None,
-            implemented_by: None,
-            status: TaskStatus::Backlog,
-            priority: TaskPriority::Medium,
             complexity: Some(TaskComplexity::Low),
             task_type: TaskType::Bug,
-            external_refs: Vec::new(),
-            source_task_id: None,
-            crew: None,
-            crew_source: None,
-            orchestrator: None,
-            orchestrator_model: None,
-            orchestrator_model_source: None,
-            origin: None,
-            comments: Vec::new(),
-            context_creation: Vec::new(),
+            ..task_create_params(
+                "cancel candidate",
+                "candidate should remain available",
+                TaskStatus::Backlog,
+            )
         })
         .expect("create task");
     runtime
@@ -446,6 +425,7 @@ fn admission(
     let request = AdmissionRequest {
         caller_before_pr: false,
         review_gate: false,
+        selective_review: false,
         ..admission_request(
             format!("request-{}", owner.receipts.lock().unwrap().len()),
             AdmissionRunContext {
@@ -494,6 +474,7 @@ fn admission(
             title: "stop-time admission".into(),
             complexity: None,
             crew: None,
+            crew_source: None,
             context_files: vec![],
             resume_candidate: None,
         },

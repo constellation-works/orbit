@@ -39,15 +39,19 @@ spec:
     the task can later ship through the ordinary pull-request route only after
     task-pilot validation and explicit CI-sweep admission. Filing itself never
     promotes or dispatches implementation. It is deduped
-    against exact-key operator coverage first: archived or rejected sweep tasks
-    with covered_by hold their key while the task or GitHub PR cover is open.
+    against operator coverage for the same evidenced cause first: archived or
+    rejected sweep tasks with covered_by hold that cause while the task or GitHub
+    PR cover is open.
     Landed covers hold older checkouts; a failure containing the landed commit
     files a new task naming the cover as a fix that did not hold. Unavailable
     cover evidence stays explicitly withheld, and a closed unmerged cover
-    releases its key. Plain archive/rejection holds for
-    ci_failure.operator_suppression_hours (default 6) from the status event.
+    releases its key. Plain archive/rejection holds the same evidenced cause for
+    ci_failure.operator_suppression_hours (default 6) from the status event; a
+    different retained diagnostic under the same broad key files. An undetermined
+    cause is held as a candidate owner, without attribution.
     Every operator hold appears in withheld and audit.withheld with outcome,
-    reason, failure key, owner and cover or expiry; it produces no pilot.
+    reason, archive actor, failure key, owner or candidate owner, and cover or
+    expiry; it produces no pilot.
     Otherwise it checks still-open tasks first by an exact failure key carried
     as a `ci-failure:<key>` tag, then by rejected exact-key tasks whose comments
     name one still-open covering owner, then by a shared high-confidence

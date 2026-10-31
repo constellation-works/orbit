@@ -3,19 +3,23 @@
 #![allow(clippy::expect_used, clippy::print_stdout, clippy::unwrap_used)]
 #![cfg(target_os = "linux")]
 
+use std::fs;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::symlink;
 use std::process::Stdio;
 
 use orbit_common::OrbitError;
 use orbit_exec::{
-    BUNDLED_BWRAP_PATH, HOST_BWRAP_PATH, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT,
-    LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval,
-    LinuxBwrapSpawnRequest, WriteAnchorKind, bwrap_path, bwrap_program_for_audit,
-    compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority,
-    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
-    probe_bwrap, spawn_under_linux_bwrap,
+    BUNDLED_BWRAP_PATH, BwrapProbeOutcome, HOST_BWRAP_PATH, LINUX_STABLE_BUILD_MOUNT,
+    LINUX_STABLE_WORKSPACE_MOUNT, LinuxBwrapMask, LinuxBwrapMountAuthority, LinuxBwrapPlan,
+    LinuxBwrapPostRunGuard, LinuxBwrapScratchRemoval, LinuxBwrapSpawnRequest, WriteAnchorKind,
+    bwrap_path, bwrap_program_for_audit, compile_linux_bwrap_argv,
+    compile_linux_bwrap_argv_with_authority, linux_bwrap_write_grant_diagnostic,
+    linux_bwrap_write_grants, prepare_linux_bwrap_write_grants, probe_bwrap,
+    spawn_under_linux_bwrap,
 };
 use orbit_types::policy::ResolvedFsProfile;
+use orbit_types::workflow::{HostEvidenceReason, HostSandboxCommand, judge_host_test_output};
 
 /// Credential-mask compilation reads the launcher's HOME/CARGO_HOME, so an
 /// in-process env guard cannot isolate it from parallel tests that only read
@@ -61,6 +65,75 @@ pub(super) fn profile(modify: Vec<String>) -> ResolvedFsProfile {
     }
 }
 
+/// Fresh `tempdir()/workspace` fixture, canonicalized so grant strings and
+/// argv assertions compare against one stable spelling.
+fn fresh_workspace() -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    (temp, workspace)
+}
+
+/// Fresh `tempdir()/worktree` fixture for the worktree-profile scenarios,
+/// which assert on uncanonicalized display strings.
+fn fresh_worktree() -> (tempfile::TempDir, std::path::PathBuf) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let worktree = temp.path().join("worktree");
+    std::fs::create_dir_all(&worktree).expect("worktree");
+    (temp, worktree)
+}
+
+/// Probe Bubblewrap, reporting `case`'s deferral past output capture when
+/// this host cannot create the namespaces. Call as
+/// `let Some(probe) = probe_or_defer(case) else { return };`.
+fn probe_or_defer(case: &str) -> Option<BwrapProbeOutcome> {
+    let probe = probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(case, &probe.detail);
+        return None;
+    }
+    Some(probe)
+}
+
+/// Spawn `plan` with piped stdout/stderr and wait for its captured output.
+fn run_captured(
+    plan: &LinuxBwrapPlan,
+    env: &[(String, String)],
+    cwd: Option<&std::path::Path>,
+) -> std::process::Output {
+    spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan,
+        env,
+        cwd,
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+    })
+    .expect("spawn")
+    .wait_with_output()
+    .expect("wait")
+}
+
+/// Spawn `plan` with discarded stdio and wait for its status.
+fn run_status(
+    plan: &LinuxBwrapPlan,
+    env: &[(String, String)],
+    cwd: Option<&std::path::Path>,
+) -> std::process::ExitStatus {
+    spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+        plan,
+        env,
+        cwd,
+        stdin: Stdio::null(),
+        stdout: Stdio::null(),
+        stderr: Stdio::null(),
+    })
+    .expect("spawn")
+    .wait()
+    .expect("wait")
+}
+
 /// [ORB-10917] Bubblewrap forwards its own environment into the confined
 /// program, so the launcher must hand it exactly the environment the
 /// dispatcher composed. Ambient variables are injected into an isolated test
@@ -73,22 +146,16 @@ fn bwrap_child_gets_only_the_supplied_environment() {
             ("DATABASE_URL", "postgres://svc:hunter2@db.internal"),
             ("BILLING_ENDPOINT", "https://billing.internal.example"),
             ("ORB_10917_AMBIENT", "leaked"),
-            ("ANTHROPIC_API_KEY", "sk-ant-000000000000000000000"),
+            ("ANTHROPIC_API_KEY", "[REDACTED]"),
         ],
     ) {
         return;
     }
-    let probe = probe_bwrap();
-    if !probe.available {
-        orbit_exec::report_bwrap_deferral(
-            "bwrap_child_gets_only_the_supplied_environment",
-            &probe.detail,
-        );
+    if probe_or_defer("bwrap_child_gets_only_the_supplied_environment").is_none() {
         return;
     }
 
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().canonicalize().expect("canonical workspace");
+    let (_temp, workspace) = fresh_workspace();
     let resolved = profile(vec![format!("{}/**", workspace.display())]);
     let plan = compile_linux_bwrap_argv(&resolved, "/usr/bin/env", &[], Some(&workspace), false)
         .expect("compile");
@@ -97,16 +164,7 @@ fn bwrap_child_gets_only_the_supplied_environment() {
         ("PATH".to_string(), "/usr/bin:/bin".to_string()),
         ("ORB_10917_SUPPLIED".to_string(), "present".to_string()),
     ];
-    let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &env,
-        cwd: Some(&workspace),
-        stdin: Stdio::null(),
-        stdout: Stdio::piped(),
-        stderr: Stdio::piped(),
-    })
-    .expect("spawn");
-    let output = child.wait_with_output().expect("wait");
+    let output = run_captured(&plan, &env, Some(&workspace));
     let child_env = String::from_utf8_lossy(&output.stdout);
 
     assert!(
@@ -127,8 +185,10 @@ fn bwrap_child_gets_only_the_supplied_environment() {
 }
 
 /// The host filesystem stays readable under Bubblewrap, but the well-known
-/// credential locations are masked: a confined child sees an empty `~/.ssh`
-/// and no cargo token while its worktree stays writable. The fake home lives
+/// credential locations are masked: a confined child sees an empty `~/.ssh`,
+/// no cargo token and no dashboard browser-session key (`~/.orbit/run`, which
+/// a confined worker could otherwise exchange for a dashboard session) while
+/// its worktree stays writable. The fake home lives
 /// under the crate directory because the sandbox replaces `/tmp` with its own
 /// tmpfs, which would hide a home created there and prove nothing.
 #[test]
@@ -139,12 +199,9 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     ) {
         return;
     }
-    let probe = probe_bwrap();
-    if !probe.available {
-        orbit_exec::report_bwrap_deferral(
-            "bwrap_child_cannot_read_credential_locations_but_writes_its_worktree",
-            &probe.detail,
-        );
+    if probe_or_defer("bwrap_child_cannot_read_credential_locations_but_writes_its_worktree")
+        .is_none()
+    {
         return;
     }
 
@@ -153,8 +210,11 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
         .expect("canonical home");
     std::fs::create_dir_all(home.join(".ssh")).expect("ssh dir");
     std::fs::create_dir_all(home.join(".cargo")).expect("cargo dir");
+    std::fs::create_dir_all(home.join(".orbit/run")).expect("browser session dir");
     std::fs::write(home.join(".ssh/id_ed25519"), b"PRIVATE-KEY").expect("key");
     std::fs::write(home.join(".cargo/credentials.toml"), b"PUBLISH-TOKEN").expect("token");
+    std::fs::write(home.join(".orbit/run/web-session.secret"), b"BROWSER-KEY")
+        .expect("browser session key");
     let workspace_dir = tempfile::tempdir().expect("workspace tempdir");
     let workspace = workspace_dir
         .path()
@@ -163,8 +223,10 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     let resolved = profile(vec![format!("{}/**", workspace.display())]);
 
     let script = format!(
-        "cat '{home}/.ssh/id_ed25519' '{home}/.cargo/credentials.toml' 2>/dev/null; \
-         echo \"ssh-listing:$(ls -A '{home}/.ssh')\"; echo written > '{ws}/out.txt'",
+        "cat '{home}/.ssh/id_ed25519' '{home}/.cargo/credentials.toml' \
+         '{home}/.orbit/run/web-session.secret' 2>/dev/null; \
+         echo \"ssh-listing:$(ls -A '{home}/.ssh')\"; \
+         echo \"run-listing:$(ls -A '{home}/.orbit/run')\"; echo written > '{ws}/out.txt'",
         home = home.display(),
         ws = workspace.display()
     );
@@ -177,20 +239,13 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     )
     .expect("compile");
     let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
-    let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &env,
-        cwd: Some(&workspace),
-        stdin: Stdio::null(),
-        stdout: Stdio::piped(),
-        stderr: Stdio::piped(),
-    })
-    .expect("spawn");
-    let output = child.wait_with_output().expect("wait");
+    let output = run_captured(&plan, &env, Some(&workspace));
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
-        !stdout.contains("PRIVATE-KEY") && !stdout.contains("PUBLISH-TOKEN"),
+        !stdout.contains("PRIVATE-KEY")
+            && !stdout.contains("PUBLISH-TOKEN")
+            && !stdout.contains("BROWSER-KEY"),
         "credential contents must not reach a confined child: {stdout}"
     );
     // `cat` names the path it could not open, so the listing is framed rather
@@ -198,6 +253,10 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     assert!(
         stdout.lines().any(|line| line == "ssh-listing:"),
         "the masked ~/.ssh must list as empty: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "run-listing:"),
+        "the masked ~/.orbit/run must list as empty: {stdout}"
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join("out.txt")).expect("worktree write"),
@@ -224,12 +283,9 @@ fn bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file() {
     // Probe before creating the fixture. This lane bind-mounts the checkout at
     // a second path, and a credential directory created inside it is refused
     // as an alias before Bubblewrap starts. The owning host has no such alias.
-    let probe = probe_bwrap();
-    if !probe.available {
-        orbit_exec::report_bwrap_deferral(
-            "bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file",
-            &probe.detail,
-        );
+    if probe_or_defer("bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file")
+        .is_none()
+    {
         return;
     }
 
@@ -313,16 +369,7 @@ fn bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file() {
     }
 
     let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
-    let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &env,
-        cwd: Some(&workspace),
-        stdin: Stdio::null(),
-        stdout: Stdio::piped(),
-        stderr: Stdio::piped(),
-    })
-    .expect("spawn");
-    let output = child.wait_with_output().expect("wait");
+    let output = run_captured(&plan, &env, Some(&workspace));
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     for marker in [
@@ -353,12 +400,7 @@ fn bwrap_child_cannot_read_linux_browser_profiles_but_reads_a_workspace_file() {
 /// `/tmp` with its own tmpfs, which would hide the file and prove nothing.
 #[test]
 fn bwrap_child_cannot_read_a_masked_file_beside_readable_siblings() {
-    let probe = probe_bwrap();
-    if !probe.available {
-        orbit_exec::report_bwrap_deferral(
-            "bwrap_child_cannot_read_a_masked_file_beside_readable_siblings",
-            &probe.detail,
-        );
+    if probe_or_defer("bwrap_child_cannot_read_a_masked_file_beside_readable_siblings").is_none() {
         return;
     }
 
@@ -412,16 +454,7 @@ fn bwrap_child_cannot_read_a_masked_file_beside_readable_siblings() {
     );
 
     let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
-    let child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &env,
-        cwd: Some(&workspace),
-        stdin: Stdio::null(),
-        stdout: Stdio::piped(),
-        stderr: Stdio::piped(),
-    })
-    .expect("spawn");
-    let output = child.wait_with_output().expect("wait");
+    let output = run_captured(&plan, &env, Some(&workspace));
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -480,17 +513,7 @@ fn kernel_descriptor_mount_never_writes_the_replacement_object() {
     )
     .expect("compile descriptor plan");
 
-    let status = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &[],
-        cwd: Some(&root),
-        stdin: Stdio::null(),
-        stdout: Stdio::null(),
-        stderr: Stdio::piped(),
-    })
-    .expect("spawn")
-    .wait()
-    .expect("wait");
+    let status = run_status(&plan, &[], Some(&root));
 
     assert!(status.success());
     assert_eq!(std::fs::read(&original).expect("held object"), b"child");
@@ -514,8 +537,6 @@ fn trusted_resolution_never_consults_path() {
 /// and relative pointers to a gitdir outside its common directory.
 #[test]
 fn tmp_linked_worktree_retains_git_without_exposing_host_scratch() {
-    use std::fs;
-
     for managed in [false, true] {
         let temp = tempfile::tempdir_in("/tmp").expect("fixture under /tmp");
         let root = temp.path().canonicalize().expect("canonical root");
@@ -632,17 +653,13 @@ printf written > result.txt
                 metadata.display()
             );
         }
-        let probe = probe_bwrap();
-        if !probe.available {
-            orbit_exec::report_bwrap_deferral(
-                "tmp_linked_worktree_retains_git_without_exposing_host_scratch",
-                &probe.detail,
-            );
+        if probe_or_defer("tmp_linked_worktree_retains_git_without_exposing_host_scratch").is_none()
+        {
             continue;
         }
-        let output = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-            plan: &plan,
-            env: &[
+        let output = run_captured(
+            &plan,
+            &[
                 ("PATH".to_string(), "/usr/bin:/bin".to_string()),
                 ("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string()),
                 ("GITDIR".to_string(), git_dir.display().to_string()),
@@ -653,14 +670,8 @@ printf written > result.txt
                     main_content.display().to_string(),
                 ),
             ],
-            cwd: Some(&cwd),
-            stdin: Stdio::null(),
-            stdout: Stdio::piped(),
-            stderr: Stdio::piped(),
-        })
-        .expect("spawn")
-        .wait_with_output()
-        .expect("wait");
+            Some(&cwd),
+        );
         assert!(
             output.status.success(),
             "stdout: {}\nstderr: {}",
@@ -685,40 +696,17 @@ printf written > result.txt
     }
 }
 
-#[test]
-fn git_metadata_pointer_cannot_restore_host_tmp_wholesale() {
-    let temp = tempfile::tempdir_in("/tmp").expect("fixture");
-    let workspace = temp.path().join("workspace");
-    let git_dir = temp.path().join("metadata");
-    std::fs::create_dir(&workspace).expect("workspace");
-    std::fs::create_dir(&git_dir).expect("metadata");
-    std::fs::write(workspace.join(".git"), "gitdir: ../metadata\n").expect("gitdir");
-    std::fs::write(git_dir.join("commondir"), "/tmp\n").expect("commondir");
-    let error = compile_linux_bwrap_argv(
-        &profile(Vec::new()),
-        "/bin/true",
-        &[],
-        Some(&workspace),
-        false,
-    )
-    .expect_err("a crafted common directory must not reveal all host scratch");
-    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
-}
-
 /// The wrapper's trust rests on it being root-owned under root-owned
 /// directories: the sandboxed agent runs as the invoking user, so even a
 /// policy that binds the wrapper's own directory writable cannot let it
 /// rewrite or replace the binary that confines the next dispatch.
 #[test]
 fn bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writable() {
-    let probe = probe_bwrap();
-    if !probe.available {
-        orbit_exec::report_bwrap_deferral(
-            "bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writable",
-            &probe.detail,
-        );
+    let Some(probe) = probe_or_defer(
+        "bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writable",
+    ) else {
         return;
-    }
+    };
     let wrapper = std::path::PathBuf::from(&probe.trusted_path);
     let directory = wrapper.parent().expect("wrapper directory");
     // The writes below hit the host's real wrapper whenever the invoking user
@@ -750,18 +738,11 @@ fn bwrap_child_cannot_modify_the_trusted_wrapper_even_with_its_directory_writabl
         false,
     )
     .expect("compile");
-    let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
-    let output = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &env,
-        cwd: None,
-        stdin: Stdio::null(),
-        stdout: Stdio::piped(),
-        stderr: Stdio::piped(),
-    })
-    .expect("spawn")
-    .wait_with_output()
-    .expect("wait");
+    let output = run_captured(
+        &plan,
+        &[("PATH".to_string(), "/usr/bin:/bin".to_string())],
+        None,
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.trim().is_empty(),
@@ -787,9 +768,7 @@ fn worktree_profile(worktree: &std::path::Path, reallows: Vec<String>) -> Resolv
 
 #[test]
 fn absent_anchor_kind_comes_from_rule_semantics_not_filename_shape() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let worktree = temp.path().join("worktree");
-    std::fs::create_dir_all(&worktree).expect("worktree");
+    let (_temp, worktree) = fresh_worktree();
     let orbit = worktree.join(".orbit");
     let resolved = worktree_profile(
         &worktree,
@@ -839,9 +818,7 @@ fn absent_anchor_kind_comes_from_rule_semantics_not_filename_shape() {
 
 #[test]
 fn ungranted_paths_are_never_materialized_and_report_the_deny_that_shadows_them() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let worktree = temp.path().join("worktree");
-    std::fs::create_dir_all(&worktree).expect("worktree");
+    let (_temp, worktree) = fresh_worktree();
     let orbit = worktree.join(".orbit");
     let resolved = worktree_profile(
         &worktree,
@@ -947,381 +924,365 @@ fn definition_and_cursor_roots_stay_separate_across_local_and_shared_orbit_dirs(
     assert!(joined.contains(&format!("--bind {0} {0}", local_definitions.display())));
 }
 
-#[cfg(unix)]
+/// Symlink-escape rows: preparation fails closed when the Orbit root, an
+/// intermediate anchor, or the final anchor resolves through a symlink.
 #[test]
-fn write_grant_preparation_rejects_symlink_escape() {
-    use std::os::unix::fs::symlink;
-
+fn write_grants_reject_symlink_escapes_table() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let worktree = temp.path().join("worktree");
-    let outside = temp.path().join("outside");
-    std::fs::create_dir_all(&worktree).expect("worktree");
-    std::fs::create_dir_all(&outside).expect("outside");
-    symlink(&outside, worktree.join(".orbit")).expect("symlink Orbit root");
-    let resolved = worktree_profile(
-        &worktree,
-        vec![worktree.join(".orbit/config.toml").display().to_string()],
-    );
 
-    let error = prepare_linux_bwrap_write_grants(&resolved, &worktree)
-        .expect_err("symlink escape must fail closed");
+    // Row: write_grant_preparation_rejects_symlink_escape.
+    {
+        let worktree = temp.path().join("escape-root");
+        let outside = temp.path().join("escape-root-outside");
+        std::fs::create_dir_all(&worktree).expect("worktree");
+        std::fs::create_dir_all(&outside).expect("outside");
+        symlink(&outside, worktree.join(".orbit")).expect("symlink Orbit root");
+        let resolved = worktree_profile(
+            &worktree,
+            vec![worktree.join(".orbit/config.toml").display().to_string()],
+        );
 
-    assert!(error.to_string().contains("resolves through symlink"));
-    assert!(!outside.join("config.toml").exists());
-}
+        let error = prepare_linux_bwrap_write_grants(&resolved, &worktree)
+            .expect_err("row escape-root: symlink escape must fail closed");
 
-#[cfg(unix)]
-#[test]
-fn existing_write_grant_rejects_intermediate_symlink_escape() {
-    use std::os::unix::fs::symlink;
+        assert!(error.to_string().contains("resolves through symlink"));
+        assert!(!outside.join("config.toml").exists());
+    }
 
-    let temp = tempfile::tempdir().expect("tempdir");
-    let worktree = temp.path().join("worktree");
-    let outside = temp.path().join("outside");
-    std::fs::create_dir_all(&worktree).expect("worktree");
-    std::fs::create_dir_all(&outside).expect("outside");
-    std::fs::write(outside.join("config.toml"), "outside").expect("outside target");
-    symlink(&outside, worktree.join(".orbit")).expect("symlink Orbit root");
-    let resolved = worktree_profile(
-        &worktree,
-        vec![worktree.join(".orbit/config.toml").display().to_string()],
-    );
+    // Row: existing_write_grant_rejects_intermediate_symlink_escape.
+    {
+        let worktree = temp.path().join("escape-intermediate");
+        let outside = temp.path().join("escape-intermediate-outside");
+        std::fs::create_dir_all(&worktree).expect("worktree");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(outside.join("config.toml"), "outside").expect("outside target");
+        symlink(&outside, worktree.join(".orbit")).expect("symlink Orbit root");
+        let resolved = worktree_profile(
+            &worktree,
+            vec![worktree.join(".orbit/config.toml").display().to_string()],
+        );
 
-    let error = prepare_linux_bwrap_write_grants(&resolved, &worktree)
-        .expect_err("an existing target through an intermediate symlink must fail closed");
+        let error = prepare_linux_bwrap_write_grants(&resolved, &worktree)
+            .expect_err("row escape-intermediate: an existing target through an intermediate symlink must fail closed");
 
-    let message = error.to_string();
-    assert!(message.contains("config.toml"), "{message}");
-    assert!(message.contains("resolves through symlink"), "{message}");
-    assert_eq!(
-        std::fs::read_to_string(outside.join("config.toml")).expect("outside unchanged"),
-        "outside"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn existing_write_grant_rejects_final_symlink() {
-    use std::os::unix::fs::symlink;
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    let worktree = temp.path().join("worktree");
-    let orbit = worktree.join(".orbit");
-    let outside = temp.path().join("outside.toml");
-    std::fs::create_dir_all(&orbit).expect("Orbit root");
-    std::fs::write(&outside, "outside").expect("outside target");
-    symlink(&outside, orbit.join("config.toml")).expect("symlink final anchor");
-    let resolved = worktree_profile(
-        &worktree,
-        vec![orbit.join("config.toml").display().to_string()],
-    );
-
-    let error = prepare_linux_bwrap_write_grants(&resolved, &worktree)
-        .expect_err("a final symlink must fail closed");
-
-    let message = error.to_string();
-    assert!(message.contains("config.toml"), "{message}");
-    assert!(message.contains("resolves through symlink"), "{message}");
-}
-
-#[test]
-fn materialization_uses_final_last_match_wins_decision() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let worktree = temp.path().join("worktree");
-    let orbit = worktree.join(".orbit");
-    std::fs::create_dir_all(&worktree).expect("worktree");
-    let denied_file = orbit.join("workspace-denied");
-    let partially_writable = orbit.join("cache.v1");
-    let resolved = worktree_profile(
-        &worktree,
-        vec![
-            denied_file.display().to_string(),
-            format!("!{}", denied_file.display()),
-            format!("{}/**", partially_writable.display()),
-            format!("!{}/private/**", partially_writable.display()),
-        ],
-    );
-
-    let grants = linux_bwrap_write_grants(&resolved).expect("derive effective grants");
-    assert!(
-        grants.iter().all(|grant| grant.anchor != denied_file),
-        "a later exact deny must remove the shadowed materialization candidate: {grants:?}"
-    );
-    assert!(
-        grants
-            .iter()
-            .any(|grant| grant.anchor == partially_writable),
-        "a narrower child deny must preserve the writable remainder: {grants:?}"
-    );
-
-    let prepared =
-        prepare_linux_bwrap_write_grants(&resolved, &worktree).expect("prepare effective grants");
-    assert!(!denied_file.exists());
-    assert!(partially_writable.is_dir());
-    assert_eq!(prepared.created, vec![partially_writable.clone()]);
-
-    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&worktree), true)
-        .expect("compile");
-    assert!(
-        plan.dropped_grants
-            .iter()
-            .all(|grant| grant.anchor != denied_file),
-        "a finally denied rule is not an unsatisfied grant: {:?}",
-        plan.dropped_grants
-    );
-}
-
-#[test]
-fn argv_is_deterministic_and_orders_denies_after_writable_parent() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    let denied = workspace.join(".orbit");
-    std::fs::create_dir_all(&denied).expect("create fixture");
-    let resolved = profile(vec![
-        format!("{}/**", workspace.display()),
-        format!("!{}/**", denied.display()),
-    ]);
-
-    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-        .expect("compile");
-    let joined = plan.args.join(" ");
-    for required in [
-        "--die-with-parent",
-        "--new-session",
-        "--unshare-all",
-        "--share-net",
-        "--ro-bind / /",
-        "--dev /dev",
-        "--proc /proc",
-        "--tmpfs /tmp",
-    ] {
-        assert!(
-            joined.contains(required),
-            "missing `{required}` in {joined}"
+        let message = error.to_string();
+        assert!(message.contains("config.toml"), "{message}");
+        assert!(message.contains("resolves through symlink"), "{message}");
+        assert_eq!(
+            std::fs::read_to_string(outside.join("config.toml")).expect("outside unchanged"),
+            "outside"
         );
     }
-    let writable = joined.find(&format!("--bind {0} {0}", workspace.display()));
-    let readonly = joined.find(&format!("--ro-bind {0} {0}", denied.display()));
-    assert!(writable.is_some_and(|index| readonly.is_some_and(|deny| index < deny)));
 
-    let repeated = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-        .expect("compile twice");
-    assert_eq!(plan, repeated);
+    // Row: existing_write_grant_rejects_final_symlink.
+    {
+        let worktree = temp.path().join("escape-final");
+        let orbit = worktree.join(".orbit");
+        let outside = temp.path().join("escape-final-outside.toml");
+        std::fs::create_dir_all(&orbit).expect("Orbit root");
+        std::fs::write(&outside, "outside").expect("outside target");
+        symlink(&outside, orbit.join("config.toml")).expect("symlink final anchor");
+        let resolved = worktree_profile(
+            &worktree,
+            vec![orbit.join("config.toml").display().to_string()],
+        );
+
+        let error = prepare_linux_bwrap_write_grants(&resolved, &worktree)
+            .expect_err("row escape-final: a final symlink must fail closed");
+
+        let message = error.to_string();
+        assert!(message.contains("config.toml"), "{message}");
+        assert!(message.contains("resolves through symlink"), "{message}");
+    }
 }
 
+/// Argv-ordering rows: deterministic output with denies after the writable
+/// parent, narrow re-allows after the `.orbit` deny, and last-match-wins
+/// materialization of effective grants.
+#[test]
+fn argv_ordering_table() {
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    // Row: argv_is_deterministic_and_orders_denies_after_writable_parent.
+    {
+        let workspace = temp.path().join("ordering-deterministic");
+        let denied = workspace.join(".orbit");
+        std::fs::create_dir_all(&denied).expect("create fixture");
+        let resolved = profile(vec![
+            format!("{}/**", workspace.display()),
+            format!("!{}/**", denied.display()),
+        ]);
+
+        let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
+            .expect("compile");
+        let joined = plan.args.join(" ");
+        for required in [
+            "--die-with-parent",
+            "--new-session",
+            "--unshare-all",
+            "--share-net",
+            "--ro-bind / /",
+            "--dev /dev",
+            "--proc /proc",
+            "--tmpfs /tmp",
+        ] {
+            assert!(
+                joined.contains(required),
+                "row deterministic: missing `{required}` in {joined}"
+            );
+        }
+        let writable = joined.find(&format!("--bind {0} {0}", workspace.display()));
+        let readonly = joined.find(&format!("--ro-bind {0} {0}", denied.display()));
+        assert!(writable.is_some_and(|index| readonly.is_some_and(|deny| index < deny)));
+
+        let repeated =
+            compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
+                .expect("compile twice");
+        assert_eq!(plan, repeated);
+    }
+
+    // Row: argv_reallows_only_narrow_existing_paths_after_orbit_deny.
+    {
+        let workspace = temp.path().join("ordering-reallows");
+        let orbit = workspace.join(".orbit");
+        let resources = orbit.join("resources");
+        let tasks = orbit.join("tasks");
+        std::fs::create_dir_all(&resources).expect("create resources");
+        std::fs::create_dir_all(&tasks).expect("create tasks");
+
+        let resolved = profile(vec![
+            format!("{}/**", workspace.display()),
+            format!("!{}/**", orbit.display()),
+            format!("{}/**", resources.display()),
+            orbit.join("missing-config.toml").display().to_string(),
+            // A later positive ancestor is not a narrow exception and must not
+            // mask the read-only `.orbit` mount.
+            format!("{}/**", workspace.display()),
+            format!("{}/**", tasks.display()),
+        ]);
+        let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
+            .expect("compile");
+        let joined = plan.args.join(" ");
+        let orbit_readonly = joined
+            .find(&format!("--ro-bind {0} {0}", orbit.display()))
+            .expect("orbit deny mount");
+        let resources_writable = joined
+            .find(&format!("--bind {0} {0}", resources.display()))
+            .expect("resources re-allow mount");
+        let tasks_writable = joined
+            .find(&format!("--bind {0} {0}", tasks.display()))
+            .expect("trusted store re-allow mount");
+
+        assert!(orbit_readonly < resources_writable);
+        assert!(orbit_readonly < tasks_writable);
+        assert!(
+            !joined.contains("missing-config.toml"),
+            "row reallows: a missing narrow exception is skipped instead of making every sandbox invocation fail"
+        );
+        let dropped = plan
+            .dropped_grants
+            .iter()
+            .find(|grant| grant.anchor.ends_with("missing-config.toml"))
+            .expect("a skipped narrow exception must be reported, never silently dropped");
+        assert_eq!(
+            dropped.rule,
+            orbit.join("missing-config.toml").display().to_string()
+        );
+        assert_eq!(
+            joined
+                .match_indices(&format!("--bind {0} {0}", workspace.display()))
+                .count(),
+            2,
+            "row reallows: both broad profile entries are emitted before the deny, never as a re-allow: {joined}"
+        );
+        let last_workspace = joined
+            .rfind(&format!("--bind {0} {0}", workspace.display()))
+            .expect("workspace bind");
+        assert!(last_workspace < orbit_readonly);
+    }
+
+    // Row: materialization_uses_final_last_match_wins_decision.
+    {
+        let worktree = temp.path().join("ordering-materialization");
+        let orbit = worktree.join(".orbit");
+        std::fs::create_dir_all(&worktree).expect("worktree");
+        let denied_file = orbit.join("workspace-denied");
+        let partially_writable = orbit.join("cache.v1");
+        let resolved = worktree_profile(
+            &worktree,
+            vec![
+                denied_file.display().to_string(),
+                format!("!{}", denied_file.display()),
+                format!("{}/**", partially_writable.display()),
+                format!("!{}/private/**", partially_writable.display()),
+            ],
+        );
+
+        let grants = linux_bwrap_write_grants(&resolved).expect("derive effective grants");
+        assert!(
+            grants.iter().all(|grant| grant.anchor != denied_file),
+            "row last-match: a later exact deny must remove the shadowed materialization candidate: {grants:?}"
+        );
+        assert!(
+            grants
+                .iter()
+                .any(|grant| grant.anchor == partially_writable),
+            "row last-match: a narrower child deny must preserve the writable remainder: {grants:?}"
+        );
+
+        let prepared = prepare_linux_bwrap_write_grants(&resolved, &worktree)
+            .expect("prepare effective grants");
+        assert!(!denied_file.exists());
+        assert!(partially_writable.is_dir());
+        assert_eq!(prepared.created, vec![partially_writable.clone()]);
+
+        let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&worktree), true)
+            .expect("compile");
+        assert!(
+            plan.dropped_grants
+                .iter()
+                .all(|grant| grant.anchor != denied_file),
+            "row last-match: a finally denied rule is not an unsatisfied grant: {:?}",
+            plan.dropped_grants
+        );
+    }
+}
+
+/// Stable-mount rows: managed worktrees bind the stable workspace and build
+/// mounts for the writable root, and a subdirectory grant never exposes
+/// ungranted roots through those aliases.
 /// [ORB-11259] Managed worktrees get stable `/tmp` workspace and build mounts
 /// so compiler caches can key on path-independent prefixes.
 #[test]
-fn managed_worktree_argv_binds_stable_workspace_and_build_mounts() {
+fn stable_mount_table() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let resolved = profile(vec![format!("{}/**", workspace.display())]);
 
-    let unmanaged = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-        .expect("compile unmanaged");
-    let unmanaged_joined = unmanaged.args.join(" ");
-    assert!(
-        !unmanaged_joined.contains(LINUX_STABLE_WORKSPACE_MOUNT),
-        "direct invocations must not grow the stable toolchain mounts: {unmanaged_joined}"
-    );
+    // Row: managed_worktree_argv_binds_stable_workspace_and_build_mounts.
+    {
+        let workspace = temp.path().join("stable-managed");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        let resolved = profile(vec![format!("{}/**", workspace.display())]);
 
-    let reviewer = profile(Vec::new());
-    let reviewer_plan =
-        compile_linux_bwrap_argv(&reviewer, "/bin/true", &[], Some(&workspace), true)
-            .expect("compile reviewer managed");
-    let reviewer_joined = reviewer_plan.args.join(" ");
-    assert!(
-        !reviewer_joined.contains(LINUX_STABLE_WORKSPACE_MOUNT),
-        "read-only managed profiles must not bind a writable stable workspace mount: {reviewer_joined}"
-    );
+        let reviewer = profile(Vec::new());
+        // Neither a direct invocation nor a read-only managed profile may
+        // grow the stable toolchain mounts.
+        for (case, profile, managed) in
+            [("direct", &resolved, false), ("reviewer", &reviewer, true)]
+        {
+            let plan =
+                compile_linux_bwrap_argv(profile, "/bin/true", &[], Some(&workspace), managed)
+                    .unwrap_or_else(|error| {
+                        panic!("compile {case} without stable mounts: {error}")
+                    });
+            let joined = plan.args.join(" ");
+            assert!(
+                !joined.contains(LINUX_STABLE_WORKSPACE_MOUNT),
+                "row stable ({case}): must not grow the stable toolchain mounts: {joined}"
+            );
+        }
 
-    let managed = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
-        .expect("compile managed");
-    let joined = managed.args.join(" ");
-    let cwd = workspace.canonicalize().expect("canonical workspace");
-    let target = cwd.join("target");
-    assert!(target.is_dir(), "managed compile must create target/");
-    assert!(
-        joined.contains(&format!("--dir {LINUX_STABLE_WORKSPACE_MOUNT}")),
-        "missing workspace mount dir in {joined}"
-    );
-    assert!(
-        joined.contains(&format!(
-            "--bind {} {LINUX_STABLE_WORKSPACE_MOUNT}",
-            cwd.display()
-        )),
-        "missing workspace bind in {joined}"
-    );
-    assert!(
-        joined.contains(&format!(
-            "--bind {} {LINUX_STABLE_BUILD_MOUNT}",
-            target.display()
-        )),
-        "missing build bind in {joined}"
-    );
-    assert!(
-        joined.contains(&format!("--chdir {}", cwd.display())),
-        "provider agent cwd must stay on the worktree, not the stable alias: {joined}"
-    );
-    assert!(
-        !joined.contains(&format!("--chdir {LINUX_STABLE_WORKSPACE_MOUNT}")),
-        "do not remap provider agent cwd onto the stable workspace mount: {joined}"
-    );
-}
-
-#[test]
-fn managed_worktree_subdirectory_grant_does_not_expose_writable_stable_aliases() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    let docs = workspace.join("docs");
-    let drafts = docs.join("drafts");
-    std::fs::create_dir_all(&drafts).expect("create docs fixture");
-    std::fs::create_dir_all(workspace.join("src")).expect("create ungranted source directory");
-    std::fs::create_dir_all(workspace.join("target")).expect("create ungranted build directory");
-    let workspace = workspace.canonicalize().expect("canonical workspace");
-    let docs = workspace.join("docs").display().to_string();
-    let drafts = workspace.join("docs/drafts").display().to_string();
-    let resolved = profile(vec![format!("{docs}/**"), format!("!{drafts}/**")]);
-
-    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
-        .expect("compile subdirectory-only managed profile");
-    assert!(
-        plan.args
-            .windows(3)
-            .any(|args| args == ["--bind", &docs, &docs]),
-        "the granted docs directory must stay writable: {:?}",
-        plan.args
-    );
-    assert!(
-        plan.args
-            .windows(3)
-            .any(|args| args == ["--ro-bind", &drafts, &drafts]),
-        "the explicit drafts deny must remain read-only: {:?}",
-        plan.args
-    );
-    for alias in [LINUX_STABLE_WORKSPACE_MOUNT, LINUX_STABLE_BUILD_MOUNT] {
+        let managed = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
+            .expect("compile managed");
+        let joined = managed.args.join(" ");
+        let cwd = workspace.canonicalize().expect("canonical workspace");
+        let target = cwd.join("target");
+        assert!(target.is_dir(), "managed compile must create target/");
         assert!(
-            !plan.args.iter().any(|arg| arg == alias),
-            "a subdirectory grant must not expose ungranted src/ or target/ through {alias}: {:?}",
+            joined.contains(&format!("--dir {LINUX_STABLE_WORKSPACE_MOUNT}")),
+            "row stable: missing workspace mount dir in {joined}"
+        );
+        assert!(
+            joined.contains(&format!(
+                "--bind {} {LINUX_STABLE_WORKSPACE_MOUNT}",
+                cwd.display()
+            )),
+            "row stable: missing workspace bind in {joined}"
+        );
+        assert!(
+            joined.contains(&format!(
+                "--bind {} {LINUX_STABLE_BUILD_MOUNT}",
+                target.display()
+            )),
+            "row stable: missing build bind in {joined}"
+        );
+        assert!(
+            joined.contains(&format!("--chdir {}", cwd.display())),
+            "row stable: provider agent cwd must stay on the worktree, not the stable alias: {joined}"
+        );
+        assert!(
+            !joined.contains(&format!("--chdir {LINUX_STABLE_WORKSPACE_MOUNT}")),
+            "row stable: do not remap provider agent cwd onto the stable workspace mount: {joined}"
+        );
+    }
+
+    // Row: managed_worktree_subdirectory_grant_does_not_expose_writable_stable_aliases.
+    {
+        let workspace = temp.path().join("stable-subdirectory");
+        let docs = workspace.join("docs");
+        let drafts = docs.join("drafts");
+        std::fs::create_dir_all(&drafts).expect("create docs fixture");
+        std::fs::create_dir_all(workspace.join("src")).expect("create ungranted source directory");
+        std::fs::create_dir_all(workspace.join("target"))
+            .expect("create ungranted build directory");
+        let workspace = workspace.canonicalize().expect("canonical workspace");
+        let docs = workspace.join("docs").display().to_string();
+        let drafts = workspace.join("docs/drafts").display().to_string();
+        let resolved = profile(vec![format!("{docs}/**"), format!("!{drafts}/**")]);
+
+        let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
+            .expect("compile subdirectory-only managed profile");
+        assert!(
+            plan.args
+                .windows(3)
+                .any(|args| args == ["--bind", &docs, &docs]),
+            "row subdirectory: the granted docs directory must stay writable: {:?}",
             plan.args
         );
-    }
-
-    let nested_cwd = workspace.join("docs");
-    let nested_plan =
-        compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&nested_cwd), true)
-            .expect("compile cwd inside the writable root");
-    for alias in [LINUX_STABLE_WORKSPACE_MOUNT, LINUX_STABLE_BUILD_MOUNT] {
         assert!(
-            nested_plan.args.iter().any(|arg| arg == alias),
-            "a cwd inside the granted subtree must retain {alias}: {:?}",
-            nested_plan.args
+            plan.args
+                .windows(3)
+                .any(|args| args == ["--ro-bind", &drafts, &drafts]),
+            "row subdirectory: the explicit drafts deny must remain read-only: {:?}",
+            plan.args
         );
+        for alias in [LINUX_STABLE_WORKSPACE_MOUNT, LINUX_STABLE_BUILD_MOUNT] {
+            assert!(
+                !plan.args.iter().any(|arg| arg == alias),
+                "row subdirectory: a subdirectory grant must not expose ungranted src/ or target/ through {alias}: {:?}",
+                plan.args
+            );
+        }
+
+        let nested_cwd = workspace.join("docs");
+        let nested_plan =
+            compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&nested_cwd), true)
+                .expect("compile cwd inside the writable root");
+        for alias in [LINUX_STABLE_WORKSPACE_MOUNT, LINUX_STABLE_BUILD_MOUNT] {
+            assert!(
+                nested_plan.args.iter().any(|arg| arg == alias),
+                "row subdirectory: a cwd inside the granted subtree must retain {alias}: {:?}",
+                nested_plan.args
+            );
+        }
     }
 }
 
+/// Direct-invocation policy rows: absent denies fail closed, existing denies
+/// mount read-only while absent denies outside the write root need nothing,
+/// and a crafted `commondir` pointing at host `/tmp` is refused the same way.
+/// (The no-modify no-bind row lives in the dotenv kernel test; the
+/// overlapping-deny refusal there is identical to the removed fails_closed
+/// row.)
 #[test]
-fn argv_reallows_only_narrow_existing_paths_after_orbit_deny() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    let orbit = workspace.join(".orbit");
-    let resources = orbit.join("resources");
-    let tasks = orbit.join("tasks");
-    std::fs::create_dir_all(&resources).expect("create resources");
-    std::fs::create_dir_all(&tasks).expect("create tasks");
+fn direct_invocation_policy_table() {
+    let (temp, workspace) = fresh_workspace();
 
-    let resolved = profile(vec![
-        format!("{}/**", workspace.display()),
-        format!("!{}/**", orbit.display()),
-        format!("{}/**", resources.display()),
-        orbit.join("missing-config.toml").display().to_string(),
-        // A later positive ancestor is not a narrow exception and must not
-        // mask the read-only `.orbit` mount.
-        format!("{}/**", workspace.display()),
-        format!("{}/**", tasks.display()),
-    ]);
-    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-        .expect("compile");
-    let joined = plan.args.join(" ");
-    let orbit_readonly = joined
-        .find(&format!("--ro-bind {0} {0}", orbit.display()))
-        .expect("orbit deny mount");
-    let resources_writable = joined
-        .find(&format!("--bind {0} {0}", resources.display()))
-        .expect("resources re-allow mount");
-    let tasks_writable = joined
-        .find(&format!("--bind {0} {0}", tasks.display()))
-        .expect("trusted store re-allow mount");
-
-    assert!(orbit_readonly < resources_writable);
-    assert!(orbit_readonly < tasks_writable);
-    assert!(
-        !joined.contains("missing-config.toml"),
-        "a missing narrow exception is skipped instead of making every sandbox invocation fail"
-    );
-    let dropped = plan
-        .dropped_grants
-        .iter()
-        .find(|grant| grant.anchor.ends_with("missing-config.toml"))
-        .expect("a skipped narrow exception must be reported, never silently dropped");
-    assert_eq!(
-        dropped.rule,
-        orbit.join("missing-config.toml").display().to_string()
-    );
-    assert_eq!(
-        joined
-            .match_indices(&format!("--bind {0} {0}", workspace.display()))
-            .count(),
-        2,
-        "both broad profile entries are emitted before the deny, never as a re-allow: {joined}"
-    );
-    let last_workspace = joined
-        .rfind(&format!("--bind {0} {0}", workspace.display()))
-        .expect("workspace bind");
-    assert!(last_workspace < orbit_readonly);
-}
-
-#[test]
-fn direct_invocation_allows_non_subtree_denies_without_writable_roots() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let resolved = profile(vec![
-        format!("!{}/**/.env", workspace.display()),
-        format!("!{}/**/*.env", workspace.display()),
-    ]);
-
-    let plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], None, false)
-        .expect("a read-only direct invocation needs no mount-based write exclusion");
-
-    assert!(
-        !plan.args.iter().any(|arg| arg == "--bind"),
-        "a no-modify profile must not gain a writable bind: {:?}",
-        plan.args
-    );
-}
-
-#[test]
-fn direct_invocation_fails_closed_for_overlapping_non_subtree_deny() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let resolved = profile(vec![
-        format!("{}/**", workspace.display()),
-        format!("!{}/**/*.env", workspace.display()),
-    ]);
-    let error = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], None, false)
-        .expect_err("direct invocation must fail closed");
-    assert!(error.to_string().contains("non-subtree denyModify"));
-}
-
-#[test]
-fn direct_invocation_refuses_absent_exact_and_subtree_denies_under_writable_root() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-
+    // Row direct_invocation_fails_closed_for_overlapping_non_subtree_deny is not
+    // repeated here: its profile and refusal are identical to the unsafe-profile
+    // check in kernel_enforces_existing_and_new_protected_env_paths (strict
+    // subset, same "non-subtree denyModify" refusal without bwrap).
+    // Row: direct_invocation_refuses_absent_exact_and_subtree_denies_under_writable_root.
+    // Runs before the mounts row creates these paths.
     for denied in [
         workspace.join("Cargo.lock").display().to_string(),
         format!("{}/**", workspace.join("secrets").display()),
@@ -1331,24 +1292,20 @@ fn direct_invocation_refuses_absent_exact_and_subtree_denies_under_writable_root
             format!("!{denied}"),
         ]);
         let error = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-            .expect_err("an absent deny beneath a writable root must refuse before spawn");
+            .expect_err("row refuses_absent: an absent deny beneath a writable root must refuse before spawn");
         assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
         assert!(
             !workspace.join("Cargo.lock").exists() && !workspace.join("secrets").exists(),
-            "compilation must not create denied paths"
+            "row refuses_absent: compilation must not create denied paths"
         );
 
         let mut managed =
             compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), true)
-                .expect("managed worktree retains the post-run guard");
+                .expect("row refuses_absent: managed worktree retains the post-run guard");
         assert!(managed.take_post_run_guard().is_some());
     }
-}
 
-#[test]
-fn direct_invocation_mounts_existing_denies_and_allows_nonoverlapping_absent_denies() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
+    // Row: direct_invocation_mounts_existing_denies_and_allows_nonoverlapping_absent_denies.
     let outside = temp.path().join("outside");
     let secrets = workspace.join("secrets");
     let lock = workspace.join("Cargo.lock");
@@ -1362,9 +1319,10 @@ fn direct_invocation_mounts_existing_denies_and_allows_nonoverlapping_absent_den
         format!("!{}/**", outside.join("absent").display()),
         format!("!{}", outside.join("absent.lock").display()),
     ]);
-
     let mut plan = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&workspace), false)
-        .expect("existing denies mount and absent denies outside the write root need no mount");
+        .expect(
+            "row mounts_existing: existing denies mount and absent denies outside the write root need no mount",
+        );
     let mounts: Vec<_> = plan
         .args
         .windows(3)
@@ -1375,25 +1333,44 @@ fn direct_invocation_mounts_existing_denies_and_allows_nonoverlapping_absent_den
         assert!(
             mounts
                 .iter()
-                .any(|args| args[1] == rendered && args[2] == rendered)
+                .any(|args| args[1] == rendered && args[2] == rendered),
+            "row mounts_existing: missing read-only deny mount for {}",
+            path.display()
         );
     }
     assert_eq!(plan.take_post_run_guard(), None);
 
     let simple = profile(vec![format!("{}/**", workspace.display())]);
     compile_linux_bwrap_argv(&simple, "/bin/true", &[], Some(&workspace), false)
-        .expect("a direct writable plan without denies remains supported");
+        .expect("row mounts_existing: a direct writable plan without denies remains supported");
+
+    // Row: git_metadata_pointer_cannot_restore_host_tmp_wholesale.
+    let fixture = tempfile::tempdir_in("/tmp").expect("fixture");
+    let pointer_workspace = fixture.path().join("workspace");
+    let pointer_git = fixture.path().join("metadata");
+    std::fs::create_dir(&pointer_workspace).expect("workspace");
+    std::fs::create_dir(&pointer_git).expect("metadata");
+    std::fs::write(pointer_workspace.join(".git"), "gitdir: ../metadata\n").expect("gitdir");
+    std::fs::write(pointer_git.join("commondir"), "/tmp\n").expect("commondir");
+    let error = compile_linux_bwrap_argv(
+        &profile(Vec::new()),
+        "/bin/true",
+        &[],
+        Some(&pointer_workspace),
+        false,
+    )
+    .expect_err("row git_pointer: a crafted common directory must not reveal all host scratch");
+    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
 }
 
 /// [ORB-11257] A read-only direct invocation can compile default dotenv glob
 /// denials. Live Bubblewrap must leave an existing match intact and refuse a
 /// newly created matching path; a write-capable sibling still fails closed.
-#[cfg(target_os = "linux")]
+/// Also hosts the allows row (fewer-denies no-bind) and the fails_closed
+/// refusal, whose profile and message are identical to the unsafe check here.
 #[test]
 fn kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_invocation() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let (_temp, workspace) = fresh_workspace();
     let existing = workspace.join(".env");
     let created = workspace.join("new.env");
     std::fs::write(&existing, "secret").expect("write existing protected path");
@@ -1429,25 +1406,29 @@ fn kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_inv
         "a no-modify profile must not gain a writable bind: {:?}",
         plan.args
     );
+    // Row direct_invocation_allows_non_subtree_denies_without_writable_roots:
+    // the same no-bind property with fewer denies.
+    let narrow = profile(vec![
+        format!("!{}/**/.env", workspace.display()),
+        format!("!{}/**/*.env", workspace.display()),
+    ]);
+    let narrow_plan = compile_linux_bwrap_argv(&narrow, "/bin/true", &[], None, false)
+        .expect("row allows: a read-only direct invocation needs no mount-based write exclusion");
+    assert!(
+        !narrow_plan.args.iter().any(|arg| arg == "--bind"),
+        "row allows: a no-modify profile must not gain a writable bind: {:?}",
+        narrow_plan.args
+    );
 
-    let probe = probe_bwrap();
-    if !probe.available {
-        orbit_exec::report_bwrap_deferral(
-            "kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_invocation",
-            &probe.detail,
-        );
+    if probe_or_defer(
+        "kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_invocation",
+    )
+    .is_none()
+    {
         return;
     }
-    let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &[],
-        cwd: Some(&workspace),
-        stdin: Stdio::null(),
-        stdout: Stdio::null(),
-        stderr: Stdio::null(),
-    })
-    .expect("spawn");
-    assert!(child.wait().expect("wait").success());
+    let status = run_status(&plan, &[], Some(&workspace));
+    assert!(status.success());
     assert_eq!(
         std::fs::read_to_string(&existing).expect("read existing protected path"),
         "secret"
@@ -1458,62 +1439,10 @@ fn kernel_enforces_existing_and_new_protected_env_paths_for_read_only_direct_inv
     );
 }
 
-#[test]
-fn managed_worktree_guard_rejects_new_forbidden_match() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let resolved = profile(vec![
-        format!("{}/**", workspace.display()),
-        format!("!{}/**/*.env", workspace.display()),
-    ]);
-    let guard = LinuxBwrapPostRunGuard::capture(&resolved)
-        .expect("capture")
-        .expect("guard required");
-    std::fs::write(workspace.join("new.env"), "secret").expect("write forbidden fixture");
-    let error = guard
-        .verify(None)
-        .expect_err("new forbidden match rejected");
-    assert!(error.to_string().contains("before commit"));
-}
-
-#[test]
-fn absent_subtree_deny_is_enforced_when_child_creates_the_root() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let created = workspace.join("secrets/x");
-    assert!(!workspace.join("secrets").exists());
-    assert_absent_deny_enforced(
-        &workspace,
-        vec![
-            format!("{}/**", workspace.display()),
-            format!("!{}/secrets/**", workspace.display()),
-        ],
-        "mkdir -p secrets && touch secrets/x",
-        &created,
-    );
-}
-
-#[test]
-fn absent_exact_file_deny_is_enforced_when_child_creates_the_file() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let created = workspace.join("Cargo.lock");
-    assert!(!created.exists());
-    assert_absent_deny_enforced(
-        &workspace,
-        vec![
-            format!("{}/**", workspace.display()),
-            format!("!{}", created.display()),
-        ],
-        "touch Cargo.lock",
-        &created,
-    );
-}
-
+/// Row driver for [`absent_deny_enforcement_table`]: a child-created subtree
+/// root or exact file is refused by the post-run guard.
 fn assert_absent_deny_enforced(
+    case: &str,
     workspace: &std::path::Path,
     modify: Vec<String>,
     script: &str,
@@ -1532,19 +1461,10 @@ fn assert_absent_deny_enforced(
             true,
         )
         .expect("compile");
-        let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-            plan: &plan,
-            env: &[],
-            cwd: Some(workspace),
-            stdin: Stdio::null(),
-            stdout: Stdio::null(),
-            stderr: Stdio::null(),
-        })
-        .expect("spawn");
-        let _ = child.wait().expect("wait");
+        let _ = run_status(&plan, &[], Some(workspace));
     } else {
         orbit_exec::report_bwrap_deferral(
-            "assert_absent_deny_enforced",
+            case,
             &format!(
                 "{}; applying the child script on the host instead",
                 probe.detail
@@ -1555,7 +1475,7 @@ fn assert_absent_deny_enforced(
             .current_dir(workspace)
             .status()
             .expect("host script");
-        assert!(status.success(), "host script failed: {status}");
+        assert!(status.success(), "[{case}] host script failed: {status}");
     }
 
     let write_blocked = !created.exists();
@@ -1563,34 +1483,69 @@ fn assert_absent_deny_enforced(
         Some(guard) => match guard.verify(None) {
             Ok(_) => assert!(
                 write_blocked,
-                "child created {} and the post-run guard accepted it",
+                "[{case}] child created {} and the post-run guard accepted it",
                 created.display()
             ),
             Err(OrbitError::PolicyDenied(message)) => {
                 assert!(
                     message.contains("before commit"),
-                    "PolicyDenied must name the post-run check: {message}"
+                    "[{case}] PolicyDenied must name the post-run check: {message}"
                 );
             }
-            Err(other) => panic!("expected PolicyDenied, got {other}"),
+            Err(other) => panic!("[{case}] expected PolicyDenied, got {other}"),
         },
         None => assert!(
             write_blocked,
-            "no post-run guard and the child created {}",
+            "[{case}] no post-run guard and the child created {}",
             created.display()
         ),
     }
 }
 
-#[cfg(target_os = "linux")]
+/// Absent-deny rows: a child-created subtree root and a child-created exact
+/// file are both refused by the post-run guard.
+#[test]
+fn absent_deny_enforcement_table() {
+    for case in ["subtree", "exact"] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        let (modify, script, created) = if case == "subtree" {
+            assert!(!workspace.join("secrets").exists());
+            (
+                vec![
+                    format!("{}/**", workspace.display()),
+                    format!("!{}/secrets/**", workspace.display()),
+                ],
+                "mkdir -p secrets && touch secrets/x",
+                workspace.join("secrets/x"),
+            )
+        } else {
+            let created = workspace.join("Cargo.lock");
+            assert!(!created.exists());
+            (
+                vec![
+                    format!("{}/**", workspace.display()),
+                    format!("!{}", created.display()),
+                ],
+                "touch Cargo.lock",
+                created,
+            )
+        };
+        assert_absent_deny_enforced(
+            &format!("absent_deny/{case}"),
+            &workspace,
+            modify,
+            script,
+            &created,
+        );
+    }
+}
+
 #[test]
 fn kernel_enforces_allowed_outside_and_subtree_writes_when_available() {
-    let probe = probe_bwrap();
-    if !probe.available {
-        orbit_exec::report_bwrap_deferral(
-            "kernel_enforces_allowed_outside_and_subtree_writes_when_available",
-            &probe.detail,
-        );
+    if probe_or_defer("kernel_enforces_allowed_outside_and_subtree_writes_when_available").is_none()
+    {
         return;
     }
 
@@ -1637,22 +1592,16 @@ deny mv "$DENIED" "$WORKSPACE/orbit-moved"
         plan.take_post_run_guard().is_none(),
         "this is a direct invocation"
     );
-    let env = [
-        ("PATH".to_string(), "/usr/bin:/bin".to_string()),
-        ("WORKSPACE".to_string(), workspace.display().to_string()),
-        ("OUTSIDE".to_string(), outside.display().to_string()),
-        ("DENIED".to_string(), denied.display().to_string()),
-    ];
-    let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &env,
-        cwd: Some(&workspace),
-        stdin: Stdio::null(),
-        stdout: Stdio::null(),
-        stderr: Stdio::null(),
-    })
-    .expect("spawn");
-    let status = child.wait().expect("wait");
+    let status = run_status(
+        &plan,
+        &[
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("WORKSPACE".to_string(), workspace.display().to_string()),
+            ("OUTSIDE".to_string(), outside.display().to_string()),
+            ("DENIED".to_string(), denied.display().to_string()),
+        ],
+        Some(&workspace),
+    );
     assert!(status.success());
     assert_eq!(
         std::fs::read_to_string(allowed_file).expect("allowed write"),
@@ -1672,20 +1621,17 @@ deny mv "$DENIED" "$WORKSPACE/orbit-moved"
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_available() {
-    let probe = probe_bwrap();
-    if !probe.available {
-        orbit_exec::report_bwrap_deferral(
-            "kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_available",
-            &probe.detail,
-        );
+    if probe_or_defer(
+        "kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_available",
+    )
+    .is_none()
+    {
         return;
     }
 
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
+    let (_temp, workspace) = fresh_workspace();
     let orbit = workspace.join(".orbit");
     for directory in [
         "resources",
@@ -1769,16 +1715,7 @@ fn kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_availabl
         true,
     )
     .expect("compile");
-    let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &[],
-        cwd: Some(&workspace),
-        stdin: Stdio::null(),
-        stdout: Stdio::null(),
-        stderr: Stdio::null(),
-    })
-    .expect("spawn");
-    let status = child.wait().expect("wait");
+    let status = run_status(&plan, &[], Some(&workspace));
     assert!(status.success());
 
     for path in allowed {
@@ -1800,8 +1737,6 @@ fn kernel_enforces_versioned_orbit_exceptions_and_protected_stores_when_availabl
 #[test]
 #[ignore = "requires a Linux host with working Bubblewrap user/mount namespaces"]
 fn kernel_git_metadata_integrity_through_original_and_build_aliases() {
-    use std::fs;
-
     let probe = probe_bwrap();
     assert!(
         probe.available,
@@ -1913,17 +1848,7 @@ printf 'source edit\n' > "$ALIAS/source.txt"
         ),
         ("BUILD".to_string(), LINUX_STABLE_BUILD_MOUNT.to_string()),
     ];
-    let output = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-        plan: &plan,
-        env: &env,
-        cwd: Some(&workspace),
-        stdin: Stdio::null(),
-        stdout: Stdio::piped(),
-        stderr: Stdio::piped(),
-    })
-    .unwrap()
-    .wait_with_output()
-    .unwrap();
+    let output = run_captured(&plan, &env, Some(&workspace));
     assert!(
         output.status.success(),
         "stdout: {}\nstderr: {}",
@@ -1970,6 +1895,16 @@ fn scratch_policy_profile(workspace: &std::path::Path) -> ResolvedFsProfile {
     ])
 }
 
+/// Canonical workspace with `.orbit/tmp` for the post-run guard rows.
+fn scratch_workspace() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    let scratch = workspace.join(".orbit/tmp");
+    (temp, workspace, scratch)
+}
+
 /// Write `path` from a managed Bubblewrap child, or on the host when this host
 /// cannot create the sandbox, and return the plan's post-run guard.
 fn create_in_managed_child(
@@ -1995,22 +1930,11 @@ fn create_in_managed_child(
     let guard = plan
         .take_post_run_guard()
         .expect("managed worktree keeps a post-run guard");
-    let probe = probe_bwrap();
-    if probe.available {
-        let mut child = spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
-            plan: &plan,
-            env: &[("PATH".to_string(), "/usr/bin:/bin".to_string())],
-            cwd: Some(workspace),
-            stdin: Stdio::null(),
-            stdout: Stdio::null(),
-            stderr: Stdio::piped(),
-        })
-        .expect("spawn managed child");
-        let _ = child.wait().expect("wait");
-    } else {
-        orbit_exec::report_bwrap_deferral(
-            test_name,
-            &format!("{}; creating the path on the host instead", probe.detail),
+    if probe_or_defer(test_name).is_some() {
+        let _ = run_status(
+            &plan,
+            &[("PATH".to_string(), "/usr/bin:/bin".to_string())],
+            Some(workspace),
         );
     }
     if !path.exists() {
@@ -2020,146 +1944,149 @@ fn create_in_managed_child(
     guard
 }
 
-/// A denyModify match the child creates only under run scratch, which commit
-/// never includes, is removed and reported instead of failing the run. The
-/// same match fails the run when the caller names no scratch root.
+/// Post-run guard rows: a denyModify match created only under run scratch is
+/// removed and reported instead of failing the run, while a committable match
+/// fails the run even when scratch also holds one; [ORB-14337] the `.orbit/tmp`
+/// write exception does not beat the later secret globs.
 #[test]
-fn managed_worktree_guard_removes_scratch_only_match() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
-    let workspace = workspace.canonicalize().expect("canonical workspace");
-    let scratch = workspace.join(".orbit/tmp");
-    let resolved = scratch_policy_profile(&workspace);
-    let created = scratch.join("clock-probe/home/.orbit/clock.env");
+fn managed_worktree_guard_table() {
+    // Row: managed_worktree_guard_rejects_new_forbidden_match, folded into the
+    // committable row below as the `new.env` case verified without a scratch
+    // root.
+    //
+    // Row: managed_worktree_guard_removes_scratch_only_match.
+    {
+        let (_temp, workspace, scratch) = scratch_workspace();
+        let resolved = scratch_policy_profile(&workspace);
+        let created = scratch.join("clock-probe/home/.orbit/clock.env");
 
-    let guard = create_in_managed_child(
-        &resolved,
-        &workspace,
-        &created,
-        "managed_worktree_guard_removes_scratch_only_match",
-    );
-    let error = guard
-        .verify(None)
-        .expect_err("without a scratch root the match fails the run");
-    assert!(error.to_string().contains("before commit"), "{error}");
-    assert!(created.exists(), "a failing guard removes nothing");
-
-    let removed = guard
-        .verify(Some(&scratch))
-        .expect("a scratch-only match does not fail the run");
-    assert_eq!(
-        removed,
-        vec![LinuxBwrapScratchRemoval {
-            path: created.clone(),
-            rule: format!("{}/**/*.env", workspace.display()),
-        }]
-    );
-    assert!(!created.exists(), "the scratch match is removed");
-    assert!(
-        created.parent().expect("parent").is_dir(),
-        "only the matched path is removed"
-    );
-    assert_eq!(
-        guard.verify(Some(&scratch)).expect("verify again"),
-        Vec::new(),
-        "nothing forbidden is left behind"
-    );
-}
-
-/// A committable match fails the run even when scratch also holds one, and the
-/// failing guard removes nothing.
-#[test]
-fn managed_worktree_guard_rejects_committable_match_beside_scratch_match() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
-    let workspace = workspace.canonicalize().expect("canonical workspace");
-    let scratch = workspace.join(".orbit/tmp");
-    let guard = LinuxBwrapPostRunGuard::capture(&scratch_policy_profile(&workspace))
-        .expect("capture")
-        .expect("guard");
-    let in_scratch = scratch.join("fixture.env");
-    let committable = workspace.join("src/secrets.env");
-    std::fs::write(&in_scratch, "secret").expect("scratch match");
-    std::fs::create_dir_all(committable.parent().expect("parent")).expect("src");
-    std::fs::write(&committable, "secret").expect("committable match");
-
-    let error = guard
-        .verify(Some(&scratch))
-        .expect_err("a committable match fails the run");
-    let message = error.to_string();
-    assert!(
-        matches!(error, OrbitError::PolicyDenied(_))
-            && message.contains("before commit")
-            && message.contains(&committable.display().to_string()),
-        "{message}"
-    );
-    assert!(in_scratch.exists() && committable.exists());
-}
-
-/// [ORB-14337] The `.orbit/tmp` write exception does not beat the later secret
-/// globs. A managed run that creates one of those paths on a committable path
-/// still fails the post-run guard; under scratch, including rust-docs
-/// `macro.env.html`, the match is removed rather than left behind.
-#[test]
-fn managed_worktree_guard_rejects_secret_paths_after_tmp_exception() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(workspace.join(".orbit/tmp")).expect("tmp");
-    let workspace = workspace.canonicalize().expect("canonical workspace");
-    let scratch = workspace.join(".orbit/tmp");
-    let resolved = scratch_policy_profile(&workspace);
-    let ordinary = scratch.join("ok.txt");
-    std::fs::write(&ordinary, "ok").expect("ordinary scratch");
-    assert_eq!(
-        LinuxBwrapPostRunGuard::capture(&resolved)
-            .expect("capture")
-            .expect("guard")
-            .verify(Some(&scratch))
-            .expect("verify"),
-        Vec::new(),
-        "a non-secret scratch file stays allowed"
-    );
-    assert!(ordinary.exists());
-
-    let docs = scratch
-        .join("toolchains/1.96.0-x86_64-unknown-linux-gnu/share/doc/rust/html/core/macro.env.html");
-    let removed = create_in_managed_child(
-        &resolved,
-        &workspace,
-        &docs,
-        "managed_worktree_guard_rejects_secret_paths_after_tmp_exception",
-    )
-    .verify(Some(&scratch))
-    .expect("a scratch-only match is removed");
-    assert_eq!(removed.len(), 1, "{removed:?}");
-    assert!(
-        !docs.exists(),
-        "the `*.env.*` rule still applies under scratch"
-    );
-
-    let created = [
-        workspace.join(".env"),
-        workspace.join(".env.local"),
-        workspace.join("secrets.env"),
-    ];
-    for path in created {
         let guard = create_in_managed_child(
             &resolved,
             &workspace,
-            &path,
-            "managed_worktree_guard_rejects_secret_paths_after_tmp_exception",
+            &created,
+            "managed_worktree_guard_table/scratch_only",
         );
         let error = guard
+            .verify(None)
+            .expect_err("row scratch_only: without a scratch root the match fails the run");
+        assert!(error.to_string().contains("before commit"), "{error}");
+        assert!(
+            created.exists(),
+            "row scratch_only: a failing guard removes nothing"
+        );
+
+        let removed = guard
             .verify(Some(&scratch))
-            .expect_err("new forbidden match");
+            .expect("row scratch_only: a scratch-only match does not fail the run");
+        assert_eq!(
+            removed,
+            vec![LinuxBwrapScratchRemoval {
+                path: created.clone(),
+                rule: format!("{}/**/*.env", workspace.display()),
+            }]
+        );
+        assert!(
+            !created.exists(),
+            "row scratch_only: the scratch match is removed"
+        );
+        assert!(
+            created.parent().expect("parent").is_dir(),
+            "row scratch_only: only the matched path is removed"
+        );
+        assert_eq!(
+            guard.verify(Some(&scratch)).expect("verify again"),
+            Vec::new(),
+            "row scratch_only: nothing forbidden is left behind"
+        );
+    }
+
+    // Row: managed_worktree_guard_rejects_committable_match_beside_scratch_match.
+    {
+        let (_temp, workspace, scratch) = scratch_workspace();
+        let guard = LinuxBwrapPostRunGuard::capture(&scratch_policy_profile(&workspace))
+            .expect("capture")
+            .expect("guard");
+        let in_scratch = scratch.join("fixture.env");
+        let committable = workspace.join("src/secrets.env");
+        std::fs::write(&in_scratch, "secret").expect("scratch match");
+        std::fs::create_dir_all(committable.parent().expect("parent")).expect("src");
+        std::fs::write(&committable, "secret").expect("committable match");
+
+        let error = guard
+            .verify(Some(&scratch))
+            .expect_err("row committable: a committable match fails the run");
         let message = error.to_string();
         assert!(
-            message.contains("before commit") && message.contains(&path.display().to_string()),
-            "post-run guard must fail the managed run for {}: {message}",
-            path.display()
+            matches!(error, OrbitError::PolicyDenied(_))
+                && message.contains("before commit")
+                && message.contains(&committable.display().to_string()),
+            "{message}"
         );
+        assert!(in_scratch.exists() && committable.exists());
+    }
+
+    // Row: managed_worktree_guard_rejects_secret_paths_after_tmp_exception,
+    // including managed_worktree_guard_rejects_new_forbidden_match.
+    {
+        let (_temp, workspace, scratch) = scratch_workspace();
+        let resolved = scratch_policy_profile(&workspace);
+        let ordinary = scratch.join("ok.txt");
+        std::fs::write(&ordinary, "ok").expect("ordinary scratch");
+        assert_eq!(
+            LinuxBwrapPostRunGuard::capture(&resolved)
+                .expect("capture")
+                .expect("guard")
+                .verify(Some(&scratch))
+                .expect("verify"),
+            Vec::new(),
+            "row secret_paths: a non-secret scratch file stays allowed"
+        );
+        assert!(ordinary.exists());
+
+        let docs = scratch.join(
+            "toolchains/1.96.0-x86_64-unknown-linux-gnu/share/doc/rust/html/core/macro.env.html",
+        );
+        let removed = create_in_managed_child(
+            &resolved,
+            &workspace,
+            &docs,
+            "managed_worktree_guard_table/secret_paths",
+        )
+        .verify(Some(&scratch))
+        .expect("row secret_paths: a scratch-only match is removed");
+        assert_eq!(removed.len(), 1, "{removed:?}");
+        assert!(
+            !docs.exists(),
+            "row secret_paths: the `*.env.*` rule still applies under scratch"
+        );
+
+        // (path relative to the workspace, scratch root for verification):
+        // `new.env` is the rejects_new_forbidden_match row and is verified
+        // without a scratch root exactly as that scenario did.
+        for (relative, with_scratch) in [
+            ("new.env", false),
+            (".env", true),
+            (".env.local", true),
+            ("secrets.env", true),
+        ] {
+            let path = workspace.join(relative);
+            let guard = create_in_managed_child(
+                &resolved,
+                &workspace,
+                &path,
+                "managed_worktree_guard_table/secret_paths",
+            );
+            let scratch_root = with_scratch.then_some(scratch.as_path());
+            let error = guard
+                .verify(scratch_root)
+                .expect_err("row secret_paths: new forbidden match");
+            let message = error.to_string();
+            assert!(
+                message.contains("before commit") && message.contains(&path.display().to_string()),
+                "row secret_paths: post-run guard must fail the managed run for {}: {message}",
+                path.display()
+            );
+        }
     }
 }
 
@@ -2168,8 +2095,6 @@ fn managed_worktree_guard_rejects_secret_paths_after_tmp_exception() {
 /// reads that run as executing the confined path [ORB-14334].
 #[test]
 fn a_deferred_bwrap_test_reports_its_deferral_past_output_capture() {
-    use orbit_types::workflow::{HostEvidenceReason, HostSandboxCommand, judge_host_test_output};
-
     const CHILD_ENV: &str = "ORBIT_BWRAP_DEFERRAL_FIXTURE_CHILD";
     const DETAIL: &str = "fixture host\nwithout namespaces";
     if std::env::var_os(CHILD_ENV).is_some() {

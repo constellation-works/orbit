@@ -122,12 +122,38 @@ impl TaskV2Store {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
-        self.ensure_recovered()?;
+        self.candidate_keys(filter, limit, false)
+    }
+
+    /// [`Self::task_candidate_keys`] under the observational terms of
+    /// [`Self::observe_task_candidates`]: freshness is validated without
+    /// persisting proofs and recovery is never entered.
+    pub(crate) fn observe_task_candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        self.candidate_keys(filter, limit, true)
+    }
+
+    fn candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        observed: bool,
+    ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        if !observed {
+            self.ensure_recovered()?;
+        }
         let filter = filter.normalized();
         if !filter.is_fully_indexed() {
             return Ok(None);
         }
-        let Some(unsettled) = self.validate_index()? else {
+        let Some(unsettled) = (if observed {
+            self.validate_index_with_proofs(false)?
+        } else {
+            self.validate_index()?
+        }) else {
             return Ok(None);
         };
         let selection = self.registry.indexed_task_selection(
@@ -180,8 +206,13 @@ impl TaskV2Store {
         residual: TaskResidualFilter<'_>,
     ) -> Result<TaskPage, OrbitError> {
         let filter = filter.normalized();
+        let selection_filter = if residual.is_some() {
+            filter.without_cursor()
+        } else {
+            filter.clone()
+        };
         let candidates = self.task_candidates(
-            &filter,
+            &selection_filter,
             if residual.is_some() {
                 usize::MAX
             } else {
@@ -197,6 +228,10 @@ impl TaskV2Store {
             // a bundle: a lock, seven file reads and their parses. Each
             // hydrated task is checked again below, which is the authority.
             selected.retain(|candidate| matches(&Self::metadata_task(candidate), &status_by_id));
+        }
+        let residual_total_without_cursor = selected.len();
+        if residual.is_some() && filter.scan_before.is_some() {
+            selected.retain(|candidate| filter.matches_cursor(candidate));
         }
         let selected_total = selected.len();
         let mut items = Vec::with_capacity(selected_total.min(limit));
@@ -223,7 +258,7 @@ impl TaskV2Store {
             candidates.total
         };
         let total_without_cursor = if residual.is_some() {
-            total
+            residual_total_without_cursor
         } else {
             candidates.total_without_cursor
         };
@@ -256,7 +291,8 @@ impl TaskV2Store {
         }
         sort_listing(
             &mut items,
-            filter.terminal_last,
+            filter,
+            |row| row.task.not_before,
             |row| &row.task.created_at,
             |row| &row.task.id,
             |row| row.task.status,
@@ -404,7 +440,8 @@ fn select_candidates(
         .collect::<Vec<_>>();
     sort_listing(
         &mut items,
-        filter.terminal_last,
+        filter,
+        |task| task.not_before,
         |task| &task.created_at,
         |task| &task.id,
         |task| task.status,
@@ -427,13 +464,16 @@ fn select_candidates(
 /// status move behind the rest while each partition keeps that order.
 fn sort_listing<T>(
     items: &mut [T],
-    terminal_last: bool,
+    filter: &TaskListFilter,
+    not_before: impl Fn(&T) -> Option<chrono::DateTime<Utc>>,
     created_at: impl Fn(&T) -> &chrono::DateTime<Utc>,
     id: impl Fn(&T) -> &str,
     status: impl Fn(&T) -> TaskStatus,
 ) {
     sort_by_created_desc_id_asc(items, created_at, id);
-    if terminal_last {
+    if filter.scheduled_after.is_some() {
+        items.sort_by_key(not_before);
+    } else if filter.terminal_last {
         items.sort_by_key(|item| status(item).is_terminal());
     }
 }

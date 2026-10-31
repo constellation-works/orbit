@@ -11,6 +11,10 @@ use std::path::PathBuf;
 
 #[path = "source_repair/association.rs"]
 mod association;
+#[path = "source_repair/crew_redraw.rs"]
+mod crew_redraw;
+#[path = "source_repair/escalated_publication.rs"]
+mod escalated_publication;
 #[path = "source_repair/failed_publication.rs"]
 mod failed_publication;
 #[path = "source_repair/failed_successors.rs"]
@@ -24,19 +28,34 @@ mod completion;
 mod generations;
 #[path = "source_repair/handoff_requeue.rs"]
 mod handoff_requeue;
+#[path = "source_repair/inline_completion_retry.rs"]
+mod inline_completion_retry;
+#[path = "source_repair/inline_publication.rs"]
+mod inline_publication;
+#[path = "source_repair/preflight.rs"]
+mod preflight;
 #[path = "source_repair/publication.rs"]
 mod publication;
 #[path = "source_repair/published_owner.rs"]
 mod published_owner;
+#[path = "source_repair/reconciliation.rs"]
+mod reconciliation;
 #[path = "source_repair/replay.rs"]
 mod replay;
 #[path = "source_repair/resumed_recovery.rs"]
 mod resumed_recovery;
+#[path = "source_repair/review_requeue.rs"]
+mod review_requeue;
 #[path = "source_repair/reviewers.rs"]
 mod reviewers;
 use completion::mutation::{
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,
+};
+use completion::policy::{
+    candidate_drift_refuses_equivalent_policy_retry, equivalent_policy_drift_retries_observation,
+    relevant_policy_drift_preserves_publication,
+    risk_threshold_policy_retries_observation_until_a_predicate_changes,
 };
 use completion::prerequisite::{
     later_prerequisite_read_failure_resumes_only_completion,
@@ -51,9 +70,14 @@ use completion::{
     empty_requirements_still_bind_completion_policy,
     moved_base_and_empty_requirements_retry_unchanged_completion,
     refused_receipts_stop_before_agent_or_republication,
-    repeated_observation_failure_escalates_after_one_retry,
+    repeated_observation_failure_holds_after_one_retry,
+    timing_alias_rewrites_preserve_published_completion_authentication,
     unchanged_publication_retries_only_completion,
     unknown_merge_reply_is_reconciled_without_republication,
+};
+use crew_redraw::{
+    crew_redraws_keep_every_other_adoption_refusal,
+    system_crew_redraws_keep_the_preserved_publication_adoptable,
 };
 use failed_successors::{
     failed_pre_adoption_chain_rebinds_the_original_publication,
@@ -839,6 +863,8 @@ crate::scenario_table!(
     failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     published_completion_requeue_adopts_without_reimplementation,
+    system_crew_redraws_keep_the_preserved_publication_adoptable,
+    crew_redraws_keep_every_other_adoption_refusal,
     published_requeue_is_admitted_past_held_locks_and_reuses_its_pr,
     deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn,
     auto_fix_advanced_publication_is_adopted_at_its_recorded_head,
@@ -861,10 +887,15 @@ crate::scenario_table!(
 
 crate::scenario_table!(
     published_completion_scenarios,
+    timing_alias_rewrites_preserve_published_completion_authentication,
     unchanged_publication_retries_only_completion,
+    equivalent_policy_drift_retries_observation,
+    relevant_policy_drift_preserves_publication,
+    risk_threshold_policy_retries_observation_until_a_predicate_changes,
+    candidate_drift_refuses_equivalent_policy_retry,
     moved_base_and_empty_requirements_retry_unchanged_completion,
     empty_requirements_still_bind_completion_policy,
-    repeated_observation_failure_escalates_after_one_retry,
+    repeated_observation_failure_holds_after_one_retry,
     completion_reuse_refuses_drift,
     changed_base_gets_fresh_native_validation,
     concurrent_and_lost_admission_keep_one_completion_budget,

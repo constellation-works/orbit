@@ -51,6 +51,7 @@ use orbit_types::workflow::{
 use rusqlite::TransactionBehavior;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// Transient authentication errors one block may take before it waits for an
 /// operator.
@@ -260,7 +261,7 @@ impl OrbitRuntime {
         let task = self.get_task(&scanned.task_id)?;
         // Authenticate first, outside the lock: it asks the remote and forge.
         let preserved = match &scanned.pull_request {
-            Some(_) => match self.failure_handoff_requeue_record(&task) {
+            Some(_) => match self.failure_handoff_preservation(&task) {
                 Ok((entry, _)) => Some(entry),
                 // Only the authentication's own refusal is final; a remote,
                 // forge or store error says nothing about the publication.
@@ -285,7 +286,7 @@ impl OrbitRuntime {
                 )?;
                 return Ok(None);
             }
-            None if self.unbound_publication_on_record(&task)? => {
+            None if self.unbound_publication(&task)? => {
                 self.refuse_transient_infra_requeue(
                     scanned,
                     "a pull request or preserved candidate is on record that no failure-handoff \

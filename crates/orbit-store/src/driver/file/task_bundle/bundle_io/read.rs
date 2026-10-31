@@ -33,8 +33,8 @@ pub(crate) fn read_bundle_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitErr
 /// canonical bundle lock used by [`read_bundle_at`].
 ///
 /// Deferred checks, performed by [`read_bundle_at`] and by import, reindex,
-/// publication restore, and artifact retrieval: existence, size, and sha256 of
-/// every `artifacts/files/**` blob named by the manifest.
+/// publication restore, and artifact retrieval: containment, existence, size,
+/// and sha256 of every `artifacts/files/**` blob named by the manifest.
 pub(crate) fn read_bundle_lightweight_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
     read_bundle_at_with(bundle_dir, ArtifactPayloadCheck::Defer)
 }
@@ -118,6 +118,11 @@ fn corrupt_unless_missing_or_io(
     task_id: String,
     error: OrbitError,
 ) -> OrbitError {
+    // An escaping artifact symlink is a containment refusal, not damaged
+    // declared bytes. Wrapping it would hide the stable client error.
+    if crate::fs::path_safety::is_artifact_containment_refusal(&error) {
+        return error;
+    }
     match error {
         OrbitError::NotFound {
             kind: NotFoundKind::Task,

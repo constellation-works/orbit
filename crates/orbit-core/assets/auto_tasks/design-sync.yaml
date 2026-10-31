@@ -1,0 +1,180 @@
+schemaVersion: 1
+name: design-sync
+description: Twice-daily reconciliation of design documentation with task state and current code
+enabled: false
+schedule:
+  every_minutes: 720
+template:
+  title: Reconcile design documentation with task state
+  description: |
+    Keep the design docs under `docs/design/` true to this workspace's task
+    records and code. They are the source of truth for what each feature is,
+    how far it is built and what happens next. Reconcile a few features per
+    run. Mechanical checks (broken links, typos, Markdown, a renamed path in
+    prose) belong to `doc-duties`; do them here only where a reconciliation
+    edit touches the same line.
+
+    Read `docs/design/CONVENTIONS.md` first, every run: frontmatter, stage and
+    status definitions, required sections, Task References and citation format.
+    Record `git rev-parse HEAD`. If the repository has no
+    `docs/design/CONVENTIONS.md`, make no repository edits or filings, attach
+    the ledger below with empty `features` and an explicit no-conventions
+    note, and finish as a successful no-op under the workspace's validated
+    no-diff evidence requirements. Do not create conventions for it.
+
+    ## Select features
+
+    A feature is one folder under `docs/design/` with an entry doc named
+    `1_scope.md` or `1_overview.md`. Exclude `_archived/`, `_templates/` and
+    `CONVENTIONS.md`.
+
+    1. Read the prior ledger from the newest done chore minted by `design-sync`:
+       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["design-sync","auto-task:design-sync"],"limit":1,"model":"<agent-family>"}'`.
+       The provenance tag keeps divergence and archival follow-ups from
+       shadowing the reconciliation ledger.
+       Discover its artifact metadata with
+       `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
+       and, only when listed, fetch
+       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"design-sync-ledger.json","model":"<agent-family>"}'`.
+       Start from its cumulative `state`, which maps feature slugs to their
+       last reconciliation date and outcome. Say explicitly in the execution
+       summary and ledger `notes` when no ledger is readable; never substitute
+       summary prose. On a no-conventions run, carry any readable state forward
+       unchanged without selecting features.
+    2. For each feature, collect its related tasks as described below and read
+       their creation and status history. Use the newest status change, not
+       `updated_at` alone (a comment is not a status change). A feature is
+       changed when a related task was filed or changed status (including
+       approval, start, done, rejection or archival) after its ledger date,
+       or it has no ledger row. For date-only ledger rows, conservatively
+       include changes on that date so same-day transitions are not lost.
+       Record unavailable history as an uncertainty, never as proof of no
+       change.
+    3. Select at most three features: changed ones first, oldest ordering date
+       first, then unchanged ones in the same order. The ordering date is the
+       ledger's `reconciled_on`, else the entry doc's valid `last_validated`,
+       else its git last-touched date. Break ties by feature slug. Report
+       invalid or unavailable dates rather than inventing them.
+
+    Related tasks come from Orbit, never from guesses:
+
+    - Every task ID cited anywhere in the feature folder's docs.
+    - `orbit tool run orbit.search --input '{"query":"<one token>","kind":"task","all":true,"model":"<agent-family>"}'`
+      separately for `docs/design/<feature>/`, the feature slug, and the
+      feature's tag when tasks use one. Task search matches non-adjacent
+      terms; keep each query to one token, and do not treat a zero-hit
+      multi-word query as evidence of absence.
+      Inspect truncation and narrow or page before claiming completeness.
+    - Tasks whose `spawned_from` or `resolves` relations point at a cited task
+      and implement a phase or slice. Search each cited ID as a separate token
+      to discover these candidates, then confirm the actual relation.
+    - `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`
+      on each candidate to confirm it implements, extends, reviews or retires
+      this design, rather than merely mentioning it, and to read its status,
+      history, done date and delivery. Use `field: "delivery"` for recorded
+      landing evidence. Recover truncated records needed for the judgment.
+
+    ## Reconcile each selected feature
+
+    Check every claim against the recorded checkout HEAD and the task records.
+    Fix stale claims; leave design intent alone. Follow CONVENTIONS when its
+    vocabulary differs from these rules, and record any such difference.
+
+    - **Stage** in the entry doc: `designing` while nothing is approved to
+      build; `building` once implementation tasks are approved or have landed
+      and committed scope is incomplete; `shipped` when every committed-scope
+      task is done and its code is on the workspace integration branch
+      `__ORBIT_BASE_BRANCH__` (vision and someday work do not count); `parked`
+      only when a task or decision records the hold. Verify landing ancestry
+      against that branch with git and delivery records; a done status alone
+      is insufficient. Name the evidence for every stage move. Missing branch
+      or delivery evidence leaves the move unverified, not assumed shipped.
+    - **Status:** `Draft` becomes `Accepted` only on recorded approval of this
+      design by its owner or the workspace owner, in a task, comment or
+      decision. Never infer approval from implementation or task completion.
+      `Accepted` becomes `Implemented` when stage is `shipped`. Deprecation
+      and archiving follow CONVENTIONS section 7 and are not done here: file
+      a deduplicated follow-up task instead, within the filing cap below.
+    - **Next:** one line, at most about 100 characters, naming the actual next
+      step and its task ID when one exists; `—` for a shipped feature with
+      nothing pending.
+    - **Phasing, slice and At-a-Glance tables and status prose:** cite the task
+      implementing each phase or slice once filed; mark done slices with their
+      task IDs. Correct claims such as "nothing is implemented", "not filed"
+      or "planned" contradicted by records or code. Fix moved or renamed file,
+      symbol, command and config-key anchors after verifying them in the
+      checkout; never add line numbers.
+    - **Task References:** exactly the task IDs cited in that doc, each with
+      a verb phrase naming what the task did or does, plus the conventions'
+      resolve line. Use the repository's citation format (plain bracketed
+      IDs under section 9). Cite a newly related task in the body where it
+      belongs before listing it; never list an uncited ID or drop a cited one.
+    - Move `last_updated` to today on any edit. Move `last_validated` to today
+      only when the key already exists and the feature was fully reconciled.
+      Missing records or unchecked claims make the feature `partial`, with
+      a reason; do not mark it fully validated.
+    - `4_decisions.md` is historical: fix only links and Task References.
+      Preserve its decisions and historical metadata.
+
+    **Never rewrite design intent to match code.** When implementation diverges
+    from committed design and no landed task or decision explains it, leave
+    the design text. Search for an open task covering that divergence by path
+    and distinctive tokens, inspect candidates, and cite an existing task when
+    one covers it. Otherwise file one proposed task for the divergence:
+    `orbit tool run orbit.task.add --input '{"title":"Design/code divergence in <feature>: <what>","description":"<doc path and section; code location at the recorded HEAD; which side looks wrong and why; supporting evidence>","acceptance_criteria":["<observable resolution of the documented divergence>"],"tags":["docs","design-sync"],"type":"bug","complexity":"<low|medium|hard|xhard>","relations":[{"type":"spawned_from","target":"<this task ID>"}],"context_files":["file:<file the fix would modify>"],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Set honest complexity and context selectors naming only files the fix
+    would modify. File at most three tasks total per run, including any
+    deprecation or archival follow-ups (use type `chore` for those). Record
+    remaining divergences and cap deferrals as unverified work; do not silently
+    reconcile them away. Never implement a divergence fix in this run.
+
+    After any frontmatter change, run `make docs-index`
+    (`scripts/generate-doc-indexes.sh`) and include regenerated indexes in the
+    diff. Use the repository's documented equivalent when it supplies one;
+    if no generator exists, record that limit instead of inventing a command.
+    Follow the workspace's validation requirements for the resulting diff.
+
+    ## Ledger and summary
+
+    Write `.orbit/tmp/design-sync-ledger.json` and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/design-sync-ledger.json","path":"design-sync-ledger.json","model":"<agent-family>"}'`.
+    Its shape is
+    `{"schema_version":1,"run_date":"YYYY-MM-DD","head":"<full HEAD SHA>","notes":"<missing ledger, no conventions or other limits>","features":[{"feature":"<slug>","changed":true,"outcome":"clean|fixed|partial","reason":"<required unless clean or fixed>","stage":"<before>-><after>","status":"<before>-><after>","next_changed":false,"tasks_cited":["<id>"],"divergence_tasks":["<id>"]}],"state":{"<slug>":{"reconciled_on":"YYYY-MM-DD","outcome":"clean|fixed|partial"}}}`.
+    Give each selected feature exactly one row in selection order; record both
+    found and newly filed divergence tasks. Put today's date and outcome in
+    each selected feature's state row and carry every other state row forward
+    unchanged. Attach the ledger every run, including clean batches, no
+    features and no-conventions no-ops.
+
+    The execution summary names each feature, the evidence behind every stage,
+    status and next move, newly cited tasks, divergence tasks found or filed,
+    and anything left unverified. State explicitly when everything matched.
+    Do not manufacture edits on a clean run: follow the workspace's validated
+    no-diff evidence requirements.
+  acceptance_criteria:
+  - At most three design features were reconciled against CONVENTIONS.md, task records and the recorded checkout HEAD, ordered changed-since-ledger first then oldest reconciliation date with frontmatter and git date fallbacks; unavailable ledger or task history is disclosed.
+  - Stage, status, next, phase and slice task citations, implementation claims and Task References match verified evidence; Accepted requires recorded owner approval, shipped requires integration-branch delivery, and historical decisions and design intent are preserved.
+  - Unexplained design/code divergences have a cited existing task or a proposed design-sync task with evidence, honest complexity, modification-only context selectors and a spawned_from relation; no more than three tasks were filed and cap deferrals are recorded.
+  - Frontmatter edits regenerated the repository's doc index when its generator is available, and any unavailable generator or other verification limit is recorded without claiming full reconciliation.
+  - A design-sync-ledger.json artifact records each selected feature and carries all other state rows forward, including clean runs and a successful no-edit, no-filing no-op when docs/design/CONVENTIONS.md is absent; clean runs follow workspace no-diff evidence requirements.
+  task_type: chore
+  tags:
+  - design-sync
+  - docs
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  context_files:
+  - 'dir:docs'
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-26T00:00:00Z
+updated_by: system
+updated_at: 2026-10-26T00:00:00Z

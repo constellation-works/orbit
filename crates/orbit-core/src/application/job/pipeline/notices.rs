@@ -13,6 +13,7 @@ use orbit_types::workflow::ResourceThrottle;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::{JobAutomationPort, JobDrainPort};
 
 /// The submission the notices describe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +57,8 @@ pub struct SubmissionNotices {
     pub task_pilot_warning: Option<String>,
     /// That this host declares no required validation commands. Drains only.
     pub required_validation_note: Option<String>,
+    /// macOS polling containment, or its explicit disablement.
+    pub worker_containment_note: Option<String>,
 }
 
 impl SubmissionNotices {
@@ -78,7 +81,11 @@ impl SubmissionNotices {
     /// Informational notes; they never describe a problem.
     #[must_use]
     pub fn notes(&self) -> Vec<String> {
-        self.required_validation_note.clone().into_iter().collect()
+        self.required_validation_note
+            .clone()
+            .into_iter()
+            .chain(self.worker_containment_note.clone())
+            .collect()
     }
 
     /// Add the notices to a JSON submission receipt: `warning` and `note`
@@ -113,9 +120,14 @@ impl OrbitRuntime {
         };
         SubmissionNotices {
             kind,
-            resource_throttle: throttled
-                .then(|| self.admission_resource_throttle().throttle)
-                .flatten(),
+            worker_containment_note: (self.host_os() == Some(orbit_types::task::HostOs::Macos)).then(|| {
+                if self.context.settings().worker_containment().enabled {
+                    "Worker containment: watchdog (1s polling), without kernel enforcement; strict requires kernel containment.".to_string()
+                } else {
+                    "Worker containment: off; no watchdog or kernel limits.".to_string()
+                }
+            }),
+            resource_throttle: throttled.then(|| self.admission_throttle()).flatten(),
             validation_env_warning: self.validation_env_preflight_warning(),
             host_os_backlog_warning: (kind == SubmissionKind::Drain)
                 .then(|| self.host_os_backlog_warning())
@@ -127,7 +139,7 @@ impl OrbitRuntime {
                 .then(|| self.claude_worker_credential_warning())
                 .flatten(),
             task_pilot_warning: (kind == SubmissionKind::Drain)
-                .then(|| self.task_pilot_warning())
+                .then(|| self.pilot_routine_warning())
                 .flatten(),
             required_validation_note: kind
                 .is_drain()

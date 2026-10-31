@@ -6,7 +6,7 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use orbit_automation::{
-    AutomationError,
+    AutomationError, DeferredReason,
     members::incidents::{IncidentFacts, incident_key},
 };
 use orbit_store::contracts::TaskCandidates;
@@ -57,17 +57,21 @@ fn root(
 
     for _ in 0..50 {
         if !seen.insert(current.run_id.clone()) {
-            return Err(AutomationError::Deferred("incident_lineage_cycle".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::IncidentLineageCycle,
+            ));
         }
         let Some(parent) = &current.retry_source_run_id else {
             return Ok(current.run_id);
         };
         current = session
             .backend_run(runtime, parent)?
-            .ok_or_else(|| AutomationError::Deferred("incident_lineage_missing".into()))?;
+            .ok_or_else(|| AutomationError::Deferred(DeferredReason::IncidentLineageMissing))?;
     }
 
-    Err(AutomationError::Deferred("incident_lineage_budget".into()))
+    Err(AutomationError::Deferred(
+        DeferredReason::IncidentLineageBudget,
+    ))
 }
 
 pub(crate) fn observe(
@@ -123,13 +127,13 @@ fn diagnose(
     session.stats.observes += 1;
 
     if !runtime.task_run_is_local(task) {
-        return Err(AutomationError::Deferred("foreign_run".into()));
+        return Err(AutomationError::Deferred(DeferredReason::ForeignRun));
     }
 
     let run_id = task
         .job_run_id
         .as_deref()
-        .ok_or_else(|| AutomationError::Deferred("human_block".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::HumanBlock))?;
 
     let mut run = session.show_run(runtime, run_id)?;
     let coupled = failure_coupled(runtime, task, run_id)?;
@@ -145,7 +149,9 @@ fn diagnose(
     let mut seen = BTreeSet::new();
     for _ in 0..50 {
         if !seen.insert(run.run_id.clone()) {
-            return Err(AutomationError::Deferred("incident_lineage_cycle".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::IncidentLineageCycle,
+            ));
         }
 
         let liveness = session.probe_liveness(&run);
@@ -175,7 +181,9 @@ fn diagnose(
             .unwrap_or_default();
 
         if children.len() > 1 {
-            return Err(AutomationError::Deferred("incident_unresolved".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::IncidentUnresolved,
+            ));
         }
 
         let Some(child) = children.first() else {
@@ -187,14 +195,16 @@ fn diagnose(
     }
 
     if seen.len() == 50 {
-        return Err(AutomationError::Deferred("incident_lineage_budget".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::IncidentLineageBudget,
+        ));
     }
 
     // Collect the whole retry tree under the episode root: an incident is only
     // settled once every run in it has stopped.
     let root_run = session
         .backend_run(runtime, &episode)?
-        .ok_or_else(|| AutomationError::Deferred("incident_lineage_missing".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::IncidentLineageMissing))?;
 
     let mut related = vec![root_run];
     let mut lineage = BTreeSet::from([episode.clone()]);
@@ -204,7 +214,9 @@ fn diagnose(
         let children = session.retries(runtime, &related[index].run_id)?;
 
         if children.len() > 50 || related.len() + children.len() > 1000 {
-            return Err(AutomationError::Deferred("incident_scan_budget".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::IncidentScanBudget,
+            ));
         }
 
         for child in children {
@@ -529,7 +541,7 @@ fn blocked_candidates(runtime: &OrbitRuntime) -> Result<TaskCandidates, Automati
 
     if candidates.total > 1000 {
         return Err(AutomationError::Deferred(
-            "incident_inventory_budget".into(),
+            DeferredReason::IncidentInventoryBudget,
         ));
     }
 

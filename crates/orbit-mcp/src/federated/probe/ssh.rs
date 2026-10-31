@@ -16,6 +16,8 @@ use crate::remote::McpSessionAuthority;
 
 /// The production probe: one short-lived SSH-hosted MCP session per call.
 pub struct SshDestinationProbe {
+    #[cfg(feature = "test-support")]
+    fixture_line_cap: Option<u64>,
     caller_machine_id: String,
     probe_timeout: Duration,
     delivery_timeout: Duration,
@@ -42,12 +44,41 @@ impl SshDestinationProbe {
         authority: McpSessionAuthority,
     ) -> Self {
         Self {
+            #[cfg(feature = "test-support")]
+            fixture_line_cap: None,
             caller_machine_id,
             probe_timeout,
             delivery_timeout,
             orchestrator,
             authority,
         }
+    }
+
+    /// Lower this probe's line caps for isolated transport fixtures only.
+    ///
+    /// Available only with `test-support`, enabled from dev-dependencies.
+    /// No process-wide setting or production limit is changed.
+    #[cfg(feature = "test-support")]
+    pub fn with_test_line_cap(mut self, cap: u64) -> Self {
+        self.fixture_line_cap = Some(cap);
+        self
+    }
+
+    fn session_from_child(
+        &self,
+        destination: &Destination,
+        child: Child,
+    ) -> Result<DestinationSession, OrbitError> {
+        #[cfg(feature = "test-support")]
+        if let Some(cap) = self.fixture_line_cap {
+            return DestinationSession::start_with_test_line_cap(
+                destination.clone(),
+                child,
+                self.probe_timeout,
+                cap,
+            );
+        }
+        DestinationSession::start(destination.clone(), child, self.probe_timeout)
     }
 }
 
@@ -64,8 +95,7 @@ impl DestinationProbe for SshDestinationProbe {
             true,
             false,
         )?;
-        let mut session =
-            DestinationSession::start(destination.clone(), child, self.probe_timeout)?;
+        let mut session = self.session_from_child(destination, child)?;
         session.handshake_with_worker(None)?;
         Ok(Box::new(SshRoutedSession::new(
             session,
@@ -133,8 +163,7 @@ impl SshDestinationProbe {
         )?;
         // The session is one process; the guard ends it on every path,
         // including the timeout path where the child is still mid-answer.
-        let mut session =
-            DestinationSession::start(destination.clone(), child, self.probe_timeout)?;
+        let mut session = self.session_from_child(destination, child)?;
         session.handshake_with_worker(binding)?;
         Ok(session)
     }

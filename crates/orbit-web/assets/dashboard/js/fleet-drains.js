@@ -11,6 +11,24 @@ let cached = null;
 let pending = null;
 let cachedAt = 0;
 let cachedKey = '';
+let partialPayload = null;
+const partialListeners = new Set();
+
+function publishPartial(rows, sources) {
+  const items = [];
+  for (let index = 0; index < sources.length; index++) {
+    if (rows[index]) items.push(...rows[index]);
+    else items.push({ host: sources[index].name, phase: 'loading', pending: true });
+  }
+  partialPayload = { items };
+  for (const listener of [...partialListeners]) {
+    try { listener(partialPayload); } catch (error) { console.error(error); }
+  }
+}
+
+export function peekFleetPartial() {
+  return partialPayload;
+}
 
 function fleetSources() {
   const hosts = getRegisteredHosts();
@@ -29,14 +47,24 @@ export function peekFleetDrains() {
   return { payload: cached, fresh: Date.now() - cachedAt < FLEET_CACHE_MS };
 }
 
-export function fetchFleetDrains({ force = false } = {}) {
+export function fetchFleetDrains({ force = false, onPartial = null } = {}) {
   const sources = fleetSources();
   const key = fleetKey(sources);
-  if (!force && key === cachedKey && cached && Date.now() - cachedAt < FLEET_CACHE_MS) return Promise.resolve(cached);
-  if (key === cachedKey && pending) return pending;
-  if (key !== cachedKey) cached = null;
+  if (typeof onPartial === 'function') partialListeners.add(onPartial);
+  if (!force && key === cachedKey && cached && Date.now() - cachedAt < FLEET_CACHE_MS) {
+    if (typeof onPartial === 'function') partialListeners.delete(onPartial);
+    return Promise.resolve(cached);
+  }
+  if (key === cachedKey && pending) {
+    if (partialPayload && typeof onPartial === 'function') {
+      try { onPartial(partialPayload); } catch (error) { console.error(error); }
+    }
+    return pending;
+  }
+  if (key !== cachedKey) { cached = null; partialPayload = null; }
   cachedKey = key;
   const rows = new Array(sources.length);
+  publishPartial(rows, sources);
   let next = 0;
   const read = async () => {
     while (next < sources.length) {
@@ -50,6 +78,7 @@ export function fetchFleetDrains({ force = false } = {}) {
       } catch (error) {
         rows[index] = [{ host: host.name, phase: 'unavailable', error: error.message || 'Host unavailable' }];
       }
+      if (cachedKey === key) publishPartial(rows, sources);
     }
   };
   const request = Promise.all(Array.from({ length: Math.min(3, sources.length) }, read)).then(() => ({ items: rows.flat() }));
@@ -59,6 +88,8 @@ export function fetchFleetDrains({ force = false } = {}) {
       cached = payload;
       cachedAt = Date.now();
       pending = null;
+      partialPayload = null;
+      partialListeners.clear();
     }
     return payload;
   });
@@ -70,8 +101,10 @@ export function fleetDrainLabel(payload) {
   const draining = known.filter(row => ['draining', 'pulling'].includes(row.phase)).length;
   const winding = known.filter(row => row.phase === 'winding_down').length;
   const unavailable = rows.some(row => row.error);
+  const loading = rows.some(row => row.pending);
+  if (loading && !known.length && !unavailable) return 'Fleet loading…';
   if (unavailable && known.every(row => row.error)) return 'Fleet unavailable';
-  return `${draining ? `${draining} of ${known.length} workspaces draining` : winding ? `${winding} of ${known.length} workspaces winding down` : `Fleet idle · ${known.length} workspaces`}${unavailable ? ' · partial' : ''}`;
+  return `${draining ? `${draining} of ${known.length} workspaces draining` : winding ? `${winding} of ${known.length} workspaces winding down` : `Fleet idle · ${known.length} workspaces`}${unavailable ? ' · partial' : ''}${loading ? ' · loading' : ''}`;
 }
 
 const LIVE_PHASES = ['draining', 'pulling', 'winding_down'];
@@ -162,8 +195,131 @@ function unavailableRow(row) {
   return item;
 }
 
-// One group per host, in registry order. Live drains lead their group; the
-// rest keep the host's order (the sort is stable). Idle rows show a muted dot and slots only.
+function loadingRow(row) {
+  const item = el('li', { class: 'fleet-row fleet-loading' });
+  item.setAttribute('data-phase', 'loading');
+  item.append(field('phase', 'Phase', 'loading…', 'fleet-phase'));
+  return item;
+}
+
+// Repaint a fleet container without dropping keyboard focus held by a
+// ready workspace button. When the previously focused button's workspace
+// is still present, its node is moved into the new tree while both trees
+// are connected (so it never disconnects), and focus is restored to that
+// same node if the move still blurred it. If the workspace is gone, focus
+// is left where the browser puts it rather than stolen for another row.
+export function replaceFleetDrains(container, payload, selectScope) {
+  if (!container) return;
+  const doc = container.ownerDocument || null;
+  const active = doc?.activeElement || null;
+  const focusedLabel = active && container.contains(active) && active.classList?.contains('fleet-workspace')
+    ? active.getAttribute?.('aria-label') : null;
+  const focusedTab = active && container.contains(active) && active.classList?.contains('fleet-host-tab')
+    ? active.getAttribute?.('data-host') : null;
+  const next = renderFleetDrains(payload, selectScope);
+  if (focusedTab) {
+    container.replaceChildren(next);
+    [...container.querySelectorAll('.fleet-host-tab')]
+      .find(tab => tab.getAttribute('data-host') === focusedTab)?.focus({ preventScroll: true });
+    return;
+  }
+  if (!focusedLabel) {
+    container.replaceChildren(next);
+    return;
+  }
+  const previous = container.querySelector(':scope > .fleet-drains');
+  if (!previous || container.childElementCount !== 1) {
+    container.replaceChildren(next);
+    const candidate = [...container.querySelectorAll('button.fleet-workspace')]
+      .find(button => button.getAttribute('aria-label') === focusedLabel);
+    candidate?.focus({ preventScroll: true });
+    return;
+  }
+  const oldButton = [...previous.querySelectorAll('button.fleet-workspace')]
+    .find(button => button.getAttribute('aria-label') === focusedLabel);
+  const newButton = [...next.querySelectorAll('button.fleet-workspace')]
+    .find(button => button.getAttribute('aria-label') === focusedLabel);
+  container.append(next);
+  if (oldButton && newButton && oldButton === active) newButton.replaceWith(oldButton);
+  previous.remove();
+  const restored = oldButton && newButton ? oldButton
+    : [...container.querySelectorAll('button.fleet-workspace')]
+      .find(button => button.getAttribute('aria-label') === focusedLabel);
+  if (restored && doc.activeElement !== restored) restored.focus({ preventScroll: true });
+}
+
+// The host tab shown, remembered across repaints and reloads. Storage can
+// refuse reads and writes; the in-memory choice then serves this page.
+const HOST_STORAGE_KEY = 'orbit.dashboard.fleetHost';
+let sessionHost = null;
+
+function rememberedHost() {
+  try { return localStorage.getItem(HOST_STORAGE_KEY) || sessionHost; } catch { return sessionHost; }
+}
+
+function rememberHost(host) {
+  sessionHost = host;
+  try { localStorage.setItem(HOST_STORAGE_KEY, host); } catch { /* the in-memory choice serves */ }
+}
+
+const isLive = row => Number(LIVE_PHASES.includes(row.phase));
+
+function hostSummary(rows) {
+  const known = rows.filter(row => row.workspace_id && !row.error && !row.pending);
+  const loading = rows.some(row => row.pending);
+  const live = known.filter(isLive);
+  const count = known.length ? `${known.length} workspace${known.length === 1 ? '' : 's'}${live.length ? ` · ${live.length} live` : ''}${loading ? ' · loading' : ''}` : loading ? 'loading' : 'unavailable';
+  const state = loading ? 'loading' : known.length ? 'ready' : 'unavailable';
+  return { known, loading, live, count, state };
+}
+
+// Show one host's section and mark its tab, in place: no repaint, so a
+// focused tab keeps focus.
+function showHost(root, host) {
+  for (const tab of root.querySelectorAll('.fleet-host-tab')) {
+    const on = tab.getAttribute('data-host') === host;
+    tab.classList.toggle('on', on);
+    tab.setAttribute('aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+  }
+  for (const section of root.querySelectorAll('.fleet-host')) section.hidden = section.getAttribute('data-host') !== host;
+}
+
+// One tab per host: its name and a dot for its liveliest drain, hollow when
+// the host is unavailable. Arrow keys, Home and End move between tabs.
+function hostTabs(root, groups, selected) {
+  const hosts = [...groups.keys()];
+  const list = el('div', { class: 'scoreboard-window-selector fleet-host-tabs', role: 'tablist', 'aria-label': 'Host' });
+  for (const host of hosts) {
+    const summary = hostSummary(groups.get(host));
+    const dot = summary.live[0]?.phase || (summary.state === 'unavailable' ? 'fleet-dot-down' : summary.state === 'loading' ? 'fleet-dot-loading' : '');
+    const on = host === selected;
+    const tab = el('button', { class: `scoreboard-window-seg fleet-host-tab${on ? ' on' : ''}`, type: 'button', role: 'tab', 'aria-selected': String(on), title: `${host} · ${summary.count}` }, [
+      el('span', { class: `drain-dot ${dot}`.trim(), 'aria-hidden': 'true' }),
+      el('span', { class: 'fleet-host-tab-name', text: host }),
+    ]);
+    tab.setAttribute('data-host', host);
+    tab.tabIndex = on ? 0 : -1;
+    tab.addEventListener('click', () => { rememberHost(host); showHost(root, host); });
+    list.append(tab);
+  }
+  list.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = hosts.indexOf(rememberedHost());
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? hosts.length - 1
+      : (Math.max(index, 0) + (event.key === 'ArrowLeft' ? -1 : 1) + hosts.length) % hosts.length;
+    rememberHost(hosts[next]);
+    showHost(root, hosts[next]);
+    list.querySelector(`[data-host="${CSS.escape(hosts[next])}"]`)?.focus();
+  });
+  return list;
+}
+
+// One section per host, in registry order; with more than one host, tabs
+// choose which section shows (the remembered host, else the first). Live
+// drains lead their section; the rest keep the host's order (the sort is
+// stable). Idle rows show a muted dot and slots only.
 export function renderFleetDrains(payload, selectScope) {
   const root = el('div', { class: 'fleet-drains' });
   root.append(el('p', { class: 'fleet-hint', text: 'Select a workspace to inspect or control its drain' }));
@@ -172,16 +328,23 @@ export function renderFleetDrains(payload, selectScope) {
     if (!groups.has(row.host)) groups.set(row.host, []);
     groups.get(row.host).push(row);
   }
+  const tabbed = groups.size > 1;
+  const remembered = rememberedHost();
+  const selected = groups.has(remembered) ? remembered : groups.keys().next().value;
+  if (tabbed) {
+    root.className = 'fleet-drains fleet-tabbed';
+    root.append(hostTabs(root, groups, selected));
+  }
   for (const [host, rows] of groups) {
-    const isLive = row => Number(LIVE_PHASES.includes(row.phase));
     const ranked = [...rows].sort((a, b) => isLive(b) - isLive(a));
-    const known = rows.filter(row => row.workspace_id && !row.error);
-    const live = known.filter(isLive).length;
-    const count = known.length ? `${known.length} workspace${known.length === 1 ? '' : 's'}${live ? ` · ${live} live` : ''}` : 'unavailable';
+    const { known, loading, count, state } = hostSummary(rows);
     const section = el('section', { class: 'fleet-host' });
-    section.append(el('h3', { class: 'fleet-host-name' }, [el('span', { text: host }), el('span', { class: known.length ? 'fleet-host-count' : 'fleet-host-count fleet-host-down', text: count })]));
+    section.setAttribute('data-host', host);
+    section.setAttribute('data-host-state', state);
+    if (tabbed && host !== selected) section.hidden = true;
+    section.append(el('h3', { class: 'fleet-host-name' }, [el('span', { text: host }), el('span', { class: known.length ? 'fleet-host-count' : loading ? 'fleet-host-count fleet-host-loading' : 'fleet-host-count fleet-host-down', text: count })]));
     const list = el('ul', { class: 'fleet-rows' });
-    for (const row of ranked) list.append(row.workspace_id && !row.error ? workspaceRow(row, selectScope) : unavailableRow(row));
+    for (const row of ranked) list.append(row.pending ? loadingRow(row) : row.workspace_id && !row.error ? workspaceRow(row, selectScope) : unavailableRow(row));
     section.append(list);
     root.append(section);
   }

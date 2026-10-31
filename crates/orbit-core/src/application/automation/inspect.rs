@@ -39,6 +39,7 @@ pub fn unresolvable_delivery_branches(
         let definition = listed.definition;
         let AutoTaskSchedule::Deliveries {
             deliveries_landed: declared,
+            ..
         } = &definition.schedule
         else {
             continue;
@@ -144,6 +145,7 @@ pub fn delivery_ownership_refusal(
 ) -> Option<UnadmittableDefinition> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         return None;
@@ -247,7 +249,7 @@ pub fn wedged_delivery_consumers(
 /// with the remote-tracking ref without fetching.
 pub(super) fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<String> {
     source.verify_branch(branch).err().map(|error| match error {
-        AutomationError::Deferred(reason) => reason,
+        AutomationError::Deferred(reason) => reason.to_string(),
         other => other.to_string(),
     })
 }
@@ -282,6 +284,7 @@ fn inspect_auto_task_inner(
 ) -> Result<AutomationDiagnostic, OrbitError> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         return Err(OrbitError::InvalidInput("not a delivery definition".into()));

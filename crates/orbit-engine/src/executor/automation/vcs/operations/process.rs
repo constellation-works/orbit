@@ -11,10 +11,12 @@ pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_ATTEMPTS: u32 = 
 pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_RETRY_DELAY: Duration =
     Duration::from_millis(500);
 
-/// Retry a private automation VCS read-only lookup across a bounded number
+/// Retry a private automation VCS lookup or idempotent label mutation across a bounded number
 /// of attempts when GitHub answers with a transient failure. This includes
 /// PR lists, views and status, repository identity and merge capabilities,
-/// and CI and check-annotation reads without a completion deadline.
+/// and CI and check-annotation reads without a completion deadline. Task-derived
+/// label create and add operations are idempotent: create accepts an existing
+/// label and edit only adds labels, so an ambiguous response can be retried.
 /// Deadline-bounded reads retain their caller's observation recovery.
 /// `pr_open` calls
 /// `PR_LIST` and `PR_VIEW` to check for an existing PR before deciding whether
@@ -39,7 +41,7 @@ pub(super) fn execute_with_transient_retry(
                 tracing::warn!(target: "orbit_engine::executor::automation::vcs::operations",
                     operation,
                     attempt,
-                    "retrying private automation VCS lookup after a transient GitHub failure"
+                    "retrying private automation VCS operation after a transient GitHub failure"
                 );
                 super::super::remote_probe::fixed_wait(GITHUB_TRANSIENT_RETRY_DELAY);
                 attempt += 1;
@@ -57,9 +59,10 @@ pub(in crate::executor::automation::vcs) fn is_transient(error: &OrbitError) -> 
         .is_some_and(|failure| failure.class.is_transient())
 }
 
-/// `wrapper`, an Orbit diagnostic that reports `cause`, keeping the class of
-/// the private VCS failure `cause` carries. Any other wrapper is returned
-/// unchanged: an Orbit refusal is never a transient provider failure.
+/// `wrapper`, an Orbit diagnostic that reports `cause`, preserving a typed
+/// delivery refusal or the class of a private VCS failure. Any other wrapper
+/// is returned unchanged: an Orbit refusal is never a transient provider
+/// failure.
 pub(in crate::executor::automation::vcs) fn carry_class(
     cause: &OrbitError,
     wrapper: OrbitError,
@@ -70,8 +73,16 @@ pub(in crate::executor::automation::vcs) fn carry_class(
                 operation: failure.operation.clone(),
                 class: failure.class,
                 message,
+                read_throttle: failure.read_throttle.clone(),
             }))
         }
+        (_, OrbitError::Execution(message)) => match cause {
+            OrbitError::DeliveryRefused { refusal, .. } => OrbitError::DeliveryRefused {
+                refusal: *refusal,
+                message,
+            },
+            _ => OrbitError::Execution(message),
+        },
         (_, wrapper) => wrapper,
     }
 }
@@ -80,8 +91,9 @@ pub(in crate::executor::automation::vcs) fn carry_class(
 /// diagnostic `succeeded` renders for it.
 ///
 /// Transient: HTTP 499, any three-digit HTTP 5xx, a TLS handshake timeout
-/// (`net/http: TLS handshake timeout` or `tls: handshake timeout`) or a
-/// connection the peer reset, even when the URL is not GraphQL, a request
+/// (`net/http: TLS handshake timeout` or `tls: handshake timeout`), a
+/// connection the peer reset or one `gh` could not open (`error connecting to
+/// api.github.com`) [ORB-19430], even when the URL is not GraphQL, a request
 /// timeout, or GitHub's generic "Something
 /// went wrong while executing your query" response. Permanent failures such
 /// as auth, an unknown head, or an invalid selector must fail on the first
@@ -99,7 +111,8 @@ fn classify(message: &str) -> PrivateVcsFailureClass {
         || (text.contains("graphql") && text.contains("timeout"))
         || text.contains("tls handshake timeout")
         || text.contains("tls: handshake timeout")
-        || text.contains("connection reset by peer");
+        || text.contains("connection reset by peer")
+        || text.contains("error connecting to ");
     if !transient {
         PrivateVcsFailureClass::Other
     } else if [
@@ -211,6 +224,7 @@ pub(super) fn succeeded(
             operation: operation.to_string(),
             class: classify(&message),
             message,
+            read_throttle: None,
         })));
     }
     Ok(result)

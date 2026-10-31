@@ -2,7 +2,7 @@
 //! `[provider_limit]` failure, and the observation the host records.
 //! [ORB-14696] The usage windows a provider reported after any run.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use chrono::{DateTime, Offset, Utc};
 use orbit_agent::{
@@ -15,7 +15,17 @@ use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
+use super::antigravity_usage::AntigravityUsageRequest;
 use super::completion::{provider_failure, stdout_frames};
+use super::grok_usage::GrokUsageRequest;
+
+/// State resolved from the provider child's environment before dispatch.
+#[derive(Default)]
+pub(super) struct UsageWindowContext {
+    pub(super) antigravity: Option<AntigravityUsageRequest>,
+    pub(super) codex_home: Option<PathBuf>,
+    pub(super) grok: Option<GrokUsageRequest>,
+}
 
 /// A provider's terminal error frame saying the account hit a usage limit.
 /// Claude's error `result` frame and Antigravity's `event=result` frame with
@@ -136,19 +146,36 @@ pub(super) fn record_limit(
 /// [ORB-14696] Record each usage window the provider reported about its own
 /// account during the run, success or failure. `stdout` is the whole capture,
 /// since a long run's first frames sit before a truncation marker, and
-/// `codex_home` the `CODEX_HOME` the Codex child ran with. [ORB-17288] Each
+/// `context` names the Codex rollout root, Grok CLI account or agy launcher to read.
+/// Grok reads its billing API and Antigravity its quota command rather than
+/// invocation telemetry. [ORB-17288] Each
 /// reading is attributed to `account`, the crew account the run used, or to
 /// the provider's default login when that is `None`.
 pub(super) fn record_usage_windows(
     host: &dyn RuntimeHost,
     provider: &str,
     stdout: &[u8],
-    codex_home: Option<&Path>,
+    context: &UsageWindowContext,
     run_id: &str,
     crew: Option<&str>,
     account: Option<&str>,
 ) {
-    for mut observation in provider_usage_windows(provider, stdout, codex_home, Utc::now()) {
+    let usage = match provider {
+        "grok" => context.grok.as_ref().and_then(GrokUsageRequest::read),
+        "antigravity" => context
+            .antigravity
+            .as_ref()
+            .and_then(AntigravityUsageRequest::read),
+        _ => None,
+    };
+    let source = if matches!(provider, "grok" | "antigravity") {
+        usage.as_deref().unwrap_or_default()
+    } else {
+        stdout
+    };
+    for mut observation in
+        provider_usage_windows(provider, source, context.codex_home.as_deref(), Utc::now())
+    {
         observation.run_id = (!run_id.is_empty()).then(|| run_id.to_string());
         observation.crew = crew.map(str::to_string);
         observation.account = account.map(str::to_string);

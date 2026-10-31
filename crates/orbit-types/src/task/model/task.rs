@@ -17,6 +17,29 @@ pub struct Task {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub required_tools: Vec<String>,
+    /// Exact canonical tool names an operator granted the implementing
+    /// activity despite its deny list. Separate from `required_tools`
+    /// because only operator authority may set it, and only before the task
+    /// has a live attempt. Stored and shown; only `agent_implement` admission
+    /// reads this field, lifting an exact deny entry only for a read/repeat-safe
+    /// tool while a mutating grant stays denied.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_required_tools",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub granted_tools: Vec<String>,
+    /// Capability labels a host must all carry to run the task: its
+    /// `machine.labels` plus its OS as an implicit label. Empty places no
+    /// label requirement. Normalized (lowercase, sorted, deduplicated).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_labels: Vec<String>,
+    /// The instant before which no dispatcher starts the task, in UTC. A
+    /// `backlog` task whose time is still ahead is held out of admission;
+    /// the hold lifts on the first admission pass after it. Absent places no
+    /// hold, and status transitions never change it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<DateTime<Utc>>,
     #[serde(default, alias = "instructions")]
     pub plan: String,
     #[serde(default)]
@@ -25,6 +48,12 @@ pub struct Task {
     pub context_files: Vec<String>,
     #[serde(default)]
     pub created_by: Option<String>,
+    /// The creator's full model id, recorded once when the create named one
+    /// (`claude-opus-5-5`, where `created_by` keeps only `claude`). Never
+    /// rewritten afterwards. Absent on family-only creates and on tasks filed
+    /// before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_model: Option<String>,
     #[serde(default)]
     pub planned_by: Option<String>,
     #[serde(default)]
@@ -44,8 +73,9 @@ pub struct Task {
     pub job_run_id: Option<String>,
     /// Trusted execution location of the linked run; legacy links are unknown.
     ///
-    /// [ORB-12725] `job_run_host` is read for one release so a task bundle
-    /// written by an older build still loads; only the new name is written.
+    /// Permanent read alias [ORB-12725, ORB-18313]: `job_run_host` stays
+    /// readable because task bundles written before v0.24 still carry it, and
+    /// `TaskEnvelopeV2` denies unknown fields. Only the new name is written.
     #[serde(
         default,
         alias = "job_run_host",
@@ -76,6 +106,11 @@ pub struct Task {
     /// recorded and on interactive filings that did not state one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<TaskOrigin>,
+    /// Stable rule-result fingerprint this task owns, written by the
+    /// rule-findings filer at filing so a retitled task keeps its identity.
+    /// Absent on every task the filer did not create.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_fingerprint: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -147,10 +182,14 @@ impl Task {
             acceptance_criteria,
             tags: normalize_task_tags(envelope.tags),
             required_tools: normalize_required_tools(envelope.required_tools),
+            granted_tools: normalize_required_tools(envelope.granted_tools),
+            requires_labels: envelope.requires_labels,
+            not_before: envelope.not_before,
             plan,
             execution_summary,
             context_files: envelope.context_files,
             created_by: envelope.created_by,
+            created_by_model: envelope.created_by_model,
             planned_by: envelope.planned_by,
             implemented_by: envelope.implemented_by,
             status,
@@ -167,6 +206,7 @@ impl Task {
             orchestrator_model: envelope.orchestrator_model,
             orchestrator_model_source: envelope.orchestrator_model_source,
             origin: envelope.origin,
+            rule_fingerprint: envelope.rule_fingerprint,
             created_at: envelope.created_at,
             updated_at: envelope.updated_at,
         }
@@ -383,7 +423,7 @@ pub fn resolve_task_relations_with_index(
         .map(|relation| ResolvedTaskRelation {
             relation_type: relation.relation_type,
             target: relation.target.clone(),
-            regression: relation.regression,
+            regression: relation.regression.clone(),
             verification: reference_index
                 .is_not_verifiable_here(task, &relation.target, status_by_id)
                 .then(|| TASK_REFERENCE_NOT_VERIFIABLE_HERE.to_string()),
@@ -718,6 +758,10 @@ impl AdmissionAffinityReach {
 /// One candidate's standing against the live executor census, as the
 /// requesting executor sees it [ORB-17304]. The default is the standing every
 /// candidate shares when no census applies, so it never reorders.
+/// Neutral usage pressure, in milli-units (1000 = pressure 1.0), as an
+/// admission ordering key [ORB-17773].
+pub const NEUTRAL_PRESSURE_MILLI: u64 = 1000;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DispatchAffinity {
     /// The requester is the only live executor that can run the task.
@@ -726,17 +770,27 @@ pub struct DispatchAffinity {
     /// the requester itself cannot run carries `usize::MAX`, so it sorts
     /// after every task the requester can.
     pub eligible: usize,
+    /// The highest weekly usage pressure, in milli-units, the requester
+    /// reported for a member of the task's crew pool [ORB-17773]; higher
+    /// sorts first, below every affinity key and above age. The default
+    /// `0` is shared by every candidate of a pressure-free order, so it
+    /// never reorders.
+    pub pressure_milli: u64,
 }
 
 /// Automatic dispatch order for one requesting executor against the live
 /// executor census [ORB-17304].
 ///
-/// `band → exclusive → priority → expiry → fewer eligible executors → age →
-/// ID` under [`AdmissionAffinityReach::Band`]; exclusivity moves after
-/// priority under [`AdmissionAffinityReach::Priority`], and
+/// `band → exclusive → priority → expiry → fewer eligible executors → usage
+/// pressure → age → ID` under [`AdmissionAffinityReach::Band`]; exclusivity
+/// moves after priority under [`AdmissionAffinityReach::Priority`], and
 /// [`AdmissionAffinityReach::Off`] ignores both affinity keys. Each side is a
 /// task, whether its frozen batch is expiring, and its affinity. Exclusivity
-/// never crosses a band, so critical and corrective work still leads.
+/// never crosses a band, so critical and corrective work still leads. Usage
+/// pressure [ORB-17773] is the lowest-precedence key above age and ID: it
+/// only reorders tasks that tie on band, priority, expiry and affinity, it
+/// applies under every reach, and a requester that reported none leaves
+/// every candidate at the shared default, so the order is unchanged.
 pub fn automatic_dispatch_cmp_with_affinity(
     left: (&Task, bool, DispatchAffinity),
     right: (&Task, bool, DispatchAffinity),
@@ -766,7 +820,18 @@ pub fn automatic_dispatch_cmp_with_affinity(
     let (left, left_expiring, left_affinity) = left;
     let (right, right_expiring, right_affinity) = right;
     let (left_affinity, right_affinity) = match reach {
-        AdmissionAffinityReach::Off => (DispatchAffinity::default(), DispatchAffinity::default()),
+        // `Off` drops the affinity keys only; usage pressure is a separate,
+        // lowest-precedence key the reach does not govern [ORB-17773].
+        AdmissionAffinityReach::Off => (
+            DispatchAffinity {
+                pressure_milli: left_affinity.pressure_milli,
+                ..DispatchAffinity::default()
+            },
+            DispatchAffinity {
+                pressure_milli: right_affinity.pressure_milli,
+                ..DispatchAffinity::default()
+            },
+        ),
         _ => (left_affinity, right_affinity),
     };
     let exclusive_at = |at: AdmissionAffinityReach| {
@@ -783,6 +848,11 @@ pub fn automatic_dispatch_cmp_with_affinity(
         .then(exclusive_at(AdmissionAffinityReach::Priority))
         .then(right_expiring.cmp(&left_expiring))
         .then(left_affinity.eligible.cmp(&right_affinity.eligible))
+        .then(
+            right_affinity
+                .pressure_milli
+                .cmp(&left_affinity.pressure_milli),
+        )
         .then(left.created_at.cmp(&right.created_at))
         .then(left.id.cmp(&right.id))
 }
@@ -790,8 +860,9 @@ pub fn automatic_dispatch_cmp_with_affinity(
 /// Persisted execution location. Absence on older records means unknown.
 ///
 /// A machine's display name is metadata; only the stable machine id identifies
-/// execution. [ORB-12725] `host_id` is read for one release so a run record
-/// written by an older build still loads; only `machine_name` is written.
+/// execution. Permanent read alias [ORB-12725, ORB-18313]: `host_id` stays
+/// readable for run records written before v0.24; only `machine_name` is
+/// written.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionLocation {
     pub machine_id: String,

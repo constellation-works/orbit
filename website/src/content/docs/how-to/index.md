@@ -17,6 +17,18 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Use the Dashboard</h3>
     <p>Approve and ship tasks, follow runs, start a drain, and reach a remote host over SSH.</p>
   </a>
+  <a class="orbit-card" href="./claude-code/">
+    <h3>Use the Claude Code Mod</h3>
+    <p>Act on tasks from the prompt band, inspect the board, preflight ships, and track PR runs in Claude Code.</p>
+  </a>
+  <a class="orbit-card" href="./desktop/">
+    <h3>Use the Desktop App</h3>
+    <p>Supervise the dashboard server, manage the system tray, and follow fleet notifications in a native window.</p>
+  </a>
+  <a class="orbit-card" href="./mcp-apps/">
+    <h3>Open the MCP Apps Control Center</h3>
+    <p>Open the embedded control center or one task or run from an MCP client, pick a selector, and fall back when it does not render.</p>
+  </a>
   <a class="orbit-card" href="./continuous-delivery/">
     <h3>Run a Delivery Window</h3>
     <p>Prepare the backlog, drain it for a set time, retune or stop the window, and recover failed runs.</p>
@@ -38,11 +50,19 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Write an Activity</h3>
     <p>Define your own agent or deterministic step in activity YAML.</p>
   </a>
+  <a class="orbit-card" href="./experiments/">
+    <h3>Run an Experiment</h3>
+    <p>Compare control and treatment arms, read intervals and the verdict, and conclude without changing configuration automatically.</p>
+  </a>
 </div>
 
 ## Operate
 
 <div class="orbit-card-grid">
+  <a class="orbit-card" href="./diagnostics/">
+    <h3>Investigate Failures from the Terminal</h3>
+    <p>Trace a failure through doctor, run output, host logs, audit events, and server health checks.</p>
+  </a>
   <a class="orbit-card" href="./multi-host/">
     <h3>Run Orbit across hosts</h3>
     <p>Register SSH hosts, route tasks by prefix, select remote workspaces, and prepare a follower.</p>
@@ -51,8 +71,32 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Publish and Restore Tasks</h3>
     <p>Snapshot task records to a dedicated repository, and recover them.</p>
   </a>
+  <a class="orbit-card" href="./state-and-backup/">
+    <h3>Back Up and Move Orbit State</h3>
+    <p>Find the state you can't regenerate, take consistent SQLite backups, verify a restore, and move tasks with export and import.</p>
+  </a>
+  <a class="orbit-card" href="./workspace-maintenance/">
+    <h3>Maintain and Remove Workspaces</h3>
+    <p>Inspect bindings and ship mode, converge shipped defaults, inspect migrations, rebind remotes, and remove or tear down checkouts safely.</p>
+  </a>
   <a class="orbit-card" href="./distributed-drain/">
     <h3>Set Up a Distributed Drain</h3>
     <p>Spread one backlog across machines: one owner, replica checkouts, SSH access.</p>
+  </a>
+  <a class="orbit-card" href="./friction/">
+    <h3>Report and Triage Friction</h3>
+    <p>Record what made work harder than it should have been, then search, triage, resolve, and rehome the record.</p>
+  </a>
+  <a class="orbit-card" href="./decision-channels/">
+    <h3>Decision channels</h3>
+    <p>Register a human decision channel, inspect approval digests, and connect an authenticated transport plugin.</p>
+  </a>
+  <a class="orbit-card" href="./plugins/">
+    <h3>Install and Grant Plugins</h3>
+    <p>Add a plugin to this machine, grant only the permissions it requests, enable it per workspace, and upgrade or remove it.</p>
+  </a>
+  <a class="orbit-card" href="./path-leases/">
+    <h3>Hold Paths with Leases</h3>
+    <p>Announce or reserve the workspace paths you are editing outside a drain, then check, renew and release the lease.</p>
   </a>
 </div>

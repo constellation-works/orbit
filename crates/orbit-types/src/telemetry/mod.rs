@@ -12,9 +12,14 @@ pub use audit_actor::{
     ACTOR_ALIAS_MAP_VERSION, ActorKind, CanonicalActor, canonical_actor_for_role_label,
 };
 pub use audit_event::{AuditEvent, AuditEventStatus, AuditStats, audit_event_base_json};
-pub use invocation::{InvocationTrace, TokenUsage, ToolCallTrace};
+pub use invocation::{
+    AgentEffortUsage, AgentExecutionIdentity, InvocationTrace, LONG_PROMPT_CAPTURE_FLOOR_TOKENS,
+    TokenUsage, ToolCallTrace,
+};
 pub use metrics::MetricsEntry;
-pub use pricing::{InputTokenBasis, PriceRow, cost_from_rows, normalize_token_usage_from_rows};
+pub use pricing::{
+    InputTokenBasis, PriceRow, PromptTierRow, cost_from_rows, normalize_token_usage_from_rows,
+};
 pub use provider_limit::{
     PROVIDER_LIMIT_DETAIL_MAX_BYTES, ProviderLimitObservation, ProviderLimitSource,
     USAGE_REPORTING_PROVIDERS,

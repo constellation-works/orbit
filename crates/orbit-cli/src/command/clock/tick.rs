@@ -7,8 +7,8 @@ use orbit_cmd::registry_routines::{run_sweep, run_sweep_at};
 use orbit_core::{
     OrbitError, OrbitRuntime,
     application::routines::{
-        AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
-        clock_unit_drift_warning,
+        AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions,
+        SweepOutcome, clock_unit_drift_warning,
     },
 };
 use orbit_types::workflow::automation::members::BatchMember;
@@ -61,6 +61,13 @@ pub(crate) fn format_batch(batch: &[BatchMember]) -> String {
         .map(|member| format!("{} ({})", member.key, member.reason))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn format_external_merge_settlement_line(report: &ExternalMergeSweepReport) -> String {
+    format!(
+        "{} ({}): settled — PR #{}",
+        report.task_id, report.source, report.pr_number
+    )
 }
 
 fn format_auto_task_report_line(report: &AutoTaskSweepReport) -> String {
@@ -145,6 +152,7 @@ impl ClockTickArgs {
         }
         if outcome.reports.is_empty()
             && outcome.auto_task_reports.is_empty()
+            && outcome.external_merge_settlements.is_empty()
             && outcome.load_errors.is_empty()
             && !outcome.deadline_exceeded
         {
@@ -164,13 +172,7 @@ impl ClockTickArgs {
             Vec::new()
         };
         for report in &outcome.reports {
-            if show_all
-                || report_is_noteworthy(report.action)
-                || report
-                    .reason
-                    .as_deref()
-                    .is_some_and(|reason| reason.starts_with("workspace_drain_live:"))
-            {
+            if show_all || report_is_noteworthy(report.action) {
                 lines.push(format_routine_report_line(report));
             }
         }
@@ -178,6 +180,9 @@ impl ClockTickArgs {
             if show_all || report_is_noteworthy(report.action) {
                 lines.push(format_auto_task_report_line(report));
             }
+        }
+        for settlement in &outcome.external_merge_settlements {
+            lines.push(format_external_merge_settlement_line(settlement));
         }
         if lines.is_empty() && outcome.load_errors.is_empty() {
             // Retired rows are definitions the tick skips, not schedules.
@@ -265,5 +270,15 @@ fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json::Value {
         })).collect::<Vec<_>>(),
         "no_workspace_loaded": outcome.no_workspace_loaded,
         "clock_env_loaded": outcome.clock_env_loaded,
+        "settled": outcome.external_merge_settlements.iter().map(|settlement| json!({
+            "task_id": settlement.task_id,
+            "source": settlement.source,
+            "pr_number": settlement.pr_number,
+        })).collect::<Vec<_>>(),
+        "external_merge_settlements": outcome.external_merge_settlements.iter().map(|settlement| json!({
+            "task_id": settlement.task_id,
+            "source": settlement.source,
+            "pr_number": settlement.pr_number,
+        })).collect::<Vec<_>>(),
     })
 }

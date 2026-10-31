@@ -2,6 +2,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::lower_hex;
+use orbit_types::task::TaskStatus;
+use orbit_types::workflow::{
+    BRANCH_HASH_LEN, ConventionTemplate, DeliveryRefusal, Placeholder, unsafe_branch_name_reason,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -11,7 +15,7 @@ use crate::executor::automation::input::input_string_field;
 use super::super::git::{
     GitOutcome, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
     git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
-    normalize_base_branch, resolve_worktree_start_point, timeout_recovery_error,
+    normalize_base_branch, resolve_worktree_start_point_for_admission, timeout_recovery_error,
 };
 use super::cleanup::remove_worktree;
 use super::dependency_delivery::{
@@ -60,7 +64,44 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     let repo_root_str = host.repo_root()?;
     let repo_root = Path::new(&repo_root_str);
 
-    let start_point = resolve_worktree_start_point(repo_root, &base, base_sync_mode)?;
+    let start_point =
+        match resolve_worktree_start_point_for_admission(repo_root, &base, base_sync_mode) {
+            Err(OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::OriginUnavailable,
+                message,
+            }) => {
+                let tasks = task_ids
+                    .iter()
+                    .map(|task_id| host.get_task(task_id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if tasks.iter().all(|task| task.status == TaskStatus::Backlog) {
+                    return Err(OrbitError::DeliveryRefused {
+                        refusal: DeliveryRefusal::OriginUnavailable,
+                        message,
+                    });
+                }
+
+                // A task already admitted by an earlier run cannot use the
+                // backlog-only hold: held delivery refusals have no generic resume
+                // path. For local tasks, link this failed attempt so the ordinary
+                // run finalizer can move them through failure handling. A claimed
+                // leaf uses its claim settlement for the same outcome.
+                for (task_id, task) in task_ids.iter().zip(&tasks) {
+                    if task.status == TaskStatus::InProgress && host.worker_invocation().is_none() {
+                        host.apply_task_automation_update(
+                            task_id,
+                            TaskAutomationUpdate {
+                                expected_status: Some(TaskStatus::InProgress),
+                                job_run_id: Some(job_run_id.clone()),
+                                ..TaskAutomationUpdate::default()
+                            },
+                        )?;
+                    }
+                }
+                return Err(OrbitError::Execution(message));
+            }
+            result => result?,
+        };
     // ORB-10380: `start_point` is a moving name (`origin/<base>`) shared by every
     // worktree off this `.git`; a sibling run's fetch or a merge can move it
     // mid-run. Resolve it exactly once here and hand the resulting commit id to
@@ -116,7 +157,13 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         }
     }
 
-    let branch_name = branch_name_for_tasks(&identity.branch_prefix, task_ids, worktree_run_id);
+    let branch_name = branch_name_for_tasks(
+        host,
+        repo_root,
+        &identity.branch_prefix,
+        task_ids,
+        worktree_run_id,
+    )?;
 
     let worktree_path = identity.path(repo_root)?;
 
@@ -583,17 +630,83 @@ fn is_empty_dir(path: &Path) -> Result<bool, OrbitError> {
     Ok(entries.next().is_none())
 }
 
-fn branch_name_for_tasks(branch_prefix: &str, task_ids: &[String], run_id: &str) -> String {
-    if task_ids.len() == 1 {
+/// The run's branch. A single task's follows `branch.name_template`
+/// (`<prefix>/<task>-<hash8>` by default); a bundle's is always
+/// `<prefix>/bundle-<hash8>`.
+fn branch_name_for_tasks<H: RuntimeHost + ?Sized>(
+    host: &H,
+    repo_root: &Path,
+    branch_prefix: &str,
+    task_ids: &[String],
+    run_id: &str,
+) -> Result<String, OrbitError> {
+    if let [task_id] = task_ids {
         // A retry for the same run must address the same ref even after the
         // checkout has been removed and only its candidate branch remains.
         let run_hash = lower_hex(Sha256::digest(run_id.as_bytes()));
-        return format!("{branch_prefix}/{}-{}", task_ids[0], &run_hash[..8]);
+        let run_hash = &run_hash[..BRANCH_HASH_LEN];
+        let template = host.pr_config().conventions.branch_name;
+        let task = if template.uses_external_ref() {
+            // A task's external refs may change during the run, so a branch
+            // this run already named is reused rather than renamed.
+            if let Some(existing) =
+                existing_run_branch(repo_root, &template, branch_prefix, task_id, run_hash)?
+            {
+                return Ok(existing);
+            }
+            Some(host.get_task(task_id)?)
+        } else {
+            None
+        };
+        let name = template.render(|placeholder| match placeholder {
+            Placeholder::Prefix => branch_prefix.to_string(),
+            Placeholder::TaskId => task_id.clone(),
+            Placeholder::Hash => run_hash.to_string(),
+            Placeholder::ExternalRef(system) => task
+                .iter()
+                .flat_map(|task| &task.external_refs)
+                .find(|external_ref| external_ref.system.eq_ignore_ascii_case(system))
+                .map(|external_ref| external_ref.id.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        });
+        if let Some(reason) = unsafe_branch_name_reason(&name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "branch.name_template renders '{name}' for task {task_id}, and a branch name \
+                 {reason}"
+            )));
+        }
+        return Ok(name);
     }
 
     let mut sorted_ids = task_ids.to_vec();
     sorted_ids.sort();
     let digest = Sha256::digest(sorted_ids.join(","));
     let bundle_hash = lower_hex(digest);
-    format!("{branch_prefix}/bundle-{}", &bundle_hash[..8])
+    Ok(format!(
+        "{branch_prefix}/bundle-{}",
+        &bundle_hash[..BRANCH_HASH_LEN]
+    ))
+}
+
+/// The local branch this run already named for `task_id`, if exactly one
+/// carries the run's hash and matches the template for the task.
+fn existing_run_branch(
+    repo_root: &Path,
+    template: &ConventionTemplate,
+    branch_prefix: &str,
+    task_id: &str,
+    run_hash: &str,
+) -> Result<Option<String>, OrbitError> {
+    let listed = git_output(
+        repo_root,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+    )?;
+    let mut matching = listed.lines().map(str::trim).filter(|branch| {
+        branch.contains(run_hash) && template.branch_names_task(branch, branch_prefix, task_id)
+    });
+    Ok(match (matching.next(), matching.next()) {
+        (Some(branch), None) => Some(branch.to_string()),
+        _ => None,
+    })
 }

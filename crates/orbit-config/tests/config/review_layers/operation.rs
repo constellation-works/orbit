@@ -84,8 +84,10 @@ fn review_table_sets_timing_and_minutes_with_their_layer() {
     assert_eq!(review.review_budget().minutes, 45);
     assert_eq!(review.legacy_after_landing, None);
     assert!(
-        !logs.contains("deprecated"),
-        "no legacy key, no warning: {logs}"
+        logs.contains("review.timing")
+            && logs.contains("deprecated")
+            && logs.contains("before_pr"),
+        "canonical before_pr warns as deprecated but stays honoured: {logs}"
     );
 }
 
@@ -211,6 +213,43 @@ fn retired_scoring_table_loads_with_a_warning_and_refuses_edits() {
     assert!(
         error.to_string().contains("scoreboard was retired"),
         "the refusal says why: {error}"
+    );
+}
+
+/// `workflow.regression_risk.record_sites` was retired once sites became
+/// always recorded: a config that still sets it loads with a deprecation
+/// warning, and edits are refused with the retirement note.
+#[test]
+fn retired_record_sites_loads_with_a_warning_and_refuses_edits() {
+    let (_config, logs) = load_workspace("[workflow.regression_risk]\nrecord_sites = true\n");
+    assert!(
+        warned_deprecated(&logs, "workflow.regression_risk.record_sites"),
+        "record_sites ignored with a deprecation warning: {logs}"
+    );
+    let error = admit_settable_config_key("workflow.regression_risk.record_sites")
+        .expect_err("retired key refused");
+    assert!(
+        error.to_string().contains("always recorded"),
+        "the refusal says sites are always recorded: {error}"
+    );
+}
+
+/// `workflow.auto_ship` was retired with the ship sweep it opted into: a
+/// config that still sets it loads with a deprecation warning, and edits are
+/// refused with the retirement note.
+#[test]
+fn retired_auto_ship_loads_with_a_warning_and_refuses_edits() {
+    let (_config, logs) = load_workspace("[workflow]\nauto_ship = true\n");
+    assert!(
+        warned_deprecated(&logs, "workflow.auto_ship"),
+        "auto_ship ignored with a deprecation warning: {logs}"
+    );
+    let error = admit_settable_config_key("workflow.auto_ship").expect_err("retired key refused");
+    assert!(
+        error
+            .to_string()
+            .contains("ship sweep it opted into was removed"),
+        "the refusal says the ship sweep was removed: {error}"
     );
 }
 
@@ -378,5 +417,67 @@ fn host_evidence_rules_orbit_could_never_fulfil_fail_the_load() {
             ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path())).is_err(),
             "refused: {body}"
         );
+    }
+}
+
+/// Historical writers used both enum spellings; the resolved policy and its
+/// provenance must depend only on the state, never its spelling.
+#[test]
+fn historical_review_timing_spellings_resolve_identically() {
+    for (canonical, aliases, switches) in [
+        (
+            "off",
+            &["off", "none", "after_landing", "after-landing"][..],
+            (false, false),
+        ),
+        ("before_pr", &["before_pr", "before-pr"][..], (true, false)),
+        (
+            "before_landing",
+            &["before_landing", "before-landing"][..],
+            (false, true),
+        ),
+    ] {
+        let (expected, _) = load_workspace(&format!("[review]\ntiming = {canonical:?}\n"));
+        for alias in aliases {
+            let (config, _) = load_workspace(&format!("[review]\ntiming = {alias:?}\n"));
+            assert_eq!(config.operation, expected.operation, "{alias}");
+            assert_eq!(config.snapshot.review_timing, canonical, "{alias}");
+            assert_eq!(
+                (
+                    config.operation.review_before_pr.value,
+                    config.operation.review_before_landing.value
+                ),
+                switches
+            );
+            assert_eq!(config.operation.legacy_after_landing, None);
+        }
+    }
+}
+
+#[test]
+fn invalid_review_timing_names_the_file_key_value_and_accepted_spellings() {
+    let global = tempdir().expect("config fixture");
+    let workspace = tempdir().expect("config fixture");
+    for root in [global.path(), workspace.path()] {
+        review_layers_write_config(root, "[review]\ntiming = \"invalid-timing\"\n");
+        let error = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
+            .expect_err("invalid timing is refused")
+            .to_string();
+        for required in [
+            root.join("config.toml").display().to_string(),
+            "review.timing".into(),
+            "invalid-timing".into(),
+            "off".into(),
+            "none".into(),
+            "before_pr".into(),
+            "before-pr".into(),
+            "before_landing".into(),
+            "before-landing".into(),
+            "after_landing".into(),
+            "after-landing".into(),
+        ] {
+            assert!(error.contains(&required), "missing {required}: {error}");
+        }
+        review_layers_write_config(root, "");
     }
 }

@@ -129,9 +129,11 @@ See [multi-host.md](multi-host.md).
 
 Three things to know about what it seeded and how to finalize:
 
-- **Every routine and auto-task ships disabled.** The automation layer is
-  installed but dark until someone reviews and opts in. Do not assume a fresh
-  workspace schedules anything. → [automation.md](automation.md)
+- **Only `crew_performance_refresh` is seeded enabled.** Every other routine and
+  auto-task ships disabled: the automation layer is installed but dark until
+  someone reviews and opts in. `crew_performance_refresh` no-ops while
+  `workflow.crew_performance` is `off`, but it still records a job run each hour,
+  so a fresh workspace that seeds the default routines schedules it. → [automation.md](automation.md)
 - **`.orbit/` is per-user state.** `orbit workspace init` seeds a `.gitignore`
   that ignores the whole of `.orbit/` with no re-includes. Keep it. Seeded
   routines, auto-tasks, and resources come from the binary, not from git.
@@ -171,6 +173,72 @@ Supported clients: `claude`, `codex`, `gemini`, `antigravity`, `grok`, `cursor`,
 `--scope home` writes user-level config. The current Google terminal CLI is
 `agy` (Antigravity). Gemini CLI remains available for enterprise / API-key
 deployments; individual Gemini CLI accounts stopped on 2026-06-18.
+
+### Workspace presets
+
+A preset is a TOML file a distribution ships to set a workspace up in one step.
+Apply it with `--preset` when registering the workspace, or with `--force` on a
+workspace that is already registered:
+
+```bash
+orbit workspace init --base-branch <integration-branch> --ship-mode pr --preset <distribution>.toml
+orbit workspace init --force --preset <distribution>.toml   # already registered
+```
+
+A preset file has one required key and three optional tables:
+
+```toml
+name = "<distribution>"                # required: 1-64 ASCII letters, digits, "-", "_" or "."
+
+[seeding]                              # which shipped defaults this workspace seeds
+routines = "none"                      # "all" (the default), "none", or a list of shipped names
+auto_tasks = ["<shipped-auto-task>"]
+
+[enable]                               # switch on definitions an enabled plugin already seeded
+routines = ["<plugin-routine>"]
+auto_tasks = []
+
+[config]                               # workspace keys that `orbit config set` accepts
+"<section>.<key>" = "<value>"          # dotted keys or nested tables
+```
+
+- **`[seeding]`** sets which shipped routines and auto-tasks are seeded, through
+  the `seeding.routines` and `seeding.auto_tasks` keys. A list seeds exactly the
+  named shipped defaults, so a later release's additions are not seeded.
+- **`[config]`** sets workspace config keys. `seeding.*` keys belong in
+  `[seeding]`, not here.
+- **`[enable]`** switches on routines and auto-tasks that an enabled plugin
+  already seeded into this workspace. It applies after seeding. It never enables
+  a shipped default, so `crew_performance_refresh` (seeded enabled) is the only
+  shipped default on without an opt-in; every other shipped routine and
+  auto-task stays disabled unless someone opts in.
+
+**Validation and limits.** Orbit validates the whole file against this
+workspace before it writes anything. Nothing is written or registered when any
+of these fails:
+
+- an unknown field in any table;
+- a `[config]` key or value that `orbit config set` refuses for this workspace;
+- a blank `[enable]` name, or one that no plugin seeded here;
+- an `[enable]` definition a plugin seeded whose file is missing or does not load;
+- a file larger than 256 KiB.
+
+**No plugin consent.** A preset never grants plugin permissions and never
+enables a plugin. Fields named `grant`, `grants`, `permissions`, `plugin`,
+`plugins`, `enable_plugins` or `plugin_enablement` are refused at the top level
+or under `[enable]`, and so is any `plugin_enablement*` key under `[config]`.
+To use `[enable]`, enable the plugin first, then apply the preset:
+
+```bash
+orbit plugin enable <plugin>
+orbit workspace init --force --preset <distribution>.toml
+```
+
+**Verify.** `orbit workspace init` prints the preset's name, its `sha256:`
+digest of the file bytes, and any definitions it enabled. Afterwards,
+`orbit workspace show` reports the last applied preset, and its JSON output has
+a `preset` key. Check the enabled routines and auto-tasks with
+`orbit routine list` and `orbit auto-task list`.
 
 ## Step 5 — Verify
 

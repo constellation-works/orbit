@@ -1,14 +1,15 @@
 //! Projection of a finished provider subprocess: response and completion
 //! envelopes, invocation trace, failure diagnostics, and the step output.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, muse_terminal_failure_diagnostic, normalize_cli_stdout,
     project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
-    provider_content_refusal, provider_invocation_diagnostic, provider_usage_limit,
+    provider_content_refusal, provider_invocation_diagnostic, provider_long_prompt_requests,
+    provider_usage_limit,
 };
 use orbit_common::process::build_budget::BuildBudgetWaits;
 use orbit_common::security::redaction::{PatternRedactor, redact_all_json};
@@ -39,7 +40,10 @@ use super::super::stdout_preview::{
     bounded_assistant_message, stdout_text_preview,
 };
 use super::super::supervisor::CapturedOutput;
-use super::limit::{record_limit, record_usage_windows, reported_limit, structured_provider_limit};
+use super::limit::{
+    UsageWindowContext, record_limit, record_usage_windows, reported_limit,
+    structured_provider_limit,
+};
 
 /// Everything a provider subprocess left behind once it exited, plus the
 /// run state its completion projection reads.
@@ -50,6 +54,7 @@ pub(super) struct ProviderExit<'a> {
     pub(super) run_id: &'a str,
     pub(super) provider: String,
     pub(super) model: Option<String>,
+    pub(super) agent_execution_id: Option<i64>,
     pub(super) task_ids: &'a [String],
     pub(super) worktree_boundary: Option<WorktreeBoundaryGuard>,
     pub(super) sandbox: Option<&'a ResolvedSandbox>,
@@ -72,9 +77,8 @@ pub(super) struct ProviderExit<'a> {
     /// The provider-side time budget Orbit injected into argv, if the
     /// provider has one. [ORB-14683]
     pub(super) print_timeout: Option<Duration>,
-    /// The `CODEX_HOME` a Codex child ran with, where its session rollout
-    /// holds the usage windows. [ORB-14696]
-    pub(super) codex_home: Option<PathBuf>,
+    /// The account state resolved from the actual provider child environment.
+    pub(super) usage_context: UsageWindowContext,
     pub(super) build_budget_waits: BuildBudgetWaits,
 }
 
@@ -98,6 +102,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         run_id,
         provider,
         model,
+        agent_execution_id,
         task_ids,
         worktree_boundary,
         sandbox,
@@ -116,7 +121,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         stalled,
         stall_window,
         print_timeout,
-        codex_home,
+        usage_context,
         build_budget_waits,
     } = exit;
 
@@ -277,6 +282,21 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             success,
         )
     };
+    // [ORB-19680] Prompt-size price tiers key on each request's own prompt,
+    // which the totals above cannot show. Codex identifies its rollout from
+    // thread.started, which can live in the redacted retained prefix after
+    // truncation; answer projection above stays on protocol_bytes().
+    let trace = trace.map(|mut trace| {
+        trace.long_prompt_requests = provider_long_prompt_requests(
+            &provider,
+            stdout.bytes(),
+            !stdout.truncated(),
+            usage_context.codex_home.as_deref(),
+            trace.provider_model.as_deref().or(model.as_deref()),
+            chrono::Utc::now(),
+        );
+        trace
+    });
     // [ORB-14695] The usage limit the failure reports, with the provider's
     // own words, for the host's provider-limit store.
     let mut observed_limit: Option<(ProviderLimitFailure, String)> = None;
@@ -577,7 +597,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         host,
         &provider,
         stdout.bytes(),
-        codex_home.as_deref(),
+        &usage_context,
         run_id,
         crew,
         account,
@@ -746,6 +766,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         invocation: trace.map(|trace| DispatchInvocationTrace {
             provider,
             model,
+            agent_execution_id,
             account: spec.crew_account.clone(),
             trace,
         }),
@@ -753,10 +774,32 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
 }
 
 /// Stdout's JSON frames, for the provider-owned failure readers below.
+///
+/// A slice `StreamDeserializer` truncates its input at the first parse error,
+/// so a stray non-JSON line or a lone-surrogate escape would hide every later
+/// frame. Parse one value at a time to preserve valid multiline frames. On an
+/// error, skip the malformed record's first line, since the parser may have
+/// read into a following valid frame before discovering the error.
 pub(super) fn stdout_frames(stdout: &[u8]) -> impl Iterator<Item = Value> + '_ {
-    serde_json::Deserializer::from_slice(stdout)
-        .into_iter::<Value>()
-        .filter_map(Result::ok)
+    let mut rest = stdout;
+    std::iter::from_fn(move || {
+        loop {
+            rest = rest.trim_ascii_start();
+            let mut stream = serde_json::Deserializer::from_slice(rest).into_iter::<Value>();
+            match stream.next()? {
+                Ok(frame) => {
+                    rest = &rest[stream.byte_offset()..];
+                    return Some(frame);
+                }
+                Err(_) => {
+                    rest = rest
+                        .iter()
+                        .position(|byte| *byte == b'\n')
+                        .map_or(&[], |newline| &rest[newline + 1..]);
+                }
+            }
+        }
+    })
 }
 
 /// The failure a provider wrote in its own control-plane `frame`, never

@@ -11,6 +11,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 
 use super::super::remote_probe::remote_ref_output;
 use super::answers::PullRequestStatus;
@@ -91,10 +92,13 @@ impl HeadLag {
                     && remote_sha.as_deref() == Some(previous)
             });
             if !replaced || self.pull_ref_settled_at.as_deref() == Some(candidate) {
-                return Err(OrbitError::Execution(format!(
-                    "{error_code}: pull request #{pr_number} remote head {remote_sha:?} is not \
+                return Err(head_lag_error(
+                    error_code,
+                    format!(
+                        "{error_code}: pull request #{pr_number} remote head {remote_sha:?} is not \
                      the pinned candidate '{candidate}'; the task stays in review"
-                )));
+                    ),
+                ));
             }
             let branch = pin
                 .head()
@@ -102,19 +106,25 @@ impl HeadLag {
                 .map(str::trim)
                 .filter(|branch| !branch.is_empty())
                 .ok_or_else(|| {
-                    OrbitError::Execution(format!(
-                        "{error_code}: pull request #{pr_number} remote head still names the \
+                    head_lag_error(
+                        error_code,
+                        format!(
+                            "{error_code}: pull request #{pr_number} remote head still names the \
                          previous head and the task branch is unknown; the task stays in review"
-                    ))
+                        ),
+                    )
                 })?;
             let branch_ref = format!("refs/heads/{branch}");
             let branch_sha = remote_ref_sha(workspace_path, &branch_ref, pr_number, error_code)?;
             if branch_sha.as_deref() != Some(candidate) {
-                return Err(OrbitError::Execution(format!(
-                    "{error_code}: pull request #{pr_number} remote head still names the previous \
+                return Err(head_lag_error(
+                    error_code,
+                    format!(
+                        "{error_code}: pull request #{pr_number} remote head still names the previous \
                      head and branch '{branch}' {branch_sha:?} is not the pinned candidate \
                      '{candidate}'; the task stays in review"
-                )));
+                    ),
+                ));
             }
         }
         if !stale && !ref_lags {
@@ -127,10 +137,13 @@ impl HeadLag {
             .min(remaining_seconds);
         if self.observations > MAX_STALE_HEAD_REREADS || delay == 0 {
             if ref_lags {
-                return Err(OrbitError::Execution(format!(
-                    "{error_code}: pull request #{pr_number} remote head still names the previous \
+                return Err(head_lag_error(
+                    error_code,
+                    format!(
+                        "{error_code}: pull request #{pr_number} remote head still names the previous \
                      head after the bounded wait; the task stays in review"
-                )));
+                    ),
+                ));
             }
             return Ok(None);
         }
@@ -159,13 +172,27 @@ fn remote_ref_sha(
         "PR head settling",
     )
     .map_err(|error| {
-        OrbitError::Execution(format!(
-            "{error_code}: cannot confirm pull request #{pr_number} remote ref \
+        head_lag_error(
+            error_code,
+            format!(
+                "{error_code}: cannot confirm pull request #{pr_number} remote ref \
                  {reference}: {error}; the task stays in review"
-        ))
+            ),
+        )
     })?;
     Ok(probe.stdout.lines().find_map(|line| {
         let (sha, remote_ref) = line.split_once('\t')?;
         (remote_ref == reference).then(|| sha.to_string())
     }))
+}
+
+fn head_lag_error(code: &str, message: String) -> OrbitError {
+    if code == "delivery_evidence_stale" {
+        OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::EvidenceStale,
+            message,
+        }
+    } else {
+        OrbitError::Execution(message)
+    }
 }

@@ -216,11 +216,11 @@ Tests that call a supervisor directly are left out.
 | `orbit-store/src/workflow/task/git.rs` (publication Git) | `run_bounded` | Deadline, full capture, no stdin |
 | `orbit-common/src/fs/git.rs` (`run_git`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-common/src/process/identity.rs` (`ps -o lstart`) | `run_bounded_capped_typed` | Deadline, prefix cap, spawn error kind; must not itself sample the process table (§4.4) |
-| `orbit-core/src/runtime/command_exec.rs` (`orbit.command.exec`) | `run_bounded_capped_typed` | Deadline (clamped), prefix cap, spawn error kind; timed-out output discarded |
+| `orbit-runtime/src/command_exec.rs` (`orbit.command.exec`) | `run_bounded_capped_typed` | Deadline (clamped), prefix cap, spawn error kind; timed-out output discarded |
 | `orbit-core/src/application/gc/scratch.rs` (`lsof`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/task/final_recovery/verify.rs` (`git fetch`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/task/retained_candidate.rs` (`git status`) | `run_bounded_capped` | Deadline, prefix cap |
-| `orbit-core/src/application/job/catalog.rs` (`git check-ref-format`) | `run_bounded_capped` | Deadline, prefix cap |
+| `orbit-core/src/application/job/catalog/loading.rs` (`git check-ref-format`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/routines/clock/manager.rs` (launchd/systemd) | `run_bounded_capped` | Deadline, prefix cap, timeout mapped to its own error |
 | `orbit-core/src/application/routines/clock/inspect.rs` (version probe) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-cmd/src/update/converge.rs` (install steps; probes) | `run_bounded_capped_typed`; `run_bounded_capped_complete_typed` | Spawn error kind (`ETXTBSY` retry); probes need both pipes at EOF |
@@ -234,7 +234,7 @@ Tests that call a supervisor directly are left out.
 
 | Caller | Entry point | What it needs |
 |--------|-------------|---------------|
-| `orbit-core/src/runtime/task/pr_forge.rs` | `run_process` | Deadline, fail-at-limit capture, signal fan-out |
+| `orbit-runtime/src/task/pr_forge.rs` | `run_process` | Deadline, fail-at-limit capture, signal fan-out |
 | `orbit-core/src/application/review/fulfilment/codeql.rs` | `run_process` (CodeQL evidence sandbox) | Sandbox spawn, deadline, capture, signal fan-out |
 | `orbit-tools/src/external.rs`, `builtin/proc/spawn.rs` (`proc.spawn`) | `run_process` | Stdin payload, deadline, capture, debug echo |
 | `orbit-tools/src/builtin/github/{common,auth,logs}.rs` | `run_process`; `run_process_streaming_stdout` (logs) | Deadline, capture or stdout relay, typed capture-limit stop |
@@ -252,7 +252,7 @@ Tests that call a supervisor directly are left out.
 
 | Caller | Entry point | What it needs |
 |--------|-------------|---------------|
-| `orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs` (provider run) | `spawn_for_supervision` + `spawn_with_timeout` | Pre-supervision work on the child (worker registration, PID namespace, broker bind, Linux post-run guard), prompt on stdin, rolling capture with protocol tail, line trace events, `on_spawn`, progress, stopped-descendant reports, build-budget deadline extension, kill at once |
+| `orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/subprocess.rs` (provider run) | `spawn_for_supervision` + `spawn_with_timeout` | Pre-supervision work on the child (worker registration, PID namespace, broker bind, Linux post-run guard), prompt on stdin, rolling capture with protocol tail, line trace events, `on_spawn`, progress, stopped-descendant reports, build-budget deadline extension, kill at once |
 | `orbit-engine/src/activity_job/cli_runner/auth_probe.rs` (provider auth probe) | `spawn_for_supervision` + `spawn_with_timeout` | Same spawn path, worker registration, 16 KiB capture, deadline |
 
 ### 2.4 Long-lived session callers

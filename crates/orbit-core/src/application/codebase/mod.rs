@@ -25,6 +25,7 @@
 //! selection without rescanning.
 
 mod detail;
+mod diff_stats;
 mod facts;
 mod landed;
 mod lock_waits;
@@ -32,6 +33,7 @@ mod pilot;
 mod regression;
 mod related;
 mod risk;
+mod riskiness;
 mod sections;
 mod stored;
 
@@ -43,14 +45,21 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
+pub use diff_stats::{
+    DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DIFF_STATS_BACKFILL_MAX_LIMIT, DiffStatsBackfill,
+};
 pub use facts::CodebaseFacts;
 pub(in crate::application) use facts::{
     Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
 };
 pub(in crate::application) use pilot::{
-    Contest, HeldWait, PilotEvidence, PilotRun, pilot_evidence,
+    Contest, HeldWait, PilotEvidence, PilotRun, PilotRuns, pilot_evidence,
 };
 pub use regression::RegressionFilter;
+pub use riskiness::{
+    BasisFallback, RiskinessBase, RiskinessBasis, RiskinessFit, RiskinessSizeBand, RiskinessState,
+    SupportState, TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskiness, TaskRiskinessModel,
+};
 use sections::{Params, ROW_LIMIT, Rollup};
 
 const DEFAULT_WINDOW: &str = "90d";
@@ -140,6 +149,60 @@ impl CodebaseQuery {
             "tasks_scanned": facts.tasks.len(),
             "row_limit": ROW_LIMIT,
         })
+    }
+}
+
+/// Related-file selection. The omitted window is 30 days and the omitted
+/// partner cap is 10. Rollup is always `file` and regression filters are not
+/// parameters. Analytics and path detail keep [`CodebaseQuery::parse`]'s
+/// 90-day default and their own filters.
+#[derive(Debug, Clone, Copy)]
+pub struct RelatedQuery {
+    query: CodebaseQuery,
+    top: usize,
+}
+
+impl RelatedQuery {
+    /// Landed period when `window` is omitted.
+    const DEFAULT_WINDOW: &str = "30d";
+    /// Partner cap when `top` is omitted.
+    const DEFAULT_TOP: usize = 10;
+
+    /// Validate a related selection.
+    ///
+    /// An omitted window is 30 days, an omitted minimum support is the shared
+    /// analytics default (15) and an omitted `top` is 10. The selection always
+    /// uses file rollup and no regression filter.
+    pub fn parse(
+        window: Option<&str>,
+        min_support: Option<usize>,
+        top: Option<usize>,
+    ) -> Result<Self, OrbitError> {
+        let query = CodebaseQuery::parse(
+            Some(window.unwrap_or(Self::DEFAULT_WINDOW)),
+            min_support,
+            Some("file"),
+        )?;
+        Ok(Self {
+            query,
+            top: top.unwrap_or(Self::DEFAULT_TOP),
+        })
+    }
+
+    /// Resolved window: `7d`, `30d`, `90d` or `all`.
+    pub fn window(self) -> &'static str {
+        self.query.window
+    }
+
+    /// Resolved partner cap.
+    pub fn top(self) -> usize {
+        self.top
+    }
+
+    /// File-rollup selection with no regression filter, for the related scan
+    /// and ranking.
+    pub fn codebase_query(self) -> CodebaseQuery {
+        self.query
     }
 }
 

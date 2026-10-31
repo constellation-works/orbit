@@ -1,0 +1,2 @@
+ORB-00001	Document the new sink resolution precedence	proposed	medium	chore	any host from OS tags (crew unassigned)	<TIMESTAMP>
+ORB-00000	Fix the flaky retry loop in the sync worker	proposed	high	bug	any host from OS tags (crew unassigned)	<TIMESTAMP>

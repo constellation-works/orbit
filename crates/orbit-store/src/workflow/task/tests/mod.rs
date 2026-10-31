@@ -31,6 +31,8 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
     let now = Utc.with_ymd_and_hms(2026, 6, 1, 9, 0, 0).unwrap();
     TaskBundleV2 {
         envelope: TaskEnvelopeV2 {
+            granted_tools: Vec::new(),
+            requires_labels: Vec::new(),
             job_run_machine: None,
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             id: id.to_string(),
@@ -46,7 +48,9 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
             orchestrator: Some("archive-orchestrator".to_string()),
             orchestrator_model: None,
             orchestrator_model_source: None,
+            created_by_model: None,
             origin: None,
+            rule_fingerprint: None,
             relations,
             tags: vec!["migration".to_string()],
             required_tools: Vec::new(),
@@ -57,6 +61,7 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
             implemented_by: None,
             created_at: now,
             updated_at: now,
+            not_before: None,
         },
         description: format!("description for {id}"),
         acceptance: "- [ ] done".to_string(),

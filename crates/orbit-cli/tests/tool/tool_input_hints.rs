@@ -120,12 +120,14 @@ fn tool_run_unusable_input_does_not_migrate_a_pending_layout() {
         .assert()
         .success();
 
+    // The first open stamps the layout and records this home as the
+    // workspace's authority. Rewind to version 1 so a later runtime open has
+    // a pending migration to apply.
+    orbit_command(&work, &home)
+        .args(["task", "list"])
+        .assert()
+        .success();
     let marker = work.join(".orbit/state/layout.version");
-    if let Some(parent) = marker.parent() {
-        std::fs::create_dir_all(parent).expect("layout marker directory");
-    }
-    // Workspace init can leave the marker absent (version 0). Record version 1
-    // so a later runtime open has a pending migration to apply.
     std::fs::write(&marker, "1\n").expect("rewind layout marker");
 
     let json_error = run_tool(&work, &home, &["orbit.task.show", "--input", "not-json"]);
@@ -233,4 +235,65 @@ fn assert_input_error_precedes_bootstrap(error: &str) {
         !lowered.contains("no workspace") && !lowered.contains("no initialized"),
         "workspace bootstrap must not replace the input error: {error}"
     );
+}
+
+#[test]
+fn unknown_task_tools_suggest_visible_registered_tools_without_aliasing() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    orbit_command(&work, &home)
+        .args(["workspace", "init", "--name", "unknown-tool-hints"])
+        .assert()
+        .success();
+    for (name, hint) in [
+        ("orbit.task.get", Some("orbit.task.show")),
+        (
+            "orbit.task.artifact.list",
+            Some("orbit.task.show with field: \"artifacts\""),
+        ),
+        ("orbit.workflow.run.get", None),
+        ("orbit.auto_task.get", None),
+        ("orbit.definitely.missing", None),
+    ] {
+        let output = orbit_command(&work, &home)
+            .env("ORBIT_TASK_ACTOR_KIND", "agent")
+            .env("ORBIT_AGENT_NAME", "codex")
+            .args(["tool", "run", name, "--input", "{}", "--format", "json"])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        let error: Value = serde_json::from_slice(&output.stderr)
+            .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stderr)));
+        assert_eq!(error["code"], "tool_not_found", "{error}");
+        let expected = match hint {
+            Some(hint) => format!("tool not found: {name} (did you mean {hint}?)"),
+            None => format!("tool not found: {name}"),
+        };
+        assert_eq!(error["error"], expected);
+    }
+    // The name itself may pass the activity policy, but its replacement may not.
+    let output = orbit_command(&work, &home)
+        .env("ORBIT_TASK_ACTOR_KIND", "agent")
+        .env("ORBIT_AGENT_NAME", "codex")
+        .env("ORBIT_ACTIVITY_TOOLS", "orbit.task.get")
+        .args([
+            "tool",
+            "run",
+            "orbit.task.get",
+            "--input",
+            "{}",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let error: Value = serde_json::from_slice(&output.stderr)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stderr)));
+    assert_eq!(error["error"], "tool not found: orbit.task.get");
 }

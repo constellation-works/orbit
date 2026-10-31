@@ -62,6 +62,23 @@ pub(super) fn host_os_exclusion(
     })
 }
 
+/// The exclusion for a task whose `requires_labels` this host does not
+/// carry. Shared by automatic selection and the explicit ship override, like
+/// [`host_os_exclusion`].
+pub(super) fn host_labels_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Option<BacklogTaskExclusion> {
+    let reason = runtime.task_host_labels_wait(task)?;
+    Some(BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::HostLabelsMissing,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(reason),
+    })
+}
+
 /// The exclusion for a `ui` task on a host whose browser kit is not
 /// verified (`kit_verified`, read once per admission pass).
 ///
@@ -82,6 +99,46 @@ pub(super) fn browser_kit_exclusion(
         crew: None,
         detail: Some(browser_kit_wait()),
     })
+}
+
+/// The exclusion for a `verify-mock-ui` task whose mocks fail validation
+/// against the manifest at the base revision. Shared by automatic
+/// selection and the readiness snapshot, like [`browser_kit_exclusion`].
+pub(super) fn mock_validation_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Option<BacklogTaskExclusion> {
+    let detail = runtime.mock_admission_check(task).err()?;
+    Some(BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::MockValidationFailed,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(detail),
+    })
+}
+
+/// The exclusion for a `backlog` task whose `not_before` is still ahead.
+/// Shared by automatic selection and the explicit ship override, like
+/// [`host_os_exclusion`]. A hold that cannot be read is not one: the
+/// workflow-entry check at dispatch reads it again.
+pub(super) fn scheduled_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Option<BacklogTaskExclusion> {
+    match runtime.schedule_hold(task) {
+        Ok(hold) => hold.map(|hold| BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::Scheduled,
+            conflicts: Vec::new(),
+            crew: None,
+            detail: Some(hold.detail()),
+        }),
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, "could not read scheduled hold: {error}");
+            None
+        }
+    }
 }
 
 /// The exclusion for an inherited-only `epic` root.

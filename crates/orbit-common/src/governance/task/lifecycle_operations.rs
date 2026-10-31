@@ -284,6 +284,9 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
+const BLOCK_TRIAGE_SUBJECT_VALUES: &[EnumValue] =
+    &[EnumValue::plain("block"), EnumValue::plain("pilot_warning")];
+
 const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[
     EnumValue::plain("candidates"),
     EnumValue::plain("requeue"),
@@ -291,13 +294,14 @@ const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[
     EnumValue::plain("report"),
 ];
 
-/// Read the block episodes awaiting triage, or record one triage decision on
-/// a blocked task: the blocked-task triage's agent surface.
+/// Read the block episodes or pilot warning holds awaiting triage, or record
+/// one triage decision on one: the agent surface of the blocked-task triage
+/// and of the pilot-warning escalation triage.
 pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
     verb: TaskVerb::BlockTriage,
     cli_path: &[],
     tool_name: "orbit.task.block_triage",
-    tool_description: "Triage escalated blocks. `candidates` lists every blocked task with whether its current block episode awaits triage: its final-recovery decision escalated, or it has none and the backstop will never decide it; an episode already triaged or touched by a human after the block is excluded. Each other action records one decision on a qualifying episode, as one task comment plus a history marker, and refuses any other episode. `requeue` returns the task to the backlog as a final-recovery requeue, counted against the shared final-recovery requeue bound (2 per 24 hours): past the bound, for a task tagged security or security-review, or for a run another machine executed, it is recorded as refused and the task stays blocked; when the count cannot be read nothing is written. `propose` records the quoted blocker, two or three options with consequences and ready-to-apply replacement text, and a recommendation, and changes nothing else. `report` records the human action and changes nothing else. Never completes, rejects or archives a task.",
+    tool_description: "Triage blocked tasks whose final recovery escalated, or that the backstop never decides. `candidates` lists those awaiting triage; `propose` records options and a recommendation, `report` records a human action, and `requeue` returns the task to the backlog within the requeue bound shared with final recovery. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions triage proposed tasks held by a task-pilot warning instead, and `requeue` is refused. A refused requeue leaves the task blocked. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the requeue bound, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Blocked-task triage`.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     // `candidates` only reads, but the decisions write.
@@ -311,14 +315,19 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
                 "candidates, requeue, propose, or report",
             )),
             mcp_only(
+                "subject",
+                ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
+                "what is triaged: block (default), a blocked task's block episode; pilot_warning, a proposed task's pilot warning hold",
+            ),
+            mcp_only(
                 "id",
                 ParamType::String,
-                "requeue, propose, report: the blocked task",
+                "requeue, propose, report: the blocked or pilot-held task",
             ),
             free_text(mcp_only(
                 "blocker",
                 ParamType::String,
-                "requeue, propose, report: the escalation reason, quoted in the comment",
+                "block requeue, propose, report: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it",
             )),
             free_text(mcp_only(
                 "reason",
@@ -328,12 +337,27 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
             mcp_only(
                 "options",
                 ParamType::Array,
-                "propose: two or three {summary, consequences, replacement} objects; replacement is the exact text for each changed description section or criterion",
+                "propose: two or three {summary, consequences, target, replacement} objects; target is `acceptance_criteria` or `description`, and replacement is that field's complete new value (one criterion per line), which an operator's answer applies; without a target the option cannot be applied",
             ),
             mcp_only(
                 "recommended",
                 ParamType::Integer,
                 "propose: 1-based index of the recommended option",
+            ),
+            mcp_only(
+                "source_revision",
+                ParamType::String,
+                "inspection proof: the pinned commit id the caller inspected, or null in a non-Git workspace; supply with observed_revision and observed_tree",
+            ),
+            mcp_only(
+                "observed_revision",
+                ParamType::String,
+                "inspection proof: `git rev-parse HEAD` in the inspection checkout",
+            ),
+            mcp_only(
+                "observed_tree",
+                ParamType::String,
+                "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
             ),
         ],
         IDENTITY_PARAMS,
@@ -399,6 +423,117 @@ pub(super) const DELETE: TaskOperation = TaskOperation {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: None,
+};
+
+const RECOVER_STATUS_VALUES: &[EnumValue] =
+    &[EnumValue::plain("blocked"), EnumValue::plain("backlog")];
+
+/// Recover a follower claim to blocked or backlog, fencing its attempt.
+pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
+    verb: TaskVerb::RecoverClaim,
+    cli_path: &["recover-claim"],
+    tool_name: "orbit.task.recover_claim",
+    tool_description: "Recover a live execution claim on its owner workspace to blocked or backlog, fencing the attempt, invalidating pending landing authority and releasing its reservation in one transaction. Requires trusted operator authority; unavailable to managed runs. Supply the claim phase you observed, the target status, a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original recovery.",
+    cli_about: "Recover a live claim to blocked or backlog with an audited reason",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        HOST_PARAM,
+        WORKSPACE_PARAM,
+        required(both(
+            "claim_id",
+            ParamType::String,
+            "Live claim to recover",
+            CliArgKind::Positional,
+            "Claim to recover",
+        )),
+        required(both(
+            "expected_phase",
+            ParamType::String,
+            "Claim phase you observed; a claim that moved on is refused",
+            flag_named("phase", "PHASE"),
+            "Expected claim phase you observed",
+        )),
+        required(both(
+            "status",
+            ParamType::Enum(RECOVER_STATUS_VALUES),
+            "Target status: blocked for diagnosis or backlog for retry",
+            flag_named("status", "STATUS"),
+            "Move the task to blocked or backlog",
+        )),
+        required(free_text(both(
+            "reason",
+            ParamType::String,
+            "Required operator reason retained durably",
+            flag_named("reason", "REASON"),
+            "Operator reason recorded with the recovery",
+        ))),
+        required(both(
+            "request_key",
+            ParamType::String,
+            "Durable request key; reuse exactly after a lost reply",
+            flag_named("request", "KEY"),
+            "Durable replay key; reuse after a lost reply",
+        )),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+/// Revoke a handoff's completion authority.
+pub(super) const REVOKE_HANDOFF: TaskOperation = TaskOperation {
+    verb: TaskVerb::RevokeHandoff,
+    cli_path: &["revoke-handoff"],
+    tool_name: "orbit.task.revoke_handoff",
+    tool_description: "Revoke a handoff's completion authority on its owner workspace, cancelling its pending landing request while the task stays in review. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base, supply a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original revocation. Refused while an external merge intent is unresolved.",
+    cli_about: "Revoke a handoff's completion authority with an audited reason",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        HOST_PARAM,
+        WORKSPACE_PARAM,
+        required(both(
+            "handoff_id",
+            ParamType::String,
+            "Accepted handoff whose authority to revoke",
+            CliArgKind::Positional,
+            "Accepted handoff identity",
+        )),
+        required(both(
+            "expected_candidate_commit",
+            ParamType::String,
+            "Accepted candidate commit the operator observed",
+            flag_named("candidate", "COMMIT"),
+            "Expected accepted candidate commit",
+        )),
+        required(both(
+            "expected_base_commit",
+            ParamType::String,
+            "Accepted base commit the operator observed",
+            flag_named("base", "COMMIT"),
+            "Expected accepted base commit",
+        )),
+        required(free_text(both(
+            "reason",
+            ParamType::String,
+            "Required operator reason retained durably",
+            flag_named("reason", "REASON"),
+            "Operator reason recorded with the revocation",
+        ))),
+        required(both(
+            "request_key",
+            ParamType::String,
+            "Durable request key; reuse exactly after a lost reply",
+            flag_named("request", "KEY"),
+            "Durable replay key; reuse after a lost reply",
+        )),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
 /// Retry an existing authorized handoff, preserving its immutable foreign binding.

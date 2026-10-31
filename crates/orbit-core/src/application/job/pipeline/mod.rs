@@ -62,16 +62,13 @@ mod worker;
 
 pub(crate) use admission::{input_hash, pipeline_run_queue_position};
 pub use notices::{SubmissionKind, SubmissionNotices};
-pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission, RetryKey};
+pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]
 pub(crate) use wait::PipelineWaitClock;
 #[cfg(feature = "test-support")]
 pub use wait::pipeline_worker_observer_completed;
-pub use wait::{
-    PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_held,
-    pipeline_wait_status_is_success,
-};
+pub use wait::{PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus};
 pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;
@@ -84,6 +81,7 @@ pub(crate) use worker::log::pipeline_worker_log_path;
 pub(crate) use worker::log::pipeline_worker_log_test_hook;
 #[cfg(all(feature = "test-support", unix))]
 pub use worker::log::pipeline_worker_log_test_hook::with_pipeline_worker_log_open_hook;
+pub(crate) use worker::scope::{ScriptScopeLauncher, script_scope_launcher};
 pub(crate) use worker::supervisor::WorkerLaunchError;
 #[cfg(feature = "test-support")]
 pub use worker::supervisor::worker_reap_hook::{WorkerReapPhase, install_worker_reap_hook};

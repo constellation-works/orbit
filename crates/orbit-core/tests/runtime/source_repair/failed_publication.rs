@@ -132,8 +132,80 @@ fn failed_after_push_gets_fresh_authority_without_replaying_the_attempt() {
     );
 }
 
+fn scheduled_failed_publication_waits_before_source_repair() {
+    use orbit_common::OrbitError;
+    use orbit_core::application::job::JobRunListParams;
+
+    let mut f = Fixture::new();
+    published_owner::publication(&mut f);
+    published_owner::requeue(&mut f);
+    let set_schedule = |time: &str| {
+        f.runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({
+                    "id": f.task, "not_before": time, "model": "codex"
+                }),
+            )
+            .unwrap();
+    };
+    set_schedule("2099-01-01T00:00:00Z");
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Backlog
+    );
+    let before_history = f.runtime.get_task_history(&f.task).unwrap();
+    let before_runs = f
+        .runtime
+        .list_job_runs(JobRunListParams::default())
+        .unwrap()
+        .len();
+    let binding = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .unwrap()["binding"]
+        .clone();
+    let input = f.submit(binding);
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input.clone())
+        .unwrap_err();
+    assert!(matches!(error, OrbitError::TaskScheduled { .. }), "{error}");
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(
+        f.runtime.get_task_history(&f.task).unwrap().len(),
+        before_history.len()
+    );
+    assert_eq!(
+        f.runtime
+            .list_job_runs(JobRunListParams::default())
+            .unwrap()
+            .len(),
+        before_runs
+    );
+
+    set_schedule("2000-01-01T00:00:00Z");
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input.clone())
+        .unwrap();
+    assert_eq!(admitted["replayed"], false);
+    let id = admitted["run_id"].as_str().unwrap();
+    f.wait(id);
+    let replay = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    assert_eq!(replay["run_id"], id);
+    assert_eq!(replay["replayed"], true);
+}
+
 crate::scenario_table!(
     failed_publication_scenarios,
+    scheduled_failed_publication_waits_before_source_repair,
     failed_after_push_gets_fresh_authority_without_replaying_the_attempt,
     failed_push_refusals_preserve_task_and_receipts
 );
@@ -726,6 +798,7 @@ fn settle_and_publish_reviewer(
         ),
         baseline_commands: f.runtime.review_baseline_commands().to_vec(),
         host_evidence: policy.review_host_evidence.value.clone(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
     });
     published_owner::save_run(f, &run);
@@ -985,8 +1058,26 @@ fn reviewer_handoffs_refuse_unproven_transitions_without_writes() {
     refused_without_writes(&f, &f.source.run_id, &binding, "arbitrary descendant");
 }
 
-fn escalated_completion_receipt_is_not_a_blocked_publication_receipt() {
+/// A run that pushed and opened its PR through its own pipeline steps, then
+/// failed completion: its failure handoff kept the PR open and unmerged, and
+/// final recovery escalated, leaving the task blocked. Returns the run's
+/// retained checkout and the fixture's illustrative binding, inspected before
+/// the publication replaced its source.
+pub(super) fn escalated_completion_fixture() -> (Fixture, PathBuf, Value) {
     let mut f = Fixture::new();
+    let path = f
+        ._root
+        .path()
+        .join("global/resources/jobs/task_pr_pipeline.yaml");
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        path,
+        yaml.replace(
+            "  task_delivery: {}",
+            "  task_delivery: {}\n  failure_activity: pr_failure_handoff",
+        ),
+    )
+    .unwrap();
     let binding = f.inspect();
     let checkout = published_owner::publication(&mut f);
     escalate(&f, &f.source.run_id);
@@ -1009,13 +1100,34 @@ fn escalated_completion_receipt_is_not_a_blocked_publication_receipt() {
     f.source.pid = None;
     f.source.finished_at = Some(Utc::now());
     published_owner::save_run(&f, &f.source);
+    f.state = state;
+    (f, checkout, binding)
+}
+
+fn escalated_completion_receipt_requires_explicit_rework_authority() {
+    let (f, _, _) = escalated_completion_fixture();
     // A real completion-preservation receipt has a distinct contract. It is
     // retained, never rewritten into a blocked-publication receipt for admission.
-    refused_without_writes(&f, &f.source.run_id, &binding, "completion receipt variant");
+    let task = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
+    let history = serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.submit(f.inspect()))
+        .unwrap_err();
+    assert!(error.to_string().contains("unmet_acceptance"), "{error}");
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap(),
+        task
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap(),
+        history
+    );
+    f.assert_original();
 }
 
 crate::scenario_table!(
     reviewer_handoff_refusal_scenarios,
     reviewer_handoffs_refuse_unproven_transitions_without_writes,
-    escalated_completion_receipt_is_not_a_blocked_publication_receipt
+    escalated_completion_receipt_requires_explicit_rework_authority
 );

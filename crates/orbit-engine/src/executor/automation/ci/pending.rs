@@ -20,6 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
+use orbit_common::security::redaction::redact_all;
 use serde_json::{Value, json};
 
 use super::investigate::{bound_diagnostic, log_belongs_to_job};
@@ -113,12 +114,15 @@ pub(super) fn hold_for_in_flight_descendants<Q: CiQueries + ?Sized>(
                     break;
                 }
                 Ok(false) => {}
-                Err(error) => notes.push(format!(
-                    "run {} could not be compared with in-flight run {} ({error}); the failure \
-                     stays current",
-                    display_id(&failure),
-                    display_id(successor),
-                )),
+                Err(error) => {
+                    let error = redact_all(&error.to_string());
+                    notes.push(format!(
+                        "run {} could not be compared with in-flight run {} ({error}); the failure \
+                         stays current",
+                        display_id(&failure),
+                        display_id(successor),
+                    ));
+                }
             }
         }
         let Some(successor) = descendant else {
@@ -244,6 +248,7 @@ fn reproduction<Q: CiQueries + ?Sized>(
             Ok(true) => {}
             Ok(false) => return None,
             Err(error) => {
+                let error = redact_all(&error.to_string());
                 notes.push(format!(
                     "run {run_id} could not be compared with its previous completed run \
                      {previous_id} ({error}); it stays held"
@@ -270,6 +275,7 @@ fn reproduction<Q: CiQueries + ?Sized>(
                 views.insert(id, view);
             }
             Err(error) => {
+                let error = redact_all(&error.to_string());
                 notes.push(format!(
                     "run view {id} could not be read to compare run {run_id} with its previous \
                      completed run ({error}); it stays held"
@@ -380,6 +386,7 @@ fn job_signature<Q: CiQueries + ?Sized>(
     ) {
         Ok(log) => log,
         Err(error) => {
+            let error = redact_all(&error.to_string());
             notes.push(format!(
                 "failed-step log of job {job_id} in run {run_id} could not be read to compare \
                  error signatures ({error}); the run it would release stays held"

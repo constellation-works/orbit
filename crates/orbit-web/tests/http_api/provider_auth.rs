@@ -188,6 +188,23 @@ fn host_resources_carry_the_hosts_provider_readings_for_the_top_bar() {
             assert_eq!(claude["window"], "five_hour");
             assert_eq!(claude["used_percent"], 40.0);
             assert_eq!(claude["gated"], false);
+            let pressures = sample["provider_pressures"].as_array().unwrap();
+            let claude_pressure = pressures
+                .iter()
+                .find(|item| item["provider"] == "claude")
+                .unwrap();
+            assert_eq!(
+                claude_pressure["pressure"], 1.0,
+                "five-hour windows are neutral"
+            );
+            assert!(claude_pressure["pressure_window"].is_null());
+            let codex_pressure = pressures
+                .iter()
+                .find(|item| item["provider"] == "codex")
+                .unwrap();
+            assert!((codex_pressure["pressure"].as_f64().unwrap() - 0.14).abs() < 0.001);
+            assert_eq!(codex_pressure["pressure_window"]["window"], "seven_day");
+            assert!(sample["crew_pressures"].is_array());
             assert!(claude["threshold"].is_number() || claude["threshold"] == "off");
         },
     );
@@ -208,13 +225,15 @@ fn dashboard_top_bar_shows_provider_usage_on_every_tab() {
             global.push_str(concat!(
                 "\n[workflow]\ndefault_crew = \"opus\"\nprovider_limit_overrides = [\"codex:off\"]\n",
                 "\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n",
+                "\n[crews.codex_fixture]\nprovider = \"codex\"\nmodel = \"fixture\"\n",
             ));
             std::fs::write(global_path, global).unwrap();
             let now = Utc::now();
             for (provider, window, used, observed_at) in [
                 ("codex", "primary", 100.0, now - Duration::days(3)),
                 ("claude", "five_hour", 5.0, now),
-                ("claude", "seven_day", 26.0, now),
+                ("claude", "seven_day", 10.0, now),
+                ("codex", "secondary", 0.0, now),
             ] {
                 fixture
                     .runtime
@@ -223,7 +242,11 @@ fn dashboard_top_bar_shows_provider_usage_on_every_tab() {
                         window,
                         used,
                         observed_at,
-                        now + Duration::days(4),
+                        now + match window {
+                            "seven_day" => Duration::hours(6),
+                            "secondary" => Duration::days(7),
+                            _ => Duration::days(4),
+                        },
                     ))
                     .unwrap();
             }
@@ -428,7 +451,11 @@ fn reading(
         source: ProviderLimitSource::Event,
         resets_at: Some(resets_at),
         used_percent: Some(used_percent),
-        window_minutes: Some(300),
+        window_minutes: Some(if window == "seven_day" || window == "secondary" {
+            10080
+        } else {
+            300
+        }),
         gating: true,
         partial: false,
         observed_at,

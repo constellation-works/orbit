@@ -8,9 +8,11 @@
 //! blocking, and a reviewer that skips or claims it cannot ship the candidate
 //! unverified. Once the owner's run of the check arrives, the owner's next run
 //! resumes the held candidate and settles the held review without
-//! re-implementing or re-reviewing it.
+//! re-implementing or re-reviewing it. A before-landing hold does the same
+//! on the landing gate: matching evidence admits `evidence_received` and
+//! settlement reuses the held certificate.
 
-use super::claimed_review::ReviewedLeaf;
+use super::claimed_review::{REVIEW_CREW, ReviewedLeaf};
 use super::*;
 
 use orbit_types::task::HostOs;
@@ -101,6 +103,7 @@ pub(super) fn report(
     escalation: Option<&str>,
 ) -> ReviewReport {
     ReviewReport {
+        visual_resolutions: Vec::new(),
         external_evidence: Vec::new(),
         schema_version: orbit_types::workflow::REVIEW_CONTRACT_VERSION,
         attempt_id: admitted["attempt_id"].as_str().unwrap().into(),
@@ -369,34 +372,131 @@ fn a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_chec
     assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
 }
 
-/// A check that failed on the candidate is an answer, not an evidence gap: a
-/// later run of it on another OS cannot settle it, so the review blocks.
-fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
-    let (leaf, admitted) = leaf_on(HostOs::Macos, "docs/**/*.md");
+/// A Mac before-landing reviewer reports a broader run that deferred three
+/// Linux sandbox tests, using Cargo's `-- <filter>` spelling for their host
+/// requirements. Settlement must owe those runs to the owner and hold,
+/// synthesizing their required records rather than blocking as incomplete.
+fn a_mac_before_landing_review_owes_named_linux_tests_with_separated_filters() {
+    let mut leaf = ReviewedLeaf::admit_before_landing();
+    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+    leaf.gate_input["before_landing"] = json!(true);
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["timing"], "before-landing", "{admitted}");
+    assert_eq!(admitted["owed_evidence"], json!([]), "{admitted}");
+    let tests = [
+        "pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker",
+        "v2_cli_sandbox::dispatch_registration_failure_ends_the_provider_group",
+        "v2_cli_sandbox::auth_probe_refused_registration_ends_the_grandchild",
+    ];
+    let named = tests
+        .iter()
+        .enumerate()
+        .map(|(index, test)| ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostSandboxTest,
+            name: format!("Linux sandbox: {test}"),
+            command: format!("cargo test -p orbit-engine --test engine -- {test}"),
+            artifact: format!("evidence/linux-sandbox-{index}.json"),
+            os: Some(EvidenceHostOs::Linux),
+            hosted_check: None,
+        })
+        .collect::<Vec<_>>();
+    let mut broad = record(
+        "V2",
+        "cargo test -p orbit-engine --test engine",
+        ValidationOutcome::Passed,
+    );
+    broad.deferred = tests
+        .iter()
+        .map(|test| {
+            format!(
+                "SKIP: sandbox-exec cannot apply a profile: {test}: \
+                 sandbox_apply: Operation not permitted"
+            )
+        })
+        .collect();
     let mut reviewer_report = report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
-        vec![ci_fast(), record("V2", CI, ValidationOutcome::Failed)],
-        Some("the hosted CI check failed on the candidate"),
+        vec![ci_fast(), broad],
+        Some("These sandbox tests need a Linux host"),
     );
-    reviewer_report.external_evidence = vec![ReviewEvidenceRequirement {
-        kind: ReviewEvidenceKind::HostedCi,
-        name: "CI".into(),
-        command: CI.into(),
-        artifact: CI_ARTIFACT.into(),
-        os: None,
-        hosted_check: None,
-    }];
+    reviewer_report.external_evidence = named.clone();
     leaf.put_report(&reviewer_report);
     let refused = leaf
         .settle()
-        .expect_err("a failed check opens no pull request");
-    assert!(refused.contains("review_gate_blocked"), "{refused}");
+        .expect_err("missing Linux evidence cannot land");
     assert!(
-        artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
-        "no hold for a failed check"
+        refused.contains("review_awaiting_evidence"),
+        "a Mac review's Linux sandbox gaps must hold instead of blocking: {refused}"
     );
+    assert!(!refused.contains("review_gate_blocked"), "{refused}");
+    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the owner receives a hold for the Linux tests");
+    assert_eq!(hold.requirements, named);
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
+    assert_eq!(certificate.owed_evidence, named);
+    for required in &named {
+        let record = certificate
+            .validation
+            .iter()
+            .find(|record| record.command == required.command)
+            .expect("each owed test has its own required record");
+        assert_eq!(
+            (record.role, record.outcome),
+            (ValidationRole::Required, ValidationOutcome::NotRun)
+        );
+    }
+    leaf.leaf_holds(&hold);
+    leaf.pair.pass(&leaf.drain);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
+}
+
+/// A check that failed on the candidate is an answer, not an evidence gap: a
+/// later run of it on another OS cannot settle it, so the review blocks.
+fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
+    for named in [
+        ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostedCi,
+            name: "CI".into(),
+            command: CI.into(),
+            artifact: CI_ARTIFACT.into(),
+            os: None,
+            hosted_check: None,
+        },
+        ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostSandboxTest,
+            name: "Linux sandbox".into(),
+            command: SANDBOX.into(),
+            artifact: SANDBOX_ARTIFACT.into(),
+            os: Some(EvidenceHostOs::Linux),
+            hosted_check: None,
+        },
+    ] {
+        let mut leaf = ReviewedLeaf::admit_before_landing();
+        leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+        leaf.gate_input["before_landing"] = json!(true);
+        let admitted = leaf.admit_review();
+        let mut reviewer_report = report(
+            &admitted,
+            ReviewVerdict::Incomplete,
+            Vec::new(),
+            vec![
+                ci_fast(),
+                record("V2", &named.command, ValidationOutcome::Failed),
+            ],
+            Some("the Linux-only check failed on the candidate"),
+        );
+        reviewer_report.external_evidence = vec![named];
+        leaf.put_report(&reviewer_report);
+        let refused = leaf.settle().expect_err("a failed check cannot land");
+        assert!(refused.contains("review_gate_blocked"), "{refused}");
+        assert!(
+            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            "no hold for a failed check"
+        );
+    }
 }
 
 /// The owner fulfils the held check with the candidate's CodeQL entry point
@@ -584,6 +684,7 @@ pub(super) fn owner_resumes(leaf: &ReviewedLeaf, timing: ReviewTiming) -> Resume
         required_validation_commands: Some(Vec::new()),
         baseline_commands: Vec::new(),
         host_evidence: Vec::new(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
     };
     let run = jobs
@@ -710,6 +811,21 @@ pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &Re
     let [required] = hold.requirements.as_slice() else {
         panic!("one owed check: {hold:?}");
     };
+    attach_passed_command(leaf, owner, hold, &required.command);
+}
+
+/// Operator attachment of a passed result for `hold`'s one requirement,
+/// recording `command` instead of the owed command when they differ.
+#[cfg(unix)]
+fn attach_passed_command(
+    leaf: &ReviewedLeaf,
+    owner: &OrbitRuntime,
+    hold: &ReviewEvidenceHold,
+    command: &str,
+) {
+    let [required] = hold.requirements.as_slice() else {
+        panic!("one owed check: {hold:?}");
+    };
     let log_artifact = format!("{}.log.json", required.artifact.trim_end_matches(".json"));
     let log_artifact = log_artifact.as_str();
     let result = orbit_types::workflow::ReviewExternalEvidence {
@@ -718,7 +834,7 @@ pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &Re
         candidate: hold.candidate.clone(),
         kind: required.kind,
         name: required.name.clone(),
-        command: required.command.clone(),
+        command: command.into(),
         outcome: ValidationOutcome::Passed,
         log_artifact: log_artifact.into(),
         os: required.os,
@@ -752,6 +868,133 @@ pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &Re
         .unwrap();
 }
 
+/// A Mac before-landing review holds for the Linux CodeQL run its owner's
+/// rule owes. A result for a different command leaves that hold. The matching
+/// result lets the owner's next run resume the unchanged candidate, and the
+/// landing gate admits `evidence_received` and settles the held certificate
+/// without a reviewer. The fresh admission, before any evidence, is
+/// `admitted`, which is the decision that still starts a reviewer.
+#[cfg(unix)]
+#[test]
+fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
+    if !isolated(
+        module_path!(),
+        "a_before_landing_evidence_hold_settles_once_matching_evidence_arrives",
+    ) {
+        return;
+    }
+
+    let mut leaf = ReviewedLeaf::admit_from(
+        &format!(
+            "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n{}",
+            codeql_rule("**/*.rs")
+        ),
+        "",
+    );
+    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+    leaf.gate_input["before_landing"] = json!(true);
+    let (_root, origin) = publish_origin(&leaf);
+
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["timing"], "before-landing", "{admitted}");
+    assert_eq!(
+        admitted["decision"], "admitted",
+        "a fresh before-landing attempt still admits a reviewer: {admitted}"
+    );
+    leaf.put_report(&report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        vec![ci_fast()],
+        Some("Rust CodeQL cannot run on macOS"),
+    ));
+    let refused = leaf.settle().expect_err("missing evidence cannot land");
+    assert!(
+        refused.contains("review_awaiting_evidence"),
+        "missing owed evidence must hold: {refused}"
+    );
+    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
+    assert_eq!(hold.requirements, vec![owed()]);
+    leaf.leaf_holds(&hold);
+    leaf.pair.pass(&leaf.drain);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
+
+    let owner = leaf.pair.wire.owner.clone();
+    attach_passed_command(&leaf, &owner, &hold, "echo mismatched");
+    assert_eq!(
+        leaf.pair.owner_status(&leaf.task),
+        "in-progress",
+        "a mismatched command must not release the hold"
+    );
+    assert!(
+        owner
+            .get_task_history(&leaf.task)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "review_evidence_received"),
+        "mismatched evidence must not record receipt"
+    );
+    let still_held: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the hold stays until the owed command arrives");
+    assert_eq!(still_held.attempt_id, hold.attempt_id);
+
+    owner_checkout(&leaf, &origin);
+    attach_result(&leaf, &owner, &hold);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "backlog");
+    let receipt = owner.get_task_history(&leaf.task).unwrap();
+    assert_eq!(
+        receipt.last().unwrap().event,
+        "review_evidence_received",
+        "{receipt:?}"
+    );
+
+    let resumed = owner_resumes(&leaf, ReviewTiming::BeforeLanding);
+    assert_eq!(
+        resumed.output["outcome"], "resumed_held",
+        "{}",
+        resumed.output
+    );
+    assert_eq!(resumed.output["implement"], false, "{}", resumed.output);
+    assert_eq!(resumed.output["source_sha"], hold.candidate.commit.as_str());
+
+    let mut gate_input = json!({
+        "run_id": resumed.run, "job_run_id": resumed.run, "completed_task_ids": [leaf.task],
+        "workspace_path": resumed.worktree, "base": "main", "base_sync": "local",
+        "base_sha": resumed.base_sha, "mode": "pr", "skipped_no_diff_expected": false,
+        "before_landing": true,
+    });
+    let admitted = owner
+        .run_deterministic(
+            "review_gate_admit",
+            &json!({}),
+            &gate_input,
+            ToolContext::default(),
+        )
+        .expect("the landing gate admits the resumed candidate");
+    assert_eq!(admitted["decision"], "evidence_received", "{admitted}");
+    assert_eq!(admitted["applies"], true, "{admitted}");
+    assert_eq!(admitted["timing"], "before-landing", "{admitted}");
+    assert_eq!(admitted["held_attempt_id"], hold.attempt_id.as_str());
+    gate_input["admission"] = admitted;
+    let settled = owner
+        .run_deterministic(
+            "review_gate_settle",
+            &json!({}),
+            &gate_input,
+            ToolContext::default(),
+        )
+        .expect("matching evidence settles the held review without a reviewer");
+    assert_eq!(settled["gate"], "passed", "{settled}");
+    assert_eq!(settled["verdict"], "accept", "{settled}");
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(
+        certificate.resumed_hold_attempt.as_deref(),
+        Some(hold.attempt_id.as_str()),
+        "settled on the held certificate, with no new reviewer"
+    );
+    assert_eq!(certificate.final_candidate.tree, hold.candidate.tree);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_mac_leaf_whose_only_gap_is_owed_codeql_holds_for_it_scenarios,
@@ -769,5 +1012,6 @@ crate::scenario_table!(
 crate::scenario_table!(
     a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check_scenarios,
     a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check,
+    a_mac_before_landing_review_owes_named_linux_tests_with_separated_filters,
     a_mac_reviewers_failed_linux_only_check_still_blocks
 );

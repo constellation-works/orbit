@@ -18,21 +18,21 @@ use orbit_types::task::{
     ExternalRef, TaskPriority, TaskStatus, is_task_show_projection_field,
     unknown_task_show_field_message,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
     ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority,
-    TaskUpdateParams, TaskWriteScreen, is_operator_rescue_close,
+    TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen, is_operator_rescue_close,
+    screened_task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
 use super::super::input::{
     empty_string_to_none, optional_bool_alias, parse_artifacts, parse_assessed_task_complexity,
-    parse_optional_task_origin, parse_relations, parse_task_priority, parse_task_status,
-    parse_task_type,
+    parse_optional_not_before, parse_optional_task_origin, parse_relations, parse_task_priority,
+    parse_task_status, parse_task_type,
 };
-use super::super::json::serialize_task_write_response;
 
 /// The CLI-only options `orbit task add` sends.
 const ADD_CLI_OPTIONS: &[&str] = &[
@@ -139,6 +139,13 @@ pub(super) fn add(
             tags: optional_csv_or_string_list_alias(input, &["tags"])?.unwrap_or_default(),
             required_tools: optional_csv_or_string_list_alias(input, &["required_tools"])?
                 .unwrap_or_default(),
+            // Reaching here with a grant means the tool chokepoint admitted
+            // this caller as an operator.
+            granted_tools: optional_csv_or_string_list_alias(input, &["granted_tools"])?
+                .unwrap_or_default(),
+            requires_labels: optional_csv_or_string_list_alias(input, &["requires_labels"])?
+                .unwrap_or_default(),
+            not_before: parse_optional_not_before(input)?.flatten(),
             plan: optional_raw_string(options, "plan")?.unwrap_or_default(),
             crew_source: None,
             comment: filed_by.map(|binding| {
@@ -174,7 +181,9 @@ pub(super) fn add(
             orchestrator: optional_string(input, "orchestrator")?,
             orchestrator_model: optional_string(input, "orchestrator_model")?,
             origin: parse_optional_task_origin(input, "origin")?,
+            rule_fingerprint: None,
             context_creation: ContextCreationAuthorization::default(),
+            creation_decision: None,
         },
         &screen,
         caller.agent,
@@ -392,35 +401,23 @@ pub(super) fn artifact_put(
     screened_write_response(runtime, written, None)
 }
 
-/// The write response: the task projection plus, only when non-empty, the
-/// write's `warnings` and the `context_files_unverified` selectors the
-/// owning worker's relaxation stored, so a strict write's response is the
-/// bare projection.
+/// The write response in the tool host's compact/projected profile:
+/// the shared projection plus, only when non-empty, the write's
+/// `warnings` and `context_files_unverified` selectors.
 fn screened_write_response(
     runtime: &OrbitRuntime,
     written: ScreenedTaskWrite,
     fields: Option<&[String]>,
 ) -> Result<TaskWriteOutput, OrbitError> {
-    let ScreenedTaskWrite {
-        task,
-        warnings,
-        context_files_unverified,
-    } = written;
-    let mut response = serialize_task_write_response(runtime, &task, fields)?;
-    if let Some(obj) = response.as_object_mut() {
-        if !context_files_unverified.is_empty() {
-            obj.insert(
-                "context_files_unverified".to_string(),
-                json!(context_files_unverified),
-            );
-        }
-        if !warnings.is_empty() {
-            obj.insert("warnings".to_string(), json!(warnings));
-        }
-    }
+    let persisted_id = written.task.id.clone();
+    let response = screened_task_write_response_json(
+        runtime,
+        &written,
+        &TaskWriteResponsePolicy::from_fields(fields),
+    )?;
     Ok(TaskWriteOutput {
         response,
-        persisted_id: task.id,
+        persisted_id,
     })
 }
 
@@ -528,6 +525,9 @@ fn task_update_params_from_input(
         dependencies: optional_csv_or_string_list_alias(input, &["dependencies"])?,
         relations: parse_relations(input)?,
         tags: optional_csv_or_string_list_alias(input, &["tags"])?,
+        granted_tools: optional_csv_or_string_list_alias(input, &["granted_tools"])?,
+        requires_labels: optional_csv_or_string_list_alias(input, &["requires_labels"])?,
+        not_before: parse_optional_not_before(input)?,
         plan: optional_plan(input)?,
         execution_summary: optional_raw_string(input, "execution_summary")?,
         comment: optional_string(input, "comment")?,

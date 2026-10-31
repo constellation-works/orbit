@@ -14,6 +14,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
 use orbit_core::bootstrap::browser_kit::{
     BROWSERS_PATH_ENV, ENV_SCRIPT_ENV, KitInspection, KitLayout, KitVerification, MODULE_ENV,
+    PIXEL_HELPER_VERSION,
 };
 use serde::Serialize;
 
@@ -28,7 +29,13 @@ const SMOKE_DEADLINE: Duration = Duration::from_secs(180);
 const SCREENSHOT_ENV: &str = "ORBIT_BROWSER_KIT_SCREENSHOT";
 const SMOKE_SCRIPT: &str = r#"
 import http from "node:http";
+import { createRequire } from "node:module";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+// The visual capture driver decodes PNGs with the kit's pinned pngjs;
+// prove here that it resolves from the kit and decodes a real screenshot.
+const kitRequire = createRequire(process.env.PLAYWRIGHT_MODULE);
+const { PNG } = kitRequire("pngjs");
+const pngjsVersion = kitRequire("pngjs/package.json").version;
 const server = http.createServer((_, res) => res.end("<h1>kit ok</h1>"));
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const browser = await chromium.launch();
@@ -36,8 +43,12 @@ try {
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   const text = await page.textContent("h1");
-  await page.screenshot({ path: process.env.ORBIT_BROWSER_KIT_SCREENSHOT });
-  console.log(JSON.stringify({ text, version: browser.version() }));
+  const buffer = await page.screenshot({ path: process.env.ORBIT_BROWSER_KIT_SCREENSHOT });
+  const decoded = PNG.sync.read(buffer);
+  const pixelsOk = decoded.width > 0 && decoded.height > 0
+    && decoded.data.length === decoded.width * decoded.height * 4
+    && PNG.sync.read(PNG.sync.write(decoded)).data.equals(decoded.data);
+  console.log(JSON.stringify({ text, version: browser.version(), pngjs: pngjsVersion, pixels_ok: pixelsOk }));
 } finally {
   await browser.close();
   server.close();
@@ -126,12 +137,21 @@ pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
     let browser_version = result
         .as_ref()
         .and_then(|value| value.get("version")?.as_str().map(str::to_string));
+    let pixel_helper_version = result
+        .as_ref()
+        .and_then(|value| value.get("pngjs")?.as_str().map(str::to_string));
+    let pixels_ok = result
+        .as_ref()
+        .and_then(|value| value.get("pixels_ok")?.as_bool())
+        == Some(true);
     let passed = output.status.success()
         && result
             .as_ref()
             .and_then(|value| value.get("text")?.as_str())
             == Some("kit ok")
-        && screenshot.is_file();
+        && screenshot.is_file()
+        && pixels_ok
+        && pixel_helper_version.as_deref() == Some(PIXEL_HELPER_VERSION);
 
     if passed {
         let record = KitVerification {
@@ -139,6 +159,7 @@ pub fn verify(layout: &KitLayout) -> Result<VerifyReport, OrbitError> {
             playwright_version: version.clone(),
             chromium_revision: revision.clone(),
             browser_version: browser_version.clone().unwrap_or_default(),
+            pixel_helper_version: pixel_helper_version.clone(),
             verified_at: chrono::Utc::now().to_rfc3339(),
         };
         let text = serde_json::to_string_pretty(&record)
@@ -180,6 +201,10 @@ fn diagnose(output: &str) -> String {
     } else if output.contains("FontConfig") || output.contains("Fontconfig") {
         "Chromium crashed in Skia/FontConfig: the host has no fonts; rerun `orbit browser-kit \
          install` to unpack fonts into the kit"
+            .to_string()
+    } else if output.contains("pngjs") {
+        "the kit's pixel-compare helper (pngjs) is missing or not at this release's pin: rerun \
+         `orbit browser-kit install`"
             .to_string()
     } else if output.contains("Executable doesn't exist") {
         "the Playwright module and the installed browser revision are out of step: rerun \

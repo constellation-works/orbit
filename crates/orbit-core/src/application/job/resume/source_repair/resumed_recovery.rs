@@ -26,10 +26,7 @@ impl ResumedRecovery {
     pub(super) fn binding(&self) -> Result<SourceRepairOwner, OrbitError> {
         Ok(SourceRepairOwner {
             run_id: self.owner.run_id.clone(),
-            digest: digest(&json!({
-                "run": self.owner, "steps": self.owner.steps,
-                "checkpoints": self.owner_state, "definition": self.owner_definition,
-            }))?,
+            digest: run_evidence_digest(&self.owner, &self.owner_state, &self.owner_definition)?,
         })
     }
 }

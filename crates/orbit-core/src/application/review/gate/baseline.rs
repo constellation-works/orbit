@@ -84,6 +84,7 @@ use crate::application::task::TaskRecordUpdateParams;
 
 use super::context::GateContext;
 use super::judgement::{Judgement, extend_note, write_artifact};
+use crate::application::task::TaskRecords;
 
 impl Judgement {
     /// Check every baseline claim in the report and return the holds the

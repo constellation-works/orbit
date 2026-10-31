@@ -13,6 +13,11 @@ use std::collections::HashMap;
 use super::params::*;
 
 pub trait JobRunStoreBackend: Send + Sync {
+    /// Read-only keyset page, including live runs so a later terminal state is
+    /// recovered on the next scan cycle. No step or reconciliation writes.
+    fn observed_run_page(&self, _after: &str, _limit: usize) -> Result<Vec<JobRun>, OrbitError> {
+        Err(OrbitError::Store("run paging unavailable".into()))
+    }
     /// The workspace partition this store reads and writes runs under. Run
     /// ids are only unique within it.
     fn workspace_id(&self) -> &str;
@@ -145,6 +150,68 @@ pub trait JobRunStoreBackend: Send + Sync {
 
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError>;
+    /// Up to `per_task_limit` recent runs of `job_id` for each requested task,
+    /// ordered by recency descending, then run ID ascending, including steps.
+    /// Ownership uses the exact top-level text bindings of `JobRunQuery.task_id`.
+    /// Missing tasks are omitted. Limits apply independently before hydration:
+    /// retries for one task cannot displace another task's evidence. Persistent
+    /// backends should batch indexed ownership seeks and deduplicate step reads;
+    /// a bounded result must not require a history scan per requested task.
+    fn recent_job_runs_for_tasks(
+        &self,
+        job_id: &str,
+        task_ids: &[String],
+        per_task_limit: usize,
+    ) -> Result<std::collections::BTreeMap<String, Vec<JobRun>>, OrbitError> {
+        let mut result = std::collections::BTreeMap::new();
+        for id in task_ids {
+            if result.contains_key(id) {
+                continue;
+            }
+            let runs = self.list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(job_id.to_string()),
+                task_id: Some(id.clone()),
+                order_by: JobRunOrder::Recency,
+                limit: Some(per_task_limit),
+                ..Default::default()
+            })?;
+            if !runs.is_empty() {
+                result.insert(id.clone(), runs);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Distinct trimmed, nonblank task IDs carried by the selected runs' top-level
+    /// `task_ids` string array or text `task_id`. Run filters and limits apply
+    /// before projection; nested fields confer no ownership. Backends may
+    /// project these IDs without hydrating runs, checkpoints or step payloads.
+    fn job_run_task_ids(
+        &self,
+        query: &JobRunQuery,
+    ) -> Result<std::collections::BTreeSet<String>, OrbitError> {
+        let mut query = query.clone();
+        query.include_steps = false;
+        Ok(self
+            .list_job_runs_filtered(&query)?
+            .into_iter()
+            .filter_map(|run| run.input)
+            .flat_map(|input| {
+                input
+                    .get("task_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .chain(input.get("task_id").and_then(serde_json::Value::as_str))
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect())
+    }
+
     /// Latest created run, including steps, for each distinct requested job.
     /// Missing jobs are omitted; results are ordered by job ID. Ties use the
     /// same run-ID ordering as a default `JobRunQuery`. Backends may batch the
@@ -281,6 +348,17 @@ pub trait JobRunStoreBackend: Send + Sync {
         finished_at: DateTime<Utc>,
         duration_ms: Option<u64>,
     ) -> Result<JobRunFinalization, OrbitError>;
+    /// Cancel a run only while it is still `pending`: the state check and the
+    /// terminal write share the immediate transaction
+    /// [`Self::mark_job_run_running`] starts a run in, so a run either starts
+    /// or is cancelled here, never both. A run that already started or ended
+    /// is left untouched and reported as
+    /// [`PendingJobRunCancellation::NotPending`].
+    fn cancel_pending_job_run(
+        &self,
+        run_id: &str,
+        finished_at: DateTime<Utc>,
+    ) -> Result<PendingJobRunCancellation, OrbitError>;
     /// Compatibility surface: `true` means the run exists, including replay.
     fn finalize_job_run(
         &self,
@@ -348,6 +426,17 @@ pub enum JobRunFinalization {
     Finalized,
     /// An earlier terminal state won; this call did not change it.
     AlreadyTerminal(JobRunState),
+}
+
+/// The result of [`JobRunStoreBackend::cancel_pending_job_run`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingJobRunCancellation {
+    /// The run did not exist.
+    Missing,
+    /// This call moved the still-pending run to `cancelled`.
+    Cancelled,
+    /// The run had left `pending` (it is in this state); nothing was written.
+    NotPending(JobRunState),
 }
 
 /// Durable inputs for one parent-authorized child admission.

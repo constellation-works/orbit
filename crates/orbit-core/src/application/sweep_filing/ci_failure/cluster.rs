@@ -3,30 +3,33 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_types::task::Task;
+use orbit_types::task::{CiFailureSource, HostOs};
 use serde_json::{Value, json};
 
 use super::fields::{truncate_bytes, value_string};
 use super::filing::{
-    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, CI_FAILURE_TAG,
-    DESCRIPTION_LOG_BYTES, MAX_LISTED_RUNS,
+    CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, DESCRIPTION_LOG_BYTES,
+    MAX_LISTED_RUNS,
 };
-use super::grouping::{failure_test_names, legacy_source_matches, tested_commit};
+use super::grouping::{failure_test_names, tested_commit};
+use super::identity::{CauseCheckedLookup, CiTaskIdentities};
 use super::log_signature::{
-    FailedStepExcerpt, compiler_cause, compiler_diagnostic_set, relevant_log_query_errors,
+    FailedStepExcerpt, compiler_diagnostic_set, relevant_log_query_errors,
     render_failed_step_excerpt, specific_command_from_log, specific_error_anchors,
 };
+use super::runner_os::{RunnerOsEvidence, RunnerOsSource};
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
-    CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
-    DuplicateTaskMatch, find_covering_task,
+    CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateMatchKind,
+    DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
 };
 use crate::application::sweep_filing::{digest, display, is_open_ci_owner_status, truncate_chars};
+use crate::application::task::{CiSweepFilingEvidence, CiSweepFilingSource};
 
-/// Description line naming a compiler-cause identity. Completed repairs are
-/// matched on it, so the rendering and the reader share the prefix.
+/// Legacy description labels shared only by rendering and the legacy reader.
 pub(super) const COMPILER_CAUSE_LINE: &str = "- Compiler cause identity: `";
 /// Complete location-free set, retained independently of the bounded excerpt.
-const OPEN_COMPILER_SET_LINE: &str = "- Open compiler diagnostic set identity: `";
+pub(super) const OPEN_COMPILER_SET_LINE: &str = "- Open compiler diagnostic set identity: `";
 /// Description line naming a concrete normalized error signature (never the
 /// step-name fallback, which is no diagnostic).
 pub(super) const SIGNATURE_LINE: &str =
@@ -62,30 +65,43 @@ pub(super) struct FailureCluster {
     /// so rather than presenting it as a failed-step quote.
     pub(super) log_source_job: Option<String>,
     pub(super) runs: Vec<Value>,
+    pub(super) sources: Vec<CiFailureSource>,
 }
 
 impl FailureCluster {
     pub(super) fn find_covering_task<L: DuplicateTaskLookup + ?Sized>(
         &self,
         lookup: &L,
+        identities: &CiTaskIdentities<'_>,
     ) -> Result<Option<DuplicateTaskMatch>, OrbitError> {
+        let lookup = &CauseCheckedLookup {
+            inner: lookup,
+            cluster: self,
+            identities,
+        };
         if let Some(found) = find_covering_task(lookup, &self.duplicate_candidate())? {
             return Ok(Some(found));
         }
         if let Some(identity) = self.open_compiler_identity() {
             let tasks = lookup.list_tasks()?;
-            if let Some(owner) = tasks
-                .iter()
-                .filter(|task| {
-                    is_open_ci_owner_status(task.status)
-                        && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
-                        && task_open_compiler_identity(task).as_ref() == Some(&identity)
-                })
+            let mut owners = Vec::new();
+            for task in tasks.iter().filter(|task| {
+                is_open_ci_owner_status(task.status)
+                    && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+            }) {
+                if identities.for_task(task)?.is_some_and(|record| {
+                    record.identity.open_compiler_set.as_ref() == Some(&identity)
+                }) {
+                    owners.push(task);
+                }
+            }
+            if let Some(owner) = owners
+                .into_iter()
                 .min_by(|left, right| left.id.cmp(&right.id))
             {
                 return Ok(Some(DuplicateTaskMatch {
                     task_id: owner.id.clone(),
-                    match_kind: "open_compiler_diagnostics",
+                    match_kind: DuplicateMatchKind::OpenCompilerDiagnostics,
                     evidence: json!({
                         "fingerprint": "ci_open_compiler_diagnostics",
                         "matched_fields": [{"field": "compiler_diagnostic_set", "value": identity}],
@@ -120,18 +136,27 @@ impl FailureCluster {
                     .unwrap_or(&found.task_id);
                 let source = lookup.get_task(source_id)?;
                 let owner = lookup.get_task(&found.task_id)?;
-                let prior_cause = compiler_cause(&source.description)
-                    .or_else(|| compiler_cause(&owner.description));
-                if prior_cause.is_some() && prior_cause != self.compiler_cause {
+                let source_identity = identities.for_task(&source)?;
+                let owner_identity = identities.for_task(&owner)?;
+                let prior_cause = source_identity
+                    .as_ref()
+                    .and_then(|record| record.prior_compiler_cause_digest.as_ref())
+                    .or_else(|| {
+                        owner_identity
+                            .as_ref()
+                            .and_then(|record| record.prior_compiler_cause_digest.as_ref())
+                    });
+                let current_cause = self.compiler_cause.as_ref().map(|cause| digest(&[cause]));
+                if prior_cause.is_some() && prior_cause != current_cause.as_ref() {
                     continue;
                 }
                 // An old chatter-based key can recur for a different compiler
                 // cause. Only immutable supplying evidence justifies migration.
-                if self
-                    .runs
-                    .iter()
-                    .any(|run| legacy_source_matches(&source.description, run))
-                {
+                if source_identity.as_ref().is_some_and(|record| {
+                    self.sources
+                        .iter()
+                        .any(|source| record.matches_source(source))
+                }) {
                     return Ok(Some(found));
                 }
             }
@@ -285,17 +310,6 @@ impl FailureCluster {
         fingerprints
     }
 
-    /// The root-cause identity a completed repair's description must repeat:
-    /// the compiler cause, else a concrete signature. A step-name fallback has
-    /// none, so only its exact failure key can match.
-    pub(super) fn signature_line(&self) -> Option<String> {
-        match &self.compiler_cause {
-            Some(cause) => Some(format!("{COMPILER_CAUSE_LINE}{}`", digest(&[cause]))),
-            None if self.signature_is_step_fallback => None,
-            None => Some(format!("{SIGNATURE_LINE}{}`", display(&self.signature))),
-        }
-    }
-
     pub(super) fn run_urls(&self) -> Vec<String> {
         self.runs
             .iter()
@@ -311,26 +325,26 @@ impl FailureCluster {
             .collect()
     }
 
-    pub(super) fn filing_entry(&self, task_id: &str) -> Value {
-        json!({
-            "task_id": task_id,
-            "failure_key": self.failure_key,
-            "cluster_key": self.cluster_key,
-            "workflow": self.workflow,
-            "job": self.job,
-            "step": self.step,
-            "jobs": self.jobs,
-            "tested_commit": self.tested_commit,
-            "sources": self.runs.iter().map(|run| json!({
-                "run_id": run["run_id"], "job_id": run["job_id"],
-                "workflow": run["workflow"], "failed_jobs": run["failed_jobs"],
-                "actual_checkout_shas": run["actual_checkout_shas"],
-            })).collect::<Vec<_>>(),
-            "run_ids": self.run_ids(),
-            "run_urls": self.run_urls(),
-            "ref_kinds": self.distinct_run_strings("ref_kind"),
-            "head_branches": self.distinct_run_strings("head_branch"),
-        })
+    pub(super) fn filing_entry(&self, task_id: &str) -> CiSweepFilingEvidence {
+        CiSweepFilingEvidence {
+            task_id: task_id.to_string(),
+            failure_key: self.failure_key.clone(),
+            cluster_key: self.cluster_key.clone(),
+            workflow: self.workflow.clone(),
+            job: self.job.clone(),
+            step: self.step.clone(),
+            jobs: self.jobs.iter().cloned().collect(),
+            tested_commit: self.tested_commit.clone(),
+            sources: self
+                .runs
+                .iter()
+                .map(CiSweepFilingSource::decode_legacy)
+                .collect(),
+            run_ids: self.run_ids(),
+            run_urls: self.run_urls(),
+            head_branches: json!(self.distinct_run_strings("head_branch")),
+            ..CiSweepFilingEvidence::with_ref_kinds(self.distinct_run_strings("ref_kind"))
+        }
     }
 
     fn distinct_run_strings(&self, field: &str) -> Vec<String> {
@@ -395,7 +409,7 @@ impl FailureCluster {
 
     /// Each run's runner OS evidence, in run order (see
     /// [`super::runner_os::failure_runner_os`]).
-    pub(super) fn runner_os(&self, repo_root: &std::path::Path) -> Vec<Value> {
+    pub(super) fn runner_os(&self, repo_root: &std::path::Path) -> Vec<RunnerOsEvidence> {
         self.runs
             .iter()
             .map(|run| super::runner_os::failure_runner_os(run, repo_root))
@@ -408,7 +422,7 @@ impl FailureCluster {
     /// cannot reach GitHub, so anything absent here is unavailable to it.
     /// `runners` is [`Self::runner_os`], the evidence behind the task's `os:`
     /// tags.
-    pub(super) fn description(&self, evidence: &Value, runners: &[Value]) -> String {
+    pub(super) fn description(&self, evidence: &Value, runners: &[RunnerOsEvidence]) -> String {
         let mut out = String::new();
         out.push_str(
             "This task was filed automatically from a host-side sweep of this repository's \
@@ -609,11 +623,11 @@ impl FailureCluster {
              file. Then set the relation with `orbit tool run orbit.task.update --input \
              '{\"id\":\"<this task ID>\",\"relations\":[<existing relations from \
              orbit.task.show>,{\"type\":\"regression_from\",\"target\":\"<culprit task \
-             ID>\",\"regression\":{\"nature\":\"<nature>\",\"escape\":\"<escape>\"}}]}'` — \
+             ID>\",\"regression\":{\"nature\":\"<nature>\",\"escape\":\"<escape>\",\"severity\":\"<severity>\"}}]}'` — \
              `relations` replaces the whole list, so carry the existing entries forward. In \
              claimed execution, where `orbit.task.update` is unavailable, return \
              `\"regression_from\":[\"<culprit task ID>\"]` in your output instead and name \
-             the culprit commit, nature and escape in the execution summary; the owner checks \
+             the culprit commit, nature, escape and severity in the execution summary; the owner checks \
              the target and records the relation when it accepts the handoff. When the culprit \
              commit carries no task ID, or the failure is infrastructure rather than \
              repository-owned, record that conclusion and its evidence in the execution \
@@ -641,7 +655,22 @@ impl FailureCluster {
              shipped reading.\n\
              - `nondeterministic`: it depends on timing, ordering or environment and passed \
              when gated.\n\
-             - `unclassified`: the evidence does not settle the escape.\n",
+             - `unclassified`: the evidence does not settle the escape.\n\
+             \n\
+             `severity` is how much the defect matters, on the one scale findings and \
+             regression links share; a new link without it is refused. Rate the worst real \
+             impact the evidence shows, not the size of the fix, and take the lower level when \
+             torn:\n\
+             - `critical`: data loss or corruption, a security hole, every drain halted, or \
+             silently wrong results (a migration drops task history).\n\
+             - `high`: a core workflow broken with no workaround (every `ui` delivery fails at \
+             handoff).\n\
+             - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` \
+             drops a field the plain output shows).\n\
+             - `low`: an edge case, a misleading message or a minor UX defect (an error names \
+             the wrong flag).\n\
+             - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a \
+             reference doc).\n",
         );
         out
     }
@@ -664,45 +693,28 @@ impl FailureCluster {
     }
 }
 
-/// Old descriptions carry only the exact-cause digest. Verify that their
-/// retained excerpt contains that entire cause before deriving a weaker set;
-/// a truncated subset must never claim coverage of another diagnostic set.
-pub(super) fn task_open_compiler_identity(task: &Task) -> Option<String> {
-    let identity_line = |prefix| {
-        task.description
-            .lines()
-            .find_map(|line| line.strip_prefix(prefix)?.strip_suffix('`'))
-    };
-    if let Some(identity) = identity_line(OPEN_COMPILER_SET_LINE) {
-        return Some(identity.to_string());
-    }
-    let cause = compiler_cause(&task.description)?;
-    if identity_line(COMPILER_CAUSE_LINE) != Some(digest(&[&cause]).as_str()) {
-        return None;
-    }
-    compiler_diagnostic_set(&task.description).map(|set| digest(&[&set]))
-}
-
 /// The `Runner OS` line: what each distinct runner was, where that came
 /// from, and the `os:` tags it gives the task.
-fn runner_os_line(runners: &[Value]) -> String {
+fn runner_os_line(runners: &[RunnerOsEvidence]) -> String {
     let observed = runners
         .iter()
         .map(|runner| {
-            let os = runner["os"].as_str().unwrap_or("unknown");
-            let labels = runner["labels"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
+            let os = runner.os.map(HostOs::as_str).unwrap_or("unknown");
+            let labels = runner
+                .labels
+                .iter()
                 .map(|label| format!("`{}`", display(label)))
                 .collect::<Vec<_>>();
-            match runner["source"].as_str() {
-                Some("job_labels") => format!("`{os}` (runner labels {})", labels.join(", ")),
-                Some("workflow_runs_on") => {
+            match runner.source {
+                RunnerOsSource::JobLabels => {
+                    format!("`{os}` (runner labels {})", labels.join(", "))
+                }
+                RunnerOsSource::WorkflowRunsOn => {
                     format!("`{os}` (workflow `runs-on` {})", labels.join(", "))
                 }
-                _ => "unknown (no runner labels and no literal workflow `runs-on`)".to_string(),
+                RunnerOsSource::Unknown => {
+                    "unknown (no runner labels and no literal workflow `runs-on`)".to_string()
+                }
             }
         })
         .collect::<BTreeSet<_>>()

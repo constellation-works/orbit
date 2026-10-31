@@ -3,6 +3,10 @@
 use super::*;
 
 #[cfg(unix)]
+#[path = "plugins_agent_callable.rs"]
+mod agent_callable;
+
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 
 /// Write a plugin outside the workspace checkout — installs are global, and a
@@ -60,6 +64,46 @@ fn run_orbit_with_env(
     output
 }
 
+#[cfg(unix)]
+fn install_enabled_plugin(workspace: &McpWorkspace, source: &Path) {
+    run_orbit(
+        workspace,
+        &[
+            "plugin",
+            "add",
+            source.to_str().expect("source"),
+            "--enable",
+        ],
+    );
+}
+
+#[cfg(unix)]
+fn serve_plugin_with_debug_log(workspace: &McpWorkspace, log_path: &Path) -> McpClient {
+    let log = std::fs::File::create(log_path).expect("server log");
+    let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["mcp", "serve"])
+        .env("RUST_LOG", "orbit.mcp.plugin=debug")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(log))
+        .spawn()
+        .map(ChildGuard::new)
+        .expect("start live MCP session");
+    let mut client = McpClient::new(child);
+    workspace.initialize(&mut client);
+    client
+}
+
+#[cfg(unix)]
+fn install_plugin_with_orbit_tools(workspace: &McpWorkspace, source: &Path, namespace: &str) {
+    let source = source.to_str().expect("utf8 plugin source");
+    run_orbit(workspace, &["plugin", "add", source]);
+    run_orbit(
+        workspace,
+        &["plugin", "enable", namespace, "--grant", "orbit_tools"],
+    );
+}
+
 fn advertised_tool_names(client: &mut McpClient) -> Vec<String> {
     client.request("tools/list", Value::Null)["result"]["tools"]
         .as_array()
@@ -106,15 +150,7 @@ fn check_brokered_plugin_audit(scope: &str) {
         "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"ok\":true,\"output\":{\"value\":7}}'\n",
     )
     .expect("write constant backend");
-    run_orbit(
-        &workspace,
-        &[
-            "plugin",
-            "add",
-            source.to_str().expect("source"),
-            "--enable",
-        ],
-    );
+    install_enabled_plugin(&workspace, &source);
     let direct = run_orbit(
         &workspace,
         &["tool", "run", "brokerfixture.echo", "--input", "{}"],
@@ -381,15 +417,7 @@ fn managed_global_plugin_tool_refusals_are_audited() {
     }
     let workspace = McpWorkspace::init();
     let source = write_plugin_with_scope(&workspace.home, "policyglobal", "global");
-    run_orbit(
-        &workspace,
-        &[
-            "plugin",
-            "add",
-            source.to_str().expect("plugin source"),
-            "--enable",
-        ],
-    );
+    install_enabled_plugin(&workspace, &source);
 
     // A non-managed MCP session ignores the server's stray activity envelope.
     let mut interactive = workspace.serve_with_args_and_env(
@@ -501,15 +529,7 @@ fn unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli() {
     for scope in ["workspace", "global"] {
         let workspace = McpWorkspace::init();
         let source = write_plugin_with_scope(&workspace.home, "unbrokered", scope);
-        run_orbit(
-            &workspace,
-            &[
-                "plugin",
-                "add",
-                source.to_str().expect("source"),
-                "--enable",
-            ],
-        );
+        install_enabled_plugin(&workspace, &source);
         // Initialize the lazy audit schema and take the count before the MCP
         // request that exercises the missing-broker refusal.
         run_orbit(
@@ -709,31 +729,12 @@ fn a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface() {
     }
     let workspace = McpWorkspace::init();
     let log_path = workspace.home.join("plugin-surface.log");
-    let log = std::fs::File::create(&log_path).expect("server log");
-    let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["mcp", "serve"])
-        .env("RUST_LOG", "orbit.mcp.plugin=debug")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::from(log))
-        .spawn()
-        .map(ChildGuard::new)
-        .expect("start live MCP session");
-    let mut client = McpClient::new(child);
-    workspace.initialize(&mut client);
+    let mut client = serve_plugin_with_debug_log(&workspace, &log_path);
     let names = advertised_tool_names(&mut client);
     assert!(!names.iter().any(|name| name.starts_with("livecache_")));
 
     let source = write_plugin(&workspace.home, "livecache");
-    run_orbit(
-        &workspace,
-        &[
-            "plugin",
-            "add",
-            source.to_str().expect("source"),
-            "--enable",
-        ],
-    );
+    install_enabled_plugin(&workspace, &source);
     // Call the new wire name before tools/list, so a stale adapter name map
     // cannot be repaired incidentally by listing first.
     client.call_tool_ok("livecache_echo", json!({}));
@@ -857,15 +858,7 @@ fn a_live_session_refreshes_definition_admission_and_membership() {
         "activities/*.yaml, literal/probe.yaml]",
     );
     std::fs::write(&manifest_path, manifest).expect("manifest with definitions");
-    run_orbit(
-        &workspace,
-        &[
-            "plugin",
-            "add",
-            source.to_str().expect("source"),
-            "--enable",
-        ],
-    );
+    install_enabled_plugin(&workspace, &source);
     let shown = run_orbit(
         &workspace,
         &["plugin", "show", "definitionscache", "--format", "json"],
@@ -876,18 +869,7 @@ fn a_live_session_refreshes_definition_admission_and_membership() {
         std::fs::read(installed.join("plugin.yaml")).expect("installed manifest");
 
     let log_path = workspace.home.join("definition-surface.log");
-    let log = std::fs::File::create(&log_path).expect("server log");
-    let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["mcp", "serve"])
-        .env("RUST_LOG", "orbit.mcp.plugin=debug")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::from(log))
-        .spawn()
-        .map(ChildGuard::new)
-        .expect("start live MCP session");
-    let mut client = McpClient::new(child);
-    workspace.initialize(&mut client);
+    let mut client = serve_plugin_with_debug_log(&workspace, &log_path);
     let assert_surface = |client: &mut McpClient, active: bool| {
         let names = advertised_tool_names(client);
         let fresh = advertised_tool_names(&mut workspace.serve());
@@ -995,8 +977,7 @@ fn a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_h
     let workspace = McpWorkspace::init();
     let source = write_plugin(&workspace.home, "toggled");
     add_global_tool(&source);
-    let source = source.to_str().expect("utf8 plugin source");
-    run_orbit(&workspace, &["plugin", "add", source, "--enable"]);
+    install_enabled_plugin(&workspace, &source);
 
     // One server for the whole test: every change below must show without a
     // restart, through the cached workspace runtime and tools/list cache.
@@ -1182,27 +1163,13 @@ fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
         .collect();
     assert_eq!(granted, ["orbit_tools"]);
 
-    let call = |tool: &str| -> Value {
-        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .env("ORBIT_OPERATOR", "1")
-            .env("ORBIT_BIN", orbit_bin)
-            .args([
-                "tool",
-                "run",
-                "callback.callback",
-                "--full",
-                "--input",
-                &format!("{{\"callback\":\"{tool}\"}}"),
-            ])
-            .output()
-            .expect("run orbit tool run");
-        assert!(
-            output.status.success(),
-            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+    let call = |tool: &str| {
+        call_plugin_probe(
+            &workspace,
+            "callback.callback",
+            &format!("{{\"callback\":\"{tool}\"}}"),
+            &[("ORBIT_OPERATOR", "1")],
+        )
     };
 
     // The child env carries exactly the granted allowlist.
@@ -1293,6 +1260,46 @@ fn callback_probe_input(tool: &str, forge: Option<&str>) -> String {
     input.to_string()
 }
 
+#[cfg(unix)]
+fn call_plugin_probe(
+    workspace: &McpWorkspace,
+    tool: &str,
+    input: &str,
+    env: &[(&str, &str)],
+) -> Value {
+    let mut command = McpWorkspace::orbit_command(&workspace.work, &workspace.home);
+    command.env("ORBIT_BIN", env!("CARGO_BIN_EXE_orbit"));
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command
+        .args(["tool", "run", tool, "--full", "--input", input])
+        .output()
+        .expect("run orbit tool run");
+    assert!(
+        output.status.success(),
+        "{tool}: the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+}
+
+#[cfg(unix)]
+fn call_forging_callback(
+    workspace: &McpWorkspace,
+    namespace: &str,
+    tool: &str,
+    forge: &str,
+) -> Value {
+    call_plugin_probe(
+        workspace,
+        &format!("{namespace}.callback"),
+        &callback_probe_input(tool, Some(forge)),
+        &[("ORBIT_OPERATOR", "1")],
+    )
+}
+
 /// Unsetting or rewriting `ORBIT_ALLOWED_TOOLS` in the plugin child cannot
 /// admit a tool outside the recorded allowlist, and a recorded tool still
 /// runs (design docs/design/plugins/1_scope.md §4.2).
@@ -1305,37 +1312,10 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
     }
     let workspace = McpWorkspace::init();
     let source = write_forging_callback_plugin(&workspace.home, "forgecb", "orbit.task.list");
-    let source = source.to_str().expect("utf8 plugin source");
-    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
 
-    run_orbit(&workspace, &["plugin", "add", source]);
-    run_orbit(
-        &workspace,
-        &["plugin", "enable", "forgecb", "--grant", "orbit_tools"],
-    );
+    install_plugin_with_orbit_tools(&workspace, &source, "forgecb");
 
-    let call = |tool: &str, forge: &str| -> Value {
-        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .env("ORBIT_OPERATOR", "1")
-            .env("ORBIT_BIN", orbit_bin)
-            .args([
-                "tool",
-                "run",
-                "forgecb.callback",
-                "--full",
-                "--input",
-                &callback_probe_input(tool, Some(forge)),
-            ])
-            .output()
-            .expect("run orbit tool run");
-        assert!(
-            output.status.success(),
-            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
-    };
+    let call = |tool: &str, forge: &str| call_forging_callback(&workspace, "forgecb", tool, forge);
 
     for forge in ["unset", "rewrite", "clear-namespace"] {
         let granted = call("orbit.task.list", forge);
@@ -1382,40 +1362,22 @@ fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
         "ceilingcb",
         "orbit.task.list, orbit.search",
     );
-    let source = source.to_str().expect("utf8 plugin source");
-    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
 
-    run_orbit(&workspace, &["plugin", "add", source]);
-    run_orbit(
-        &workspace,
-        &["plugin", "enable", "ceilingcb", "--grant", "orbit_tools"],
-    );
+    install_plugin_with_orbit_tools(&workspace, &source, "ceilingcb");
 
     // `activity` is the spawning caller's own allowlist: it must name the
     // plugin tool it is calling, plus whichever Orbit tool that caller is
     // itself allowed to reach.
-    let call = |activity: &str, tool: &str| -> Value {
-        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .env("ORBIT_BIN", orbit_bin)
-            .env("ORBIT_TASK_ACTOR_KIND", "agent")
-            .env("ORBIT_ACTIVITY_TOOLS", activity)
-            .args([
-                "tool",
-                "run",
-                "ceilingcb.callback",
-                "--full",
-                "--input",
-                &callback_probe_input(tool, Some("clear-ceiling")),
-            ])
-            .output()
-            .expect("run orbit tool run");
-        assert!(
-            output.status.success(),
-            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+    let call = |activity: &str, tool: &str| {
+        call_plugin_probe(
+            &workspace,
+            "ceilingcb.callback",
+            &callback_probe_input(tool, Some("clear-ceiling")),
+            &[
+                ("ORBIT_TASK_ACTOR_KIND", "agent"),
+                ("ORBIT_ACTIVITY_TOOLS", activity),
+            ],
+        )
     };
 
     let lister = "ceilingcb.callback,orbit.task.list";
@@ -1566,37 +1528,11 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
     }
     let workspace = McpWorkspace::init();
     let source = write_forging_callback_plugin(&workspace.home, "clearplug", "orbit.task.list");
-    let source = source.to_str().expect("utf8 plugin source");
-    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
 
-    run_orbit(&workspace, &["plugin", "add", source]);
-    run_orbit(
-        &workspace,
-        &["plugin", "enable", "clearplug", "--grant", "orbit_tools"],
-    );
+    install_plugin_with_orbit_tools(&workspace, &source, "clearplug");
 
-    let call = |tool: &str, forge: &str| -> Value {
-        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .env("ORBIT_OPERATOR", "1")
-            .env("ORBIT_BIN", orbit_bin)
-            .args([
-                "tool",
-                "run",
-                "clearplug.callback",
-                "--full",
-                "--input",
-                &callback_probe_input(tool, Some(forge)),
-            ])
-            .output()
-            .expect("run orbit tool run");
-        assert!(
-            output.status.success(),
-            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
-    };
+    let call =
+        |tool: &str, forge: &str| call_forging_callback(&workspace, "clearplug", tool, forge);
 
     let granted = call("orbit.task.list", "clear-namespace");
     assert_eq!(
@@ -1714,40 +1650,20 @@ fn a_plugin_child_cannot_shed_its_callback_session_with_setsid() {
     }
     let workspace = McpWorkspace::init();
     let source = write_setsid_callback_plugin(&workspace.home, "shedcb", "orbit.task.list");
-    let source = source.to_str().expect("utf8 plugin source");
-    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
 
-    run_orbit(&workspace, &["plugin", "add", source]);
-    run_orbit(
-        &workspace,
-        &["plugin", "enable", "shedcb", "--grant", "orbit_tools"],
-    );
+    install_plugin_with_orbit_tools(&workspace, &source, "shedcb");
     assert!(
         workspace.home.join(".orbit/plugins/.grants").is_dir(),
         "the grant witness directory exists before the probe"
     );
 
-    let call = |tool: &str| -> Value {
-        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-            .env("ORBIT_OPERATOR", "1")
-            .env("ORBIT_BIN", orbit_bin)
-            .args([
-                "tool",
-                "run",
-                "shedcb.callback",
-                "--full",
-                "--input",
-                &callback_probe_input(tool, None),
-            ])
-            .output()
-            .expect("run orbit tool run");
-        assert!(
-            output.status.success(),
-            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+    let call = |tool: &str| {
+        call_plugin_probe(
+            &workspace,
+            "shedcb.callback",
+            &callback_probe_input(tool, None),
+            &[("ORBIT_OPERATOR", "1")],
+        )
     };
 
     let recorded = call("orbit.task.list");
@@ -1833,9 +1749,7 @@ fn an_mcp_backend_plugin_is_advertised_and_proxied() {
             .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
         &source,
     );
-    let source = source.to_str().expect("utf8 plugin source");
-
-    run_orbit(&workspace, &["plugin", "add", source, "--enable"]);
+    install_enabled_plugin(&workspace, &source);
     let mut client = workspace.serve();
     let names = advertised_tool_names(&mut client);
     assert!(
@@ -1856,6 +1770,39 @@ fn an_mcp_backend_plugin_is_advertised_and_proxied() {
         "one server per runtime process serves every call"
     );
     drop(client);
+}
+
+#[cfg(unix)]
+fn install_mcp_secret_fixture(
+    workspace: &McpWorkspace,
+    declaration: &str,
+    name: &str,
+    value: &str,
+) {
+    let source = workspace.home.join("plugin-sources/mcpdemo/.orbit-plugin");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
+        &source,
+    );
+    let manifest = source.join("plugin.yaml");
+    let declared = std::fs::read_to_string(&manifest).expect("read fixture manifest") + declaration;
+    std::fs::write(&manifest, declared).expect("declare secrets");
+    install_enabled_plugin(workspace, &source);
+    let mut set = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["plugin", "secret", "set", "mcpdemo", name])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn secret set");
+    set.stdin
+        .take()
+        .expect("stdin")
+        .write_all(value.as_bytes())
+        .expect("pipe the value");
+    let set = set.wait_with_output().expect("secret set");
+    assert!(set.status.success(), "{name}: {set:?}");
 }
 
 /// A secret value distinctive enough that finding it anywhere is a leak.
@@ -1881,39 +1828,12 @@ fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it(
         return;
     }
     let workspace = McpWorkspace::init();
-    let source = workspace.home.join("plugin-sources/mcpdemo/.orbit-plugin");
-    copy_tree(
-        &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
-        &source,
-    );
-    let manifest = source.join("plugin.yaml");
-    let declared = std::fs::read_to_string(&manifest).expect("read fixture manifest")
-        + "  secrets:\n    - name: api_token\n    - name: unset_token\n";
-    std::fs::write(&manifest, declared).expect("declare secrets");
-    run_orbit(
+    install_mcp_secret_fixture(
         &workspace,
-        &[
-            "plugin",
-            "add",
-            source.to_str().expect("utf8 source"),
-            "--enable",
-        ],
+        "  secrets:\n    - name: api_token\n    - name: unset_token\n",
+        "api_token",
+        MCP_SECRET,
     );
-    let mut set = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["plugin", "secret", "set", "mcpdemo", "api_token"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn secret set");
-    set.stdin
-        .take()
-        .expect("stdin")
-        .write_all(MCP_SECRET.as_bytes())
-        .expect("pipe the value");
-    let set = set.wait_with_output().expect("secret set");
-    assert!(set.status.success(), "{set:?}");
 
     let mut client = workspace.serve();
     let result = client.call_tool("mcpdemo_echo", json!({ "message": "hi" }));
@@ -2002,39 +1922,12 @@ fn an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value(
     }
     let rotated = format!("{MCP_ROTATION_SECRET}-rotated");
     let workspace = McpWorkspace::init();
-    let source = workspace.home.join("plugin-sources/mcpdemo/.orbit-plugin");
-    copy_tree(
-        &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
-        &source,
-    );
-    let manifest = source.join("plugin.yaml");
-    let declared = std::fs::read_to_string(&manifest).expect("read fixture manifest")
-        + "  secrets:\n    - name: refresh_token\n      rotatable: true\n";
-    std::fs::write(&manifest, declared).expect("declare secrets");
-    run_orbit(
+    install_mcp_secret_fixture(
         &workspace,
-        &[
-            "plugin",
-            "add",
-            source.to_str().expect("utf8 source"),
-            "--enable",
-        ],
+        "  secrets:\n    - name: refresh_token\n      rotatable: true\n",
+        "refresh_token",
+        MCP_ROTATION_SECRET,
     );
-    let mut set = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["plugin", "secret", "set", "mcpdemo", "refresh_token"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn secret set");
-    set.stdin
-        .take()
-        .expect("stdin")
-        .write_all(MCP_ROTATION_SECRET.as_bytes())
-        .expect("pipe the value");
-    let set = set.wait_with_output().expect("secret set");
-    assert!(set.status.success(), "{set:?}");
 
     let mut client = workspace.serve();
     let delivered_version = |result: &Value| {
@@ -2197,15 +2090,9 @@ fn write_probe_plugin(home: &Path, namespace: &str) -> PathBuf {
 fn a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots() {
     let workspace = McpWorkspace::init();
     let source = write_probe_plugin(&workspace.home, "probe");
-    let source = source.to_str().expect("utf8 plugin source");
-    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
     let global = workspace.home.join(".orbit");
 
-    run_orbit(&workspace, &["plugin", "add", source]);
-    run_orbit(
-        &workspace,
-        &["plugin", "enable", "probe", "--grant", "orbit_tools"],
-    );
+    install_plugin_with_orbit_tools(&workspace, &source, "probe");
 
     // Every probe target exists and holds known content before the call, so a
     // denial is the kernel refusing a real file rather than a missing path.
@@ -2230,19 +2117,7 @@ fn a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots() {
         "the recorded install directory exists before the probe"
     );
 
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .env("ORBIT_OPERATOR", "1")
-        .env("ORBIT_BIN", orbit_bin)
-        .args(["tool", "run", "probe.probe", "--full", "--input", "{}"])
-        .output()
-        .expect("run orbit tool run");
-    assert!(
-        output.status.success(),
-        "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let probed: Value = serde_json::from_slice(&output.stdout).expect("probe output is JSON");
+    let probed = call_plugin_probe(&workspace, "probe.probe", "{}", &[("ORBIT_OPERATOR", "1")]);
 
     assert_eq!(
         probed["wrote"], "",
@@ -2271,9 +2146,18 @@ fn a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots() {
 }
 
 #[cfg(unix)]
+fn run_plugin_scenarios(cases: &[(&str, fn())]) {
+    for (name, check) in cases {
+        if std::panic::catch_unwind(check).is_err() {
+            panic!("MCP contract scenario failed: {name}");
+        }
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn plugin_failure_auditing() {
-    for (name, check) in [
+    run_plugin_scenarios(&[
         (
             "brokered_plugin_calls_audit_only_caller_owned_failures",
             brokered_plugin_calls_audit_only_caller_owned_failures as fn(),
@@ -2286,16 +2170,13 @@ fn plugin_failure_auditing() {
             "unreachable_host_read_is_audited_once_by_cli",
             unreachable_host_read_is_audited_once_by_cli as fn(),
         ),
-    ] {
-        tracing::info!(case = name, "MCP contract row");
-        check();
-    }
+    ]);
 }
 
 #[cfg(unix)]
 #[test]
 fn plugin_errors_and_discovery() {
-    for (name, check) in [
+    run_plugin_scenarios(&[
         (
             "unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli",
             unbrokered_plugin_refusals_are_audited_once_over_mcp_and_cli as fn(),
@@ -2308,16 +2189,13 @@ fn plugin_errors_and_discovery() {
             "an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not",
             an_enabled_plugin_tool_is_advertised_and_callable_and_a_disabled_one_is_not as fn(),
         ),
-    ] {
-        tracing::info!(case = name, "MCP contract row");
-        check();
-    }
+    ]);
 }
 
 #[cfg(unix)]
 #[test]
 fn live_plugin_configuration() {
-    for (name, check) in [
+    run_plugin_scenarios(&[
         (
             "a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface",
             a_live_session_refreshes_plugin_tools_and_reuses_an_unchanged_surface as fn(),
@@ -2331,16 +2209,13 @@ fn live_plugin_configuration() {
             a_workspace_toggle_reaches_a_live_bound_session_and_global_tools_follow_the_host
                 as fn(),
         ),
-    ] {
-        tracing::info!(case = name, "MCP contract row");
-        check();
-    }
+    ]);
 }
 
 #[cfg(unix)]
 #[test]
 fn callback_tool_authorization() {
-    for (name, check) in [
+    run_plugin_scenarios(&[
         (
             "a_plugin_callback_reaches_only_its_granted_orbit_tools",
             a_plugin_callback_reaches_only_its_granted_orbit_tools as fn(),
@@ -2353,16 +2228,13 @@ fn callback_tool_authorization() {
             "a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling",
             a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling as fn(),
         ),
-    ] {
-        tracing::info!(case = name, "MCP contract row");
-        check();
-    }
+    ]);
 }
 
 #[cfg(unix)]
 #[test]
 fn callback_identity_confinement() {
-    for (name, check) in [
+    run_plugin_scenarios(&[
         (
             "a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling",
             a_global_mcp_plugin_backend_receives_its_activity_callback_ceiling as fn(),
@@ -2375,16 +2247,13 @@ fn callback_identity_confinement() {
             "an_mcp_backend_plugin_is_advertised_and_proxied",
             an_mcp_backend_plugin_is_advertised_and_proxied as fn(),
         ),
-    ] {
-        tracing::info!(case = name, "MCP contract row");
-        check();
-    }
+    ]);
 }
 
 #[cfg(unix)]
 #[test]
 fn plugin_backend_secrets() {
-    for (name, check) in [
+    run_plugin_scenarios(&[
         (
             "an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it",
             an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it as fn(),
@@ -2393,16 +2262,13 @@ fn plugin_backend_secrets() {
             "an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value",
             an_mcp_backend_rotation_is_stored_and_no_response_or_audit_row_holds_a_value as fn(),
         ),
-    ] {
-        tracing::info!(case = name, "MCP contract row");
-        check();
-    }
+    ]);
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_callback_and_root_confinement() {
-    for (name, check) in [
+    run_plugin_scenarios(&[
         (
             "a_plugin_child_cannot_shed_its_callback_session_with_setsid",
             a_plugin_child_cannot_shed_its_callback_session_with_setsid as fn(),
@@ -2411,8 +2277,5 @@ fn linux_callback_and_root_confinement() {
             "a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots",
             a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots as fn(),
         ),
-    ] {
-        tracing::info!(case = name, "MCP contract row");
-        check();
-    }
+    ]);
 }

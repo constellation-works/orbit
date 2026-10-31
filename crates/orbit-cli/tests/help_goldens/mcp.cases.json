@@ -1,0 +1,4 @@
+[
+  {"argv": ["mcp", "init"], "golden": "mcp/init.txt"},
+  {"argv": ["mcp", "listen"], "golden": "mcp/listen.txt"}
+]

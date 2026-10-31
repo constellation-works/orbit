@@ -1,13 +1,16 @@
 //! Generic coordination writes translated into owner claim transactions.
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::crew::CrewVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
+use orbit_common::governance::visual::VisualVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::{ClaimRefusalKind, OrbitError};
@@ -50,6 +53,19 @@ pub(crate) fn execute(
         OrbitBuiltinAction::Agents(verb) => match verb {
             AgentsVerb::Scorecard | AgentsVerb::Show => false,
         },
+        OrbitBuiltinAction::Automation(verb) => match verb {
+            AutomationVerb::Explain | AutomationVerb::ClearStall => false,
+        },
+        OrbitBuiltinAction::Crew(verb) => match verb {
+            CrewVerb::Ladder => false,
+        },
+        // Capture renders the checkout it runs in, so a claimed leaf
+        // captures locally rather than routing to the owner. Accepting a
+        // dispute is the owner's operator decision, refused below.
+        OrbitBuiltinAction::Visual(verb) => match verb {
+            VisualVerb::Capture => false,
+            VisualVerb::AcceptDispute => true,
+        },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
         },
@@ -77,6 +93,8 @@ pub(crate) fn execute(
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => true,
         },
@@ -156,6 +174,10 @@ pub(crate) fn execute(
                 serde_json::to_value(tasks)
             }
             "tasks" => serde_json::to_value(runtime.list_tasks()?),
+            "task_metadata" => {
+                return crate::application::task::metadata::owner_metadata_page(runtime, input)
+                    .map(Some);
+            }
             "status_index" => serde_json::to_value(runtime.task_status_index()?),
             "completion_by_complexity" => serde_json::to_value(
                 runtime
@@ -189,12 +211,10 @@ pub(crate) fn execute(
                 serde_json::to_value(runtime.worker_claim_steering(&worker_auth(binding))?)
             }
             "dependency" => match runtime.resolve_dependency_task(id)? {
-                orbit_store::RegisteredTaskResolution::Resolved(task) => serde_json::to_value(task),
-                _ => {
-                    return Err(OrbitError::InvalidInput(
-                        "owner dependency unavailable".into(),
-                    ));
+                orbit_store::RegisteredTaskResolution::Resolved(task) => {
+                    serde_json::to_value(Some(task))
                 }
+                _ => serde_json::to_value(Option::<orbit_types::task::Task>::None),
             },
             _ => {
                 return Err(OrbitError::InvalidInput(
@@ -309,6 +329,8 @@ pub(crate) fn execute(
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => {
                 return Err(OrbitError::PolicyDenied(
@@ -356,6 +378,27 @@ pub(crate) fn execute(
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
             AgentsVerb::Scorecard | AgentsVerb::Show => return Ok(None),
+        },
+        OrbitBuiltinAction::Automation(verb) => match verb {
+            AutomationVerb::Explain => return Ok(None),
+            AutomationVerb::ClearStall => {
+                return Err(OrbitError::PolicyDenied(
+                    "claimed worker operation requires its lifecycle boundary".into(),
+                ));
+            }
+        },
+        OrbitBuiltinAction::Crew(verb) => match verb {
+            CrewVerb::Ladder => return Ok(None),
+        },
+        OrbitBuiltinAction::Visual(verb) => match verb {
+            VisualVerb::Capture => return Ok(None),
+            VisualVerb::AcceptDispute => {
+                return Err(OrbitError::PolicyDenied(
+                    "a claimed worker cannot accept a visual finding's dispute; the owner's \
+                     operator does"
+                        .into(),
+                ));
+            }
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => return Ok(None),

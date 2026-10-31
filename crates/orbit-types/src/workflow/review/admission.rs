@@ -7,6 +7,9 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+use super::selective::{
+    SelectiveBeforeLandingMode, SelectiveBeforeLandingPolicy, SelectiveReviewReceipt,
+};
 use super::{HostGateResult, ReviewConsumption};
 use crate::workflow::{ReviewAdmissionError, ReviewEvidenceRequirement};
 
@@ -64,12 +67,17 @@ pub const DEFAULT_REVIEW_MINUTES: u32 = 30;
 /// exactly when `review.timing` was `before_pr` at submission,
 /// `before-landing` exactly when it was `before_landing` [ORB-14849], and
 /// `none` otherwise [ORB-13992].
+///
+/// `before-pr` is deprecated but preserved byte-for-byte for already-admitted
+/// runs, claims, resumes, and evidence; new admissions prefer `none` or
+/// `before-landing`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewTiming {
     /// The run delivers without a before-PR review.
     None,
     /// Hold PR creation for a fresh reviewer that fixes what it finds.
+    /// Deprecated for new policy; preserved for captured admissions.
     BeforePr,
     /// Open the PR, then have a fresh reviewer review and fix it while
     /// hosted CI runs; the PR lands only at the head that review settled.
@@ -96,18 +104,28 @@ impl ReviewTiming {
 /// A review layer before landing that one run may add with `--review`
 /// [ORB-16572]. It strengthens workspace policy only: the layer the policy
 /// already applies is a no-op, and the other layer is refused.
+///
+/// `before-landing` is recommended for new run requests; `before-pr` is
+/// deprecated but still holds PR creation for a reviewer until a later
+/// separately scoped removal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewLayer {
     /// Hold PR creation for a reviewer, as `review.timing = before_pr` does.
+    /// Deprecated: prefer `before-landing`; still honoured as before-PR.
     BeforePr,
     /// Review the open PR before it lands, as `review.timing = before_landing`
-    /// does.
+    /// does. Recommended for new `--review` requests.
     BeforeLanding,
 }
 
 impl ReviewLayer {
+    /// Whether this run-request layer is deprecated but still honoured.
+    pub fn is_deprecated(self) -> bool {
+        matches!(self, ReviewLayer::BeforePr)
+    }
+
     /// The option spelling.
     pub fn as_str(self) -> &'static str {
         self.timing().as_str()
@@ -237,6 +255,11 @@ pub struct ReviewAdmission {
     /// host owes for the paths it changed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_evidence: Vec<super::super::HostEvidenceRule>,
+    /// The owner's selective before-landing policy, frozen with its
+    /// provenance and digest. Absent on admissions captured before the
+    /// feature or with the mode off: today's behavior, never reinterpreted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_before_landing: Option<SelectiveBeforeLandingPolicy>,
     /// When the snapshot was captured.
     pub captured_at: DateTime<Utc>,
 }
@@ -279,6 +302,21 @@ impl ReviewAdmission {
     /// review layer before landing.
     pub fn gates_merge(&self) -> bool {
         self.gates_pr() || self.gates_landing()
+    }
+
+    /// The captured selective policy, when it evaluates candidates.
+    pub fn selective_policy(&self) -> Option<&SelectiveBeforeLandingPolicy> {
+        self.selective_before_landing
+            .as_ref()
+            .filter(|policy| policy.is_active())
+    }
+
+    /// Whether selective enforcement may still require a review of this
+    /// run's candidate even though `timing` alone is `none`: a pending or
+    /// absent selection is not `not_required`.
+    pub fn selective_enforced(&self) -> bool {
+        self.selective_policy()
+            .is_some_and(|policy| policy.mode == SelectiveBeforeLandingMode::Enforce)
     }
 }
 
@@ -435,11 +473,16 @@ pub struct ReviewGateAdmitted {
     /// When the attempt started.
     #[serde(serialize_with = "serialize_rfc3339")]
     pub started_at: DateTime<Utc>,
+    /// The selective-selection receipt that required this review, when
+    /// selective enforcement selected it. Absent on records written before
+    /// the field existed and on unconditional reviews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_receipt: Option<Box<SelectiveReviewReceipt>>,
 }
 
 /// The reviewer an admitted gate names. A held review names the reviewer
 /// that reviewed it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewGateReviewer {
     /// Canonical crew name.
     pub crew: String,
@@ -451,6 +494,10 @@ pub struct ReviewGateReviewer {
     pub model: String,
     /// The crew's reasoning effort; `null` when it sets none.
     pub reasoning_effort: Option<String>,
+    /// Eligible members and their draw weights; absent on older records or
+    /// when the reviewer was pinned rather than drawn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eligible_pool: Vec<crate::workflow::ActivityCrewPoolMember>,
 }
 
 impl ReviewGateReviewer {
@@ -476,6 +523,10 @@ pub struct ReviewGateNotApplicable {
     /// Which layer decided the timing; `null` with it.
     #[serde(default)]
     pub timing_source: Option<String>,
+    /// The selective-selection receipt behind a selective not-required or
+    /// observe outcome. Selection evidence only: never a passed review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_receipt: Option<Box<SelectiveReviewReceipt>>,
 }
 
 impl ReviewGateNotApplicable {
@@ -485,6 +536,20 @@ impl ReviewGateNotApplicable {
             reason: reason.to_string(),
             timing: admission.map(|admission| admission.timing),
             timing_source: admission.map(|admission| admission.timing_source.clone()),
+            selective_receipt: None,
+        }
+    }
+
+    /// Not applicable for `reason`, carrying the host-authored selective
+    /// selection receipt that decided it.
+    pub fn with_selective_receipt(
+        reason: &str,
+        admission: Option<&ReviewAdmission>,
+        receipt: SelectiveReviewReceipt,
+    ) -> Self {
+        Self {
+            selective_receipt: Some(Box::new(receipt)),
+            ..Self::new(reason, admission)
         }
     }
 }

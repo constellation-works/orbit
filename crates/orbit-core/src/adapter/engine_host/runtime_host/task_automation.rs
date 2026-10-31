@@ -4,11 +4,14 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, push_external_ref_if_missing,
 };
+use orbit_types::workflow::handoff::FindingInvalidReport;
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams as StoreTaskUpdateParams;
+use crate::application::task::TaskRecords;
 use crate::application::task::{
-    SYSTEM_ACTOR_LABEL, TaskAttributionInput, TaskUpdateParams, assemble_task_attribution,
+    FindingEvidence, InvalidFinding, SYSTEM_ACTOR_LABEL, TaskAttributionInput, TaskUpdateParams,
+    VerdictConfidence, VerdictSource, VerdictWrite, assemble_task_attribution,
 };
 
 /// Apply an automation update while holding the task write lock across the
@@ -90,6 +93,7 @@ fn apply_task_automation_update_under_lock(
     }
     if update.status == Some(TaskStatus::Done) && existing_task.status != TaskStatus::Done {
         crate::application::task::ensure_post_deploy_criteria_met(runtime, &existing_task)?;
+        runtime.ensure_mutation_proposals_applied(&existing_task)?;
         runtime.ensure_resolves_are_workspace_local(&existing_task)?;
     }
     let (agent, model) =
@@ -199,4 +203,44 @@ pub(super) fn apply_task_automation_update(
         return Ok(());
     }
     apply_locked_task_automation_update(runtime, task_id, update)
+}
+
+/// Record an implementer's verified `finding-invalid.json` report as the
+/// REJECTED finding verdict [`OrbitRuntime::reject_invalid_finding`] writes,
+/// attributed to the run and its resolved crew. A claimed leaf cannot write
+/// the owner's task, and a verdict that did not record refuses the commit.
+pub(super) fn reject_invalid_finding(
+    runtime: &OrbitRuntime,
+    report: &FindingInvalidReport,
+    base_branch: &str,
+) -> Result<(), OrbitError> {
+    if runtime.worker_invocation().is_some() {
+        return Err(OrbitError::PolicyDenied(
+            "a claimed run cannot reject the owner's review finding".to_string(),
+        ));
+    }
+    let crew = RuntimeHost::get_job_run(runtime, &report.run_id)?.and_then(|run| run.resolved_crew);
+    let finding = InvalidFinding {
+        source: VerdictSource::Implementer,
+        verified_sha: &report.tested_head,
+        base_branch,
+        confidence: VerdictConfidence::High,
+        detail: &report.reasoning,
+        evidence: report
+            .evidence
+            .iter()
+            .map(|citation| FindingEvidence {
+                location: citation.location.clone(),
+                note: citation.note.clone(),
+            })
+            .collect(),
+        crew: crew.as_deref(),
+        run_id: Some(&report.run_id),
+    };
+    match runtime.reject_invalid_finding(&report.task_id, &finding)? {
+        VerdictWrite::Recorded(_) => Ok(()),
+        VerdictWrite::Superseded { reason, detail } => Err(OrbitError::Execution(format!(
+            "finding_invalid_unrecorded: {reason}: {detail}"
+        ))),
+    }
 }

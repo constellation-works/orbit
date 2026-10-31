@@ -39,6 +39,7 @@ use orbit_types::workflow::BaselineRedHold;
 
 use super::{TaskAddParams, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 /// External ref system that keys a repair task by its command and failures.
 const BASELINE_RED_REF_SYSTEM: &str = "baseline-red";

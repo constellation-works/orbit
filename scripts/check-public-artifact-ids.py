@@ -39,6 +39,26 @@ def production_lines(path: Path):
         yield line_number, line
 
 
+def strip_line_comment(line: str) -> str:
+    """Return the line up to a // comment that is outside a string literal."""
+    in_string = False
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if in_string:
+            if char == "\\":
+                index += 2
+                continue
+            if char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char == "/" and line[index + 1:index + 2] == "/":
+            return line[:index]
+        index += 1
+    return line
+
+
 def main() -> int:
     violations = []
     for source_root in SOURCE_ROOTS:
@@ -48,7 +68,7 @@ def main() -> int:
             for line_number, line in production_lines(path):
                 # Internal provenance belongs in ordinary source comments, which
                 # are intentionally outside this shipped-string guard.
-                code = line.split("//", maxsplit=1)[0]
+                code = strip_line_comment(line)
                 if '"' not in code:
                     continue
                 if match := CONCRETE_ID.search(code):

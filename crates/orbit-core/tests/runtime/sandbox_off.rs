@@ -159,11 +159,13 @@ fn dispatch_codex(
     )
     .expect("audit writer");
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested response envelope.".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,
@@ -179,6 +181,7 @@ fn dispatch_codex(
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     });
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name: "explicit_sandbox_off",

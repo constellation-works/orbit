@@ -1,19 +1,25 @@
 use std::cell::Cell;
+use std::io;
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{
-    GIT_FETCH_CAS_ATTEMPTS, GIT_FETCH_LOCK_HOLD_LIMIT, GIT_REMOTE_TIMEOUT,
-    git_fetch_cas_retry_delay, should_retry_git_ref_cas, with_git_fetch_lock,
+    GIT_FETCH_CAS_ATTEMPTS, GIT_FETCH_LOCK_HOLD_LIMIT, GIT_REMOTE_TIMEOUT, git_common_dir,
+    git_fetch_cas_retry_delay, git_fetch_lock_target, should_retry_git_ref_cas,
+    with_git_fetch_lock,
 };
+use orbit_common::fs::io::{FileLockTimeout, with_exclusive_file_lock};
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
 };
 use orbit_types::workflow::TRANSIENT_FAILURE_MARKER;
 use serde_json::Value;
+
+const ORIGIN_AVAILABILITY_PROBE_TIMEOUT_MS: u64 = GIT_REMOTE_TIMEOUT.as_millis() as u64;
+const ORIGIN_AVAILABILITY_PROBE_MIN_TIMEOUT_MS: u64 = 1_000;
 
 /// Bounded wall-clock budgets for host Git children.
 ///
@@ -475,6 +481,78 @@ pub(crate) fn git_success(current_dir: &Path, args: &[&str]) -> Result<(), Orbit
     git_output_raw(current_dir, args).map(|_| ())
 }
 
+/// A URL argument that reaches `push_url` itself, without Git applying
+/// `url.*.insteadOf` to the already-resolved push URL a second time.
+///
+/// `git remote get-url --push` resolves `pushInsteadOf` (and, when no
+/// push-specific rule matches, `insteadOf`) exactly once, as `git push
+/// origin` does. Passing that resolved URL to `ls-remote` or `fetch`
+/// would apply `insteadOf` again and can name a different repository
+/// [ORB-17686]. The probe URL appends a suffix segment so an ephemeral
+/// identity rewrite for it is strictly longer — and therefore wins —
+/// over every `insteadOf` rule whose value is a prefix of `push_url`.
+/// The identity rewrite maps the probe URL back to `push_url`, so the
+/// transport still addresses exactly `push_url`. This adds only a
+/// command-line `-c` value; it never writes the user's Git config.
+#[derive(Debug, Clone)]
+pub(crate) struct DirectRemoteTarget {
+    pub probe_url: String,
+    pub config_arg: Option<String>,
+}
+
+impl DirectRemoteTarget {
+    pub(crate) fn prefix_args(&self) -> Vec<String> {
+        match &self.config_arg {
+            Some(config) => vec!["-c".to_string(), config.clone()],
+            None => Vec::new(),
+        }
+    }
+}
+
+pub(crate) fn direct_remote_target(push_url: &str) -> DirectRemoteTarget {
+    // A `-c url.<push_url>.insteadOf=...` key cannot carry these bytes:
+    // `=` would end the config name early and the rest corrupt parsing.
+    // Such URLs fall back to a plain probe, which
+    // `verify_direct_remote_target` then refuses if it would rewrite.
+    if push_url.is_empty() || push_url.contains(['=', '\n', '\r', '\\', '"']) {
+        return DirectRemoteTarget {
+            probe_url: push_url.to_string(),
+            config_arg: None,
+        };
+    }
+    let separator = if push_url.ends_with('/') { "" } else { "/" };
+    let probe_url = format!("{push_url}{separator}.orbit-publication-probe");
+    DirectRemoteTarget {
+        config_arg: Some(format!("url.{push_url}.insteadOf={probe_url}")),
+        probe_url,
+    }
+}
+
+/// Fail closed when Git would still rewrite `target` away from
+/// `push_url` (for example a rule matching the probe URL itself at the
+/// same length). Probing or fetching the rewritten repository could
+/// report publication at a destination `git push origin` never wrote.
+pub(crate) fn verify_direct_remote_target(
+    current_dir: &Path,
+    push_url: &str,
+    target: &DirectRemoteTarget,
+) -> Result<(), OrbitError> {
+    let mut args: Vec<&str> = Vec::new();
+    if let Some(config) = target.config_arg.as_deref() {
+        args.extend(["-c", config]);
+    }
+    args.extend(["ls-remote", "--get-url", target.probe_url.as_str()]);
+    let expanded = git_output(current_dir, &args)?;
+    if expanded != push_url {
+        return Err(OrbitError::Execution(format!(
+            "git_push: effective push URL '{push_url}' would be rewritten to '{expanded}' \
+             when probed or fetched by URL, so it does not name the repository \
+             'git push origin' writes; refusing to probe or fetch a different repository"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn git_command_success(current_dir: &Path, args: &[&str]) -> Result<bool, OrbitError> {
     let outcome = git_run(current_dir, args)?;
     if outcome.timed_out {
@@ -702,6 +780,106 @@ pub(in crate::executor::automation) fn resolve_worktree_start_point(
             fetch_remote_base(repo_root, &branch)?;
             resolve_remote_base_ref(repo_root, &branch)
         }
+    }
+}
+
+/// Resolve the start point used before a task is admitted. Only this boundary
+/// parks transport outages as held runs; landing and post-admission callers
+/// keep their existing failure and recovery behavior.
+pub(in crate::executor::automation) fn resolve_worktree_start_point_for_admission(
+    repo_root: &Path,
+    base: &str,
+    sync_mode: BaseSyncMode,
+) -> Result<String, OrbitError> {
+    match sync_mode {
+        BaseSyncMode::Local => resolve_worktree_start_point(repo_root, base, sync_mode),
+        BaseSyncMode::Remote => {
+            let branch = normalize_base_branch(base)?;
+            fetch_remote_base_for_worktree_setup(repo_root, &branch)?;
+            resolve_remote_base_ref(repo_root, &branch)
+        }
+    }
+}
+
+/// Fetch origin for pre-admission setup while retaining enough lock-timeout
+/// detail to tell an origin outage from ordinary lock contention.
+fn fetch_remote_base_for_worktree_setup(repo_root: &Path, branch: &str) -> Result<(), OrbitError> {
+    let common_dir = git_common_dir(repo_root)?;
+    let lock_target = git_fetch_lock_target(&common_dir);
+    let result = with_exclusive_file_lock(&lock_target, "git fetch", || {
+        fetch_remote_base_locked(repo_root, branch, GIT_FETCH_LOCK_HOLD_LIMIT)
+            .map_err(WorktreeFetchLockError::Fetch)
+    });
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(WorktreeFetchLockError::Fetch(error)) if is_marked_transient_fetch_error(&error) => {
+            Err(origin_unavailable_refusal(error))
+        }
+        Err(WorktreeFetchLockError::Fetch(error)) => Err(error),
+        Err(WorktreeFetchLockError::Lock(error))
+            if is_git_fetch_lock_timeout(&error)
+                && origin_probe_confirms_transport_failure(repo_root, branch) =>
+        {
+            Err(origin_unavailable_refusal(error))
+        }
+        Err(WorktreeFetchLockError::Lock(error)) => Err(error.into()),
+    }
+}
+
+enum WorktreeFetchLockError {
+    Lock(io::Error),
+    Fetch(OrbitError),
+}
+
+impl From<io::Error> for WorktreeFetchLockError {
+    fn from(error: io::Error) -> Self {
+        Self::Lock(error)
+    }
+}
+
+fn is_git_fetch_lock_timeout(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::TimedOut
+        && error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<FileLockTimeout>())
+            .is_some_and(|timeout| timeout.label == "git fetch")
+}
+
+fn origin_probe_confirms_transport_failure(repo_root: &Path, branch: &str) -> bool {
+    let mut budget = GitTimeoutBudget::current();
+    let probe_timeout_ms = budget
+        .fetch_ms
+        .min(budget.default_ms)
+        .min(ORIGIN_AVAILABILITY_PROBE_TIMEOUT_MS);
+    if probe_timeout_ms < ORIGIN_AVAILABILITY_PROBE_MIN_TIMEOUT_MS {
+        return false;
+    }
+    budget.default_ms = probe_timeout_ms;
+    budget.fetch_ms = probe_timeout_ms;
+    let _budget = GitTimeoutBudgetGuard::install(budget);
+    let ref_name = format!("refs/heads/{branch}");
+    match git_run(repo_root, &["ls-remote", "--heads", "origin", &ref_name]) {
+        Ok(outcome) if outcome.timed_out => true,
+        Ok(outcome) if outcome.success => false,
+        Ok(outcome) => is_git_transport_failure(&outcome.stderr),
+        Err(_) => false,
+    }
+}
+
+fn is_marked_transient_fetch_error(error: &OrbitError) -> bool {
+    match error {
+        OrbitError::Execution(message) | OrbitError::ExecutionTimeout { message, .. } => {
+            message.contains(TRANSIENT_FAILURE_MARKER)
+        }
+        _ => false,
+    }
+}
+
+fn origin_unavailable_refusal(error: impl std::fmt::Display) -> OrbitError {
+    OrbitError::DeliveryRefused {
+        refusal: orbit_types::workflow::DeliveryRefusal::OriginUnavailable,
+        message: format!("origin transport was unavailable during worktree setup: {error}"),
     }
 }
 

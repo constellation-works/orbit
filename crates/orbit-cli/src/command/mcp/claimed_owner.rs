@@ -14,6 +14,7 @@ use orbit_core::adapter::command::{
     ClaimedOwnerRoute, ToolEntryPoint, bridge_claimed_owner_call,
     execute_global_in_process_tool_dispatch,
 };
+use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
 use orbit_mcp::McpHost;
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use serde_json::Value;
@@ -65,7 +66,16 @@ impl McpHost for ClaimedOwnerBridge {
             ToolEntryPoint::Mcp,
         ) {
             return match route {
-                ClaimedOwnerRoute::Forwarded(result) => result,
+                // The owner's answer bypasses the wrapped host, so it gets
+                // the same result policy here.
+                ClaimedOwnerRoute::Forwarded(result) => {
+                    let list_policy = TaskListResultPolicy::for_call(
+                        name,
+                        &input,
+                        TaskListResultProfile::Default,
+                    );
+                    result.map(|value| list_policy.finalize(value))
+                }
                 ClaimedOwnerRoute::Refused(error) => {
                     // The inner ServerMcpHost is deliberately bypassed for a
                     // bridged owner call. Persist adapter-side refusals and

@@ -131,7 +131,9 @@ flattens `command`, `outcome`, `role` and `log_artifact` as siblings; every
 required command's entry carries `outcome: "passed"` and `role: "required"`.
 The role vocabulary is `required`, `expected_failure`, `excluded`,
 `superseded` and `diagnostic`; other values such as `acceptance` or `gate` are
-refused.
+refused. The outcome vocabulary is `passed`, `failed`, `denied` and `not_run`;
+an `expected_failure` entry carries `outcome: "failed"`, never the role name as
+the outcome.
 The already-landed verifier requires exactly one passed `required` entry per
 `required_commands` command and refuses extra required commands. It also accepts
 additional `expected_failure` and `diagnostic` entries, without counting them
@@ -147,6 +149,63 @@ Implement in testable increments. Breadth or an ordinary missing API is not a
 blocker when the task owns that outcome. A real authority refusal, unavailable
 prerequisite or unresolved product decision is: record the specific evidence and
 what is needed to proceed. A clean baseline check is not feature validation.
+
+### Agent-filled PR sections
+
+When the workspace configures `pr.agent_sections` or `pr.required_sections`,
+the `agent_implement` instruction lists the headings to fill. Optional agent
+sections may be left to the template; required sections must have content.
+When neither setting adds a heading, no section artifact is needed.
+
+Write `.orbit/tmp/pr-sections.json` with exactly this top-level shape, using
+one entry per configured heading. Each value is the Markdown for that section
+without its heading:
+
+```json
+{
+  "sections": {
+    "<heading>": "<markdown>"
+  }
+}
+```
+
+The final execution summary or response-envelope prose is not section content;
+for a single-task delivery, `pr_open` reads the task artifact. In owner mode,
+attach the file before PR creation:
+
+```bash
+orbit tool run orbit.task.artifact.put --input '{"id":"<task-id>","source_path":".orbit/tmp/pr-sections.json","path":"pr-sections.json","model":"<agent-family>"}'
+```
+
+In claimed mode, return it in `task_artifacts` so the owner durably attaches it:
+
+```json
+{
+  "task_artifacts": [
+    {"path": "pr-sections.json", "source_path": ".orbit/tmp/pr-sections.json"}
+  ]
+}
+```
+
+The rendered body matches configured names to Markdown ATX headings after
+trimming and case-insensitively; heading-like lines inside fenced code do not
+match. In a body template, filled content replaces the text under its heading
+until the next heading at the same or a higher level. A required section whose
+heading is absent from the template is not checked. Orbit's built-in body
+instead appends configured sections under `## <heading>` headings. Empty
+optional sections keep the template text, or are omitted from the built-in
+body.
+
+When a checked required section has no content, it is rendered with a “Missing
+required section” note. The task history records a `pr_section_gap` event
+naming the gap and the configured `pr.missing_required_section` policy drafts
+the PR or refuses to open it. Verify the resulting PR body and, when required
+content is missing, the task history and delivery outcome. A reused draft is
+marked ready only when `pr.draft` is disabled, no required section is still
+missing, and either its live body has the section-gap note or a matching body
+refresh was reserved before an interrupted ready transition. Check its
+`pr_draft_recovery` history record; do not assume a resumed delivery changed
+the draft state.
 
 ### Checking a UI in a browser
 
@@ -173,8 +232,11 @@ defect, not a defect in the code under test.
 ### Screenshots of a UI change
 
 A diff that changes something a user sees (dashboard, web pages, docs site,
-desktop app UI) owes screenshots of each changed view as task artifacts. The
-diff decides this, not the tag: an untagged UI change still owes them.
+desktop app UI) follows the workspace guide's screenshot evidence rule for
+task artifacts. This review evidence follows the diff, not the `ui` tag.
+Publishing screenshots in the PR body is optional: if
+`pr.screenshot_section` applies and none are attached, Orbit writes `No
+screenshots attached.` and does not draft or refuse the PR for that reason.
 `.orbit/tmp/` is cleared with the worktree, so a screenshot left only there is
 lost evidence.
 
@@ -183,7 +245,9 @@ lost evidence.
 - Add a before shot from the base revision when it is practical and it shows
   the change.
 - Write each under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) and give it a stable
-  stored path such as `screenshots/<view>-<theme>-<width>.png`. Owner mode
+  stored path such as `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`.
+  A file with no suffix is an After shot, and the Before shot stays optional.
+  Owner mode
   attaches screenshots with `orbit.task.artifact.put`. A claimed implementer
   returns each screenshot in `task_artifacts`, setting `path` to its stable
   stored path and `source_path` to its file under `.orbit/tmp/`, for
@@ -194,6 +258,13 @@ lost evidence.
 - Keep each under the 1 MiB per-artifact limit: prefer a viewport capture to a
   full-page one, or JPEG or WebP when a PNG is too large.
 - List the artifact paths in the execution summary.
+- Orbit publishes these artifacts into the PR's `## Screenshots` table when
+  `pr.screenshot_section` applies. `pr_open` commits attached shots to the
+  task's permanent evidence ref `refs/orbit/evidence/<task-id>` and renders
+  the Before/After table in the PR body; an empty section is optional. Do not
+  push your own evidence branch:
+  Orbit replaces the hand-pushed evidence branch used for
+  constellation-works/orbit#6155.
 
 When the host has no browser kit or the view cannot render, say so in the
 handoff instead of claiming visual verification.
@@ -230,6 +301,40 @@ Each referenced validation log is JSON with `run_id`, `tested_head`,
 non-empty and unique. The commit verifier also requires a clean worktree and
 the current HEAD to equal `tested_head`; otherwise reconcile the changes and
 rerun validation before attaching the evidence.
+
+### Invalid review finding
+
+A review-filed bug (type `bug` tagged `code-review`, `delivery-code-review`,
+`security-review` or `qa-sweep`) can be wrong. Confirm the defect at your
+base before editing. When it does not exist there (the code does not do what
+the finding claims, or the claimed consequence cannot happen), change
+nothing, run no workspace gates, and attach `finding-invalid.json` with
+`orbit.task.artifact.put`. It is not for a defect already fixed (use
+already-landed or no-diff) or one you judge not worth fixing (that is the
+operator's call):
+
+```json
+{
+  "schema_version": 1,
+  "task_id": "<current-task-id>",
+  "run_id": "<current-run-id>",
+  "tested_head": "<pinned-head-sha>",
+  "reasoning": "Why the defect as described does not exist at tested_head.",
+  "evidence": [
+    {"location": "src/path.rs:42", "note": "What this line shows."}
+  ]
+}
+```
+
+Each `location` is a repository-relative `path:line` naming an existing
+line at `tested_head`; at least one is required, and every `note` is
+non-empty. The commit step requires a clean worktree at `tested_head` and a
+report from this run or its retry lineage. It then records a REJECTED
+finding verdict (source `implementer`), moves the task to `rejected`, and
+lands nothing. Still write the execution summary with `Outcome: success`,
+saying the finding is invalid; a failed outcome refuses the handoff. A
+claimed run cannot reject the owner's task: return `result.blocker` with
+kind `finding_invalid` and the same evidence instead.
 
 ### Criteria owed after deploy
 
@@ -343,6 +448,62 @@ recorded false result, not a hypothetical one. Before comparing two revisions:
 If the workspace ships a helper for this comparison, use it rather than
 hand-rolling the steps; check the workspace's build and CI instructions.
 
+### Sanctioned sandbox deferral
+
+Before attempting or claiming a sandbox deferral, read and follow this
+subsection. Only a required affected-test gate may qualify, and it must exit 0
+while printing only notices for tests whose nested sandbox the agent lane
+refuses: `DEFERRED: bubblewrap unavailable:` on Linux,
+`SKIP: sandbox-exec cannot apply a profile:` on macOS, or `DEFERRED: ps denied:`
+on a claimed macOS leaf. A single gate may report multiple notice kinds only
+when every corresponding sandbox probe refuses in the implementer's lane.
+For an eligible case, use this route instead of failing the step for the
+deferred test coverage.
+
+Run the gate with its comparison base pinned to `input.base_sha` and set
+`ORBIT_VALIDATION_SUMMARY` to a new file under `.orbit/tmp/`. The summary must
+record the gate command, exit status, executed-test count, pinned base and
+notices. Return only the summary path in this handoff:
+
+```json
+{"deferred_sandbox_validation":{"summary":".orbit/tmp/<file>.json"}}
+```
+
+Do not add other output keys. Orbit derives and checks the record from the
+summary, including that the command is a required gate, the exit status is 0,
+tests ran, the base matches, and every notice is eligible for this lane. Orbit
+runs one refusal probe for each notice kind; every probe must refuse. It then
+replays the gate outside the agent sandbox before delivery, and the replay must
+run tests without deferral. In the execution summary, name the gate, summary
+path and notices, and mark the deferred coverage `not_run`, never passed.
+
+A required `orbit plugin test` gate in a macOS worker must also set
+`ORBIT_VALIDATION_GATE` to the gate exactly as configured and
+`ORBIT_VALIDATION_BASE` to `input.base_sha`. Without both values, the route
+fails with `validation_route_unavailable` and runs no case.
+
+No other check can be deferred. This includes a nonzero exit, any other `SKIP:`
+or `skipping` notice, a gate that ran or selected no tests, a notice for a
+sandbox this lane does not refuse, `DEFERRED: ps denied:` outside a claimed
+macOS leaf, a host-required criterion, a `baseline_red` command, and every
+other required command such as formatting, lint, goldens or static analysis.
+
+### Read-only delegation
+
+You may hand read-only questions (locate code, trace callers, summarize
+a module, find the tests covering a path) to a cheaper agent:
+- `orbit.agent.invoke` with one focused `prompt`, a `cwd` inside your
+  worktree, `wait_seconds` (≤600) and a unique `idempotency_key`. The
+  answer carries `answer.summary`, `answer.findings` and
+  `answer.paths_read`. Calls are budgeted; when one is refused, do the
+  work yourself.
+- Your provider's own read-only subagents (for example Claude's Agent
+  tool on a small model).
+
+Delegate only reading, never edits, validation, commits or dispatch. An
+explorer's answer is a lead: read what you rely on yourself before you
+change or cite it.
+
 ## Step 5 — Summarize and hand off
 
 Persist `execution_summary` via `orbit.task.update` **first**.
@@ -356,19 +517,24 @@ it — see [friction.md](friction.md). Then:
   succeed.
 - **Claimed mode** (`input.claimed` is true, a distributed-drain leaf):
   another machine owns the task. Work from the injected envelope; you are not
-  granted `orbit.task.update`. `orbit.task.show` reads only the claimed task
-  through the run's coordinator. Return the summary as the output's
+  granted `orbit.task.update`. `orbit.task.show` and `orbit.task.artifact.get`
+  read any task in the claimed workspace through the run's coordinator, except
+  that a `review-*` artifact of another task is refused on the remote route
+  (the review gate keeps its stricter scope). Return the summary as the output's
   `execution_summary` (with `context_files_added` and `comment` for anything
   you would have written to the task); the pipeline's handoff carries it to
   the owner. When the task asks you to record a `regression_from` relation,
   return the culprit task IDs as `regression_from` and name the culprit commit
   in the summary; the owner checks and records the relation at handoff. That
-  output carries IDs only, so state the nature and escape you would have set
-  in the summary. An owner-routed tool that answers unreachable is not a task
-  failure. A task you file must be `spawned_from` the claimed task; a claimed
-  `delivery-code-review` or `code-review` task may also give each finding a
-  `regression_from` relation to its culprit, classified with its `regression`
-  nature and escape ([task-fields.md](task-fields.md#behavior-affecting-optional-fields)). `orbit.search` and `orbit.task.list` reach the
+  output carries IDs only, so state the nature, escape and severity you would
+  have set in the summary. An owner-routed tool that answers unreachable is not a task
+  failure. A task you file must be `spawned_from` the claimed task. A claimed
+  `delivery-code-review`, `code-review`, `qa-sweep` or `qa-full-sweep` auto-task,
+  or an area task tagged `full-code-review` or `qa-full-sweep` together with
+  `no-diff-expected`, may also give each finding a `regression_from` relation
+  to a culprit in the claimed workspace while the claim is active, classified
+  with its `regression` nature, escape and severity ([task-fields.md](task-fields.md#behavior-affecting-optional-fields);
+  severity per its [rubric](task-fields.md#severity-rubric)). `orbit.search` and `orbit.task.list` reach the
   owner's authoritative records in the claimed workspace through the coordinator;
   use them for duplicate checks. Federated search scopes are refused.
   Return a finding the owner still refuses in `unfiled_findings` as

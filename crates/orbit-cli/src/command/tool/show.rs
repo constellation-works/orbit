@@ -25,6 +25,7 @@ impl Execute for ToolShowArgs {
             "status": tool_status(&tool),
             "builtin": tool.builtin,
             "parameters": &tool.parameters,
+            "mcp_toolset": tool.mcp_toolset,
         });
 
         let mut header = format!(
@@ -38,6 +39,9 @@ impl Execute for ToolShowArgs {
             bold("Status:"),
             text(tool_status(&tool), Domain::JobState)
         );
+        if let Some(toolset) = tool.mcp_toolset {
+            header.push_str(&format!("\n{} {toolset}", bold("MCP toolset:")));
+        }
 
         if tool.parameters.is_empty() {
             header.push_str(&format!("\n{} (none)", bold("Parameters:")));

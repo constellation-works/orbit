@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::TryLockError;
 
 use orbit_common::fs::io::sqlite_synchronous;
-use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::storage::sqlite::{pragma, sqlite_error, sqlite_store_error};
 use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, ErrorCode, TransactionBehavior, params};
 
@@ -158,15 +158,12 @@ struct CacheWriteSettings {
 impl CacheWriteSettings {
     fn apply(conn: &Connection) -> Result<Self, OrbitError> {
         let settings = Self {
-            busy_timeout_ms: conn
-                .pragma_query_value(None, "busy_timeout", |row| row.get::<_, i64>(0))
-                .map_err(|e| {
-                    sqlite_error(StorageLayer::Store, &e, format!("read busy_timeout: {e}"))
-                })?,
+            busy_timeout_ms: pragma::get::<i64>(conn, "busy_timeout").map_err(|e| {
+                sqlite_error(StorageLayer::Store, &e, format!("read busy_timeout: {e}"))
+            })?,
         };
-        let applied = conn
-            .pragma_update(None, "busy_timeout", 0)
-            .and_then(|()| conn.pragma_update(None, "synchronous", sqlite_synchronous("NORMAL")))
+        let applied = pragma::set(conn, "busy_timeout", &0)
+            .and_then(|()| pragma::set(conn, "synchronous", &sqlite_synchronous("NORMAL")))
             .map_err(|e| {
                 sqlite_error(
                     StorageLayer::Store,
@@ -182,8 +179,8 @@ impl CacheWriteSettings {
     }
 
     fn restore(&self, conn: &Connection) -> Result<(), OrbitError> {
-        conn.pragma_update(None, "synchronous", sqlite_synchronous("FULL"))
-            .and_then(|()| conn.pragma_update(None, "busy_timeout", self.busy_timeout_ms))
+        pragma::set(conn, "synchronous", &sqlite_synchronous("FULL"))
+            .and_then(|()| pragma::set(conn, "busy_timeout", &self.busy_timeout_ms))
             .map_err(|e| {
                 sqlite_error(
                     StorageLayer::Store,

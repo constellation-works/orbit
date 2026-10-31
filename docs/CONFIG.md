@@ -1,21 +1,39 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-10-19
+last_validated: 2026-10-30
 ---
 
 # Orbit Configuration
 
-Reference for Orbit's `config.toml`: every fixed key, its default and what it does. `orbit config keys` prints the same keys with descriptions. The annotated template `orbit init` writes is [`crates/orbit-config/assets/default-config.toml`](../crates/orbit-config/assets/default-config.toml); use it as a reference, not a file to copy. The website has a shorter overview under [Reference › Configuration](https://orbit-cli.com/reference/config/). To add an execution lane rather than configure a shipped one, see the [executor onboarding runbook](runbooks/executor-onboarding.md).
+Reference for Orbit's `config.toml`: every fixed key, its default and what it does. `orbit config keys` prints the same keys with descriptions. `orbit init` writes a minimal template, [`crates/orbit-config/assets/default-config.toml`](../crates/orbit-config/assets/default-config.toml), with the agent environment allowlist, the Codex sandbox mode, review-skip mappings for shipped auto-task provenance tags, and the `[workflow]` table its crew keys go into; this page is the reference. The website has a shorter overview under [Reference › Configuration](https://orbit-cli.com/reference/config/). To add an execution lane rather than configure a shipped one, see the [executor onboarding runbook](runbooks/executor-onboarding.md).
 
 ## Where config lives
 
 | Path | Scope | Created by |
 |---|---|---|
-| `<workspace>/.orbit/config.toml` | Workspace-local (per user, gitignored) | Hand-authored, or `orbit config set --fresh` / `--seed-from-global` |
+| `<workspace>/.orbit/config.toml` | Workspace-local (per user, gitignored) | `orbit workspace init`, hand-authored, or `orbit config set --fresh` / `--seed-from-global` |
 | `~/.orbit/config.toml` | Global | `orbit init` (only when absent, or under `--force`) |
 
 Settings inherit per key: workspace overrides global, global fills omissions, built-in defaults fill the rest. Keep a workspace file to genuine overrides.
+
+Routine and auto-task schedules are not config keys: they live in the definitions under `<workspace>/.orbit/routines/` and `<workspace>/.orbit/auto_tasks/`. Change a schedule with `orbit auto-task update`, `orbit.routine.control` `set_trigger`, or the **edit** link on the dashboard's Automation rows, which edits only the schedule or trigger; see [`automation.md`](../crates/orbit-core/assets/skills/orbit-setup/references/automation.md#changing-a-routines-trigger).
+
+`orbit workspace init` seeds missing review keys for the registered ship mode
+(a new registration defaults to `pr`; `--force` retains its mode unless
+`--ship-mode` changes it). A PR workspace gets `review.timing = "before_landing"`,
+`review.minutes = 30`, and `workflow.purpose_crews.pre_landing_review` containing
+the enabled members of `luna` and `haiku` in the effective host/workspace config.
+With neither enabled, timing is explicitly `"off"` and the pool is empty; init
+never substitutes a costlier reviewer. A local workspace gets timing `"off"`
+because before-landing review needs the PR route, plus the same explicit
+30-minute budget. Each seeded key has a short comment explaining the choice.
+Existing workspace values (including legacy review switches) win, and repeated
+init leaves them unchanged. Global `orbit init` seeds no review timing and
+keeps the built-in `off` default for other workspaces. When init creates the
+first workspace policy layer, it explicitly preserves the sandbox, approval
+policy and environment allowlist previously in effect; it leaves an existing
+workspace policy layer's security settings alone.
 
 Both config files must be regular files. Runtime loads and workspace plugin-toggle polling refuse symlink leaves (including dangling links), directories, FIFOs and other non-regular leaves. Symlinked parent directories are supported and resolved before opening the file. A missing file or parent directory contributes no layer, so global settings and built-in defaults still apply.
 
@@ -32,9 +50,11 @@ Both config files must be regular files. Runtime loads and workspace plugin-togg
 |---|---|
 | `orbit config show` | Effective merged view. Identity (`machine.id`, `machine.task_prefix`) leads, then Machine, Delivery (`workflow.*`), Crews, Execution, Review and Housekeeping. Each row's description is one sentence; defaults, ranges and interactions are in this reference. Unconfigured advanced keys are hidden with a count per section. `--all` (alias `--advanced`) lists every key, expands unset sections, and appends Paths, Crew purposes and Review, which restate rows above. `--json` adds `provenance` and always includes `crew_purposes` and `review`. |
 | `orbit config get <key>` | One value. |
-| `orbit config set <key> <value>` | Write the workspace file (`--global` for the global one). The value parses as a TOML literal, else a string. Without a workspace file, pass `--fresh` (start empty) or `--seed-from-global`. |
+| `orbit config set <key> <value>` | Write the workspace file (`--global` for the global one). The value parses as a TOML literal, else a string. Without a workspace file, pass `--fresh` (start empty) or `--seed-from-global` (copy the global file without its global-only keys: `[assistance]`, `[machine]`, each `[crews.<name>] env`, `lease.intake.peer_user` and `[lease.listener]`). |
 | `orbit config keys` | Every fixed settable key with type, section and description. |
 | `orbit config path` | The resolved `config.toml` path. |
+
+`config set` checks a registered setting's supplied value type before staging the edit. A type mismatch names the key and supplied value, explains the expected type, and confirms the edit was not saved. For example, `orbit config set --global review.minutes abc` is refused; supply an integer such as `30` instead. Full config validation still runs before saving. Errors loading an already invalid config identify its file.
 
 **Advanced** keys are shown whenever any layer sets them, including a global security value that is not inherited. JSON always includes every key. Scoped text views apply the same tier filter to the selected file. The tier affects display only: loading, `config get`, and `config set` are unchanged.
 
@@ -42,13 +62,87 @@ Each `show` value has one state: `workspace`, `global` or `environment` (the lay
 
 `--scope global|workspace` shows one file's values plus built-in defaults, without inheriting the other layer. Crew references are still validated against both layers' crews (partial workspace overrides included), here and in the dashboard's Workspace file view; a crew in neither is reported by name and key. A dashboard file validation error names the file and asks you to fix it before reloading. Scoped JSON reports `exists` (`config get`: key in that file) and `source.exists` (`config show`: file exists).
 
-The dashboard's Settings payloads (`GET /api/config/effective`, `GET /api/config/file?scope=…`) add per-key comparison facts to each row. `built_in` is `{state, value}`: the value Orbit ships with, `state` `unset` with a `null` value when there is none. `fallback` is `{layer, value, state}`: what the key resolves to if the layer that sets it stopped setting it, or `null` when nothing can be removed or no admitted fallback can be predicted. Removing a workspace security key falls to the built-in value, not the global one, while a workspace file exists. `equals` is `{global, built_in}`: whether the row's value restates the global file's value (`null` when the global file does not set the key, and on the Global file view itself) and the built-in default, by plain JSON equality, so `opus` and `opus:100` differ. On the Global file view, `reach` says what a set value does for the bound workspace: `{state: "in-effect"}`, `{state: "overridden", workspace_value, equals_global}` or `{state: "not-inherited"}`. On the file views, `fallback`, `equals` and `reach` are `null` for rows the file does not set, and also when the two layers do not load together. Every row also says what `orbit config set` would refuse: `read_only_reason` is the refusal note for a key no write may change (`null` otherwise), and `global_only` marks a key only the global file may carry, such as `machine.*`. File views do not build crew rows. They report `crews_enumerated: false` and list the file's `[crews.<name>]` tables in `crew_tables`, so an empty `crews` list does not mean no crew is defined.
+The dashboard's Settings payloads (`GET /api/config/effective`, `GET /api/config/file?scope=…`) add per-key comparison facts to each row. `built_in` is `{state, value}`: the value Orbit ships with, `state` `unset` with a `null` value when there is none. `fallback` is `{layer, value, state}`: what the key resolves to if the layer that sets it stopped setting it, or `null` when nothing can be removed or no admitted fallback can be predicted. Removing a workspace security key falls to the built-in value, not the global one, while a workspace file exists. `equals` is `{global, built_in}`: whether the row's value restates the global file's value (`null` when the global file does not set the key, and on the Global file view itself) and the built-in default, by plain JSON equality, so `opus` and `opus:100` differ. On the Global file view, `reach` says what a set value does for the bound workspace: `{state: "in-effect"}`, `{state: "overridden", workspace_value, equals_global}` or `{state: "not-inherited"}`. On the file views, `fallback`, `equals` and `reach` are `null` for rows the file does not set, and also when the two layers do not load together. Every row also says what `orbit config set` would refuse: `read_only_reason` is the refusal note for a key no write may change (`null` otherwise), and `global_only` marks a key only the global file may carry, such as `machine.*`. The file payload also carries `text`: the file's raw TOML (empty when the file does not exist), shown by Settings › All keys. File views do not build crew rows. They report `crews_enumerated: false` and list the file's `[crews.<name>]` tables in `crew_tables`, so an empty `crews` list does not mean no crew is defined.
 
 For crew fields, the library’s `EffectiveConfigValue.fallback` describes removal of one field while its table survives. A workspace field inherits a lower global field when the resulting crew can be admitted. Otherwise optional fields use the configured entry’s defaults (`enabled = true`, empty `tags`, absent `description` and `effort`), even for a crew with a shipped name. Removing `model` or `provider` without a valid lower file value leaves the table invalid, so the prediction is `None`. The separate `built_in` value still describes the shipped crew of that name; shipped crew fields do not fill omissions in configured tables.
 
 For registered settings, fallback values and global comparisons use the config layer's admitted JSON in the current workspace's settings and crew context. For example, a global `workflow.purpose_crews.review = "sol"` supplies `["sol"]`, and complexity pools are compared in canonical crew order with duplicate bare members collapsed. `shadowed_by.value` keeps the raw file projection, including a scalar crew or the written pool order. If a shadowed global setting cannot be admitted in that context, its comparison is `null`; its removal fallback is also `null` rather than predicting a successful reload. Replace-only security settings still fall back to built-in values.
 
 ---
+
+## `[assistance]` — optional bounded model annotations
+
+The single advanced `assistance` table is **global-only**. Workspace files and
+workspace-scoped writes refuse it, including an empty table. Global settings are
+never copied into a new workspace file. It is shown by `orbit config show --json`
+and read with `orbit config get assistance`; a replacement uses
+`orbit config set --global assistance '<table>'`. Nested fields are part of this
+one setting, not separately registered dotted keys.
+
+The default is off and unfunded:
+
+```toml
+[assistance]
+policies = []
+```
+
+No task/report consumer or background worker is automatically installed or
+activated. Composition exposes a library service for explicitly integrated
+consumers. `off` enqueues nothing and reads no credential. `shadow` retains results
+for operator comparison while the advisory read returns nothing. `advisory`
+permits annotations for the matching current source and policy; no mode grants
+workflow authority. Moving from shadow to advisory changes the cache identity.
+
+Fields omitted from `[assistance.limits]` or `[assistance.budget]` use their
+built-in defaults. Unknown fields in either table are rejected.
+
+| Field | Built-in default | Meaning |
+|---|---|---|
+| `limits.concurrency` | `2` | Active claims across the host store (1–64). |
+| `limits.queue_capacity` / `max_records` | `128` / `1024` | Pending work / all retained work; overflow records a coverage-gap counter. |
+| `limits.queue_age_seconds` / `timeout_seconds` | `300` / `15` | Maximum queue age for queued work, including retry-pending work, and per-attempt deadline (timeout at most 120s). Expired queued work is not current and has no advisory; queue age does not expire a completed result. |
+| `limits.retry_delay_seconds` / `max_attempts` | `5` / `2` | Delayed retries, at most five attempts including the first. |
+| `limits.max_request_bytes` / `max_response_bytes` | `16384` / `65536` | Serialized outbound request and received response bounds. Oversize is explicit, never silently clipped. |
+| `limits.max_input_tokens` | `32768` | Conservative reservation per attempt; body bytes plus framing must fit. |
+| `limits.retention_seconds` | `604800` | Terminal payload/attempt retention after the queue deadline; at most 30 days. A completed result stays readable until this retention ends or it is superseded. |
+| `budget.epoch` | `unfunded` | Host allocation identity. Its cumulative counters survive payload retention. |
+| `budget.token_ceiling` / `spend_ceiling_microusd` | `0` / `0` | Cumulative reserved input tokens / micro-USD for that allocation. |
+| `budget.input_microusd_per_million_tokens` / `pricing_version` | absent / absent | Operator-verified uncached Decisions input price ceiling and provenance version. Missing pricing refuses calls; it never means free. |
+| `policies` | `[]` | Exact workspace/use-case grants, described below. |
+
+A claim refused before any outbound request is entered (unavailable credential,
+changed configuration, a request over its input bound, a superseded subject, or
+a deadline reached before send) releases its reservation to the allocation and
+records no outcome-unknown attempt, because nothing was sent. A claim whose
+request entered the transport keeps its full reservation, including connect and
+client-build failures, which are conservatively charged.
+
+Each policy requires `workspace_id`, `use_case`, `model` (`gpt-6-luna`),
+`model_revision` (an operator-maintained cache epoch), `policy_version`,
+`contract_digest` (the `sha256:`-prefixed lowercase-hex SHA-256 digest of the
+`serde_json::to_vec` serialization of the typed contract, e.g. `sha256:`
+followed by 64 `0-9a-f` characters), `evidence_fields`,
+`evidence_ref_prefixes`, and `credential_env`. Its optional `mode` defaults to
+`off`. A bare 64-character hex string without the `sha256:` prefix, or
+uppercase hex, is rejected. The digest binds exact question names/types,
+choices, rubrics, criterion references, versions and evaluated thresholds. Consumer taxonomies remain in
+the consumer. Evidence field/reference grants can only be narrowed by a packet;
+ungranted fields/references are omitted with explicit truncation metadata.
+
+`credential_env` must name an `ORBIT_ASSISTANCE_*` host environment variable.
+That namespace is refused by the agent subprocess environment builder even in
+explicit passthrough or crew mappings. Resolve the intended project's key only
+in the adapter; config contains its reference, never its value. The fixed
+destination is `https://api.openai.com/v1/decisions`; there is no configurable
+endpoint, redirect, proxy or agent-crew route. Explicit secret-value and shared
+credential-pattern redaction run before storage and transmission. References
+are provenance strings, never fetched attachments or instructions.
+
+Live evaluation and activation still require the separate operator decision in
+the [evaluation protocol](design/decision-assistance/2_evaluation.md). This
+configuration surface does not activate either priority consumer. See the
+[service contract](design/decision-assistance/specs/service.md) for API usage,
+attempt accounting, freshness and the offline fixture command.
 
 ## `[machine]` — who this machine is
 
@@ -66,12 +160,54 @@ task_prefix = "ORB"
 | `machine.id` | written by init | No | Opaque `hm_…` identity for run ownership, workspace ownership and federated routing. |
 | `machine.name` | written by init | Yes (`--global`) | Display label: `executed_on.machine_name` on new local and claimed runs, `run_context.machine_name` in pull admission, and dashboard execution labels (full id in the tooltip). |
 | `machine.task_prefix` | written by init | No | 2–5 uppercase ASCII letters for task IDs minted here; fixed for the life of the local task store. |
+| `machine.labels` | `[]` | Yes (`--global`) | Capability labels this machine carries for tasks that require them (`["gpu", "xcode"]`). Its OS (`linux`, `macos` or `windows`) is an implicit label. See [capability labels](#capability-labels-machinelabels-and-requires_labels). |
 | `machine.host_shutdown_hold_minutes` | `180` | Yes (`--global`) | **Advanced.** Hold new unattended admissions only when a scheduled host shutdown or reboot is this many minutes away or sooner (`>= 1`). A later schedule is still reported and admission continues. |
-| `machine.worker_containment` | `warn` | Yes | `warn` runs each detached pipeline worker in a transient systemd user scope (`orbit-worker-<run_id>-<nonce>.scope`), so a runaway run is throttled or OOM-killed inside it, and launches it uncontained with a warning when no scope is available; `strict` refuses that launch; `off` never uses a scope. A boolean still loads with a deprecation warning (`true` is `warn`, `false` is `off`). See [worker containment](#worker-containment). |
+| `machine.worker_containment` | `warn` | Yes | `warn` runs each detached pipeline worker in a transient systemd user scope (`orbit-worker-<run_id>-<nonce>.scope`), so a runaway run is throttled or OOM-killed inside it. Where no scope is available it launches the worker uncontained with a warning; on macOS it runs an in-worker watchdog instead, which stops a run past the memory or process limit without kernel enforcement. `strict` refuses any launch without kernel containment, which includes every macOS launch; `off` uses neither a scope nor a watchdog. A boolean still loads with a deprecation warning (`true` is `warn`, `false` is `off`). See [worker containment](#worker-containment). |
 | `machine.worker_memory_high` | `40%` | Yes | **Advanced.** Scope `MemoryHigh=` (throttle point): bytes with optional `K`/`M`/`G`/`T`, a percentage of physical RAM, or `infinity`. |
 | `machine.worker_memory_max` | `50%` | Yes | **Advanced.** Scope `MemoryMax=` (OOM point). Same grammar. |
-| `machine.worker_tasks_max` | `4096` | Yes | **Advanced.** Scope `TasksMax=` (processes plus threads), at least 1. |
+| `machine.worker_tasks_max` | `4096` | Yes | **Advanced.** Scope `TasksMax=` (processes plus threads), at least 1. The macOS watchdog counts processes only. |
 | `machine.worker_cpu_quota` | `0` (unset) | Yes | **Advanced.** Scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` sets no CPU limit. Linux only. |
+| `machine.web_terminal.enabled` | `false` | Yes (`--global`) | Enable private dashboard browser credentials at startup. |
+| `machine.web_session.ttl` | `43200` (12h) | Yes (`--global`) | Session lifetime in seconds (`1..=604800`); restart the dashboard to apply. See [browser sessions](#browser-sessions). |
+
+### Browser sessions
+
+`machine.web_terminal.enabled` defaults to `false`. Set it to `true` in the
+global config and restart the dashboard to enable browser credentials. This
+prepares the authentication boundary for terminal routes; it does not grant
+operator capability or change authorization on existing dashboard routes.
+
+`machine.web_session.ttl` is the session lifetime in seconds, from `1` to
+`604800`, default `43200` (12 hours). The server reads both settings at startup.
+Sessions live only in memory and expire on restart, even if a browser retains
+its cookie. Cookies are HttpOnly, SameSite=Strict and scoped to `/api`.
+
+The host's private startup key is replaced atomically in
+`~/.orbit/run/web-session.secret` (0600, directory 0700). In the terminal design,
+“Orbit home” means this machine-global `~/.orbit`, just as it does for SSH
+control sockets; neither `--root` nor a workspace relocates credentials.
+Orbit's sandbox masks the whole `~/.orbit/run` tree, including temporary
+credential writes and private browser-launch documents. Insecure existing
+permissions or symlinks are refused. Only Unix hosts support this feature.
+
+`orbit web open` prints a fresh one-time URL for the running dashboard and
+opens it unless `--no-open` is given. Treat its output as a credential. The
+startup key stays on the host: the URL carries a signed random ticket valid for
+five minutes and one exchange. The page immediately removes the fragment from
+history and exchanges the ticket at `POST /api/session`. There are at most 1024
+live sessions and 4096 recently used tickets; excess exchanges fail closed.
+`web serve` and `web connect` print private URLs only to an interactive terminal,
+so redirected service logs never contain them. Browser launchers receive a
+private local redirect-file path, not the credential. These launch documents
+remain in the masked directory; their tickets expire after five minutes.
+`web connect` obtains the ticket over authenticated SSH and uses the forwarded
+local port. If ticket retrieval or the private browser launch fails, it warns,
+keeps the tunnel connected and opens the plain local dashboard URL unless
+`--no-open` is given. Existing dashboard routes remain available; features
+requiring a browser session need a fresh ticket. With `--no-open` and redirected
+stdout, it skips ticket retrieval because no browser or interactive terminal
+will consume the URL. A dashboard without the setting serves `/api/session` as
+404.
 
 ### `[machine.auto_concurrency]` — host forecast admission
 
@@ -167,20 +303,23 @@ The present-tense line is omitted when a finished drain or a no-forecast pass
 shows retained history. Shadow decisions are labelled as hypothetical; they do
 not hold admissions. With no block (off mode or an older drain), no line
 appears. JSON preserves the complete recorded block, including the profile
-source (`exact`, `without_complexity`, `base_class`,
+source (`crew`, `exact`, `without_complexity`, `base_class`,
 `heaviest_of_class`, `heaviest_on_host`, or `none`).
 
 `orbit run readiness` shows the same last-pass snapshot, CPU and memory peaks,
 and headroom in percentage points below the **current** configured admission
 limits. JSON adds `capacity.admission_forecast`, with the recorded fields,
-`task_titles`, `headroom` (`cpu_percent`, `memory_percent`,
+`task_titles`, `task_statuses` (the current status of each named task,
+including one the admission population no longer lists because it is `done`),
+`headroom` (`cpu_percent`, `memory_percent`,
 `admit_cpu_percent`, `admit_memory_percent`), and the drain that recorded it
 (`drain_run_id`, with `drain_live` false once that drain has ended). An unknown
 host capacity has unknown headroom; negative headroom means the peak exceeds
 the limit. Text names each task as `ORB-12 "title"` and prints memory in GiB.
 A pass that builds a forecast also retains it in
 `pipeline_state.drain_last_forecast`; readiness exposes the same observation
-as `capacity.last_admission_forecast`, with titles and current-limit headroom.
+as `capacity.last_admission_forecast`, with titles, current statuses and
+current-limit headroom.
 When later passes build none, both commands say so and show the retained
 forecast as `Last forecast <time> (<age> ago, from drain <run id>)`, with its
 admitted and skipped candidates, and its peaks as `Last forecast peak:`. A
@@ -204,7 +343,7 @@ its first hour as percentages of the host, one point per `bucket_minutes` (5)
 from minute 0 to +60m, each the highest minute of its bucket, so the highest
 point equals the peak whenever the peak is within the hour. It is absent when
 the host could not be measured and in records written before it was kept.
-The dashboard Drain card shows the same snapshot: forecast time, CPU and memory over the first hour as sparklines with the admit threshold dashed and the peak's minute marked (peak bars for a record without `series`), headroom, each admitted task with its profile source, and each candidate enforce held. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` when one was retained. Shadow decisions are labelled hypothetical.
+The dashboard Drain card shows the same snapshot: forecast time, CPU and memory over the first hour as sparklines with the admit threshold dashed and the peak's minute marked (peak bars for a record without `series`), headroom, each admitted task with its profile source, and each candidate enforce held. A built forecast whose drain has ended is shown as **Last forecast** history, even when it remains under `capacity.admission_forecast` and is also present in `capacity.last_admission_forecast`. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` as **Last forecast** when one was retained. That retained block is history: decisions are past and time-anchored (`Admitted at 03:59 UTC`, `Held at 03:59 UTC`, `Starvation guard protected at 03:59 UTC`), each listed task shows its current status, and when that drain has ended the block says `window ended · nothing running` only while shared occupancy (`capacity.active_leaf_runs`) is exactly zero. A positive count, such as an independent delivery holding a slot, says `window ended · other work running`; an unknown count says only `window ended`. A live or winding-down drain never shows the ended line. A live pass keeps present tense (`Admitted`, `Held`, `Starvation guard protects`). A live shadow forecast says `Would admit` and `Would hold`; a retained shadow forecast says `Would have admitted at 03:59 UTC` and `Would have held at 03:59 UTC`.
 
 `orbit run profiles --accuracy` checks the forecast itself. Each local drain
 pass under `shadow` or `enforce` that built a forecast records it at +5, +10,
@@ -226,8 +365,9 @@ passes; the shadow columns stay on shadow passes. JSON adds
 `enforce_admitted`, `gap_held` (the task ids) and `pull_held` without
 changing the existing shadow fields.
 `--since <RFC3339>`, `--drain <RUN>` and `--mode shadow|enforce` intersect to
-select a cohort; without filters the report uses all drains and modes from
-the last 30 days. Both output formats identify that selection and report
+select a cohort; without filters the report uses the newest 5000 forecasts
+of every drain and mode, whatever their age, and `--last <N>` the newest
+`N` (alone or with the other selectors). Both output formats identify that selection and report
 time. Only fully ended target minutes with measurements form error pairs.
 `pending` counts future/incomplete minutes, even with a partial measured row;
 `missing` counts ended minutes with no row. `missing` splits into `unsampled`
@@ -240,8 +380,10 @@ compatible `unmeasured` count is pending plus missing. `--json` adds the raw pai
 drain/time range does not attest source, build-budget or threshold settings:
 those are not stored in forecast rows. Per-task profiles remain a separate
 population whose sparsity and spread still limit confidence. See the
-[operator runbook](runbooks/forecast-accuracy.md). Records are kept for
-30 days and pruned by `orbit gc runs --apply`. See
+[operator runbook](runbooks/forecast-accuracy.md). Records older than 30
+days are pruned by `orbit gc runs --apply`, except the newest 10,000 forecasts with
+the host minutes they pair with, and each workspace, work class and complexity's
+newest `max(200, machine.auto_concurrency.profile_window)` deliveries. See
 [auto-concurrency §8.1](design/auto-concurrency/2_design.md#81-the-accuracy-report).
 
 Each drain also counts why its admission passes admitted nothing, in
@@ -268,10 +410,12 @@ resource throttle's memory percentage both measure non-reclaimable memory.
 
 ### Worker containment
 
-- Without a systemd user manager (containers) under `warn`, or with `worker_containment = "off"`, workers run in the caller's cgroup and each Linux Orbit process logs one warning. macOS has no systemd and runs workers uncontained without a warning.
-- `strict` starts no uncontained worker: the run reports why and how to enable a user manager or turn strict mode off, with error code `worker_containment_unavailable` (also in CLI JSON errors). The deprecated `worker_containment_strict = true` reads as `strict`, and fails config load beside `worker_containment = false`. `--strict-worker-containment` on `orbit run ship` or `orbit run auto` turns it on for one invocation; the auto coordinator passes it to leaf workers as `ORBIT_WORKER_CONTAINMENT_STRICT`.
+- Without a systemd user manager (containers) under `warn`, or with `worker_containment = "off"`, workers run in the caller's cgroup and each Linux Orbit process logs one warning. macOS uses a watchdog in each running worker under `warn`: once per second it sums `phys_footprint` across the tracked process tree and its owned sessions, and counts processes (not threads). Above `machine.worker_memory_max` or `machine.worker_tasks_max`, it records a bounded snapshot of the eight largest consumers (command, PID/start key, memory and CPU rate), sends descendants SIGTERM, then SIGKILL after one second, records the run as failed, and terminates the worker last. The watchdog survives the submitting CLI exiting. `off` disables it. Memory percentages resolve against physical RAM; `infinity` disables only the memory ceiling. The five-second profile sampling cadence stays unchanged.
+- `strict` retains its kernel-enforced meaning and refuses macOS watchdog launches. It starts no uncontained worker: the run reports why and how to enable a user manager or turn strict mode off, with error code `worker_containment_unavailable` (also in CLI JSON errors). The deprecated `worker_containment_strict = true` reads as `strict`, and fails config load beside `worker_containment = false`. `--strict-worker-containment` on `orbit run ship` or `orbit run auto` turns it on for one invocation; the auto coordinator passes it to leaf workers as `ORBIT_WORKER_CONTAINMENT_STRICT`.
+- macOS `orbit doctor` and submission notes report **watchdog**, never kernel containment. It does not implement `worker_memory_high` throttling or `worker_cpu_quota`. One-second polling reduces overshoot compared with the five-second telemetry interval but cannot prevent fast allocations between checks. A daemon that calls `setsid` after leaving the tracked tree, an unseen short-lived session, and descendants of an escaped process are not found. Unreadable snapshots skip a check; the watchdog cannot survive its own worker being killed or a host failure. It is a best-effort watchdog, not a kernel security boundary.
 - Every Linux worker, contained or not, starts with an `oom_score_adj` of at least 500, inherited by everything it runs, so a host-wide OOM kills a worker before the user systemd manager (100) or the drain that launched it. It is not configurable; scope units take no `OOMScoreAdjust=`, so the worker sets it on itself before `systemd-run` execs it.
 - `machine.worker_cpu_quota` adds `CPUQuota=` to each scope, so one run cannot take every core. Only an unsigned integer loads, with no upper bound. `orbit doctor`'s `worker-containment` row reads `info` while it is unset and `ok` once it is set. systemd enforces it only where the user manager delegates the cpu controller; elsewhere the property is accepted and not enforced.
+- A macOS watchdog breach names top-consuming child commands and memory bytes in `orbit run show`. The same snapshot is kept with the run as resource evidence, one bounded record per run until that run is deleted, and survives worker termination; `orbit run show --json` returns it under `worker_resource_limit`.
 - A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. A run interrupted because its worker vanished names the worker's exit and scope evidence instead ([stuck job runs › How the worker ended](runbooks/stuck-job-runs.md#how-the-worker-ended)). Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
 - Admitted names reach the contained worker through its environment, not the `systemd-run` command line. Orbit passes each name as `--setenv=NAME` with no value. systemd (211 and later, including 259) copies the value from the wrapper process, which already holds the allow-listed environment. That includes pass-listed provider credentials and clock-file defaults. A toolchain `PATH` override, an explicit removal, and the workspace allowlist are unchanged. Agent subprocesses still start from a cleared environment.
 
@@ -291,36 +435,116 @@ provider_limit_max_used_pct = 90
 provider_limit_overrides = []
 provider_limit_budgets = []
 provider_limit_explicit_crews = "wait"
+crew_selection = "static"
+usage_pressure_cap = 8
+usage_pressure_strength = 1.0
+crew_performance_types = []
+# [workflow.type_complexity_crews.<type>] <tier> = [...]  (unset)
+crew_performance = "off"
+crew_performance_strength = 3
+crew_performance_cap = 4
+crew_performance_window_days = 30
 ```
 
 | Key | Default | What it does |
 |---|---|---|
-| `workflow.base_branch` | `main` | **Advanced.** Fallback base branch for ship, auto and pilot. The workspace registry's value (`orbit workspace show`) wins; `--base <branch>` overrides both. For a two-branch repo, register with `--base-branch agent-main`. |
+| `workflow.base_branch` | `main` | **Advanced.** Fallback base branch for ship, auto and pilot. The workspace registry's value (`orbit workspace show`) wins; `--base <branch>` overrides both for the ship target only and does not change the provider boundary guard. For a two-branch repo, register with `--base-branch agent-main`. The provider boundary guard's baseline for the primary checkout is the workspace base branch (the registered value, else `workflow.base_branch`): a primary left on another branch is tolerated with a warning while it stays put, and moving it anywhere but back onto the base branch during a run fails that run with `primary_checkout_drift`. |
 | `workflow.default_crew` | see [resolution](#resolution-precedence) | Crew for a task with no `crew`. Must name a defined crew. |
 | `workflow.system_crew` | — | **Deprecated, ignored.** Loads with a deprecation warning for one release; `config get`/`set` refuse it. System work draws from the complexity pools instead: see [system work](#system-work-draws-from-the-complexity-pools). Delete the key. |
 | `workflow.low_complexity_crews` | `[]` | Pool a crew-less `low` task draws from, and the task pilot and PR auto-fix while their [purpose pools](#purpose-crew-pools) are unset; empty uses `default_crew`. See [pools](#automatic-crew-pools-by-complexity). |
 | `workflow.medium_complexity_crews` | `[]` | The same, for `medium`; step-failure and PR conflict recovery draw from it too while `workflow.purpose_crews.failure_recovery` is unset. |
 | `workflow.hard_complexity_crews` | `[]` | The same, for `hard`. |
 | `workflow.xhard_complexity_crews` | `[]` | The same, for `xhard`. |
-| `workflow.purpose_crews.<purpose>` | `[]` | Weighted pool for one purpose of work (`task_pilot`, `failure_recovery`, `auto_fix`, `baseline_red_repair`, `sweep_tasks`, `explorer`). Unset or `[]` keeps the purpose's earlier route. `final_recovery` (default `["sol:100", "opus:20"]`, `[]` disables it; see [final recovery pool](#final-recovery-pool)), `review` and `pre_landing_review` (see [automatic review](#review-and-operation--automatic-review)) keep their own rules. See [purpose crew pools](#purpose-crew-pools). |
+| `workflow.type_complexity_crews.<type>.<tier>` | unset | Pool a task of [type](#crew-performance-types) `<type>` at complexity `<tier>` draws from instead of `workflow.<tier>_complexity_crews`. See [type pools](#type-pools-by-task-type-and-complexity). |
+| `workflow.purpose_crews.<purpose>` | `[]` | Weighted pool for one purpose of work (`task_pilot`, `failure_recovery`, `auto_fix`, `baseline_red_repair`, `sweep_tasks`, `explorer`, `visual_review`). Unset or `[]` keeps the purpose's earlier route; `visual_review` then draws from the task's complexity pool, in both cases keeping only crews whose executor declares `image_input` and that do not set `vision = false`. `final_recovery` (default `["sol:100", "opus:20"]`, `[]` disables it; see [final recovery pool](#final-recovery-pool)), `review` and `pre_landing_review` (see [automatic review](#review-and-operation--automatic-review)) keep their own rules. See [purpose crew pools](#purpose-crew-pools). |
 | `workflow.provider_limit_max_used_pct` | `90` | **Advanced.** Admission skips a crew while a live usage window of its provider or model is exhausted or used at or above this percent (`1`–`100`; `100` skips only on exhaustion). See [provider usage limits](#provider-usage-limits). |
 | `workflow.provider_limit_overrides` | `[]` | Per-provider thresholds replacing the one above, each `provider:percent` (`["claude:80", "grok:100"]`) or `provider:off` (`["codex:off"]`, record readings without gating admission). One entry per provider, percent `1`–`100`, an alias such as `anthropic` stored as its provider. An entry may instead name a crew that sets [`env`](#per-crew-credentials-env) (`opus-credits:off`), its own account. |
 | `workflow.provider_limit_budgets` | `[]` | **Advanced.** Rolling budgets for providers that report no usage, each `provider:<amount><usd\|tokens>/<n><h\|d>` (`["grok:30usd/5h"]`), or for one crew that sets [`env`](#per-crew-credentials-env) (`opus-credits:200usd/30d`). See [budgets](#budgets-for-providers-that-report-no-usage). |
 | `workflow.provider_limit_explicit_crews` | `wait` | **Advanced.** A task whose explicit crew is limited: `wait` keeps it in the backlog; `pool` draws from the unlimited members of its complexity pool. |
-| `workflow.auto_ship` | `false` | Opt this workspace in to `orbit run ship-sweep`, the cross-workspace unattended ship command (skipped with `auto_ship_disabled` while `false`). The seeded `ship-sweep` routine ignores this key; its `enabled:` flag is its only switch. Neither grants `--complete` or `--approve-proposed`, and a `no-auto-approve` task is never auto-approved by either flag's drain or the CI sweep. |
+| `workflow.crew_selection` | `static` | **Advanced.** How task creation, complexity re-rate and admission draws weigh pool members: `static` uses the configured weights; `usage_pressure` scales each by its crew's weekly usage pressure and re-draws a system-chosen crew at admission. This is the policy key; the `crew_selection` object in `orbit run show` and run input is the recorded draw. See [usage-pressure draws](#usage-pressure-draws). |
+| `workflow.usage_pressure_cap` | `8` | **Advanced.** Under `usage_pressure`, the weight multiplier is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
+| `workflow.usage_pressure_strength` | `1.0` | **Advanced.** Under `usage_pressure`, the exponent applied to pressure before the cap. A number of at least `0`; `0` disables weighting and the admission re-draw. |
+| `workflow.crew_performance_types` | `[]` | **Advanced.** Ordered task types for the implementer scorecard's by-type matrix, each a `[[workflow.crew_performance_types]]` table with `name`, `tags` and `paths`. See [crew performance types](#crew-performance-types). |
+| `workflow.crew_performance` | `off` | **Advanced.** How task creation, complexity re-rate and admission draws weigh pool members by crew performance: `off`, `absolute` (toward the crew that scores best on the task's type), `comparative` (toward the type each crew does best against its own mean), `shadow_absolute` or `shadow_comparative`. Shadow computes and records the same factor and does not apply it, so the draw matches `off` apart from usage pressure. Independent of `workflow.crew_selection`; when a live mode is on, the two factors multiply. Only `off` makes the seeded refresh routine no-op without scanning. See [performance-weighted draws](#performance-weighted-draws) and [crew performance snapshot](#crew-performance-snapshot). |
+| `workflow.crew_performance_strength` | `3` | **Advanced.** `k` in the performance factor `clamp(exp(k × advantage / 100), 1/cap, cap)`. A number of at least `0`; `0` disables the factor. |
+| `workflow.crew_performance_cap` | `4` | **Advanced.** The performance factor is clamped to `[1/cap, cap]`. A number of at least `1`; `1` leaves every weight as configured. |
+| `workflow.crew_performance_window_days` | `30` | **Advanced.** Evidence window in days (`1`–`90`) the crew-performance snapshot is built from. Values outside that range are refused. |
+| `workflow.auto_ship` | — | **Deprecated, ignored.** The ship sweep it opted into was removed. Loads with a deprecation warning; `config get`/`set` refuse it. Dispatch with `orbit run auto` drains or `orbit run ship`, and delete the key. |
 | `workflow.required_validation_commands` | `[]` | Commands every delivered candidate must pass before push or merge. Empty runs no required check. See [required validation](#required-validation). |
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff: `review` waits for an operator's **Approve handoff**; `done` authorizes it on acceptance and lands it through `task_landing_pipeline`, rechecking this key before the merge. |
 | `workflow.admission_affinity` | `band` | **Advanced.** How this owner orders admission against the live executor census, so each executor takes work only it can run first. `band`: within a dispatch band (critical, then corrective or expiring, then the rest), work only the requester can run leads, ahead of priority. `priority`: it leads only within a priority. `off`: the canonical band, priority, expiry and age order. Applies to pull admission and the owner's local drain alike. See [task pull](design/distributed-drain/specs/task-pull.md#executor-census-and-affinity). |
 | `workflow.unlocked_context_paths` | `["**/*.md"]` | Path globs whose `context_files` entries take no context lock. See [unlocked context paths](#unlocked-context-paths). |
+| `workflow.lock_modes` | `[]` | **Advanced.** Ordered `[[workflow.lock_modes]]` tables, each a `pattern` regex and a `mode` of `exclusive` (default) or `shared`. An overlap between two footprints at a shared path does not block admission. See [footprint lock modes](#footprint-lock-modes). |
 | `workflow.unlocked_path_validation_commands` | `[]` | Commands a repaired candidate runs instead of the full required list when its tree differs from the run's last fully validated tree only in `workflow.unlocked_context_paths`. Empty always runs the full list. See [revalidating an unlocked-path repair](#revalidating-an-unlocked-path-repair). |
 | `workflow.generated_paths` | `{}` | Generated files, as path glob = regenerate command. Conflict recovery regenerates a conflicting match instead of merging it. See [generated paths](#generated-paths-are-regenerated-not-merged). |
 | `workflow.light_delivery_paths` | `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]` | Path globs a candidate must change only within for a `skip-review` or `skip-validation` task to skip agent review or local validation. A leading `!` excludes. `[]` disables both tags. See [light delivery](#light-delivery-skip-review-and-skip-validation). |
+| `workflow.test_paths` | `["**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**", "**/testdata/**", "**/*_test.*", "**/*.test.*", "**/test_*.*", "**/*_spec.*", "**/*.spec.*"]` | **Advanced.** Path globs whose changed lines count as tests in landed-delivery diff stats. See [landed diff classification](#landed-diff-classification). |
+| `workflow.non_code_paths` | `["docs/**", "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.lock", "**/*.csv", "**/*.golden", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.webp", "**/*.svg", "**/*.ico", "**/LICENSE*"]` | **Advanced.** Path globs whose changed lines count as other (docs, config, data, assets) in landed-delivery diff stats; everything else is code. See [landed diff classification](#landed-diff-classification). |
+| `workflow.review_skip_tags.<tag>.paths` | unset | Path globs (same syntax as `workflow.light_delivery_paths`; `["**"]` allowed) a candidate carrying `<tag>` must change only within to skip agent review. See [review-skip tags](#review-skip-tags-workflowreview_skip_tags). |
+| `workflow.review_skip_tags.<tag>.guard` | unset | Optional repository-relative executable, read from the delivery's base revision, that must exit 0 (with the base and head as its first two arguments) for `<tag>` to skip agent review. |
+| `visual_review.manifests` | `[]` | Repository-relative view manifests a `verify-mock-ui` task's `mocks/<view>[.<state>][.<theme>][.<width>].<ext>` names are validated against at promotion to backlog and at delivery admission, read at the base revision. Empty refuses such a task with `no_view_manifest`. `orbit visual capture --task <ID>` reads the same manifests from the working tree to render each mock's view from the current checkout (its implementer self-check, available in every mode). |
+| `visual_review.default_width` | `1440` | Width a mock name with no width part means; also the only width a non-responsive view allows. |
+| `visual_review.mode` | `"off"` | `off`, `shadow` or `live`. Not `off`: a `verify-mock-ui` delivery runs `visual_capture`, `visual_checks`, the comparison review and its in-line verification (unless `visual_review.reviewer = false`), and `visual_settle` after required validation. Capture checks the final candidate out detached, captures each mock at the digests frozen at admission, and attaches `visual/<mock-name>/capture.<ext>`, `visual/<mock-name>/side-by-side.<ext>` and `visual/capture.json` (system-written; agent and operator writes under `visual/` are refused). The checks record the workspace's UI rules plus `render_timeout`, `setup_failed`, `image_over_budget`, `off_loopback_request`, `color_scheme_leak` and `unstable_view` in `visual/checks.json`; settle records `stale_capture` and `mock_changed` in `visual/settle.json`. In `shadow` nothing blocks and nothing is filed. In `live` each confirmed comparison finding gets a disposition from `visual_review.block_at` and `visual_review.file_at`, and the code reviewer before landing receives them in its manifest's `visual_findings` and answers each in its report's `visual_resolutions` (`fixed`, `disputed` or `unfixed`). `visual_recapture` runs before initial and bounded re-review landing attempts: live delivery requires complete evidence for every budgeted mock (the first `visual_review.max_mocks` by artifact name) at the final head, even when the initial review found nothing. It recaptures the candidate when a review commit changed it, records each finding's resolution in `visual/review.json` and the recapture under `visual/recapture/`, and holds the run (`delivery_visual_review_unresolved`) while a blocking finding is unfixed, marked fixed without successful recapture or with its check still failing, or disputed and not yet accepted by an operator with `orbit visual accept-dispute --task <ID> --finding <finding-id> --reason <why>` (refused in managed runs and claimed workers); resume the held run after accepting. After landing, `visual_landed` files each unfixed finding at or above `file_at` and each accepted-dispute blocking finding as a proposed `visual-review` bug `spawned_from` the delivered task, with the mock, capture and side-by-side attached and a `finding_verified` entry; findings below `file_at` are only recorded. A delivery with no review before landing (`review.timing = "off"` without `review.selective_before_landing.mode = "enforce"`), or whose review gate ran no reviewer (selective `not_required`, a review-skip tag), files its blocking findings as `high` follow-ups instead, and config load warns when `live` is set without a review layer. A host without a verified browser kit records `not_established` with its reason (`browser_kit_missing`, `kit_pin_mismatch`, `setup_failed`, `capture_failed`), shown in `orbit run show`, `orbit task show` and the PR body, never a pass. The PR body's screenshots section leads with each mock's side-by-side. Shadow claimed runs capture against the owner's settings, manifests and mock digests; mismatched captures are refused with `visual_capture_mismatch`. Claimed live delivery is held as `visual_live_claim_unsupported` until negotiated owner-verifiable final-candidate resolution exists. Live obligations/records require the Breaking layout 6 fence before use; upgrade must refuse incompatible live clients before mutation. |
+| `visual_review.block_at` | `"high"` | In `live`, lowest confirmed-finding severity that blocks landing until it is fixed (and the recapture's checks pass) or its dispute is accepted: `critical`, `high`, `medium`, `low` or `never` (nothing blocks). |
+| `visual_review.file_at` | `"low"` | In `live`, lowest confirmed-finding severity a delivery that lands without fixing it files as a follow-up: `critical`, `high`, `medium`, `low`, `nit` or `never`; lower findings are recorded only. Load refuses a `file_at` above `block_at`, naming both keys. |
+| `visual_review.max_mocks` | `12` | Most mocks one delivery captures (1–100), by artifact name; the rest are recorded as over budget. In `live` the over-budget mocks are neither captured nor required at the final head, so they do not hold the delivery. |
+| `visual_review.reviewer` | `true` | Run the mock comparison reviewer and its in-line verifier after the checks. `false` keeps capture and checks only. The reviewer is drawn from `workflow.purpose_crews.visual_review` filtered to `image_input` crews (else the task's complexity pool under the same filter), seeded by task and candidate; the verifier is a different such crew than the reviewer's and the implementer's, with one escalation crew from the next tier for low-confidence verdicts. Findings, verdicts and verified severities are recorded in the system-written `visual/review.json` and scored for the reviewer under purpose `visual_review`; in `shadow` nothing is filed, nothing blocks and nothing is given to the code reviewer; `live` is described under `visual_review.mode`. A visual review experiment arm overlays this key (it is in the experiment overlay allowlist); a landed task enrolled in one gets the post-landing comparison of its landed head (`pass: measure`, recorded under `visual/measure/` with purpose `visual_measure`), whose reviewer and verifier invocations are excluded from the experiment's cost. With no image-capable crew the review records `not_established: no_vision_crew`. |
+| `visual_review.max_images` | `32` | Most images one review invocation is sent (2–200), canary included, also capped by the drawn executor's `spec.image_input.max_images`. Each mock costs two images (mock and capture); the side-by-side is sent only when both would not fit. |
+| `visual_review.max_image_tokens` | `48000` | Estimated image tokens for one review invocation (1–1000000), checked before dispatch. Claude models estimate at width × height / 750 per image; other providers use a per-image constant. What does not fit is listed as not shown in `visual/review.json`. |
+| `visual_review.max_findings` | `15` | Most findings accepted from one comparison review (1–100); extras are dropped and counted, as are findings whose evidence names an image outside the delivery's capture or a region outside its image (`invalid_evidence`). |
+| `visual_review.require_established` | `false` | `true` holds a delivery whose capture is not established (`delivery_visual_not_established`). To release it, clear the setting and resume the held run (settlement rereads it); a fresh delivery on a host with a verified browser kit captures it. |
+
+### Crew performance types
+
+`workflow.crew_performance_types` is an ordered list of task types, one `[[workflow.crew_performance_types]]` table per type with a `name` and at least one of `tags` or `paths`:
+
+```toml
+[[workflow.crew_performance_types]]
+name = "review"
+tags = ["no-diff-expected"]
+
+[[workflow.crew_performance_types]]
+name = "ui"
+tags = ["ui"]
+paths = ["web/**"]
+```
+
+A task takes the first type whose `tags` it carries (any of) or whose `paths` globs match any of its `context_files` (any of); a task matching none is `other`. Names must be unique and non-empty, `other` is reserved, and an entry with neither `tags` nor `paths` is refused with a config error naming the entry. The list is a lens: the scorecard classifies historical tasks with the current list at scan time, so editing it re-sorts history. Orbit ships no types beyond `other`, so an empty list puts every task in `other`. The matrix is read with `orbit agents scorecard --role implementers --by-type`; under [`workflow.crew_performance`](#performance-weighted-draws) a draw classifies the task with the same list.
+
+### Crew performance snapshot
+
+A crew draw must never run the scorecard scan, so the by-type cell matrix is persisted as a per-workspace snapshot: one row per `(crew, model, tier, type)` cell with its raw score, `n`, crew mean and shrunk score, plus the evidence window, a hash of the type list it was built with, and `computed_at`. The seeded `crew_performance_refresh` routine (hourly, seeded enabled) runs `job:crew_performance_refresh_pipeline` to rebuild it; each refresh replaces the previous snapshot atomically. Run it on demand with `orbit run job crew_performance_refresh_pipeline`.
+
+While `workflow.crew_performance` is `off` (the default) the refresh writes no snapshot, records `skipped: crew_performance_off`, and skips the scan (the hourly routine still records a job run). `off` is the only mode that skips the scan. `absolute`, `comparative`, `shadow_absolute` and `shadow_comparative` all build snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`). A stored snapshot is usable only while fresh: a reader gets the typed reason `missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a different `workflow.crew_performance_types` list) otherwise. `orbit run readiness` prints one line for the snapshot — its computed time, window and type list, or the unusable reason — and `--json` carries the same under `crew_performance`. [Performance-weighted draws](#performance-weighted-draws) read it and treat every unusable reason as factor 1.
 
 ### Unlocked context paths
 
 `workflow.unlocked_context_paths` lists workspace-relative globs: `*` matches within one path component and `**` spans components, so `**/*.md` is every Markdown file and `docs/**` is everything under `docs/`. A `context_files` entry whose path matches stays in the task's context, and the agent still receives it, but takes no context lock. Local drain waves, readiness, backlog admission, `orbit task eligible`, lock contention and lock reservations skip it, so two tasks that share only a design doc beside their own code run together and landing reconciles the text by merge and conflict recovery.
 
 A task whose every entry matches, such as a rewrite of one document, still locks them all, because two rewrites of one file are where a merge can silently produce contradictory text. A mixed task touching that file is not held back by the rewrite, since it does not request the file. Leave build and CI definitions (`Makefile`, `.github/workflows/*.yml`) and code out of the list: they define the gates, so a bad merge there breaks every delivery. `[]` locks every entry, as before the setting existed. Owner pull admission still checks a remote claim's full declared footprint. The value is read when an Orbit process opens the workspace.
+
+### Footprint lock modes
+
+Two tasks whose `context_files` overlap normally cannot run together. The second waits for the first, whether it is a local drain wave, a pull admission, a reservation or a claim. `workflow.lock_modes` lets you name paths where an overlap is allowed. These are files that merge cleanly or are regenerated, such as append-only `mod.rs` registration lists or a generated catalog:
+
+```toml
+[[workflow.lock_modes]]
+pattern = '(^|/)mod\.rs$'
+mode = "shared"
+
+[[workflow.lock_modes]]
+pattern = '^crates/orbit-core/assets/auto_tasks/body-history\.json$'
+mode = "shared"
+```
+
+- Each `pattern` is a Rust [`regex`](https://docs.rs/regex/latest/regex/#syntax) searched for in the selector's normalized, workspace-relative anchor path (`symbol:` selectors use their backing file). Anchor patterns with `^` and `$` to match the whole path.
+- `mode` is `exclusive`, the default and the behaviour without the setting, or `shared`. The first matching entry wins, in config order, and a path no entry matches is `exclusive`. So an earlier `exclusive` entry can carve an exception out of a later `shared` one.
+- The mode applies at the **overlap point**. That is the narrower selector's anchor, or the common anchor when the two anchors are equal. `file:a/mod.rs` against `file:a/mod.rs` is waived when `mod.rs` is shared. `dir:a` against `file:a/mod.rs` is waived too, because they meet at the shared file. `dir:a` against `file:a/lib.rs` still blocks, because `lib.rs` is exclusive. A task stays blocked while any of its overlaps is not waived, and admission diagnostics name only the overlaps that still block.
+- `module:` and `command:` selectors have no path, so they always lock exclusively.
+- Every footprint check that admits or defers work applies the setting. That covers local drain waves, readiness, backlog admission, `orbit task eligible`, lock reservations, owner pull admission, owner-wave admission, execution-claim checks and the in-progress footprint guard.
+- A shared path trades prevention for repair. Two tasks may both change it, and the second to land resolves the conflict through `base_conflict`, a rebase or a landing repair. Keep build and CI definitions and most code exclusive.
+
+An invalid regex, an empty pattern or an unknown mode fails config validation, and the error names the entry by position and pattern. The setting belongs to the owner. A follower never sends it and it is not part of the request fingerprint, so an owner or follower that predates it treats every overlap as exclusive. Orbit ships no shared patterns. The value is read when an Orbit process opens the workspace.
 
 ### Revalidating an unlocked-path repair
 
@@ -358,6 +582,110 @@ On a distributed claim, the owner captures its list in the claim's validation ga
 
 `review.baseline_commands` are the reviewer's own checks: they run only when a review runs. Tag a task with both tags to skip review and every local check.
 
+### Landed diff classification
+
+Each landed delivery records the lines it added and deleted, and the files it changed, in three classes for Analytics › Metrics › Lines changed. A changed path matching `workflow.test_paths` counts as tests; otherwise one matching `workflow.non_code_paths` counts as other; anything else counts as code. Both lists use the `workflow.light_delivery_paths` glob syntax (`*` within a component, `**` across components, a leading `!` excludes), and a list with no positive glob matches nothing. The defaults are language-neutral naming conventions (test directories and `*_test.*`, `*.test.*`, `test_*.*`, `*_spec.*`, `*.spec.*` files; docs, Markdown, data, lock files, goldens and images). Set them to your repository's layout:
+
+```toml
+[workflow]
+test_paths = ["**/tests/**", "e2e/**"]
+non_code_paths = ["docs/**", "**/*.md", "website/**"]
+```
+
+A rename counts its changed lines only, and a binary file counts as a changed file with no lines. A change to either list applies to deliveries recorded after it; rows already recorded keep their classes.
+
+### Review-skip tags: `workflow.review_skip_tags`
+
+A workspace (or the global config, layered per tag like `[workflow.tag_instructions]`) can map its own tag to a review skip for low-risk work that touches paths outside `workflow.light_delivery_paths`:
+
+```toml
+[workflow.review_skip_tags.comment-hygiene]
+paths = ["crates/**"]
+guard = "scripts/check-comment-only-diff.sh"
+```
+
+A candidate skips every agent review layer (before-PR, before-landing and after-landing delivery-code-review sampling) for a mapped tag only when every task it delivers carries the tag, every path it changes since its synchronized base matches that tag's `paths` (the `workflow.light_delivery_paths` glob syntax, `!` excludes; `["**"]` allows every path), and the guard, when set, exits 0. Any other candidate gets normal review. Each decision is recorded once per candidate in the task's history as `light_delivery_applied` or `light_delivery_ignored`, naming the tag, its profile key and the failed condition (a task without the tag, the first path outside `paths`, the guard's exit status, or a guard missing at the base). Check them with `orbit task show`.
+
+The guard is a repository-provided executable: Orbit only runs it, so a language-specific check (for example, that the non-comment content is unchanged) lives in the workspace. It is read from the delivery's base revision, never the worktree, so a delivery cannot weaken its own guard, and it runs the way required validation commands run (same environment and sandbox rules), in a throwaway detached checkout of the candidate's head commit (so it sees the candidate's `HEAD` and files, wherever the owner's own checkout stands, and the owner's branch and edits are untouched), with the candidate's base and head commits as its first two arguments and as `ORBIT_REVIEW_SKIP_BASE` / `ORBIT_REVIEW_SKIP_HEAD` (the tag as `ORBIT_REVIEW_SKIP_TAG`).
+
+Delivery automation dry runs defer mapped-tag decisions, including profiles without a guard: they run no guard and record no task history. Unless a before-PR certificate or the built-in `skip-review` rule already covers a landing, the preview counts it as work requiring review. Real evaluation applies the mapped profile and records its decision, so it may find less review work than the preview reports.
+
+Mapped tags have the same protection as `skip-review`: only filing a task (including an auto-task definition) or an operator update may add one; an agent's update that adds one is refused, and removal is always allowed. A mapped tag skips review only, never validation: required validation, workspace gates and hosted CI still run. The built-in `skip-review` and `skip-validation` tags keep their behaviour above and cannot be remapped. Config validation refuses a mapping that reuses a built-in tag name, has an empty or malformed `paths`, or a `guard` that is absolute or contains `..`, naming the key. `orbit config show` lists the effective mappings under `Review skip tags:` (and as `review_skip_tags` in `--json`).
+
+The seeded template includes one mapping for each shipped default auto-task's `auto-task:<name>` provenance tag, all limited to the documentation/CI paths shown above. The template is not migrated into existing config files: `orbit init` leaves an existing config alone unless run with `--force`. To opt in on an existing install, add the same tables to its `config.toml`:
+
+```toml
+[workflow.review_skip_tags."auto-task:agent-guidance-audit"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:auto-task-yield-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:crew-ladder-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:architecture-audit"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:backlog-hygiene"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:delivery-code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:dependency-freshness"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:ci-budget-watch"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:code-health-sweep"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:doc-duties"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:escape-to-guard"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:flaky-test-hunt"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:friction-curation"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:full-code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:path-risk-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:qa-full-sweep"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:qa-sweep"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:run-failure-patterns"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:security-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:structure-sweep"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:suppression-ratchet"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+```
+
+These mappings apply only to the auto-task that carries its provenance tag. Do not map finding tags such as `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`: fixes filed by those reviews must keep normal agent review. A wider mapping for a future auto-task should remain disabled unless its config includes an appropriate repository-specific guard.
+
+On a distributed claim, the owner captures its mappings in the claim's validation gates alongside `workflow.light_delivery_paths`. The follower leaf judges its candidate against that copy, guard included, and the owner judges the handed-off candidate again (guard included) when it accepts, recording the decision in the task's history. An owner too old to capture mappings leaves the leaf with none, so no mapped tag applies.
+
 ### Generated paths are regenerated, not merged
 
 `workflow.generated_paths` maps a generated file's path glob to the command that rebuilds it:
@@ -379,11 +707,14 @@ Only the global file, and only when it is absent (or under `--force`):
 
   | Detected | `low` | `medium` | `hard` | `xhard` |
   |---|---|---|---|---|
-  | codex + claude | `["haiku", "luna"]` | `["sol", "sonnet"]` | `["opus"]` | `["opus", "astra"]` |
-  | codex only | `["luna"]` | `["sol"]` | `["sol"]` | `["astra"]` |
+  | codex + claude | `["haiku", "luna"]` | `["terra", "sonnet"]` | `["sol", "opus"]` | `["opus", "astra"]` |
+  | codex only | `["luna"]` | `["terra"]` | `["sol"]` | `["astra"]` |
   | claude only | `["haiku"]` | `["sonnet"]` | `["opus"]` | `["opus"]` |
 
-  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`, and a Google CLI's crew to `low` (`antigravity` when `agy` is detected, otherwise `gemini`). Other families leave the pools `[]`, which route to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
+  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full` to `low`, `medium` and `hard`. With codex, claude, grok, `agy` and `muse` all detected that gives `low = ["haiku", "luna", "gemini-flash", "muse-spark"]`, `medium = ["terra", "sonnet", "grok", "muse-wonder"]`, `hard = ["sol", "opus", "argon", "muse-wonder-full"]` and `xhard = ["opus", "astra"]`. Copilot leaves the pools as they are, and an empty pool routes to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
+- every [purpose pool](#purpose-crew-pools), so no route is an invisible default: `task_pilot` and `auto_fix` copy `low`, `failure_recovery` and `review` copy `medium`, and `final_recovery` names whichever of `sol`, `grok` and `muse-wonder` are enabled (else `opus`). `pre_landing_review`, `baseline_red_repair`, `sweep_tasks` and `explorer` are written as `[]`, each with a comment naming the route it keeps: `pre_landing_review` uses the review pool, `baseline_red_repair` and `sweep_tasks` use the task's complexity pool, and `explorer` offers no read-only explorers.
+
+These choices apply to newly seeded global configurations. Existing crew tables and complexity or purpose pools keep their explicit values; workspace overrides keep their normal precedence. To use the new defaults in an existing configuration, edit those choices explicitly.
 
 Interactive init asks for the default crew by name, offering only enabled crews. It no longer writes or asks for `workflow.system_crew`: system work draws from the pools. With no supported CLI, every crew is written disabled and `default_crew` stays unset, so it resolves to the disabled `opus` and agent dispatch refuses until you run `orbit config set crews.<name>.enabled true`; deterministic jobs such as store retention still run. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
 
@@ -439,9 +770,9 @@ in text, including while admission is healthy or the throttle is disabled;
 
 On macOS, [XNU caches host statistics after a shared query quota is reached](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c). Identical CPU tick counters do not mean zero utilization. The shared history retains both ends of the last measured window, so repeated kernel counters reuse a real delta without refreshing the baseline's timestamp. Missing, stale or future-dated baselines require a new sampling pair across the one-second cache window without polling or increasing the query rate; a failed native read remains `unknown` with reason `unavailable`.
 
-Every watched path takes part in admission, but `GET /api/host/resources` reports one `disk` object (highest known percentage, severity and path; `null` when none is known), and a disk hold names only the highest held path. That endpoint covers every active registered local checkout whatever `?workspace=` says (or with none), never remote hosts, and returns severity, sample time and age, thresholds, verdict and reason. It also carries `provider_limits`, the same live readings as readiness's `provider_limits` (below), read through the default workspace's effective config for thresholds and crew coverage, for the dashboard's top bar; the field is `null` when no workspace can be opened or the store cannot be read.
+Every watched path takes part in admission, but `GET /api/host/resources` reports one `disk` object (highest known percentage, severity and path; `null` when none is known), and a disk hold names only the highest held path. That endpoint covers every active registered local checkout whatever `?workspace=` says (or with none), never remote hosts, and returns severity, sample time and age, thresholds, verdict and reason. It also carries `provider_limits`, the same live readings as readiness's `provider_limits` (below), read through the default workspace's effective config for thresholds and crew coverage, for the dashboard's top bar, plus additive `provider_pressures` and `crew_pressures` arrays described below; these fields are `null` when no workspace can be opened or the store cannot be read.
 
-**Dashboard.** The top bar's `load` (CPU as a multiple of online cores), `mem` and `disk` chips, and an `io` chip on hosts that report disk I/O pressure, show the selected host's readings, severity and held resources ([UI design §6](design/user-interface/2_design.md#6-top-level-navigation)); they poll every five seconds and mark aging data unknown even while a request is pending. **Settings › System** shows the enable switch and each resource's high and resume marks, with source, live reading, severity and verdict: six marks for CPU, memory and disk, and, on hosts that report disk I/O pressure (Linux only), the two `io_full_*` marks as well, for eight (`cpu_light_leaves` is edited in the Effective view). Its edits share the Effective view's `PUT /api/config/keys/{key}` validation but write the **global** file by default, because this host's chips and admission read global settings; a workspace override is marked and wins for that workspace's runtimes.
+**Dashboard.** The rail foot's host block shows the selected host's `load` (CPU as a multiple of online cores, or `cpu` as a busy percentage when `cpu_source = "utilization"`), `mem` and `disk` readings, and an `io` row on hosts that report disk I/O pressure, with severity and held resources ([UI design §6](design/user-interface/2_design.md#6-top-level-navigation)); they poll every five seconds and mark aging data unknown even while a request is pending. The top bar shows one warning chip only while a reading is elevated or worse. **Settings › Machine** shows the enable switch and each resource's high and resume marks, with source, live reading, severity and verdict: six marks for CPU, memory and disk, and, on hosts that report disk I/O pressure (Linux only), the two `io_full_*` marks as well, for eight (`cpu_light_leaves` is edited on the Workflow page). Its edits share the topic pages' `PUT /api/config/keys/{key}` validation but write the **global** file by default, because this host's readings and admission read global settings; a workspace override is marked and wins for that workspace's runtimes.
 
 ### `[workflow.task_pilot_freshness]` — when a task is piloted again
 
@@ -472,6 +803,25 @@ Task list/detail JSON and MCP expose the same `pilot_warnings` array of
 `{kind, text}` entries, and CLI readiness uses that source for warning holds.
 The dashboard drain payload omits per-finding text.
 
+The pilot checks concrete contracts required by a task's description and
+criteria against pinned source: tools and their output fields, schemas, port
+methods, config sections and authority requirements. It reads the workspace's
+repository guides for ownership rules and the recorded dependencies' scopes.
+If a required contract is absent, no dependency supplies it, and the task is
+not permitted and scoped to add it, a holding `utility_warnings` finding names
+the contract, source or tool-schema evidence, dependency coverage and a
+suggested prerequisite or criterion rewrite. It follows the existing warning
+hold and triage path. A dependency explicitly adding the contract gates
+execution through its existing edge; it needs no additional warning hold.
+
+Full task records also expose `resolvable_pilot_admission_hold`, derived from
+the current admission finding and trusted resolutions independently of
+`pilot_warnings`. A held backlog task's detail offers **Clear hold** and
+**Approve anyway**, each requiring evidence through the operator-only typed
+route. Resolved holds remove these actions. When an open pilot-admission
+decision exists, its **Decision needed** answers serve as the single action
+set instead. Promotion warnings keep their proposed-only semantics.
+
 An `--approve-proposed` drain checks freshness under the approval lock against the exact material certified by the pilot's atomic write. The pilot's OS routing tag, selectors, complexity and automatic crew redraw therefore permit approval; later tag, crew, assignment provenance, relation or configured material edits withhold it. The `no-auto-approve` opt-out always wins. Replayed writes use their recorded audit rather than the task's current values; a pending approval from an older audit without that record needs a new assessment. Approval preserves routing and native-host admission holds.
 
 ### `[workflow.mid_run_steering]` — operator comments after dispatch
@@ -495,7 +845,9 @@ With it on, `task_pr_pipeline` and `task_local_pipeline` gate `commit` ([design]
 
 Steering settings refresh at prompt and gate checkpoints. Enabling with runs in flight leaves missing watermarks absent: their gates treat post-dispatch operator comments as undelivered (or use an inherited candidate/claim baseline when present). Disabling stops recording and gating at the next checkpoint; existing watermarks and steering-round state stay inert, not deleted. Invalid config retains the last successfully resolved settings. Prefer enabling between drains; enabling does not change admission authority or turn steering on in `orbit init`. See [migration](design/mid-run-steering/specs/steering-delivery.md#migration).
 
-### `[workflow.regression_risk]` — regression-prone context files in prompts
+<a id="workflowregression_risk--regression-prone-context-files-in-prompts"></a>
+
+### `[workflow.regression_risk]` — prompt marks and task riskiness scores
 
 ```toml
 [workflow.regression_risk]
@@ -508,17 +860,71 @@ max_files = 3
 
 | Key | Default | What it does |
 |---|---|---|
-| `workflow.regression_risk.enabled` | `true` | Mark a task's regression-prone `file:` context files in its implement and review prompts. |
-| `workflow.regression_risk.window_days` | `30` | **Advanced.** Trailing days of done tasks a mark is computed over (`1`–`365`). |
-| `workflow.regression_risk.min_support` | `5` | **Advanced.** Done tasks in the window whose declared footprint named the file before it can be marked (`1`–`10000`). |
-| `workflow.regression_risk.threshold_percent` | `40` | **Advanced.** Share of those tasks, in percent, that a `regression_from` link names before the file is marked (`1`–`100`). |
-| `workflow.regression_risk.max_files` | `3` | **Advanced.** Most files one prompt marks, highest regression rate first (`1`–`20`). |
+| `workflow.regression_risk.enabled` | `true` | Whether implement and review prompts mark regression-prone backing files named by a task's `file:` or `symbol:` context selectors. This switch controls marks only; task riskiness scores remain active when it is off. |
+| `workflow.regression_risk.window_days` | `30` | **Advanced.** Trailing days of done tasks used for both task riskiness scores and prompt marks (`1`–`365`). |
+| `workflow.regression_risk.min_support` | `5` | **Advanced.** Minimum task support used for riskiness scores and required before a context file can be marked (`1`–`10000`). |
+| `workflow.regression_risk.threshold_percent` | `40` | **Advanced. Prompt marks only.** Share of a file's touching tasks, in percent, that a `regression_from` link must name before the file is marked (`1`–`100`). |
+| `workflow.regression_risk.max_files` | `3` | **Advanced. Prompt marks only.** Most files one prompt marks, highest regression rate first (`1`–`20`). |
 
-Analytics › Codebase knows which paths regress; these marks tell the agent that edits one, and its reviewer. An activity asks for marks by declaring a `regression_risk_instruction`; the shipped `agent_implement`, `agent_review_repair` and `review_reconciliation_review` do. For each canonical `file:` selector of the task, Orbit counts, among the tasks that became `done` in the trailing window and declared the file, those a `regression_from` link names, the same rate as the Regressions ranking at file grouping. The file is marked when it has at least `min_support` such tasks and at least `threshold_percent` of them regressed, so a file few tasks touched, or a hub every task touches, stays unmarked, and a fixed hotspot drops out once its regressed tasks leave the window. At most `max_files` files are marked, by rate, then regressed count, then path.
+The riskiness score is fitted on task size alone over the window's done tasks: the declared path count before a diff exists, and the lines changed once a review candidate or landed diff resolves. `min_support` is the fewest done tasks a fit needs. The Tasks row shows the score as a percentage, prefixed with `~` when some selectors name no path; when no estimate is available, the row shows no risk part. Task detail shows the score with its basis, size and how many recent done tasks of that size or larger regressed, including the reason for no estimate: **no files** (the task has no context files and no diff), **no paths** (its selectors identify no file or directory), **thin history** (too few done tasks in the window to fit), or **unavailable** (the estimate could not be computed). `window_days` and `min_support` size this score regardless of `enabled`.
 
-Marks reach the agent as `task.regression_risk` in the envelope: `window_days` and `marks`, each with `path`, `regressed` (`"N of M touching tasks"`), `nature` and `escape` (the one or two values most of the file's links record; a link without a typed classification reads `unclassified`, never a guess) and `lesson`, the newest regression task's title cut to one line, with internal task and friction IDs removed (omitted when nothing is left). The activity's `regression_risk_instruction` follows the main instruction and maps each nature and escape to one check: for example `no_test` asks the implementer for a focused regression check at the public boundary, `merge_reintroduced` to re-verify the touched area after a rebase, and `contract_drift` to update the affected docs or contract in the same diff, and the reviewer checks those categories on the marked files. With the switch off, a task without `file:` selectors, or no file qualifying, the envelope has no `regression_risk` key and the instruction is unchanged. `orbit codebase show <path>` and `orbit.codebase.show` give the tasks behind a mark.
+Analytics › Codebase knows which paths regress; these marks tell the agent that edits one, and its reviewer. An activity asks for marks by declaring a `regression_risk_instruction`; the shipped `agent_implement`, `agent_review_repair` and `review_reconciliation_review` do. For each distinct backing file named by a canonical `file:` or `symbol:` selector of the task, Orbit counts, among the tasks that became `done` in the trailing window and declared the file, those a `regression_from` link names, whether or not the link records a defect site. This is the footprint rate, not the Regressions ranking's site-attributed rate at file grouping: a task counts against every file it declared, including a task whose sites name only other files, and a task that did not declare the file never counts. A symbol-only footprint can qualify; symbols in the same file share its file-level rate and produce at most one mark for that path. The file is marked when it has at least `min_support` such tasks and at least `threshold_percent` of them regressed, so a file few tasks touched, or a hub every task touches, stays unmarked, and a fixed hotspot drops out once its regressed tasks leave the window. At most `max_files` files are marked, by rate, then regressed count, then path.
 
-Each prompt that carries marks records them on the task as a `regression_risk_marked` history event whose decision names the run, the activity, the marked paths and the window, once per run, activity and paths. A claimed follower leaf computes marks from its own records and records none, since it cannot write its owner's task. The Regressions ranking reads these events back and compares the marked paths' regression rate for tasks delivered with marks against the same paths' rate in the window before the first mark, with the counts shown ([dashboard](design/user-interface/2_design.md)). Building marks scans task metadata and the history of tasks updated in the window; a scan that fails, or a record that cannot be written, is logged and never refuses the dispatch. Settings are read when the runtime opens.
+Marks reach the agent as `task.regression_risk` in the envelope: `window_days` and `marks`, each with `path`, `regressed` (`"N of M touching tasks"`), `nature` and `escape` (the one or two values most of the file's links record; a link without a typed classification reads `unclassified`, never a guess) and `lesson`, the newest regression task's title cut to one line, with internal task and friction IDs removed (omitted when nothing is left). The activity's `regression_risk_instruction` follows the main instruction and maps each nature and escape to one check: for example `no_test` asks the implementer for a focused regression check at the public boundary, `merge_reintroduced` to re-verify the touched area after a rebase, and `contract_drift` to update the affected docs or contract in the same diff, and the reviewer checks those categories on the marked files. With the switch off, a task with neither `file:` nor `symbol:` selectors, or no backing file qualifying, the envelope has no `regression_risk` key and the instruction is unchanged. `orbit codebase show <path>` and `orbit.codebase.show` list the regressed tasks behind the Regressions ranking for that path, which are those whose recorded sites name it. A mark's regressed tasks that declared the file but record no site appear there only in the `unsited` count, and one whose sites name other files appears nowhere in that path's regression standing.
+
+Each prompt that carries marks records them on the task as a `regression_risk_marked` history event whose decision names the run, the activity, the marked paths and the window, once per run, activity and paths. A claimed follower leaf reads task metadata through its authenticated owner and records no mark events, since it cannot write its owner's task. The Regressions ranking reads these events back and compares the marked paths' regression rate for tasks delivered with marks against the same paths' rate in the window before the first mark, counting each task against its declared footprint rather than its recorded sites, with the counts shown ([dashboard](design/user-interface/2_design.md)). Building marks scans task metadata and separately reads recent done-task history. Owner metadata reads omit description, acceptance criteria, plan and execution summary, while retaining titles, footprints, attribution and regression classifications and sites. The internal metadata protocol limits each page to 128 rows and 1 MiB of serialized page data, leaving room for MCP framing under the unchanged 64 MiB transport cap. Targeted metadata reads send bounded ID selections, without listing the whole workspace. The follower accepts only complete pages with matching scan identity, counts and advancing continuations; changed scans, malformed or incomplete pages, oversized individual rows and failed owner reads make marks unavailable. It never substitutes full task bodies or partial analytics. A scan that fails, or a record that cannot be written, is logged and never refuses dispatch. Settings are read when the runtime opens.
+
+### `[workflow.crew_ladder]` — shadow trials of a cheaper crew per tier
+
+```toml
+[workflow.crew_ladder]
+mode = "off"                       # or "shadow"
+rungs = []                         # crews, cheapest first, e.g. ["haiku", "sonnet", "opus"]
+tiers = []                         # tiers that opt in, e.g. ["low", "medium"]
+explore_rate = 0.10
+margin = 5
+look_every = 10
+max_sample = 60
+exclude_types = []
+watch_window = 30
+retry_after_days = 30
+delivery_quality = "off"
+quality_grade_margin = 10
+min_grade_coverage = 0.8
+```
+
+The crew ladder is opt-in: nothing runs until `mode = "shadow"` and `tiers` names at least one tier. With `mode = "off"`, or no tiers listed, no trial is created and crew draws are unchanged; `xhard` runs only when named. The crew ladder orders crews from cheapest to most capable and asks, per complexity tier, whether the rung below the tier's current crews would hold up. A tier's **floor** is the cheapest rung that is an enabled member of `workflow.<tier>_complexity_crews` with a positive weight; its **candidate** is the rung directly below the floor. A tier with no rung in its pool, or whose floor is the bottom rung, has no candidate.
+
+With `mode = "shadow"`, each tier in `tiers` that has a candidate keeps one standing [experiment](#experiments--experiments-over-agent-treatments) owned by `system:crew-ladder`, in experiment `shadow` mode, named `crew-ladder-<tier>-<n>`. Its `control` arm has no overlay and weight `1000 × (1 − explore_rate)`; its `candidate` arm overlays the crew pool with the one candidate rung at weight `1000 × explore_rate`. The population is the tier's complexity, minus the task types in `exclude_types`. Tasks are assigned and recorded as for any shadow experiment, so no task's crew, crew source or run changes.
+
+The trials are reconciled at each delivery admission while `experiments.enabled` is true, before the task is assigned:
+
+- A tier without a trial starts one. Trials count toward `experiments.max_running`; free slots go to tiers in `tiers` order, and a start the lifecycle refuses leaves no draft behind.
+- A trial whose candidate, arm weights or population no longer match the ladder (a changed pool, `rungs`, `explore_rate` or `exclude_types`) is concluded with no winner, which files no promotion task, and a new trial starts.
+- A tier covered by a running operator crew experiment (one whose population includes the tier, or names no complexity) gets no trial, and its open trial is concluded: operator experiments come first.
+- With `mode = "off"`, open ladder trials are concluded and none start. A workspace that never set the ladder reads its experiments and writes nothing, so its draws are exactly as before.
+
+The sync and `orbit crew ladder` read the ladder, crews, complexity pools and the `experiments.enabled` / `max_running` gates from the current config on disk, as one version per pass, not from the config a long-lived runtime opened with. A runtime opened before you changed the ladder therefore neither concludes nor recreates a trial the current config still wants, and a real change (mode `off`, a new `explore_rate`, a changed pool) takes effect at the next admission from any runtime. Config that fails to load keeps the last good version. Runs already admitted keep the crew and experiment arms they froze.
+
+`orbit crew ladder` (or the read-only MCP tool `orbit.crew.ladder`, and `--json` for the same payload) shows the ladder: per tier its pool, floor, candidate, the trial with its status and would-be count (tasks assigned to the candidate arm), or why the tier has no trial (`mode_off`, `tier_not_listed`, `no_ladder_rung`, `floor_is_bottom_rung`, `operator_experiment`, `experiments_disabled`, `max_running`, or `pending` until the next delivery admission). It reads and never writes.
+
+This release runs only the report and shadow trials. `margin`, `look_every`, `max_sample`, `watch_window`, `retry_after_days`, `quality_grade_margin` and `min_grade_coverage` are validated and recorded for the later phases, which will read them; `mode = "propose"`, `mode = "auto"`, `delivery_quality = "shadow"` and `delivery_quality = "guardrail"` are refused at load.
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.crew_ladder.mode` | `off` | **Advanced.** `off` or `shadow`. `propose` and `auto` are refused at load as not available yet. |
+| `workflow.crew_ladder.rungs` | `[]` | **Advanced.** Crews, cheapest first. Each must be a defined, enabled crew, named once; an unknown or disabled crew fails load naming this key. |
+| `workflow.crew_ladder.tiers` | `[]` | **Advanced.** Complexity tiers (`low`, `medium`, `hard`, `xhard`) that may run a trial, each once. Empty means no tier runs a trial. |
+| `workflow.crew_ladder.explore_rate` | `0.10` | **Advanced.** Share of a tier's tasks assigned to the candidate arm, `0.02`–`0.25`. |
+| `workflow.crew_ladder.margin` | `5` | **Advanced.** Quality points the candidate may trail the floor by, greater than `0` and at most `100`. Recorded in each trial's hypothesis. |
+| `workflow.crew_ladder.look_every` | `10` | **Advanced.** Settled candidate tasks between a trial's looks (`1`–`1000`), no more than `max_sample`. |
+| `workflow.crew_ladder.max_sample` | `60` | **Advanced.** Candidate tasks after which a trial stops without promotion (`1`–`10000`). |
+| `workflow.crew_ladder.exclude_types` | `[]` | **Advanced.** Task types (`feature`, `bug`, `refactor`, `chore`) left out of every trial's population. Excluding all four is refused. |
+| `workflow.crew_ladder.watch_window` | `30` | **Advanced.** Settled tasks per learned ladder member in its demotion check (`1`–`1000`). |
+| `workflow.crew_ladder.retry_after_days` | `30` | **Advanced.** Days before a failed rung is trialled again (`1`–`365`). |
+| `workflow.crew_ladder.delivery_quality` | `off` | **Advanced.** How trials weigh delivery-quality grades. Only `off` is accepted; `shadow` and `guardrail` are refused at load as not available yet. |
+| `workflow.crew_ladder.quality_grade_margin` | `10` | **Advanced.** Grade points a candidate may trail its tier by under the delivery-quality check, greater than `0` and at most `100`. |
+| `workflow.crew_ladder.min_grade_coverage` | `0.8` | **Advanced.** Share of settled trial tasks that must carry a delivery-quality grade before the check reads them, greater than `0` and at most `1`. |
 
 ### `[workflow.explore]` — read-only exploration for implementing agents
 
@@ -548,7 +954,7 @@ An implementing agent spends its expensive crew reading code. With the switch on
 An explorer is an `agent_explore_pipeline` run of the `agent_explore` activity, not a trusted-host invocation:
 
 - **Who may call.** Only a managed run of `agent_implement` or `agent_review_repair` that is still active. Every other agent is refused, as is an explorer itself, so explorers never nest. The operator's `orbit.agent.invoke` path is unchanged.
-- **Where it reads.** `cwd` must resolve inside the calling run's own linked worktree; a path in another worktree or the main checkout is refused. The explorer starts in that worktree under the `reviewer` filesystem profile. That profile grants no writes when Orbit's executor sandbox wraps the provider. When the wrapper is absent or explicitly off, a provider with a read-only inner sandbox (Codex) runs in that mode, and every other provider is refused before spawn, so it cannot write the worktree. `provider_sandbox` is refused.
+- **Where it reads.** `cwd` must resolve inside the calling run's own linked worktree; a path in another worktree or the main checkout is refused. The explorer starts in that worktree under the `reviewer` filesystem profile. That profile grants no writes when Orbit's executor sandbox wraps the provider. The provider-read-only fallback applies when the wrapper is explicitly off, when the Linux Bubblewrap capability probe fails (no trusted `/usr/bin/bwrap` or bundled `bwrap`, or the namespace-and-mount probe fails), or when the trusted `sandbox-exec` executable is missing on macOS (an existence and executable-bit check on the trusted path, not a profile-application probe). A provider with a read-only inner sandbox (Codex) then runs in that mode, and every other provider is refused before spawn, so it cannot write the worktree. The explorer takes this fallback whether or not the executor sets `allow_fallback`. On macOS, a `sandbox-exec` that exists but refuses to apply the profile (exit 71, `sandbox_apply: Operation not permitted`) is a different failure: the wrapper stays in place, the provider's inner sandbox stays neutralized, and the run fails with the exit-71 diagnosis instead of falling back. `provider_sandbox` is refused.
 - **Which crew.** One drawn by weight from `workflow.purpose_crews.explorer`. A named `crew` must be an eligible member of that pool; any other crew is refused.
 - **What it may do.** Its tool policy denies every task, friction, lifecycle, dispatch, commit, pull-request and workspace-claim tool, and `orbit.agent.invoke`. It carries no task, so it owns nothing it could change.
 - **Budgets.** A call past `max_calls_per_run` or `max_concurrent_per_run`, or a `timeout_seconds` above the setting, is refused, and the refusal names the setting. An answer longer than `max_answer_bytes` is shortened (final message, extra fields, next steps, findings, then the summary) and reported with `answer_truncated: true`. The minimum cap reserves room for the fixed answer fields. If final-message metadata still exceeds the cap after content is removed, the answer omits that metadata, paths and summary; the result keeps its stdout reference, and the complete answer remains on the run. A retried call with the same `idempotency_key` returns that earlier run — its persisted crew, timeout and directory, and its queue position or terminal state — and spends no budget.
@@ -556,6 +962,33 @@ An explorer is an `agent_explore_pipeline` run of the `agent_explore` activity, 
 Every refusal is an ordinary tool error with its reason; the calling agent continues without delegating. With the switch off or no eligible pool member, the instruction is not added and every call is refused.
 
 **Accounting.** Each explorer records its calling run, task and activity in its input (`parent_run_id`, `parent_task_id`, `parent_activity`) and an `agent.explore` audit entry, and its invocation records carry its own tokens and cost. Run detail lists a calling run's explorers with state, crew, duration, tokens, cost and paths read, and an explorer's detail links back to its caller. An explorer takes no drain slot of its own: it runs inside its caller's slot, bounded by `max_concurrent_per_run`, and inherits the caller's resource class, so its resource minutes count in the caller's [work-class resource profile](design/auto-concurrency/2_design.md). Analytics › Cost compares, per implementing crew, the implement runs that called explorers with those that did not: run count, mean duration, mean implementing-crew cost, and footprint misses (runs that widened their task's `context_files`), each with its sample count.
+
+Settings are read when the runtime opens.
+
+### `[workflow.explore_brief]` — explore briefs from the task pilot
+
+```toml
+[workflow.explore_brief]
+enabled = true
+tags = ["explore-brief"]
+deliver = false
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.explore_brief.enabled` | `false` | Ask the task pilot for an explore brief for each requested task. |
+| `workflow.explore_brief.tags` | `[]` | Task tags that request a brief. Empty requests one for every piloted task. |
+| `workflow.explore_brief.deliver` | `true` | Give a stored brief to the implementer. `false` keeps briefs in shadow: produced and stored, never delivered. |
+
+The task pilot already reads the code a task will change to propose its lock footprint. An **explore brief** keeps a bounded map of that reading: the targets the change creates, modifies or deletes, the call path to them, the existing pattern to copy, the covering tests, gotchas, adjacent work the task does not own, and the checked-in maps it builds on. Every location is a `file:`, `dir:` or `symbol:` selector, never a line number.
+
+- **Which tasks.** With the switch on, preparation marks each task whose tags include one of `tags` (or every task, when `tags` is empty) and the pilot returns a brief for it. Tags are read when the task is piloted, so tag a task at filing; one tagged later gets a brief only when it is piloted again. A non-Git workspace gets no brief, and neither does a `verified_no_diff`, `host_operational` or `unassessed` assessment.
+- **Validation.** Apply checks the brief's shape and per-field caps, a serialized size of at most 8 KiB, that no target or free text cites a line number or pastes code, that every target exists at the pilot's pinned revision (a `symbol:` name must also occur in its file), and that every `change` target lies inside the applied `context_files`. A brief that fails is dropped: the assessment applies as usual, the task is never marked invalid for it, and no repair pass is spent. When a task is repaired for another reason, the repair pilot returns a brief again.
+- **Storage.** A valid brief is written as the task artifact `explore-brief.json` by the system writer, before the pilot's receipt, with its provenance: the task, the inspection revision and tree, the material fingerprint and operation id of the receipt, and the pilot run and crew. Re-piloting replaces it. The name is reserved: an agent or operator write to it is refused. The receipt records `explore_brief` as `{written, sha256, bytes}` or `{dropped: <reason>}`, and `orbit task show` prints that outcome in the pilot comment.
+
+- **Delivery.** Each `agent_implement` dispatch checks the task's brief before the agent starts, and records the outcome as `activity.explore_brief_applied`, whatever it is. First, the brief must belong to the task's newest pilot receipt (otherwise `absent`), and the task's material, recomputed at the brief's inspection revision under the pilot's freshness policy, must still be what that receipt sealed. The comparison ignores the task's own status and its dependencies' statuses, which admission changes, so a material edit with no new pilot (title, description, criteria, plan or selectors by default) drops the brief as `dropped: material_changed`, and so does a fingerprint that cannot be recomputed. Second, the files the brief's targets cover (a `dir:` target by prefix) are compared between the inspection revision and the run's base (`steps.worktree.output.base_sha`): none changed is `fresh`; 1 to 3 files and at most 200 changed lines, with no `change` target deleted or renamed, is `drifted`; more is `dropped: stale`; an inspection revision that is not an ancestor of the base is `dropped: revision_unrelated`. The limits are fixed. A resumed implementation on a new base is checked again against it.
+- **Claimed runs.** Admission captures the selected task's current brief (including its inspection revision), the receipt's status-neutral material fingerprint, the pilot's resolved eligibility and freshness policy, and the owner's delivery setting alongside tag instructions. The follower recomputes material from the current task at the inspection revision and classifies code drift against the claim's worktree base using the same checks as an owner run. Dispatch reads the capture, never the owner's artifact or pilot run, and never the replica's brief policy. An older receipt without a captured brief runs cold.
+- **What the implementer sees.** Only a `fresh` or `drifted` brief, and only while both `enabled` and `deliver` are on, reaches the prompt: the task context carries `explore_brief` (`status`, `inspection_revision`, `base_sha`, the brief and, when drifted, `drift` with each changed covered file's added and deleted line counts and the `git diff` command to read them; the patch itself is never inlined), and the activity's `explore_brief_instruction` is appended. It says the brief is a starting map, not authority, and asks the execution summary to list wrong or missing entries. Explorer delegation is still offered, and tag instructions are unchanged. Review, review repair and recovery activities never receive a brief. `orbit run show` prints an `Explore brief:` line per dispatch and carries the records under `tag_instructions.explore_briefs` in its JSON.
 
 Settings are read when the runtime opens.
 
@@ -578,7 +1011,7 @@ review = false            # switch off Orbit's shipped reviewer default
 
 Each value is a path relative to the repository root (`/` separators, no `..`, no absolute path), or `false` to switch off Orbit's shipped default for that tag and role. Tags match ignoring case, and two tables naming the same tag in different case are a config error. At most 32 tags may be mapped. The tables layer like crews: a workspace entry replaces the global one for the same tag and role and leaves the others. Edit `config.toml` directly; `orbit config set` does not write these keys.
 
-Orbit ships defaults for three tags. `no-diff-expected` gives implementers the read-only handoff rule (no workspace gates, no `no-diff.json`). `skip-validation` gives implementers the [light delivery](#light-delivery-skip-review-and-skip-validation) rule: run no local validation while the change stays within `workflow.light_delivery_paths`. `ui` gives implementers the screenshot rule and gives reviewers the check that screenshots are attached. A mapped file replaces the default for that tag and role. The task-execution and task-review references still carry the full screenshot rule, because it follows the diff rather than the tag.
+Orbit ships defaults for three tags. `no-diff-expected` gives implementers the read-only handoff rule (no workspace gates, no `no-diff.json`). `skip-validation` gives implementers the [light delivery](#light-delivery-skip-review-and-skip-validation) rule: run no local validation while the change stays within `workflow.light_delivery_paths`. `ui` routes implementers to a host with a verified browser kit and selects the optional PR screenshots section; an empty section never blocks opening. Visual task artifact evidence follows the workspace guide and the actual diff, not the tag. A mapped file replaces the default for that tag and role.
 
 **Where the text comes from.** Instruction text comes only from Orbit's shipped defaults or from the mapped file as committed at the delivery's base revision: the `base_sha` the run's `worktree` step recorded, or else the checkout's `HEAD`. Orbit reads the file from that commit, never from the worktree, so neither a delivery's commits nor its uncommitted edits change the instructions it runs under. A task's description, comments and tags never supply text; a tag only selects.
 
@@ -722,7 +1155,7 @@ Codex runs each tool command through the user's shell as a login shell (`zsh -lc
 - Re-running a task whose failed run preserved a candidate from `commit` or later runs the commands on that candidate over the new base, to decide whether implementation runs at all. A candidate preserved from implementation or earlier always returns to the implementer ([re-running a task](../crates/orbit-core/assets/skills/orbit-orchestrate/references/workflows.md#re-running-a-task-with-a-preserved-candidate)).
 - An empty list runs nothing, including on claimed handoffs; the other handoff guards still apply.
 - Required validation, host replay, detached evidence, baseline reruns and recovery use the workspace's [build output bindings](#workspace-build-output). The runtime allocates no build output by default. Configured bindings isolate host output from worker builds, and logs record `validation_env.build_output`.
-- An implementer whose affected-test gate passed with only deferral notices of sandboxes its lane refuses hands that gate off instead of failing, by naming the validation summary the gate wrote; Orbit derives the `deferred_sandbox_validation` record from it and runs each notice kind's probe in the implementer's lane itself [ORB-15516]: `DEFERRED: bubblewrap unavailable:` notices on Linux [ORB-15287], `SKIP: sandbox-exec cannot apply a profile:` notices on macOS, as a Mac claimed implementer's nested Seatbelt prints [ORB-15409], and `DEFERRED: ps denied:` notices from a claimed implementer on macOS, whose sandbox refuses to exec `ps` [ORB-15587]. One record may defer several kinds, such as a Mac claimed leaf's Seatbelt and ps-denied notices together, when every kind's probe refuses [ORB-15692]. The gate must be a required command or a `review.baseline_commands` entry. Validation runs it after the required commands, outside the agent sandbox (a claim's `claim_validate` on its claim host, before publication), on this run and on a resumed candidate: a pass that still prints any of these notices holds the candidate as a `validation_environment` failure, and a run that reports no executed tests is refused ([development guide](DEVELOPMENT.md#test-process-environment)).
+- An implementer whose affected-test gate passed with only deferral notices of sandboxes its lane refuses hands that gate off instead of failing, by naming the validation summary the gate wrote; Orbit derives the `deferred_sandbox_validation` record from it and runs each notice kind's probe in the implementer's lane itself [ORB-15516]: `DEFERRED: bubblewrap unavailable:` notices on Linux [ORB-15287], `SKIP: sandbox-exec cannot apply a profile:` notices on macOS, as a Mac claimed implementer's nested Seatbelt prints [ORB-15409], and `DEFERRED: ps denied:` notices from a claimed implementer on macOS, whose sandbox refuses to exec `ps` [ORB-15587]. One record may defer several kinds, such as a Mac claimed leaf's Seatbelt and ps-denied notices together, when every kind's probe refuses [ORB-15692]. The gate must be a required command or a `review.baseline_commands` entry. A required `orbit plugin test` is such a gate inside a macOS worker: given `ORBIT_VALIDATION_SUMMARY`, `ORBIT_VALIDATION_GATE` and `ORBIT_VALIDATION_BASE`, it defers each case with the Seatbelt notice instead of starting the backend, and without them it fails `[validation_route_unavailable]`, which recovery treats as a validation-environment failure ([policy-sandbox design](design/policy-sandbox/2_design.md#the-plugin-backend-boundary)) [ORB-19224]. Validation runs it after the required commands, outside the agent sandbox (a claim's `claim_validate` on its claim host, before publication), on this run and on a resumed candidate: a pass that still prints any of these notices holds the candidate as a `validation_environment` failure, and a run that reports no executed tests is refused ([development guide](DEVELOPMENT.md#test-process-environment)).
 - An implementer may hand off a criterion the task pilot typed `post_deploy` (evidence only the deployed build on a named host can produce) as `owed_criteria`, naming the host, measurement command and target, instead of failing. The implement step admits each against the pilot's finding and refuses any other owed criterion; a claimed handoff carries the list, and the owner admits it again on acceptance. The delivery runs these commands, review and landing as usual, then settles in `review` even under `--complete` or `workflow.distributed_completion = "done"`, until an operator records every outstanding criterion met with a `post-deploy: met <N>` comment (a `post-deploy: failed <N>` measurement keeps it outstanding). Claimed landing reads persisted obligations, so a repair or replacement handoff that omits `owed_criteria` preserves any earlier owed or failed criterion. Owed or failed criteria also refuse ordinary task updates to `done`, approval, desktop review completion, automation and final recovery; every owed criterion must be recorded `met` before completion. The human `--force`/dashboard force override remains available and records a `forced` status event without changing the measurement record ([task-execution reference](../crates/orbit-core/assets/skills/orbit/references/task-execution.md#criteria-owed-after-deploy)).
 
 #### Missing tools block the task
@@ -748,6 +1181,48 @@ by a flood of failures says what they were.
 
 Network-inconclusive output (HTTP status `000`; a curl connect, resolve, timeout, TLS or receive error such as `curl: (6)`, `(7)`, `(28)`, `(35)`, `(56)`; a DNS resolution failure; a TLS handshake timeout) reruns the command up to twice, after 2 s and 6 s. Only the last attempt counts; the log records `network_retries`.
 
+#### Delivery refusals are held
+
+A fail-closed delivery decision ends the run `held` with a typed diagnostic code:
+
+| Code | Decision |
+| --- | --- |
+| `delivery_head_changed` | The PR reports a head different from the one this run published. |
+| `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. |
+| `delivery_repair_dispatched` | A repair was already dispatched for the blocked head. |
+| `delivery_pr_draft` | The PR is still a draft. |
+| `delivery_pr_closed` | The PR closed without merging. |
+| `delivery_task_not_promotable` | The task's current status refuses promotion. |
+| `delivery_landing_conflict` | Owner landing requires a conflict repair with fresh validation and a new handoff. |
+| `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. |
+| `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; wait for the base's own result before candidate recovery. |
+| `delivery_completion_budget_expired` | The completion budget (deadline) expired before completion could be confirmed; the last observed pull request state was unmerged and the task stays in review. The pull request may have merged since, through auto-merge (a hold does not cancel it) or another actor, so check the forge. |
+| `delivery_check_evidence_inconclusive` | An auto-fix stop whose check log could not be read conclusively; no repair agent runs. A failed job's log read that the forge throttled for the authenticated account first waits for the forge's reset (or a bounded backoff when none is reported), at most three times per job and never past the completion deadline; each wait is recorded in the task history as `pr_auto_fix_read_deferred`, and a resumed completion honors it. |
+| `delivery_forge_observation_unavailable` | Completion's read-only forge reads (PR status, required checks, merge policy, prerequisite evidence) kept failing with a transport error before any completion mutation: after the one authenticated completion retry, when the run has no final recovery, past the completion budget, or after repair provenance that rules the retry out. Nothing changed on the forge and the task stays in review; `orbit job resume` reads the forge again and continues completion from its checkpoints. |
+| `delivery_origin_unavailable` | `worktree_setup` could not reach origin during pre-admission base fetch while every task being admitted was still in backlog, including a fetch-lock wait whose bounded origin probe confirms a transport outage. The run is held without changing those tasks; a later admission retries after origin recovers. If any task is already in progress, the outage follows ordinary run failure handling (or claim settlement for a claimed leaf) instead of a hold with no generic resume path. Authentication, permission and missing-ref refusals remain failures. |
+
+These codes come from typed refusals, never from matching diagnostic wording.
+The refusing action keeps its existing task transition and landing evidence;
+run finalization does not change the task's status. Retry, step recovery, final
+recovery and the failure handoff do not run for these decisions. Gate and auto
+parents pass the held child, run history lists it as `held`, and reliability
+counts it under held, outside the failure rate. For `delivery_origin_unavailable`,
+backlog tasks remain there and a later normal admission retries worktree setup.
+An already-in-progress task follows ordinary run failure handling, or claim
+settlement for a claimed leaf; the held run itself has no generic resume path. Routine fires retain their
+existing `succeeded` status for a held underlying run.
+
+Missing pinned identity fields, including the PR head, and contradictory merge
+evidence produce typed `delivery_evidence_stale` holds. Forge reads refused for
+a credential, permission or other permanent reason, transport failures after a
+merge, auto-merge or rebase request (in that run or recorded in the task's
+history), failed candidate checks, and unlisted refusals remain failures. In particular,
+`delivery_evidence_stale` text alone does not establish a hold. Completion's
+ordinary conflict-recovery path also retains its existing failure and repair
+semantics. Resolve the named refusal before starting a new delivery attempt;
+apart from `delivery_forge_observation_unavailable`, these holds do not enable
+generic `orbit job resume`.
+
 #### A red base is held, not blocked
 
 The integration branch has no merge gates, so a command may already fail on the base. A command still failing after its reruns is rerun on the base commit in a clean detached worktree under `<git-common-dir>/orbit-baseline/`, cached per base commit, command and selection behind a file lock (concurrent candidates on one host share one base run). `validation/<run>/<n>.json` gets a `baseline` record; `validation/<run>/<n>.baseline.json` holds the base log. Candidate logs record `failures` and `baseline_reproduces`; baseline records and logs retain their parsed `failures`. The baseline record's `decision` describes the base run's outcome separately from whether it reproduces the candidate.
@@ -756,20 +1231,21 @@ The integration branch has no merge gates, so a command may already fail on the 
 |---|---|
 | Comparable completed failure with the same exit status, and every identified candidate failure is a test that fails there too | Known red: the candidate proceeds (below). |
 | Comparable completed failure with the same exit status and every candidate failure identity confirmed on the base, including compiler or lint errors | The task is held (below). |
-| Fails with different or additional candidate identities, missing identities on either side, or a timeout | Matching failures are unconfirmed; candidate repair remains enabled, with both logs preserved. |
+| Neither run names identities, but complete normalized diagnostics and exit status match, with no timeout or coverage refusal | The task is held, with a diagnostic fingerprint as its failure identity. |
+| Fails with different or additional candidate identities, unmatched diagnostics, identities missing on only one side, or a timeout | Matching failures are unconfirmed; candidate repair remains enabled, with both logs preserved. |
 | Passes | Candidate failure; the error says the base passed, so step recovery can repair it. |
 | Inconclusive (missing tool or network) | Candidate failure; nothing cached. |
 | Not comparable (below) | Candidate failure; the `baseline` record's `decision` is `not_comparable`. |
 
-**Known red.** The candidate introduced none of the base's failures when the candidate run did not time out, printed no host coverage refusal (sandbox-unavailable diagnostics, `DEFERRED:`, `SKIP:`, `skipping:` or `skipping ` notices), names at least one failure, and every failure it names is a failed test that also fails in the base run. Both runs' failures and the candidate's host coverage notices are read from the complete output, not the bounded log, using the identities a hold records (below). A declared deferred-sandbox replay must report executed tests before known-red continuation, including when it exits nonzero; a missing or zero executed-test count refuses the replay. The step does not fail: it records the command under `known_red` in its output (decision `passed_with_known_red`), marks the command's log `failure_kind: "known_red"` with the failures, appends a `known_red_validation` history event naming command, base commit, candidate commit and failing tests to each delivered task, and goes on to the next command. `pr_open` lists that run's known-red commands, for the published head and base, under `## Known-red validation` in a body it opens; one found by a later revalidation, after the PR exists, is only on the task and the run. The red base keeps its repair task through other holds. A compiler or lint error with an identity confirmed on the base can be held as below. Missing identities, timeouts, or any candidate identity absent from the base cannot establish an inherited failure and leave the candidate requiring repair. Host coverage refusals still follow the validation-environment rules. A resumed candidate is judged the same way.
+**Known red.** The candidate introduced none of the base's failures when the candidate run did not time out, printed no host coverage refusal (sandbox-unavailable diagnostics, `DEFERRED:`, `SKIP:`, `skipping:` or `skipping ` notices), names at least one failure, and every failure it names is a failed test that also fails in the base run. Both runs' failures and the candidate's host coverage notices are read from the complete output, not the bounded log, using the identities a hold records (below). A declared deferred-sandbox replay must report executed tests before known-red continuation, including when it exits nonzero; a missing or zero executed-test count refuses the replay. The step does not fail: it records the command under `known_red` in its output (decision `passed_with_known_red`), marks the command's log `failure_kind: "known_red"` with the failures, appends a `known_red_validation` history event naming command, base commit, candidate commit and failing tests to each delivered task, and goes on to the next command. `pr_open` lists that run's known-red commands, for the published head and base, under `## Known-red validation` in a body it opens; one found by a later revalidation, after the PR exists, is only on the task and the run. The red base keeps its repair task through other holds. A compiler or lint error with an identity confirmed on the base can be held as below. Diagnostic fingerprints never qualify as known-red tests. Timeouts, unmatched diagnostics, or any candidate identity absent from the base leave the candidate requiring repair. Host coverage refusals still follow the validation-environment rules. A resumed candidate is judged the same way.
 
-**Hold.** The step fails with the `[baseline_red]` marker and error code `baseline_red`, and the run ends `held`, not `failed`; the gate and auto parents waiting on it pass it as held. No step or final recovery runs and no budget is spent; the handoff pushes nothing and opens no `[BLOCKED]` PR. The task moves to `backlog` under a `baseline_red_hold` history event naming base ref, base commit, command and what fails on the base (run finalization does this for a local pipeline), with the candidate kept in its worktree. The hold's `failures` record keeps up to 20 failure identities the base output names (each nextest `FAIL [..]` summary line as `test <binary-id> <test>`, a libtest `test <name> ... FAILED`, a compiler or lint error at its location) and counts the rest; when the output names none, it keeps the last 5 lines of that output instead. Admission withholds the task; `orbit run readiness --json` reports `reason: "baseline_red_hold"`, and its `detail`, like each hold verdict, names the failing tests. Operator steps: [stuck job runs](runbooks/stuck-job-runs.md#a-task-held-for-a-red-base).
+**Hold.** The step fails with the `[baseline_red]` marker and error code `baseline_red`, and the run ends `held`, not `failed`; the gate and auto parents waiting on it pass it as held. No step or final recovery runs and no budget is spent; the handoff pushes nothing and opens no `[BLOCKED]` PR. The task moves to `backlog` under a `baseline_red_hold` history event naming base ref, base commit, command and what fails on the base (run finalization does this for a local pipeline), with the candidate kept in its worktree. The hold's `failures` record keeps up to 20 failure identities the base output names (each nextest `FAIL [..]` summary line as `test <binary-id> <test>`, a libtest `test <name> ... FAILED`, a compiler or lint error at its location) and counts the rest; when neither run names identities, equal diagnostic fingerprints establish reproduction instead. The fingerprint hashes the complete output after stripping ANSI codes, collapsing whitespace, replacing workspace/worktree roots and temporary paths, removing PATH lines and elapsed-time tokens, and sorting lines. Empty normalized output has no fingerprint. The hold records a readable SHA-256 fingerprint identity; legacy holds without identities retain up to 5 output lines instead. Older cached results without fingerprints remain readable but cannot establish identity-less reproduction from bounded logs. Admission withholds the task; `orbit run readiness --json` reports `reason: "baseline_red_hold"`, and its `detail`, like each hold verdict, names the failing tests. Operator steps: [stuck job runs](runbooks/stuck-job-runs.md#a-task-held-for-a-red-base).
 
-**Repair task.** The owner's clock tick files one repair task per red base failure: the first standing hold for a command and failure set files a `bug` in the workspace's `backlog` (priority `high`, complexity `medium`, tag `baseline-red-repair`, external ref `baseline-red:<digest>`) naming the failures, the first red base commit and the held task. Every later hold with the same command and failures, on another task or a later base, is added to that task as a `related_to` relation with a comment. Once it is done, rejected or archived, a hold still naming the same failures files a new one. A hold that records no failures, such as one written before holds kept them, files nothing. A hold whose base already has a passing result for its command lifts on that tick without filing or linking a repair. New holds retain a SHA-256 digest of the complete trimmed, sorted, deduplicated failure identities before limiting their display to 20 entries and a 240-byte prefix plus an ellipsis for long entries. Repair identity uses that digest, so input order, duplicate names and display truncation do not change which complete set is tracked. Older holds without a digest retain their original display-based repair key and still find existing open repairs; a new digest-bearing hold can therefore file a separate repair from an older hold for the same failures. Output-only failures continue to use the bounded output tail.
+**Repair task.** The owner's clock tick files one repair task per red base failure: the first standing hold for a command and failure set files a `bug` in the workspace's `backlog` (priority `high`, complexity `medium`, tag `baseline-red-repair`, external ref `baseline-red:<digest>`) naming the failures, the first red base commit and the held task. Every later hold with the same command and failures, on another task or a later base, is added to that task as a `related_to` relation with a comment. Once it is done, rejected or archived, a hold still naming the same failures files a new one. A hold that records no failures, such as one written before holds kept them, files nothing. A hold whose base already has a passing result for its command lifts on that tick without filing or linking a repair. New holds retain a SHA-256 digest of the complete trimmed, sorted, deduplicated failure identities before limiting their display to 20 entries and a 240-byte prefix plus an ellipsis for long entries. Repair identity uses that digest, so input order, duplicate names and display truncation do not change which complete set is tracked. Older holds without a digest retain their original display-based repair key and still find existing open repairs; a new digest-bearing hold can therefore file a separate repair from an older hold for the same failures. Fingerprint holds key repairs on command plus fingerprint, so changing host paths or output tails cannot file another open repair for the same diagnostics. Legacy output-only failures continue to use the bounded output tail.
 
 **Release.** The held command must pass on a new base tip. When a hold records runnable failing test identities and a selection, refresh first reruns only those tests: a comparable failure keeps the hold without running the full command. If those tests pass, or their replay is inconclusive or not comparable (including a command that ignores the test filter or a renamed test that executes nothing), refresh runs the full recorded selection before lifting. A hold without recorded tests, with a non-test or shortened identity, or without a selection runs the full command directly. Narrowed and full runs retain separate cache entries per base tip, command and selection; cached full results take precedence, and cached narrowed failures also suppress another refresh on the same tip. A failed or inconclusive full run keeps the hold. `orbit clock tick` never runs it (it holds the sweep lock): it reads the cached base result for the new tip, or dispatches one `baseline_hold_refresh_pipeline` run per workspace at a time to run it and record a `baseline_red_hold_verdict` event. An inconclusive attempt suppresses refreshes for that tip and command for 15 minutes; a new tip is checked at once, and a conclusive cached result overrides the attempt. Readiness, the backlog snapshot and pull admission only read verdicts, so a hold with none stays held. The next run resumes the preserved candidate.
 
-**Self-selecting commands** (`make ci-test-affected`) report their selection and executed-test count through `ORBIT_VALIDATION_SUMMARY`, and the base run reruns the candidate's selection from `ORBIT_VALIDATION_SELECTION`; a base run with another selection, or a pass with no counted test, is not comparable ([validation summary](DEVELOPMENT.md#validation-summary-and-base-reruns)). A hold records the selection and lifts only when that selection passes on a moved base with at least one test executed. A hold from before selections were recorded is judged by exit status, and a still-red base re-holds the next delivery with the selection. A command that writes no summary has no selection check, but reproduction still requires a completed failure with the same exit status and a nonempty candidate failure set covered by the base identities.
+**Self-selecting commands** (`make ci-test-affected`) report their selection and executed-test count through `ORBIT_VALIDATION_SUMMARY`, and the base run reruns the candidate's selection from `ORBIT_VALIDATION_SELECTION`; a base run with another selection, or a pass with no counted test, is not comparable ([validation summary](DEVELOPMENT.md#validation-summary-and-base-reruns)). A hold records the selection and lifts only when that selection passes on a moved base with at least one test executed. A hold from before selections were recorded is judged by exit status, and a still-red base re-holds the next delivery with the selection. A command that writes no summary has no selection check, but reproduction still requires completed failures with the same exit status and either a nonempty candidate failure set covered by the base identities or equal diagnostic fingerprints when neither run names identities.
 
 **Followers.** A claimed leaf validates before it pushes or opens a PR and judges a red base by the same rule against its own base run. A known-red command does not stop it: `claim_validate` reports it under `known_red` (decision `passed_with_known_red`), the leaf's `pr_open` lists it under `## Known-red validation`, and the command's claim validation log keeps the non-zero exit with a `known_red` report naming the base commit, the selection and the complete failing set. The owner does not take that report on the leaf's word. Before it accepts the handoff it judges each reported command it requires itself, on the handed-off base, which must be in the history of the base branch the owner captured when it admitted the claim (this membership rule applies to both same-OS and cross-OS settlements; a base off that branch is refused without running a validation command). For same-OS settlements, it uses a full result it has cached for that base, command and selection, else a replay of only the reported tests when the command reports a selection, else the whole command. When the follower was admitted on the same host OS as this owner, it accepts only when its own base run fails every reported test, the same way when the whole command ran, and then appends the `known_red_validation` history event to the task. A different host OS is a different validation environment: after checking that same base-branch membership, the owner does not run or consult its own base validation for that report, does not release the claim as `known_red_contradicted`, and accepts the follower's base evidence for the admitted OS, recording the same history event. The handoff is accepted, so a pull request the leaf opened stays this delivery rather than being left open while the task returns to the backlog. Owner settlement shares a ten-minute deadline across its base comparisons, below the fifteen-minute routed delivery budget, leaving room for observation, cleanup and the reply. Lock waits and base commands use the remaining time. An attempted base run that is cut or otherwise inconclusive is retained under the base, command and replay selection separately from conclusive base results: settlement retries reuse that refusal rather than starting another cold run. Partial failures from a cut never confirm known red, and ordinary candidate validation and reviewer base replays do not read these inconclusive claim records. A later conclusive base result may supersede the refusal. When the follower was admitted on this owner's OS, a report its own completed, comparable base run contradicts (the base passes the reported tests, fails without one of them, or fails the whole command with another exit status) can never be accepted, so the owner ends the claim instead of refusing it: it releases the task to the backlog as a `transient` failure whose reason, led by `known_red_contradicted`, names its verdict and counts against the task's release budget, and the follower closes its pending settlement obsolete. A report it cannot establish either way (the base run is inconclusive or not comparable, the report names another base, or the base is off the owner's base branch) refuses the settlement while the owner keeps the claim, and the leaf retries it; a non-zero log without a report is refused as before. A candidate failing a test its base lacks requires candidate repair; equal exit status alone never creates a `baseline_red_hold`. The candidate and base logs retain their complete parsed identity sets and the reproduction decision even when bounded output omits a failure. An owner running a release without this rule refuses a log carrying a report until it is upgraded.
 
@@ -779,7 +1255,7 @@ The integration branch has no merge gates, so a command may already fail on the 
 
 #### Agent-declared blockers stop the run
 
-An implementer that cannot proceed returns `blocker: {kind, evidence}` (a short token and the reason) from `implement_one` or a resolved `agent_implement` target. The step fails with the `[task_blocked_by_agent]` marker and error code `task_blocked_by_agent`; no step retry, step recovery or final recovery runs. On the PR pipeline the handoff commits, pushes and opens nothing, blocks the task under `task_blocked_by_agent` with the kind, and leaves the worktree as the implementer left it, uncommitted files included. `orbit job resume` does not move the task back; an operator does once the blocker is gone. An implementation activity cannot set status `blocked` itself (operators and other activities can). A claimed leaf stops before its next step and final recovery. Blocked-task recovery skips a marked failure note, or for a claimed leaf, a marker in the execution summary.
+An implementer that cannot proceed returns `blocker: {kind, evidence}` (a short token and the reason) from `implement_one` or a resolved `agent_implement` target. The step fails with the `[task_blocked_by_agent]` marker and error code `task_blocked_by_agent`; the run ends `held`, and gate and auto parents pass their success guards. The held diagnostic in `orbit run show` retains the blocker kind. No step retry, step recovery or final recovery runs. On the PR pipeline the handoff commits, pushes and opens nothing, blocks the task under `task_blocked_by_agent` with the kind, and leaves the worktree as the implementer left it, uncommitted files included. `orbit job resume` does not move the task back; an operator does once the blocker is gone. An implementation activity cannot set status `blocked` itself (operators and other activities can). A claimed leaf stops before its next step and final recovery. Blocked-task recovery skips a marked failure note, or for a claimed leaf, a marker in the execution summary.
 
 A blocker whose kind names an Orbit upgrade refusal (`upgrade_pending`, `upgrade_admission_refused`, `orbit.generation_switch_pending` and similar spellings) is the host's state, not the task's. It ends any agent step, reviewers included, with error code `upgrade_pending` instead. The step is not retried or recovered, the candidate is kept, and the task returns to the backlog rather than `blocked`. See [in-flight agent steps during a binary swap](runbooks/upgrades.md#in-flight-agent-steps-during-a-binary-swap).
 
@@ -793,13 +1269,14 @@ A crew is one provider-model assignment. An activity uses the crew named in its 
 
 | Field | Required | Values |
 |---|---|---|
-| `provider` | Yes | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode`, `muse`. See [provider identity](#provider-identity-and-resolution). |
+| `provider` | Yes | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `muse`. See [provider identity](#provider-identity-and-resolution). |
 | `model` | Yes | Model ID passed to the provider CLI. |
 | `enabled` | No | Default `true`. `false` keeps the crew defined and listed but refuses to run it; see [disabled crews](#disabled-crews). |
 | `effort` | No | Reasoning effort (below). Omitted leaves the provider's default. |
 | `description` | No | Summary. Trimmed; blank becomes absent. |
 | `tags` | No | Discovery labels. Trimmed, blanks dropped, sorted and deduplicated. |
 | `env` | No | Variables this crew's agents receive on top of `execution.env.pass`, as `NAME` or `NAME=SOURCE`. Global config only; see [per-crew credentials](#per-crew-credentials-env). |
+| `vision` | No | Default `true`. `false` opts a text-only model out of image input on an image-capable lane; see [executor image input](#executor-image-input-image_input). |
 
 ```toml
 [crews.sol]
@@ -809,46 +1286,61 @@ effort = "high"
 description = "Systems implementation"
 tags = ["implementation", "review"]
 
-[crews.gemini]
+[crews.argon]
 enabled = false
-model = "gemini-3.8-flash"
-provider = "gemini"
+model = "gemini-4-argon-high"
+provider = "antigravity"
 ```
 
-**Built-in crews**, in init's family preference order. A config with no `[crews]` table uses the full set. Existing explicit model pins are kept as written.
+**Built-in crews**, in init's family preference order. A config with no `[crews]` table uses the full set. Existing explicit model pins are kept as written. The legacy Gemini CLI lane has no built-in crew: define one under `[crews.<name>]` to use it.
 
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
 | `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`fable`) | `opus` |
-| `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `luna` (`gpt-6-luna`) | `astra` |
-| `antigravity` | `agy` | `antigravity` (`gemini-3.8-flash-high`) | `antigravity` |
-| `gemini` | `gemini` | `gemini` (`gemini-3.8-flash`) | `gemini` |
+| `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `terra` (`gpt-6.1-terra`), `luna` (`gpt-6-luna`) | `astra` |
+| `antigravity` | `agy` | `gemini-flash` (`gemini-3.8-flash-high`), `argon` (`gemini-4-argon-high`) | `gemini-flash` |
 | `grok` | `grok` | `grok` (`grok-4.7`) | `grok` |
 | `copilot` | `copilot` | `copilot` (`claude-sonnet-5`) | `copilot` |
-| `cursor` | `cursor-agent` | `cursor` (`gpt-5`) | `cursor` |
-| `pi` | `pi` | `pi` (`sonnet`) | `pi` |
-| `opencode` | `opencode` | `opencode` (`anthropic/claude-sonnet-4-5`) | `opencode` |
-| `muse` | `muse` | `muse` (`muse-spark-1.3`) | `muse` |
+| `muse` | `muse` | `muse-spark` (`muse-spark-1.3`), `muse-wonder` (`muse-wonder-1.0`), `muse-wonder-full` (`muse-wonder-full-1.0`) | `muse-spark` |
 
 **Reasoning effort.** Choose capability with the model, then tune `effort` within it.
 
 | Provider | Accepted `effort` | Rendered as |
 |---|---|---|
-| `claude`, `codex`, `pi`, `muse` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` · `model_reasoning_effort` · `--thinking` · `--reasoning-effort` |
+| `claude`, `codex`, `muse` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` · `model_reasoning_effort` · `--reasoning-effort` |
 | `antigravity` | `low`, `medium`, `high` | `--effort` |
-| `opencode` | `high`, `max` | `--variant` |
 | `grok` (`grok-4.7`, `grok-4.6`) | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
 | `grok` (`grok-4.5`) | `low`, `medium`, `high` | `--reasoning-effort` |
 | others | none | — |
 
 An unsupported `effort` (`max` on Grok, `effort = "hard"`) is ignored for that crew, never remapped, with a warning naming the file, crew, value and accepted values. `orbit doctor` lists ignored properties; `orbit config set` refuses a value load would drop. A selected crew's provider, model and effort each override an activity's inline baseline.
 
+**Recorded effort.** Each provider launch records its resolved crew, model and
+`reasoning_effort` before the process starts, after crew/inline precedence and
+configuration admission. `null` means no effort option was rendered (provider
+default); `"unknown"` identifies history without a dispatch record. Editing a
+crew never changes these records, and audit history is not backfilled.
+`orbit run show --json` and `orbit.workflow.run.show` expose `agent_executions`
+on the run and its displayed steps, including retries and interrupted launches.
+The dashboard shows the same provenance on run detail and step rows.
+
+Scorecard rows keep their compatible crew/model ranking and include an
+`effort_breakdown` of recorded invocation counts, linked tasks, duration, tokens
+and provider-reported cost. The score itself still describes the whole row. The top-level scorecard
+`effort_breakdown` covers completed workspace invocations in the selected
+window (`effort_population` names that population).
+Orchestrator authorship has no recorded execution effort and stays `unknown`;
+it never borrows an implementer's effort. The crew ladder includes a 90-day
+completed-invocation breakdown; experiment arms include the completed invocations
+linked to their enrolled tasks; managed usage buckets break down by actual
+crew, model and effort. Null/default and historical unknown remain separate.
+
 **Editing.** Crew fields are `crews.<name>.<field>`:
 
 ```bash
 orbit config set crews.sol.effort high
 orbit config get crews.sol.effort
-orbit config set crews.gemini.enabled true
+orbit config set crews.argon.enabled true
 ```
 
 `config set` refuses invalid values, unsupported provider/model combinations and misspelled fields. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.workspace.list` with `include: ["crews"]` returns each checkout's effective normalized crews with `enabled` (schema version 3), or `crews_error` when its config cannot be read.
@@ -866,7 +1358,7 @@ Orbit's own work draws from the [complexity pools](#automatic-crew-pools-by-comp
 | Step-failure recovery, PR conflict recovery | `medium` | Recovery diagnoses failures in work of any tier, so it is not low work; medium is also the tier an unassessed task is verified on. |
 | [`orbit run auto --auto-fix`](#pr-auto-fix-repairs) repairs (failed required checks and merge conflicts on the drain's PRs) | `low` | The repair is bounded to one named blocker on a candidate that already passed its gates. |
 
-A pilot, recovery or auto-fix activity names its purpose as `crew_config_key: workflow.purpose_crews.<purpose>` (an older asset may still name `workflow.<tier>_complexity_crews`, which draws that pool directly). The run draws once per pool on its first such dispatch: the pool's weights apply, disabled crews and those outside the run's `allowed_crews` are skipped, and crews at a [provider usage limit](#provider-usage-limits) are skipped while another member is left. Every later dispatch of that pool in the run, and a resume, reuses the draw, which the run's state records with the eligible members. An empty or wholly disabled pool falls back to `workflow.default_crew`, as an unassigned task does, and the recorded draw says so. The task pilot and finding verification inspect pinned source with the provider's native file-read and command tools, which only Codex and Claude have, so their draws skip crews of any other provider (Gemini, Grok, Antigravity, ...). A pool with no such member passes to the next tier up, then to `workflow.default_crew`; when that cannot inspect either, the activity fails with `inspection_crew_unavailable` before a provider launches. The pilot's recorded draw names the filter and the crews it skipped.
+A pilot, recovery or auto-fix activity names its purpose as `crew_config_key: workflow.purpose_crews.<purpose>` (an older asset may still name `workflow.<tier>_complexity_crews`, which draws that pool directly). The run draws once per pool on its first such dispatch: the pool's weights apply, disabled crews and those outside the run's `allowed_crews` are skipped, and crews at a [provider usage limit](#provider-usage-limits) are skipped while another member is left. Every later dispatch of that pool in the run, and a resume, reuses the draw, which the run's state records with the eligible members. An empty or wholly disabled pool falls back to `workflow.default_crew`, as an unassigned task does, and the recorded draw says so. The task pilot, finding verification and escalation triage inspect pinned source with a CLI's own native file-read and command tools, so their draws keep only crews whose provider has a CLI runtime and whose executor declares [`inspection_args`](#executor-inspection-tools-inspection_args). A pool with no such member passes to the next tier up, then to `workflow.default_crew`; when that cannot inspect either, the activity fails with `inspection_crew_unavailable` before a provider launches. The recorded draw names the filter and the crews it skipped. Trust in an inspection still comes from its result: each result reports the `HEAD` and tree it observed in its checkout, and the apply step (or, for triage, `orbit.task.block_triage`) refuses a result whose proof is missing or differs from the pinned source.
 
 **Migration.** `workflow.system_crew` still loads for one release but is ignored, with a deprecation warning naming the pools. Orbit no longer defines a built-in `system` crew or aliases it to `[crews.qa]`. A template, job or activity still naming `crew: system` (or `crew_config_key: workflow.system_crew`) resolves through the pools with a warning: a template by its complexity, a job or activity step through `medium`. A user-authored `[crews.system]` table is an ordinary crew and keeps working wherever it is named.
 
@@ -890,7 +1382,7 @@ baseline_red_repair = ["opus"]
 | PR auto-fix | `workflow.purpose_crews.auto_fix` | [`--auto-fix`](#pr-auto-fix-repairs) repairs | `workflow.low_complexity_crews` |
 | Automatic review | `workflow.purpose_crews.review` | [automatic review](#review-and-operation--automatic-review): after-landing review tasks, and the reviewer before landing while the next row is unset | the review's existing rules |
 | Pre-landing review | `workflow.purpose_crews.pre_landing_review` | before-PR and before-landing review | `workflow.purpose_crews.review` |
-| Red-base repair | `workflow.purpose_crews.baseline_red_repair` | tasks the red-base re-check files (`baseline-red-repair` tag) | the task's complexity pool, then `default_crew` |
+| Red-base repair | `workflow.purpose_crews.baseline_red_repair` | tasks the red-base re-check files (`baseline-red-repair` tag) | the task's matching [type pool](#type-pools-by-task-type-and-complexity), when it has one, then its complexity pool, then `default_crew` |
 | Sweep tasks | `workflow.purpose_crews.sweep_tasks` | tasks the CI failure sweep files (`ci-failure-sweep` tag), the Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files (its follow-up tag) | the same |
 | Explorer | `workflow.purpose_crews.explorer` | the read-only [explorers](#workflowexplore--read-only-exploration-for-implementing-agents) an implement or review-repair agent delegates | none: exploration is not offered |
 
@@ -902,9 +1394,9 @@ Final recovery keeps its own rules (no fallback; `[]` turns it off), and automat
 
 1. **Explicit crew.** A `crew` on the task, the auto-task template or the activity input is used as it is and skips the purpose. An activity's explicit `crew` also beats its `crew_config_key`.
 2. **Purpose pool.** The purpose's pool, drawn by weight once per run for an activity and at creation for a task. Disabled crews are skipped, `--allow-crew` narrows the draw (a pool with no permitted member fails as a complexity pool does), and [provider usage limits](#provider-usage-limits) and [failure holds](#provider-failure-holds) skip crews while another member is left. The task pilot keeps only members that [inspect natively](#system-work-draws-from-the-complexity-pools).
-3. **Earlier route.** A purpose whose pool is unset, `[]`, wholly disabled, or (for the pilot) has no inspection-capable member resolves exactly as it did before purpose pools: the right-hand column above.
+3. **Earlier route.** A purpose whose pool is unset, `[]`, wholly disabled, or (for the pilot) has no inspection-capable member resolves to the right-hand column above. Only the tasks the red-base re-check and the sweeps file (`baseline_red_repair`, `sweep_tasks`) consult a matching [type pool](#type-pools-by-task-type-and-complexity) on that route, before their complexity pool. The activity purposes `task_pilot`, `failure_recovery` and `auto_fix` go straight to their complexity pool.
 
-**A task's purpose** comes from its tags: a `crew-purpose:<purpose>` tag naming one of the `workflow.purpose_crews` purposes, else the tag the system filed it with. An auto-task template names a purpose for the tasks it mints by adding a `crew-purpose:<purpose>` tag. A task drawn from its purpose pool records `crew_source: purpose:<purpose>`; admission keeps that crew while it is still an enabled positive-weight member of the pool, and otherwise redraws as for a stale pool assignment. A [provider usage limit](#provider-usage-limits) or a [failure hold](#provider-failure-holds) that covers the assigned crew redraws from the pool's other enabled positive-weight members, keeping their weights and the run's allowlist, before the complexity pool. The task record is not rewritten. A purpose task that cannot use its pool falls back to its complexity pool. A complexity change keeps a purpose-sourced crew, because the purpose does not depend on the tier.
+**A task's purpose** comes from its tags: a `crew-purpose:<purpose>` tag naming one of the `workflow.purpose_crews` purposes, else the tag the system filed it with. An auto-task template names a purpose for the tasks it mints by adding a `crew-purpose:<purpose>` tag. A task drawn from its purpose pool records `crew_source: purpose:<purpose>`; admission keeps that crew while it is still an enabled positive-weight member of the pool, and otherwise redraws as for a stale pool assignment. A [provider usage limit](#provider-usage-limits) or a [failure hold](#provider-failure-holds) that covers the assigned crew redraws from the pool's other enabled positive-weight members, keeping their weights and the run's allowlist, before the complexity pool. Admission writes the crew it runs back to the task (see [Admission write-back](#automatic-crew-pools-by-complexity)). A purpose task whose pool is unset, `[]` or wholly disabled falls back to its matching type pool, when one exists, then to its complexity pool. A pool whose members are all held or limited instead retries its other members, then the complexity pool, and never the type pool. A complexity change keeps a purpose-sourced crew, because the purpose does not depend on the tier.
 
 **Seeing the choice.** `orbit config show --all` lists **Crew purposes**: each purpose's resolved pool, the key it came from and that key's layer. The default text view omits that block because each purpose key is already a row; `--json` always includes `crew_purposes`. `orbit run show` prints one `Activity Crew:` line per pool a run drew from, naming the crew, the key and the draw's source; `--json` adds `activity_crew_draws` with a `rule` of `default_crew`, `purpose_pool`, `purpose_unset_fallback`, `final_recovery_pool` or `complexity_pool`.
 
@@ -943,7 +1435,7 @@ effort = "high"
 env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]
 ```
 
-- **`NAME`** passes `NAME` from the launching process (as a [`pass`](#executionenv--the-agent-subprocess-environment) entry does) to this crew's agents only.
+- **`NAME`** passes `NAME` from the launching process to this crew's agents only, whether or not [`pass`](#executionenv--the-agent-subprocess-environment) lists it.
 - **`NAME=SOURCE`** gives this crew's agents `NAME` with the value of `SOURCE` from the launching process, or from `~/.orbit/clock.env` for [clock-started runs](#executionenv--the-agent-subprocess-environment). Keep the source under a name no CLI reads (`ANTHROPIC_CREDITS_API_KEY_1`), so interactive shells and other crews are unaffected and different crews can use different keys. The agent never receives `SOURCE` itself.
 - **Names only, never values.** Both sides must be variable names (letters, digits and `_`, not starting with a digit), and no side may be an `ORBIT_*` name. A malformed entry, or two entries for one `NAME`, fails load naming the crew and entry.
 - **Global config only.** A workspace `config.toml` that sets `crews.<name>.env` fails load naming the crew, and `orbit config set` refuses it without `--global`, so a checkout cannot choose which host secrets its agents read. Set it with `orbit config set --global crews.opus-credits.env '["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]'`.
@@ -980,17 +1472,14 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 | `gemini` | `gemini` | Legacy Gemini CLI (enterprise / API-key deployments). |
 | `grok` | `grok` | |
 | `copilot` | `copilot` | [GitHub Copilot CLI](#github-copilot-cli) |
-| `cursor` | `cursor-agent` | [Cursor Agent CLI](#cursor-agent-cli) |
-| `pi` | `pi` | [Pi CLI](#pi-cli) |
 | `antigravity` | `agy` | [Antigravity CLI](#antigravity-cli) |
-| `opencode` | `opencode` | [OpenCode CLI](#opencode-cli) |
 | `muse` | `muse` | [Muse Code CLI](#muse-code-cli) |
 | `ollama` | — | Recognized but unsupported at the Orbit CLI entry point (`provider.unsupported`). |
 | `openai_compat` (`openai-compat`) | — | HTTP-only, no CLI runtime; selecting it fails. |
 
 - Parsing ignores case and surrounding whitespace.
 - Deprecated aliases resolve with an `orbit.config.crew` warning: `anthropic` → `claude`, `openai`/`chatgpt` → `codex`, `google` → `gemini`, `xai` → `grok`.
-- `copilot`, `cursor`, `pi`, `antigravity`, `opencode` and `muse` have no aliases, and the model vendor a lane runs (a Claude model through Copilot) never changes the provider.
+- `copilot`, `antigravity` and `muse` have no aliases, and the model vendor a lane runs (a Claude model through Copilot) never changes the provider.
 - The cross-repo Worker executor runs only `claude`, `codex`, `gemini` and `grok`; a Worker-routed step naming another lane is refused, not re-pointed.
 
 **Audit attribution.** Process audit maps `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL` to an agent family. An invalid pair (`copilot` with a `claude-*` model) or an agent envelope with no identity records `unknown` with a warning. An agent envelope (non-empty name and model, truthy `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ACTOR_KIND=agent`) takes precedence over `ORBIT_ACTOR`, the operator override and the OS username. This affects recorded identity only, not command authorization.
@@ -1002,7 +1491,7 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 1. **explicit**: `--crew` or run-input `crew`.
 2. **task_config**: an explicit `task.crew`, or a pool or [purpose](#purpose-crew-pools) assignment still valid for its pool (normally set at creation; admission redraws stale pool assignments and default fallbacks, see [pools](#automatic-crew-pools-by-complexity)).
 3. **workspace_default**: `workflow.default_crew`.
-4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus` and `codex` selects `sol` when defined; any other ID selects the same-named crew. Never overrides a configured `default_crew`.
+4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus`, `codex` selects `sol`, `antigravity` selects `gemini-flash` and `muse` selects `muse-spark` when defined; any other ID selects the same-named crew. Never overrides a configured `default_crew`.
 5. **system_default**: the `opus` crew, or a legacy `claude` crew.
 
 The environment-default tier applies even when neither config file exists.
@@ -1020,16 +1509,21 @@ An explicit selection that cannot run fails with a stable diagnostic and never f
 
 - `provider openai_compat is unsupported by the Orbit CLI entry point (HTTP-only)`
 - `provider ollama is unsupported by the Orbit CLI entry point`
-- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode, muse`
+- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, antigravity, muse`
+- `provider 'cursor' is retired and no longer supported; pick a supported provider (…)` — likewise for `pi` and `opencode` (see [retired providers](#retired-providers))
 - A selected lane whose binary is missing fails permanently, naming the binary.
 
 ---
 
 ## Provider CLI notes
 
-For every lane: Orbit passes `--model` from the crew and sends the prompt on **stdin**, never argv (process listings and audit see argv). Muse Code, which cannot read stdin, gets the prompt in a private file instead ([below](#muse-code-cli)). The Orbit OS sandbox is the filesystem boundary, and provider-specific write grants apply only while that provider runs. Credentials reach the agent only through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment); Orbit never puts a key on argv. A lane without native or Orbit-managed MCP reaches Orbit tools with `orbit tool run <tool> --input '<json>'` through its shell tool, under the same grants.
+For every lane: Orbit passes `--model` from the crew and sends the prompt on **stdin**, never argv (process listings and audit see argv). Muse Code, which cannot read stdin, gets the prompt in a private file instead ([below](#muse-code-cli)). The Orbit OS sandbox is the filesystem boundary, and provider-specific write grants apply only while that provider runs. Credentials reach the agent through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment), which every crew shares; through a crew's global [`env`](#per-crew-credentials-env) entry, which reaches only that crew's agents; or from the provider's own credential store. Orbit never puts a key on argv. A lane without native or Orbit-managed MCP reaches Orbit tools with `orbit tool run <tool> --input '<json>'` through its shell tool, under the same grants.
 
-`orbit tool run` selects a workspace from any directory with `workspace` in the JSON input or the global `--workspace` flag: a name, `ws_*` ID, absolute local checkout path, or local `hm_*/ws_*` selector from the federated listing. A selector for another host fails locally, naming it; run the command on that owner host. Unparseable JSON or an unreadable `--input-file` is reported before workspace selection, runtime open or migration, so an input typo never migrates the checkout.
+`orbit tool run` selects a workspace from any directory with `workspace` in the JSON input or the global `--workspace` flag: a name, `ws_*` ID, absolute local checkout path, or local `hm_*/ws_*` selector from the federated listing. A selector naming a registered remote host (`orbit host list`) is delivered to that host over the federated route, and fails with `unreachable_destination` when the route is down. A selector naming a host this machine does not list fails locally with `invalid_input`, naming the host. Unparseable JSON or an unreadable `--input-file` is reported before workspace selection, runtime open or migration, so an input typo never migrates the checkout.
+
+### Retired providers
+
+The `cursor`, `pi` and `opencode` lanes were retired (ORB-18096). A crew naming one fails to load, naming the crew, the retired provider and the remedy: pick a supported provider (`claude`, `codex`, `gemini`, `grok`, `copilot`, `antigravity`, `muse`). `orbit doctor` reports the same refusal. Persisted records naming them still read and display. The Cursor editor MCP client (`orbit mcp init --cursor`) is a separate surface and is unaffected.
 
 ### GitHub Copilot CLI
 
@@ -1043,35 +1537,13 @@ For every lane: Orbit passes `--model` from the crew and sends the prompt on **s
 
 An account without Copilot entitlement fails with `Error: Authentication failed`; org-policy-disabled third-party MCP servers produce a `session.warning` (`warningType: "policy"`). The GitHub org admin fixes both. A run with no assistant message fails the step.
 
-### Cursor Agent CLI
-
-| | |
-|---|---|
-| Install | `curl https://cursor.com/install -fsS \| bash`, then `cursor-agent --version`; put `~/.local/bin` on `PATH`. Cloud agents are not used. |
-| Auth | `cursor-agent login` (check with `cursor-agent status`), in the macOS login keychain by default. A file-store login (`AGENT_CLI_CREDENTIAL_STORE=file` at login) also needs `pass = ["AGENT_CLI_CREDENTIAL_STORE"]`. Or `pass = ["CURSOR_API_KEY"]`. |
-| Model | `cursor-agent models` (or `--list-models`). |
-| Flags | `--print --force --output-format json`. The terminal `{"type":"result","subtype":"success","is_error":false,"result":…}` object is validated before the envelope is read. |
-| Sandbox | Write: `~/.cursor`. macOS: read `~/Library/Keychains`. |
-
-### Pi CLI
-
-| | |
-|---|---|
-| Install | `npm install -g @earendil-works/pi-coding-agent`, then `pi --version`. |
-| Auth | `/login` in an interactive `pi` session (under `$PI_CODING_AGENT_DIR`, default `~/.pi/agent`), or a vendor key via `pass`. Orbit never renders `--api-key`. |
-| Model | A `--model` pattern, optionally vendor-prefixed (`openai/gpt-4o`); list with `pi --list-models`. `effort` renders as `--thinking <level>`. |
-| Flags | `--mode json --no-session --no-approve --offline`: ephemeral sessions, no inherited project trust (project-local `.pi` extensions don't run; `AGENTS.md`/`CLAUDE.md` still load), no startup network calls. |
-| Sandbox | Write: `$PI_CODING_AGENT_DIR`, else `~/.pi`. |
-
-Pi has no MCP client and `orbit mcp init` offers none; keep Pi's `bash` tool available, since Orbit tools go through it. Completion is read only from the final assistant `message_end` frame. No provider token usage is reported; raw output is kept in the audit blob store.
-
 ### Antigravity CLI
 
 `antigravity` launches `agy`, Google's current terminal agent: a separate lane from `gemini` (the legacy Gemini CLI), with different flags, MCP config and model slugs. `gemini-*` models still attribute to the Gemini model family.
 
 | | |
 |---|---|
-| Install | See the [Antigravity CLI docs](https://www.antigravity.google/docs/cli/headless/), then `agy --version` and `agy models`. Init prefers it over `gemini` when both are present. |
+| Install | See the [Antigravity CLI docs](https://www.antigravity.google/docs/cli/headless/), then `agy --version` and `agy models`. |
 | Auth | One interactive `agy` login, cached under `~/.gemini/antigravity-cli/`. An unauthenticated headless run exits with `authentication required`. |
 | Model | A slug from `agy models`; `effort` accepts `low`/`medium`/`high` only. To migrate a `provider = "gemini"` crew, change the provider and use an `agy models` slug. |
 | Flags | `--input-format stream-json --output-format stream-json --dangerously-skip-permissions`, plus `--print-timeout` set to the activity's wall-clock runtime minus 30 s, so `agy` stops itself before Orbit's deadline kills it. The argv is fixed at launch, before any build-admission credit is earned, so credit extends Orbit's deadline but not `agy`'s budget. A shorter custom value is kept. The invocation-start audit event records `print_timeout_ms` and the launch `effective_deadline_ms`; the step output records the same print budget and the final `effective_deadline_ms` (runtime plus earned credit). Deadlines are durations from spawn. For runtimes of 30 s or less the full runtime is used, with a minimum of 1 s, because the shutdown margin does not fit. Don't add `agy --sandbox` or Gemini CLI flags. |
@@ -1082,36 +1554,23 @@ Orbit checks the response from a terminal `result` with `status: "SUCCESS"` for 
 
 Background commands cannot be turned off for a headless run. `agy` 1.3.3 has no flag or setting for it (`agy --help` lists none), so Orbit passes nothing and instead tells every provider, in the shared prompt contract, to run commands in the foreground. `agy` itself waits for a background task it started only until `--print-timeout`, capped at 30 minutes, then ends the turn and exits 0 with the task still running and no envelope. When the last `manage_task`-style status report in stdout shows a `task-<id>` still running, the step fails naming that task, the elapsed time and the bounded last `response`, instead of the generic message. The exit code, a `SUCCESS` wrapper and a persisted summary never count as completion; whatever the run left in the checkout is unverified.
 
-### OpenCode CLI
-
-| | |
-|---|---|
-| Install | `opencode --version`, then `opencode models`. Served modes (`serve`, `--attach`, `web`) are not used. |
-| Auth | `opencode auth login` (`auth.json` under `$XDG_DATA_HOME/opencode`), or a vendor key via `pass`. |
-| Model | A fully qualified `<vendor>/<model>` (`anthropic/claude-sonnet-4-5`). `effort` renders as `--variant`: `high`/`max` only. |
-| Flags | `run --format json --auto`. `--auto` is required unattended (otherwise every permission request is auto-rejected) and is not a security boundary. `--continue`, `--session` and `--share` are never passed. |
-| Sandbox | Write: `$XDG_DATA_HOME/opencode`, the config root (`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`), `$XDG_STATE_HOME/opencode` and `$XDG_CACHE_HOME/opencode`. |
-
-Unset or empty XDG variables use the HOME-based defaults: `~/.local/share/opencode`, `~/.config/opencode`, `~/.local/state/opencode` and `~/.cache/opencode`, respectively. Non-empty absolute XDG overrides keep the `opencode` subdirectory; `$OPENCODE_CONFIG_DIR` selects the config directory directly.
-
-Orbit does not write OpenCode's `opencode.json` MCP config and `orbit mcp init` has no OpenCode target; Orbit tools go through the shell tool. Only assistant `text` parts are read; a terminal `error` event or non-zero exit fails the step. No provider token usage is reported.
-
 ### Muse Code CLI
 
-`muse` runs Muse Code, Meta's terminal coding agent. The contract below was observed on Muse Code 1.4.10 (`1.4.10-R6427.1`, macOS): `muse exec --help` and offline `--provider echo` runs only, with no authenticated run.
+`muse` runs Muse Code, Meta's terminal coding agent. The contract below was observed on Muse Code 1.4.10 (`1.4.10-R6427.1`, macOS): `muse exec --help` and offline `--provider echo` runs only, with no authenticated run. The account-window allowance was additionally observed on Muse Code 1.4.12 in an authenticated macOS run (2026-10-23).
 
 | | |
 |---|---|
-| Install | `~/.local/bin/muse`, a launcher that execs `~/.local/bin/muse-bin-<version>`; check with `muse --version`. Init detects `muse` on `PATH` and enables the `muse` crew. Orbit sets `MUSE_NO_AUTO_UPDATE=1` and `MUSE_LOGIN=0` for every run (an outer value cannot override them), so a run never swaps the binary under running work or starts a device login; upgrade with the launcher yourself. |
-| Routing | The shipped asset sets `host_os: [macos]`. A task assigned a muse crew waits for a macOS host and keeps that crew; a Linux drain does not redraw it onto another crew. Muse Code also ships a Windows build, but native Windows is not an Orbit runtime (ORB-13857) and spawning that binary from Orbit-in-WSL2 is unverified, so Windows stays off the list until that launch is verified. A Mac pull drain that claims these tasks must run the owner's exact Orbit build: `orbit host list` shows the owner reachable with the same `binary_version` and `protocol_fingerprint`. |
+| Install | `~/.local/bin/muse`, a launcher that execs `~/.local/bin/muse-bin-<version>`; check with `muse --version`. Init detects `muse` on `PATH` and enables the `muse-spark`, `muse-wonder` and `muse-wonder-full` crews. Orbit sets `MUSE_NO_AUTO_UPDATE=1` and `MUSE_LOGIN=0` for every run (an outer value cannot override them), so a run never swaps the binary under running work or starts a device login; upgrade with the launcher yourself. |
+| Routing | The shipped asset sets no `host_os`: Muse runs on macOS and Linux, so a muse crew is admitted on either host and the seeded sandbox is translated per host (`macos-sandbox-exec` on macOS, `linux-bwrap` on Linux). Native Windows is not an Orbit runtime (ORB-13857), so a Windows host still has no runnable Muse lane through the normal executor/sandbox availability path. |
 | Auth | `muse login` (Meta account, browser device code) once, outside Orbit. The login writes the file `auth.json` under the config root (`$XDG_CONFIG_HOME/muse`, else `~/.config/muse`), and on macOS `muse exec` also reads the login keychain, so Muse gets the read-only `~/Library/Keychains` carve-out; without it a valid login fails with `missing meta credentials`. Or `pass = ["META_API_KEY"]`, which Muse prefers; `muse auth set --api-key-stdin` also works. Orbit never logs in or forwards `META_API_KEY` unless `pass` names it. |
 | Model | A catalog id (`muse-spark-1.3`); `muse model-profile show <model> [--effort <tier>]` resolves one. `effort` renders as `--reasoning-effort`; Muse accepts `none` … `ultra`, which covers every Orbit effort, and any other value is refused at config load. |
 | Prompt | `muse exec` does not read stdin (piped stdin alone exits 2, `missing prompt`) and refuses `--prompt-file /dev/stdin` (`not a regular file`). Orbit writes the prompt to a mode-0600 file with an unpredictable name in the run's scratch directory (`<worktree>/.orbit/tmp/`), passes `--prompt-file <path>`, and deletes the file when the invocation ends, whatever its outcome. The envelope never reaches argv; the audit keeps the prompt in the invocation's stdin blob. An activity profile that cannot read the worktree cannot read the file either, and the run fails. |
 | Flags | `exec --json --approval-mode never --disable-request-user-input --no-foreign-personal-context --disable-reminders --no-session-log`. `--approval-mode never` and `--disable-request-user-input`: nobody can answer mid-turn, and neither is a security boundary. `--no-foreign-personal-context`: Muse otherwise loads your Claude Code and Codex personal rules and skills. `--disable-reminders`: otherwise every turn spawns skill, goal and verify reminder child agents. `--no-session-log`: no session log per run (this also disables Muse's local session messaging). `--trust-workspace` is not passed: a worktree is content Orbit does not vouch for, so its Muse skills and rules stay unloaded and agent delegation stays off; the envelope directs the agent to read `AGENTS.md`. `--max-model-steps` and `--disable-web-tools` are not passed; the activity deadline bounds the run. |
 | Sandbox | Write: the config root and `$XDG_DATA_HOME/muse` (else `~/.local/share/muse`: tracing, plugins, skills); on macOS also `~/Library/Application Support/Muse` (session-name authority). macOS: read `~/Library/Keychains`. Muse's own sandbox is on by default with network `proxy-only`; under Orbit's sandbox (or `sandbox: off`) Orbit appends `--disable-sandbox`, because a second Seatbelt profile cannot be applied inside Orbit's and Orbit's profile is the filesystem boundary. `--yolo` is never passed. |
 | MCP | Muse has a native MCP client (`mcpServers` in `settings.json`, or `-c KEY=VALUE` per run), but per-run injection of Orbit's server was not verified, so Orbit passes no `-c` and never writes `settings.json`; Orbit tools go through `orbit tool run` on `PATH`. `orbit mcp init` has no Muse target. |
+| Images | `muse exec --image <PATH>` (repeatable) attaches a local image. On Muse Code 1.4.14 (Linux) an authenticated canary probe passed for all three shipped crews, so the shipped executor declares [`image_input`](#executor-image-input-image_input) `attach_args` for PNG. |
 
-Orbit reads only string `payload.text` of the last `run.terminal.completed` record, and only when its `payload.terminal` is `completed`. Missing or non-string answer text cannot be replaced by `payload.message`, `payload.error`, or `payload.error.message`; those fields are fallback failure reasons for non-completed terminal diagnostics only. `failed`, `cancelled` and unknown values (the field is wire-open) fail the step, as do a missing terminal record, a stdout line that is not a JSON record with a `payload_type`, and a non-zero exit even with a completed record. The prompt echoes (`run.lifecycle.started`, `turn.input.user`), partial `run.output.delta` text and child-task records never count as completion. The terminal record carries no usage, so no provider token usage is reported. `muse serve` (MSP over stdio) is not used.
+Orbit reads only string `payload.text` of the last `run.terminal.completed` record, and only when its `payload.terminal` is `completed`. Missing or non-string answer text cannot be replaced by `payload.message`, `payload.error`, or `payload.error.message`; those fields are fallback failure reasons for non-completed terminal diagnostics only. `failed`, `cancelled` and unknown values (the field is wire-open) fail the step, as do a missing terminal record, a stdout line that is not a JSON record with a `payload_type`, and a non-zero exit even with a completed record. The prompt echoes (`run.lifecycle.started`, `turn.input.user`), partial `run.output.delta` text and child-task records never count as completion. The terminal record carries no usage, so no provider token usage is reported. Account usage windows instead come from top-level usage records with `payload.kind = "run_usage"`: a `status` record (Muse Code 1.4.12) or, from Muse Code 1.4.13, a `run.usage` record (`payload_type` `run.usage`, `record_type` `status`, the same allowance shape). Orbit reads both and takes the last one. `payload.allowance.window` and `.weekly` report `used_percent` and `resets_at_ms` (epoch milliseconds). Orbit preserves the `window` / `weekly` labels, records them at run completion and gates them through the shared provider-limit policy; it does not infer a window duration or read per-model token usage from this record. `muse serve` (MSP over stdio) is not used.
 
 ### MCP client registration
 
@@ -1133,13 +1592,14 @@ hard_complexity_crews = ["astra"]
 xhard_complexity_crews = ["fable", "astra"]
 ```
 
-- **Selected at creation.** A task created without `crew` (`orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, an import) draws from its complexity's pool, else `default_crew`, storing `task.crew` and its provenance `task.crew_source`; a `crew_assigned` history entry records the source (`explicit`, `pool:<complexity>`, `purpose:<purpose>` or `default`). A task with a [purpose](#purpose-crew-pools) whose pool is configured draws from that pool instead of its complexity's. That entry is a second write after the insert; if it fails, the task is still created and returned, and the failure is logged. With no crews configured the field stays unset.
-- **Complexity changes redraw automatic crews.** When the pilot or `task update --complexity` changes the tier, a crew sourced from another pool or the `default` fallback is redrawn in the same mutation, logged as `crew_redrawn` with previous and new source and crew. Explicit crews stay pinned, even when an update names the crew a pool already chose; status transitions keep the selection. `task update --crew <name>` pins; [`--crew ""`](#setting-taskcrew) redraws. Every stored change records the actor, prior and new crew, and whether it was named or drawn.
+- **Selected at creation.** A task created without `crew` (`orbit task add`, `orbit.task.add`, an auto-task mint with no template crew, an import) draws from its complexity's pool, else `default_crew`, storing `task.crew` and its provenance `task.crew_source`; a `crew_assigned` history entry records the source (`explicit`, `pool:<complexity>`, `type:<type>/<tier>`, `purpose:<purpose>` or `default`). A task with a [purpose](#purpose-crew-pools) whose pool is configured draws from that pool instead of its complexity's, and a task whose type has a [type pool](#type-pools-by-task-type-and-complexity) for its tier draws from that. That entry is a second write after the insert; if it fails, the task is still created and returned, and the failure is logged. With no crews configured the field stays unset.
+- **Complexity changes before admission redraw automatic crews.** When the pilot or `task update --complexity` changes the tier of unreserved proposed, backlog or someday work, a crew sourced from another pool or the `default` fallback is redrawn in the same mutation, logged as `crew_redrawn` with previous and new source and crew. Explicit crews stay pinned, even when an update names the crew a pool already chose; status transitions keep the selection. `task update --crew <name>` pins; [`--crew ""`](#setting-taskcrew) redraws. Every stored change records the actor, prior and new crew, and whether it was named or drawn.
 - **Tiers:** `low`, `medium`, `hard`, `xhard`. Unset or `unassessed` complexity uses the default chain. The task pilot never demotes a task out of `xhard`.
 - **Empty pool** (`[]`, the init scaffold) means no pool: the task gets `default_crew`, as it does when all members are [disabled](#disabled-crews). Blank entries and unknown crew names fail before dispatch.
 - **Preferences, not allowlists.** An explicit `task.crew`, an explicit run crew, and review and preparation jobs keep the crew they name, except that a standing [provider failure hold](#provider-failure-holds) redirects a task-crew draw away from the crews it excludes, and a [provider usage limit](#provider-usage-limits) removes limited crews from the draw.
 - **Serving hosts at creation.** The creation and re-rate draws above keep a crew whose executor `host_os` (below) excludes the creating host when another host serving this workspace can run that executor. A host serves this workspace when the owner's own records show it pulled here recently: it is in the owner's host registry (`orbit host list` shows each host's recorded `host_os`, read from the host at `orbit host add`) and it holds an execution claim in this workspace from the last seven days. Registration alone never counts — a registered host that serves only other workspaces changes nothing — and a follower that stops pulling ages out after the window, so its OS-only crews stop being drawn; tasks already drawn keep their crew and wait. The task keeps the drawn crew and waits for that host; admission on each host, and activity and purpose-pool draws, still filter by the executing host alone. With no serving follower of the needed OS the creation draw skips the crew as before. Before drawing, creation, crew clearing and complexity re-rates also discard complexity-pool crews whose executor cannot intersect the task's `os:` tags, falling back to `default_crew` when the pool empties. A simultaneous tag edit supplies the tags for that draw. An untagged task can still draw a follower-only crew; an explicitly requested crew with an empty task OS intersection is refused before persistence.
-- **Admission** (drain or ship) checks a pool-sourced crew against the current tier and its enabled, positive-weight members. A stale pool assignment or `default` fallback, or no crew, draws from the current pool, else the default chain; a default fallback is never an explicit pin. Without `crew_source`, legacy assignment history recovers provenance, and a crew with no assignment evidence counts as explicit. Admission never writes back to the task.
+- **Admission** (drain or ship) checks a pool-sourced crew against the current tier and its enabled, positive-weight members. A stale pool assignment or `default` fallback, or no crew, draws from the current pool, else the default chain; a default fallback is never an explicit pin. Without `crew_source`, legacy assignment history recovers provenance, and a crew with no assignment evidence counts as explicit.
+- **Admission write-back.** `task.crew` names the crew of the task's latest delivery. When admission runs a task on a crew other than its recorded one, it writes that crew back with a `crew_source` naming why and a `crew_assigned` history entry (``crew changed from `muse-wonder` to `luna` by experiment exp-4e3e0399 arm cheap-pool``): `experiment:<id>/<arm>` for an experiment arm's crew overlay, else `redraw:<reason>`, where the reason is `provider_hold`, `provider_limit`, `usage_pressure`, `run_crew` (an explicit run-input `crew`) or `pool`. A claimed leaf draws its crew on its executor, so the owner writes the leaf's reported crew back when the leaf settles, with `redraw:claimed_leaf` when no crew experiment chose it. Only the settlement the owner commits writes it: a replayed settlement, including one that overlapped the first, returns the original receipt and leaves the task's crew alone. A written-back crew is not a standing assignment: the next admission draws the task's pool again (or its experiment arm, or the explicit run crew), and a terminal task is never rewritten. The write lands only once the run is durably admitted: a refused or disabled submission, and a keyed resubmission that resolves an existing run, leave the task's crew, source and history as they were, and the write applies only while the task still names the crew its draw read. This also replaces an explicit `task.crew` that a run crew or a provider hold overrode; its history entry names the earlier crew, and `orbit.task.update` sets the pin again. `orbit migrate --backfill-task-crews` repairs tasks admitted before the write-back, as `crew_source: backfill:admission`.
 - **Run overrides.** `orbit run auto --low-complexity-crews …` (and `--medium-…`, `--hard-…`, `--xhard-…`) replaces that pool for one drain; with no names it disables it. `orbit run ship` has no override flags.
 
 #### Weighting a pool
@@ -1157,9 +1617,30 @@ hard_complexity_crews   = ["opus", "sol"]          # bare = uniform
 - Weight `0` parks a crew (never drawn); at least one entry must weigh more than 0.
 - The draw walks the pool in canonical name order over `[0, total_weight)`.
 
+#### Type pools by task type and complexity
+
+```toml
+[workflow.type_complexity_crews.ui]
+hard = ["opus"]
+
+[workflow.type_complexity_crews.security]
+hard = ["opus"]
+medium = ["sol:200", "opus:50"]
+```
+
+`workflow.type_complexity_crews` routes crews by task kind. A task's type is the one [`workflow.crew_performance_types`](#crew-performance-types) gives it from its current tags and context files, the same lens the implementer scorecard measures by. When `workflow.type_complexity_crews.<type>.<tier>` is set for that type and the task's complexity, the pool replaces `workflow.<tier>_complexity_crews` for that draw; any other task, `other` included, draws from its complexity pool exactly as before.
+
+- **Entries** are written like a complexity pool's (`crew` or `crew:weight`), but every entry must name a defined, enabled crew with a positive weight, and a pool must not be empty: remove the key to fall back to the complexity pool. The type must be a `workflow.crew_performance_types` name and the tier one of `low`, `medium`, `hard` or `xhard`. Each refusal is a load error naming the full key.
+- **Layering.** Each `<type>.<tier>` pool is one setting: a workspace pool replaces the same type and tier from global, and the global's other pools still apply.
+- **Precedence.** An explicit crew, then a [purpose pool](#purpose-crew-pools), then the type pool, then the complexity pool, then `default_crew`. A type pool whose members are all excluded by executor `host_os` or the task's `os:` tags falls through to the complexity pool. OS filtering, [usage-pressure](#usage-pressure-draws) and [performance](#performance-weighted-draws) weights apply to type-pool members as to complexity-pool members.
+- **Provenance.** A type-pool draw records `crew_source: type:<type>/<tier>` (such as `type:ui/hard`), and its `crew_assigned` or `crew_redrawn` history names that source. `orbit task show` prints the source. Admission keeps that `type:` source in `crew_selection.source` in `orbit run show` while the task keeps its assigned member; a draw from the whole type pool records the pool's key, `workflow.type_complexity_crews.<type>.<tier>`, with `; usage pressure` appended when usage pressure weighs it. A provider hold or usage limit adds its own note to the source it applies to (`; provider hold excludes <crews> until <time>` or `; provider limit: <detail>`), ahead of any pressure suffix.
+- **Where it draws.** Creation, `task update --crew ""`, a complexity re-rate before admission and fresh admission. A tag or context-file edit that moves an unreserved proposed, backlog or someday task with a pool, type or default source to another type pool redraws it in the same update, as a re-rate does. Implicit edits preserve the crew and source of admitted deliveries, including stopped runs and preserved candidates, in-progress or review work, and work reserved by a non-terminal delivery run or protecting execution claim, even before setup binds the run to the task. Scope metadata still changes under its existing authority rules; it never rewrites recorded run crew/model facts or emits a redraw for a crew that did not run. Local admission serializes selection, run insertion and crew writeback with task edits. An authorized recovery or requeue permits a genuinely fresh admission to evaluate the updated classification and record its selected crew; a candidate resume keeps its original admission provenance. Explicit audited crew corrections retain their existing authority rules.
+- **Admission** keeps a `type:` crew while the task still classifies to that type and tier and the crew is an enabled, positive-weight member of the pool. Otherwise the task draws from the pool it now routes to. A [provider usage limit](#provider-usage-limits) or [failure hold](#provider-failure-holds) covering the crew redraws from the pool's other members, then the complexity pool, then `default_crew`. A claimed leaf on a follower keeps the owner's type-pool crew, because the claimed snapshot carries no tags or context files to classify by.
+- **Seeing it.** `orbit config show` and `orbit config keys` list the table, and Settings › Crews names each `workflow.type_complexity_crews.<type>.<tier>` pool a crew is in under **Used by**.
+
 **Allowlists.** With `--allow-crew`, the draw renormalizes over permitted members, keeping their ratios. A pool with no permitted positive-weight member is disjoint, and `orbit run readiness --allow-crew <crew>` reports `crew_not_allowed`. Without `--allow-crew`, readiness (and the dashboard Drain card) applies the live drain's own set and reports it as `capacity.allowed_crews`. The allowlist is checked against `task.crew` and still applies to system and review activities at dispatch.
 
-**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
+**Frozen per run.** The admitting run captures the effective pools in run input `auto_crew_pools`, inherited by descendants. Each admitted leaf records `crew` and `crew_selection` (task ID, complexity, source, and the eligible `[{name, weight}]` after renormalization, with `pressure` and `effective_weight` under [usage-pressure draws](#usage-pressure-draws) and `performance` under [performance-weighted draws](#performance-weighted-draws)), shown as `Crew Selection:` in `orbit run show`. Retries and resumes keep it.
 
 ### Provider failure holds
 
@@ -1167,29 +1648,34 @@ A local run can fail because of its provider rather than the work. The step erro
 
 | Marker | Meaning | Excluded crews | Base backoff |
 |---|---|---|---|
-| `[provider_capacity]` | The selected model was at capacity. | The run's crew, or every crew of the failing step's provider when that step ran on another provider (a reviewer, say). | 15 min |
+| `[provider_capacity]` | The selected model was at capacity. | The run's crew when the failing step has the same provider and account. If either differs, crews of the failing provider that use the failing account: the named crew for `account=<crew>`, or provider crews without `env` for the default login. If none match, the run's crew. | 15 min |
 | `[provider_unavailable]` | Unusable on this host, such as failed authentication. | As for capacity. | 30 min |
 | `[provider_refusal]` | Content policy refused the task: a Codex content-filter `error` or `turn.failed` frame (`This content was flagged for possible …`), or a Claude `result` with `stop_reason: "refusal"`. | Every crew of the provider, which would refuse the same content again. | 24 h |
-| `[provider_limit]` | The account hit a usage limit (texts below). | Every crew of the failing account; only crews whose model contains the named model (case-insensitive) when the limit names one. | Until the reported reset (below) |
+| `[provider_limit]` | The account hit a usage limit (texts below). | The failing account's crews on that provider. If the limit names a model and at least one of them runs a model containing it (case-insensitive), only those crews; otherwise all of them. | Until the reported reset (below) |
 
-**Accounts.** When the failing crew sets [`env`](#per-crew-credentials-env), the marker is followed by `account=<crew>` after the provider (`[provider_limit] provider=claude account=opus-credits …`): that crew is its own account, so a limit, or a capacity or unavailability failure of a step on another provider than the run's crew, excludes that crew alone. A failure without it, every one written before accounts were named included, is the provider's default login's and excludes only the provider's crews without `env`. A refusal is the provider's content policy and still excludes every crew of the provider. A stored hold keeps the crews it named; its note carries `account` when it is a crew account's.
+**Accounts.** When the failing crew sets [`env`](#per-crew-credentials-env), the marker is followed by `account=<crew>` after the provider (`[provider_limit] provider=claude account=opus-credits …`): that crew is its own account. For capacity and unavailability, the table uses the failing account when the failing step's provider or account differs from the run crew's: a named account selects that crew, while the default login selects only the provider's crews without `env`. If the provider and account both match the run crew, only the run crew is excluded; if no crews match the failing account, the run crew is the fallback. A usage limit independently excludes the failing account's crews on that provider, narrowed further by a reported model as described above. A capacity, unavailability, or limit failure without `account`, including older markers, is for the provider's default login. A refusal is the provider's content policy and still excludes every crew of the provider. A stored hold keeps the crews it named; its note carries `account` when it is a crew account's.
 
 Capacity, unavailability and refusal backoff doubles for each other hold the task got in the last 24 hours, up to 24 hours. A usage limit holds until the provider's reset, clamped to 5 minutes – 7 days after the failure; with no readable reset it starts at 30 minutes and doubles per earlier usage-limit hold on that provider account in the last 24 hours, up to 6 hours. Provider labels are parsed first, so an alias is the same provider. Crews an earlier, still-standing hold excluded stay excluded, each on the machines it was excluded on.
 
 Recognized usage-limit texts: Antigravity's `Individual quota reached … Resets in 1h37m37s`; Gemini's `TerminalQuotaError`; Codex's `You've hit your usage limit … try again at <time>` (an `error` and `turn.failed` pair); a Claude `result` with `is_error: true` starting `You've hit your` or `You've reached your`, or a `rate_limit_event` with status `rejected`; grok's `Too Many Requests (429)` and Grok Build's `API error (status 402 Payment Required): Grok Build usage balance exhausted` (which names no reset time and takes the default hold backoff). The marker then carries `model=<model>`, `window=<window>` and `resets_at=<RFC 3339 time>`. A relative reset is read from the failure time; a Codex `try again at` time is local to the host.
 
+**Run outcome.** An owner-local run stopped by `[provider_capacity]` or `[provider_limit]` ends `held`, with diagnostic code `provider_capacity` or `provider_limit`. `orbit run history` shows the hold, reliability counts it under held rather than failed, and the gate and auto parents pass their success guards without echoing a failure. Incidents retains a provider deferral record. Authentication and content refusals keep their existing failed run outcomes. A routine fire backed by a held run retains the existing `succeeded` fire status; its underlying run still reads `held`.
+
 **Handoff.** Step and final recovery skip these failures. On the PR pipeline the handoff returns `held_provider_failure`: it commits the candidate on the run's branch, publishes no branch and opens no `[BLOCKED]` PR, but pushes the candidate to `refs/orbit/candidates/<task>/<run>` on `origin` so a claim on another host can continue it (a task comment says when that push failed). Run finalization moves the task to `backlog` under a `provider_failure_hold` history event, whose note carries the class, provider, excluded crews, `not_before` and run. A `[provider_unavailable]` hold also names the host's `machine`: a failed login is that host's, so its crews are excluded only there, while crews a still-standing capacity, limit or refusal hold excluded stay excluded on every machine (`carried_crews`). A hold stored without a `machine` excludes its crews everywhere, as before. A claimed leaf on a follower that ends with `[provider_refusal]` releases its claim as a `provider` failure, and the owner records the same hold from its own crews, naming the leaf run.
 
-**Admission during the hold.** Until `not_before`, the crew is drawn from crews the hold does not exclude: the task's own crew or pool, then the other enabled members of its purpose pool when the assignment came from one, then its complexity pool, then `default_crew`; `crew_selection.source` names the hold. With none left, the local drain defers the task and `orbit run readiness --json` reports `reason: "provider_backoff"` with the release time. A follower's pull is not given a held task it would run as an excluded crew (its own crew, or the follower's default for a task naming none); the pull receipt's `deferred_conflicts` names the hold. An unavailable hold placed on another host excludes nothing from that follower. A hold that excludes nothing (the failed run resolved no crew) still defers until `not_before`. An explicit run-input `crew` ignores the hold. A usage-limit hold on an explicit crew (`crew_source` `explicit`, or a legacy pin) follows [`workflow.provider_limit_explicit_crews`](#provider-usage-limits): under `wait` the task waits with `provider_backoff` instead of being redirected; under `pool` it draws as above. The hold ends at `not_before` or any later status change, and the next run resumes the committed candidate.
+**Admission during the hold.** Until `not_before`, the crew is drawn from crews the hold does not exclude: the task's own crew or pool, then the other enabled members of its purpose or type pool when the assignment came from one, then its complexity pool, then `default_crew`; `crew_selection.source` names the hold. With none left, the local drain defers the task and `orbit run readiness --json` reports `reason: "provider_backoff"` with the release time. A follower's pull is not given a held task it would run as an excluded crew (its own crew, or the follower's default for a task naming none); the pull receipt's `deferred_conflicts` names the hold. An unavailable hold placed on another host excludes from that follower only the crews it carries from an earlier standing capacity, limit or refusal hold (`carried_crews`); those stay excluded on every machine. A hold that excludes nothing (the failed run resolved no crew) still defers until `not_before`. An explicit run-input `crew` ignores the hold. A usage-limit hold on an explicit crew (`crew_source` `explicit`, or a legacy pin) follows [`workflow.provider_limit_explicit_crews`](#provider-usage-limits): under `wait` the task waits with `provider_backoff` instead of being redirected; under `pool` it draws as above. The hold ends at `not_before` or any later status change, and the next run resumes the committed candidate.
 
 **Host outages.** A local run that fails `[provider_unavailable]` also records each crew it excluded in the global store (`~/.orbit/orbit.db`, table `provider_crew_outages`), one row per provider and crew, until the hold's own backoff ends; a longer outage of the crew is kept. Until then this host's local admission draws no task onto that crew, not only the held one, and whatever became of the held task: a task whose own crew, complexity pool or default leaves another crew draws it, and the rest wait with `provider_backoff`. A crew of the same name on another provider is not covered. The record is advisory: a failure to record it logs a warning, and the task is still held. Followers and their pull drains are not affected; their own crew window handles their own logins. Operator steps: [stuck job runs](runbooks/stuck-job-runs.md#a-task-held-after-a-provider-failure).
 
-**Routines.** The task-pilot routine honours a host provider failure hold. It reads recent runs on this host — the failures `orbit run readiness --json` projects as `provider_auth_failures`, plus `provider_capacity` — over a one-hour window of finish time (falling back to start time, then creation time), and does not write a new hold record. A recently finished failure remains in that window even when its pipeline was created more than an hour ago. Clearing successes use the same finish-time window. While a `provider_unavailable` failure from the last 30 minutes, or a `provider_capacity` failure from the last 15 minutes, covers every crew the pilot would draw (the inspection-capable members of `workflow.purpose_crews.task_pilot` when it has one, else of `workflow.low_complexity_crews`, or of the next tier up when none can inspect, else `workflow.default_crew`, after the usage-limit narrowing), the routine withholds the dispatch. The withhold reason starts with `provider_hold:` and names the provider or crew, when the backoff ends, the failing run, and the crews skipped. It does not start `task_pilot_pipeline`. Unavailability covers every crew of that provider account on this host, because a failed login is the account's: the crew the failure names as its `account`, else the provider's crews without `env`. Capacity covers the crew the run ran as, or every crew of the failing step's provider when that step did not run as that crew. The routine and the readiness auth-failure card share crew attribution: `task_pilot_pipeline` uses its recorded task-pilot draw (or, for a run admitted before purpose pools, its `workflow.low_complexity_crews` draw), `blocked_task_recovery_pipeline` uses its `workflow.purpose_crews.final_recovery` draw, and `finding_verification_pipeline` uses its prepared verifier partitions, including escalations. These jobs' `resolved_crew` names the tasks' crews and does not identify the agents they dispatched. A missing draw counts as no known crew. A verifier failure counts for the partition whose recorded error the failure message carries; a verifier success counts only partitions with a recorded result. Other jobs use `resolved_crew`. A pilot's provider failure is recorded on the run itself: a failed pilot fan-out prefers a provider-classified worker message over an ordinary failure message, preserving the provider marker even when an earlier worker failed on the work. The backoff is the base in the table above, measured from the latest uncleared failure's finish time; it does not double. A successful run of that provider account on this host that started after the failure, or a pull-drain auth probe that records `recovered_at` for that account on this host, clears unavailability before the backoff ends; a success that started before the failure does not, even when it finishes after it, the same rule `provider_auth_failures` uses. Capacity clears when such a success is of the held crew, or of any of the provider's crews when the hold covers the provider. A probe does not clear capacity. `provider_limit` and `provider_refusal` do not withhold the routine. When any drawable crew remains, the routine still dispatches and the draw skips the held crews, naming the hold in the draw's source. The next tick after the hold lifts dispatches again with no operator action, once the routine's own debounce has passed. Another host's failure does not hold this one. Step-failure and PR conflict recovery share that draw, so they skip a held crew the same way; the routine withhold itself is only the task-pilot routine.
+**Routines.** The task-pilot routine honours a host provider failure hold. It reads recent runs on this host — the failures `orbit run readiness --json` projects as `provider_auth_failures`, plus `provider_capacity` from held runs and older failed runs — over a one-hour window of finish time (falling back to start time, then creation time), and does not write a new hold record. A recently finished failure remains in that window even when its pipeline was created more than an hour ago. Clearing successes use the same finish-time window. While a `provider_unavailable` failure from the last 30 minutes, or a `provider_capacity` failure from the last 15 minutes, covers every crew the pilot would draw (the inspection-capable members of `workflow.purpose_crews.task_pilot` when it has one, else of `workflow.low_complexity_crews`, or of the next tier up when none can inspect, else `workflow.default_crew`, after the usage-limit narrowing), the routine withholds the dispatch. The withhold reason starts with `provider_hold:` and names the provider or crew, when the backoff ends, the failing run, and the crews skipped. It does not start `task_pilot_pipeline`. Unavailability covers every crew of that provider account on this host, because a failed login is the account's: the crew the failure names as its `account`, else the provider's crews without `env`. Capacity covers the crew the run ran as, or every crew of the failing step's provider when that step did not run as that crew. The routine and the readiness auth-failure card share crew attribution: `task_pilot_pipeline` uses its recorded task-pilot draw (or, for a run admitted before purpose pools, its `workflow.low_complexity_crews` draw), `blocked_task_recovery_pipeline` uses its `workflow.purpose_crews.final_recovery` draw, and `finding_verification_pipeline` uses its prepared verifier partitions, including escalations. These jobs' `resolved_crew` names the tasks' crews and does not identify the agents they dispatched. A missing draw counts as no known crew. A verifier failure counts for the partition whose recorded error the failure message carries; a verifier success counts only partitions with a recorded result. Other jobs use `resolved_crew`. A pilot's provider failure is recorded on the run itself: a failed pilot fan-out prefers a provider-classified worker message over an ordinary failure message, preserving the provider marker even when an earlier worker failed on the work. The backoff is the base in the table above, measured from the latest uncleared failure's finish time; it does not double. A successful run of that provider account on this host that started after the failure, or a pull-drain auth probe that records `recovered_at` for that account on this host, clears unavailability before the backoff ends; a success that started before the failure does not, even when it finishes after it, the same rule `provider_auth_failures` uses. Capacity clears when such a success is of the held crew, or of any of the provider's crews when the hold covers the provider. A probe does not clear capacity. `provider_limit` and `provider_refusal` do not withhold the routine. When any drawable crew remains, the routine still dispatches and the draw skips the held crews, naming the hold in the draw's source. The next tick after the hold lifts dispatches again with no operator action, once the routine's own debounce has passed. Another host's failure does not hold this one. Step-failure and PR conflict recovery share that draw, so they skip a held crew the same way; the routine withhold itself is only the task-pilot routine.
 
-**The host's limit record.** A usage-limit failure also records an observation in the global store (`~/.orbit/orbit.db`, table `provider_limit_observations`): one row per provider, model and window with the reset, run, crew and provider text. A run of a crew that sets [`env`](#per-crew-credentials-env) records its observations under that crew account instead (table `provider_account_limit_observations`, one row per provider, account, model and window), so they never replace or gate the default login's. A newer observation replaces the row, an older one never does. Recording is advisory: a failure to record logs a warning, and the run is still typed and held. After every Codex or Claude run, successful or not, the host also records the provider's own reading of each window (source `event`): percent used (can exceed 100), window length and reset.
+**The host's limit record.** A usage-limit failure also records an observation in the global store (`~/.orbit/orbit.db`, table `provider_limit_observations`): one row per provider, model and window with the reset, run, crew and provider text. A run of a crew that sets [`env`](#per-crew-credentials-env) records its observations under that crew account instead (table `provider_account_limit_observations`, one row per provider, account, model and window), so they never replace or gate the default login's. A newer observation replaces the row, an older one never does. Recording is advisory: a failure to record logs a warning, and the run is still typed and held. After every Codex, Claude, Muse, Grok or Antigravity run, successful or not, the host also records the provider's own reading of each window (source `event`): percent used (can exceed 100), window length when known and reset.
 
 - Codex: the last `token_count` with `rate_limits` in the run's own thread rollout (`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*-<thread_id>.jsonl`, `CODEX_HOME` from `[execution.env]`, else `~/.codex`), reading at most the last 1 MiB. `primary` and `secondary` windows are account-wide.
 - Claude: the last stdout `rate_limit_event` (Orbit runs `claude --output-format stream-json --verbose`): each `unifiedWindows` entry (`five_hour`, `seven_day`, …) plus the currently limiting window if absent there. `seven_day_opus` and `seven_day_sonnet` carry their model; an overage window is recorded with `gating` off.
+- Muse: the last stdout `status` (Muse Code 1.4.12) or `run.usage` (Muse Code 1.4.13) record with `payload.kind = "run_usage"` and an allowance object. Each recognized `allowance.window` / `allowance.weekly` with a nonnegative numeric `used_percent` and valid integer `resets_at_ms` yields an account-wide reading, timestamped at run completion. Labels are preserved and window lengths remain unknown.
+- Grok: after the run, the host reads `https://cli-chat-proxy.grok.com/v1/billing?format=credits` with the existing first-party CLI login in `$GROK_HOME/auth.json` (else `$HOME/.grok/auth.json`), using the child's state root. Grok CLI 1.0.67 reports `config.creditUsagePercent` and `config.currentPeriod` (`type`, `start`, `end`): the recognized weekly period yields an account-wide `weekly` reading, its duration in minutes and its end as the reset. Headless `usage` and `grok usage` contain invocation/session token and cost totals, not quota windows. This read needs `curl` on the child's `PATH`, adds no secret to the agent environment, follows no redirects and has a three-second request timeout. Missing or ambiguous credentials, credential/endpoint environment overrides, unavailable transport and unrecognized responses record nothing and never fail the run. Such accounts can still use [`provider_limit_budgets`](#budgets-for-providers-that-report-no-usage).
+- Antigravity: after every run, the host invokes the same resolved `agy` launcher with `--print /usage --output-format json --print-timeout 3s`, using the child's environment and working directory. Verified with agy 1.4.6: the native command's top-level `command.name = "usage"` / `command.data.groups[].buckets[]` reports `remaining_fraction`, `window` (`5h` or `weekly`) and RFC 3339 `reset_time`. Orbit records percent used, 300 or 10080 minutes, and the reported reset, preserving the bucket ID as the window label. Shared buckets are scoped to Gemini, or Flash/Pro when a separate Argon bucket exists; third-party buckets are split into Claude/GPT scopes, and Argon has its own scope. It never reads assistant `response` text or treats token accounting as quota. The query runs host-side so agy can use its existing login, including the macOS login keychain, without adding a secret to the worker environment. A five-second deadline and 64 KiB output bound keep it advisory: unavailable commands, failed reads and unknown shapes record nothing and never fail the run. Older versions without structured quota data can use [`provider_limit_budgets`](#budgets-for-providers-that-report-no-usage).
 - A missing rollout, another thread's rollout or an unrecognized reading records nothing. Other providers report no usage window.
 
 **Pull drains and claimed leaves.** An authentication failure releases the claim and excludes every crew of that provider account (aliases included): the leaf's crew alone when it sets [`env`](#per-crew-credentials-env), else every crew of the provider without `env`; a declared [`auth_probe`](#executor-authentication-recovery-probes) can re-admit them in the same window. A capacity failure excludes only the leaf's crew, since another model may have room, and only for a backoff: 10 minutes from when the leaf ended, doubling with each further capacity failure of that crew in the window up to an hour. The exclusion carries `until` and the crew is runnable again in the same window once it passes; while it holds the owner's before-PR or before-landing review crew, the drain requests nothing and its `Requests held:` line names the review's timing and when the backoff lifts. A usage limit releases the claim with failure class `provider` and `provider_limit: true`, which does not count against the task's release budget and excludes no crew itself; the follower's own limit record excludes the provider's crews until the reading lapses.
@@ -1216,8 +1702,8 @@ provider_limit_explicit_crews = "wait"      # or "pool"
 
 **Gated draws.** Only delivery admission (the crew draw of drains and `orbit run ship`, and the pull window); system, review, final-recovery and task-pilot crews are not gated. The complexity-pool draw of the task pilot, step-failure and PR conflict recovery still skips crews at a provider limit while another member remains, but never waits or redirects the way the gate does. It also skips crews under a host provider failure hold for unavailability or capacity, and that hold alone can withhold the task-pilot routine ([Routines](#provider-failure-holds) above).
 
-- **Purpose tasks** (`crew_source` `purpose:<purpose>`): a limited assigned crew is redrawn from the unlimited enabled positive-weight members of that purpose pool. Their weights and the run's allowlist are kept, and the task record is not rewritten. With none left, the draw continues as a pool task does.
-- **Pool and default tasks** (`crew_source` `pool:<tier>` or `default`, or no crew): limited members are removed and the rest renormalized, as with `--allow-crew`. A limited assigned crew is redrawn from the unlimited members of the current complexity pool; the task record is not rewritten.
+- **Purpose tasks** (`crew_source` `purpose:<purpose>`): a limited assigned crew is redrawn from the unlimited enabled positive-weight members of that purpose pool. Their weights and the run's allowlist are kept, and admission writes the crew it runs back to the task as `redraw:provider_limit`. With none left, the draw continues as a pool task does.
+- **Pool and default tasks** (`crew_source` `pool:<tier>`, `type:<type>/<tier>` or `default`, or no crew): limited members are removed and the rest renormalized, as with `--allow-crew`. A limited assigned crew is redrawn from the unlimited members of the current complexity pool; a `type:` crew is redrawn first from its type pool's other unlimited members, as [type pools](#type-pools-by-task-type-and-complexity) describes. Admission writes a changed crew back to the task as `redraw:provider_limit`, except that a weighted [usage-pressure re-draw](#usage-pressure-draws) keeps the task's `crew_source`.
 - **No default fallback.** With every member limited the task waits; filtering never falls through to `workflow.default_crew`, usually the most expensive crew and often on the same provider.
 - **Explicit crews** (`crew_source` `explicit`, or a legacy pin): `wait` (default) keeps the task in the backlog; `pool` draws from the unlimited members of its complexity pool.
 - **Explicit run crews** (`--input crew=<name>` on `orbit run job`) are the operator's decision and not gated; `crew_selection.provider_limit` records the limit.
@@ -1228,14 +1714,76 @@ A redrawn task's `crew_selection.source` names the limit. A task left with no un
 
 **Surfaces** all share admission's view of live readings (liveness, threshold, crew rules), so none shows a crew runnable while admission skips it.
 
-- `orbit run readiness`: a `Provider limits:` line per gated reading (`claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`, `claude/opus-credits 30d budget …` for a crew account; a reset on another UTC day includes its date) and each waiting task's detail. `--json` has a top-level `provider_limits` array of every live reading: `provider`, `account` (present only for a crew account's reading), `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `age_seconds` (never negative), `stale` (true when `observed_at` is an earlier UTC date than the snapshot), `gating`, `partial`, `threshold` (a percent, or the string `off` when that provider's gate is off), `gated` (false for every reading of a provider set to `off`), `until` and `crews` (enabled crews covered). `provider_auth_failures` lists each host and provider with a `provider_unavailable` authentication failure in the last 7 days (at most 200 recent failures and 200 recent successes) that no successful run of that provider on that host, started after the failure, has cleared. Each item is `host`, `provider`, `account` (present only for a crew that sets `env`, which is grouped and cleared on its own), `runs` (`run_id`, `at`, oldest first) and `fix_command` (the executor's auth-probe hint, else the provider's re-login command; for a crew account, the variables its `env` passes, by name). Crew attribution uses the same recorded draws and verifier partitions as the routine's [provider failure hold](#provider-failure-holds), so a successful pilot, recovery or verifier on another provider cannot clear the card. A failure or success outside that window is not part of the projection.
+- `orbit run readiness`: a `Provider limits:` line per gated reading (`claude five_hour 93% >= 90% until 15:00Z: opus, sonnet skipped`, `claude/opus-credits 30d budget …` for a crew account; a reset on another UTC day includes its date) and each waiting task's detail. `--json` has a top-level `provider_limits` array of every live reading: `provider`, `account` (present only for a crew account's reading), `scope` (the model a reading names, else `null`), `window`, `used_percent`, `exhausted`, `resets_at`, `source`, `observed_at`, `age_seconds` (never negative), `stale` (true when `observed_at` is an earlier UTC date than the snapshot), `gating`, `partial`, `threshold` (a percent, or the string `off` when that provider's gate is off), `gated` (false for every reading of a provider set to `off`), `until` and `crews` (enabled crews covered). The additive `provider_pressures` array lists every enabled crew account (`provider`, optional `account`, `reports_usage`, `threshold`, `gated`, `crews`, `pressure`, `pressure_window`); `crew_pressures` lists every enabled `crew`, `pressure` and `pressure_window`. Text shows `Provider pressure:` and `Crew pressure:` lines. `pressure_window` names the binding `window`, model `scope`, `used_percent` and `resets_at`, or is `null` for neutral unknown usage. `provider_auth_failures` lists each host and provider with a `provider_unavailable` authentication failure in the last 7 days (at most 200 recent failures and 200 recent successes) that no successful run of that provider on that host, started after the failure, has cleared. Each item is `host`, `provider`, `account` (present only for a crew that sets `env`, which is grouped and cleared on its own), `runs` (`run_id`, `at`, oldest first) and `fix_command` (the executor's auth-probe hint, else the provider's re-login command; for a crew account, the variables its `env` passes, by name). Crew attribution uses the same recorded draws and verifier partitions as the routine's [provider failure hold](#provider-failure-holds), so a successful pilot, recovery or verifier on another provider cannot clear the card. A failure or success outside that window is not part of the projection.
 - `orbit run show <pull-drain>`: `excluded <crew> (provider_limit until <time>): <reading>; reading from host <machine-id>` (`unregistered` when the runtime has no machine identity).
-- `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew without `env` uses, and one `provider-limits:<provider>/<crew>` row per enabled crew that sets `env` (a provider with no usage windows and no budget, which is every provider but Codex and Claude, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`; a provider set to `off` says gating is off and lists its readings), plus a `provider-limits:workflow.purpose_crews.review` warning when that ungated lane uses a gated provider (and a `provider-limits:workflow.purpose_crews.pre_landing_review` warning for that pool while it is set). Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
-- Dashboard: the Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge, or `gating off` when the provider's gate is off); the Drain card names gated readings, lists every live reading with its age (`today` on the observation's UTC date, otherwise how long ago) and a stale marker when `stale` is set (a reading whose gate is off is marked `gating off`), lists each standing `provider_auth_failures` item with its host, provider, run links and fix command, and lists tasks waiting with `provider_limit`.
+- `orbit doctor`: one `provider-limits:<provider>` row per provider an enabled crew without `env` uses, and one `provider-limits:<provider>/<crew>` row per enabled crew that sets `env` (a provider with no usage windows and no budget, which is every provider but Codex, Claude, Muse and Grok, shows `info`; a budgeted one shows its `ledger` reading, such as `grok 5h budget 67%`; a provider set to `off` says gating is off and lists its readings), plus a `provider-limits:workflow.purpose_crews.review` warning when that ungated lane uses a gated provider (and a `provider-limits:workflow.purpose_crews.pre_landing_review` warning for that pool while it is set). Each account row appends its raw weekly pressure and binding window/reset (or neutral unknown usage). Row semantics: [health checks](runbooks/health-checks.md#run-orbit-doctor). `orbit doctor providers` shows the same per executor (`LIMITS` column, `provider_limits` in `--json`).
+- Dashboard: the provider strip shows each account's raw weekly pressure beside its readings, with the binding window and reset in its accessible title. Narrow bars show a summary account's pressure with every account and window in the title. The Settings › Crews Limit column (tightest window, used percent, reset, `gated` badge, or `gating off` when the provider's gate is off); the Drain card names gated readings, lists every live reading with its age (`today` on the observation's UTC date, otherwise how long ago) and a stale marker when `stale` is set (a reading whose gate is off is marked `gating off`), lists each standing `provider_auth_failures` item with its host, provider, run links and fix command, and lists tasks waiting with `provider_limit`.
+
+**Weekly usage pressure** is shown raw on these surfaces; it changes draws only under [`workflow.crew_selection = "usage_pressure"`](#usage-pressure-draws). For live provider-reported gating windows of exactly 10080 minutes, pressure is `max(0, 1 - used_percent / 100) / clamp(time_to_reset / 7 days, ε, 1)`, shown uncapped (for example `claude ×25.2 (seven_day 10%, resets 18:00Z)` with six hours left). Five-hour and overage windows do not count. Account pressure uses account-wide weekly readings; crew pressure takes the minimum across those and weekly model windows covering its model. Crews with `env` use only their own account. With no valid weekly reading, a missing/past reset, an error reading or a ledger budget, pressure is neutral `1`. A neutral unknown does not constrain other valid weekly windows. Muse's `weekly` window is normalized to 10080 minutes when parsed.
+
+#### Usage-pressure draws
+
+```toml
+[workflow]
+crew_selection = "usage_pressure"   # default "static"
+usage_pressure_cap = 8              # default
+usage_pressure_strength = 1.0       # default; 0 disables
+```
+
+With `workflow.crew_selection = "usage_pressure"` and a positive strength, crew pool draws spend weekly capacity that is about to reset before capacity that is not: a Claude week 10% used with six hours left (pressure about 25) wins over a fresh Codex week (pressure 1).
+
+- **Effective weight.** Each pool member draws on `weight × clamp(pressure ^ strength, 1/cap, cap)`, where pressure is its crew's [weekly usage pressure](#provider-usage-limits) on this host. Tickets are whole numbers, ×1000 and rounded, so a weight-1 member at the default `1/8` floor keeps 125 tickets; a positive weight never rounds to zero, and a weight of `0` stays undrawable. The multiplier applies after provider-hold and usage-limit narrowing. Task admission applies it before the run's `--allow-crew` list; other draws apply it after their existing membership filters. In each case, pool membership is unchanged, and a crew at its limit is still skipped only by `provider_limit_max_used_pct` or its override. A draw with a single candidate has nothing to weigh.
+- **Draws it covers.** Task creation, `task update --crew ""` and the re-draw after a complexity change (each a fresh draw from the purpose, type or complexity pool, recorded under that pool's source), delivery admission, and a pull-drain follower's claimed leaf: a leaf whose snapshot crew came from a `pool:`, `purpose:` or `default` source is re-drawn inside that source's pool, as the follower captures it, while a `type:` crew stays the owner's (see the admission re-draw below), with the follower's own readings and under the follower's hold, limit and `--allow-crew` narrowing. The owner's readings never weigh a follower's run, and a follower never rewrites the owner's task; the leaf simply runs on the crew its own host drew. Activity pools (including task pilots and final recovery), review pools, finding-verification pools (initial and escalation rounds), and automatic explorer draws use the same multiplier after their existing membership filters. A named explorer stays pinned.
+- **Admission re-draw.** At admission, a task whose crew the system chose (`crew_source` `pool:<tier>`, `purpose:<purpose>`, `type:<type>/<tier>` or `default`) is drawn again from that source's whole pool instead of keeping its assigned member, under the same OS, hold, usage-limit and allowlist narrowing. A claimed leaf on a follower keeps the owner's type-pool crew, because its snapshot carries no tags or context files to classify the task by. When the weighted draw picks another crew, the task record takes the new crew and keeps its `crew_source` unchanged, and its history gains a `crew_redrawn` entry naming both crews and their pressures (``crew redrawn from pool:hard (`sol`) to pool:hard (`opus`) at admission under usage pressure: `sol` ×1 (…), `opus` ×25.2 (…)``). An explicit crew (`crew_source` `explicit`, a legacy pin, or an explicit run-input `crew`) is never re-drawn.
+- **Provenance.** A weighted admission's `crew_selection.source` ends in `; usage pressure`, and each `eligible_pool` member gains `pressure` (raw) and `effective_weight` (the weight it drew on) beside its configured `weight`. Activity draws freeze these fields in `activity_crew_draws`; admitted reviewers record them in `reviewer.eligible_pool`; verifier task snapshots and partition `draws` record each task's eligible pool; explorer submissions and persisted run input carry `eligible_pool`. Retries reuse frozen activity and explorer records, including their original weights. Singleton draws keep configured weights without pressure fields.
+- **Pull offer order.** A follower under `usage_pressure` also reports each crew's weekly pressure in its pull capability (recomputed each pass; absent under `static`, and an absent report reads as neutral `1`). The owner orders that follower's offers by it only below band, priority, expiry and census reach/affinity: of tasks tied on all of those, the one whose pool contains the follower's highest-pressure crew is offered first. Pressure never overrides a higher priority or an expiring task, never gates admission, and owner-local dispatch, which has no pressure input, orders exactly as before.
+
+Under `static`, or with the keys unset, every seeded draw uses its original configured weights and consumes the same random tickets; recorded members omit pressure fields. The pressure is this host's reading; a drain admitting on this host weighs its own readings.
+
+#### Performance-weighted draws
+
+```toml
+[workflow]
+crew_performance = "comparative"    # default "off"; or "absolute", "shadow_absolute", "shadow_comparative"
+crew_performance_strength = 3       # default; 0 disables
+crew_performance_cap = 4            # default
+```
+
+With `workflow.crew_performance` set to `absolute` or `comparative` and a positive strength, task pool draws also weigh each member by its crew's implementer score on the task's type within its complexity tier, read from the [crew performance snapshot](#crew-performance-snapshot). The task's type comes from [`workflow.crew_performance_types`](#crew-performance-types) and its tier from its complexity (`unassessed` when it has none).
+
+- **Factor.** Each member's cell `(crew, current model, tier, type)` gives a score and the crew's tier mean. `absolute` and `shadow_absolute` read the advantage `score − 100`, `comparative` and `shadow_comparative` read `score − crew mean`, and the factor is `clamp(exp(strength × advantage / 100), 1/cap, cap)`: at the default strength, +10 points is ×1.35 and −10 is ×0.74. A crew with no cell for the type reads its crew mean (so comparative is ×1), and a crew with no evidence for its current model in that tier reads 100. Evidence from a crew's earlier model does not count.
+- **Effective weight.** Under `absolute` or `comparative`, a member draws on `weight × pressure_factor × performance_factor`, ×1000 and rounded to whole tickets, with the pressure factor `1` unless [usage-pressure draws](#usage-pressure-draws) apply too. A weight of `0` stays undrawable, the factor never adds a crew outside the pool, and the usage-limit gate and provider holds still narrow the pool first.
+- **Shadow.** `shadow_absolute` and `shadow_comparative` compute that same factor and record it, and the draw uses the weights it would use with the mode `off`. Usage pressure still scales the tickets. Set one of these before turning a live mode on: the draws stay where they are, and the [shadow report](#reading-a-shadow-trial) shows what the factor would have changed. A strength of `0` records nothing, the same as `off`. Shadow still builds the snapshot.
+- **Draws it covers.** Task creation, `task update --crew ""`, the re-draw after a complexity change, and delivery admission of a task drawn from its whole pool. Performance alone never re-draws an assigned crew at admission; under `usage_pressure` the pressure re-draw carries a live performance factor too. A shadow factor is left out of that history note, because it did not change the crew. Explicit crews, a single candidate and tasks outside a pool are untouched. Activity, review, verifier and explorer pools, and a pull follower's claimed-leaf re-draw, take no performance factor.
+- **Unusable snapshot.** A missing, stale (over 24 hours) or `type_list_changed` snapshot, or one the store cannot read (`unreadable`), gives every member factor 1 and records the reason; with usage pressure off the draw then uses the configured weights exactly.
+- **Provenance.** Each `eligible_pool` member of the recorded `crew_selection` gains a `performance` object: `mode`, `applied`, `tier`, `type`, `factor`, and either the cell's `score`, `crew_mean`, `n`, `evidence` (`cell`, `crew_mean` or `none`) and the snapshot's `computed_at`, or `unusable` with the reason. `applied` is true under `absolute` and `comparative`, and false under either shadow mode. A record written before shadow mode has no `applied` field; readers treat that as applied. A scaled draw records `effective_weight` too. `orbit run show` prints each applied member's factor and the mode and type under `Crew Selection:` (`eligible=haiku:40×1.57, luna:30×1.27, gemini-flash:30×0.74 performance=absolute type=review`). A shadow line keeps the configured weight and adds `applied=false`. An admission pressure re-draw's `crew_redrawn` history entry appends both crews' performance factors only when `applied` is true.
+
+With the keys unset or `off`, every draw and its recorded selection is what it was without them.
+
+#### Reading a shadow trial
+
+Before setting `workflow.crew_performance` to `absolute` or `comparative`, set `shadow_absolute` or `shadow_comparative` and let draws accumulate. Each draw stays on the same weights as `off` (usage pressure still applies) and stores the factor it did not use.
+
+Then read the window with:
+
+```
+orbit agents scorecard --role implementers --by-type --shadow --window 30d
+```
+
+`--json` returns the same report. `--shadow` is refused without `--by-type`, and for any role other than implementers. The window is the scorecard's existing `--window` (`1h`, `24h`, `7d`, `30d`, `90d` or `all`; default `30d`). A call without `--shadow` keeps the ranking, or the cell matrix when only `--by-type` is set.
+
+For each pool and task type the report lists every crew that appeared in a draw:
+
+- **Draws** — how many times that crew was selected, and how many draws the pool and type had.
+- **Static share** — the crew's configured weight divided by the pool's configured weight, averaged over those draws.
+- **Drawn share** — the same average using the weight the draw actually used. That is the configured weight, or the usage-pressure weight when pressure was on.
+- **Would-be share** — the share if the recorded factor had been applied on top of the weight the draw used. Under a live mode the factor is already in the drawn weight, so would-be matches drawn. A large gap between drawn and would-be is the work that would move if you switched that shadow mode on.
+
+`comparative` would-be stays near static inside one crew's own mix and moves work between types. `absolute` moves work toward the highest-scoring crew. Draws that recorded no performance object are listed afterwards, with static and drawn shares and no would-be share, and counted as static. They are not mixed into the comparison as factor 1. A pool name is the draw's source up to the first `;`, so a usage-pressure redraw stays with the pool it came from. Choosing which mode to enable, and how long to watch, is the operator's.
 
 #### Budgets for providers that report no usage
 
-Grok, Antigravity and Gemini don't report how close an account is to its limit; Orbit learns it only from the failure. `provider_limit_budgets` declares the operator's allowance per rolling window so Orbit gates the provider before it runs out.
+Gemini doesn't report how close an account is to its limit; Orbit learns it only from the failure. Antigravity's structured `/usage` command and Grok's CLI billing API provide live windows when available; accounts or CLI versions without an available reading can use the same fallback. `provider_limit_budgets` declares the operator's allowance per rolling window so Orbit gates the provider before it runs out.
 
 - **Format.** `provider:<amount><unit>/<window>`: a positive amount in `usd` or whole `tokens`, a window of `<n>h` or `<n>d` up to 31 days, each provider once (`xai` is stored as `grok`). No defaults. Load and `orbit config set` reject a malformed entry.
 - **Crew accounts.** An entry may name a crew that sets [`env`](#per-crew-credentials-env) instead of a provider (`opus-credits:200usd/30d`): it reads only that crew's own spend and gates only that crew, and a provider's budget reads only its default login's spend, the invocations of its crews without `env`. A name that is a provider is the provider; an entry naming a crew that is not defined, or that sets no `env`, fails load naming it.
@@ -1280,17 +1828,48 @@ the existing pull request is reused. Republication is leased to the exact
 previously published head, including when the repeated sync has no rebase
 left to perform. A changed or deleted remote branch refuses that push.
 
+A transient read-only PR or repository observation failure gets one
+host-authenticated completion retry within the original completion deadline.
+The host checks the unchanged publication, validation receipts and captured
+review certificate first; the retried completion reads PR state again and
+checks the published head and base before merging. The recovery rationale
+records `transient-observation`. Review provenance changes and the retired
+capture-only after-landing timing do not add review obligations. New
+validation captures bind non-review inputs separately so review-only config
+drift can be checked against the candidate's captured obligations; older
+captures still require their original full policy digest to match.
+
+A changed review obligation (timing, reviewer pool, budget, baseline commands or
+host evidence) refuses completion reuse and records `policy-changed`. The
+existing bounded requeue preserves the branch and PR for a fresh run under
+current policy, with fresh validation and review. Changed candidate/base
+bindings, mutation or rewrite provenance, and missing or stale evidence
+retain their refusals, recorded as `candidate-changed`. Conflicts, red checks
+and permission failures keep their existing recovery path; a lost mutation
+reply never grants this read-only retry.
+
+A historical supported completion-repair grant is a separate case: it may have
+renewed a deadline without reaching a repair agent. Fresh operator source
+repair can acknowledge that stopped lineage when the host's unique grant
+record, complete parent chain, receipt origin, step audits and unchanged
+publication prove no source or mutation effects. Plain descendants must retain
+the granted deadline and marker. This admission creates a repair-only attempt
+under current validation and review policy; it preserves the old records and
+inherits no completion, merge or automatic-fix authority. See
+[repairing a kept inline publication](runbooks/stuck-job-runs.md#repair-a-kept-inline-publication-after-completion-expired).
+
 **Escalated blocks.** A final-recovery `requeue` is bounded to two per task
 in 24 hours; past that the decision is refused and the task stays blocked.
 The bound has no configuration key. What final recovery escalates waits in
-`blocked` for a reader: the bundled `blocked-task-triage` auto-task (shipped
-disabled; `orbit auto-task toggle blocked-task-triage on`) re-reads each
-escalated block once, hourly, and requeues a mechanical one within the same
+`blocked` for a reader: the seeded `blocked_task_triage` routine (shipped
+disabled; set `enabled: true` in `.orbit/routines/blocked_task_triage.yaml`)
+admits each escalated block episode once, shortly after it appears, into the
+`escalation_triage_pipeline` job. A triager drawn from
+`workflow.hard_complexity_crews` requeues a mechanical block within the same
 two-per-24-hours count, proposes options for a decision, or reports a
-human-only block. Its `skip_unless_blocked_candidates: true` precondition
-mints nothing while no block awaits triage and records a
-`no_blocked_candidates` skip. Its minted task has no crew and draws from the
-`medium` complexity pool. See
+human-only block. It replaced the `blocked-task-triage` auto-task, which is no
+longer seeded: `orbit workspace sync` retires a seeded copy and never enables
+the routine for you. See
 [blocked-task triage](../plugin/skills/orbit-setup/references/automation.md#blocked-task-triage).
 
 ### PR auto-fix repairs
@@ -1319,7 +1898,8 @@ any more. When a task's newest delivery leaf ended `failed`, `timeout` or
 `interrupted` and the task waits in `review`, or was blocked or requeued by that
 leaf's own delivery or final recovery, each pass reads the task's recorded pull
 request. If it conflicts with its base or a required check failed on its head,
-the pass resumes the leaf at its completion step with `auto_fix` granted. The
+the pass resumes the leaf at the last completion round it reached, which pins
+the head the leaf last published, with `auto_fix` granted. The
 watcher there admits the repair against the same attempt ledger and budget (three
 per pull request, one per head and blocker), and the auto-fix crew takes the
 task's footprint locks before it edits, pushes to the same branch and leaves
@@ -1336,6 +1916,21 @@ observation time). Blockers are null when a refusal preceded the forge read.
 `orbit run show <drain-run> --step adopt_orphans --json` exposes the persisted
 pass in `step_output`, including `auto_fix.skipped`. See
 [a conflicting or red pull request no run is watching](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching).
+
+The dashboard's **Fix PR** action on a `review` task starts the same repair for
+that one task without a drain (`POST /api/tasks/<task>/auto-fix`). It runs the
+drain pass's checks and start: the same attempt ledger and budget, footprint
+locks and `pr_auto_fix_out_of_run` record. It needs an operator session, governed
+as `auto_drain.auto_fix`. It grants repair only: the resumed leaf keeps its own
+`completion`, and a leaf started with `--complete` is resumed only when the
+session also holds completion authority (`auto_drain.complete`). The button
+shows only when the task records a pull request. It is enabled only when that
+pull request conflicts with its base or a required check failed on its head;
+otherwise it is disabled with the reason in its title. A refused start answers
+`409` with code `task_auto_fix_<reason>`, using the drain's reasons plus the
+single-task ones; nothing starts. See the
+[runbook](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching)
+for the reasons.
 
 The crew comes from the existing pool resolution, in this order:
 
@@ -1358,23 +1953,33 @@ existing recovery activities, final validation and push do the repair:
 
 - On an open blocked PR, the watcher reads authenticated required-check policy
   for the pinned current head. Queued or running required checks keep waiting
-  within the original completion deadline, even beside an unrelated optional
-  failure. So does a required check that current branch policy names and a
-  freshly pushed head has not reported yet; it is never treated as passed. An
-  unclassified or optional pending check grants no wait, and a
-  required failure still takes precedence over pending checks. Review gates and
+  within the original completion deadline, even beside a failed required or
+  optional check. Repair admission waits until all reported required checks
+  conclude and includes every required failure from the latest policy read. A
+  required check that current branch policy names and a freshly pushed head
+  has not reported yet also waits; it is never treated as passed. An
+  unclassified or optional pending check grants no wait. Review gates and
   unreadable or stale evidence still stop the watcher. A failed required check
-  whose job log shows a code failure is compared with the current base tip
+  whose job log shows a code failure is compared with the current base
   before a repair is admitted. Orbit reads the latest push run of the same
-  workflow on that exact tip. If every failed required job succeeds there and
-  the PR is behind, it refreshes the branch through the existing pinned rebase,
-  validation and lease-checked publication path, then watches checks on the new
-  head. This spends no agent repair attempt. A reviewed head returns for
-  independent re-review before publication. A matching failure on the current
-  base is known red: the watcher records it and waits within the completion
-  deadline, spending no repair attempt. The existing inherited-failure wait also
-  applies while a moved base's same job has not concluded. Missing, pending or
-  unreadable tip evidence cannot prove a landed fix or a known-red base. A
+  workflow on the exact base tip. When that run skipped the job (a docs-only
+  or change-scoped commit) or lists no such job, it reads back along the base
+  branch's first-parent history, up to eight commits including the tip, to the
+  newest commit whose same job ran to success or failure, and judges the
+  failure there. If every failed required job succeeds on the base and the PR
+  is behind, it refreshes the branch onto the current tip, which contains
+  those green commits, through the existing pinned rebase, validation and
+  lease-checked publication path, then watches checks on the new head. This
+  spends no agent repair attempt. A reviewed head returns for independent
+  re-review before publication. A matching failure on the base is known red:
+  the watcher records it and waits within the completion deadline, spending no
+  repair attempt. A failure the base already failed the same way at the head's
+  fork point also waits, without spending a repair attempt, while the moved
+  tip cannot prove it fixed: its same job is still pending, skipped or not
+  listed, no commit within the bound ran it, or its jobs cannot be read. Each
+  poll evaluates it again, so the wait ends once the tip's job concludes. Once
+  a head is recorded that way (`pr_auto_fix_base_red`), a later poll that
+  cannot read the base evidence again keeps waiting instead of repairing. A
   distinct candidate failure keeps the ordinary repair path and three-attempt
   budget. A conflict is rebased onto the current base by PR conflict recovery.
   If a published check repair then conflicts, recovery follows the contiguous
@@ -1382,6 +1987,28 @@ existing recovery activities, final validation and push do the repair:
   authenticated retry ancestors. The stopped rebase's branch and original head
   must both match that repaired head; its target base remains pinned. Missing,
   unrelated or disconnected push records cannot authorize a different head.
+- CI rerun-planner refusals are retained on the owning task in
+  `ci-rerun/<execution>/diagnostics.json`, including the observed PR, head,
+  run and job identities, planner stage and a redacted reason header capped
+  at 1 KiB. These are observations, not authenticated mutation authority.
+  The single replaceable artifact keeps the first refusal and the latest 15
+  transitions, with an omitted-transition count; identical consecutive reads
+  add no history. A later successful planner read clears the current refusal.
+  A changed head clears it before any completion hold, while earlier heads
+  remain historical observations. Completion retains its typed outcome beside
+  this journal and includes a current refusal in the stop diagnostic, including
+  when the original completion budget expires. A diagnostic write failure is
+  reported in a warning and never grants recovery permission.
+- Final recovery after `complete_pr` re-reads required checks on the current
+  head and receives each failed check's name and diagnostic evidence in
+  `required_check_failures`, independently of the earlier step error. The
+  exception is an untouched-path failure whose base evidence is still
+  incomplete: no passing same-check base run exists yet, or the base run passes
+  but no same-signature `pull_request` rerun of the unchanged head is recorded.
+  That wait withholds `required_check_failures` for every check, and the
+  attempt requeues the published candidate instead of diagnosing it. Pending,
+  unreadable or changing checks refuse a partial diagnosis without renewing
+  the completion watch deadline.
 - A failed required check run that no workflow produced (a provider app's
   aggregate result, such as a code-scanning check beside passing analysis jobs)
   is repaired only from its own failure annotations. The watcher reads them
@@ -1507,25 +2134,28 @@ existing recovery activities, final validation and push do the repair:
   concurrent remote movement is refused. Resume spends no new
   repair attempt merely to finish an inherited repair and grants no merge
   authority.
-- A base refresh retains the failed and passing job identities and exact base
-  tip in `auto-fix/<run>/landed-<failed-head>.json` and records
+- A base refresh retains the failed and passing job identities, the base
+  commit each passing job ran on and the exact base tip in
+  `auto-fix/<run>/landed-<failed-head>.json` and records
   `pr_auto_fix_base_refresh` in task history before mutation. Its owner-side
   reservation bounds base refreshes independently of the repair-attempt budget.
-  Old fork-point failure logs are unnecessary: the current tip's latest push
-  jobs supply the evidence. A green tip alone does not prove the base fixed
-  that one failure: when the latest push run of the head's fork point passed
-  the same job, the failure is the candidate's. That check does not by itself
+  Old fork-point failure logs are unnecessary: the base's latest push jobs,
+  read back from the tip past commits that skipped the job, supply the
+  evidence. A green base alone does not prove the base fixed that one failure:
+  when the head's fork point, read back the same way, passed the same job, the
+  failure is the candidate's. That check does not by itself
   end the comparison. When every failed required check is candidate-owned
   that way, completion spends no base refresh and admits one ordinary repair,
   even when the pull request's one base update is already reserved. The same
   repair path holds when one check is candidate-owned and another is green
-  on the tip without a successful fork-point job, as long as no required
-  check is known-red on the tip. A known-red sibling wins over a
-  candidate-owned check: the tip fails that sibling with the same diagnostic,
+  on the base without a successful fork-point job, as long as no required
+  check is known-red on the base. A known-red sibling wins over a
+  candidate-owned check: the base fails that sibling with the same diagnostic,
   completion records `pr_auto_fix_base_red`, and no repair attempt is
   admitted. Other matching current-base failures also record
   `pr_auto_fix_base_red`. Ordinary agent repairs retain their existing
-  admission history. Missing evidence leaves the ordinary diagnosis path in
+  admission history. Missing refresh or known-red evidence leaves the
+  inherited-failure wait and the ordinary diagnosis path in
   place.
 - Closed or merged PRs, and heads superseded by a newer push, get no repair.
 
@@ -1574,18 +2204,42 @@ spec:
 ```
 
 - The value is a non-empty subset of `linux`, `macos` and `windows`. An empty list or any other name is refused when the asset loads, and the error names that asset. Omit `host_os`, or set it null, and the executor runs on every host. Assets that omit it load as they did before the field existed.
-- A task's effective OS requirement is its `os:` tags intersected with its assigned crew's executor `host_os`. Local admission, `orbit run ship` discovery, the drain-start warning and owner pull admission all read that one intersection, so they cannot disagree. An empty intersection (an `os:linux` task assigned a muse crew, for example) is refused when the task is created or updated. The reason names the crew, the executor constraint and the task's tags, and nothing is written: the task never becomes one that no host can run.
+- A task's effective OS requirement is its `os:` tags intersected with its assigned crew's executor `host_os`. Local admission, `orbit run ship` discovery, the drain-start warning and owner pull admission all read that one intersection, so they cannot disagree. An empty intersection (an `os:linux` task assigned a crew whose executor declares `host_os: [macos]`, for example) is refused when the task is created or updated. The reason names the crew, the executor constraint and the task's tags, and nothing is written: the task never becomes one that no host can run.
 - **Operator readout.** Task show (`Runs on:` and JSON `os_requirement`), task list and dashboard task details derive the same tags/stored-crew intersection without writing task fields or adding OS tags. JSON includes `any_of`, `describe`, `source` (OS `tags`, assigned `crew`, and constrained `executor` when present) and `state`. Unknown or disabled crews are `unresolved`; disjoint constraints are `conflict` and admit no host. `orbit task list --runs-on linux|macos|windows` (MCP `runs_on`) filters before pagination, includes unrestricted tasks, and excludes unresolved/conflicting requirements. With neither tags nor a constrained stored crew the JSON key is omitted. For an unset crew this is a tags-only readout: automatic pool/default routing remains undecided and can impose further OS constraints. The stored crew is used even when a past run records a different crew.
-- An explicit crew this host cannot run stays assigned and waits, for example `waits for a macos host (crew muse-wonder)`. It is not redrawn onto another crew. Admission draws and `workflow.default_crew` resolution skip a crew whose executor excludes this host; the other members keep their weights, and an excluded default is left unset rather than pinned. Creation-time complexity draws — task creation, `task update --crew ""`, and complexity re-rates — instead count a crew as runnable when any host serving this workspace can run it: the owner itself, plus each registered host (`~/.orbit/hosts.toml`, what `orbit host list` reports, including each host's `host_os`) whose recorded operating system the executor allows and which the owner's own claim records for this workspace show pulling here within the last seven days. Being registered is not enough: a host in the registry that serves only other workspaces — or none — never counts, and a follower that stops pulling ages out after the window and stops counting, though tasks already drawn keep their crew and wait. So a Linux owner whose Mac pull follower recently claimed work in this workspace can draw a muse crew from a complexity pool; the task is stored with that crew and pool provenance, waits on the Linux owner under the same effective-OS intersection, and is claimed only by a macOS follower through owner pull admission. A crew no serving host can run is still skipped at creation, and a workspace with no serving followers draws exactly as a single host always has. Activity and purpose pools (recovery, review, pilot) run on the executing host and keep filtering by that host alone, as does every admission-time draw. A host's OS is read from it when `orbit host add` registers it (discovery reports `host_os`); an entry registered before that field existed records no OS and counts for no limited crew until it is removed and added again. If no supported purpose or complexity pool remains, local admission and the automatic draw withhold that task with a wait naming the default and the OS it needs; leaving the crew unset never permits the unsupported default to launch. Discovery for a named task uses that run's admitted crew selection, including an explicit choice retained by replay, instead of retrying the unsupported automatic default. This does not override the task's stored crew constraints or its `os:` tags. Activity default fallbacks apply the same host check, including native-inspection activities. Provider preflight stays a backstop for a missing binary or a failed login on a host the executor does allow.
+- An explicit crew this host cannot run stays assigned and waits, for example `waits for a macos host (crew <macos-only-crew>)`. It is not redrawn onto another crew. Admission draws and `workflow.default_crew` resolution skip a crew whose executor excludes this host; the other members keep their weights, and an excluded default is left unset rather than pinned. Creation-time complexity draws — task creation, `task update --crew ""`, and complexity re-rates — instead count a crew as runnable when any host serving this workspace can run it: the owner itself, plus each registered host (`~/.orbit/hosts.toml`, what `orbit host list` reports, including each host's `host_os`) whose recorded operating system the executor allows and which the owner's own claim records for this workspace show pulling here within the last seven days. Being registered is not enough: a host in the registry that serves only other workspaces — or none — never counts, and a follower that stops pulling ages out after the window and stops counting, though tasks already drawn keep their crew and wait. So a Linux owner whose Mac pull follower recently claimed work in this workspace can draw a macOS-only crew from a complexity pool; the task is stored with that crew and pool provenance, waits on the Linux owner under the same effective-OS intersection, and is claimed only by a macOS follower through owner pull admission. A crew no serving host can run is still skipped at creation, and a workspace with no serving followers draws exactly as a single host always has. Activity and purpose pools (recovery, review, pilot) run on the executing host and keep filtering by that host alone, as does every admission-time draw. A host's OS is read from it when `orbit host add` registers it (discovery reports `host_os`); an entry registered before that field existed records no OS and counts for no limited crew until it is removed and added again. If no supported purpose or complexity pool remains, local admission and the automatic draw withhold that task with a wait naming the default and the OS it needs; leaving the crew unset never permits the unsupported default to launch. Discovery for a named task uses that run's admitted crew selection, including an explicit choice retained by replay, instead of retrying the unsupported automatic default. This does not override the task's stored crew constraints or its `os:` tags. Activity default fallbacks apply the same host check, including native-inspection activities. Provider preflight stays a backstop for a missing binary or a failed login on a host the executor does allow.
 - Seeding copies a shipped `host_os` onto an installed default only when that install still omits the field. A value an operator set is kept. Clearing the field restores the shipped declaration on the next seed. Custom executors outside the shipped set are not rewritten.
 - `orbit doctor providers` reports `unsupported on this OS` when `host_os` excludes this host, including when the binary is absent, so an operator is not told to install it here. `not installed` is only for an executor this host may run whose command is missing. The full `orbit doctor` and the dashboard's Doctor panel agree: a routed crew whose executor excludes this host is `skipped` with the same `unsupported on this OS` message and no remediation.
-- Muse is the shipped case: `macos` only, as [Muse Code](#muse-code-cli) records. A Mac that pulls those tasks from the owner must run the owner's exact Orbit build. `orbit host list` shows the owner reachable with the same `binary_version` and `protocol_fingerprint` ([distributed drain](runbooks/distributed-drain.md)).
+
+## Capability labels: `machine.labels` and `requires_labels`
+
+A machine declares the capabilities it has as opaque labels, and a task names the ones it needs:
+
+```toml
+# ~/.orbit/config.toml on the host with the GPU
+[machine]
+labels = ["gpu", "cuda-12"]
+```
+
+```sh
+orbit task add --title "Train the model" --requires-labels gpu,linux ...
+orbit task update <id> --requires-labels ""   # clears the requirement
+```
+
+- A host carries its `machine.labels` plus its OS as an implicit label (`linux`, `macos` or `windows`). `orbit doctor` prints the effective set in its `host-labels` row. Orbit gives no other label a meaning, and does not detect labels.
+- Labels are trimmed and lowercased, and may use ASCII letters, digits, `-`, `_`, `.`, `:` and `/`, up to 64 bytes. A setting or task field with a blank or invalid label is refused.
+- A task's `requires_labels` (MCP `orbit.task.add` and `orbit.task.update`, CLI `--requires-labels`) is all-of: a host may start the task only when it carries every label. `os:` tags keep their any-of meaning, and both apply: a task tagged `os:macos` that requires `xcode` runs only on a macOS host labelled `xcode`.
+- **Write-time check.** Add and update refuse a requirement that no registered serving host carries together with the task's `os:` tags, naming the labels no host carries and every known label set, and write nothing. The known hosts are this host and every executor whose census row in this workspace was declared within the last seven days, which a pull-drain follower sends with each pull. A follower is known only once it has pulled from this workspace.
+- **Admission.** Owner-local drains, `orbit run ship` discovery and readiness withhold a task this host lacks a label for, with reason `host_labels_missing` and a detail naming the labels it lacks. An explicit ship refuses it. Owner pull admission checks the labels the follower declares in its pull request, and the follower's idle pass records the same reason. A task that is already running is not moved.
+- **Grants pin ownership.** Any non-empty `granted_tools` restricts execution to the task's owner host, including grants for tools outside coordination. Pull admission withholds the task from every follower and names the granted tools. Required labels still apply to the owner: if it lacks a label, admission and placement waits name both the grant and the label gap, even while a labelled follower is pulling. Labels never move ownership or override the grant. An operator resolves the conflict by dropping the grant, dropping a required label, or moving the task's ownership. Grants do not extend the closed claimed-owner tool bridge.
+- **Named wait.** While no live host carries the labels (this host, or a follower whose census row is live), task show (`Placement:`, JSON `placement_wait`), task list and `orbit run readiness` name the wait, for example ``waits for a host labelled `gpu` (requires_labels): no registered serving host carries them``. The task stays in `backlog`.
+- **Crew draws.** A creation-time complexity draw for a labelled task narrows the task's OS requirement to the OSes of the known hosts that carry its labels, so it does not draw a crew whose executor `host_os` excludes every such host.
+- **Mixed versions.** The pull request's `labels` field is part of the distributed-drain protocol fingerprint, so a follower and owner on releases with and without label support refuse each other's admission as protocol skew rather than ignoring the field. Upgrade the hosts in lockstep.
 
 ## Executor authentication recovery probes
 
 An executor may declare `spec.auth_probe`. Only a pull drain's **auth-excluded** providers run it: never at drain start, for healthy crews, after the window closes, or for capacity or refusal exclusions. The first attempt is due ten minutes after the failed leaf; failures wait twenty, then thirty minutes (the cap). Exclusions and probes are per provider account: a crew that sets [`env`](#per-crew-credentials-env) is excluded, probed and re-admitted alone, and the provider's default login covers its crews without `env`. A pass durably acknowledges those auth failures and re-admits that account's crews within the window; it never clears a preflight, capacity, crew or host exclusion. Without a probe the exclusion lasts the whole window: re-login and start a new drain. Owner-local drains use timed, task-specific [provider holds](#provider-failure-holds) instead. Drain-side view: [distributed drain runbook](runbooks/distributed-drain.md).
 
-Only the shipped **claude** executor declares one: a minimal `claude -p --model haiku` call with built-in and MCP tools disabled ([CLI contract](https://code.claude.com/docs/en/cli-reference)), a one-line prompt on stdin, and success on exit zero plus `ORBIT_AUTH_OK` on stdout. Each attempt costs one model request. `claude auth status` is not used: cached status can lag a real 401 and may refresh shared OAuth credentials. Codex, Gemini, Antigravity, Grok, Copilot, Cursor, Pi, OpenCode and Muse declare none (their minimal model-call and success contracts are not established); local-shell has no provider authentication.
+Only the shipped **claude** executor declares one: a minimal `claude -p --model haiku` call with built-in and MCP tools disabled ([CLI contract](https://code.claude.com/docs/en/cli-reference)), a one-line prompt on stdin, and success on exit zero plus `ORBIT_AUTH_OK` on stdout. Each attempt costs one model request. `claude auth status` is not used: cached status can lag a real 401 and may refresh shared OAuth credentials. Codex, Gemini, Antigravity, Grok, Copilot, and Muse declare none (their minimal model-call and success contracts are not established); local-shell has no provider authentication.
 
 Seeding preserves existing operator executor definitions; to opt in, add the declaration to the installed definition and start a drain:
 
@@ -1604,6 +2258,47 @@ auth_probe:
 
 `orbit doctor` (`provider-auth:<provider>`, or `provider-auth:<provider>/<crew>` for a crew account), `orbit run show <drain>` and the dashboard drain panel show provider account, host, exclusion time, auth class, re-login hint, credential origin and next probe time; doctor reads the record and calls no provider. Credential origin names a passed `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) by name only, else the macOS keychain or provider cache: the configured route, not a keychain read or proof of which credential the CLI used. To avoid sharing a rotating Desktop login, pass a dedicated `claude setup-token` credential as `CLAUDE_CODE_OAUTH_TOKEN`.
 
+## Executor inspection tools (`inspection_args`)
+
+An executor may declare `spec.inspection_args`: the arguments appended to its argv for a pinned-source inspection run (task pilot, finding verification, escalation triage), so the CLI's own file-read and shell tools work unattended in the inspection checkout.
+
+```yaml
+spec:
+  inspection_args: [--config, features.shell_tool=true, --config, features.unified_exec=true]
+```
+
+- An empty list means the executor's static `args` already enable those tools. The shipped **claude** executor declares `[]` (`--tools default` enables Read and Bash) and the shipped **codex** executor declares the shell and unified-exec features above. No other shipped executor declares the field.
+- Omitting the field means the executor has no known inspection surface. Inspection draws skip its crews (see [System work draws from the complexity pools](#system-work-draws-from-the-complexity-pools)), and an explicit or run crew that names it fails before launch with the non-retryable `InspectionToolsUnavailable` error, which names the executor and this field. Declare the arguments once the CLI's native tools are known to work non-interactively under the `reviewer` profile.
+- An installed definition that omits the field takes the shipped default executor's declaration of the same name, so existing `codex` and `claude` installs inspect without reseeding. A value set on the installed definition wins.
+- Read-only is enforced by the `reviewer` filesystem profile, not by these arguments.
+
+## Executor image input (`image_input`)
+
+An executor may declare `spec.image_input`: how image files reach its model. Images never travel in prompt text; they are staged as files in the run's scratch directory.
+
+```yaml
+spec:
+  image_input:
+    mode: attach_args          # or native_read
+    formats: [png, jpeg, webp] # png is required: it is the canary's format
+    max_images: 40             # canary included; at least 2
+    attach_args: ["--image", "{path}"]   # attach_args only: argv per image
+```
+
+- `native_read`: the CLI's own file-read tool presents image files to the model. The prompt lists the staged paths and tells the agent to read each one.
+- `attach_args`: the images are attached at launch, `attach_args` appended once per image with `{path}` replaced by the staged file. Only scratch paths reach argv, never content.
+- A definition with an invalid declaration fails to load with `invalid spec.image_input: …`: an unknown key, no `png` in `formats`, a repeated format, `max_images` below 2, `attach_args` with `native_read`, `attach_args` mode without `attach_args`, or a template without `{path}`.
+- Omitting the field means the executor cannot take images. An activity whose input asks for images (`image_input`) on such a crew, or on a crew that sets [`vision = false`](#crewsname--which-provider-model-runs-the-task), fails before launch with the non-retryable `image_input_unavailable` error, which names the executor and `spec.image_input`.
+- An installed definition that omits the field takes the shipped default executor's declaration of the same name, as `inspection_args` does. A value set on the installed definition wins.
+- Shipped declarations: **claude** `native_read` (PNG, JPEG, WebP, GIF), **codex** `attach_args` with `--image {path}` (PNG, JPEG, WebP) and **muse** `attach_args` with `--image {path}` (PNG). Each is declared only because its lane passed the canary probe below. The gemini, antigravity, grok and copilot executors declare none.
+- Only regular files are staged. A requested image that is a FIFO, socket, directory, device or another non-regular file — including a symlink that resolves to one — is refused before launch with a `stage image …` error that names the path. When the source opens, the refusal reports `not a regular file (found <kind>)`; when opening the source itself fails — as it does for a Unix-domain socket on Linux, refused with its OS error such as `No such device or address (os error 6)` — the staging error retains that open error instead. The source is opened without blocking, so a named pipe with no writer cannot stall preparation before provider supervision starts.
+
+**The canary.** Every image-input invocation is first given a canary: a generated PNG of a random six-character code, created per invocation in scratch and never written to a task. The agent must return the code as `result.canary`. A result without it, or with another code, is refused as `[image_not_seen]`, a retryable step failure, and each check emits an `activity.image_canary_checked` audit event with the crew, mode and `seen`. The canary proves delivery, not judgement.
+
+**Visual hold.** A crew whose newest two or more canary checks all missed is held for visual purposes until 30 minutes after its last miss, doubling with each further consecutive miss up to 24 hours, like a [provider failure hold](#provider-failure-holds). Its next passing check clears it. The hold is read from the audit events, so it covers probes and deliveries alike.
+
+**Probing.** `orbit agents vision-probe` runs the canary for every enabled crew outside any delivery (one `image_input_probe_pipeline` run each) and prints one row per crew: executor, model, mode, result and any visual hold. Results are `seen`, `image_not_seen`, `no_image_input`, `vision_off`, `no_cli_runtime`, `failed` or `timeout`. `--crew <name>` (repeatable) probes only those crews, and fails before launching anything when a named crew cannot take images. `--timeout-seconds` bounds the wait (default 900). Declare `image_input` on an executor only after its probe passes, and set `vision = false` on a crew whose model keeps returning `image_not_seen` on a lane that passes for others.
+
 ## `[execution.env]` — the agent subprocess environment
 
 Every agent subprocess (bare, Bubblewrap or `sandbox-exec`) starts from a **cleared** environment and receives only:
@@ -1614,8 +2309,9 @@ Every agent subprocess (bare, Bubblewrap or `sandbox-exec`) starts from a **clea
 | `pass` | Names listed in `execution.env.pass`. Default: `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`, plus `__CF_USER_TEXT_ENCODING` on macOS. |
 | Provider extras | Variables the selected provider runtime declares it needs. |
 | Orbit envelope | Named `ORBIT_*` variables: run, task and session identity (`ORBIT_RUN_ID`, `ORBIT_TASK_ID`, `ORBIT_SESSION_ID`, …), locators (`ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`, `ORBIT_REGISTRY_ROOT`, …) and activity bindings (`ORBIT_ACTIVITY_*`, `ORBIT_STEP_INDEX`, …). Privilege-bearing names (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) are not admitted; an inherited `ORBIT_ROOT` is removed. |
+| Crew `env` | The global `[crews.<name>] env` entries of the crew the agent runs as, applied last. Each entry's name takes its source's value from the launching process and replaces the same name from `pass`. Other crews never receive it. An unset source leaves the name out for that crew. See [per-crew credentials](#per-crew-credentials-env). |
 
-This is an allowlist, not a secret filter: a benignly named credential such as `DATABASE_URL` never reaches an agent unless you name it. Agents keep network access, so this is the boundary against accidental exfiltration.
+This is an allowlist, not a secret filter: a benignly named credential such as `DATABASE_URL` never reaches an agent unless you name it in `pass` or in a crew's `env`. Agents keep network access, so this is the boundary against accidental exfiltration.
 
 ```toml
 [execution.env]
@@ -1623,6 +2319,7 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "GITHUB_TOKEN"]
 ```
 
 - `pass` replaces the default rather than extending it; restate the baseline names you want.
+- `pass` is shared by every crew. A crew's [`env`](#per-crew-credentials-env) entry adds a name for that crew alone and replaces the same name from `pass` for it.
 - A listed name that is unset is absent, not empty. Names must be valid identifiers.
 - `pass` is a [security key](#where-config-lives): a workspace file that omits it gets the built-in default, not the global value.
 - Inheriting the full environment is not configurable; a stale `execution.env.inherit` is ignored.
@@ -1647,7 +2344,7 @@ The remaining keys, grouped as `orbit config show` groups them.
 |---|---|---|
 | `execution.codex.sandbox` | `workspace-write` | Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. Under `workspace-write`, Codex's extra writable roots are Orbit's runtime stores, never the whole workspace `.orbit` or `~/.orbit`. `orbit init` seeds `danger-full-access` globally. [Security key](#where-config-lives). |
 | `execution.codex.approval_policy` | unset | **Advanced.** `untrusted`, `on-request` or `never`. Security key. |
-| `execution.env.pass` | `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` (+ `__CF_USER_TEXT_ENCODING` on macOS) | Environment names passed into agent subprocesses. Security key. See [`[execution.env]`](#executionenv--the-agent-subprocess-environment). |
+| `execution.env.pass` | `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER` (+ `__CF_USER_TEXT_ENCODING` on macOS) | Environment names passed into every crew's agent subprocesses; a crew's [`env`](#per-crew-credentials-env) adds names for that crew alone. Security key. See [`[execution.env]`](#executionenv--the-agent-subprocess-environment). |
 | `execution.proc_spawn_max_timeout_minutes` | `45` | **Advanced.** Longest timeout one `proc.spawn` call may use inside a managed activity (1–1440), also capped at the activity's remaining wall-clock budget (passed to the agent as `ORBIT_ACTIVITY_DEADLINE_UNIX_MS`). Outside an activity the ceiling is 60 seconds. The result reports `timeout_ceiling_ms` and its source. |
 | `execution.agent_stall_minutes` | `30` | **Advanced.** Minutes a provider process may produce no stdout or stderr and use no CPU before Orbit ends it and fails the step as stalled, so the usual retry and recovery path runs. `0` disables the check and leaves only the wall-clock timeout. At most 1440. |
 
@@ -1657,16 +2354,27 @@ Both tables resolve built-in → global → workspace. Unknown keys warn and are
 
 | Key | Default | What it does |
 |---|---|---|
-| `review.timing` | `off` | The one review layer before landing. `before_pr` holds PR creation for a fresh reviewer that fixes what it finds. `before_landing` opens the PR first, reviews its published head while hosted CI runs, and merges only the head the review settled; a reviewer fix is validated and pushed onto the PR under a lease, and any outcome but approve leaves the PR open and unmerged, with the task in `review` and a typed reason (see [before-landing review](design/review-gate/2_design.md#32-before-landing-review-of-the-open-pr-orb-14849)). PR route only. Captured at submission, so a run in flight keeps its value. |
+| `review.timing` | `off` | The one review layer before landing. `off` (recommended default) and `before_landing` (recommended when a pre-landing review is wanted) are the supported values. `before_pr` is deprecated but still holds PR creation for a fresh reviewer that fixes what it finds; an explicit `before_pr` keeps before-PR semantics with a bounded `review.timing` deprecation warning naming the file. `before_landing` opens the PR first, reviews its published head while hosted CI runs, and merges only the head the review settled; a reviewer fix is validated and pushed onto the PR under a lease, and any outcome but approve leaves the PR open and unmerged, with the task in `review` and a typed reason (see [before-landing review](design/review-gate/2_design.md#32-before-landing-review-of-the-open-pr-orb-14849)). PR route only. Captured at submission, so a run in flight keeps its value. New setups use `off` or `before_landing`; new run requests use `--review before-landing`. |
+| `review.selective_before_landing.mode` | `off` | Selective before-landing review: `off` (default; no selective scan), `observe` (record what would require review on a host-authored `review-selection.json` receipt without invoking a reviewer or changing delivery), or `enforce` (a selected candidate runs the existing before-landing reviewer alongside CI). Requires `review.timing = "off"` and at least one predicate; an effective `before_pr` refuses the combination with the explicit-migration remedy and is never auto-converted. Enforce needs a pre-landing reviewer crew and the PR route before dispatch; observe needs no crew but is PR-route only. |
+| `review.selective_before_landing.risk_threshold` | unset | Select when the existing `diff_lines` task-riskiness estimate for the pinned candidate is strictly greater than this finite probability in `[0, 1]` (exactly `0.40` does not exceed `0.40`). Unset disables the risk predicate and builds no risk model. Unknown or unattributable risk is never zero; it follows `unknown_risk`. |
+| `review.selective_before_landing.paths` | `[]` | Positive repository-relative globs matched against both old and new names of the complete pinned base/head diff (renames, deletions, binary, mode, symlink and gitlink entries included), e.g. `[".github/workflows/**"]` with `risk_threshold = 0.40`, `mode = "observe"` and `unknown_risk = "review"`. A stated list replaces the lower layer's list. Candidate selectors and candidate config edits cannot weaken the frozen owner policy. |
+| `review.selective_before_landing.unknown_risk` | `review` | What a configured risk predicate does without a usable estimate: `review` or `skip`. Never applies to an unreadable or truncated path diff, which records `selection_unavailable` and holds enforced completion. |
 | `review.before_landing_hosts` | `[]` | Owner policy for the distributed drain: machine ids (`hm_…`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries do not. See the per-host note below the table. |
 | `review.minutes` | `30` | Wall-clock limit for one candidate's review, fix commit and final validation included (1..=1440). Retries and resumes share the minutes; the reviewer is stopped when they run out, and a spent review is not restarted. A base replay stopped at its review deadline is inconclusive and is not cached [ORB-15350], so raising `review.minutes` allows a retry to complete without being suppressed by an earlier cutoff. A changed candidate (after a completion rebase, say) is a new review. |
 | `review.baseline_commands` | `[]` | Commands settlement may rerun on the host, besides `workflow.required_validation_commands`, to confirm a [reviewer's red-base claim](#a-red-base-is-held-not-blocked). A listed command is binding: it needs a passing record or a claim settlement reproduces, or the review settles incomplete. Captured when the delivery or claim is admitted. With the required commands, also the gates an implementer may hand off when its sandbox deferred only one kind's tests (Bubblewrap, Seatbelt, or `ps` on a macOS claimed leaf) ([required validation](#required-validation)). |
-| `review.verify_findings` | `false` | **Advanced.** Review findings must be verified before approval. When `true`, a review-filed `bug` (tagged `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`) is refused at approval and promotion and withheld from drain admission as `unverified_review_finding` until `finding_verification_pipeline` records a CONFIRMED verdict for its current material. When `false` or absent, verification state is ignored there, and readiness, drain summaries and `orbit doctor` report no such hold. Read each time the gate is checked, so `orbit config set` or the dashboard's Settings › Effective switch applies to running drains without a restart. Turning it on does not enable the seeded `finding_verification` routine, and the job and routine stay available with it off; a REJECTED verdict still rejects the task. |
+| `review.verify_findings` | `false` | **Advanced.** Review findings must be verified before approval. When `true`, a review-filed `bug` (tagged `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`) is refused at approval and promotion and withheld from drain admission as `unverified_review_finding` until `finding_verification_pipeline` records a CONFIRMED verdict for its current material. When `false` or absent, verification state is ignored there, and readiness, drain summaries and `orbit doctor` report no such hold. Read each time the gate is checked, so `orbit config set` or the dashboard's Settings › Review switch applies to running drains without a restart. Turning it on does not enable the seeded `finding_verification` routine, and the job and routine stay available with it off; a REJECTED verdict still rejects the task. |
 | `[[review.host_evidence]]` | `[]` | Checks a claimed leaf owes for the paths it changed; see [owed host evidence](#owed-host-evidence). A workspace list replaces the global one. |
 | `workflow.purpose_crews.review` | unset | Crew for automatic review: review tasks the after-landing `delivery-code-review` auto-task mints (unset: that definition's template crew; set, it replaces that crew), and the reviewer `review.timing` runs while `workflow.purpose_crews.pre_landing_review` is unset. One crew name, or a weighted pool. See the review crew pool note below the table. |
 | `workflow.purpose_crews.pre_landing_review` | unset | Crew for before-PR and before-landing review only, including the reviewer a claim captures for a `review.before_landing_hosts` machine. Unset or `[]`: `workflow.purpose_crews.review`. Written like it. See the review crew pool note below the table. |
 
+
+**Selective before-landing review.** Shipping changes no live setting: the default stays `off`. Adoption is a later operator decision — set `mode = "observe"` first, read selection volume, unknowns and scan gaps from the receipts and `orbit config show` / doctor review lines, and only then change `mode` to `"enforce"` for future admissions. Observation and skips create no review certificate and no after-landing coverage, and review-mode accounting never counts them as completed reviews. A positive enforced decision overrides `skip-review` and custom review-skip tags; stronger `--review before-landing` and `review.before_landing_hosts` matches stay unconditional, while `--review before-pr` conflicts with enforcement. Required CI and merge authority are unchanged; this does not replace release-secret isolation or authorize disabling Copilot workflow-run approval. Symbol-history triggers are not part of this feature.
+
+**Review timing compatibility.** Readers also accept `none`, `after_landing` and `after-landing` as `off`, `before-pr` as `before_pr`, and `before-landing` as `before_landing`. The retired after-landing timing captures no run review; after-landing review is controlled by the `delivery-code-review` auto-task. Config writes, including doctor repairs and unrelated edits, persist only `off`, `before_pr` or `before_landing`, which the previous release also reads. Existing canonical values keep their spelling. During a mixed-version deployment, new writers therefore keep the config readable by older CLI and MCP processes. Normalize any already-written aliases with a new build before older readers use that file; editing aliases by hand while older readers remain active is unsupported. Alias normalization preserves the resolved policy and its source, so published-run policy digests remain unchanged and admissions need not be drained for this spelling-only rewrite. `review.timing = before_pr` (and `before-pr`) is deprecated but accepted with a bounded warning naming `review.timing`, the written value, and the file; the effective value and provenance stay truthful and before-PR behavior is unchanged. Deprecation alone never fails `orbit doctor` and never conceals a genuine configuration or gate error.
+
 **Deprecated review keys.** `review.before_pr` and `review.before_landing` load into `review.timing` with a deprecation warning: `before_pr = true` is `before_pr`, `before_landing = true` is `before_landing`, both off is `off`. A workspace that sets one of them keeps the other from the global file, as it did before. Load fails, naming the keys, while they would both be on, since there is one review layer before landing. `operation.review_crew` loads into `workflow.purpose_crews.review`. A file that also sets the replacement keeps the replacement. Runs, claims and pipeline state recorded with the old switches keep their captured review: the captured admission and ship contract still carry `before_pr` and `before_landing` flags.
+
+**Deprecated `before_pr` timing and its intentional migration [ORB-20099].** `review.timing = before_pr` (and `before-pr`) is deprecated; new setups use `off` or `before_landing` and new run requests use `--review before-landing`. An explicit `before_pr` still resolves to before-PR with its deciding layer/source, a bounded warning on load (`review.timing`, the written value, the file) and at submission (`review.timing` with the `global`/`workspace` source, or `--review before-pr` with the `run-option` source), and unchanged admission, publication order, reviewer, and budget. Migrate intentionally with the existing scoped audited writer: `orbit config set review.timing before_landing` for the workspace (add `--global` only when the global layer actually decides the timing; use explicit owner/workspace targeting for other stores). Show before/after effective policy and source (`orbit config show`); the migration preserves minutes, crew pools, validation requirements, host evidence, and unrelated settings, and distinguishes a workspace override from editing the global setting it masks. Ordinary writes, spelling normalization (`before-pr` to `before_pr`), default refresh, and doctor retired-key repair never silently change the timing nor materialize a masked global timing into another layer. Deferred removal of accepted `before_pr` input and internal before-PR handlers is a later separately scoped decision (consumed by ORB-20087 only after this deprecation lands).
 
 **Per-host before-landing review.** `review.before_landing_hosts` is read only by the owner, and only for claimed leaves. A leaf on a listed machine reviews its PR before it lands, as `review.timing = before_landing` makes every leaf do; the owner's own deliveries and unlisted machines are unaffected. Entries are trimmed and de-duplicated. Each must be an `hm_` machine id, with letters, digits, `_` or `-` after the prefix; any other entry fails load, naming its index. The list is redundant while `review.timing` is `before_landing`, and loading fails while it is `before_pr` and the list is non-empty. The owner resolves it for the caller's machine when a follower probes or pulls, and the claim captures the result, so a follower that echoes its probed contract matches. The machine label is caller-chosen, so this is policy, not a security boundary. Protocol revision is unchanged; the contract is in the [`orbit.task.pull` spec](design/distributed-drain/specs/task-pull.md).
 
@@ -1687,7 +2395,50 @@ The review tasks it mints carry `workflow.purpose_crews.review` when that key is
 Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`), `name`, `paths` (workspace-relative globs), `os` (`linux` or `macos`), the exact `command`, and a result `artifact` (a relative `.json` path, unique across rules). A rule Orbit could never fulfil fails load.
 
 - A `codeql` rule is owed on a host of another OS and fulfilled by the owner on `os`.
-- A `linux` `codeql` rule may add `hosted_check`, the pull request check that runs exactly its `command` on every candidate, named as the forge reports it (`CodeQL / Analyze (rust)`, or the check's own name). On a before-landing review on a claim host of another known OS, such as macOS, the requirement is then owed to the owner (`owner_owed_evidence`) instead of holding the review: owner acceptance refuses a certificate that owes it any check its captured rules did not declare that way, and the owner's landing merges the pull request only after that check reports an explicit success on the reviewed head (a CheckRun `SUCCESS` or a StatusContext `SUCCESS`). It waits while the check is absent, still running, or completed without a success (`SKIPPED` or `NEUTRAL`), and when the check failed it recovers or stops as for any failed pull request check (one branch update for a failure inherited from the base, one rerun for a transient one, the one automatic repair for the candidate's own; see the [distributed drain runbook](runbooks/distributed-drain.md)), whatever branch protection requires. Branch protection's own reading of a skipped or neutral required check is unchanged. Without `hosted_check` — a custom query, or a workspace with no hosted CodeQL — the requirement holds the review like any other owed check. Declare it only for a check that really runs the rule's command: Orbit compares the name, not the queries the job runs. Any other kind or OS with `hosted_check`, or an empty one, fails load.
+- A `linux` `codeql` rule may add `hosted_check`, the pull request check that runs exactly its `command` on every
+  candidate, named as the forge reports it (`CodeQL / Analyze (rust)`, or the check's own name). On a
+  before-landing review on a claim host of another known OS, such as macOS, the requirement is then
+  owed to the owner (`owner_owed_evidence`) instead of holding the review: owner acceptance refuses a
+  certificate that owes it any check its captured rules did not declare that way, and the owner's
+  landing merges the pull request only after that check reports an explicit success on the reviewed
+  head (a CheckRun `SUCCESS` or a StatusContext `SUCCESS`). It waits while the check is absent, still
+  running, or completed without a success (`SKIPPED` or `NEUTRAL`). When the check failed, landing
+  recovers or stops as for any failed pull request check: a failure inherited from the base gets a
+  branch update, and the owner waits within the landing deadline for a newer passing base, up to three
+  updates per handoff. A transient failure gets one shared rerun. For an untouched-path failure, a
+  successful same-check push run on the accepted base ancestry authorizes one rerun of the original
+  `pull_request` run; this base run may predate the candidate failure, and a base pass alone does not
+  attribute the failure to the candidate. Both owner completion with `auto_fix=true` and claimed
+  landing use the shared bounded eligible-set planner. It authorizes the workflow-wide action only
+  for a complete authenticated failed-job set of eligible roots and dependency-only waiters; an
+  independent candidate failure vetoes that retry, and uncertain evidence holds. The generic
+  versioned producer contract authenticates the workflow and the producer's complete event-base
+  source checkout and the workspace-owned `isolated-source-v1` execution promise. The trusted
+  invocation must exclude ambient imports, shell hooks, configuration and executable search, and
+  re-establish the actual producer bytes after the last candidate operation; this workspace uses
+  an absolute isolated interpreter, a cleared environment and a raw git byte check before launch
+  anchored through hash-verified commit/tree objects from the immutable trusted base,
+  excluding mutable refs, clean filters and replacement-object indirection; execution uses
+  those verified bytes without reopening the helper path.
+  Runner/OS and filesystem integrity remain prerequisites; this is no attestation against a
+  compromised runner. Changed/legacy/spoofed sources, an overwritten helper or records grant no
+  dependency-only authority. `ci_check_rerun_reserved` consumes the shared once-per-head budget
+  before sending, and survives restart or an unknown reply without another request. `auto_fix=false`
+  keeps its conservative manual-repeat hold. No new recovery setting weakens required checks.
+  See the [eligible-set recovery contract](design/distributed-drain/2_design.md) and
+  [operator recovery procedure](runbooks/distributed-drain.md).
+  Orbit runs `gh run rerun <id> --failed`; GitHub retains the
+  original event's `GITHUB_SHA` and `GITHUB_REF`, while Orbit CI's candidate-build jobs explicitly
+  check out the PR head rather than a merge with the current base. A passing rerun clears the failure;
+  the same signature failing again with the passing base result enters the one automatic repair for
+  the candidate's own failure. If untouched-path evidence remains incomplete, landing stops after
+  `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
+  whichever comes first (see the [distributed drain runbook](runbooks/distributed-drain.md)). Branch
+  protection's own reading of a skipped or neutral required check is unchanged. Without
+  `hosted_check` — a custom query, or a workspace with no hosted CodeQL — the requirement holds the
+  review like any other owed check. Declare it only for a check that really runs the rule's command:
+  Orbit compares the name, not the queries the job runs. Any other kind or OS with `hosted_check`, or
+  an empty one, fails load.
 - A `host_sandbox_test` rule is owed on a host of `os`, which runs it outside the agent sandbox at settlement, so its command must be one settlement admits. A held `linux` rule the leaf could not run is fulfilled by a Linux owner whose host can create namespaces.
 - The owner captures the rules on each claim. The reviewer records an owed check `not_run` and never attempts it, and a verdict whose only gaps are owed checks holds for them instead of blocking.
 
@@ -1704,8 +2455,22 @@ At claim admission the owner captures `review.timing` as the contract's `before_
 | `pr.task_url_template` | unset | **Advanced.** URL template linking a task ID in PR descriptions. |
 | `pr.close_on_terminal` | `true` | **Advanced.** Close a task's open Orbit-authored delivery and `[BLOCKED]` preservation PRs when it lands (`done`), is rejected or archived, when an operator or agent moves it back to `backlog` or `someday`, and when a newer delivery attempt opens its own PR (rules below). `false` disables all of these. |
 | `pr.delivery_authors` | `[]` | **Advanced.** Forge logins (case-insensitive) whose PRs count as Orbit-authored, for closing them and for settling a task from its delivery PR merged outside Orbit ([stuck job runs](runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)). Empty: the login `gh` is authenticated as on this machine. Add a follower's login if it opens PRs this owner has not accepted as a handoff. |
+| `pr.title_template` | unset | **Advanced.** Single-task PR title template ([delivery templates](#delivery-templates-pr-commit-and-branch)). Unset: the task title. |
+| `pr.body_template` | unset | **Advanced.** `"repo"` or a repository-relative path, read at the delivery's base revision. Unset: Orbit's layout. |
+| `pr.agent_sections` | `[]` | **Advanced.** Body headings the implementer may fill through the `pr-sections.json` task artifact. |
+| `pr.required_sections` | `[]` | **Advanced.** Body headings the implementer must fill; a gap follows `pr.missing_required_section`. |
+| `pr.missing_required_section` | `draft` | **Advanced.** `draft`: open the PR as a draft with a note under the heading. `refuse`: open no PR and fail `pr_open`. Both record a `pr_section_gap` history event. |
+| `pr.screenshot_section` | `auto` | **Advanced.** When a single-task body carries the optional `## Screenshots` section ([delivery templates](#delivery-templates-pr-commit-and-branch)): `auto` for tasks tagged `ui`, `always`, or `off`. If no screenshots are publishable, the neutral note does not count as a missing required section and never drafts or refuses the PR. Other values fail the configuration load. |
+| `pr.freshness_section` | `true` | **Advanced.** Include the Branch Freshness section and the `{{freshness}}` value. |
+| `pr.signature` | `true` | **Advanced.** Append the authoring model's signature. |
+| `pr.orchestration_trailer` | `true` | **Advanced.** Append the `Orchestrated-By` trailer to PR bodies. |
+| `pr.labels` | `[]` | **Advanced.** Labels `gh pr create` applies to each PR Orbit opens. |
+| `pr.task_tag_labels` | `[]` | **Advanced.** Allowlist of task tags mirrored as PR labels, matched exactly (case-sensitive). |
+| `pr.task_type_labels` | `{}` | **Advanced.** Table mapping `feature`, `bug`, `refactor` or `chore` to a PR label name. Unknown types are refused. |
+| `pr.reviewers` | `[]` | **Advanced.** Reviewers (logins or `org/team`) requested on each PR Orbit opens. |
+| `pr.draft` | `false` | **Advanced.** Open every PR as a draft. Completion never merges a draft. |
 
-`pr.close_on_terminal` closes a PR only if its head branch is `orbit/<TASK-ID>-…`, its body names the task, and it was opened by a `pr.delivery_authors` login or is the delivery PR of an accepted follower handoff. Human PRs and other tasks' PRs are never touched, and branches are never deleted. On `done` the landing PR stays open: any `#N` the done note names, or, when the note names none and the task leaves `review`, the PR it was reviewed through. The closing comment names the landing (the done note, such as `delivered by pull request #N merged as <sha>` or `already landed as <sha>`) or the state and reason. Starting a run or blocking a task closes nothing.
+`pr.close_on_terminal` closes a PR only if its head branch is one `branch.name_template` names for the task (`orbit/<TASK-ID>-…` by default), its body names the task, and it was opened by a `pr.delivery_authors` login or is the delivery PR of an accepted follower handoff. Human PRs and other tasks' PRs are never touched, and branches are never deleted. On `done` the landing PR stays open: any `#N` the done note names, or, when the note names none and the task leaves `review`, the PR it was reviewed through. The closing comment names the landing (the done note, such as `delivered by pull request #N merged as <sha>` or `already landed as <sha>`) or the state and reason. Starting a run or blocking a task closes nothing.
 
 A task keeps one open delivery PR. When a run's `pr_open` (or a failure handoff) creates a PR, it closes the task's other open PRs that pass the same three tests, commenting `Superseded by #N` with the new PR. Reusing an existing PR closes nothing more. Without `pr.delivery_authors`, the author test uses the author of the PR the run just created. If the run stops between creating its PR and closing the others, the others stay open until the task's next created PR, an attributed requeue or a terminal decision closes them; close them by hand meanwhile. One listing reads at most 500 open PRs, so in a repository with more, an earlier PR beyond that page stays open; the same cap applies to the terminal and requeue closures below. This is how a re-admitted task's earlier `[BLOCKED]` PR closes: the failure handoff keeps it open while the task is blocked and until the next attempt publishes. The step's `closed_stale_pull_requests` output lists each close; a failed close is listed there and the step still succeeds.
 
@@ -1729,24 +2494,83 @@ The blocked and final-recovery exceptions hold however often the task moves betw
 
 A task with no recorded PR makes no forge call. A forge error is logged as a warning and never fails the transition.
 
+### `[commit]` and `[branch]` — commit messages and branch names
+
+| Key | Default | What it does |
+|---|---|---|
+| `commit.subject_template` | unset | **Advanced.** Single-task commit subject template; must contain `[{{task_id}}]`. Unset: Orbit's subjects. |
+| `commit.body_template` | unset | **Advanced.** Single-task commit body template, placed before the trailers. Unset: Orbit's bodies. |
+| `commit.planned_by_trailer` | `true` | **Advanced.** Add `Planned-By` where Orbit's message carries it. |
+| `commit.implemented_by_trailer` | `true` | **Advanced.** Add `Implemented-By` where Orbit's message carries it. |
+| `commit.orchestrated_by_trailer` | `true` | **Advanced.** Add `Orchestrated-By` to commit messages. |
+| `branch.name_template` | `{{prefix}}/{{task_id}}-{{hash}}` | **Advanced.** Single-task delivery branch name; must contain `{{task_id}}` and `{{hash}}`. |
+
+### Delivery templates: `[pr]`, `[commit]` and `[branch]`
+
+With none of these keys set, titles, bodies, commit messages and branch names are byte-for-byte Orbit's own. Templates apply to single-task deliveries; a bundle of several tasks keeps Orbit's batch body, `[Bundle]` title, batch commit and `<prefix>/bundle-<hash>` branch.
+
+Placeholders are `{{name}}`, with optional spaces inside the braces. An unknown or misplaced placeholder, or an unterminated `{{`, fails the configuration load naming the key and the placeholder. Text templates (`pr.title_template`, the PR body, `commit.*_template`) take `task_id`, `title`, `type` (`feat`/`fix`/`refactor`/`chore` from the task type), `description`, `acceptance_criteria` (a checklist), `execution_summary`, `validation`, `freshness` (base and head refs, behind and ahead counts; empty in commits and with `pr.freshness_section = false`), `task_url` (from `pr.task_url_template`, empty when unset) and `ext.<system>` (the task's external ref ID for that system, empty when it has none). Branch templates take `prefix` (the `worktree_setup` step's branch prefix, `orbit` by default), `task_id`, `hash` (eight hex characters of the run ID) and `ext.<system>`. PR titles and commit subjects collapse to one line.
+
+**Body template lookup.** `pr.body_template = "repo"` reads the forge's PR template at the delivery's base revision: the first `pull_request_template.md` (any case) in `.github/`, the repository root, then `docs/`. With none there, Orbit's layout is used. Any other value is a repository-relative path (no absolute path, `\`, `:`, `.` or `..` component), which must exist at the base revision; a missing file fails `pr_open`. The template is never read from the candidate branch, so a task cannot rewrite the body it is published with. Placeholders in a file are checked when `pr_open` renders it: an unknown one fails that step (phase `automation.vcs.pr.body`) naming `pr.body_template` and the placeholder, and no PR opens.
+
+**Task identity.** A single-task body rendered from a template always ends with a generated HTML comment, `<!-- orbit-delivery-task: <TASK-ID> -->`, after the template text and after the signature and orchestration trailer when those are on. The comment is Orbit's, not part of the template. Delivery readers still require a branch `branch.name_template` names for the task, that task id as a whole token in the body, and an Orbit author. The comment supplies the token when the template has no `{{task_id}}` placeholder, and it is kept when the body is cut to GitHub's size limit. Turning off `pr.signature` or `pr.orchestration_trailer` does not remove it. Orbit's own layout already names the task and does not add the comment.
+
+**Agent-filled sections.** When `pr.agent_sections` or `pr.required_sections` is set, `agent_implement` tells the implementer to write `{"sections": {"<heading>": "<markdown>"}}` to `.orbit/tmp/pr-sections.json` and attach it as the `pr-sections.json` task artifact (a claimed leaf lists it in `task_artifacts`). `pr_open` reads that artifact; a missing or malformed one counts as no filled sections, with a warning. Each filled section replaces the body under the template's Markdown heading of the same name (ATX headings, case-insensitive, fenced code skipped), up to the next heading of the same or higher level. With Orbit's layout, filled sections are appended as `## <heading>`. An unfilled agent section keeps the template's own text. An unfilled required section is never published as an empty heading: its body becomes a "Missing required section" note, and `pr.missing_required_section` drafts the PR or refuses it. Either way the task's history gets a `pr_section_gap` event naming the sections. A required section the template has no heading for is not checked. A retried `pr_open` records any remaining gap. If the reused PR is a draft whose live body carries Orbit's missing-section note, `pr.draft` is false, and every required section is now filled, Orbit refreshes its body from the current artifacts and marks it ready for review. Configured drafts, drafts without section-gap evidence and drafts with remaining gaps keep their body and draft state. Labels and reviewers are preserved. The typed `pr_draft_recovery` history event records the ready transition or the reason for keeping a draft. A durable body-refresh reservation lets a failed ready request retry without mistaking the updated body for an unrelated draft; human body edits invalidate that reservation.
+
+**Screenshots.** When `pr.screenshot_section` applies (`auto`: the task is tagged `ui`; `always`: every single-task delivery), `pr_open` publishes the task's `screenshots/` artifacts and renders them as a `## Screenshots` table. This section is optional evidence for PR opening: no publishable screenshots produces the neutral note `No screenshots attached.` and never counts as a required-section gap. Name each `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`: the width is the last number, the theme the token before it, and the view (which may hold hyphens) the rest, in ASCII letters, digits, `-`, `_` and `.`. A name without a suffix is an After shot; the Before shot is optional. Only PNG, JPEG, GIF and WebP files within the 1 MiB artifact limit are published; any other artifact under `screenshots/`, an unconventional name, or a second shot of the same view, theme, width and phase is skipped with a warning in the log.
+
+Before the body is built, `pr_open` commits exactly the published files, at `screenshots/<file>`, to the task's permanent evidence ref `refs/orbit/evidence/<TASK-ID>` on `origin`, through the same private VCS boundary as the branch push. The ref sits outside `refs/heads`, so it is never listed or merged as a branch, and nothing deletes it: landing, cleanup and worktree GC leave it, so a merged PR keeps working images. A retried or resumed `pr_open` with unchanged artifacts reuses the ref's tip; changed artifacts chain one new commit onto it without force, so earlier commits stay reachable. The table has one row per view, width and theme (views in name order, wider viewports first; the theme is named only when the shots carry several), with Before and After columns. Each image is `<repository URL>/blob/<commit sha>/screenshots/<file>?raw=true`, pinned to the evidence commit's sha, never the ref name, and shown 420 pixels wide, or 200 for a viewport of 480 or less.
+
+With Orbit's layout, the section follows the task contract, ahead of the execution summary, so truncation to GitHub's body limit cuts the summary first. A `pr.body_template` heading named `Screenshots` (matched as agent-filled headings are) is filled in place; a template without one gets the section appended after its text and before the task identity comment. When the section applies and no screenshot is publishable, it carries the neutral `No screenshots attached.` note; no gap is recorded, and `pr.missing_required_section` does not draft or refuse the PR for it. With `off`, or `auto` on an untagged task, `pr_open` reads no screenshots and pushes no evidence ref, so the body is unchanged. A `body` input supplied to `pr_open` is published as given, without the section, and a bundle of several tasks keeps its batch body.
+
+**Commit subjects** keep the 72-character budget. An over-long subject shortens `{{title}}` with an ellipsis first, keeping the rest of the template, including the `[<TASK-ID>]` marker that delivery checks such as already-landed detection read; the full title then leads the body. A subject still over budget is cut around that marker, reserving space for the complete marker within the budget. The subject template must therefore contain `[{{task_id}}]`.
+
+**Branch names** are stable across a run's retries: `{{hash}}` comes from the run ID, and with `ext.*` placeholders an existing local branch carrying the run's hash is reused even if the task's refs changed. A sample render is checked at load, and each real render when `worktree_setup` names the branch: a name that is empty, contains `..`, `@{`, whitespace, a control character or one of `~^:?*[\`, starts with `-`, has an empty component, a component starting with `.` or ending in `.lock`, or ends with `.`, is refused before any ref is created. Readers that find a task from a branch (PR closure, external-merge settlement, PR adoption and CI-failure filing) match the complete template, including the eight-character hex hash and any trailing literal, with `prefix` bound to `orbit`. A task token inside an external reference or a prefix of the owning task ID does not establish ownership. An external reference is matched verbatim, including an id that contains `/`. The fixed hash length also lets readers identify the task when `{{hash}}` immediately follows `{{task_id}}`.
+
+`pr.labels`, `pr.reviewers` and `pr.draft` apply when `pr_open` creates a PR (`gh pr create --label/--reviewer/--draft`); an entry starting with `-` is refused. Completion never merges a draft. Section-gap drafts can recover on a resumed `pr_open` as described above; other drafts must be marked ready on the forge to continue.
+
+When a follower hands off a section-gap draft, owner landing returns the claim for an automatic repair instead of leaving it stopped in review. The `landing_stopped` history entry names the missing headings from the live PR body and asks the repair to fill them or attach their evidence, then resume `pr_open`. That step refreshes the body and marks the PR ready under the same recovery rules above. If the automatic repair has already been used, the owner preserves the candidate and returns it to the backlog for another repair round, subject to the existing landing repair budget. Configured drafts (`pr.draft = true`) and drafts without Orbit's gap note keep their refusal, with an operator action to mark the PR ready and retry landing. Screenshot requirements continue to follow `pr.screenshot_section`; a non-UI diff does not automatically override a `ui` tag.
+
+Task-derived labels are opt-in and separate from `pr.labels`. For example:
+
+```toml
+[pr]
+task_tag_labels = ["ui", "security"]
+
+[pr.task_type_labels]
+bug = "bug"
+feature = "enhancement"
+```
+
+After creating or reusing a PR, Orbit unions the allowlisted tags present on every delivered task with their mapped type labels. Empty settings add no forge commands. Label names must be non-empty and must not start with `-`, just like `pr.labels`. Orbit creates missing labels, accepts existing labels without changing their color or description, then adds the labels. Label creation and application use normal transient retries; any remaining failure is warned and recorded in the `pr_open` output's `task_labels.applied` and `task_labels.failed` (label and reason), while the PR step still succeeds with its original decision and PR identity. It never removes labels or syncs later task edits.
+
 ### Housekeeping
 
 | Key | Default | What it does |
 |---|---|---|
 | `tasks.id_start` | unset | Forward-only floor for this machine's task-ID allocator, raised on every runtime build and never lowered, so machines can hold disjoint ranges. For the first seed prefer `orbit workspace init --task-id-start N`. See [task migration](design/task-migration/1_overview.md). |
-| `ci_failure.operator_suppression_hours` | `6` | **Advanced.** Hours a CI sweep finding archived or rejected without `covered_by` suppresses its exact failure key, from that event (0–720; 0 disables). An explicit task or GitHub PR cover instead holds the key while open, or until its landed commit is observed in the failing checkout; if it fails to hold, later completed repairs still own duplicates or defer older failures until their landing is tested. |
+| `ci_failure.operator_suppression_hours` | `6` | **Advanced.** Hours a CI sweep finding archived or rejected without `covered_by` suppresses recurrences of its evidenced cause, from that status event (0–720; 0 disables). A recurrence whose retained diagnostic differs files again. One whose cause cannot be established stays held: within the window for a plain archive, and with no expiry under a cover. An explicit task or GitHub PR cover holds that cause while open, or until its landed commit is observed in the failing checkout; if it fails to hold, later completed repairs still own duplicates or defer older failures until their landing is tested. |
 | `automation.stall_window_minutes` | `60` | **Advanced.** How long a delivery-automation consumer may sit on a stuck deferral (`history_diverged`, `repository_changed`, `provider_identity_missing`, `state_missing`) before a warning and one deduped friction (1–1440). Transient backpressure never escalates. See [auto-tasks](../plugin/skills/orbit-setup/references/auto-tasks.md). |
 | `runtime.log_retention_days` | `7` | Delete `orbit.jsonl` and `orbit-agent.jsonl` archives older than N days (≥ 1). |
 | `runtime.log_max_total_mb` | `500` | **Advanced.** Operational `orbit.jsonl` archive budget in MiB, pruned oldest first (≥ 1). |
 | `runtime.log_max_file_mb` | `100` | **Advanced.** Roll the active operational log past N MiB (≥ 1, ≤ `log_max_total_mb`). |
 | `retention.audit_days` | `60` | Days `orbit gc audit` keeps audit rows (1..=36500). Older host-wide command audit, this workspace's run audit, unregistered workspace run audit, and unreferenced audit blobs become reclaimable. Another registered workspace keeps its own window. Health > Events, Incidents, Denials, `orbit audit` and the diagnostics friction view lose raw history older than the cutoff, with no rollups. Lock contention keeps durable denial facts alongside reservation history; Cost, task-store Codebase rankings, `orbit task flow`, friction stats, auto-concurrency profiles and forecast accuracy keep working. Nothing is deleted until `orbit gc audit --apply` or the opt-in `store-gc` routine runs. |
-| `retention.runs_days` | `60` | Days after a terminal run finishes before `orbit gc runs` may drop its pipeline state (30..=36500); `--older-than-days` has the same minimum. The 30-day floor preserves Reliability > Pipeline echo dedupe and forecast-accuracy per-drain limiter shares. Existing global or workspace files with a value below 30 load with an effective value of 30 and a warning, without rewriting the file; repair it with `orbit config set retention.runs_days 30` (add `--global` for the global file). New writes below 30 are refused. Run rows, steps, summaries and commit outcomes stay, so implement_one duration with outcome=succeeded, run history, Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working; raw pipeline checkpoints older than the cutoff are lost. Held and non-terminal runs stay. The pass includes unregistered workspace ids and separately prunes run/host resource minutes and admission forecasts older than a fixed 30 days; auto-concurrency profiles and forecast accuracy keep their supported 30-day history, not older raw samples. A value of 30 can reclaim more terminal state than the default. |
+| `retention.runs_days` | `60` | Days after a terminal run finishes before `orbit gc runs` may drop its pipeline state (30..=36500); `--older-than-days` has the same minimum. The 30-day floor preserves Reliability > Pipeline echo dedupe and forecast-accuracy per-drain limiter shares. Existing global or workspace files with a value below 30 load with an effective value of 30 and a warning, without rewriting the file; repair it with `orbit config set retention.runs_days 30` (add `--global` for the global file). New writes below 30 are refused. Run rows, steps, summaries and commit outcomes stay, so implement_one duration with outcome=succeeded, run history, Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working; raw pipeline checkpoints older than the cutoff are lost. Held and non-terminal runs stay. The pass includes unregistered workspace ids and separately prunes run/host resource minutes and admission forecasts older than 30 days, whatever this window, except rows kept at any age by count: each workspace, work class and complexity's newest `max(200, machine.auto_concurrency.profile_window)` deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept forecast onward. Auto-concurrency profiles and forecast accuracy keep working on those rows; older raw samples outside them are lost. A value of 30 can reclaim more terminal state than the default. |
 | `retention.journal_days` | `14` | **Advanced.** Days after a task commit is applied before `orbit gc journal` may delete its journal row (1..=36500), for this workspace and unregistered ids. Recovery replays only prepared and committed rows; these, aborted rows and each task's newest applied row stay. Older raw transition diagnostics are lost; published task history, Codebase rankings, `orbit task flow`, friction stats, Cost, auto-concurrency profiles and forecast accuracy keep working. Nothing is deleted until `orbit gc journal --apply`; the `store-gc` routine does not run it. |
 | `retention.store_warn_bytes` | `1073741824` | **Advanced.** `orbit doctor` warns when the host store file is larger than this many bytes (default 1 GiB) and this workspace has no enabled `store-gc` routine. Zero warns for any non-empty file. The check stays ok under the threshold or while the routine is enabled. |
 | `worktree.reclaim` | `["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]` | **Advanced.** Relative rebuildable path globs reclaimed in kept terminal worktrees; an explicit list replaces earlier layers, `[]` disables. `*` stays within a component; a whole-component `**` spans components. Absolute, parent or root-matching patterns fail load. Registration, worker, symlink, confinement and Git content gates protect candidates and tracked files. See [worktree reclamation](runbooks/worktree-reclaim.md). |
 | `worktree.reclaim_below_free_mib` | unset | **Advanced.** Also reclaim during admission while free space beneath the state directory is below this, oldest terminal worktrees first; active runs stay protected. |
 | `worktree.parked_reclaim_after_hours` | `336` | **Advanced.** Hours a task must stay parked in `someday`, counted from that status change, before worktree GC removes a terminal run's worktree serving it (0..=876000). A live worker, an unsettled claim or a Git worktree lock keeps it, and a clean worktree whose run branch holds commits no other ref reaches and `origin` lacks stays with its branch (`skipped:unpublished_commits`). See [parked tasks](runbooks/worktree-reclaim.md#worktrees-of-parked-tasks). |
+| `seeding.routines` | `all` | Which shipped default routines this workspace seeds: `"all"`, `"none"` or a list of file stems. See [below](#seeding--which-shipped-defaults-a-workspace-carries). |
+| `seeding.auto_tasks` | `all` | Which shipped default auto-tasks this workspace seeds: `"all"`, `"none"` or a list of names. See [below](#seeding--which-shipped-defaults-a-workspace-carries). |
+| `decision_channel.enabled` | `false` | Raise decision requests for work held on a human decision. |
 | `security_alert_sweep.min_severity` | `moderate` | **Advanced.** Lowest Dependabot and Code scanning severity the security alert sweep files. See [below](#security_alert_sweep--security-finding-severity). |
+| `ux_rules.surfaces` | `[]` | **Advanced.** Surfaces the ux-rules routine runs (for example `ui` and `cli`); empty disables it. See [below](#ux_rules--scheduled-rule-checks). |
+| `ux_rules.runner` | `"scripts/ux-rules/run.mjs"` | **Advanced.** Workspace-relative rule runner the ux-rules script step runs and filed tasks name in their reproduce command. |
+| `ux_rules.ui_base_url` | `"http://127.0.0.1:7878"` | **Advanced.** Live dashboard URL the ux-rules runner measures for UI surfaces. |
+| `ux_rules.max_new_tasks` | `10` | **Advanced.** Most new tasks one rule-findings filing run creates, highest severity first. |
+| `ux_rules.file_at` | `"low"` | **Advanced.** Lowest rule-result severity the rule-findings filer files: `critical`, `high`, `medium`, `low` or `nit`; lower results are recorded only. |
+| `ux_rules.disabled` | `[]` | **Advanced.** Rule ids whose results are recorded only, not filed; the runner still runs them. |
 
 Agent relay output goes to `orbit-agent.jsonl` with its own 200 MiB archive budget and 50 MiB active-file limit, so it cannot consume the operational budget; each feed is pruned by its own size and age limits. A full agent queue blocks the relay instead of dropping lines. The operational feed can still drop a line when its queue is full. The dashboard and `orbit log tail` merge both active feeds. Full rotation runs in long-lived processes (`orbit mcp serve`, `orbit clock tick`/`orbit sweep`, `orbit web serve`); short-lived commands only roll an oversized active file.
 
@@ -1760,6 +2584,199 @@ min_severity = "high"
 ```
 
 Precedence: run/job `min_severity` input, then workspace, then global, then `moderate`; `orbit run job dependabot_alert_sweep_pipeline --input min_severity=critical` overrides one run. Scheduled routines use the configured floor without shadowing the job. An invalid value fails validation naming the key. The file step records `min_severity`, `min_severity_source` (`input`, `workspace`, `global` or `built-in`) and `excluded_below_min_severity`; `orbit run show <RUN_ID>` summarizes the filed count, floor and source, and excluded alert count and numbers, even when the sweep succeeded.
+
+### `[ux_rules]` — scheduled rule checks
+
+The seeded `ux-rules` routine (disabled by default) runs `ux_rules_pipeline` daily: a granted script step (`ux_rules_runner`, a workspace Script manifest an operator creates and grants with `orbit script grant ux_rules_runner`) runs `ux_rules.runner` once per surface in `ux_rules.surfaces` and prints one merged results document, and the deterministic `file_rule_findings` activity keeps one task per result fingerprint (stored in the task's `rule_fingerprint` field). A new failure files one proposed bug task with the measurements, evidence and a reproduce command; an open owner is commented when measurements change and once when the rule passes again (never transitioned); rule errors file one task per rule tagged `ux-rules-error`. `ux_rules.max_new_tasks` caps new tasks per run, highest severity first, and results below `ux_rules.file_at` or for rules in `ux_rules.disabled` are recorded in the run output only. `orbit run show` for the run carries the pass/fail/error/skipped counts and the tasks filed or commented in the filing step's output. A network-`none` script step cannot reach a dashboard on the host's loopback, so a live UI surface at `ux_rules.ui_base_url` needs the runner's fixture mode until script steps gain a network phase.
+
+```toml
+[ux_rules]
+surfaces = ["cli"]
+file_at = "medium"
+```
+
+### `[lease]` — path leases
+
+A path lease records that a person or an agent outside the drain is editing some paths, so drains and other holders can see it ([design](design/path-leases/2_design.md)). An `advisory` lease is always granted (within the [token lease limits](#lease-intake-socket) for a lease token) and blocks nothing. A `hard` lease is granted only when its selectors overlap no `in-progress` or `review` task's context, task reservation or other hard lease, after `workflow.unlocked_context_paths` is dropped from its stored surface (a request whose every selector matches keeps them all, as a task does); an overlapping hard request waits in the lease queue in state `queued`, holding nothing, and is granted in priority-then-age order once its holders release, expire or settle (a lease never preempts a task), or is refused with the holders named when it asks `wait = false`. `expand` adds selectors to a granted lease: free paths at once, blocked ones queued while the lease keeps what it holds, and a mutual expansion wait refuses the expansion ranked last in queue order (lowest effective priority, then youngest) with a `deadlock` notice. Leases take `ttl_seconds` with the reservation bounds (default 1,800, at most 14,400), are renewed to move their expiry forward, and end on release or when their TTL lapses.
+
+| Key | Default | What it does |
+|---|---|---|
+| `lease.enabled` | `false` | Accept lease operations in this workspace. While false every lease operation (request, renew, expand, release, show, list, check) is refused with an error naming this key, and admission is unchanged. |
+| `lease.default_mode` | `"advisory"` | **Advanced.** Mode of a request that names none: `advisory` or `hard`. |
+| `lease.hard.human`, `lease.hard.agent` | `"allow"` | **Advanced.** Per principal class, `allow` or `never`. A hard request from a class set to `never` is granted as advisory, and the answer says so. |
+| `lease.max_priority.human`, `lease.max_priority.agent` | `"high"`, `"normal"` | **Advanced.** Per principal class, the highest priority (`low`, `normal` or `high`) a request may ask for; a higher one is refused. A request that names no priority gets `normal`, or the ceiling when that is lower. |
+| `lease.aging_minutes` | `30` | **Advanced.** Minutes a queued hard request or expansion waits before it moves up one priority level, capped at `high` (`1`–`10080`). Aging does not outrank newer higher-priority requests, so a stream of overlapping `high` requests can hold an aged `low` waiter until its TTL expires. Queue grants run on lease operations and on every owner clock tick. |
+| `lease.intake.peer_user` | unset | **Advanced. Global only.** The OS user (the lease listener's, `orbit-lease` by convention) that Orbit Web accepts lease operations from over its intake socket. Unset serves no socket. See [lease intake socket](#lease-intake-socket). |
+| `lease.listener.bind`, `lease.listener.behind_proxy`, `lease.listener.trusted_proxy`, `lease.listener.intake_socket`, `lease.listener.limits.*`, `lease.listener.tls` | see [lease listener](#lease-listener) | **Advanced. Global only.** Read only by `orbit lease listen`, from the listener user's own `~/.orbit/config.toml`. |
+
+The principal class is `agent` when the calling process declares an agent or a managed run (`ORBIT_AGENT_NAME`, `ORBIT_AGENT_MODEL`, `ORBIT_MANAGED_RUN_CONTEXT` or `ORBIT_TASK_ACTOR_KIND=agent`), otherwise `human`. Over SSH the class and its ceilings are attribution and a guard, not a security boundary: the operator can lift them by editing this configuration. The per-class keys may also be written as tables:
+
+```toml
+[lease]
+enabled = true
+hard = { human = "allow", agent = "never" }
+max_priority = { human = "high", agent = "normal" }
+```
+
+#### Lease intake socket
+
+The lease listener runs as its own OS user and cannot open the operator's Orbit store, so it hands authenticated lease operations to Orbit Web over a Unix socket ([design §7.2](design/path-leases/2_design.md#72-the-intake-socket)). `lease.intake.peer_user` turns it on. It is read only from the global `~/.orbit/config.toml` (`orbit config set --global lease.intake.peer_user orbit-lease`); a workspace `config.toml` that sets it is refused. Leave it unset unless the [listener-user prerequisite](design/path-leases/2_design.md#71-the-listener-user) holds on this host.
+
+- **Location.** `orbit web serve` binds `$ORBIT_HOME/run/lease-intake.sock` (`~/.orbit/run/lease-intake.sock`, or `<root>/run/lease-intake.sock` under `--root`) and prints its path at startup. Unset, it creates no socket and the dashboard is unchanged.
+- **Permissions.** `run/` is `0750` and the socket `0660`, both owned by the operator and group-owned by the peer user's primary group, so only the operator and that group can reach them. Giving them that group needs the operator's user to be a member of it; startup is refused otherwise. The listener user also needs search permission on every directory above `run/`.
+- **Startup refusals.** A peer user that is root, that is the operator's own user, or that does not exist is refused with a message naming the setting. A path that is not a socket the operator owns, or a socket another process is serving, is refused; a stale socket of the operator's from an earlier run is removed.
+- **Peer check.** Each connection's peer user comes from the kernel (`SO_PEERCRED` on Linux, `getpeereid` on macOS). Every other user, the operator included, is refused and logged with its uid.
+- **Operations only.** The socket takes request, renew, expand, release, show, list, check, notices and events, each with the token's principal, class, id and scope and the client address. A request is granted within the stricter of the token's scope and this workspace's `lease.hard.*` and `lease.max_priority.*`, and the lease records the token id. Each operation writes one `lease.intake.<operation>` audit row with the principal, token id, client address and outcome. `events` is audited once when it opens, then streams one notice page per frame, about one a second while idle, until either side closes the connection or Orbit Web shuts down.
+- **Versioned and bounded.** Both sides open with their protocol version (currently 2) and refuse a mismatch, naming both, so update the listener's binary together with Orbit's. A frame body is at most 64 KiB, each frame must arrive within 10 seconds, and at most 16 intake connections are served at once. An oversized incoming frame or a stalled connection is closed without affecting the others. An operation whose response would exceed the limit receives a bounded `frame_too_large` error instead, and the connection remains usable. If that operation just granted a new lease, Orbit releases it before returning the error, so retrying cannot accumulate active grants from oversized responses. A notice page is shortened instead, to the notices that fit, with its cursor at the last of them, so resuming from the cursor skips nothing. An open `events` stream holds one of the 16 connections.
+- **Token lease limits.** A token's principal may have at most 64 active (granted or queued) leases in a workspace, counted from the owner's lease rows by principal, so neither a replacement token nor a restart resets it. Past that, a request answers `granted: false` with `reason: "active_lease_limit"` and writes nothing. A token's lease holds and waits for at most 64 selectors together; a request or expansion over that is refused with `invalid_input` before anything is written. A request or expansion is sized against the frame before it writes: one whose answer could not fit even without its holder lists is refused with `invalid_input`, and otherwise its `overlaps`, `conflicts` and `queued_ahead` are built only up to the prefix that fits, with `truncated: true`, and a queued request or expansion stores that same prefix in its `queued` notice. An expansion that is the deadlock victim is refused with `invalid_input`, changing no queue and writing no notice, when the complete cycle cannot fit in the bytes that fixed answer left; when the cycle fits, the answer includes it whole and `conflicts` keeps only the prefix that still fits beside it. `overlaps` lists tasks, then task reservations, then leases oldest first; `conflicts` is ordered by requested path, then tasks, reservations and hard leases, then holder id; `queued_ahead` follows queue order. Every holder still counts toward whether the lease is granted, queued or refused, and every overlapped holder still gets its `overlap` notice. These limits are fixed; SSH and dashboard callers are not subject to them.
+
+#### Lease listener
+
+`orbit lease listen` is the network surface for people who have no SSH login to the owner, and their agents ([design §7.3](design/path-leases/2_design.md#73-tokens-routes-and-limits)). It runs as the lease listener user, never as the operator, and reads `lease.listener.*` only from that user's global `~/.orbit/config.toml` (`/var/lib/orbit-lease/.orbit/config.toml` in the documented setup), which the operator's user cannot write. A workspace `config.toml` that sets any `lease.listener.*` key is refused. Setup, including the systemd unit, is in the orbit-setup skill's remote-access reference.
+
+| Key | Default | What it does |
+|---|---|---|
+| `lease.listener.bind` | unset | Address and port to listen on, such as `100.64.0.5:7480` (a tailnet address) or `127.0.0.1:7480` behind a local proxy. Unset, the listener refuses to start. `0.0.0.0` or `::` requires native `tls` or `behind_proxy = true`. |
+| `lease.listener.behind_proxy` | `false` | A TLS-terminating proxy is in front. Permits an unspecified bind address and turns on `X-Forwarded-For` from `trusted_proxy`. Refused when `trusted_proxy` is empty. |
+| `lease.listener.trusted_proxy` | `[]` | Proxy addresses or CIDR ranges (`10.0.0.5`, `10.0.0.0/24`, `fd00::/8`) whose `X-Forwarded-For` is read. An entry that is neither is refused at startup. |
+| `lease.listener.intake_socket` | unset | Absolute path of the operator's [lease intake socket](#lease-intake-socket), such as `/home/<operator>/.orbit/run/lease-intake.sock`. Required. |
+| `lease.listener.limits.failed_auth` | `10` | Failed authentications from one client address before every request from it gets 429 until the window ends (`1`–`1000`). |
+| `lease.listener.limits.failed_auth_window_seconds` | `300` | The window those failures are counted over, starting at an address's first failure (`1`–`86400`). |
+| `lease.listener.limits.address_per_minute` | `120` | Requests per minute from one resolved address or IPv6 prefix. Valid range: `1`–`100000`. |
+| `lease.listener.limits.ipv6_prefix_len` | `64` | IPv6 prefix length for address budgets; mapped IPv4 remains per address. Valid range: `0`–`128`. |
+| `lease.listener.limits.token_reads_per_minute` | `60` | Read requests per minute per token, independent of writes and address. Valid range: `1`–`100000`. |
+| `lease.listener.limits.token_writes_per_minute` | `20` | Write requests per minute per token, independent of reads and address. Valid range: `1`–`100000`. |
+| `lease.listener.limits.max_streams_per_token` | `2` | Open notice streams per token; streams also count as in-flight requests. Valid range: `1`–`100`. |
+| `lease.listener.limits.max_in_flight_per_token` | `8` | In-flight requests per token, including open streams. Valid range: `1`–`1000`. |
+| `lease.listener.limits.max_connections` | `64` | Concurrent listener connections, including TLS handshakes. Valid range: `1`–`10000`. |
+| `lease.listener.limits.max_in_flight_requests` | `16` | Concurrent listener requests; excess receives 503. Valid range: `1`–`1000`. |
+| `lease.listener.limits.max_body_bytes` | `65536` | Maximum request body bytes; oversized requests receive 413. Valid range: `1`–`1048576`. |
+| `lease.listener.limits.header_timeout_seconds` | `5` | Seconds allowed to receive HTTP headers or complete a TLS handshake. Valid range: `1`–`300`. |
+| `lease.listener.limits.request_timeout_seconds` | `10` | Seconds allowed for a request handler and body receipt. Valid range: `1`–`300`. |
+| `lease.listener.limits.max_tracked_keys` | `4096` | Maximum rate-limit identities, including two shared overflow buckets. Valid range: `3`–`65536`. |
+| `lease.listener.tls` | unset | Native TLS: `{ cert = "/path/fullchain.pem", key = "/path/key.pem" }`. PEM certificate chain (leaf first) and matching unencrypted PEM private key, readable by the listener user. On Unix the key must have no group or other permissions (use `0600`). Missing, unreadable, invalid or mismatched material refuses startup with an error naming this setting. Supports TLS 1.2 and 1.3; the configured port accepts HTTPS only. |
+
+Use TLS whenever the listener is reachable outside loopback or a tailnet, either natively or at a trusted terminating proxy. For native TLS, put the paths in the listener user's own configuration:
+
+```toml
+[lease.listener]
+bind = "0.0.0.0:7480"
+intake_socket = "/home/<operator>/.orbit/run/lease-intake.sock"
+tls = { cert = "/var/lib/orbit-lease/tls/fullchain.pem", key = "/var/lib/orbit-lease/tls/key.pem" }
+```
+
+Certificates and keys are loaded and checked once, before binding. **Restart `orbit lease listen` after certificate rotation** (for example, `sudo systemctl restart orbit-lease-listener`); SIGHUP does not reload them. TLS uses rustls with its ring provider. Token authentication, routes and auditing are the same over HTTPS.
+
+- **Startup refusals.** The listener refuses to start as root; as the user that owns the intake socket (or, before Orbit Web has created it, the socket's directory), which is the operator; when its executable, the Orbit home or any directory above either is writable by a user other than root or the running user; without a provisioned `lease-tokens.db`; and for each settings combination above. Each message names the setting or path.
+- **Routes.** `/healthz` (unauthenticated, `{"status":"ok"}` only) and the lease routes under `/api/leases` that Orbit Web serves on loopback: request, renew, expand, release, show, list, check, notice polling (`GET /api/leases/notices?after=`) and the SSE event stream (`GET /api/leases/events`, resuming from `Last-Event-ID`). Notices come from the token's workspace, as Orbit Web returns them for the same cursor. Every other path is 404. There are no cookies, browser sessions or CORS headers.
+- **Tokens.** Every lease route needs `Authorization: Bearer orbl_…`. A missing, unknown, revoked or expired token gets 401 `{"error":"unauthorized"}` and nothing more; a token without the route's verb (`read` for show, list, check, notices and events, `lease` for the rest) or the workspace gets 403. `?workspace=<id>` selects the workspace, and may be omitted when the token names one. The principal and token id come from the token; a `principal` in the body or query string is ignored. Orbit applies the token's priority ceiling and `hard` permission together with the workspace's `lease.max_priority.*` and `lease.hard.*`, taking the stricter.
+- **Client address.** Without `behind_proxy` it is the TCP peer, and `X-Forwarded-For` and `Forwarded` are ignored. With it, `X-Forwarded-For` is read only when the TCP peer is in `trusted_proxy`: all such headers are joined in order, entries are walked from the right, trusted proxies are skipped and the first other entry is the client. Entries further left are client-controlled and never used. A malformed entry there, or a chain of only trusted proxies, gets 400 rather than the proxy's own address. `Forwarded` is never read. The proxy must append the address it received the connection from to `X-Forwarded-For` (or overwrite the header), never pass a client's value through as the only entry.
+- **Admission.** Every request, including `/healthz`, unknown paths and invalid proxy headers, uses the resolved address budget before token lookup or hashing. Failed authentications (401 and 403) additionally consume the stricter failed-auth window. IPv4-mapped IPv6 counts as IPv4; other IPv6 clients share the configured prefix (default /64). A trusted proxy must append the actual client address to `X-Forwarded-For`; client-supplied entries to its left cannot change the budget. A malformed chain uses the TCP peer for its rejection budget. Tokens have independent read and write budgets across addresses. `POST …/check` counts as a read. Rate refusals return 429 and a rounded-up `Retry-After` in seconds; errors expose only the applied limit.
+- **Resource bounds.** Connections include TLS handshakes, with the header timeout also bounding the handshake. HTTP/1 headers are limited to 64 fields and a 16 KiB parsing buffer. Connections close after their response, so idle keep-alives cannot occupy the connection budget. Oversized declared bodies receive 413 before polling their body; streamed bodies stop at the byte limit. A handler/body-read timeout returns 408. Excess in-flight requests or token concurrency receives 503. A response body, including an SSE notice stream, retains its global and token allowance until closed or cancelled, and its connection stays open, so a stream counts toward `max_connections`, `max_in_flight_requests`, `max_in_flight_per_token` and `max_streams_per_token`; opening one spends a token read. The request timeout bounds opening a stream, not its life. A stream ends when the client disconnects, when Orbit Web closes it, after 30 seconds without a page from Orbit Web, or at listener shutdown. Blocking intake calls retain a separate concurrency allowance even after a handler times out, and socket reads and writes have the request timeout (at most 30 seconds).
+- **Connection saturation.** One additional, bounded refusal connection can complete TLS and send 503. Further plain HTTP connections receive a best-effort 503; TLS connections close when that refusal lane is occupied. No connection task is queued. This extra lane has the same handshake/header time bound.
+- **Bounded state.** `max_tracked_keys` includes two reserved shared overflow keys, one for new addresses and one for new tokens. Live windows and open-stream counters are never evicted to admit new keys. New keys at capacity share their conservative overflow budget; idle keys are reclaimed during maintenance. Limits are per listener process and reset on restart; run one listener for one shared budget.
+- **Audit.** Operations that reach Orbit retain their `lease.intake.<operation>` audit rows there. Rejections that stop at the listener are aggregated by canonical key, limit/reason and window in its own `lease-tokens.db`, table `lease_listener_limit_audit` (schema v3): `limit_key`, `limit_name`, `count`, `first_at`, `last_at`. These rows carry no principal, secret, query or path. Token keys use only the public token id after successful authentication; failures use the address key. The first snapshot is persisted promptly, subsequent counts are coalesced in memory and flushed in bounded batches every second and at graceful shutdown, upserting the same row. Abrupt termination may lose up to the unflushed counts, and limiter state resets. Token administration keeps its existing `lease_token_audit` rows.
+
+### `[experiments]` — experiments over agent treatments
+
+An experiment compares a control arm against one or more treatment arms, each an overlay of instructions, skills, tools, crew or allowlisted config ([scope](design/experiments/1_scope.md)). An operator defines it with `orbit experiment create`, edits it only while it is a draft, and moves it through `start`, `pause`, `resume`, `reweight`, `conclude` or `abandon`; each change is an event with its actor, time and reason, listed by `orbit experiment show`. Agents may show and list experiments but not change them. An operator dashboard session can also create, edit and start experiments on Analytics › Experiments (`POST /api/diagnostics/experiments`, `PATCH /api/diagnostics/experiments/<id>` and `POST /api/diagnostics/experiments/<id>/start`). These routes call the same create, update and start as the CLI, so the rules on this page and their refusal messages apply unchanged. The form offers only `experiments.config_keys` for config overlays and the configured crews for crew pools, and every write records actor `dashboard` with the given reason. `experiments.enabled` false or `experiments.max_running` reached is answered as HTTP 409 with core's message.
+
+| Key | Default | What it does |
+|---|---|---|
+| `experiments.enabled` | `false` | Allow experiments to start in this workspace. While false, new assignments are disabled and `start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
+| `experiments.max_running` | `3` | **Advanced.** Experiments that may run at once in this workspace (`1`–`20`). `start` and `resume` are refused while that many are running; a paused experiment does not count. |
+| `experiments.config_keys` | `[]` | **Advanced.** Config keys an arm's `config` overlay may set. A key must also be on the typed code allowlist below. `start` refuses unknown keys, keys absent from either list, and values of the wrong type or outside their bounds. The default allows no config overlay. |
+
+```toml
+[experiments]
+enabled = true
+max_running = 2
+config_keys = ["workflow.explore.max_calls_per_run"]
+```
+
+At a task's first delivery admission, running experiments (shadow or live) match complexity, task type, all included tags, no excluded tags and origin. The draw uses the leading eight bytes (big-endian) of `sha256("<salt>:<experiment_id>:<task_id>")` modulo the total active arm weight, walked in arm declaration order. The recorded arm and segment survive retries, reweights and experiment conclusion. Later admissions do not reconsider an initially ineligible task, even after an edit makes it match, except that the v70 upgrade reopens every admission-only record once. This includes records from enabled admissions that matched no population, because the stored rows do not distinguish those from rows written while experiments were disabled; rows with an assignment or exclusion stay final. An admission while `experiments.enabled` is false records nothing, so the task's first admission after enabling is its first. Overlapping surfaces are reserved across all arms, including control; later experiments record `surface_conflict` exclusions. A task with an explicit crew (`crew_source: explicit`) is recorded with `explicit_crew` and no arm in an experiment whose arms overlay the crew surface, because every arm would run its explicit crew. An operator can force this `explicit_crew` exclusion into an arm with `orbit.experiment.assign`; that replaces only this exclusion, while an existing arm assignment or another exclusion for the experiment remains sticky and conflicting experiment surfaces still refuse the force. The arm's crew then runs and is written back to the task. A `shadow` experiment records assignments and applies nothing.
+
+A `live` experiment applies its arm's instructions, skills, tools, crew pool and allowed config values. `start` refuses, in either mode, an instruction file or skill bundle missing or inadmissible at the workspace's current base (its base branch as last fetched from `origin`, else the local branch), an unsupported skill provider, an added tool that is not a registered, agent-facing, enabled tool named exactly, and a removed tool that is unknown or that the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`).
+
+A crew overlay is `{"crew":{"pool":[{"crew":"sol","weight":1},{"crew":"astra","weight":2}]}}`. It replaces the task's normal admission pool, including a crew assigned at task creation. `start` checks that every member exists and is enabled; crews have no per-complexity restrictions, so each may run every tier in the population. Admission still filters members by executor host support and run allowlists. Weekly usage pressure still weighs the pool, while crew-performance weighting is off because the crew is the treatment. Provider holds and limits still apply, including the existing complexity-pool fallback. `crew_selection` records the pool, weights, overlay digest and `performance_weighting: false`; a changed draw records `deviation` with the intended crew, actual crew and reason. An explicit run crew remains authoritative, recorded with source `explicit`. The crew that runs is written back to `task.crew` as `experiment:<id>/<arm>`, so analytics and the readout's crew mix read the arm's crews. Claimed leaves freeze the follower's draw and its evidence in pipeline state's `crew_selection` before dispatch. An arm without a crew overlay keeps ordinary routing.
+
+The current typed config allowlist is:
+
+| Key | JSON type and bounds | Per-run effect |
+| --- | --- | --- |
+| `workflow.explore.max_calls_per_run` | Integer, `1`–`100` | Explorer invocations permitted for that task's managed run. It does not enable exploration or change concurrency limits. |
+
+For example, `{"config":{"values":{"workflow.explore.max_calls_per_run":2},"roles":["implement"]}}` limits an implement run to two calls. Config roles default to `implement`; `review` and `recovery` opt in those activity roles. Values and their overlay digest travel in the task-bound `experiment_capture` on owner runs and in claim receipts, so followers use the owner's treatment even when their local allowlist differs. The explorer invocation reports its effective `calls_allowed`. Other tasks and roles inherit their ordinary settings; workspace config is never rewritten.
+
+To opt in another key, add a variant to `orbit-config`'s `ExperimentConfigKey` and its `ALL` list, declare its dotted key, validate its JSON type and bounds, and wire its consumer to the task-bound run capture with role filtering on owner and claimed paths. Update this table with that change. Adding a key to `experiments.config_keys` alone cannot enable it; both code and workspace permission are required at start.
+
+- **Instructions.** An entry per role (`implement`, `review` or `recovery`) names a repository file, read like a tag instruction (UTF-8, at most 8 KiB) at the run's base revision. Its text follows any tag instruction in the prompt's tag-instruction section. `false` leaves Orbit's shipped default tag instructions out of that role. A role the entry does not name receives nothing.
+- **Skills.** `{"skills":{"replace":{"orbit":"experiments/skills/orbit"},"roles":["implement"]}}` replaces the named personal skill for those roles (`implement` by default). The directory is read from the run's base commit, including supporting files and executable bits. It must contain a UTF-8 `SKILL.md` with YAML frontmatter whose `name` matches the replacement name, a nonempty `description`, and instructions. Names use lowercase ASCII letters, digits and hyphens, at most 64 characters. A bundle holds at most 256 regular files and 64 KiB of raw content, nested at most 16 directories; symlinks, submodules and unsafe paths are refused. Serialized bundles must also fit the experiment capture's 256 KiB budget, so the raw limit alone does not guarantee admission.
+- **Tools.** `add` and `remove` apply to the roles the entry's `roles` lists (`implement` by default), after the activity's tool grant. An addition never overrides the activity's disallow list or the claimed-mode denial; a removal never takes a task's `required_tools`.
+
+Skill overlays currently support **Claude on Unix only**. Each treated invocation gets a private `CLAUDE_CONFIG_DIR` under `.orbit/tmp/`, with the arm's bundles in `skills/<name>`. Other personal skills and existing provider state (settings, credentials, plugins and session directories) remain linked to their original locations; the default `~/.claude.json` sidecar is linked too. `HOME` and authentication variables retain their values. The private directory lives until the provider exits, then is removed. Control invocations keep their original environment and discovery roots. Orbit never rewrites shared skill directories or their links. Enterprise skills retain Claude's higher discovery precedence.
+
+Codex, Gemini, Grok, Muse, Copilot, Ollama, Antigravity and mock providers are refused for skill overlays; Windows is also refused. Codex discovers personal skills independently of `CODEX_HOME` and permits duplicate names; an additional project skill therefore does not provide replacement. Claude's `--add-dir` namespaces conflicting skills instead of replacing them. The other provider discovery paths have no implemented isolation adapter. See [Claude skill discovery](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name) and [Codex skill discovery](https://developers.openai.com/codex/skills#where-codex-loads-local-skills).
+
+For an implementation-only skill overlay with an arm crew pool, `start` checks every member of that pool. Otherwise it conservatively checks every enabled crew, including possible explicit and purpose selections. Use a Claude-only arm pool on a mixed-provider host. Dispatch checks the actual provider again, so a later routing change, explicit run override or follower with a different provider refuses rather than silently running without the treatment. This restriction applies to shadow definitions at start too, though shadow runs apply no files.
+
+Each dispatch a live arm changes records an `activity.experiment_overlay_applied` audit row: the arm, the instruction's hash and source, the tools actually added and removed, a map of skill names to bundle digests, and a `sha256:` digest over the received surfaces. A bundle digest covers sorted relative paths, file contents and executable bits. `orbit run show` prints one `Experiment applied:` line per row, including each skill's digest, after the run's `Tag instructions:` lines; its JSON includes the same map.
+
+`orbit experiment assign <experiment> --task <task> --arm <arm>` forces a task without an arm assignment, or one with an `explicit_crew` exclusion for that experiment, into an active arm and records `forced=true`. It works in either shadow or live mode while the experiment is running; a draft, paused, concluded or abandoned experiment is refused. Existing arm assignments and other exclusions for that experiment remain sticky, and overlapping surfaces owned by another experiment still refuse the force. `orbit task show --fields experiments` exposes the assignments and exclusions. `orbit run show` prints each captured arm as `shadow` or `live` with its overlay digest. Owner claims carry a task-bound overlay capture, limited to 256 KiB, with each live arm's instruction files and complete skill bundles read at the claim base; followers apply those captured bytes, refuse missing, malformed or digest-mismatched captures, and never consult local experiment configuration or skill bundle files. A live instruction file the owner cannot read is captured as a refusal that stops the claimed run in that role. An unreadable or oversized skill bundle refuses claim capture itself.
+
+`orbit experiment readout <experiment> [--metric <name>]` (tool `orbit.experiment.readout`, web `GET /api/diagnostics/experiments/<id>/readout?metric=<name>`) computes each arm's outcomes on read from the assignments, one task per unit, intention-to-treat; forced assignments and exclusions (`surface_conflict_excluded`, `explicit_crew_excluded`) are counted and left out. Each metric reports per-arm n, mean and median with seeded bootstrap 95% intervals (Wilson intervals for rates), and the difference from control overall (post-stratified by complexity) and per complexity. The readout also reports crew mix from each task's `task.crew`, a `crew_mismatch` warning naming each task whose crew is outside its arm's crew pool (for an arm without a crew overlay, such as control, the pool recorded at admission for the task's delivery — its frozen crew selection, including any run-level pool override and its admission-tier, purpose or type route — so later workspace pool changes or a complexity rerate neither invent nor erase a historical mismatch; when that recorded admission pool is unavailable, a `crew_mismatch_unavailable` warning reports it instead of a confirmed mismatch) when any arm overlays the crew surface, a sample-ratio chi-square over each segment's weights (p < 0.001 warns and withholds the verdict), a drift warning when an arm saw more than one overlay digest, open lagging outcomes (unfinished tasks and 14-day regression windows), and guardrail checks. The verdict is `collecting` until `max_days` have passed or every active arm has `min_sample` settled primary outcomes, then `winner <arm>` when a treatment's primary interval excludes zero in the better direction and no guardrail is breached or undecided, `no difference`, or `inconclusive`. The JSON carries `schema_version`; an unknown experiment or metric is refused. The dashboard's Analytics › Experiments page shows the list with per-arm enrollment and each experiment's readout; its endpoint response adds a `cumulative` per-arm series of the primary metric. An operator session also offers conclude on a running or paused experiment, and New experiment, Edit and Start for drafts.
+
+`orbit experiment conclude <experiment> [--arm <arm>] --reason <text>` (tool `orbit.experiment.conclude`, dashboard `POST /api/diagnostics/experiments/<id>/conclude`) concludes a running or paused experiment. The conclusion event stores the readout JSON at that moment, which `orbit experiment show` returns, so the decision can be read against the numbers it was made on. A chosen arm files one proposed task in this workspace naming the experiment, the arm, the readout verdict and the overlay; omitting the arm files nothing. Assignment stops; tasks already assigned keep their arm. Concluding changes no configuration or repository file. Only an operator may conclude.
+
+After the horizon, if no treatment wins and any primary comparison lacks an interval, the verdict is `inconclusive`, with a reason naming the treatment and metric. This includes no settled primary outcomes, fewer than two outcomes in either arm of a used complexity cell, or no common measured complexity cell. `no difference` requires a measured comparison; a treatment with a complete winning comparison can still win.
+
+### `[seeding]` — which shipped defaults a workspace carries
+
+Orbit ships default routines (`.orbit/routines/`) and auto-tasks (`.orbit/auto_tasks/`) and seeds every one into a workspace. Two keys narrow that, per workspace or globally ([design](design/distributions/1_scope.md)):
+
+| Key | Default | What it does |
+|---|---|---|
+| `seeding.routines` | `"all"` | `"all"`, `"none"`, or a list of shipped routine file stems (`["worktree_gc", "store_gc"]`). |
+| `seeding.auto_tasks` | `"all"` | `"all"`, `"none"`, or a list of shipped auto-task names (`["doc-duties", "qa-sweep"]`). |
+
+```toml
+[seeding]
+routines = ["worktree_gc", "store_gc"]
+auto_tasks = "none"
+```
+
+- **Every seeding path honours it.** `orbit workspace init`, `orbit workspace init --force`, `orbit workspace sync` and the create-only seeding `orbit init` runs over registered workspaces after an upgrade all reconcile through the policy. `"all"` also seeds a default a later release adds; `"none"` and a list never do.
+- **Admission.** A list name Orbit has never shipped fails config load, `orbit config set` and every seeding command, naming the key, the name and the shipped names. A name a later release retired still loads and simply seeds nothing. `orbit config keys` lists both keys.
+- **Narrowing retires by digest.** A default the policy leaves out is retired exactly as a default a release dropped: an unedited file Orbit seeded is removed, and a locally edited one moves under `.orbit/.retired-managed/` with a warning to migrate it under a new user-authored name. A file Orbit never recorded is left alone.
+- **Widening reseeds.** Adding a name back, or returning to `"all"`, seeds the shipped file again on the next sync.
+- **Opt-outs.** An opt-out recorded with `orbit auto-task delete` survives while the policy leaves that auto-task out. `orbit auto-task restore` refuses a left-out name and names the policy. For routines, a list policy is the durable per-name opt-out.
+- **Diagnostics.** `orbit workspace show` prints both policies, the defaults they leave out, and the applied preset (JSON `seeding` and `preset`). `orbit doctor` does not report a left-out default as missing, and its `seeding-policy` row warns while `workflow.crew_performance` is not `off` and `seeding.routines` leaves out `crew_performance_refresh`, since nothing then refreshes the snapshot crew draws read.
+
+#### Workspace presets
+
+`orbit workspace init --preset <file>` applies a preset: a TOML file a distribution ships to set a workspace up in one step. The same flag works with `--force` on a registered workspace.
+
+```toml
+name = "graph-distro"            # required: 1-64 of [A-Za-z0-9._-]
+
+[seeding]                        # optional: written as seeding.routines / seeding.auto_tasks
+routines = ["worktree_gc"]
+auto_tasks = "none"
+
+[enable]                         # optional: plugin-seeded definitions to switch on
+routines = ["graph-refresh"]
+auto_tasks = ["graph-reindex"]
+
+[config]                         # optional: workspace keys, nested tables or dotted keys
+"workflow.crew_performance" = "off"
+[config.review]
+minutes = 45
+```
+
+- **Validated whole, before any write.** An unknown field in any table, a `[config]` key or value `orbit config set` refuses for this workspace, a `seeding.*` key under `[config]`, a blank or unseeded `[enable]` name, a plugin-seeded `[enable]` name whose file is missing or does not load (a routine's `job:` target must be a shipped default, a job on disk, or a job an active plugin supplies), or a file over 256 KiB is refused, and nothing is written or registered.
+- **No consent.** A preset never grants plugin permissions or enables a plugin: a `grant`, `grants`, `permissions`, `plugin`, `plugins`, `enable_plugins` or `plugin_enablement` field, at the top level or under `[enable]`, and any `plugin_enablement*` key under `[config]`, is refused. `[enable]` only switches on a definition an already enabled plugin seeded into this workspace (the name `orbit routine list` or `orbit auto-task list` shows), so run `orbit plugin enable <plugin>` first, then `orbit workspace init --force --preset <file>`.
+- **Order.** The `[seeding]` and `[config]` keys are written to `.orbit/config.toml` in one validated save before defaults are seeded, so the first seeding already follows the policy. `[enable]` is applied after seeding.
+- **Provenance.** The preset's `name` and `sha256:` digest of the file bytes are recorded with the apply time in `.orbit/state/workspace-preset.json`. `orbit workspace init` prints them with the definitions it enabled, and `orbit workspace show` reports them.
 
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 
@@ -1841,4 +2858,5 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `review.before_pr`, `review.before_landing` | Become `review.timing`: `before_pr`, `before_landing` or `off`. Both on fails load. |
 | `machine.worker_containment = true`/`false`, `machine.worker_containment_strict` | Become `machine.worker_containment`: `true` is `warn`, `false` is `off`, and `worker_containment_strict = true` is `strict` (refused beside `false`). |
 | `workflow.validation_env.login_shell`, `interactive` | Become `workflow.validation_env.shell_probe`: `login_shell = false` is `off`, `interactive = false` is `login`, otherwise `interactive`. |
+| `workflow.auto_ship` | Ignored: the ship sweep it opted into was removed; dispatch with `orbit run auto` drains or `orbit run ship`. Delete the key. |
 | `scoring.enabled` | Ignored: the agent-family scoreboard was retired and nothing records scoreboard metrics. Delete the `[scoring]` table. Recognised until 2026-11-12; after that it is an unknown key. |

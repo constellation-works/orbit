@@ -45,9 +45,6 @@ pub struct WorkspaceInitArgs {
     /// file). Without it, init asks at a terminal and otherwise only says how.
     #[arg(long)]
     pub install_browser_kit: bool,
-    /// No-op (kept for backwards compatibility — defaults are always refreshed on init)
-    #[arg(long, hide = true)]
-    pub refresh_defaults: bool,
     /// Reconcile an already registered workspace after validating its logical
     /// and checkout binding. A missing or malformed identity is restored only
     /// for that exact binding; malformed bytes are archived first. Also
@@ -57,4 +54,13 @@ pub struct WorkspaceInitArgs {
     /// rebind` to change.
     #[arg(long)]
     pub force: bool,
+    /// Apply a workspace preset file: a TOML file a distribution ships that
+    /// may set which shipped default routines and auto-tasks this workspace
+    /// seeds (`[seeding]`), enable definitions an enabled plugin already
+    /// seeded here (`[enable]`), and set workspace config keys `orbit config
+    /// set` accepts (`[config]`). It never grants plugin permissions or
+    /// enables a plugin. The whole file is validated before anything is
+    /// written, and its name and digest are recorded.
+    #[arg(long, value_name = "FILE")]
+    pub preset: Option<std::path::PathBuf>,
 }

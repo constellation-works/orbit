@@ -25,6 +25,12 @@ pub(super) struct Fixture {
     pub(super) input: Value,
 }
 
+#[derive(Default)]
+struct FixtureSettings<'a> {
+    workflow: &'a str,
+    review_setting: Option<&'a str>,
+}
+
 impl Fixture {
     pub(super) fn new() -> Self {
         Self::new_with_required_commands(&[])
@@ -36,12 +42,28 @@ impl Fixture {
 
     /// The fixture with `review` appended to its `[review]` table.
     pub(super) fn new_with_config(required: &[&str], review: &str) -> Self {
-        Self::build(required, review, ReviewTiming::BeforePr, 10, false)
+        Self::build(
+            required,
+            review,
+            ReviewTiming::BeforePr,
+            10,
+            None,
+            &[],
+            Default::default(),
+        )
     }
 
     /// The fixture whose captured `review.minutes` is `minutes` [ORB-15094].
     pub(super) fn new_with_review_minutes(minutes: u32) -> Self {
-        Self::build(&[], "", ReviewTiming::BeforePr, minutes, false)
+        Self::build(
+            &[],
+            "",
+            ReviewTiming::BeforePr,
+            minutes,
+            None,
+            &[],
+            Default::default(),
+        )
     }
 
     /// The fixture for a run that captured `review.before_landing` instead
@@ -53,14 +75,56 @@ impl Fixture {
     /// [`Self::before_landing`] with `review` appended to its `[review]`
     /// table.
     pub(super) fn before_landing_with_config(review: &str) -> Self {
-        Self::build(&[], review, ReviewTiming::BeforeLanding, 10, false)
+        Self::build(
+            &[],
+            review,
+            ReviewTiming::BeforeLanding,
+            10,
+            None,
+            &[],
+            Default::default(),
+        )
     }
 
     /// The fixture whose task the `implementer` crew implemented, for a run
     /// that captured `operation.review_crew = ["implementer", "reviewers"]`
     /// whole [ORB-15195].
     pub(super) fn review_pool() -> Self {
-        Self::build(&[], "", ReviewTiming::BeforePr, 10, true)
+        Self::build(
+            &[],
+            "",
+            ReviewTiming::BeforePr,
+            10,
+            Some(""),
+            &[],
+            Default::default(),
+        )
+    }
+
+    /// The fixture whose task an operator granted `granted` at filing, for a
+    /// run that captured `timing` [granted-tools §4].
+    pub(super) fn granted(timing: ReviewTiming, granted: &[&str]) -> Self {
+        Self::build(&[], "", timing, 10, None, granted, Default::default())
+    }
+
+    /// A stronger landing layer with an independent selective policy and
+    /// a genuinely light candidate, exercising the public skip-tag boundary.
+    pub(super) fn selective_landing(mode: &str, paths: &[&str]) -> Self {
+        let review = format!(
+            "selective_before_landing.mode = {mode:?}\nselective_before_landing.paths = {paths:?}\n"
+        );
+        Self::build(
+            &[],
+            &review,
+            ReviewTiming::BeforeLanding,
+            10,
+            None,
+            &[],
+            FixtureSettings {
+                workflow: "light_delivery_paths = [\"candidate.txt\"]",
+                review_setting: Some("timing = \"off\""),
+            },
+        )
     }
 
     fn build(
@@ -68,12 +132,23 @@ impl Fixture {
         review: &str,
         timing: ReviewTiming,
         review_minutes: u32,
-        pool: bool,
+        selection: Option<&str>,
+        granted: &[&str],
+        settings: FixtureSettings<'_>,
     ) -> Self {
+        let FixtureSettings {
+            workflow,
+            review_setting,
+        } = settings;
+        let pool = selection.is_some();
+        let selection = selection.unwrap_or_default();
         let switch = match timing {
             ReviewTiming::BeforeLanding => "before_landing",
             _ => "before_pr",
         };
+        let workspace_review = review_setting
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{switch} = true"));
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");
@@ -87,8 +162,12 @@ impl Fixture {
         };
         let (implementer, review_crew) = if pool {
             (
-                "[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n",
-                "[\"implementer\", \"reviewers\"]",
+                "[crews.implementer]\nmodel = \"impl-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[crews.alternative]\nprovider = \"claude\"\nmodel = \"fixture-claude\"\n[crews.parked]\nprovider = \"claude\"\nmodel = \"fixture-parked\"\n",
+                if selection.is_empty() {
+                    "[\"implementer\", \"reviewers\"]"
+                } else {
+                    "[\"implementer:1\", \"reviewers:3\", \"alternative:1\", \"parked:0\"]"
+                },
             )
         } else {
             ("", "\"reviewers\"")
@@ -96,7 +175,7 @@ impl Fixture {
         std::fs::write(
             workspace.join("config.toml"),
             format!(
-                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n{implementer}[workflow]\ndefault_crew = \"reviewers\"\n{required_commands}[operation]\nreview_crew = {review_crew}\n[review]\n{switch} = true\n{review}"
+                "[crews.reviewers]\nmodel = \"review-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n{implementer}[workflow]\ndefault_crew = \"reviewers\"\n{workflow}\n{selection}\n{required_commands}[operation]\nreview_crew = {review_crew}\n[review]\n{workspace_review}\n{review}"
             ),
         )
         .unwrap();
@@ -130,6 +209,7 @@ impl Fixture {
                 context_files: vec!["file:candidate.txt".into()],
                 status: Some(TaskStatus::InProgress),
                 crew: pool.then(|| "implementer".into()),
+                granted_tools: granted.iter().map(|tool| (*tool).to_string()).collect(),
                 ..Default::default()
             })
             .unwrap();
@@ -138,9 +218,15 @@ impl Fixture {
             contract_version: REVIEW_CONTRACT_VERSION,
             policy_version: policy.version,
             timing,
-            timing_source: match timing {
-                ReviewTiming::BeforeLanding => policy.review_before_landing.source.label().into(),
-                _ => policy.review_before_pr.source.label().into(),
+            timing_source: if review_setting.is_some() {
+                orbit_types::workflow::REVIEW_RUN_OPTION_SOURCE.into()
+            } else {
+                match timing {
+                    ReviewTiming::BeforeLanding => {
+                        policy.review_before_landing.source.label().into()
+                    }
+                    _ => policy.review_before_pr.source.label().into(),
+                }
             },
             crew: (!pool).then(|| policy.review_crew.value[0].clone()),
             crew_pool: if pool {
@@ -149,8 +235,13 @@ impl Fixture {
                     .value
                     .iter()
                     .map(|name| ReviewCrewPoolMember {
-                        name: name.clone(),
-                        weight: 1,
+                        name: name
+                            .split_once(':')
+                            .map_or(name.as_str(), |(name, _)| name)
+                            .into(),
+                        weight: name
+                            .split_once(':')
+                            .map_or(1, |(_, weight)| weight.parse().unwrap()),
                     })
                     .collect()
             } else {
@@ -166,6 +257,7 @@ impl Fixture {
                 runtime.workflow_required_validation_commands().to_vec(),
             ),
             baseline_commands: runtime.review_baseline_commands().to_vec(),
+            selective_before_landing: policy.selective_before_landing_policy(),
             captured_at: Utc::now(),
             host_evidence: Vec::new(),
         };
@@ -285,6 +377,37 @@ fn a_captured_pool_reviews_with_a_crew_that_did_not_implement_the_task() {
     assert_eq!(
         admission["reviewer"]["crew_source"], "workspace pool",
         "{admission}"
+    );
+}
+
+/// A reviewer pool is narrowed for independence before weighting; pressure
+/// and configured/effective weights survive the public gate admission.
+fn review_pool_admission_records_pressure_after_independence_filtering() {
+    let mut fixture = Fixture::build(
+        &[],
+        "",
+        ReviewTiming::BeforePr,
+        10,
+        Some("crew_selection = \"usage_pressure\""),
+        &[],
+        Default::default(),
+    );
+    crate::usage_pressure_draws::record_week(
+        &fixture.runtime,
+        "claude",
+        10.0,
+        chrono::Duration::hours(6),
+    );
+    crate::usage_pressure_draws::record_week(
+        &fixture.runtime,
+        "codex",
+        0.0,
+        chrono::Duration::days(7),
+    );
+    fixture.admit();
+    crate::usage_pressure_draws::assert_pool(
+        &fixture.input["admission"]["reviewer"]["eligible_pool"],
+        &[("alternative", 1, 8.0), ("reviewers", 3, 3.0)],
     );
 }
 
@@ -475,6 +598,7 @@ fn execution_failures_have_messages_and_remain_unexpected() {
 crate::scenario_table!(
     settled_negative_verdicts_are_successful_calls_with_decision_detail_scenarios,
     settled_negative_verdicts_are_successful_calls_with_decision_detail,
+    review_pool_admission_records_pressure_after_independence_filtering,
     uncovered_landings_succeed_and_exhausted_admissions_are_denied,
     execution_failures_have_messages_and_remain_unexpected
 );

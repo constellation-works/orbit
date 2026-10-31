@@ -1,10 +1,12 @@
-use std::ffi::{CString, OsString};
+use std::ffi::CString;
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 
+use orbit_common::OrbitError;
+use orbit_common::fs::physical::canonicalize_existing_prefix_checked;
 use orbit_engine::DispatchError;
 
 use super::provider_state::validated_linux_provider_state_root;
@@ -97,6 +99,15 @@ fn mkdir_at(parent: &OwnedFd, name: &std::ffi::OsStr, path: &Path) -> Result<(),
     Ok(())
 }
 
+/// The dispatch error for a sandbox path whose existing part could not be
+/// inspected; a missing component alone is never an error.
+pub(super) fn linux_path_inspection_error(path: &Path, error: OrbitError) -> DispatchError {
+    DispatchError::CliInvocationPermanent(format!(
+        "inspect Linux sandbox path `{}`: {error}",
+        path.display()
+    ))
+}
+
 fn runtime_open_error(path: &Path, error: std::io::Error) -> DispatchError {
     DispatchError::CliInvocationPermanent(format!(
         "open Linux sandbox runtime object `{}` without following links: {error}",
@@ -128,49 +139,12 @@ pub(super) fn validated_linux_runtime_path(
     root: &Path,
     candidate: &Path,
 ) -> Result<Option<PathBuf>, DispatchError> {
-    let Some(resolved) = resolved_existing_ancestor(candidate)? else {
+    let Some(resolved) = canonicalize_existing_prefix_checked(candidate)
+        .map_err(|error| linux_path_inspection_error(candidate, error))?
+    else {
         return Ok(None);
     };
     Ok(resolved.starts_with(root).then_some(resolved))
-}
-
-/// Split a path into the deepest ancestor that already exists and the
-/// components that do not, canonicalize that ancestor, and rejoin them.
-///
-/// Canonicalizing resolves every symlink on the existing part, which is what
-/// makes the result usable as a containment decision: whatever the caller does
-/// next happens at the real location, not at the name it was given. `Ok(None)`
-/// means the walk ran out of ancestors; callers phrase their own rejection.
-pub(super) fn resolved_existing_ancestor(path: &Path) -> Result<Option<PathBuf>, DispatchError> {
-    let mut existing = path.to_path_buf();
-    let mut missing = Vec::<OsString>::new();
-
-    let canonical_existing = loop {
-        match existing.canonicalize() {
-            Ok(canonical) => break canonical,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let Some(name) = existing.file_name() else {
-                    return Ok(None);
-                };
-                missing.push(name.to_os_string());
-                if !existing.pop() {
-                    return Ok(None);
-                }
-            }
-            Err(error) => {
-                return Err(DispatchError::CliInvocationPermanent(format!(
-                    "inspect Linux sandbox path ancestor `{}`: {error}",
-                    existing.display()
-                )));
-            }
-        }
-    };
-
-    let mut resolved = canonical_existing;
-    for component in missing.iter().rev() {
-        resolved.push(component);
-    }
-    Ok(Some(resolved))
 }
 
 /// Validate runtime roots before constructing any sandbox path beneath them.

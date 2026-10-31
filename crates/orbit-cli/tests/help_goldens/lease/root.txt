@@ -1,0 +1,26 @@
+Coordinate path leases with the workspace owner
+
+Usage: orbit lease [OPTIONS] <COMMAND>
+
+Commands:
+  request  Request an advisory or hard path lease
+  renew    Renew an active lease from now
+  expand   Add selectors to a granted lease
+  release  Release a path lease early
+  show     Inspect a lease in any state
+  list     List active advisory and hard leases
+  check    Check path coverage and overlapping holders
+  notices  Read durable lease notices after a cursor
+  token    Mint, list and revoke lease listener tokens (run as the listener user)
+  listen   Serve the lease routes to token holders (run as the listener user)
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

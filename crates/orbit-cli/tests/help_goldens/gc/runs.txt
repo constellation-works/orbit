@@ -6,35 +6,20 @@ Options:
       --apply
           Drop what the plan lists; without this flag the command only reports
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --older-than-days <DAYS>
           Retention window in days, overriding `retention.runs_days` (default 60, minimum 30)
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
-
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
 
   -h, --help
           Print help (see a summary with '-h')
 
-Without --apply this only reports. Only success, failed, timeout, cancelled and interrupted runs of this workspace, and of workspace ids that are no longer registered, are selected; another registered workspace keeps its own window. A held run, which review evidence can still resume, and every non-terminal run are never touched. The run row, its steps and its summary stay, so `orbit run show` and run history keep working, and `archived_at` records when the state was dropped. The host's per-minute run and host resource history, and the admission forecasts recorded against it, older than 30 days go in the same pass, whatever the window.
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+Without --apply this only reports. Only success, failed, timeout, cancelled and interrupted runs of this workspace, and of workspace ids that are no longer registered, are selected; another registered workspace keeps its own window. A held run, which review evidence can still resume, and every non-terminal run are never touched. The run row, its steps and its summary stay, so `orbit run show` and run history keep working, and `archived_at` records when the state was dropped. The host's per-minute run and host resource history, and the admission forecasts recorded against it, older than 30 days go in the same pass, whatever the window, except rows kept at any age by count: the newest max(200, machine.auto_concurrency.profile_window) deliveries per workspace, work class and complexity, the newest 10,000 forecasts, and host minutes from the oldest kept forecast onward.
 
 Examples:
   orbit gc runs

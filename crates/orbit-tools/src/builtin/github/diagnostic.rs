@@ -40,6 +40,8 @@ pub(super) struct DiagnosticCollector {
 #[derive(Default)]
 struct Command {
     full: Option<String>,
+    display: Option<String>,
+    display_complete: bool,
     regions: String,
     total_bytes: usize,
     retained_bytes: usize,
@@ -134,6 +136,7 @@ impl DiagnosticCollector {
         if start {
             self.candidate = Some(Command {
                 full: Some(String::new()),
+                display: Some(String::new()),
                 columns: columns.map(ToOwned::to_owned),
                 ..Command::default()
             });
@@ -146,6 +149,16 @@ impl DiagnosticCollector {
                 .and_then(|code| code.parse::<i32>().ok())
                 .is_some_and(|code| code != 0);
         if let Some(candidate) = &mut self.candidate {
+            if start || printed || (end_display && !candidate.display_complete) {
+                if let Some(display) = &mut candidate.display {
+                    if display.len() + total_bytes > MAX_REGION_BYTES || total_bytes != line.len() {
+                        candidate.display = None;
+                    } else {
+                        display.push_str(line);
+                    }
+                }
+                candidate.display_complete |= end_display;
+            }
             candidate.observe(
                 line,
                 total_bytes,
@@ -164,22 +177,27 @@ impl DiagnosticCollector {
         !self.invalid && self.line_bytes == 0
     }
 
-    pub(super) fn finish(self) -> (Option<String>, Option<Value>) {
+    pub(super) fn finish(self) -> (Option<String>, Option<Value>, Option<String>) {
         if !self.source_complete() || self.failures != 1 {
-            return (None, None);
+            return (None, None, None);
         }
         let Some(command) = self.selected.filter(|command| !command.conflicting_columns) else {
-            return (None, None);
+            return (None, None, None);
         };
+        let display = command
+            .display
+            .filter(|_| command.display_complete)
+            .map(|text| redact_all(&text))
+            .filter(|text| text.len() <= MAX_REGION_BYTES);
         if let Some(full) = command.full {
-            return (Some(redact_all(&full)), None);
+            return (Some(redact_all(&full)), None, display);
         }
         if command.regions_overflow || command.anchors == 0 {
-            return (None, None);
+            return (None, None, display);
         }
         let text = redact_all(&command.regions);
         if text.len() > MAX_REGION_BYTES {
-            return (None, None);
+            return (None, None, display);
         }
         let regions = json!({
             "kind": "runner_failure_regions",
@@ -194,7 +212,7 @@ impl DiagnosticCollector {
             "assertion_payload_omitted_bytes": command.assertion_omitted_bytes,
             "failure_anchor_count": command.anchors,
         });
-        (None, Some(regions))
+        (None, Some(regions), display)
     }
 }
 

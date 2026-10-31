@@ -2,7 +2,8 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_validated: 2026-10-19
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -741,10 +742,10 @@ excluded landings with their certificate and assurance label.
 ## State preparation [ORB-11331]
 
 > Failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
-> trigger kind still parses but has no shipped target and fires nothing. `preparation_eligible` and
-> `finding_unverified` schedule work.
+> trigger kind still parses but has no shipped target and fires nothing. `preparation_eligible`,
+> `finding_unverified` and `pilot_warnings_held` schedule work.
 
-The same routine sweep now accepts `trigger.state` with one of three kinds.
+The same routine sweep now accepts `trigger.state` with one of four kinds.
 `finding_unverified` [ORB-15662] targets `job:finding_verification_pipeline`.
 It observes review-filed bug findings (type `bug` tagged `code-review`,
 `delivery-code-review`, `security-review` or `qa-sweep`) in `proposed`,
@@ -753,7 +754,19 @@ finding as filed: title, description, criteria, tags, type and selectors. It
 takes no `eligibility` or `freshness` block. The seeded
 `finding_verification.yaml` ships `enabled: false`, with the same
 seed-time `owner_machine` and `branch` as `task_pilot.yaml`. See
-[finding-verification](../finding-verification/2_design.md#7-state-trigger). Core
+[finding-verification](../finding-verification/2_design.md#7-state-trigger).
+`pilot_warnings_held` targets `job:escalation_triage_pipeline`: it observes
+proposed tasks whose latest task-pilot assessment holds promotion on warnings
+and records one triage marker per assessment. The seeded
+`pilot_warning_triage.yaml` also ships `enabled: false` with the same seed-time
+`owner_machine` and `branch`; see
+[Pilot warning holds](2_design.md#61-pilot-warning-holds-pilot_warnings_held).
+`block_escalated` targets the same job with `subject: block`: it observes
+blocked tasks whose block episode awaits triage and settles from the
+`blocked_task_triaged` marker for that episode. The seeded
+`blocked_task_triage.yaml` ships `enabled: false` with the same seed-time
+`owner_machine` and `branch`; see
+[Escalated blocks](2_design.md#62-escalated-blocks-block_escalated). Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
 identity, frozen attempts and receipt acceptance. Store uses its existing
@@ -773,9 +786,15 @@ cron file whose template-owned fields were hand-edited is preserved and
 reported. For any other routine, migration is an explicit edit of that
 definition: disable its old temporal owner, settle any existing run, and
 replace only that definition's trigger. Preserve the user's policy. Do not run
-both old and new definitions; a sweep preview reports
-`duplicate_routine_ownership` for enabled definitions sharing the same source
-and target when one uses state scheduling.
+both old and new definitions. A sweep preview reports
+`duplicate_routine_ownership` for an enabled definition whose enabled peer on
+the same source and target conflicts with it: a temporal (cron) routine and a
+state routine, or two state routines of the same trigger kind. Two state
+routines with different kinds on one target do not conflict, because each owns
+a distinct consumer and member set, so the seeded `pilot_warning_triage` and
+`blocked_task_triage` routines run side by side. `orbit routine show` and
+`list` report the same skip for a skipped state routine instead of the
+evaluator's dry-run reason, so it never reads as `debouncing`.
 
 ```yaml
 schemaVersion: 1
@@ -870,7 +889,7 @@ dispatches one pipeline run carrying every member's task id as an explicit
 `task_ids` entry. Finding verification also requires one stored `task.crew`
 [ORB-12761], so a member whose crew disagrees stays pending for the next
 admission. Task-pilot preparation admits every due crew in that batch
-[ORB-16839]: prepare partitions the run by each task's stored crew and then
+([ORB-16839]): prepare partitions the run by each task's stored crew and then
 into groups of at most five, so two crews are assessed in that one run as
 separate partitions instead of one rejected bundle. Run start admits the mix
 only for the run the live attempt admitted, checked against that attempt and
@@ -991,3 +1010,35 @@ new admissions and preserves receipts; a binary without state-trigger support
 rejects the unknown configuration key, and one that predates `batch_size`
 rejects that key. Automatic host/epoch transfer and automatic promotion are not
 part of this implementation.
+
+## Task References
+
+- [ORB-11330] — delivery automation operations: opt-in triggers, shared
+  per-tick observation, and the no-new-daemon contract.
+- [ORB-11331] — bounded state preparation: pilot freshness and causal triage
+  on the same Store checkpoint path.
+- [ORB-11333] — before-PR coverage exclusions.
+- [ORB-12295] — recovering a consumer stalled by a settings change.
+- [ORB-14033] — a settings-only edit is adopted by the next evaluation.
+- [ORB-12312] — replaying a consumer after a legitimate branch rebase.
+- [ORB-12346] — automatic replay, and the stall that replaces a silent retry
+  loop; also resetting a consumer whose debt cannot be reconciled.
+- [ORB-12745] — the shipped `task_pilot.yaml` form and the `eligibility`
+  predicate.
+- [ORB-12746] — due members are admitted in batches.
+- [ORB-12761] — a member whose crew disagrees stays pending for the next pass.
+- [ORB-13638] — configurable task-pilot freshness inputs.
+- [ORB-16839] — prepare partitions the run by each task's stored crew.
+- [ORB-16860] — run start admits the crew mix only for the live attempt,
+  checked against its action key.
+- [ORB-15662] — the `finding_unverified` state trigger target.
+- [ORB-12867] — list and doctor render an unadmittable delivery definition as
+  `skipped` with its `skipped_reason`, instead of `enabled`/`ok`.
+- [ORB-13896] — `delivery-code-review` mints with
+  `workflow.purpose_crews.review` while it is set.
+- [ORB-13992] — after-landing review is the `delivery-code-review`
+  definition's own `enabled` flag.
+- [ORB-14164] — state-member attempt pins live under one Orbit root and
+  workspace namespace.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

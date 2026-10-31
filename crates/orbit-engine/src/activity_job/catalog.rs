@@ -31,6 +31,12 @@ use orbit_types::workflow::{
 /// `activity:<name>` prefix for the `target:` field on a [`TargetRef`].
 pub const ACTIVITY_REF_PREFIX: &str = "activity:";
 
+/// `script:<name>` prefix for the `target:` field on a [`TargetRef`].
+pub const SCRIPT_REF_PREFIX: &str = orbit_types::workflow::activity_job::SCRIPT_REF_PREFIX;
+
+/// `auto-task:<name>` prefix for the `target:` field on a [`TargetRef`].
+pub const AUTO_TASK_REF_PREFIX: &str = orbit_types::workflow::activity_job::AUTO_TASK_REF_PREFIX;
+
 #[derive(Debug, Default, Clone)]
 pub struct V2ActivityCatalog {
     inner: LayeredCatalog<ActivityV2>,
@@ -133,7 +139,9 @@ pub fn catalog_error_to_orbit(error: CatalogError) -> OrbitError {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ResolveError {
-    #[error("step `{step_id}`: target `{target}` does not start with `activity:` prefix")]
+    #[error(
+        "step `{step_id}`: target `{target}` does not start with `activity:`, `script:` or `auto-task:`"
+    )]
     UnknownRefKind { step_id: String, target: String },
     #[error("step `{step_id}`: activity `{name}` not found in catalog")]
     ActivityNotInCatalog { step_id: String, name: String },
@@ -145,6 +153,14 @@ pub enum ResolveError {
     FinalRecoveryActivityNotInCatalog { name: String },
     #[error("step `{step_id}`: recovery_activity `{name}` not found in catalog")]
     StepRecoveryActivityNotInCatalog { step_id: String, name: String },
+    #[error(
+        "step `{step_id}`: script `{name}` manifest not found at {manifest}; a `script:` step names a manifest in the workspace's scripts directory"
+    )]
+    ScriptNotInCatalog {
+        step_id: String,
+        name: String,
+        manifest: PathBuf,
+    },
 }
 
 impl V2ActivityCatalog {
@@ -647,14 +663,34 @@ fn walk_dir(
     Ok(())
 }
 
-/// Walk `job` and rewrite every [`JobV2StepBody::TargetRef`] into a
-/// [`JobV2StepBody::Target`] using the named [`ActivityV2`] from `catalog`.
-/// A ref with an unknown name is a hard error; silently succeeding would
-/// leave a `TargetRef` lurking past dispatch where the executor would
-/// ignore it.
+/// Walk `job` and rewrite every `activity:` [`JobV2StepBody::TargetRef`]
+/// into a [`JobV2StepBody::Target`] using the named [`ActivityV2`] from
+/// `catalog`. A ref with an unknown name is a hard error; silently
+/// succeeding would leave a `TargetRef` lurking past dispatch where the
+/// executor would ignore it.
+///
+/// A `script:` ref is a load error here: resolving one needs the
+/// workspace's script catalog ([`resolve_job_target_refs_with_scripts`]),
+/// and a caller without one must not silently admit a script step.
 pub fn resolve_job_target_refs(
     job: &mut JobV2,
     catalog: &V2ActivityCatalog,
+) -> Result<(), ResolveError> {
+    let scripts = super::script_catalog::V2ScriptCatalog::new(PathBuf::new(), PathBuf::new());
+    resolve_job_target_refs_with_scripts(job, catalog, &scripts)
+}
+
+/// [`resolve_job_target_refs`], plus `script:` refs: each one is checked
+/// against the workspace's script catalog (whose loader has already
+/// validated the manifest and resolved its entry inside the workspace),
+/// and a missing script is a load error naming the manifest file it
+/// would live at. A resolved script ref is *retained* as a `TargetRef`:
+/// the host re-reads and snapshots the script, checks its grant and runs
+/// it at dispatch, so a script edited after load is still caught.
+pub fn resolve_job_target_refs_with_scripts(
+    job: &mut JobV2,
+    catalog: &V2ActivityCatalog,
+    scripts: &super::script_catalog::V2ScriptCatalog,
 ) -> Result<(), ResolveError> {
     job.resolved_recovery_activity = match job.recovery_activity.as_deref() {
         Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
@@ -682,12 +718,16 @@ pub fn resolve_job_target_refs(
     };
 
     for step in &mut job.steps {
-        resolve_step(step, catalog)?;
+        resolve_step(step, catalog, scripts)?;
     }
     Ok(())
 }
 
-fn resolve_step(step: &mut JobV2Step, catalog: &V2ActivityCatalog) -> Result<(), ResolveError> {
+fn resolve_step(
+    step: &mut JobV2Step,
+    catalog: &V2ActivityCatalog,
+    scripts: &super::script_catalog::V2ScriptCatalog,
+) -> Result<(), ResolveError> {
     step.resolved_recovery_activity = match step.recovery_activity.as_deref() {
         Some(name) => Some(catalog.get(name).cloned().ok_or_else(|| {
             ResolveError::StepRecoveryActivityNotInCatalog {
@@ -700,6 +740,16 @@ fn resolve_step(step: &mut JobV2Step, catalog: &V2ActivityCatalog) -> Result<(),
 
     match &mut step.body {
         JobV2StepBody::Target(_) => Ok(()),
+        JobV2StepBody::TargetRef(reference) if reference.target.starts_with(SCRIPT_REF_PREFIX) => {
+            resolve_script_ref(&step.id, &reference.target, scripts)
+        }
+        // An auto-task ref is retained: Core resolves the named definition
+        // for inspection, and `validate_job` refuses to run it.
+        JobV2StepBody::TargetRef(reference)
+            if reference.target.starts_with(AUTO_TASK_REF_PREFIX) =>
+        {
+            Ok(())
+        }
         JobV2StepBody::TargetRef(_) => {
             // Swap the body out so we can own the ref without cloning; the
             // replacement is a throwaway `Target` that we immediately
@@ -722,20 +772,46 @@ fn resolve_step(step: &mut JobV2Step, catalog: &V2ActivityCatalog) -> Result<(),
         }
         JobV2StepBody::Parallel { parallel } => {
             for branch in &mut parallel.branches {
-                resolve_step(branch, catalog)?;
+                resolve_step(branch, catalog, scripts)?;
             }
             Ok(())
         }
-        JobV2StepBody::FanOut { fan_out, .. } => resolve_step(&mut fan_out.worker, catalog),
-        JobV2StepBody::Loop { loop_ } => resolve_loop(loop_, catalog),
+        JobV2StepBody::FanOut { fan_out, .. } => {
+            resolve_step(&mut fan_out.worker, catalog, scripts)
+        }
+        JobV2StepBody::Loop { loop_ } => resolve_loop(loop_, catalog, scripts),
     }
 }
 
-fn resolve_loop(block: &mut LoopBlock, catalog: &V2ActivityCatalog) -> Result<(), ResolveError> {
+fn resolve_loop(
+    block: &mut LoopBlock,
+    catalog: &V2ActivityCatalog,
+    scripts: &super::script_catalog::V2ScriptCatalog,
+) -> Result<(), ResolveError> {
     for step in &mut block.steps {
-        resolve_step(step, catalog)?;
+        resolve_step(step, catalog, scripts)?;
     }
     Ok(())
+}
+
+/// Check one `script:<name>` ref against the script catalog. The catalog
+/// loader has already refused a manifest whose entry escapes the
+/// workspace or whose interpreter carries inline code, naming that
+/// manifest file; the only refusal left here is a name with no manifest.
+fn resolve_script_ref(
+    step_id: &str,
+    target: &str,
+    scripts: &super::script_catalog::V2ScriptCatalog,
+) -> Result<(), ResolveError> {
+    let name = target.strip_prefix(SCRIPT_REF_PREFIX).unwrap_or(target);
+    if scripts.get(name).is_some() {
+        return Ok(());
+    }
+    Err(ResolveError::ScriptNotInCatalog {
+        step_id: step_id.to_string(),
+        name: name.to_string(),
+        manifest: scripts.manifest_path_for(name),
+    })
 }
 
 fn resolve_ref(

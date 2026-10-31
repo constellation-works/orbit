@@ -59,10 +59,17 @@ const AUTO_CONCURRENCY_MODES: &[EnumValue] = &[
     EnumValue::plain("enforce"),
 ];
 
-/// The review layers a run's `review` option may add [ORB-16572].
+/// The review layers a run's `review` option may add [ORB-16572] [ORB-20099].
+/// `before-landing` is recommended; `before-pr` is deprecated but honoured.
 const REVIEW_LAYERS: &[EnumValue] = &[
-    EnumValue::plain("before-pr"),
-    EnumValue::plain("before-landing"),
+    EnumValue::helped(
+        "before-pr",
+        "Deprecated but honoured: hold PR creation for a reviewer; prefer before-landing.",
+    ),
+    EnumValue::helped(
+        "before-landing",
+        "Recommended: review the open PR before it lands.",
+    ),
 ];
 
 const RUN_ID_PARAM: ParamSpec = required(mcp_only("id", ParamType::String, "Job run ID."));
@@ -76,7 +83,7 @@ const CLAIM_TOKEN_PARAM: ParamSpec = mcp_only(
 const MODEL_PARAM: ParamSpec = mcp_only(
     "model",
     ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
 );
 
 const VIEW_PARAM: ParamSpec = mcp_only(
@@ -152,7 +159,7 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "review",
             ParamType::Enum(REVIEW_LAYERS),
-            "Start only: add this review layer before landing (before-pr or before-landing) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
+            "Start only: add this review layer before landing (before-landing recommended; before-pr deprecated but honoured) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
         ),
         mcp_only(
             "approve_proposed",
@@ -227,7 +234,7 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
     verb: WorkflowVerb::RunResume,
     cli_path: &[],
     tool_name: "orbit.workflow.run.resume",
-    tool_description: "Resume a terminal resumable workflow run as a new linked run, or explicitly authorize review-only same-PR source repair of an eligible owner-local publication, including successful publication with unmet acceptance. Requires operator capability; agent sessions are refused.",
+    tool_description: "Resume a terminal resumable workflow run as a new linked run, or explicitly authorize review-only same-PR source repair of an eligible owner-local publication, including successful or stopped inline publication with unmet acceptance. Requires operator capability; agent sessions are refused.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
@@ -237,7 +244,7 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "source_repair",
             ParamType::Object,
-            "Explicit operator recovery of an eligible stopped owner-local publication. Inspect: {action: inspect, task_id} returns binding, review and policy_digest. Submit: {action: submit, task_id, request_key, binding, diagnosis}; successful-publication rework also requires unmet_acceptance evidence and the inspected current policy_digest. Supply the exact binding object. Diagnosis and unmet_acceptance accept 1-32768 bytes each. Captures current review and workflow.required_validation_commands: configured commands require fresh candidate evidence; an empty list records skipped_no_required_commands, not a passing check, and does not waive configured review or hosted required checks. Reuses the original PR; grants no completion, merge or auto-fix authority.",
+            "Explicit operator recovery of an eligible stopped owner-local publication. Inspect: {action: inspect, task_id} returns binding, review, policy_digest, immutable reservations and reservation_digests. Submit: {action: submit, task_id, request_key, binding, diagnosis}; successful or kept inline publication rework also requires unmet_acceptance evidence and the inspected current policy_digest. Select the original publishing run explicitly, including after empty failed successors; inspection authenticates its stopped lineage, unchanged specification and exact PR head. Supply the exact binding object and author a valid execution plan before submission; lifecycle refusal creates no reservation. To recover an existing reservation with no admitted run after correcting only an empty or placeholder plan, use {action: reconcile, task_id, request_key, reservation_digest, binding, diagnosis} with the original key, its inspected reservation_digest, fresh binding and otherwise unchanged evidence/policy. This appends fresh operator authorization while preserving the original reservation and charge; identical replay returns the one admitted run. Other meaning, identity, actor, policy or lease changes refuse reconciliation. Diagnosis and unmet_acceptance accept 1-32768 bytes each. Captures current review and workflow.required_validation_commands: configured commands require fresh candidate evidence; an empty list records skipped_no_required_commands, not a passing check, and does not waive configured review or hosted required checks. Reuses the original PR and preserves historical completion deadlines; grants no completion, merge or auto-fix authority.",
         ),
     ]],
     at_least_one_of: &[],
@@ -298,7 +305,7 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "review",
             ParamType::Enum(REVIEW_LAYERS),
-            "Optional review layer before landing (`before-pr` or `before-landing`) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
+            "Optional review layer before landing (`before-landing` recommended; `before-pr` deprecated but honoured) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
         ),
         CLAIM_TOKEN_PARAM,
         MODEL_PARAM,

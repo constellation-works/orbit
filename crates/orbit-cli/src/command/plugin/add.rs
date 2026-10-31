@@ -4,6 +4,8 @@ use orbit_core::adapter::command::PluginAddOptions;
 
 use crate::command::{CommandOut, Execute, Payload};
 
+use super::support;
+
 use super::support::{
     append_enable_report_text, enable_report_json, plugin_record, show_build_plan,
 };
@@ -26,7 +28,7 @@ pub struct PluginAddArgs {
     #[arg(long)]
     pub enable: bool,
     /// Complete permission grant set to record when enabling (repeatable,
-    /// comma-separated): fs, network, env_pass, orbit_tools, unsandboxed.
+    /// comma-separated): fs, network, env_pass, orbit_tools, unsandboxed, agent_tools.
     /// Replaces any recorded set.
     /// Scope fs to particular roots with `fs=<root>[,<root>]`, as
     /// `orbit plugin enable --grant` documents.
@@ -78,6 +80,7 @@ impl Execute for PluginAddArgs {
         // install rather than collapsed into the summary, so the seeded
         // schedules, skill links and warnings `--enable` produced here are
         // not only visible on the two-step `add` then `enable` path.
+        support::append_agent_tool_consent_text(&mut text, summary);
         append_enable_report_text(&mut text, &result.seeded, &result.skills, &result.warnings);
 
         let mut doc = plugin_record(summary);

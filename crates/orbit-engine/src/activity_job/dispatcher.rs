@@ -25,6 +25,15 @@ use super::cli_runner::{run_cli_backend_for_step, task_id_from_input};
 pub struct ResolvedCliExecutor {
     pub command: String,
     pub args: Vec<String>,
+    /// The executor's declared arguments for a pinned-source inspection run
+    /// (`ExecutorDef::inspection_args`): appended to that run's argv, empty
+    /// when `args` already leave the native tools on. `None` declares no
+    /// inspection surface, and such a run is refused before launch.
+    pub inspection_args: Option<Vec<String>>,
+    /// How the executor gets staged images to its model
+    /// (`ExecutorDef::image_input`). `None` declares that it cannot take
+    /// images, and an image-input run is refused before launch.
+    pub image_input: Option<orbit_types::workflow::ExecutorImageInput>,
 }
 
 /// The registered `local_shell` executor definition behind a deterministic
@@ -138,6 +147,7 @@ pub struct DispatchOutcome {
 
 #[derive(Debug, Clone)]
 pub struct DispatchInvocationTrace {
+    pub agent_execution_id: Option<i64>,
     pub provider: String,
     pub model: Option<String>,
     /// The crew account the invocation ran under, when its crew sets `env`.
@@ -165,6 +175,11 @@ pub enum DispatchError {
 
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
+
+    /// A command failed after it ran. Its bounded diagnostic is retained
+    /// independently of successful checkpoints, so resume still reruns it.
+    #[error("deterministic action `local_shell` failed: {message}")]
+    LocalShellFailed { message: String, output: Box<Value> },
 
     /// [ORB-16307] `pr_complete` lost only a read-only completion observation
     /// to a transient provider failure, before any completion mutation.
@@ -204,6 +219,14 @@ pub enum DispatchError {
         message: String,
     },
 
+    /// A deliberate delivery refusal, with its shared typed diagnostic code.
+    #[error("deterministic action `{action}` refused: {message}")]
+    DeliveryRefused {
+        action: String,
+        refusal: orbit_types::workflow::DeliveryRefusal,
+        message: String,
+    },
+
     /// A settled review needs named external evidence. End the delivery run
     /// without retry, recovery, or the failure handoff; receipt queues review.
     #[error("review_awaiting_evidence: named external checks are pending")]
@@ -240,10 +263,19 @@ pub enum DispatchError {
     #[error("cli invocation failed (permanent): {0}")]
     CliInvocationPermanent(String),
 
-    /// An inspection cannot start without a supported native read and
-    /// command surface. Configuration errors never spend a provider session.
+    /// An inspection cannot start: the filesystem profile is not
+    /// `reviewer`, the provider has no CLI runtime, or its executor declares
+    /// no `inspection_args`. Configuration errors never spend a provider
+    /// session.
     #[error("inspection_tools_unavailable: provider `{provider}`: {reason}")]
     InspectionToolsUnavailable { provider: String, reason: String },
+
+    /// An image-input run cannot start: its executor declares no
+    /// `spec.image_input`, its crew sets `vision = false`, or it stages more
+    /// images or another format than the declaration admits. Configuration
+    /// errors never spend a provider session.
+    #[error("image_input_unavailable: executor `{executor}`: {reason}")]
+    ImageInputUnavailable { executor: String, reason: String },
 
     /// A host-owned Git child exceeded its finite budget. The supervisor has
     /// terminated its process group; recovery state must be inspected as-is.
@@ -290,6 +322,30 @@ pub enum DispatchError {
         task_id: String,
         tool_name: String,
         reason: String,
+    },
+
+    /// A `target: script:<name>` step refused before anything was spawned:
+    /// no grant, a stale grant, a request beyond the grant, a changed
+    /// interpreter, a follower without a follower grant, a host without the
+    /// script profile, an unusable root or an invalid input. `code` is one
+    /// of `orbit_types::workflow::activity_job::script_refusal`.
+    /// Non-retryable: another attempt meets the same refusal.
+    #[error("{code}: step `{step_id}` script `{script}`: {message}; nothing was spawned")]
+    ScriptRefused {
+        code: &'static str,
+        step_id: String,
+        script: String,
+        message: String,
+    },
+
+    /// A script exited 0 but its stdout is not one JSON document within
+    /// the cap that passes the manifest's `output_schema_json`. Not
+    /// retried: the same bytes give the same answer.
+    #[error("script_output_invalid: step `{step_id}` script `{script}`: {message}")]
+    ScriptOutputInvalid {
+        step_id: String,
+        script: String,
+        message: String,
     },
 
     /// Job validation rejected the spec at load time.
@@ -340,15 +396,19 @@ impl DispatchError {
                 | DispatchError::HostRequired(_)
                 | DispatchError::CliInvocationPermanent(_)
                 | DispatchError::InspectionToolsUnavailable { .. }
+                | DispatchError::ImageInputUnavailable { .. }
                 | DispatchError::GitTimeout { .. }
                 | DispatchError::WorktreeIntegrity { .. }
                 | DispatchError::RecoverableVcsConflict(_)
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
                 | DispatchError::ReviewGateRefused { .. }
+                | DispatchError::DeliveryRefused { .. }
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ChildRunCancelled { .. }
+                | DispatchError::ScriptRefused { .. }
+                | DispatchError::ScriptOutputInvalid { .. }
                 | DispatchError::ProtocolSkew(_)
         )
     }
@@ -362,9 +422,15 @@ impl DispatchError {
         let text = || self.to_string();
         match self {
             DispatchError::WorktreeIntegrity { code, .. } => code,
+            DispatchError::ScriptRefused { code, .. } => code,
+            DispatchError::ScriptOutputInvalid { .. } => {
+                orbit_types::workflow::activity_job::script_failure::OUTPUT_INVALID
+            }
             DispatchError::RecoverableVcsConflict(_) => "recoverable_vcs_conflict",
             DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
+            DispatchError::ImageInputUnavailable { .. } => wf::IMAGE_INPUT_UNAVAILABLE_ERROR_CODE,
             DispatchError::ReviewGateRefused { refusal, .. } => refusal.error_code(),
+            DispatchError::DeliveryRefused { refusal, .. } => refusal.error_code(),
             _ if wf::is_validation_environment_failure(None, Some(&text())) => {
                 wf::VALIDATION_ENVIRONMENT_ERROR_CODE
             }
@@ -420,6 +486,14 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun { task_id, run_id }
         }
+        DispatchError::DeliveryRefused {
+            action,
+            refusal,
+            message,
+        } => OrbitError::DeliveryRefused {
+            refusal,
+            message: format!("deterministic action `{action}` refused: {message}"),
+        },
         other => OrbitError::InvalidInput(format!("{other}")),
     }
 }
@@ -511,9 +585,11 @@ fn dispatch_v2_activity_inner(
     let outcome_str = match &result {
         Ok(o) if o.success => "success",
         Ok(_) => "failed",
-        Err(DispatchError::ReviewEvidenceHold(_) | DispatchError::ForgeUnavailableHold(_)) => {
-            "held"
-        }
+        Err(
+            DispatchError::ReviewEvidenceHold(_)
+            | DispatchError::ForgeUnavailableHold(_)
+            | DispatchError::DeliveryRefused { .. },
+        ) => "held",
         Err(DispatchError::ChildRunCancelled { .. }) => "cancelled",
         Err(_) => "error",
     };
@@ -601,18 +677,26 @@ fn run_deterministic(
     if let Some(binding) = tool_context.activity_binding.as_mut() {
         binding.task_id = task_id_from_input(input).map(ToOwned::to_owned);
     }
+    let state_context = crate::executor::automation::StateExecutionContext {
+        run_id: input
+            .get("run_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        fs_profile: fs_profile.map(ToOwned::to_owned),
+        ..crate::executor::automation::StateExecutionContext::default()
+    };
     let output = match DeterministicAction::parse(&spec.action) {
+        Some(DeterministicAction::Engine(
+            orbit_types::workflow::EngineDeterministicAction::LocalShell,
+        )) => crate::executor::automation::dispatch_local_shell(
+            host,
+            &spec.config,
+            input,
+            Some(&state_context),
+        )?,
         Some(DeterministicAction::Engine(action)) => {
-            let state_context = crate::executor::automation::StateExecutionContext {
-                run_id: input
-                    .get("run_id")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-                fs_profile: fs_profile.map(ToOwned::to_owned),
-                ..crate::executor::automation::StateExecutionContext::default()
-            };
             crate::executor::automation::execute_engine_action(
                 host,
                 action,
@@ -621,6 +705,13 @@ fn run_deterministic(
                 Some(&state_context),
             )
             .map_err(|error| match error {
+                OrbitError::DeliveryRefused { refusal, message } => {
+                    DispatchError::DeliveryRefused {
+                        action: spec.action.clone(),
+                        refusal,
+                        message,
+                    }
+                }
                 OrbitError::RecoverableVcsConflict(conflict) => {
                     DispatchError::RecoverableVcsConflict(conflict)
                 }

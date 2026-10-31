@@ -1,0 +1,55 @@
+/* Analytics › Forecast: backlog quantiles, coverage and calibration, built
+   from the Metrics card, series-card and table classes in health.css. */
+.panel > .body.forecast-body {
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 16px; background: var(--bg);
+}
+.fc-view { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* Split wait reasons only when each table can keep its labels and ranges legible. */
+.fc-waits-card { container: fc-waits-card / inline-size; }
+.fc-waits { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fc-waits-caption { margin: 0; }
+.fc-waits-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.fc-waits-grid > .mx-table-wrap { min-width: 0; }
+.fc-waits-grid .fc-table { min-width: 0; }
+@container fc-waits-card (min-width: 1080px) {
+  .fc-waits-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* The forecast's source and age, beside its Refresh control. */
+.fc-source-tools { display: inline-flex; align-items: center; gap: 8px; }
+.fc-source { font: 12px var(--font-sans); white-space: nowrap; }
+/* Quantile tiles are read-outs, not series toggles. */
+.mx-sc.fc-kpi { cursor: default; }
+.mx-sc.fc-kpi:hover { border-color: var(--hair); }
+.fc-kpi-pair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; }
+.fc-q { display: inline-flex; align-items: baseline; gap: 6px; }
+.fc-q .mx-sc-value.fc-p90 { color: var(--fg-dim); font-size: 20px; }
+.fc-assume {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  padding: 10px 12px; border: 1px dashed #2e343c; border-radius: 8px;
+  font: 13px var(--font-sans);
+}
+.fc-unavailable { border-color: var(--warn-line, #2e343c); flex-direction: column; align-items: flex-start; }
+.fc-baseline { flex-direction: column; align-items: flex-start; }
+.fc-approved-unavailable { display: flex; flex-direction: column; gap: 8px; }
+.fc-assume-head { color: var(--fg); font-weight: 500; }
+.fc-assume-rate { color: var(--fg-mute); }
+.fc-approved { margin: 0; color: var(--fg-dim); font: 13px var(--font-sans); }
+.fc-table td.fc-state, .fc-table td.fc-review { white-space: nowrap; }
+.fc-table td.fc-basis { color: var(--fg-mute); font: 12px var(--font-mono); white-space: nowrap; }
+.fc-history-table-wrap { max-height: 420px; border: 1px solid var(--hair); border-radius: 8px; }
+.fc-history-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.fc-history-page-status { color: var(--fg-dim); font: 12px var(--font-sans); }
+/* Coverage counts: one cell per count, wrapping on narrow screens. */
+.fc-coverage {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 0;
+  font: 13px var(--font-sans);
+}
+.fc-cov {
+  position: relative; display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; border: 1px solid var(--hair); border-radius: 8px; background: var(--bg-sunk);
+}
+.fc-cov dt { color: var(--fg-dim); }
+/* The count reads first; dt stays first in the markup, as a dl requires. */
+.fc-cov dd { order: -1; margin: 0; color: var(--fg); font: 600 20px var(--font-mono); font-variant-numeric: tabular-nums; }
+.fc-cov dd.fc-warn { color: #f2c46d; }

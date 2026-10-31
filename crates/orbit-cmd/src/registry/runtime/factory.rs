@@ -2,6 +2,9 @@ use super::selection::*;
 use super::*;
 
 use orbit_core::adapter::command::host_plugin_rows;
+use orbit_core::composition::{
+    WorkspaceAuthorityAdoption, adopt_workspace_layout_authority, verify_workspace_layout_authority,
+};
 use orbit_types::plugin::InstalledPlugin;
 
 /// Registered workspace metadata keeps the logical catalog ID distinct from the
@@ -43,13 +46,44 @@ pub struct ResolvedWorkspaceSelection {
 /// machine's `[machine]` identity, and the workspace `[plugin_enablement]`
 /// toggles) are resolved from at open — plus the host plugin rows, which
 /// decide the plugin tool surface and live in the plugin store, not a file.
+/// Stat-based fingerprint of the layered `config.toml` files a runtime's
+/// settings are resolved from: the global `config.toml` and the workspace
+/// `.orbit/config.toml`.
+///
+/// This is the config-only slice of [`RegisteredRuntimeStamp`], split out so
+/// a long-lived host that keeps a built runtime (the dashboard) can notice a
+/// config edit with only `stat` calls — no registry, plugin-store or audit
+/// reads per request. Size and modification time, not content, so a
+/// same-length edit inside one mtime tick is missed, as with the other
+/// stamps here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigLayerStamp {
+    global_config: FileStamp,
+    workspace_config: FileStamp,
+}
+
+impl ConfigLayerStamp {
+    /// Stamp the config layers for a workspace rooted at `workspace_root`
+    /// (its `.orbit` directory) under `global_root`. An absent or unreadable
+    /// file stamps as nothing, so a file that later appears or disappears is
+    /// itself a change.
+    ///
+    /// The paths mirror `ConfigRoots::new(global_root, workspace_root)` in
+    /// Core's composition.
+    pub fn read(global_root: &Path, workspace_root: &Path) -> Self {
+        Self {
+            global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
+            workspace_config: FileStamp::read(&workspace_root.join(CONFIG_TOML_FILE)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRuntimeStamp {
     registry: FileStamp,
     host_registry: FileStamp,
     workspace_binding: FileStamp,
-    global_config: FileStamp,
-    workspace_config: FileStamp,
+    config: ConfigLayerStamp,
     /// The host plugin rows. A host `orbit plugin enable|disable` writes the
     /// plugin store, not a config file, so without this a cached runtime would
     /// keep serving the tool surface it was built with. A workspace toggle
@@ -72,8 +106,7 @@ impl RegisteredRuntimeStamp {
             registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
             host_registry: FileStamp::read(&orbit_registry::hosts::hosts_path(global_root)),
             workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
-            global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
-            workspace_config: FileStamp::read(&checkout.orbit_dir.join(CONFIG_TOML_FILE)),
+            config: ConfigLayerStamp::read(global_root, &checkout.orbit_dir),
             host_plugins: host_plugin_rows(global_root).unwrap_or_default(),
         }
     }
@@ -229,6 +262,18 @@ impl RegisteredRuntimeFactory {
         Self::initialize_with_overrides_mode(root_override, workspace_selector, true, true)
     }
 
+    /// Host-scoped inspection uses a registered checkout when one is selected
+    /// by cwd or `--workspace`, otherwise it reads host state from the global
+    /// root. An unregistered cwd must never become a workspace as a side
+    /// effect, and a foreign-generation join must not open the shared unbound
+    /// task partition for it [ORB-19676].
+    pub fn initialize_host_read_only_with_overrides(
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> Result<OrbitRuntime, OrbitError> {
+        Self::initialize_with_overrides_mode(root_override, workspace_selector, true, true)
+    }
+
     fn initialize_with_overrides_mode(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
@@ -267,9 +312,6 @@ impl RegisteredRuntimeFactory {
                 Some(inputs) if inputs.global_root == roots.global_root => inputs,
                 _ => RuntimeOpenInputs::read(&roots.global_root)?,
             };
-            if !read_only {
-                sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
-            }
             let selection = select_workspace_for_cwd_and_roots(&cwd, &roots, &inputs.registry)?;
             if host_fallback && selection.is_none() {
                 // A plugin inspection without a registered checkout has no
@@ -284,6 +326,12 @@ impl RegisteredRuntimeFactory {
                     workspace_runtime_binding(&selection.workspace, &selection.checkout)
                 })
                 .transpose()?;
+            if !read_only {
+                // A discovered workspace may belong to another generation
+                // authority: refuse before this open writes anything.
+                verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
+                sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
+            }
             let replica_owner = selection
                 .as_ref()
                 .and_then(|selection| replica_owner_for_checkout(&selection.checkout));
@@ -384,9 +432,27 @@ impl RegisteredRuntimeFactory {
         })
     }
 
+    /// Record `global_root`'s generation authority as the one protecting the
+    /// workspace `.orbit` at `shared_root`, which has recorded none, for
+    /// `orbit migrate --adopt-authority`. This authority's catalog supplies
+    /// the registration Core requires as evidence of its claim; see
+    /// [`adopt_workspace_layout_authority`] for what else is validated.
+    pub fn adopt_workspace_authority(
+        global_root: &Path,
+        shared_root: &Path,
+        claimed: &Path,
+    ) -> Result<WorkspaceAuthorityAdoption, OrbitError> {
+        let inputs = RuntimeOpenInputs::read(global_root)?;
+        let registered = registered_checkout_for_shared_root(
+            &inputs.registry,
+            &canonical_or_original(shared_root),
+        )
+        .is_some();
+        adopt_workspace_layout_authority(global_root, shared_root, claimed, registered)
+    }
+
     pub fn open_resolved_roots(roots: OrbitRuntimeRoots) -> Result<OrbitRuntime, OrbitError> {
         let inputs = RuntimeOpenInputs::read(&roots.global_root)?;
-        sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
         let registered = registered_checkout_for_shared_root(
             &inputs.registry,
             &canonical_or_original(&roots.shared_root),
@@ -394,6 +460,8 @@ impl RegisteredRuntimeFactory {
         let binding = registered
             .map(|(workspace, checkout)| workspace_runtime_binding(workspace, checkout))
             .transpose()?;
+        verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
+        sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
         let replica_owner =
             registered.and_then(|(_, checkout)| replica_owner_for_checkout(checkout));
         let runtime = match binding {
@@ -482,6 +550,7 @@ impl RegisteredRuntimeFactory {
         host_lifetime: HostLifetime,
         identity: &MachineIdentityState,
     ) -> Result<OrbitRuntime, OrbitError> {
+        verify_workspace_layout_authority(global_root, &checkout.orbit_dir)?;
         sync_task_prefix_for_identity(global_root, identity)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_resolved_roots_with_binding_for(
@@ -493,7 +562,9 @@ impl RegisteredRuntimeFactory {
         )
         .map(|runtime| {
             attach_registry_context(
-                runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
+                runtime
+                    .with_coordination_write_owner(replica_owner_for_checkout(checkout))
+                    .with_workspace_explicitly_selected(true),
                 global_root,
                 identity,
             )
@@ -555,7 +626,9 @@ impl RegisteredRuntimeFactory {
         )
         .map(|runtime| {
             attach_registry_context(
-                runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
+                runtime
+                    .with_coordination_write_owner(replica_owner_for_checkout(checkout))
+                    .with_workspace_explicitly_selected(true),
                 global_root,
                 identity,
             )

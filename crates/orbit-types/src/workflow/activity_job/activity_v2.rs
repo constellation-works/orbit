@@ -38,6 +38,10 @@ pub struct ActivityV2 {
 /// v2 activity type discriminator. Serialized as
 /// `type: agent_loop|deterministic`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// Boxing the agent spec would churn every reader that matches it for a size
+// heuristic; the additive optional `explore_brief_instruction` makes this
+// enum cross that threshold.
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActivityV2Spec {
     AgentLoop(AgentLoopSpec),
@@ -67,6 +71,13 @@ pub struct AgentLoopSpec {
     /// Absent or unavailable, the rendered instruction offers no delegation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explore_instruction: Option<String>,
+    /// How the agent uses the task context's `explore_brief`, the task
+    /// pilot's map of the change, appended to the instruction only when the
+    /// host delivers a brief for this prompt. Declaring it is what asks the
+    /// host for a brief and records the outcome; only `agent_implement`
+    /// declares it, so review and recovery never receive one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explore_brief_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the
@@ -176,12 +187,19 @@ pub struct AgentLoopSpec {
     /// supply it.
     #[serde(skip)]
     pub crew_env: Vec<crate::identity::CrewEnvVar>,
+    /// Canonical crew resolved by the host for this dispatch, never an input hint.
+    #[serde(skip)]
+    pub crew_name: Option<String>,
     /// The dispatching crew's name when it sets `env` and so is its own
     /// provider account ([`crate::identity::Crew::account`]), set with
     /// `crew_env`. A failure, a usage reading and an invocation of this
     /// dispatch are attributed to that account. Never persisted.
     #[serde(skip)]
     pub crew_account: Option<String>,
+    /// The dispatching crew sets `vision = false`, set with `crew_env`: an
+    /// image-input run on it is refused before launch. Never persisted.
+    #[serde(skip)]
+    pub crew_vision_disabled: bool,
 }
 
 /// Accepted-but-inert value of the retired `backend:` key [ORB-10801].
@@ -199,6 +217,22 @@ pub struct RetiredAgentBackend;
 /// crew table, or `config.toml`.
 pub const RETIRED_BACKEND_MIGRATION: &str = "agent execution runs through the CLI agent path only; remove the `backend` \
      setting (the value `cli` is still accepted and ignored)";
+
+/// Provider ids retired by ORB-18096. They are refused for new configuration
+/// and dispatch, but keep deserializing so persisted history still reads.
+pub const RETIRED_PROVIDER_IDS: [&str; 3] = ["cursor", "pi", "opencode"];
+
+/// Remedy text shared by every surface that refuses a retired provider.
+pub const RETIRED_PROVIDER_MIGRATION: &str =
+    "pick a supported provider (claude, codex, gemini, grok, copilot, antigravity, muse)";
+
+/// The retired provider id `raw` names (trimmed, case-insensitive), if any.
+pub fn retired_provider_id(raw: &str) -> Option<&'static str> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    RETIRED_PROVIDER_IDS
+        .into_iter()
+        .find(|id| *id == normalized)
+}
 
 /// Validate one retired `backend` value. `Ok(())` for `cli`; the migration
 /// error for anything else, including the removed `http` and `auto`.
@@ -247,9 +281,13 @@ pub enum Provider {
     Ollama,
     #[serde(rename = "openai_compat", alias = "openai-compat")]
     OpenaiCompat,
+    /// Compatibility reader only (ORB-18096): retired lane, kept so persisted
+    /// records naming `cursor` still deserialize and display.
     Cursor,
+    /// Compatibility reader only (ORB-18096): retired lane; see `Cursor`.
     Pi,
     Antigravity,
+    /// Compatibility reader only (ORB-18096): retired lane; see `Cursor`.
     Opencode,
     Muse,
 }
@@ -278,6 +316,12 @@ pub struct ProviderParseError {
 
 impl fmt::Display for ProviderParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(retired) = retired_provider_id(&self.raw) {
+            return write!(
+                f,
+                "provider '{retired}' is retired and no longer supported; {RETIRED_PROVIDER_MIGRATION}"
+            );
+        }
         write!(
             f,
             "unknown provider '{}'; expected one of {}",
@@ -292,7 +336,7 @@ impl std::error::Error for ProviderParseError {}
 impl Provider {
     /// Every canonical provider, in declaration order. Adding a variant here is
     /// a compile-time forcing function for the match arms below.
-    pub const ALL: [Provider; 12] = [
+    pub const ALL: [Provider; 9] = [
         Provider::Claude,
         Provider::Codex,
         Provider::Gemini,
@@ -300,12 +344,28 @@ impl Provider {
         Provider::Copilot,
         Provider::Ollama,
         Provider::OpenaiCompat,
-        Provider::Cursor,
-        Provider::Pi,
         Provider::Antigravity,
-        Provider::Opencode,
         Provider::Muse,
     ];
+
+    /// Retired providers kept only as serde compatibility readers (ORB-18096).
+    pub const RETIRED: [Provider; 3] = [Provider::Cursor, Provider::Pi, Provider::Opencode];
+
+    /// Whether this provider is a retired compatibility-only variant.
+    pub fn is_retired(self) -> bool {
+        matches!(self, Provider::Cursor | Provider::Pi | Provider::Opencode)
+    }
+
+    /// Parse a persisted provider id, including retired lanes. History
+    /// readers use this; configuration and dispatch use [`Self::parse`].
+    pub fn from_persisted_id(raw: &str) -> Result<Provider, ProviderParseError> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "cursor" => Ok(Provider::Cursor),
+            "pi" => Ok(Provider::Pi),
+            "opencode" => Ok(Provider::Opencode),
+            _ => Provider::parse(raw),
+        }
+    }
 
     /// Accepted non-canonical spellings, normalized by [`Provider::parse`] /
     /// [`Provider::resolve_name`]. The five legacy **vendor** names are the
@@ -316,17 +376,12 @@ impl Provider {
     /// This table is **closed** — an unlisted string is `provider.unknown`,
     /// never guessed. New aliases require a contract bump.
     ///
-    /// `copilot`, `cursor`, `pi`, `antigravity`, `opencode`, and `muse`
-    /// deliberately have **no** alias rows.
-    /// Neither the platform name nor a selected underlying model vendor may
-    /// resolve to a different execution lane. This matters most for `pi`,
-    /// whose own `--provider` flag names the model vendor (`anthropic`,
-    /// `openai`, ...) *inside* the Pi lane: those vendor spellings already
-    /// resolve to other Orbit executors and must keep doing so. The same holds
-    /// for `opencode`, whose `--model provider/model` argument names the model
-    /// vendor *inside* the OpenCode lane. `muse` (Muse Code) is Meta's CLI;
-    /// `meta` must not become an alias for it. [ORB-10946] [ORB-10945]
-    /// [ORB-11296] [ORB-11299] [ORB-11295] [ORB-16577]
+    /// `copilot`, `antigravity` and `muse` deliberately have **no** alias
+    /// rows: neither the platform name nor a selected underlying model vendor
+    /// may resolve to a different execution lane. `muse` (Muse Code) is Meta's
+    /// CLI; `meta` must not become an alias for it. The retired `cursor`,
+    /// `pi` and `opencode` ids are refused by [`retired_provider_id`] rather
+    /// than resolved here (ORB-18096).
     pub const ALIASES: &'static [ProviderAlias] = &[
         ProviderAlias {
             alias: "anthropic",
@@ -361,7 +416,8 @@ impl Provider {
     ];
 
     /// Human-readable canonical id list used in diagnostics.
-    pub const CANONICAL_LIST: &'static str = "claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode, muse";
+    pub const CANONICAL_LIST: &'static str =
+        "claude, codex, gemini, grok, copilot, ollama, openai_compat, antigravity, muse";
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -432,15 +488,7 @@ impl Provider {
     /// has none, so selecting it must fail structurally rather than fall back.
     /// All other canonical providers have a CLI runtime.
     pub fn has_cli_runtime(self) -> bool {
-        !matches!(self, Provider::OpenaiCompat)
-    }
-
-    /// Whether this provider's CLI has a native file-read and command surface
-    /// a pinned-source inspection activity can enable. Only Codex and Claude
-    /// do; crew selection for such an activity draws only these providers,
-    /// and the CLI runner refuses any other before launch.
-    pub fn has_native_inspection(self) -> bool {
-        matches!(self, Provider::Codex | Provider::Claude)
+        !matches!(self, Provider::OpenaiCompat) && !self.is_retired()
     }
 }
 
@@ -639,7 +687,13 @@ impl Provider {
         if let Some(persisted) = non_empty(request.persisted_resolution) {
             // A persisted identity is already canonical; if it somehow fails to
             // parse we surface `unknown` rather than inventing a fallback.
-            return match Provider::parse(persisted) {
+            return match Provider::from_persisted_id(persisted) {
+                Ok(provider) if provider.is_retired() => ProviderResolution {
+                    normalized_provider: Some(provider),
+                    source: ProviderSource::PersistedReconciliation,
+                    diagnostic: ProviderDiagnostic::Unsupported,
+                    deprecation: None,
+                },
                 Ok(provider) => ProviderResolution {
                     normalized_provider: Some(provider),
                     source: ProviderSource::PersistedReconciliation,

@@ -1,0 +1,17 @@
+Show how crews are laddered across complexity tiers
+
+Usage: orbit crew [OPTIONS] <COMMAND>
+
+Commands:
+  ladder  Show each tier's pool, floor, candidate rung and shadow trial
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

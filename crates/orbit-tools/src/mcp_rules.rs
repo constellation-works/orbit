@@ -18,6 +18,8 @@ pub const ID_ROUTED_TASK_TOOLS: &[&str] = &[
     "orbit.task.review_reset",
     "orbit.task.reconcile_review",
     "orbit.task.requeue",
+    "orbit.visual.capture",
+    "orbit.visual.accept_dispute",
 ];
 
 /// Tools that take a required `id` and an optional workspace but are not
@@ -38,6 +40,62 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
     (
         "orbit.friction.rehome",
         "a friction id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.decision.show",
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.decision.answer",
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.decision.submit",
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.update",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.clone",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.start",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.pause",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.resume",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.assign",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.reweight",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.conclude",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.abandon",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.show",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.readout",
+        "an experiment id is workspace-local and carries no host prefix",
     ),
     (
         "orbit.workflow.run.show",
@@ -113,5 +171,6 @@ pub fn builtin_mcp_rules(name: &str) -> McpToolRules {
         declared_workspace_selector: name == "orbit.task.show",
         presentation_read,
         input_decoration,
+        ..McpToolRules::default()
     }
 }

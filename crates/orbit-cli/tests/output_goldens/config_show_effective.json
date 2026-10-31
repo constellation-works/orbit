@@ -7,6 +7,13 @@
     "workspace_exists": true
   },
   "provenance": {
+    "assistance": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "automation.stall_window_minutes": {
       "scope": "built-in",
       "state": "default",
@@ -14,9 +21,51 @@
       "path": null,
       "shadowed_by": []
     },
+    "branch.name_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "ci_failure.operator_suppression_hours": {
       "scope": "built-in",
       "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.body_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.implemented_by_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.orchestrated_by_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.planned_by_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.subject_template": {
+      "scope": "built-in",
+      "state": "unset",
       "tier": "advanced",
       "path": null,
       "shadowed_by": []
@@ -64,6 +113,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "decision_channel.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "execution.agent_stall_minutes": {
       "scope": "built-in",
       "state": "default",
@@ -99,6 +155,216 @@
       "shadowed_by": []
     },
     "execution.proc_spawn_max_timeout_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "experiments.config_keys": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "experiments.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "experiments.max_running": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.aging_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.default_mode": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.hard.agent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.hard.human": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.intake.peer_user": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.behind_proxy": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.bind": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.intake_socket": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.address_per_minute": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.failed_auth": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.failed_auth_window_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.header_timeout_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.ipv6_prefix_len": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_body_bytes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_connections": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_in_flight_per_token": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_in_flight_requests": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_streams_per_token": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_tracked_keys": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.request_timeout_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.token_reads_per_minute": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.token_writes_per_minute": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.tls": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.trusted_proxy": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.max_priority.agent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.max_priority.human": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -175,6 +441,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.labels": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.mcp.toolsets": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.name": {
       "scope": "built-in",
       "state": "unset",
@@ -185,6 +465,20 @@
     "machine.task_prefix": {
       "scope": "built-in",
       "state": "unset",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.web_session.ttl": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.web_terminal.enabled": {
+      "scope": "built-in",
+      "state": "default",
       "tier": "standard",
       "path": null,
       "shadowed_by": []
@@ -224,6 +518,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "pr.agent_sections": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.body_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "pr.close_on_terminal": {
       "scope": "built-in",
       "state": "default",
@@ -238,10 +546,108 @@
       "path": null,
       "shadowed_by": []
     },
+    "pr.draft": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.freshness_section": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.labels": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.missing_required_section": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.orchestration_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.required_sections": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.reviewers": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.screenshot_section": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.signature": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.task_tag_labels": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.task_type_labels": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "pr.task_url_template": {
       "scope": "built-in",
       "state": "unset",
       "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.title_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "publication.routine_allow_unscanned_attachments": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "publication.routine_attachments": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
       "path": null,
       "shadowed_by": []
     },
@@ -294,6 +700,34 @@
       "path": null,
       "shadowed_by": []
     },
+    "review.selective_before_landing.mode": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.selective_before_landing.paths": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.selective_before_landing.risk_threshold": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "review.selective_before_landing.unknown_risk": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "review.timing": {
       "scope": "built-in",
       "state": "default",
@@ -336,6 +770,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "seeding.auto_tasks": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "seeding.routines": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "tasks.id_start": {
       "scope": "built-in",
       "state": "unset",
@@ -343,17 +791,52 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.admission_affinity": {
+    "ux_rules.disabled": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
-    "workflow.auto_ship": {
+    "ux_rules.file_at": {
       "scope": "built-in",
       "state": "default",
-      "tier": "standard",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "ux_rules.max_new_tasks": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "ux_rules.runner": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "ux_rules.surfaces": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "ux_rules.ui_base_url": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.admission_affinity": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -370,6 +853,139 @@
           "reason": "overridden"
         }
       ]
+    },
+    "workflow.crew_ladder.delivery_quality": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.exclude_types": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.explore_rate": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.look_every": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.margin": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.max_sample": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.min_grade_coverage": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.mode": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.quality_grade_margin": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.retry_after_days": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.rungs": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.tiers": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_ladder.watch_window": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_performance": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_performance_cap": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_performance_strength": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_performance_types": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_performance_window_days": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.crew_selection": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
     },
     "workflow.default_crew": {
       "scope": "global",
@@ -421,6 +1037,27 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.explore_brief.deliver": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.explore_brief.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.explore_brief.tags": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.generated_paths": {
       "scope": "built-in",
       "state": "default",
@@ -439,6 +1076,13 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.lock_modes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -464,6 +1108,13 @@
       "shadowed_by": []
     },
     "workflow.mid_run_steering.max_rounds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.non_code_paths": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
@@ -555,6 +1206,13 @@
       "shadowed_by": []
     },
     "workflow.purpose_crews.task_pilot": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.purpose_crews.visual_review": {
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
@@ -694,6 +1352,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.test_paths": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.type_complexity_crews": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.unlocked_context_paths": {
       "scope": "built-in",
       "state": "default",
@@ -705,6 +1377,20 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.usage_pressure_cap": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.usage_pressure_strength": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },

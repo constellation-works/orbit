@@ -3,8 +3,10 @@ use std::sync::OnceLock;
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_cmd::task_owner::bound_workspace_identity;
+use orbit_common::governance::task::{MINIMAL_TASK_FIELDS, select_fields};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
+use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::task::is_task_show_projection_field;
@@ -58,9 +60,6 @@ pub struct ToolRunArgs {
     /// `comments` and `history`; request them with `--input '{"fields":["comments","history"]}'`.
     #[arg(long)]
     pub full: bool,
-    /// Compatibility alias for pretty-printing JSON error output
-    #[arg(long, hide = true)]
-    pub pretty: bool,
     /// Host that the input's `workspace` (or `--workspace`) names, by
     /// registered host name or `machine_id` (see `orbit host list`). Orbit
     /// reads that host's live workspace list and delivers the call to the
@@ -227,7 +226,19 @@ impl Execute for ToolRunArgs {
             output,
         )?;
         let bare_field = answers_with_bare_field(&self.name, &input)?;
-        let output = shape_tool_output(&self.name, output, self.full, &self.fields, bare_field)?;
+        let list_policy = TaskListResultPolicy::for_call(
+            &self.name,
+            &input,
+            task_list_result_profile(self.full, &self.fields),
+        );
+        let output = shape_tool_output(
+            &self.name,
+            output,
+            &list_policy,
+            self.full,
+            &self.fields,
+            bare_field,
+        )?;
 
         Ok(Payload::document(output).into())
     }
@@ -263,20 +274,6 @@ fn local_machine_identity(
         MachineIdentityState::Absent => Ok((LOCAL_MACHINE_ID_FALLBACK.to_string(), None)),
     }
 }
-
-const MINIMAL_TASK_FIELDS: &[&str] = &[
-    "id",
-    "title",
-    "status",
-    "priority",
-    "type",
-    "dependencies",
-    "resolved_dependencies",
-    "implemented_by",
-    "created_at",
-    "updated_at",
-    "workspace",
-];
 
 const TASK_WRITE_TOOLS: &[&str] = &["orbit.task.add", "orbit.task.update", "orbit.task.reject"];
 
@@ -336,24 +333,36 @@ pub(crate) fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<
     ))
 }
 
+/// The `orbit.task.list` result profile `orbit tool run`'s output flags ask for.
+pub(crate) fn task_list_result_profile(full: bool, fields: &[String]) -> TaskListResultProfile<'_> {
+    if full {
+        TaskListResultProfile::Full
+    } else {
+        TaskListResultProfile::Fields(fields)
+    }
+}
+
 /// `bare_field` is [`answers_with_bare_field`] for this request: the tool's own
 /// projection already selected one field, so an object output is that field's
-/// value, not a record to filter.
+/// value, not a record to filter. `list_policy` is Core's result policy for
+/// this call: when it owns the result (`orbit.task.list`), its answer is the
+/// output and no CLI shaping applies.
 pub(crate) fn shape_tool_output(
     tool_name: &str,
     output: Value,
+    list_policy: &TaskListResultPolicy,
     full: bool,
     fields: &[String],
     bare_field: bool,
 ) -> Result<Value, OrbitError> {
+    if list_policy.owns_result() {
+        return Ok(list_policy.finalize(output));
+    }
     if full {
         return Ok(output);
     }
 
     if !fields.is_empty() {
-        if tool_name == "orbit.task.list" {
-            return Ok(project_task_list_output(output, fields));
-        }
         // A single-field tool projection returns the raw value (`["comments"]`
         // → the comments array). CLI `--fields` is an object-key filter, so
         // re-wrap that value before selecting.
@@ -363,10 +372,7 @@ pub(crate) fn shape_tool_output(
         return Ok(shaped);
     }
 
-    if should_project_minimal_task_output(tool_name) {
-        if tool_name == "orbit.task.list" {
-            return Ok(project_task_list_output(output, MINIMAL_TASK_FIELDS));
-        }
+    if tool_name == "orbit.task.artifact.put" {
         return Ok(filter_top_level_fields(
             output,
             &MINIMAL_TASK_FIELDS
@@ -408,34 +414,6 @@ fn missing_write_sidecar_message(field: &str) -> String {
     )
 }
 
-fn should_project_minimal_task_output(tool_name: &str) -> bool {
-    matches!(tool_name, "orbit.task.list" | "orbit.task.artifact.put")
-}
-
-/// Projects `--fields` (or the default minimal set) inside the `tasks` array
-/// of an `orbit.task.list` envelope, leaving `total`/`truncated` intact.
-fn project_task_list_output<S: AsRef<str>>(value: Value, fields: &[S]) -> Value {
-    let Value::Object(mut object) = value else {
-        return value;
-    };
-    let Some(Value::Array(tasks)) = object.get_mut("tasks") else {
-        return Value::Object(object);
-    };
-    let fields = fields
-        .iter()
-        .map(|field| field.as_ref().to_string())
-        .collect::<Vec<_>>();
-    let projected = std::mem::take(tasks)
-        .into_iter()
-        .map(|task| match task {
-            Value::Object(map) => Value::Object(select_fields(map, &fields)),
-            other => other,
-        })
-        .collect();
-    *tasks = projected;
-    Value::Object(object)
-}
-
 fn wrap_single_field_value(output: Value, fields: &[String], bare_field: bool) -> Value {
     match fields {
         [field] if bare_field || !matches!(output, Value::Object(_)) => {
@@ -465,14 +443,4 @@ fn filter_top_level_fields(value: Value, fields: &[String]) -> Value {
         ),
         other => other,
     }
-}
-
-fn select_fields(map: Map<String, Value>, fields: &[String]) -> Map<String, Value> {
-    let mut selected = Map::new();
-    for field in fields {
-        if let Some(value) = map.get(field) {
-            selected.insert(field.clone(), value.clone());
-        }
-    }
-    selected
 }

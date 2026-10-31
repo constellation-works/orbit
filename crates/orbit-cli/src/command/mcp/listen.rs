@@ -27,6 +27,12 @@ pub struct ListenArgs {
     /// where the network path is already restricted.
     #[arg(long)]
     pub allow_non_loopback: bool,
+    /// Advertise these opt-in toolsets beside the default one, as
+    /// `orbit mcp serve --toolset` takes them: `leases`, `experiments`,
+    /// `analytics`, `decision-channel`, or `all`. Replaces the
+    /// `machine.mcp.toolsets` host config for this listener.
+    #[arg(long, value_name = "TOOLSETS")]
+    pub toolset: Option<String>,
 }
 
 impl ListenArgs {
@@ -35,11 +41,14 @@ impl ListenArgs {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> CommandOut {
+        let global_root = orbit_core::runtime::resolve_generation_root(root_override)?;
+        let toolsets = super::command::resolve_mcp_toolsets(&global_root, self.toolset.as_deref())?;
         super::server::serve_mcp_listener(
-            orbit_core::runtime::resolve_generation_root(root_override)?,
+            global_root,
             self.addr,
             self.exposure(),
             workspace_selector.map(ToOwned::to_owned),
+            toolsets,
         )?;
         Ok(CommandOutput::Silent)
     }

@@ -188,38 +188,36 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       // Routes are exercised through the shipped router, including in-place
       // legacy normalization. Every page retains a real link to Drain.
       for (const [legacy, expected] of [
-        ['auto-drain', '#drain'], ['operations/auto-drain', '#drain'],
-        ['tasks/drain', '#drain'], ['tasks/log', '#drain/log'],
-        ['tasks?dock=drain', '#drain'], ['tasks?dock=log', '#drain/log'],
+        ['drain', '#tasks?dock=drain'], ['drain/start', '#tasks?dock=start'], ['drain/log', '#tasks?dock=log'],
+        ['auto-drain', '#tasks?dock=drain'], ['operations/auto-drain', '#tasks?dock=drain'],
+        ['tasks/drain', '#tasks?dock=drain'], ['tasks/log', '#tasks?dock=log'],
+        ['tasks?dock=drain', '#tasks?dock=drain'], ['tasks?dock=log', '#tasks?dock=log'],
       ]) {
         await page.evaluate(async route => (await import('/js/router.js')).setActiveTab(route), legacy);
-        if (new URL(page.url()).hash !== expected || !await page.locator('.tab-pane[data-tab="drain"]').isVisible()) {
+        if (new URL(page.url()).hash.split('?')[0] !== '#tasks' || new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('dock') !== expected.split('=')[1] || !await page.locator('.tab-pane[data-tab="tasks"]').isVisible()) {
           throw new Error(`Legacy drain route ${legacy} did not reach ${expected}: ${page.url()}`);
         }
         const mode = await page.locator('#side-dock').getAttribute('data-mode');
-        if (mode !== (expected.endsWith('/log') ? 'log' : 'drain')) throw new Error(`Wrong Drain view for ${legacy}: ${mode}`);
+        if (mode !== (expected.endsWith('=log') ? 'log' : 'drain')) throw new Error(`Wrong Drain view for ${legacy}: ${mode}`);
       }
       for (const route of ['tasks', 'jobs/live', 'drain', 'diagnostics/incidents', 'analytics/metrics',
         'operations/routines', 'knowledge/frictions', 'plugins', 'config/effective']) {
         await page.evaluate(async route => (await import('/js/router.js')).setActiveTab(route), route);
         const indicator = page.locator('#global-drain-state');
-        if (!await indicator.isVisible() || await indicator.getAttribute('href') !== '#drain') {
-          throw new Error(`Drain chip must link to #drain on ${route}`);
+        if (!await indicator.isVisible() || await indicator.getAttribute('href') !== '#tasks?dock=drain') {
+          throw new Error(`Drain chip must link to the Tasks dock on ${route}`);
         }
       }
       await page.evaluate(() => { location.hash = '#tasks?dock=log'; });
-      await page.waitForFunction(() => location.hash === '#drain/log');
+      await page.waitForFunction(() => location.hash.startsWith('#tasks?') && new URLSearchParams(location.hash.split('?')[1]).get('dock') === 'log');
       await page.locator('#dock-tab-drain').click();
-      await page.waitForFunction(() => location.hash === '#drain');
+      await page.waitForFunction(() => location.hash.startsWith('#tasks?') && new URLSearchParams(location.hash.split('?')[1]).get('dock') === 'drain');
       await page.locator('#log-statusbar-open').click();
-      await page.waitForFunction(() => location.hash === '#drain/log');
-      await page.locator('.tab[data-tab="drain"]').click();
-      await page.locator('#drain-waits-body').filter({ hasText: 'waits on deps' }).waitFor();
-      await page.locator('#drain-fleet-body .fleet-drains').waitFor();
-      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('drain'));
-      await page.locator('#dock-mode-toggle [data-mode="start"]').click();
-      await page.waitForFunction(() => location.hash === '#drain/start');
-      const start = page.locator('#auto-drain-start-body .drain-start');
+      await page.waitForFunction(() => location.hash.startsWith('#tasks?') && new URLSearchParams(location.hash.split('?')[1]).get('dock') === 'log');
+      await page.locator('.tab[data-tab="tasks"]').click();
+      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks?dock=start'));
+      await page.waitForFunction(() => location.hash.startsWith('#tasks?') && new URLSearchParams(location.hash.split('?')[1]).get('dock') === 'start');
+      const start = page.locator('#auto-drain-quick-start-body .drain-start');
       const stop = page.locator('#auto-drain-body .drain-stop');
       await start.waitFor({ state: 'visible' });
       if (!(await start.isEnabled()) || !(await stop.isEnabled())) throw new Error('Drain controls must remain enabled after chip interaction');
@@ -230,11 +228,8 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       await page.setViewportSize({ width: 1280, height: 900 });
       await start.click();
       await page.locator('#auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
-      // A started window returns the dock to the Overview that reports it.
-      await page.waitForFunction(() => location.hash === '#drain');
-      await page.locator('#drain-pass-body').filter({ hasText: '3 queued · 1 deferred · 2 excluded' }).waitFor();
-      if (await page.locator('#auto-drain-panel .drain-forecast-spark').count() !== 2) throw new Error('Drain must show both forecast sparklines');
-      const passLink = new URL(await page.locator('#drain-pass-body a').getAttribute('href'), page.url());
+      // A started window stays on Tasks and links its scoped run.
+      const passLink = new URL(await page.locator('#auto-drain-run a').getAttribute('href'), page.url());
       if (passLink.hash !== '#runs?run_id=scope-drain' || passLink.searchParams.get('workspace') !== 'one') {
         throw new Error(`Admission run link lost its scope: ${passLink}`);
       }
@@ -245,9 +240,9 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       }
       const confirmations = await page.evaluate(() => globalThis.scopeConfirmations);
       if (!confirmations.some(message => message.includes('Start'))) throw new Error('Starting a window must confirm');
+      await page.setViewportSize({ width: 1280, height: 900 });
       await stop.click();
       await page.locator('#auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
-      await page.locator('#drain-pass-body').filter({ hasText: 'No active admission window.' }).waitFor();
       if (!(await page.evaluate(() => globalThis.scopeConfirmations)).some(message => /Stop/.test(message))) {
         throw new Error('Stopping admissions must confirm');
       }
@@ -260,14 +255,18 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.screenshot({ path: path.join(evidence, `tasks-approval-dark-${width}.png`), animations: 'disabled' });
       }
       await page.setViewportSize({ width: 1280, height: 900 });
-      // Tasks carries the dock beside the list: the Auto-drain status card, the
-      // simple Start card and the locks, not the Drain page's waits and fleet
-      // cards or its Start a window view.
+      // Tasks carries the dock beside the list: its Drain tab holds the
+      // Auto-drain status card and the simple Start card, and Locks held is a
+      // tab of its own; not the Drain page's waits and fleet cards or its
+      // Start a window view.
+      await page.locator('#tasks-main #dock-tab-drain').click();
       await page.locator('#tasks-main #side-dock #auto-drain-panel').waitFor({ state: 'visible' });
       await page.locator('#tasks-main #side-dock #auto-drain-quick-start').waitFor({ state: 'visible' });
+      if (await page.locator('#tasks-main #side-dock #locks-panel').isVisible()) throw new Error('Locks held is its own tab on Tasks');
+      await page.locator('#tasks-main #dock-tab-locks').click();
       await page.locator('#tasks-main #side-dock #locks-panel').waitFor({ state: 'visible' });
-      if (await page.locator('#tasks-main #drain-waits-panel').isVisible() || await page.locator('#tasks-main #drain-fleet-panel').isVisible()) throw new Error('The Tasks dock must leave the waits and fleet cards on Drain');
-      if (await page.locator('#tasks-main #dock-mode-toggle [data-mode="start"]').isVisible() || await page.locator('#tasks-main #auto-drain-start').isVisible()) throw new Error('The Tasks dock must leave Start a window on Drain');
+      if (await page.locator('#tasks-main #side-dock #auto-drain-panel').isVisible()) throw new Error('The Locks held tab shows only the locks');
+      await page.locator('#tasks-main #dock-tab-drain').click();
       await page.locator('#tasks-body [data-key="task-SCOPE-1"] .title').click();
       if (await page.locator('#tasks-main #side-dock').isVisible()) throw new Error('An open task takes the dock\'s place');
       await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();

@@ -159,6 +159,14 @@ fn bounded_preview_preserves_selection_and_byte_metadata() {
         ("complete\n", 9, "complete\n", "complete\n", false),
         ("", 0, "", "", false),
         ("omitted", 0, "", "", true),
+        // A final line longer than the window keeps the window's tail.
+        (
+            "AAAAAAAAAAAAAAAAAAAA\n",
+            10,
+            "AAAAAAAAAA",
+            "AAAAAAAAA\n",
+            true,
+        ),
         (
             compressed.as_str(),
             64,

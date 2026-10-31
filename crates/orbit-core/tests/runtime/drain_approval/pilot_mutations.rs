@@ -6,34 +6,48 @@ use orbit_types::task::HostOs;
 use super::*;
 
 fn replay_does_not_certify_operator_edits_as_pilot_output() {
-    for (edit, reason) in [
+    for (edit, expected_replay) in [
         (
             TaskUpdateParams {
                 tags: Some(vec!["os:macos".into(), "operator-tag".into()]),
                 ..Default::default()
             },
-            "tags_changed",
+            json!({
+                "outcome": "superseded", "reason": "tags_changed", "decision": null,
+                "classification": null, "decision_reason": null, "approved": null,
+            }),
         ),
         (
             TaskUpdateParams {
                 crew: Some(Some("grok".into())),
                 ..Default::default()
             },
-            "crew_changed",
+            json!({
+                "outcome": "already_applied", "reason": null, "decision": "withhold",
+                "classification": "changed_since_pilot", "decision_reason": "crew_changed",
+                "approved": false,
+            }),
         ),
         (
             TaskUpdateParams {
                 crew: Some(Some("fixture".into())),
                 ..Default::default()
             },
-            "crew_changed",
+            json!({
+                "outcome": "already_applied", "reason": null, "decision": "withhold",
+                "classification": "changed_since_pilot", "decision_reason": "crew_changed",
+                "approved": false,
+            }),
         ),
         (
             TaskUpdateParams {
                 description: Some("A different task meaning.".into()),
                 ..Default::default()
             },
-            "material_changed",
+            json!({
+                "outcome": "superseded", "reason": "material_changed", "decision": null,
+                "classification": null, "decision_reason": null, "approved": null,
+            }),
         ),
     ] {
         let workspace = Workspace::new();
@@ -69,24 +83,21 @@ fn replay_does_not_certify_operator_edits_as_pilot_output() {
         input["promotion_authorized"] = json!(true);
         input["drain_promotion"] = json!({"run_id": drain});
         let replay = workspace.action("apply_task_pilot_results", input).unwrap();
+        // Pin both the replay outcome and whether drain approval was reached
+        // so each operator edit retains its distinct replay semantics.
         let decision = &replay["drain_approval"][0];
-        if decision.is_null() {
-            // Durable operator edits may supersede a replay before approval;
-            // they still cannot be adopted as the pilot's output.
-            assert_eq!(
-                replay["task_outcomes"][0]["outcome"], "superseded",
-                "{replay}"
-            );
-            assert_eq!(replay["task_outcomes"][0]["reason"], reason, "{replay}");
-        } else {
-            assert_eq!(decision["decision"], "withhold", "{replay}");
-            assert_eq!(
-                decision["classification"], "changed_since_pilot",
-                "{replay}"
-            );
-            assert_eq!(decision["evidence"]["reason"], reason, "{replay}");
-            assert_eq!(decision["approved"], false, "{replay}");
-        }
+        assert_eq!(
+            json!({
+                "outcome": replay["task_outcomes"][0]["outcome"],
+                "reason": replay["task_outcomes"][0]["reason"],
+                "decision": decision["decision"],
+                "classification": decision["classification"],
+                "decision_reason": decision["evidence"]["reason"],
+                "approved": decision["approved"],
+            }),
+            expected_replay,
+            "{replay}"
+        );
         assert_eq!(workspace.status(&task), TaskStatus::Proposed);
         assert!(
             workspace

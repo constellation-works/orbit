@@ -21,7 +21,7 @@ use orbit_common::governance::operation::{
     Effect, NounSpec, OperationInput, OperationSpec, OperationVerb, ToolOnlyRegistration,
 };
 use orbit_common::protocol::tool_schema::tool_input_schema;
-use orbit_types::tool::{ToolParam, ToolSchema};
+use orbit_types::tool::{McpToolset, ToolParam, ToolSchema};
 use serde_json::Value;
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolExecutionKind, ToolRegistry};
@@ -174,10 +174,31 @@ where
     V: GuardedModes,
     OrbitBuiltinAction: From<V>,
 {
+    register_noun_in_toolset(registry, noun, McpToolset::Default);
+}
+
+/// Register a noun whose MCP tools `orbit mcp serve` advertises only when
+/// `toolset` is enabled. The toolset follows the noun, except that a
+/// decision channel's callbacks (the host-routed callback class, which only
+/// the bound channel plugin or the operator may call) join the
+/// decision-channel toolset whatever their noun's.
+pub(super) fn register_noun_in_toolset<V>(
+    registry: &mut ToolRegistry,
+    noun: &'static NounSpec<V>,
+    toolset: McpToolset,
+) where
+    V: GuardedModes,
+    OrbitBuiltinAction: From<V>,
+{
     for spec in noun.operations {
         let tool = OperationTool(spec);
+        let toolset = if crate::plugin::is_host_routed_callback_tool(spec.tool_name) {
+            McpToolset::DecisionChannel
+        } else {
+            toolset
+        };
         match spec.mcp_scope {
-            Some(scope) => registry.register_mcp(tool, scope),
+            Some(scope) => registry.register_mcp_in_toolset(tool, scope, toolset),
             None => match noun.tool_only_registration {
                 ToolOnlyRegistration::Active => registry.register(tool),
                 ToolOnlyRegistration::Inactive => registry.register_inactive(tool),

@@ -50,8 +50,16 @@
 //! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`].
 //! - `layering` — document reading, per-key merge, replace-only rules, and
 //!   source provenance.
+//! - `lock_modes` — the ordered `workflow.lock_modes` footprint lock-mode
+//!   entries owner admission applies to selector overlaps.
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
+//! - `crew_performance` — the ordered `workflow.crew_performance_types` list
+//!   and the one task-type classification the scorecard and draw share.
+//! - `crew_ladder` — the `workflow.crew_ladder.*` ladder of crews, cheapest
+//!   first, and its standing-trial settings.
+//! - `provider_limit` — provider/account admission policy, with threshold and draw
+//!   policy in `policy`, budget declarations in `budget`, and shared targets in `target`.
 //! - `operation` — typed review preferences (`[review]` and
 //!   `workflow.purpose_crews.review`, one crew or a pool) and their layered
 //!   resolution [ORB-11333] [ORB-13992] [ORB-15195].
@@ -63,28 +71,38 @@
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
 //! - `tag_instructions` — the `[workflow.tag_instructions.<tag>]` file mapping.
+//! - `experiment_keys` — typed workflow keys admitted for task-local experiments.
+//! - `review_skip_tags` — the `[workflow.review_skip_tags.<tag>]` review-skip mapping.
 //! - `store` — comment-preserving [`ConfigStore`] edits and an atomic save that
 //!   refuses to replace a file changed since the store read it.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
 
 mod aliases;
+/// Host-only bounded decision-assistance configuration.
+pub mod assistance;
+mod crew_ladder;
+mod crew_performance;
 mod crew_pools;
+mod experiment_keys;
 mod layering;
+mod lock_modes;
 mod memory_limit;
 mod operation;
 mod persistence;
 mod plugin_enablement;
 mod plugins;
 mod provider_limit;
-mod provider_limit_budget;
 mod raw;
 mod registry;
 mod resolved;
+mod review_skip_tags;
 mod roots;
 mod seed;
+mod seeding;
 mod store;
 mod tag_instructions;
 mod unknown;
+mod visual_review;
 
 pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
@@ -98,19 +116,38 @@ use orbit_common::security::redaction::redact_home_dir;
 pub use aliases::{
     ShellProbeMode, WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys,
 };
-pub use crew_pools::{
-    ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, canonical_crew_pool,
-    canonical_crew_pool_entries,
+pub use crew_ladder::{
+    CREW_LADDER_DELIVERY_QUALITY_KEY, CREW_LADDER_EXCLUDE_TYPES_KEY, CREW_LADDER_EXPLORE_RATE_KEY,
+    CREW_LADDER_LOOK_EVERY_KEY, CREW_LADDER_MARGIN_KEY, CREW_LADDER_MAX_SAMPLE_KEY,
+    CREW_LADDER_MIN_GRADE_COVERAGE_KEY, CREW_LADDER_MODE_KEY, CREW_LADDER_QUALITY_GRADE_MARGIN_KEY,
+    CREW_LADDER_RUNGS_KEY, CREW_LADDER_TIERS_KEY, CREW_LADDER_WEIGHT_SCALE, CrewLadderMode,
+    CrewLadderSettings,
 };
+pub use crew_performance::{
+    CREW_PERFORMANCE_CAP_KEY, CREW_PERFORMANCE_KEY, CREW_PERFORMANCE_STRENGTH_KEY,
+    CREW_PERFORMANCE_TYPES_KEY, CREW_PERFORMANCE_WINDOW_DAYS_KEY, CrewPerformanceMode,
+    CrewPerformancePolicy, CrewPerformanceType, DEFAULT_CREW_PERFORMANCE_CAP,
+    DEFAULT_CREW_PERFORMANCE_STRENGTH, DEFAULT_CREW_PERFORMANCE_WINDOW_DAYS, OTHER_TYPE,
+    classify_task_type, crew_performance_types_hash,
+};
+pub use crew_pools::{
+    ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,
+    TypeComplexityCrewPools, canonical_crew_pool, canonical_crew_pool_entries,
+    type_complexity_crews_key,
+};
+pub use experiment_keys::ExperimentConfigKey;
 pub use layering::{
     ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
     load_effective_config,
 };
+pub use lock_modes::LOCK_MODES_KEY;
 pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,
     PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY,
-    ReviewCrewPool, ReviewCrewSetting, ReviewTimingSetting,
+    ReviewCrewPool, ReviewCrewSetting, ReviewTimingSetting, SELECTIVE_MODE_KEY,
+    SELECTIVE_PATHS_KEY, SELECTIVE_RISK_THRESHOLD_KEY, SELECTIVE_UNKNOWN_RISK_KEY, SelectiveLayer,
+    SelectiveResolved, selective_mode_parse, selective_unknown_risk_parse,
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{
@@ -118,13 +155,15 @@ pub use plugin_enablement::{
 };
 pub use plugins::{PluginConfigSchema, register_plugin_config_schemas};
 pub use provider_limit::{
-    DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, ProviderLimitExplicitCrews, ProviderLimitPolicy,
-    ProviderLimitTarget, ProviderLimitThreshold,
+    CrewSelection, DEFAULT_PROVIDER_LIMIT_MAX_USED_PCT, DEFAULT_USAGE_PRESSURE_CAP,
+    DEFAULT_USAGE_PRESSURE_STRENGTH, ProviderLimitBudget, ProviderLimitBudgetUnit,
+    ProviderLimitExplicitCrews, ProviderLimitPolicy, ProviderLimitTarget, ProviderLimitThreshold,
+    UsagePressurePolicy,
 };
-pub use provider_limit_budget::{ProviderLimitBudget, ProviderLimitBudgetUnit};
 pub use registry::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigKeyTier,
-    ConfigSection, ConfigSnapshot, ExploreSettings, MachineSettings, MidRunSteeringSettings,
+    ConfigSection, ConfigSnapshot, ExperimentSettings, ExploreBriefSettings, ExploreSettings,
+    LeaseListenerSettings, LeaseListenerTlsSettings, MachineSettings, MidRunSteeringSettings,
     RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
     admit_settable_config_key, config_key_options, describe as describe_config_key,
     immutable_key_note, is_global_only_key,
@@ -135,10 +174,19 @@ pub use resolved::{
     ResolvedConfig, compatibility_config_keys_at, compatibility_config_keys_present,
     disabled_crew_message, executor_host_os, names_retired_system_crew,
 };
+pub use review_skip_tags::{REVIEW_SKIP_TAGS_KEY, ReviewSkipSettings};
 pub use roots::ConfigRoots;
-pub use seed::{ConfigSeed, seed_default_config};
+pub use seed::{ConfigSeed, seed_default_config, seed_workspace_review};
+pub use seeding::{
+    RETIRED_DEFAULT_AUTO_TASKS, RETIRED_DEFAULT_ROUTINES, SEEDING_AUTO_TASKS_KEY,
+    SEEDING_ROUTINES_KEY, SHIPPED_DEFAULT_AUTO_TASKS, SHIPPED_DEFAULT_ROUTINES, SeedingPolicy,
+    WorkspaceSeedingPolicies, load_workspace_seeding_policies,
+};
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
 pub use tag_instructions::{TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings};
+pub use visual_review::{
+    DEFAULT_VISUAL_REVIEW_WIDTH, VISUAL_REVIEW_KEY, VisualReviewSettings, visual_review_layer,
+};
 
 const MACHINE_SETTINGS_FILE: &str = "config.toml";
 
@@ -149,14 +197,51 @@ const MACHINE_SETTINGS_FILE: &str = "config.toml";
 /// document is known to admit, so an unrelated problem elsewhere in the file
 /// must not make Orbit forget who it is. A missing file has no identity.
 pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, OrbitError> {
+    match read_global_config_document(global_root)? {
+        Some((path, document)) => MachineSettings::admit(&document, &path),
+        None => Ok(MachineSettings::default()),
+    }
+}
+
+/// Read `lease.intake.peer_user` from the global `config.toml` at
+/// `global_root`: the OS user Orbit Web accepts lease operations from over
+/// its intake socket, or `None` when it serves no socket.
+///
+/// As narrow as [`load_machine_settings`], so an unrelated problem elsewhere
+/// in the file leaves the dashboard as it was. The key is global-only; a
+/// workspace file is never read here.
+pub fn load_lease_intake_peer_user(global_root: &Path) -> Result<Option<String>, OrbitError> {
+    let Some((path, document)) = read_global_config_document(global_root)? else {
+        return Ok(None);
+    };
+    registry::admit_lease_intake_peer_user(&document, &path)
+}
+
+/// Read `lease.listener.*` from the global `config.toml` at `global_root`,
+/// the lease listener user's own Orbit home. Defaults when there is no file.
+///
+/// As narrow as [`load_lease_intake_peer_user`]: the listener reads nothing
+/// else, and never a workspace file.
+pub fn load_lease_listener_settings(
+    global_root: &Path,
+) -> Result<LeaseListenerSettings, OrbitError> {
+    let empty = toml::Value::Table(toml::map::Map::new());
+    match read_global_config_document(global_root)? {
+        Some((path, document)) => registry::admit_lease_listener_settings(&document, &path),
+        None => registry::admit_lease_listener_settings(&empty, global_root),
+    }
+}
+
+/// The global `config.toml` parsed as TOML, or `None` when there is none.
+fn read_global_config_document(
+    global_root: &Path,
+) -> Result<Option<(PathBuf, toml::Value)>, OrbitError> {
     let Some(path) = validated_machine_settings_path(global_root)? else {
-        return Ok(MachineSettings::default());
+        return Ok(None);
     };
     let mut file = match open_read_only_no_follow(&path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(MachineSettings::default());
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(OrbitError::Io(format!(
                 "failed to read runtime config '{}': {error}",
@@ -177,7 +262,7 @@ pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, Orbi
             redact_home_dir(&path.display().to_string())
         ))
     })?;
-    MachineSettings::admit(&document, &path)
+    Ok(Some((path, document)))
 }
 
 fn machine_settings_path_error(message: &str, path: &Path) -> OrbitError {

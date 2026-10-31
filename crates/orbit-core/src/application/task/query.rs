@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
-    ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
-    TaskStatus,
+    ArtifactManifestFileV2, DecisionRequest, ExternalRef, Task, TaskArtifact, TaskComment,
+    TaskHistoryEntry, TaskStatus,
 };
 
 use orbit_store::RegisteredTaskResolution;
@@ -11,6 +11,7 @@ use orbit_store::RegisteredTaskResolution;
 use super::listing::{list_task_metadata_in, metadata_task};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskJobPort;
 
 impl OrbitRuntime {
     pub fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
@@ -21,6 +22,29 @@ impl OrbitRuntime {
             .tasks()
             .get_task(id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
+    }
+
+    /// Read effective human-decision requests, rechecking the current task,
+    /// block episode and pilot admission hold without writing any records.
+    pub fn get_task_decision_requests(&self, id: &str) -> Result<Vec<DecisionRequest>, OrbitError> {
+        let task = self.get_task(id)?;
+        let history = self.get_task_history(id)?;
+        let comments = self.get_task_comments(id)?;
+        let pilot_operation = if task.status == TaskStatus::Backlog
+            && self
+                .pilot_admission_hold_in(&task, &comments, &|| Ok(history.clone()))?
+                .is_some()
+        {
+            super::pilot::latest_pilot_operation_id(&comments)
+        } else {
+            None
+        };
+        Ok(orbit_types::task::decision_requests_from_history(
+            &task,
+            &history,
+            pilot_operation,
+            chrono::Utc::now(),
+        ))
     }
 
     /// Resolve a dependency target through this machine's registered owner.
@@ -41,11 +65,39 @@ impl OrbitRuntime {
         id: &str,
     ) -> Result<RegisteredTaskResolution, OrbitError> {
         if self.worker_invocation().is_some() {
-            return self
-                .read_owner(id, "dependency")
-                .map(|task| RegisteredTaskResolution::Resolved(Box::new(task)));
+            // The owner answers `Option<Task>`: `null` for a dangling or
+            // foreign prerequisite. An older owner instead refuses that case
+            // with `owner dependency unavailable`; treat that exact refusal
+            // as the same `Missing` answer rather than a failure.
+            let task: Option<Task> = match self.read_owner(id, "dependency") {
+                Ok(task) => task,
+                Err(error) if is_legacy_dependency_unavailable(&error) => None,
+                Err(error) => return Err(error),
+            };
+            return Ok(match task {
+                Some(task) => RegisteredTaskResolution::Resolved(Box::new(task)),
+                None => RegisteredTaskResolution::Missing,
+            });
         }
         self.stores().tasks().registered_task(id)
+    }
+
+    /// A dependency's body through its registered owner, or `None` when no
+    /// workspace registered on this machine owns it.
+    pub fn get_dependency_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
+        Ok(match self.resolve_dependency_task(id)? {
+            RegisteredTaskResolution::Resolved(task) => Some(*task),
+            RegisteredTaskResolution::Missing | RegisteredTaskResolution::ForeignAuthority => None,
+        })
+    }
+
+    /// A dependency's history through its registered owner, or `None` when
+    /// no workspace registered on this machine owns it.
+    pub fn get_dependency_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        self.dependency_history(id)
     }
 
     /// Whether a dependency id names a task this machine can read.
@@ -169,11 +221,11 @@ impl OrbitRuntime {
     /// instead of a bundle read. Use it for aggregates that read status,
     /// attribution, tags, priority, type or timestamps; anything that renders
     /// or forwards a task body still needs [`Self::list_tasks`] or
-    /// [`Self::get_task`]. A worker invocation reads through its owner, which
-    /// only serves whole tasks, so it falls back to the full listing.
+    /// [`Self::get_task`]. Worker invocations collect complete bounded bodyless
+    /// pages through their authenticated owner; any failed page fails the read.
     pub fn list_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
-            return self.list_tasks();
+            return super::metadata::collect_owner_metadata(self, None);
         }
 
         if !self.coordination_task_reads_visible() {
@@ -184,17 +236,13 @@ impl OrbitRuntime {
 
     /// [`Self::list_task_metadata`] for the listed `ids` only: one keyed read
     /// per id, so the cost follows the ids asked for, not the workspace. A
-    /// worker invocation falls back to the full listing, as it does there.
+    /// worker invocation pages bounded ID selections through its owner.
     pub fn list_task_metadata_for_ids(
         &self,
         ids: &BTreeSet<String>,
     ) -> Result<Vec<Task>, OrbitError> {
         if self.worker_invocation().is_some() {
-            return Ok(self
-                .list_tasks()?
-                .into_iter()
-                .filter(|task| ids.contains(&task.id))
-                .collect());
+            return super::metadata::collect_owner_metadata(self, Some(ids));
         }
 
         if !self.coordination_task_reads_visible() {
@@ -217,7 +265,7 @@ impl OrbitRuntime {
     /// so one that starts nothing does not read as an empty backlog.
     pub fn host_os_backlog_waits(&self) -> Result<Vec<String>, OrbitError> {
         let limits = self.executor_host_os_limits()?;
-        let pools = self.auto_crew_pools_for_input(&serde_json::Value::Null)?;
+        let pools = self.crew_pools_for_input(&serde_json::Value::Null)?;
         let mut waits = Vec::new();
         for task in self.list_task_metadata()? {
             if task.status != orbit_types::task::TaskStatus::Backlog {
@@ -269,7 +317,7 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         let limits = self.executor_host_os_limits()?;
-        let pools = self.auto_crew_pools_for_input(&serde_json::Value::Null)?;
+        let pools = self.crew_pools_for_input(&serde_json::Value::Null)?;
         Ok(candidates
             .into_iter()
             .filter(|task| self.task_host_os_wait(task, &pools, &limits).is_none())
@@ -464,9 +512,7 @@ impl OrbitRuntime {
         if self.worker_invocation().is_some() {
             return self.list_tasks_filtered(None, None, None, Some(run_id), None, None);
         }
-        let executed_on = self
-            .get_job_run_backend(run_id)?
-            .and_then(|run| run.executed_on);
+        let executed_on = self.stored_job_run(run_id)?.and_then(|run| run.executed_on);
         let mut tasks = self.list_tasks_filtered(None, None, None, Some(run_id), None, None)?;
         tasks.retain(|task| match &task.job_run_machine {
             Some(bound) => executed_on
@@ -569,4 +615,11 @@ impl OrbitRuntime {
         }
         self.stores().tasks().search_tasks_filtered(query, tags)
     }
+}
+
+/// Whether `error` is an older owner's refusal of an unavailable dependency
+/// projection, which a current owner answers as `null` instead.
+fn is_legacy_dependency_unavailable(error: &OrbitError) -> bool {
+    let text = error.to_string();
+    text.contains("owner dependency unavailable")
 }

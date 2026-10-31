@@ -56,16 +56,7 @@ impl Tool for ProcSpawnTool {
 
         enforce_program_allowlist(ctx, "proc.spawn", &program)?;
 
-        let args = input
-            .get("args")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(Value::as_str)
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let args = parse_args(input.get("args"))?;
 
         enforce_no_persistent_git_config("proc.spawn", &program, &args)?;
 
@@ -114,6 +105,29 @@ impl Tool for ProcSpawnTool {
         }
         Ok(result)
     }
+}
+
+/// Read `args` as an array of strings. A dropped element would run a different
+/// command than the caller asked for, so anything else is refused.
+fn parse_args(value: Option<&Value>) -> Result<Vec<String>, OrbitError> {
+    let items = match value {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => {
+            return Err(OrbitError::InvalidInput(
+                "`args` must be an array of strings".to_string(),
+            ));
+        }
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.as_str().map(ToString::to_string).ok_or_else(|| {
+                OrbitError::InvalidInput(format!("`args[{index}]` must be a string"))
+            })
+        })
+        .collect()
 }
 
 /// Assemble the child's execution request.

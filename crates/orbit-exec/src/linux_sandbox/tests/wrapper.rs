@@ -4,7 +4,9 @@
 //! spawn, which the spawn boundary cannot demonstrate without a root-owned
 //! fixture.
 
-use super::super::wrapper::{HOST_BWRAP_PATH, WrapperEntry, ownership_refusal, trusted_wrapper_at};
+use super::super::wrapper::{
+    HOST_BWRAP_PATH, WrapperEntry, ownership_refusal, verified_bwrap_path_at,
+};
 
 #[test]
 fn only_root_owned_unwritable_non_setuid_entries_qualify() {
@@ -46,7 +48,7 @@ fn only_root_owned_unwritable_non_setuid_entries_qualify() {
 }
 
 #[cfg(target_os = "linux")]
-/// Unit admission: security invariant through trusted_wrapper_at with an injected
+/// Unit admission: security invariant through verified_bwrap_path_at with an injected
 /// bundled path. The public spawn only verifies the two fixed host paths;
 /// reproducing this ownership/symlink failure there requires privileged writes.
 #[test]
@@ -59,7 +61,7 @@ fn a_user_writable_or_symlinked_bundled_copy_is_refused_before_spawn() {
     // replace it, not its contents at the time of the check.
     let copy = root.join("bwrap");
     std::fs::copy("/usr/bin/true", &copy).expect("copy a system binary");
-    let error = trusted_wrapper_at(&copy.display().to_string(), &copy)
+    let error = verified_bwrap_path_at(&copy.display().to_string(), &copy)
         .expect_err("a user-owned bundled copy must be refused")
         .to_string();
     assert!(error.contains("is not owned by root"), "{error}");
@@ -68,7 +70,7 @@ fn a_user_writable_or_symlinked_bundled_copy_is_refused_before_spawn() {
     std::fs::create_dir(&link_dir).expect("link directory");
     let link = link_dir.join("bwrap");
     std::os::unix::fs::symlink("/usr/bin/true", &link).expect("symlink");
-    let error = trusted_wrapper_at(&link.display().to_string(), &link)
+    let error = verified_bwrap_path_at(&link.display().to_string(), &link)
         .expect_err("a symlinked bundled path must be refused")
         .to_string();
     assert!(error.contains("is not a regular file"), "{error}");
@@ -78,7 +80,7 @@ fn a_user_writable_or_symlinked_bundled_copy_is_refused_before_spawn() {
 fn only_the_two_fixed_paths_are_trusted_wrappers() {
     let bundled = std::path::Path::new("/usr/local/libexec/orbit/bwrap");
     assert_eq!(
-        trusted_wrapper_at(HOST_BWRAP_PATH, bundled).expect("host path"),
+        verified_bwrap_path_at(HOST_BWRAP_PATH, bundled).expect("host path"),
         std::path::Path::new(HOST_BWRAP_PATH)
     );
     for other in [
@@ -88,7 +90,7 @@ fn only_the_two_fixed_paths_are_trusted_wrappers() {
         "/usr/bin/../bin/bwrap",
         "/usr/local/libexec/orbit/../orbit/bwrap",
     ] {
-        let error = trusted_wrapper_at(other, bundled)
+        let error = verified_bwrap_path_at(other, bundled)
             .expect_err("any other wrapper path must be refused")
             .to_string();
         assert!(

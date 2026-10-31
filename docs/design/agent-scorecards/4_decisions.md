@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Decisions
 owner: claude
-last_updated: 2026-10-18
-last_validated: 2026-10-18
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: agent-scorecards
 doc_role: decisions
@@ -32,7 +32,7 @@ Every recorded problem has exactly one owning role, or none (**Not scored**). Th
 
 ### Consequences
 
-- The attribution strip's per-role totals equal the problems behind the four scorecards, and no problem appears in two.
+- The attribution strip's per-role totals are ownership counts, not score contributions: each problem contributes once to exactly one owner total, and no problem appears in two, but rankings use only their role's scored terms. In particular, `no_test` escapes increase the Implementers strip count while leaving the Implementers score unchanged.
 - An implementer is not charged for a defect review should have seen; the reviewer is. Orchestrator spec regressions narrow to escape `spec_ambiguous`.
 - Cost: a problem that really was shared is charged to one role only, so a weak implementer paired with a weak reviewer looks better than either deserves on its own tab. Reading roles together is required to see that.
 
@@ -71,8 +71,39 @@ A gatekeeping role (reviewers today, and any future verifier) earns only for obj
 - Reviewer scores depend on later evidence, so recent scores are provisional until the miss lookback passes.
 - Cost: the review gate does not record whether its own findings were right, so "held up" is measured through proxies (disposed findings, false rejects) that misjudge some cases until a direct record exists.
 
+## Compare implementers with the fleet on their task mix
+
+**Recorded:** 2026-10-24 · [ORB-17779] removed implementer complexity weighting and centred every term on same-tier fleet expectations, extending [ORB-17118]'s unit-landed orchestrator principle.
+
+**Code anchors:** `crates/orbit-core/src/application/agents/roles/implementers.rs::rows`, `crates/orbit-core/src/application/agents/score.rs::score`
+
+### Context
+
+Complexity pools decide which work a crew receives. Weighted landings ranked
+pool membership, while unadjusted rejects charged crews for difficulty.
+Fleet-wide rates were a real alternative, but would retain the task-mix bias
+when tiers have different outcome rates.
+
+### Decision
+
+Implementer landings count one each. Compare every term's actual count with
+the fleet's expected count on that row's tier mix, per 100 tasks, starting at
+100. Pool tiers below 30 observations with the largest tier before computing
+rates, rather than letting a handful of rare-tier tasks set their own rate.
+Keep cost outside the score and keep the existing shrinkage and support rules.
+
+### Consequences
+
+- A row matching each reference pool's rates has raw 100 regardless of mix.
+- Expected counts and actual counts remain inspectable in the existing detail.
+- Cost: fleet-relative scores can move when peers change even if the crew's own
+  outcomes do not. Pooling sparse tiers trades exact per-tier invariance for a
+  supported reference; until those tiers grow, their crews inherit the larger
+  pool's rate and atypical difficulty can still affect their comparison.
+
 ## Task References
 
-No tasks are cited yet.
+- ORB-17118 — the unit-landed orchestrator principle this decision extends.
+- ORB-17779 — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

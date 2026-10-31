@@ -18,7 +18,7 @@ mod host_targets {
 
     pub(super) fn collect_host_targets(
         _repo_root: &Path,
-        _runs: &[JobRun],
+        _run_paths: &[(&JobRun, Vec<PathBuf>)],
         _options: &WorktreeGcOptions,
         _removed_worktrees: &BTreeSet<PathBuf>,
     ) -> Vec<WorktreeGcReport> {
@@ -31,6 +31,7 @@ mod paths;
 mod reclaim;
 mod rescue;
 mod sweep;
+mod workers;
 
 #[cfg(all(
     any(target_os = "linux", target_os = "macos"),

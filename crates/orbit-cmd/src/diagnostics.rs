@@ -80,7 +80,7 @@ impl DiagnosticsCommands for OrbitRuntime {
 }
 
 /// Ascending list of `YYYY-MM` subdirectories under `state/diagnostics/<category>/`.
-fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitError> {
+pub(crate) fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitError> {
     let category_dir = validated_diagnostics_category_dir(root, category)?;
     if !category_dir.exists() {
         return Ok(Vec::new());
@@ -103,6 +103,9 @@ fn is_year_month(name: &str) -> bool {
         && bytes[..4].iter().all(u8::is_ascii_digit)
         && bytes[4] == b'-'
         && bytes[5..].iter().all(u8::is_ascii_digit)
+        && name[5..]
+            .parse::<u8>()
+            .is_ok_and(|month| (1..=12).contains(&month))
 }
 
 fn validated_diagnostics_root(root: &Path) -> Result<PathBuf, OrbitError> {
@@ -251,7 +254,20 @@ pub(crate) fn read_jsonl_month<T: DeserializeOwned>(
     for path in files {
         let file = fs::File::open(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
         for (index, line) in BufReader::new(file).lines().enumerate() {
-            let line = line.map_err(|e| OrbitError::Io(e.to_string()))?;
+            let line = match line {
+                Ok(line) => line,
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                    tracing::warn!(
+                        target: "orbit::diagnostics",
+                        path = %path.display(),
+                        line = index + 1,
+                        error = %error,
+                        "skipping non-UTF-8 diagnostics line"
+                    );
+                    continue;
+                }
+                Err(error) => return Err(OrbitError::Io(error.to_string())),
+            };
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -273,7 +289,7 @@ pub(crate) fn read_jsonl_month<T: DeserializeOwned>(
     Ok(entries)
 }
 
-fn read_jsonl_month_limited<T: DeserializeOwned>(
+pub(crate) fn read_jsonl_month_limited<T: DeserializeOwned>(
     root: &Path,
     category: &str,
     year_month: &str,
@@ -297,7 +313,20 @@ fn read_jsonl_month_limited<T: DeserializeOwned>(
         let lines = ReverseLines::with_max_line_bytes(file, MAX_DIAGNOSTICS_RECORD_BYTES)
             .map_err(|e| OrbitError::Io(e.to_string()))?;
         for (lines_from_end, line) in lines.enumerate() {
-            let line = line.map_err(|e| OrbitError::Io(e.to_string()))?;
+            let line = match line {
+                Ok(line) => line,
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                    tracing::warn!(
+                        target: "orbit::diagnostics",
+                        path = %path.display(),
+                        lines_from_end,
+                        error = %error,
+                        "skipping non-UTF-8 diagnostics line"
+                    );
+                    continue;
+                }
+                Err(error) => return Err(OrbitError::Io(error.to_string())),
+            };
             let line = line.trim();
             if line.is_empty() {
                 continue;

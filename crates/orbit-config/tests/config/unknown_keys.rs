@@ -214,3 +214,76 @@ fn review_host_evidence_is_a_known_setting_and_its_neighbours_stay_unknown() {
     assert!(updated["review"].get("reviewers").is_none());
     assert!(orbit_config::unknown_config_keys_present(&updated).is_empty());
 }
+
+#[test]
+fn visual_review_settings_load_quietly_and_unknown_neighbours_are_removed() {
+    if !isolated("visual_review_settings_load_quietly_and_unknown_neighbours_are_removed") {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("config roots");
+    let roots = ConfigRoots::new(
+        directory.path().join("global"),
+        directory.path().join("workspace"),
+    );
+    fs::create_dir_all(roots.workspace()).expect("workspace config directory");
+    let path = roots.workspace().join("config.toml");
+    fs::write(
+        &path,
+        "[visual_review]\nmanifests = [\"views.toml\"]\ndefault_width = 375\nmock_neighbor = true\n",
+    )
+    .expect("config");
+
+    let keys = orbit_config::unknown_config_keys_at(&path).expect("diagnosis");
+    assert_eq!(
+        keys.iter().map(|key| key.key.as_str()).collect::<Vec<_>>(),
+        ["visual_review.mock_neighbor"]
+    );
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(Capture(buffer.clone()))
+        .with_ansi(false)
+        .finish();
+    let config = tracing::subscriber::with_default(subscriber, || ResolvedConfig::load(&roots))
+        .expect("live visual-review settings load");
+    assert_eq!(config.visual_review.manifests, ["views.toml"]);
+    assert_eq!(config.visual_review.default_width, 375);
+    let logs = String::from_utf8(buffer.lock().expect("logs").clone()).expect("utf8");
+    assert!(
+        !logs.contains("visual_review.manifests") && !logs.contains("visual_review.default_width"),
+        "live settings are not warned as unknown: {logs}"
+    );
+    assert!(
+        logs.contains("visual_review.mock_neighbor"),
+        "the unknown neighboring key remains diagnosable: {logs}"
+    );
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("store");
+    assert!(store.remove_unknown_key(&keys[0]).expect("remove neighbor"));
+    assert!(
+        !store
+            .remove_unknown_key(&keys[0])
+            .expect("stale diagnosis removes nothing")
+    );
+    store.validate().expect("remaining config is valid");
+    store.save().expect("save");
+
+    let updated: toml::Value =
+        toml::from_str(&fs::read_to_string(&path).expect("updated")).expect("TOML");
+    assert_eq!(
+        updated["visual_review"]["manifests"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        updated["visual_review"]["manifests"][0].as_str(),
+        Some("views.toml")
+    );
+    assert_eq!(
+        updated["visual_review"]["default_width"].as_integer(),
+        Some(375)
+    );
+    assert!(updated["visual_review"].get("mock_neighbor").is_none());
+    assert!(orbit_config::unknown_config_keys_present(&updated).is_empty());
+}

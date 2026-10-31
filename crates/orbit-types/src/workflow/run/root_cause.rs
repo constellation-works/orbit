@@ -8,19 +8,24 @@
 //!
 //! Some unsuccessful leaves are not failures at all: a required check red on
 //! the base kept the candidate, and a before-landing review refusal left the
-//! pull request open for a recorded decision. [`HeldFailure`] names those, so
+//! pull request open for a recorded decision. Typed completion and landing
+//! refusals also deliberately park delivery. [`HeldFailure`] names those, so
 //! the run ends `held` rather than `failed`.
 //!
 //! [ORB-15517] Nor is a claimed leaf its provider's usage limit stopped: the
 //! claim goes back to its owner, and the leaf holds on the provider and the
 //! reset it reported ([`HeldFailure::of_claimed_leaf`]).
+//! Owner-local runs also hold on capacity and usage limits: admission can
+//! choose another crew while the task keeps its provider failure hold.
 
+use super::DeliveryRefusal;
 use super::failure_classification_text;
 use serde::{Deserialize, Serialize};
 
+use super::agent_blocker::{TASK_BLOCKED_BY_AGENT_ERROR_CODE, is_task_blocked_by_agent};
 use super::baseline::{BASELINE_RED_ERROR_CODE, is_baseline_red_failure};
-use super::provider_hold::{ProviderLimitFailure, failed_provider};
-use super::state::{PROVIDER_LIMIT_ERROR_CODE, is_provider_limit};
+use super::provider_hold::{ProviderFailureClass, ProviderLimitFailure, failed_provider};
+use super::state::{PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE, is_provider_limit};
 use crate::workflow::review::REVIEW_LANDING_DECISION_PENDING;
 
 /// Error code a held run's diagnostic step records when a before-landing
@@ -65,15 +70,28 @@ pub enum HeldFailure {
     /// A before-landing review did not approve; the pull request stays open
     /// and unmerged until a recorded decision lands it.
     DecisionPending,
-    /// A claimed leaf's provider account hit its usage limit; the claim is
-    /// released to its owner, which runs the task again after the reset.
+    /// The provider account hit its usage limit; the task waits for another
+    /// crew or the reset. A claimed leaf releases its claim to the owner.
     ProviderLimit,
+    /// An owner-local run's selected model had no capacity; the task waits
+    /// for another crew or the capacity backoff to end.
+    ProviderCapacity,
+    /// An implementer declared a blocker; the task awaits an operator.
+    AgentBlocker,
+    /// A typed fail-closed delivery decision left its candidate parked.
+    DeliveryRefused(DeliveryRefusal),
 }
 
 impl HeldFailure {
     /// The hold an unsuccessful run's diagnostic names, if it is one.
     #[must_use]
     pub fn of(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
+        if is_task_blocked_by_agent(error_code, message) {
+            return Some(Self::AgentBlocker);
+        }
+        if let Some(refusal) = error_code.and_then(DeliveryRefusal::from_error_code) {
+            return Some(Self::DeliveryRefused(refusal));
+        }
         if is_baseline_red_failure(error_code, message) {
             return Some(Self::BaselineRed);
         }
@@ -82,6 +100,19 @@ impl HeldFailure {
                 failure_classification_text(message).contains(REVIEW_LANDING_DECISION_PENDING)
             });
         pending.then_some(Self::DecisionPending)
+    }
+
+    /// [`Self::of`] for an owner-local run, where capacity and usage limits
+    /// return the task to admission under its provider failure hold.
+    #[must_use]
+    pub fn of_local(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
+        Self::of(error_code, message).or_else(|| {
+            match ProviderFailureClass::of(error_code, message) {
+                Some(ProviderFailureClass::Capacity) => Some(Self::ProviderCapacity),
+                Some(ProviderFailureClass::Limit) => Some(Self::ProviderLimit),
+                _ => None,
+            }
+        })
     }
 
     /// [`Self::of`] for a claimed leaf, which a provider usage limit holds
@@ -97,9 +128,12 @@ impl HeldFailure {
     #[must_use]
     pub fn error_code(self) -> &'static str {
         match self {
+            Self::AgentBlocker => TASK_BLOCKED_BY_AGENT_ERROR_CODE,
             Self::BaselineRed => BASELINE_RED_ERROR_CODE,
             Self::DecisionPending => REVIEW_DECISION_PENDING_ERROR_CODE,
             Self::ProviderLimit => PROVIDER_LIMIT_ERROR_CODE,
+            Self::ProviderCapacity => PROVIDER_CAPACITY_ERROR_CODE,
+            Self::DeliveryRefused(refusal) => refusal.error_code(),
         }
     }
 
@@ -128,7 +162,7 @@ impl HeldFailure {
             );
         format!(
             "held on a provider usage limit: {provider} reported its account's usage limit and \
-             {reset}; the claim returns to its owner and nothing failed. {}",
+             {reset}; the task waits for another admission and nothing failed. {}",
             message.trim()
         )
     }

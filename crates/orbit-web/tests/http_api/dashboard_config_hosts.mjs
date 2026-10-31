@@ -160,6 +160,7 @@ const RESOURCES = {
     { throttle: true, pressures: [{ resource: 'cpu' }, { resource: 'memory' }], reason: 'cpu and memory high' },
   ),
 };
+const legacyHosts = new Set();
 const DRAINS = {
   gamma: { drain_phase: 'draining', drain_run_id: 'jrun-gamma', pull_drain_run_id: 'jrun-pull', pull_drain_admissions_stopped: false },
 };
@@ -207,8 +208,16 @@ const route = (url, options) => {
       if (resourceFailures[name]) return refuse(503, 'resource_unavailable', resourceFailures[name]);
       return response(RESOURCES[name] || resourceBody({ percent: 10, severity: 'ok' }, { percent: 10, severity: 'ok' }, { percent: 10, severity: 'ok' }));
     }
-    if (rest === 'workflows/auto/readiness') {
-      return response({ capacity: DRAINS[name] || { drain_phase: 'idle', drain_run_id: null, pull_drain_run_id: null } });
+    if (rest === 'workflows/auto/readiness') return response({ capacity: DRAINS[name] || { drain_phase: 'idle' } });
+    if (rest === 'fleet/drains') {
+      const host = name === LOCAL.name ? LOCAL : entries.find(entry => entry.name === name);
+      const capacity = DRAINS[name] || { drain_phase: 'idle' };
+      return response({ items: (host?.workspaces || []).map(workspace => ({
+        workspace_id: workspace.id, phase: capacity.drain_phase,
+        ...(legacyHosts.has(name) ? {} : { drain_phase: capacity.drain_phase }),
+        pull_active: Boolean(capacity.pull_drain_run_id),
+        pull_admissions_stopped: capacity.pull_drain_admissions_stopped === true,
+      })) });
     }
   }
   return response({ error: `unexpected ${method} ${url.pathname}` }, 404);
@@ -332,6 +341,10 @@ assert.equal(named(row('hm_gamma'), 'host-drain')[0].textContent, 'Draining · P
 DRAINS.alpha = { drain_phase: 'winding_down', drain_run_id: 'jrun-wind', pull_drain_run_id: 'jrun-pull-a', pull_drain_admissions_stopped: true };
 await fetchAndRenderConfig();
 assert.equal(named(row('hm_alpha'), 'host-drain')[0].textContent, 'Winding down · Pull drain · admissions stopped');
+legacyHosts.add('alpha');
+await fetchAndRenderConfig();
+assert.equal(named(row('hm_alpha'), 'host-drain')[0].textContent, 'Winding down · Pull drain · admissions stopped', 'an older remote keeps its independent readiness facts');
+legacyHosts.delete('alpha');
 delete DRAINS.alpha;
 assert.match(named(row('hm_gamma'), 'host-health')[0].getAttribute('aria-label'), /Throttle verdict: held/);
 assert.equal(named(row('hm_beta'), 'host-resource').length, 0, 'an unreachable host has no readings');
@@ -339,7 +352,7 @@ assert.match(named(row('hm_beta'), 'host-health')[0].textContent, /could not be 
 const healthPaths = requests.filter((request) => request.path.startsWith('/api/on/')).map((request) => request.path.split('?')[0]);
 for (const name of ['box-a', 'alpha', 'gamma']) {
   assert.ok(healthPaths.includes(`/api/on/${name}/host/resources`), `${name} resources were read`);
-  assert.ok(healthPaths.includes(`/api/on/${name}/workflows/auto/readiness`), `${name} drain capacity was read`);
+  assert.ok(healthPaths.includes(`/api/on/${name}/fleet/drains`), `${name} drain capacity was read`);
 }
 assert.equal(healthPaths.filter((path) => path.includes('/beta/')).length, 0, 'an unreachable host is not asked for readings');
 assert.match(named(body, 'host-head')[0].textContent, /Health/);
@@ -352,6 +365,20 @@ showAlpha.click();
 assert.deepEqual(switched, ['alpha']);
 assert.equal(named(row('hm_local'), 'host-showing')[0].textContent, 'showing');
 assert.equal(named(row('hm_local'), 'host-switch').length, 0, 'the host already shown has no switch link');
+// The serving host's Show href carries an explicit empty host, so opening or
+// copying it in a new tab selects the serving host even with a remembered
+// remote; a modified click follows the href instead of switching in page.
+load('common.js').namespace.setHost('alpha');
+await fetchAndRenderConfig();
+const showServing = named(row('hm_local'), 'host-switch')[0];
+assert.ok(showServing, 'the serving host has a Show link while a remote is shown');
+assert.match(showServing.href, /(?:\?|&)host=(?:&|#|$)/, 'serving Show href is an explicit empty host');
+showServing.dispatch('click', { metaKey: true, button: 0 });
+assert.deepEqual(switched, ['alpha'], 'a modified click is not intercepted into an in-page switch');
+showServing.click();
+assert.deepEqual(switched, ['alpha', null], 'an ordinary click switches to the serving host');
+load('common.js').namespace.setHost(null);
+await fetchAndRenderConfig();
 
 resourceFailures.alpha = 'sampler down';
 await fetchAndRenderConfig();
@@ -525,7 +552,23 @@ console.log('settings hosts: rows, freshness, load banner, inline add/rename/rem
 // this drives the shipped hosts module and stylesheet in Chromium.
 await assertHostColumnsAlign();
 
+function applyBrowserKitEnvironment() {
+  const envScript = process.env.ORBIT_BROWSER_KIT_ENV
+    || path.join(os.homedir(), '.local/chromium-deps/env.sh');
+  if (!envScript || !fs.existsSync(envScript)) return;
+  const probe = spawnSync(
+    'bash',
+    ['-c', '. "$ORBIT_KIT_ENV_FILE"; printf \'%s\\n%s\\n\' "$LD_LIBRARY_PATH" "$FONTCONFIG_FILE"'],
+    { env: { ...process.env, ORBIT_KIT_ENV_FILE: envScript }, encoding: 'utf8' },
+  );
+  if (!probe || probe.status !== 0 || typeof probe.stdout !== 'string') return;
+  const [libraries, fonts] = probe.stdout.split('\n');
+  if (libraries) process.env.LD_LIBRARY_PATH = libraries;
+  if (fonts && !process.env.FONTCONFIG_FILE) process.env.FONTCONFIG_FILE = fonts;
+}
+
 function browserModule() {
+  applyBrowserKitEnvironment();
   const fromEnv = process.env.PLAYWRIGHT_MODULE || process.env.ORBIT_PLAYWRIGHT_MODULE;
   if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
   const kit = path.join(os.homedir(), '.local/chromium-deps');

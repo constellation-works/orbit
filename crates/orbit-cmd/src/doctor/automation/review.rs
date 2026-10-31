@@ -1,13 +1,14 @@
-//! Automatic review switches: before-PR, before-landing and after-landing review
-//! in one row.
+//! Automatic review switches: deprecated before-PR, before-landing and
+//! after-landing review in one row [ORB-20099].
 
 use crate::doctor::*;
 
-/// Every automatic-review switch in one row [ORB-13992]: before-PR review
-/// (`review.timing = before_pr`, its minutes and crew), before-landing review
-/// (`review.timing = before_landing`, sharing them, and the machines
-/// `review.before_landing_hosts` turns it on for [ORB-15192]) and
-/// after-landing review (the `delivery-code-review` auto-task, with when its
+/// Every automatic-review switch in one row [ORB-13992] [ORB-20099]:
+/// before-PR review (deprecated `review.timing = before_pr`, its minutes and
+/// crew), before-landing review (`review.timing = before_landing`, sharing
+/// them, and the machines `review.before_landing_hosts` turns it on for
+/// [ORB-15192]) and after-landing review (the `delivery-code-review`
+/// auto-task, with when its
 /// next batch is due), each with its source. A host list that names this
 /// owner, whose own deliveries never read it, or repeats a workspace-wide
 /// `review.timing = before_landing` is a warning; one whose claims would be refused is

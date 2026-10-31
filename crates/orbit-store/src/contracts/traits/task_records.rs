@@ -55,7 +55,8 @@ pub trait TaskArtifactStoreBackend: Send + Sync {
 }
 
 pub trait TaskReservationStoreBackend: Send + Sync {
-    /// Read active reservations without expiring or otherwise mutating rows.
+    /// Read active path holders, task reservations and hard leases, without
+    /// expiring or otherwise mutating rows. Advisory leases hold nothing.
     fn inspect_active_task_reservations(
         &self,
         workspace_orbit_dir: &str,
@@ -78,7 +79,8 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         workspace_id: Option<&str>,
     ) -> Result<TaskReservationListResult, OrbitError>;
 
-    /// Read every file reservation, active or released, oldest first.
+    /// Read every task reservation, active or released, oldest first; leases
+    /// are not task reservations.
     /// Read-only: it neither expires nor releases rows.
     fn list_task_reservation_history(
         &self,
@@ -110,6 +112,67 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         &self,
         params: TaskReservationOwnedConflictsParams,
     ) -> Result<TaskReservationOwnedConflictsResult, OrbitError>;
+
+    /// Record a path lease, granted or queued, or report the holders that
+    /// refuse a hard one asked not to wait.
+    fn insert_lease(&self, params: LeaseInsertParams) -> Result<LeaseInsertResult, OrbitError>;
+
+    /// Add selectors to a granted lease; blocked ones on a hard lease queue.
+    fn expand_lease(&self, params: LeaseExpandParams) -> Result<LeaseExpandResult, OrbitError>;
+
+    /// Grant waiting requests and expansions, in queue order, whose paths
+    /// are free.
+    fn grant_queued_leases(
+        &self,
+        params: LeaseQueueGrantParams,
+    ) -> Result<LeaseQueueGrantResult, OrbitError>;
+
+    /// Move an active lease's `expires_at` forward.
+    fn renew_lease(&self, params: LeaseRenewParams) -> Result<LeaseRenewResult, OrbitError>;
+
+    /// End an active lease.
+    fn release_lease(&self, params: LeaseReleaseParams) -> Result<LeaseReleaseResult, OrbitError>;
+
+    /// Read one lease in any state, without mutating rows.
+    fn get_lease(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        lease_id: &str,
+    ) -> Result<Option<LeaseRecord>, OrbitError>;
+
+    /// The workspace's active leases, advisory and hard, without expiring
+    /// or otherwise mutating rows.
+    fn inspect_active_leases(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<LeaseRecord>, OrbitError>;
+
+    /// The workspace's active leases after lazy expiry.
+    fn list_active_leases(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<LeaseListResult, OrbitError>;
+
+    /// Expire elapsed leases and publish one 80%-TTL warning per heartbeat.
+    /// Returns the remaining active leases for the owner's landing checks.
+    fn sweep_lease_lifetimes(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<LeaseListResult, OrbitError>;
+
+    /// Durable notices strictly after a cursor, optionally for one lease.
+    fn list_lease_notices(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        lease_id: Option<&str>,
+        after: u64,
+        limit: u32,
+    ) -> Result<Vec<crate::contracts::LeaseNotice>, OrbitError>;
 
     /// Take the exclusive workspace claim [ADR-0352, ORB-10709], or report the
     /// incumbent that refused it.

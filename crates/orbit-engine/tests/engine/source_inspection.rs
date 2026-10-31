@@ -16,7 +16,7 @@ use orbit_types::workflow::activity_job::{ActivityV2Spec, Provider, V2AuditEvent
 use serde_json::{Value, json};
 
 #[test]
-fn codex_and_claude_pilots_inspect_the_pinned_checkout_with_native_tools() {
+fn pilots_of_any_provider_inspect_the_pinned_checkout_with_native_tools() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
     fs::create_dir(&repo).unwrap();
@@ -27,17 +27,43 @@ fn codex_and_claude_pilots_inspect_the_pinned_checkout_with_native_tools() {
     let revision = git(&repo, &["rev-parse", "HEAD"]);
     fs::write(repo.join("candidate.rs"), "later candidate\n").unwrap();
 
-    for (provider, name, args) in [
-        (Provider::Codex, "codex", vec!["exec", "--json"]),
-        (Provider::Claude, "claude", vec!["-p"]),
-        (Provider::Claude, "claude", vec!["-p", "--tools", "default"]),
-        (Provider::Claude, "claude", vec!["-p", "--tools=Read,Bash"]),
+    let codex_inspection = [
+        "--config",
+        "features.shell_tool=true",
+        "--config",
+        "features.unified_exec=true",
+    ];
+    for (provider, name, args, inspection_args) in [
+        (
+            Provider::Codex,
+            "codex",
+            vec!["exec", "--json"],
+            codex_inspection.to_vec(),
+        ),
+        (
+            Provider::Claude,
+            "claude",
+            vec!["-p", "--tools", "default"],
+            vec![],
+        ),
+        // Any provider whose executor declares `inspection_args` inspects
+        // with its own CLI's native tools: the declared arguments reach its
+        // argv, with the one generic instruction.
+        (
+            Provider::Gemini,
+            "gemini",
+            vec![],
+            vec!["--native-inspection"],
+        ),
+        (Provider::Grok, "grok", vec![], vec!["--native-inspection"]),
+        (Provider::Muse, "muse", vec![], vec!["--native-inspection"]),
     ] {
         let cli = temp.path().join(name);
         executable(&cli, NATIVE_PROVIDER);
         let host = InspectionHost {
             command: cli,
             args: args.into_iter().map(str::to_string).collect(),
+            inspection_args: Some(inspection_args.into_iter().map(str::to_string).collect()),
         };
         let mut asset = pilot(provider);
         let ActivityV2Spec::AgentLoop(spec) = &mut asset else {
@@ -60,7 +86,7 @@ fn codex_and_claude_pilots_inspect_the_pinned_checkout_with_native_tools() {
             run_id: "inspection-fixture",
             host: Some(&host),
         })
-        .unwrap();
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         assert!(outcome.success, "{name}: {:?}", outcome.message);
         assert_eq!(outcome.output["content"], "pinned candidate\n");
         assert_eq!(outcome.output["head"], revision);
@@ -86,46 +112,26 @@ fn unavailable_inspection_surface_is_a_typed_non_retryable_dispatch_error() {
     let temp = tempfile::tempdir().unwrap();
     let calls = temp.path().join("calls");
     let cases = [
-        (Provider::Gemini, "gemini", vec![], Some("reviewer")),
-        (Provider::Grok, "grok", vec![], Some("reviewer")),
+        // No CLI runtime exists for this provider, so no session can start.
         (
-            Provider::Claude,
-            "claude",
-            vec!["--tools", ""],
+            Provider::OpenaiCompat,
+            "openai_compat",
+            None,
             Some("reviewer"),
         ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--tools=Read"],
-            Some("reviewer"),
-        ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--tools", "default", "--tools", ""],
-            Some("reviewer"),
-        ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--disallowedTools", "Bash"],
-            Some("reviewer"),
-        ),
-        (
-            Provider::Claude,
-            "claude",
-            vec!["--disallowed-tools=Read"],
-            Some("reviewer"),
-        ),
-        (Provider::Codex, "codex", vec![], Some("implementer")),
+        // An executor that declares no `inspection_args` never launches,
+        // whatever its provider.
+        (Provider::Gemini, "gemini", None, Some("reviewer")),
+        (Provider::Claude, "claude", None, Some("reviewer")),
+        (Provider::Codex, "codex", Some(vec![]), Some("implementer")),
     ];
-    for (provider, name, args, profile) in cases {
+    for (provider, name, inspection_args, profile) in cases {
         let cli = temp.path().join(name);
         executable(&cli, &format!("#!/bin/sh\ntouch '{}'\n", calls.display()));
         let host = InspectionHost {
             command: cli,
-            args: args.iter().map(|arg| (*arg).into()).collect(),
+            args: Vec::new(),
+            inspection_args,
         };
         let audit = writer(temp.path());
         let error = dispatch_v2_activity(V2DispatchInput {
@@ -153,7 +159,7 @@ fn unavailable_inspection_surface_is_a_typed_non_retryable_dispatch_error() {
         );
         assert!(
             !calls.exists(),
-            "a provider with no inspection surface must never start"
+            "a refused inspection configuration must never start a provider"
         );
         assert!(
             audit
@@ -223,6 +229,7 @@ fn git(root: &Path, args: &[&str]) -> String {
 struct InspectionHost {
     command: PathBuf,
     args: Vec<String>,
+    inspection_args: Option<Vec<String>>,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
@@ -230,6 +237,8 @@ impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
         Ok(ResolvedCliExecutor {
             command: self.command.display().to_string(),
             args: self.args.clone(),
+            inspection_args: self.inspection_args.clone(),
+            image_input: None,
         })
     }
     fn run_deterministic(
@@ -262,13 +271,12 @@ if provider == 'codex':
     config = dict(arg.split('=', 1) for i, arg in enumerate(args) if i and args[i-1] in ('--config', '-c'))
     assert config['features.shell_tool'] == 'true'
     assert config['features.unified_exec'] == 'true'
+elif provider == 'claude':
+    assert args[args.index('--tools') + 1] == 'default'
 else:
-    selected = []
-    for i, arg in enumerate(args):
-        if arg == '--tools': selected = args[i+1].split(',')
-        elif arg.startswith('--tools='): selected = arg.split('=', 1)[1].split(',')
-    assert 'default' in selected or {'Read', 'Bash'} <= set(selected)
-envelope = json.loads(sys.stdin.read().split('Execution envelope:\n', 1)[1])
+    assert '--native-inspection' in args
+prompt = pathlib.Path(args[args.index('--prompt-file') + 1]).read_text() if '--prompt-file' in args else sys.stdin.read()
+envelope = json.loads(prompt.split('Execution envelope:\n', 1)[1])
 assert 'proc.spawn' not in envelope['tools']
 root = pathlib.Path(envelope['input']['workspace_path']).resolve()
 assert root == pathlib.Path.cwd().resolve()
@@ -277,5 +285,10 @@ content = pathlib.Path('candidate.rs').read_text()
 head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
 matches = subprocess.check_output(['rg', '-n', 'pinned', 'candidate.rs'], text=True).strip()
 assert head == envelope['input']['source_revision']
-print(json.dumps({'schemaVersion': 1, 'status': 'success', 'result': {'content': content, 'head': head, 'matches': matches, 'root': str(root)}, 'error': None}))
+answer = json.dumps({'schemaVersion': 1, 'status': 'success', 'result': {'content': content, 'head': head, 'matches': matches, 'root': str(root)}, 'error': None})
+if provider == 'muse':
+    # Muse answers in its JSONL stream: only the terminal record's text counts.
+    print(json.dumps({'payload_type': 'run.terminal.completed', 'payload': {'terminal': 'completed', 'text': answer}}))
+else:
+    print(answer)
 "#;

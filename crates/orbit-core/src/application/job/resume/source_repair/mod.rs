@@ -3,11 +3,14 @@
 mod admission;
 mod adoption;
 mod completion;
+mod escalated_publication;
 mod handoff;
 mod identity;
+mod inline_publication;
 mod observation;
 mod publication;
 mod published_owner;
+mod reconciliation;
 mod resumed_recovery;
 mod successor;
 
@@ -22,13 +25,15 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     ActivityV2Spec, CommitObservationStatus, JobRun, JobRunState, JobV2, JobV2StepBody,
-    PipelineState, SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED,
-    SourceRepairAdmission, SourceRepairBinding,
+    PipelineState, SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SourceRepairAdmission,
+    SourceRepairBinding,
 };
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::runtime::run_input::carried_task_ids;
-use admission::{RepairLink, digest, field, refuse, task_digest, task_pr_association};
+use admission::{
+    RepairLink, digest, field, refuse, run_evidence_digest, task_digest, task_pr_association,
+};
 pub(crate) use published_owner::PublishedResume;

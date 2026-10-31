@@ -5,3 +5,8 @@ orbit skill's task-review reference). List the task's artifacts with
 view, in every theme it supports, and at 375px when the layout is responsive.
 Missing screenshots without a stated reason, such as no browser kit on the
 host, are missing evidence: record a spec-compliance finding.
+
+For a task that also carries `verify-mock-ui` in a workspace with
+`visual_review.mode = "live"`, its mocked views have no implementer
+screenshots: Orbit's capture under `visual/` is their evidence, and the
+`verify-mock-ui` instructions govern them.

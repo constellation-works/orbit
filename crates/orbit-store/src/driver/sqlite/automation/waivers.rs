@@ -43,24 +43,7 @@ pub(super) fn commit(
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
 
-        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
-            return Ok(false);
-        };
-
-        let changed = conn
-            .execute(
-                "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
-                params![
-                    next.generation,
-                    encode(next)?,
-                    previous.consumer,
-                    previous.generation,
-                    previous_json
-                ],
-            )
-            .map_err(sqlite_store_error)?;
-
-        if changed == 0 {
+        if !checkpoint::advance(conn, previous, next)? {
             return Ok(false);
         }
 

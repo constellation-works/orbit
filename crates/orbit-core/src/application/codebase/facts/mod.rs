@@ -25,6 +25,6 @@ pub(in crate::application) use block_cause::{
 };
 pub(super) use history::HistoryFacts;
 pub use scan::CodebaseFacts;
-pub(super) use scan::{ReservationFacts, TaskFacts, scan, scan_regressions};
+pub(super) use scan::{HistoryCompleteness, ReservationFacts, TaskFacts, scan, scan_regressions};
 pub(super) use types::{ACTOR_KINDS, Block, INFRA_CAUSES};
 pub(in crate::application) use types::{Anchor, BlockCause};

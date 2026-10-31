@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 
 use super::agents::implementation_run;
 use super::codebase::{
-    add, add_with_status, append_event, init_repo, land, pilot_receipt, reserve, reserve_request,
-    seed_pilot_run,
+    add, add_with_status, append_event, append_row, init_repo, land, pilot_receipt,
+    pilot_receipt_with, pilot_run, reserve, reserve_request, seed_pilot_run,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -108,16 +108,29 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 (2, Some(purpose), "haiku", None),
                 (3, None, "ignored", Some("unattributed-pilot-model")),
                 (4, Some(purpose), "haiku", Some("actual-pilot-model")),
+                (5, Some(purpose), "luna", Some("repair-only-model")),
+                (6, Some(purpose), "uninvoked", None),
             ] {
                 let run_id = format!("jrun-pilot-attribution-{index}");
-                seed_pilot_run(
-                    &fixture,
-                    &run_id,
-                    "sol",
-                    "task-model",
-                    now - Duration::minutes(2),
-                    now,
-                );
+                if index < 5 {
+                    seed_pilot_run(
+                        &fixture,
+                        &run_id,
+                        "sol",
+                        "task-model",
+                        now - Duration::minutes(2),
+                        now,
+                    );
+                } else {
+                    pilot_run(
+                        &fixture,
+                        &run_id,
+                        "sol",
+                        "task-model",
+                        now - Duration::minutes(2),
+                        now,
+                    );
+                }
                 let mut state = fixture.runtime.read_run_state(&run_id).unwrap().unwrap();
                 state.activity_crew_draws.clear();
                 if let Some(key) = key {
@@ -142,26 +155,6 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                     );
                 }
                 fixture.runtime.write_run_state(&run_id, &state).unwrap();
-                // The latest task-pilot invocation, even with no model, wins over
-                // older evidence. Other activities on the run must not supply it.
-                for (activity, model) in [
-                    ("task_pilot", model),
-                    ("prepare_task_pilot", Some("wrong-activity-model")),
-                ] {
-                    fixture
-                        .runtime
-                        .insert_invocation_trace_record(&InvocationInsertParams {
-                            job_run_id: run_id.clone(),
-                            account: None,
-                            activity_id: activity.into(),
-                            agent: "fixture".into(),
-                            provider: None,
-                            model: model.map(str::to_string),
-                            task_ids: Vec::new(),
-                            trace: Default::default(),
-                        })
-                        .unwrap();
-                }
                 let task = add_with_status(
                     &fixture,
                     &format!("piloted {index}"),
@@ -169,6 +162,30 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                     vec![],
                     TaskStatus::Done,
                 );
+                // The latest task-pilot invocation, even with no model, wins over
+                // older evidence. Other activities on the run must not supply it.
+                for (activity, model) in [
+                    (if index == 5 { "repair_pilot" } else { "pilot" }, model),
+                    ("prepare_task_pilot", Some("wrong-activity-model")),
+                ]
+                .into_iter()
+                .filter(|_| index != 6)
+                {
+                    fixture
+                        .runtime
+                        .insert_invocation_trace_record(&InvocationInsertParams {
+                            agent_execution_id: None,
+                            job_run_id: run_id.clone(),
+                            account: None,
+                            activity_id: activity.into(),
+                            agent: "fixture".into(),
+                            provider: None,
+                            model: model.map(str::to_string),
+                            task_ids: vec![task.clone()],
+                            trace: Default::default(),
+                        })
+                        .unwrap();
+                }
                 pilot_receipt(
                     &fixture,
                     &task,
@@ -179,10 +196,150 @@ fn pilots_attribute_assessments_to_recorded_activity() {
                 );
                 land(&fixture, &repo, &task, &["src/pilot.rs"], now);
             }
+            // Two overlapping runs: only structured apply entries identify which
+            // run wrote each legacy receipt. One run also repaired an assessment
+            // with a different model, so matching the producing step matters.
+            let mut overlap_operations = Vec::new();
+            for (index, crew, minutes, cost) in
+                [(0, "overlap-a", 10, 2.0), (1, "overlap-b", 20, 6.0)]
+            {
+                let run = format!("jrun-overlap-{index}");
+                pilot_run(
+                    &fixture,
+                    &run,
+                    crew,
+                    "task-model",
+                    now - Duration::minutes(60),
+                    now - Duration::minutes(60 - minutes),
+                );
+                for (activity, model) in
+                    [("pilot", "initial-model"), ("repair_pilot", "repair-model")]
+                {
+                    if index == 0 && activity == "repair_pilot" {
+                        continue;
+                    }
+                    fixture
+                        .runtime
+                        .insert_invocation_trace_record(&InvocationInsertParams {
+                            agent_execution_id: None,
+                            job_run_id: run.clone(),
+                            account: None,
+                            activity_id: activity.into(),
+                            agent: "fixture".into(),
+                            provider: None,
+                            model: Some(model.into()),
+                            task_ids: vec![],
+                            trace: InvocationTrace {
+                                provider_cost_usd: Some(cost),
+                                ..Default::default()
+                            },
+                        })
+                        .unwrap();
+                }
+                let mut state = fixture.runtime.read_run_state(&run).unwrap().unwrap();
+                for (step, linked) in [
+                    ("apply", false),
+                    ("apply_repairs", false),
+                    ("apply_repairs", true),
+                ] {
+                    if index == 0 && step == "apply_repairs" {
+                        continue;
+                    }
+                    let task = add_with_status(
+                        &fixture,
+                        &format!("{crew} {step} {linked}"),
+                        &[],
+                        vec![],
+                        TaskStatus::Done,
+                    );
+                    pilot_receipt(
+                        &fixture,
+                        &task,
+                        now - Duration::minutes(55),
+                        linked.then_some(run.as_str()),
+                        &[],
+                        &["file:src/overlap.rs"],
+                    );
+                    let operation = fixture
+                        .runtime
+                        .get_task_comments(&task)
+                        .unwrap()
+                        .last()
+                        .unwrap()
+                        .receipt()
+                        .unwrap()
+                        .operation_id
+                        .to_string();
+                    overlap_operations.push((run.clone(), operation.clone()));
+                    if state.pipeline.get(step).is_none() {
+                        state.pipeline[step] = json!({"tasks": []});
+                    }
+                    state.pipeline[step]["tasks"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"operation_id": operation}));
+                    // A substring in unrelated output must never select this run.
+                    state.step_outputs.insert(
+                        99,
+                        json!({"diagnostic": format!("prefix-{operation}-suffix")}),
+                    );
+                    land(&fixture, &repo, &task, &["src/overlap.rs"], now);
+                }
+                fixture.runtime.write_run_state(&run, &state).unwrap();
+            }
+            // Another run may mention the operation as part of a longer field.
+            // Only exact structured operation ids can break the overlap tie.
+            for run in ["jrun-overlap-0", "jrun-overlap-1"] {
+                let mut state = fixture.runtime.read_run_state(run).unwrap().unwrap();
+                for (_, operation) in overlap_operations.iter().filter(|(owner, _)| owner != run) {
+                    state.pipeline["apply"]["tasks"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!({"operation_id": format!("prefix-{operation}-suffix")}));
+                }
+                fixture.runtime.write_run_state(run, &state).unwrap();
+            }
             let server = fixture.server(false);
             let card = json_ok(server.get(&format!(
                 "/api/agents/pilots/scorecard?{WS}&window=7d&min_support=1"
             )));
+            let observed: Vec<_> = card["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| {
+                    (
+                        row["crew"].as_str().unwrap(),
+                        row["model"].as_str().unwrap(),
+                        row["units"].as_u64().unwrap(),
+                    )
+                })
+                .collect();
+            let expected = [
+                ("haiku", "actual-pilot-model", 2),
+                ("overlap-a", "initial-model", 1),
+                ("overlap-b", "initial-model", 1),
+                ("overlap-b", "repair-model", 2),
+            ];
+            let missing: Vec<_> = expected
+                .iter()
+                .filter(|expected| !observed.contains(expected))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "recorded model and overlapping legacy attribution failures: {missing:?}; observed {observed:?}"
+            );
+            for (crew, model, units, cost, seconds) in [
+                ("overlap-a", "initial-model", 1, 2.0, 600),
+                ("overlap-b", "initial-model", 1, 12.0, 1200),
+                ("overlap-b", "repair-model", 2, 6.0, 1200),
+            ] {
+                let attributed = row(&card, crew, model);
+                assert_eq!(attributed["units"], units);
+                assert_eq!(attributed["runs_without_model"], 0);
+                assert_eq!(stat(attributed, "cost_per_assessment"), cost);
+                assert_eq!(stat(attributed, "median_run_seconds"), seconds);
+            }
             assert_eq!(
                 row(&card, "haiku", "actual-pilot-model")["units"],
                 2,
@@ -191,12 +348,24 @@ fn pilots_attribute_assessments_to_recorded_activity() {
             assert_eq!(row(&card, "luna", "legacy-pilot-model")["units"], 1);
             assert_eq!(row(&card, "haiku", "model unknown")["units"], 1);
             assert_eq!(
+                row(&card, "haiku", "model unknown")["runs_without_model"],
+                1
+            );
+            assert_eq!(
+                row(&card, "luna", "repair-only-model")["runs_without_model"],
+                0
+            );
+            assert_eq!(
+                row(&card, "uninvoked", "model unknown")["runs_without_model"],
+                1
+            );
+            assert_eq!(
                 row(&card, "crew unknown", "unattributed-pilot-model")["units"],
                 1
             );
             assert_eq!(
                 card["rows"].as_array().unwrap().len(),
-                4,
+                9,
                 "no task-crew or other-activity rows: {card}"
             );
         },
@@ -456,7 +625,7 @@ fn calibrated(
     complexity: TaskComplexity,
     run: &str,
     files: &[&str],
-    cost: f64,
+    cost: Option<f64>,
     now: DateTime<Utc>,
 ) -> String {
     let id = fixture
@@ -503,6 +672,7 @@ fn calibrated(
     fixture
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: implementation,
             account: None,
             activity_id: "implement_one".into(),
@@ -511,7 +681,7 @@ fn calibrated(
             model: Some("implement-model".into()),
             task_ids: vec![id.clone()],
             trace: InvocationTrace {
-                provider_cost_usd: Some(cost),
+                provider_cost_usd: cost,
                 ..Default::default()
             },
         })
@@ -623,7 +793,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 low,
                 "jrun-pilot-a",
                 &["src/t1.rs"],
-                1.0,
+                Some(1.0),
                 now,
             );
             calibrated(
@@ -633,7 +803,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 low,
                 "jrun-pilot-b",
                 &["src/t2.rs"],
-                5.0,
+                Some(5.0),
                 now,
             );
             calibrated(
@@ -643,7 +813,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 hard,
                 "jrun-pilot-b",
                 &["src/t3.rs"],
-                3.0,
+                Some(3.0),
                 now,
             );
             calibrated(
@@ -653,7 +823,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 hard,
                 "jrun-pilot-a",
                 &["src/t4.rs"],
-                10.0,
+                Some(10.0),
                 now,
             );
 
@@ -745,6 +915,475 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
                 json!([{"crew": "pilot-a", "model": "model-a", "problems": 2}]),
                 "{strip}"
             );
+        },
+    );
+}
+
+/// Missing implementation prices must not count as wrong tier assessments,
+/// and assessed-task support must not hide missing placement support.
+#[test]
+fn pilots_calibrate_only_placed_tasks() {
+    isolated("agents_pilots::pilots_calibrate_only_placed_tasks", || {
+        let fixture = Fixture::new();
+        let repo = init_repo(&fixture);
+        let now = Utc::now();
+        for crew in ["mixed", "peer", "unpriced", "full"] {
+            seed_pilot_run(
+                &fixture,
+                &format!("jrun-pilot-{crew}"),
+                crew,
+                "pilot-model",
+                now - Duration::hours(9),
+                now - Duration::hours(8),
+            );
+        }
+        // The peer's hard task falls between the mixed pilot's two low
+        // tasks by cost, leaving just one of that pilot's placements on tier.
+        for (title, crew, tier, cost) in [
+            ("cheap", "mixed", TaskComplexity::Low, Some(1.0)),
+            ("expensive", "mixed", TaskComplexity::Low, Some(5.0)),
+            ("middle", "peer", TaskComplexity::Hard, Some(3.0)),
+            ("fully-priced", "full", TaskComplexity::Low, Some(0.5)),
+            ("missing", "mixed", TaskComplexity::Hard, None),
+            ("missing-a", "unpriced", TaskComplexity::Low, None),
+            ("missing-b", "unpriced", TaskComplexity::Low, None),
+            ("missing-c", "unpriced", TaskComplexity::Low, None),
+        ] {
+            calibrated(
+                &fixture,
+                &repo,
+                title,
+                tier,
+                &format!("jrun-pilot-{crew}"),
+                &[&format!("src/{title}.rs")],
+                cost,
+                now,
+            );
+        }
+        let server = fixture.server(false);
+        let card = json_ok(server.get(&format!(
+            "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=1"
+        )));
+        let mixed = row(&card, "mixed", "pilot-model");
+        assert_eq!(mixed["units"], 3);
+        assert_eq!(mixed["counts"]["tier_calibration"], 1);
+        assert_eq!(mixed["per_100"]["tier_calibration"], 50);
+        assert_eq!(mixed["term_units"]["tier_calibration"], 2);
+        assert_eq!(stat(mixed, "tier_matrix")["not_placed"], 1);
+        assert_eq!(mixed["per_100"]["f1_lift"], 100);
+        assert_eq!(mixed["raw"], 112.5);
+        let full = row(&card, "full", "pilot-model");
+        assert_eq!(full["units"], 1);
+        assert_eq!(full["term_units"]["tier_calibration"], 1);
+        assert_eq!(full["per_100"]["tier_calibration"], 100);
+        assert_eq!(full["raw"], 125, "full coverage retains its score");
+        let calibration = card["terms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|term| term["key"] == "tier_calibration")
+            .unwrap();
+        assert_eq!(calibration["unit"], "placed tasks");
+        let detail = json_ok(server.get(&format!(
+            "/api/agents/pilots/detail?{WS}&window=30d&min_support=1&crew=mixed&model=pilot-model"
+        )));
+        assert_eq!(term(&detail, "tier_calibration")["units"], 2);
+        assert_eq!(term(&detail, "tier_calibration")["contribution"], 12.5);
+        let unpriced = row(&card, "unpriced", "pilot-model");
+        assert_eq!(unpriced["term_units"]["tier_calibration"], 0);
+        assert_eq!(stat(unpriced, "tier_matrix")["not_placed"], 3);
+        assert!(
+            unpriced["provisional_terms"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("tier_calibration"))
+        );
+        assert_eq!(unpriced["raw"], 100, "only F1 lift is measured");
+
+        let supported = json_ok(server.get(&format!(
+            "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=3"
+        )));
+        let mixed = row(&supported, "mixed", "pilot-model");
+        assert_eq!(mixed["below_support"], false);
+        assert!(
+            mixed["provisional_terms"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("tier_calibration"))
+        );
+        assert_eq!(mixed["per_100"]["tier_calibration"], 50);
+        assert_eq!(mixed["raw"], 100, "two placements cannot support this term");
+
+        // The runtime projection used by CLI/MCP and the dashboard's HTTP
+        // projection must carry the same rates, units and provisional terms.
+        let runtime = scorecard(&fixture, "30d");
+        assert_eq!(runtime["rows"], card["rows"]);
+        assert_eq!(runtime["terms"], card["terms"]);
+        let tool = fixture
+            .runtime
+            .run_tool(
+                "orbit.agents.scorecard",
+                json!({
+                    "role": "pilots", "window": "30d", "min_support": 1,
+                }),
+            )
+            .unwrap();
+        assert_eq!(tool["rows"], card["rows"]);
+        assert_eq!(tool["terms"], card["terms"]);
+    });
+}
+
+/// Held assessments settle from task history alone, attributed to the pilot
+/// run their receipt names: a description edit before approval confirms the
+/// warning, an unedited approval delivered clean dismisses it, and an
+/// approval after only a bare-note field edit is excluded. Advisory findings
+/// never hold, a superseded assessment gives way to the next one, and the
+/// warning terms are rated per 100 settled assessments, provisional below
+/// ten. With no block-triage record in the window the missed-scope-block
+/// source reads as unavailable; a decision triage after a clean assessment is
+/// then a miss.
+#[test]
+fn pilots_settle_held_warnings_from_history() {
+    isolated(
+        "agents_pilots::pilots_settle_held_warnings_from_history",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let run = "jrun-pilot-warden";
+            seed_pilot_run(
+                &fixture,
+                run,
+                "warden",
+                "warden-model",
+                now - Duration::minutes(5),
+                now,
+            );
+            let proposed =
+                |title: &str| add_with_status(&fixture, title, &[], vec![], TaskStatus::Proposed);
+            // Every task exists before its records: the receipt and history
+            // rows follow its creation.
+            let tasks: Vec<String> = [
+                "confirmed",
+                "dismissed",
+                "bare note",
+                "advisory",
+                "superseded",
+                "pending",
+            ]
+            .into_iter()
+            .map(proposed)
+            .collect();
+            let [confirmed, dismissed, bare, advisory, superseded, pending] =
+                <[String; 6]>::try_from(tasks).unwrap();
+            let base = Utc::now() + Duration::minutes(1);
+            let at = |seconds: i64| base + Duration::seconds(seconds);
+            let held = json!({"utility_warnings": [
+                {"text": "criterion 2 contradicts the description", "holds_promotion": true},
+                {"text": "an advisory note", "holds_promotion": false},
+            ]});
+            let receipt = |task: &str, seconds: i64, findings: &Value| {
+                pilot_receipt_with(
+                    &fixture,
+                    task,
+                    at(seconds),
+                    Some(run),
+                    &[],
+                    &["file:src/pilot.rs"],
+                    findings.clone(),
+                );
+            };
+            let row_at = |task: &str,
+                          seconds: i64,
+                          by: &str,
+                          event: &str,
+                          note: Option<&str>,
+                          to: Option<TaskStatus>| {
+                append_row(
+                    &fixture,
+                    task,
+                    at(seconds),
+                    by,
+                    event,
+                    note.map(str::to_string),
+                    to,
+                    None,
+                );
+            };
+            let approve = |task: &str, seconds: i64| {
+                row_at(
+                    task,
+                    seconds,
+                    "human:operator",
+                    "proposal_approved",
+                    None,
+                    Some(TaskStatus::Backlog),
+                );
+            };
+            let deliver = |task: &str, seconds: i64| {
+                row_at(
+                    task,
+                    seconds,
+                    "system",
+                    "started",
+                    None,
+                    Some(TaskStatus::InProgress),
+                );
+                row_at(
+                    task,
+                    seconds + 1,
+                    "system",
+                    "landing_completed",
+                    None,
+                    Some(TaskStatus::Done),
+                );
+            };
+
+            // Confirmed: the filer rewrites the description, then approves.
+            receipt(&confirmed, 1, &held);
+            row_at(
+                &confirmed,
+                2,
+                "task-pilot",
+                "updated",
+                Some("task fields updated: description"),
+                None,
+            );
+            row_at(
+                &confirmed,
+                3,
+                "claude",
+                "updated",
+                Some("task fields updated: description, plan"),
+                None,
+            );
+            approve(&confirmed, 4);
+            // Dismissed: approved unedited, then delivered with no block.
+            receipt(
+                &dismissed,
+                1,
+                &json!({"surface_warnings": ["legacy plain warning"]}),
+            );
+            row_at(
+                &dismissed,
+                2,
+                "system",
+                "updated",
+                Some("task fields updated"),
+                None,
+            );
+            approve(&dismissed, 3);
+            deliver(&dismissed, 4);
+            // Excluded: a field edit naming no document, then approval.
+            receipt(&bare, 1, &held);
+            row_at(
+                &bare,
+                2,
+                "claude",
+                "updated",
+                Some("task fields updated"),
+                None,
+            );
+            approve(&bare, 3);
+            deliver(&bare, 4);
+            // Advisory findings only: clean, and settled once it is done.
+            receipt(
+                &advisory,
+                1,
+                &json!({"utility_warnings": [{"text": "advisory", "holds_promotion": false}]}),
+            );
+            approve(&advisory, 2);
+            deliver(&advisory, 3);
+            // The first assessment is superseded with no edit between; the
+            // second is confirmed when its unedited approval blocks.
+            receipt(&superseded, 1, &held);
+            receipt(&superseded, 2, &held);
+            approve(&superseded, 3);
+            row_at(
+                &superseded,
+                4,
+                "system",
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            row_at(
+                &superseded,
+                5,
+                "system",
+                "blocked",
+                Some("blocked by agent"),
+                Some(TaskStatus::Blocked),
+            );
+            // Pending: still proposed.
+            receipt(&pending, 1, &held);
+
+            let card = scorecard(&fixture, "30d");
+            assert_eq!(card["status"], "ok", "{card}");
+            assert_eq!(card["warning_min_support"], 10);
+            let source = &card["sources"]["missed_scope_blocks"];
+            assert_eq!(
+                (&source["available"], &source["triage_records"]),
+                (&json!(false), &json!(0)),
+                "with no block-triage record the source is reported unavailable: {card}"
+            );
+            for key in [
+                "confirmed_warnings",
+                "dismissed_warnings",
+                "missed_scope_blocks",
+            ] {
+                let term = card["terms"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|term| term["key"] == key)
+                    .unwrap_or_else(|| panic!("{key}: {card}"));
+                assert_eq!(term["unit"], "settled assessments", "{term}");
+            }
+            let warden = row(&card, "warden", "warden-model");
+            assert_eq!(warden["units"], 0, "no graded done task: {warden}");
+            assert_eq!(
+                (
+                    &warden["counts"]["confirmed_warnings"],
+                    &warden["counts"]["dismissed_warnings"],
+                    &warden["counts"]["missed_scope_blocks"],
+                ),
+                (&json!(2), &json!(1), &json!(0)),
+                "the description edit and the blocked delivery confirm; the clean delivery dismisses: {warden}"
+            );
+            assert_eq!(
+                stat(warden, "settled_assessments"),
+                4,
+                "confirmed, dismissed, superseded's successor and the advisory one"
+            );
+            assert_eq!(
+                stat(warden, "excluded_assessments"),
+                3,
+                "bare note, superseded and pending"
+            );
+            assert_eq!(stat(warden, "warning_precision_percent"), 66.67);
+            assert_eq!(
+                stat(warden, "holds_per_100_assessments"),
+                85.71,
+                "six of seven held"
+            );
+            assert_eq!(stat(warden, "missed_scope_block_count"), 0);
+            assert_eq!(warden["term_units"]["confirmed_warnings"], 4);
+            assert_eq!(
+                warden["per_100"]["confirmed_warnings"], 50,
+                "per 100 settled assessments"
+            );
+            assert_eq!(
+                warden["provisional_terms"],
+                json!([
+                    "confirmed_warnings",
+                    "dismissed_warnings",
+                    "missed_scope_blocks",
+                    "tier_calibration"
+                ]),
+                "four settled assessments are below the minimum of ten"
+            );
+            assert_eq!(
+                warden["raw"], 0,
+                "provisional terms stay out of the score: {warden}"
+            );
+
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let detail = agent_detail(
+                &facts,
+                AgentRole::Pilots,
+                &query,
+                "warden",
+                Some("warden-model"),
+                StdDuration::ZERO,
+            )
+            .unwrap();
+            let confirming = &term(&detail, "confirmed_warnings")["tasks"];
+            let mut ids: Vec<&str> = confirming
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|task| task["task_id"].as_str().unwrap())
+                .collect();
+            ids.sort_unstable();
+            let mut expected = vec![confirmed.as_str(), superseded.as_str()];
+            expected.sort_unstable();
+            assert_eq!(ids, expected, "{confirming}");
+            let edit = confirming
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|task| task["task_id"] == confirmed)
+                .unwrap();
+            assert_eq!(
+                edit["occurrences"][0]["detail"],
+                "held on utility_warnings; description edited by claude"
+            );
+            assert_eq!(edit["occurrences"][0]["run_id"], run);
+            assert_eq!(term(&detail, "confirmed_warnings")["provisional"], true);
+            assert_eq!(
+                term(&detail, "dismissed_warnings")["tasks"][0]["task_id"],
+                dismissed
+            );
+
+            // A decision triage after a clean assessment is a miss, and the
+            // source is then available. Ten settled assessments score.
+            let missed = proposed("missed");
+            let clean: Vec<String> = (0..5).map(|n| proposed(&format!("clean {n}"))).collect();
+            receipt(&missed, 10, &json!({}));
+            approve(&missed, 11);
+            row_at(
+                &missed,
+                12,
+                "system",
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            row_at(
+                &missed,
+                13,
+                "system",
+                "blocked",
+                Some("blocked by agent"),
+                Some(TaskStatus::Blocked),
+            );
+            row_at(
+                &missed,
+                14,
+                "system",
+                "blocked_task_triaged",
+                Some(&format!(
+                    "disposition=decision outcome=proposed episode={}",
+                    at(13).to_rfc3339()
+                )),
+                None,
+            );
+            for task in &clean {
+                receipt(task, 10, &json!({}));
+                approve(task, 11);
+                deliver(task, 12);
+            }
+            let card = scorecard(&fixture, "30d");
+            assert_eq!(
+                card["sources"]["missed_scope_blocks"]["available"], true,
+                "{card}"
+            );
+            let warden = row(&card, "warden", "warden-model");
+            assert_eq!(warden["counts"]["missed_scope_blocks"], 1, "{warden}");
+            assert_eq!(stat(warden, "settled_assessments"), 10);
+            assert_eq!(warden["provisional_terms"], json!(["tier_calibration"]));
+            assert_eq!(
+                warden["raw"], 20,
+                "3 × 20 confirmed − 1 × 10 dismissed − 3 × 10 missed per 100 settled: {warden}"
+            );
+
+            let server = fixture.server(false);
+            let http = json_ok(server.get(&format!(
+                "/api/agents/pilots/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            assert_eq!(http["rows"], card["rows"]);
+            assert_eq!(http["sources"], card["sources"]);
         },
     );
 }

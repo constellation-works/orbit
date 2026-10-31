@@ -19,6 +19,9 @@ use super::rebase_recovery::RebaseContinuation;
 use super::{DeclaredWorktreePair, DispatchError, V2AuditWriter, WorktreeBoundaryGuard};
 
 impl WorktreeBoundaryGuard {
+    /// `primary_base_branch` is the workspace's `workflow.base_branch`: the
+    /// primary's baseline, whatever branch the primary has checked out.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn capture(
         input: &Value,
         task_ctx: Option<&Value>,
@@ -27,6 +30,7 @@ impl WorktreeBoundaryGuard {
         subprocess_cwd: Option<&Path>,
         registered_primary_root: Option<&Path>,
         declared_pair: Option<&DeclaredWorktreePair>,
+        primary_base_branch: &str,
     ) -> Result<Option<Self>, DispatchError> {
         let Some(pair) = declared_pair else {
             let (Some(subprocess_cwd), Some(registered_primary_root)) =
@@ -199,6 +203,25 @@ impl WorktreeBoundaryGuard {
         let requested_workspace_path = pair.requested_workspace_path.clone();
         let requested_repo_root = Some(pair.requested_repo_root.clone());
         let task_id = task_id(input, task_ctx);
+        let primary_before = cached_primary_before_fingerprint(run_id, &primary_root)?;
+        let primary_baseline =
+            PrimaryBaseline::capture(&primary_root, &primary_before, primary_base_branch)?;
+        if let Some(reason) = primary_baseline.off_base_reason(&primary_before) {
+            // Admitted by design: the run's base is the base branch, so the
+            // operator's side branch is neither the base nor drift until it
+            // moves anywhere but onto the base branch.
+            tracing::warn!(
+                target: "orbit.engine.cli_runner",
+                task_id = %task_id,
+                run_id,
+                primary_root = %primary_root.display(),
+                primary_branch = ?primary_before.branch,
+                primary_head = %primary_before.head,
+                base_branch = %primary_baseline.base_branch,
+                base_tip = ?primary_baseline.base_tip,
+                "{reason}"
+            );
+        }
 
         Ok(Some(Self {
             task_id,
@@ -207,7 +230,8 @@ impl WorktreeBoundaryGuard {
             requested_workspace_path,
             requested_repo_root,
             assigned_before: git_fingerprint(&assigned_root)?,
-            primary_before: cached_primary_before_fingerprint(run_id, &primary_root)?,
+            primary_before,
+            primary_baseline,
             assigned_root,
             primary_root,
             rebase_recovery: None,
@@ -234,12 +258,13 @@ impl WorktreeBoundaryGuard {
     /// Compare both monitored checkouts after the provider reaches any
     /// terminal outcome. A stationary primary delta is benign only for
     /// `.orbit/` record-store dirt that does not intersect paths this run
-    /// changed. A proven same-branch fast-forward is also benign: linked
-    /// worktrees retain their own HEAD, and the later fetched-base rebase is
-    /// the authority for candidate-versus-target integration. Primary source
-    /// edits, overlapping record-store dirt, primary rewrites, primary branch
-    /// switches, and unapproved history changes in the assigned worktree remain
-    /// typed, fail-closed violations. The guard does not clean or copy either
+    /// changed. A primary move is benign only onto `workflow.base_branch` at
+    /// or ahead of that branch's tip at capture (see [`PrimaryBaseline`]):
+    /// linked worktrees retain their own HEAD, and the later fetched-base
+    /// rebase is the authority for candidate-versus-target integration.
+    /// Primary source edits, overlapping record-store dirt, primary rewrites,
+    /// moves anywhere but onto the base branch, and unapproved history changes
+    /// in the assigned worktree remain typed, fail-closed violations. The guard does not clean or copy either
     /// checkout. Only the host's continuation of an explicitly admitted
     /// stopped rebase permits assigned history changes: one that finishes it,
     /// or one that stops again on a later pick of that same rebase.
@@ -421,16 +446,22 @@ impl WorktreeBoundaryGuard {
             return Ok(());
         }
 
-        if primary_fast_forward_is_benign(&self.primary_root, &self.primary_before, &primary_after)?
-        {
+        if self.primary_baseline.admits_move(
+            &self.primary_root,
+            &self.primary_before,
+            &primary_after,
+            &conflicting_paths,
+        )? {
             tracing::info!(
                 target: "orbit.engine.cli_runner",
                 task_id = %self.task_id,
                 run_id = %self.run_id,
+                base_branch = %self.primary_baseline.base_branch,
+                primary_before_branch = ?self.primary_before.branch,
                 primary_before = %self.primary_before.head,
                 primary_after = %primary_after.head,
                 ignored_primary_paths = ?primary_dirt_paths,
-                "accepted concurrent primary fast-forward; shipment base synchronization owns reconciliation"
+                "accepted concurrent primary move onto the base branch; shipment base synchronization owns reconciliation"
             );
             return Ok(());
         }
@@ -443,7 +474,7 @@ impl WorktreeBoundaryGuard {
             &primary_changed_paths,
             &primary_dirt_paths,
             &conflicting_paths,
-            "the registered primary checkout changed without a clean same-branch fast-forward",
+            &self.primary_baseline.drift_reason(&self.primary_before),
         ))
     }
 
@@ -479,7 +510,7 @@ impl WorktreeBoundaryGuard {
         let fingerprints_blob_ref = self
             .audit
             .as_ref()
-            .map(|audit| audit.write_blob(fingerprints.to_string().as_bytes()));
+            .and_then(|audit| audit.write_blob(fingerprints.to_string().as_bytes()));
         let diagnostic = json!({
             "code": code,
             "reason": reason,
@@ -490,6 +521,8 @@ impl WorktreeBoundaryGuard {
             "requested_repo_root": self.requested_repo_root,
             "resolved_assigned_root": self.assigned_root,
             "registered_primary_root": self.primary_root,
+            "primary_base_branch": self.primary_baseline.base_branch,
+            "primary_base_tip": self.primary_baseline.base_tip,
             "changed_paths": reported_paths,
             "run_changed_paths": changed_paths(&self.assigned_root, &self.assigned_before, assigned_after),
             "primary_changed_paths": primary_changed_paths,
@@ -576,9 +609,9 @@ const ORBIT_RECORD_STORE_PREFIX: &str = ".orbit/";
 /// candidate. Overlapping record-store dirt is the same failure; the
 /// intersection is `conflicting_paths`.
 ///
-/// `primary_fast_forward_is_benign` covers a primary branch that advanced. It
-/// rejects `before.head == after.head` on its first clause, so this function
-/// is what keeps a stationary record-store delta from being reported as drift.
+/// [`PrimaryBaseline::admits_move`] covers a primary that moved. It rejects a
+/// stationary HEAD and branch on its first clause, so this function is what
+/// keeps a stationary record-store delta from being reported as drift.
 /// The nonempty dirt-path condition keeps an unexplained fingerprint change
 /// fail closed. Neither checkout is staged, committed, reset, or cleaned here.
 fn primary_stationary_dirt_delta_is_benign(
@@ -596,23 +629,146 @@ fn primary_stationary_dirt_delta_is_benign(
             .all(|path| path.starts_with(ORBIT_RECORD_STORE_PREFIX))
 }
 
-fn primary_fast_forward_is_benign(
-    root: &Path,
-    before: &GitWorktreeFingerprint,
-    after: &GitWorktreeFingerprint,
-) -> Result<bool, DispatchError> {
-    // Linked-worktree shipment owns clean base fast-forwards; the provider
-    // boundary still rejects primary rewrites. Primary dirt and pathname
-    // overlap do not establish candidate-versus-target interference; the later
-    // fetched-base rebase owns that decision.
-    if before.head == after.head || before.branch != after.branch {
-        return Ok(false);
+/// The registered primary checkout's baseline [ORB-19177]: the workspace's
+/// `workflow.base_branch` and that branch's tip when the guard captured the
+/// primary.
+///
+/// The primary is normally on its base branch, and then the tip is its HEAD.
+/// An operator may leave it on another branch (a hand hotfix, a detached
+/// HEAD); that branch never becomes the run's base. The guard admits such a
+/// primary by design and logs why, it stays benign while it does not move,
+/// and the only move it accepts is back onto the base branch.
+#[derive(Debug, Clone)]
+pub(super) struct PrimaryBaseline {
+    /// `workflow.base_branch` as a local branch name.
+    pub(super) base_branch: String,
+    /// The base branch's commit at capture; `None` when the primary has no
+    /// such local branch, so no move can be proven onto it.
+    pub(super) base_tip: Option<String>,
+}
+
+impl PrimaryBaseline {
+    fn capture(
+        root: &Path,
+        before: &GitWorktreeFingerprint,
+        base_branch: &str,
+    ) -> Result<Self, DispatchError> {
+        let base_branch = local_branch_name(base_branch).to_string();
+        let base_tip = if base_branch.is_empty() {
+            None
+        } else if before.branch.as_deref() == Some(base_branch.as_str()) {
+            Some(before.head.clone())
+        } else {
+            let tip = git_output_raw(
+                root,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{base_branch}^{{commit}}"),
+                ],
+            )?;
+            tip.success
+                .then(|| String::from_utf8_lossy(&tip.stdout).trim().to_string())
+                .filter(|tip| !tip.is_empty())
+        };
+        Ok(Self {
+            base_branch,
+            base_tip,
+        })
     }
-    Ok(git_output_raw(
-        root,
-        &["merge-base", "--is-ancestor", &before.head, &after.head],
-    )?
-    .success)
+
+    fn holds(&self, fingerprint: &GitWorktreeFingerprint) -> bool {
+        fingerprint.branch.as_deref() == Some(self.base_branch.as_str())
+    }
+
+    /// Why a primary captured as `before` is not on its base branch, for the
+    /// operator; `None` when it is.
+    fn off_base_reason(&self, before: &GitWorktreeFingerprint) -> Option<String> {
+        if self.holds(before) {
+            return None;
+        }
+        let checked_out = before.branch.as_deref().map_or_else(
+            || "a detached HEAD".to_string(),
+            |branch| format!("`{branch}`"),
+        );
+        let judged = match &self.base_tip {
+            Some(tip) => format!(
+                "only a clean return to `{}` at or ahead of {tip} is a benign move",
+                self.base_branch
+            ),
+            None => format!(
+                "it has no local `{}` branch, so any primary move fails closed",
+                self.base_branch
+            ),
+        };
+        Some(format!(
+            "the registered primary checkout is on {checked_out}, not workflow.base_branch `{}`; \
+             the run's baseline stays `{}`: {judged}. Return the primary to `{}` to clear this",
+            self.base_branch, self.base_branch, self.base_branch
+        ))
+    }
+
+    /// Whether the primary moved from `before` to `after` only onto the base
+    /// branch at or ahead of its tip at capture.
+    ///
+    /// Linked-worktree shipment owns clean base fast-forwards; the provider
+    /// boundary still rejects primary rewrites. On the same branch, primary
+    /// dirt and pathname overlap do not establish candidate-versus-target
+    /// interference; the later fetched-base rebase owns that decision. A
+    /// return from another branch must also leave the primary clean apart
+    /// from `.orbit/` record-store dirt disjoint from the run, because a
+    /// checkout carries its dirt across the switch.
+    fn admits_move(
+        &self,
+        root: &Path,
+        before: &GitWorktreeFingerprint,
+        after: &GitWorktreeFingerprint,
+        conflicting_paths: &[String],
+    ) -> Result<bool, DispatchError> {
+        if before.head == after.head && before.branch == after.branch {
+            return Ok(false);
+        }
+        let Some(tip) = self.base_tip.as_deref() else {
+            return Ok(false);
+        };
+        if !self.holds(after) {
+            return Ok(false);
+        }
+        if before.branch != after.branch
+            && (!conflicting_paths.is_empty()
+                || !after
+                    .dirty_paths
+                    .iter()
+                    .all(|path| path.starts_with(ORBIT_RECORD_STORE_PREFIX)))
+        {
+            return Ok(false);
+        }
+        if after.head == tip {
+            return Ok(true);
+        }
+        Ok(git_output_raw(root, &["merge-base", "--is-ancestor", tip, &after.head])?.success)
+    }
+
+    fn drift_reason(&self, before: &GitWorktreeFingerprint) -> String {
+        let reason = format!(
+            "the registered primary checkout changed without a clean move onto workflow.base_branch \
+             `{}` at or ahead of its tip at run start",
+            self.base_branch
+        );
+        match self.off_base_reason(before) {
+            Some(off_base) => format!("{reason}; at run start {off_base}"),
+            None => reason,
+        }
+    }
+}
+
+/// `workflow.base_branch` as a local branch name: `origin/main` and
+/// `refs/heads/main` both name `main`.
+fn local_branch_name(base_branch: &str) -> &str {
+    let branch = base_branch.trim();
+    let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    branch.strip_prefix("origin/").unwrap_or(branch).trim()
 }
 
 /// Paths whose working-state identity in a checkout actually changed, judged

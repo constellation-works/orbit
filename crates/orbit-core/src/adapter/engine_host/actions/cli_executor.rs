@@ -3,6 +3,7 @@ use orbit_types::workflow::ExecutorType;
 use orbit_types::workflow::activity_job::{Provider, ProviderEntryPoint};
 
 use crate::OrbitRuntime;
+use crate::application::executor::{declared_image_input, declared_inspection_args};
 
 /// Map a v2 provider name to the CLI executor that dispatches it. Env-var
 /// overrides (`ORBIT_V2_CLI_<PROVIDER>`) let smokes substitute a fixture
@@ -47,6 +48,8 @@ pub(crate) fn resolve_cli_executor(
 
         return Ok(ResolvedCliExecutor {
             command,
+            inspection_args: declared_inspection_args(Some(&def), provider),
+            image_input: declared_image_input(Some(&def), provider),
             args: def.args,
         });
     }
@@ -55,6 +58,8 @@ pub(crate) fn resolve_cli_executor(
         return Ok(ResolvedCliExecutor {
             command,
             args: Vec::new(),
+            inspection_args: declared_inspection_args(None, provider),
+            image_input: declared_image_input(None, provider),
         });
     }
 
@@ -71,6 +76,8 @@ pub(crate) fn resolve_cli_executor(
             Ok(ResolvedCliExecutor {
                 command: parsed.as_str().to_string(),
                 args: Vec::new(),
+                inspection_args: declared_inspection_args(None, provider),
+                image_input: declared_image_input(None, provider),
             })
         }
         Ok(Provider::OpenaiCompat) => Err(DispatchError::CliInvocationFailed(

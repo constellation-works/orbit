@@ -2,8 +2,10 @@
 title: Federated MCP — Overview
 owner: grok
 last_updated: 2026-08-29
-last_validated: 2026-10-19
+last_validated: 2026-10-29
 status: Draft
+stage: shipped
+next: "—"
 feature: federated-mcp
 doc_role: overview
 type: design

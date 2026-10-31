@@ -66,5 +66,5 @@ cargo="${CARGO:-cargo}"
 "$cargo" test -p orbit-core --test sandbox_profile_goldens
 
 "$cargo" test -p orbit-store --lib \
-  driver::sqlite::migration::tests::ledger::store_schema_prefix_goldens -- --exact \
-  driver::sqlite::migration::tests::ledger::task_registry_schema_prefix_goldens
+  driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens -- --exact \
+  driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens

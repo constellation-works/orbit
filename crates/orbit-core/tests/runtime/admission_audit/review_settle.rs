@@ -6,8 +6,8 @@ use std::fs;
 use chrono::{Duration, Utc};
 use orbit_engine::DispatchError;
 use orbit_types::workflow::{
-    FindingDisposition, REVIEW_GATE_ARTIFACT, ReviewAttemptState, ReviewFinding, ReviewGateRefusal,
-    ReviewVerdict,
+    FindingDisposition, NegativeControl, REVIEW_GATE_ARTIFACT, ReviewAttemptState, ReviewFinding,
+    ReviewGateRefusal, ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 use serde_json::json;
 
@@ -613,6 +613,86 @@ fn a_repaired_target_restores_only_on_the_attempts_own_repair() {
     }
 }
 
+/// [ORB-18227] A failing `pre_fix` reproduction of the required check runs
+/// on a different tree (the base, or the candidate with the fix reverted),
+/// so it never contradicts the passing `required` record on the final
+/// candidate, even when both name the same command.
+fn a_pre_fix_reproduction_of_the_required_check_settles_accept() {
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    let mut reported = report(attempt_id, ReviewVerdict::Accept, false);
+    reported.validation.push(ReviewValidation {
+        id: None,
+        command: "make ci-fast".to_string(),
+        outcome: ValidationOutcome::Failed,
+        role: ValidationRole::ExpectedFailure,
+        note: Some("reproduces on the base with the fix reverted".to_string()),
+        check: None,
+        control: Some(NegativeControl::PreFix),
+        sources: vec!["src.txt".to_string()],
+        mutation_target: Vec::new(),
+        repaired_blob: Default::default(),
+        deferred: Vec::new(),
+        baseline: None,
+    });
+    write_report(&gated.fixture.runtime, &gated.task_id, &reported);
+
+    let settled = gated
+        .settle(&admission)
+        .expect("a pre_fix reproduction of the required check settles accept");
+    assert_eq!(settled["verdict"], "accept");
+    assert_eq!(settled["gate"], "passed");
+    assert!(
+        !settled.to_string().contains("validation_contradicted"),
+        "a reverted-fix reproduction is evidence about another tree: {settled}"
+    );
+    let certificate = gated.certificate();
+    assert_eq!(certificate.verdict, ReviewVerdict::Accept);
+    assert!(certificate.validation_complete);
+}
+
+/// [ORB-18227] A failing candidate-side control that shares its check with
+/// a passing `required` record is a genuine contradiction on the same final
+/// candidate tree and still settles `incomplete` with
+/// `validation_contradicted`.
+fn a_candidate_side_control_sharing_the_required_check_settles_validation_contradicted() {
+    let gated = gated_fixture(BEFORE_PR);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt");
+    let mut reported = report(attempt_id, ReviewVerdict::Accept, false);
+    reported.validation.push(ReviewValidation {
+        id: None,
+        command: "make ci-fast".to_string(),
+        outcome: ValidationOutcome::Failed,
+        role: ValidationRole::ExpectedFailure,
+        note: Some("the retired assertion still fails on the candidate".to_string()),
+        check: None,
+        control: Some(NegativeControl::SupersededAssertion),
+        sources: vec!["src.txt".to_string()],
+        mutation_target: Vec::new(),
+        repaired_blob: Default::default(),
+        deferred: Vec::new(),
+        baseline: None,
+    });
+    write_report(&gated.fixture.runtime, &gated.task_id, &reported);
+
+    let error = gated
+        .settle(&admission)
+        .expect_err("same-tree pass and fail contradicts");
+    assert!(
+        error.to_string().contains("validation_contradicted"),
+        "a candidate-side control sharing the required check blocks: {error}"
+    );
+    let certificate = gated.certificate();
+    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
+    let escalation = certificate.escalation.unwrap_or_default();
+    assert!(
+        escalation.contains("validation_contradicted"),
+        "the certificate names the contradiction: {escalation}"
+    );
+}
+
 /// A repair outside the admitted selectors widens them and changes the
 /// task-meaning digest. Consumption stays the runtime of the attempt that
 /// was reserved under the admission digest.
@@ -685,5 +765,7 @@ crate::scenario_table!(
     no_findings_accepts_without_a_reviewer_commit,
     an_unfixable_finding_rejects_and_preserves_both_commits,
     a_counterfactual_mutation_of_an_out_of_scope_file_settles_by_its_restoration,
-    a_repaired_target_restores_only_on_the_attempts_own_repair
+    a_repaired_target_restores_only_on_the_attempts_own_repair,
+    a_pre_fix_reproduction_of_the_required_check_settles_accept,
+    a_candidate_side_control_sharing_the_required_check_settles_validation_contradicted
 );

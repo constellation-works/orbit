@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 
 use super::super::source::SourceSnapshot;
 use super::admission::PreparedTaskSnapshot;
+use crate::application::task::CiSweepFilingEvidence;
 
 /// One input field, read without failing the parse.
 #[derive(Default)]
@@ -151,7 +152,7 @@ pub(super) struct ApplyInput {
     results: Field<Vec<Record<PartitionResult>>>,
     prior_applied_count: Field<u64>,
     carried_task_outcomes: Field<Vec<Value>>,
-    ci_sweep_filing: Option<Record<CiSweepFiling>>,
+    ci_sweep_filing: Option<CiSweepFilingEvidence>,
     promotion_authorized: Field<bool>,
     drain_promotion: Option<Value>,
     run_id: Field<String>,
@@ -197,6 +198,7 @@ pub(super) struct PreparedTask {
     material_components: Field<Option<Map<String, Value>>>,
     history_len: Field<Option<usize>>,
     context_creation_identity: Field<Option<String>>,
+    explore_brief_requested: Field<Option<bool>>,
 }
 
 /// Prepare's exclusions: echoed verbatim in the report, and read for the
@@ -239,6 +241,11 @@ pub(super) struct ExcludedTask {
 #[serde(default)]
 pub(super) struct PartitionResult {
     pub(super) partition_index: Field<u64>,
+    /// The `HEAD` and `HEAD^{tree}` the pilot observed in its inspection
+    /// checkout: the proof it read the pinned source, checked against the
+    /// prepared revision in [`super::partition`]. Absent reads as missing.
+    pub(super) observed_revision: Field<String>,
+    pub(super) observed_tree: Field<String>,
     pub(super) task_ids: Field<Strings>,
     /// Each assessment stays JSON for the validators that read it.
     pub(super) tasks: Field<Vec<Record<AssessedTask>>>,
@@ -247,12 +254,6 @@ pub(super) struct PartitionResult {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(super) struct AssessedTask {
-    pub(super) task_id: Field<String>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(super) struct CiSweepFiling {
     pub(super) task_id: Field<String>,
 }
 
@@ -286,7 +287,7 @@ pub(super) struct PreparedEcho {
 
 /// What the caller supplied to authorize promotion.
 pub(super) struct AuthorityInput {
-    pub(super) ci_sweep_filing: Option<Record<CiSweepFiling>>,
+    pub(super) ci_sweep_filing: Option<CiSweepFilingEvidence>,
     pub(super) promotion_authorized: Field<bool>,
     pub(super) drain_promotion: Option<Value>,
     pub(super) run_id: Option<String>,
@@ -495,6 +496,12 @@ impl PreparedTask {
             material_components,
             history_len,
             context_creation_identity,
+            // Absent on a payload prepared before briefs, and tolerated when
+            // malformed: a brief never refuses its assessment.
+            explore_brief_requested: matches!(
+                self.explore_brief_requested,
+                Field::Present(Some(true))
+            ),
         };
         Ok((task_id.to_string(), snapshot))
     }

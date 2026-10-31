@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
@@ -18,11 +17,17 @@ use super::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_comment_from_row, task_history_from_events};
 
+mod retention;
+
 /// The in-section re-check of assessment-scoped holds a caller gives
 /// [`TaskCommitBoundary::admit_task`]: the candidate with the comments and
 /// history read with it, to the hold's diagnostic, or `None` when it is free.
 pub type ValidationHold<'a> =
     dyn Fn(&Task, &[TaskComment], &[TaskHistoryEntry]) -> Result<Option<String>, OrbitError> + 'a;
+
+/// Owner callback invoked only for the selected task, before claim persistence.
+pub type AdmissionGuidanceCapture<'a> =
+    dyn Fn(&Task) -> Result<AdmissionTaskGuidance, OrbitError> + 'a;
 
 pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
 const CLAIM_KIND: &str = "distributed-execution-claim-v1";
@@ -73,10 +78,6 @@ pub(super) fn canonical_footprint(
         .collect::<Result<BTreeSet<_>, _>>()
         .map(|files| files.into_iter().collect())
 }
-pub(super) fn overlaps(left: &[String], right: &[String]) -> bool {
-    left.iter()
-        .any(|a| right.iter().any(|b| workspace_relative_paths_overlap(a, b)))
-}
 impl TaskCommitBoundary {
     pub(crate) fn guard_ordinary_footprint(
         &self,
@@ -98,8 +99,10 @@ impl TaskCommitBoundary {
             return Ok(());
         } // legacy no-context chore semantics
         let canonical = canonical_footprint(files, &checkout.repo_root)?;
+        let lock_modes = self.store.footprint_lock_modes();
         if let Some(conflicting_claim) = claims.iter().find(|claim| {
-            claim.phase.protects_footprint() && overlaps(&canonical, &claim.footprint)
+            claim.phase.protects_footprint()
+                && lock_modes.footprints_block(&canonical, &claim.footprint)
         }) {
             return Err(OrbitError::InvalidInput(format!(
                 "task footprint overlaps an execution claim (task {}, run {})",
@@ -123,6 +126,7 @@ impl TaskCommitBoundary {
         &self,
         files: &[String],
     ) -> Result<Vec<TaskLockConflict>, OrbitError> {
+        let lock_modes = self.store.footprint_lock_modes();
         Ok(self
             .execution_claims()?
             .iter()
@@ -130,7 +134,9 @@ impl TaskCommitBoundary {
             .flat_map(|claim| {
                 files
                     .iter()
-                    .filter(|file| overlaps(std::slice::from_ref(*file), &claim.footprint))
+                    .filter(|file| {
+                        lock_modes.footprints_block(std::slice::from_ref(*file), &claim.footprint)
+                    })
                     .map(|file| TaskLockConflict {
                         file: file.clone(),
                         held_by: TaskLockHolder::Task,
@@ -276,6 +282,46 @@ impl TaskCommitBoundary {
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
+        self.admit_task_with_guidance(
+            identity,
+            request,
+            ordering,
+            owner_version,
+            repo_root,
+            orbit_dir,
+            admission_holds,
+            held,
+            validation_hold,
+            &|task| {
+                Ok(AdmissionTaskGuidance {
+                    experiments: orbit_types::workflow::CapturedExperiments {
+                        task_id: task.id.clone(),
+                        assignments: Vec::new(),
+                    },
+                    explore_brief: None,
+                    artifacts: Vec::new(),
+                    visual_review: None,
+                })
+            },
+        )
+    }
+
+    /// Admission with the owner's task-guidance callback, before the
+    /// receipt is written. The callback must not acquire task admission locks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_task_with_guidance(
+        &self,
+        identity: &AdmissionIdentity,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+        owner_version: &str,
+        repo_root: &Path,
+        orbit_dir: &Path,
+        admission_holds: &BTreeMap<String, String>,
+        held: &BTreeMap<String, String>,
+        validation_hold: &ValidationHold<'_>,
+        guidance_capture: &AdmissionGuidanceCapture<'_>,
+    ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
         let mut snapshot = self.admission_snapshot(ordering)?;
         if ordering.repairs_only {
@@ -299,6 +345,7 @@ impl TaskCommitBoundary {
                 admission_holds,
                 held,
                 validation_hold,
+                guidance_capture,
                 ordering,
                 census.as_ref(),
                 reach,
@@ -322,6 +369,7 @@ impl TaskCommitBoundary {
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
+        guidance_capture: &AdmissionGuidanceCapture<'_>,
         ordering: &AdmissionOrdering,
         census: Option<&ExecutorCensusEntry>,
         reach: DependencyReach,
@@ -360,6 +408,7 @@ impl TaskCommitBoundary {
             in_flight: &in_flight.footprints,
             reservations: &reservations,
             owner_wave: &owner_wave,
+            lock_modes: self.store.footprint_lock_modes(),
             executor_host_os,
             census,
         };
@@ -374,6 +423,7 @@ impl TaskCommitBoundary {
             crew_unavailable: Vec::new(),
             os_unavailable: Vec::new(),
             browser_kit_unavailable: Vec::new(),
+            labels_unavailable: Vec::new(),
             capacity_unavailable: Vec::new(),
             queue_depth: snapshot
                 .backlog
@@ -382,12 +432,22 @@ impl TaskCommitBoundary {
                 .count(),
             gates: ordering.gates.clone(),
             tag_instructions: ordering.tag_instructions.clone(),
+            experiments: None,
+            explore_brief: None,
+            visual_review: None,
             affinity: None,
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so
         // it is offered before any backlog candidate [ORB-14261].
-        if self.admit_repair_locked(&screen, &key, orbit_dir, &in_flight.tasks, &mut receipt)? {
+        if self.admit_repair_locked(
+            &screen,
+            &key,
+            orbit_dir,
+            &in_flight.tasks,
+            &mut receipt,
+            guidance_capture,
+        )? {
             return self
                 .lookup_admission(identity, &request.request_id)
                 .map(Some);
@@ -452,6 +512,14 @@ impl TaskCommitBoundary {
                 .as_ref()
                 .filter(|offer| offer.fresh.is_none())
                 .map(|offer| offer.candidate.clone());
+            let guidance = guidance_capture(&task)?;
+            receipt.experiments = Some(guidance.experiments);
+            receipt.explore_brief = guidance.explore_brief;
+            let guidance_evidence = ClaimEvidence {
+                artifacts: guidance.artifacts,
+                ..ClaimEvidence::default()
+            };
+            receipt.visual_review = guidance.visual_review;
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
                 actor: receipt.machine_id.clone(),
@@ -518,6 +586,7 @@ impl TaskCommitBoundary {
                         title: task.title.clone(),
                         complexity: task.complexity,
                         crew: task.crew.clone(),
+                        crew_source: task.crew_source.clone(),
                         context_files: footprint.clone(),
                         resume_candidate: resume_candidate.clone(),
                     });
@@ -538,7 +607,7 @@ impl TaskCommitBoundary {
                     ])
                 },
                 &effects,
-                &Default::default(),
+                &guidance_evidence,
                 None,
             )?;
             if !matches!(committed, TaskCoordinationCommitOutcome::Committed(_)) {
@@ -568,6 +637,11 @@ impl TaskCommitBoundary {
     /// Upsert `entry` as its machine's census row [ORB-17304].
     pub fn record_executor_census(&self, entry: &ExecutorCensusEntry) -> Result<(), OrbitError> {
         self.store.upsert_executor_census(&self.workspace_id, entry)
+    }
+
+    /// Every census row of this workspace, however old.
+    pub fn recorded_executor_census(&self) -> Result<Vec<ExecutorCensusEntry>, OrbitError> {
+        self.store.executor_census_rows(&self.workspace_id)
     }
 
     /// The census rows live at `now`: each seen within
@@ -602,25 +676,6 @@ impl TaskCommitBoundary {
             );
         }
         Ok(live)
-    }
-
-    pub fn admission_storage_usage(&self) -> Result<AdmissionStorageUsage, OrbitError> {
-        self.enter_ordinary(|| {
-            let mut usage = AdmissionStorageUsage::default();
-            for row in self.coordination_rows(RECEIPT_KIND)? {
-                match decode::<StoredReceipt>(&row.payload_json)? {
-                    StoredReceipt::Full { .. } => {
-                        usage.receipts += 1;
-                        usage.receipt_bytes += row.payload_json.len() as u64;
-                    }
-                    StoredReceipt::Tombstone { .. } => {
-                        usage.tombstones += 1;
-                        usage.tombstone_bytes += row.payload_json.len() as u64;
-                    }
-                }
-            }
-            Ok(usage)
-        })
     }
 }
 
@@ -692,6 +747,13 @@ pub fn admission_refusal(
         && !(request.review_gate && request.ship.mode == "pr")
     {
         return Some(AdmissionRefusal::BeforePrUnsupported);
+    }
+    // An active selective policy is refused to an executor that cannot
+    // evaluate it on the PR route: dropping it would deliver unreviewed.
+    if request.ship.selective_policy().is_some()
+        && !(request.selective_review && request.review_gate && request.ship.mode == "pr")
+    {
+        return Some(AdmissionRefusal::SelectiveUnsupported);
     }
     None
 }

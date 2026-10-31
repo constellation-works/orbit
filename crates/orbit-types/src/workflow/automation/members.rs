@@ -21,6 +21,41 @@ pub enum StateTriggerKind {
     ExecutionFailed,
     /// A review-filed bug finding that carries no verification verdict yet.
     FindingUnverified,
+    /// A `proposed` task whose latest applied task-pilot assessment holds
+    /// promotion on warning findings, not yet triaged for that assessment.
+    PilotWarningsHeld,
+    /// A `blocked` task whose current block episode awaits triage: final
+    /// recovery escalated it, or it has no decision past the backstop's age
+    /// limit, and nobody outside Orbit's automation touched it since.
+    BlockEscalated,
+    /// A task with an open decision request that has not yet been notified:
+    /// one member per open request, fingerprinted by that request, so each
+    /// request (and the binding it was raised against) is notified once
+    /// and the member settles when the request leaves `open`.
+    DecisionRequested,
+}
+
+impl StateTriggerKind {
+    /// The job a definition of this kind must target.
+    ///
+    /// `ExecutionFailed` still names `task_triage_pipeline`, which this Orbit
+    /// no longer ships: terminal failed-run triage is retired, so an existing
+    /// definition keeps validating and is skipped as retired by the routine
+    /// loader (`RETIRED_ROUTINE_JOBS`) instead of failing on every clock tick.
+    pub fn job_name(self) -> &'static str {
+        match self {
+            StateTriggerKind::PreparationEligible => "task_pilot_pipeline",
+            StateTriggerKind::ExecutionFailed => "task_triage_pipeline",
+            StateTriggerKind::FindingUnverified => "finding_verification_pipeline",
+            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
+                "escalation_triage_pipeline"
+            }
+            // The notification job the decision channel's transport plugin
+            // ships in a later slice; a state routine on this kind targets
+            // that job by this canonical name.
+            StateTriggerKind::DecisionRequested => "decision_request_pipeline",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,7 +94,7 @@ pub struct StateTrigger {
 /// The same resolved value gates observation, admission, promotion and the
 /// material fingerprint, so a changed predicate invalidates stale
 /// assessments instead of silently keeping them fresh.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct PreparationEligibility {
     /// Statuses whose tasks carry material worth fingerprinting; a non-empty
@@ -159,7 +194,19 @@ impl PreparationEligibility {
 }
 
 /// One task input the material fingerprint can hash [ORB-13638].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MaterialField {
     Title,
@@ -193,7 +240,9 @@ impl MaterialField {
 }
 
 /// How the observed branch head bears on an accepted assessment.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceSensitivity {
     /// The head is evidence only; moving it invalidates nothing.
@@ -238,7 +287,7 @@ impl FreshnessOverride {
 
 /// The resolved inputs whose change makes an accepted task-pilot assessment
 /// stale. Eligibility still decides whether a task is fingerprinted at all.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PreparationFreshness {
     pub material_fields: Vec<MaterialField>,
     pub source_sensitivity: SourceSensitivity,
@@ -346,18 +395,10 @@ impl StateTrigger {
             .max(1)
     }
 
-    /// The job a definition of this kind must target.
-    ///
-    /// `ExecutionFailed` still names `task_triage_pipeline`, which this Orbit
-    /// no longer ships: terminal failed-run triage is retired, so an existing
-    /// definition keeps validating and is skipped as retired by the routine
-    /// loader (`RETIRED_ROUTINE_JOBS`) instead of failing on every clock tick.
+    /// The job a definition of this kind must target; see
+    /// [`StateTriggerKind::job_name`].
     pub fn job_name(&self) -> &'static str {
-        match self.kind {
-            StateTriggerKind::PreparationEligible => "task_pilot_pipeline",
-            StateTriggerKind::ExecutionFailed => "task_triage_pipeline",
-            StateTriggerKind::FindingUnverified => "finding_verification_pipeline",
-        }
+        self.kind.job_name()
     }
 }
 

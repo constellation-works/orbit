@@ -66,7 +66,7 @@ help:
 	@echo "  make uninstall    Remove installed binary"
 	@echo "  make clean        Clean build artifacts"
 	@echo "  make cleanup-branches  Force-remove worktrees and branches except main/agent-main (DESTRUCTIVE)"
-	@echo "  make build-budget-test   Test cross-worktree build admission without compiling"
+	@echo "  make build-budget-test   Test cross-worktree build admission and bench workdir ownership without compiling"
 	@echo "  make build-budget-bench  Compare current and budgeted concurrent Cargo checks"
 	@echo "  make compiler-cache-status  Show whether the opt-in rustc cache would enable"
 	@echo "  make compiler-cache-setup   Create ~/.orbit/cache/compiler (SETUP_FLAGS=--install to fetch sccache)"
@@ -248,6 +248,7 @@ cleanup-branches:
 # Cooperative host-wide build admission. See docs/runbooks/build-budget.md.
 build-budget-test:
 	./scripts/test-build-budget.sh
+	./scripts/test-bench-build-budget.py
 
 build-budget-bench:
 	./scripts/bench-build-budget.sh

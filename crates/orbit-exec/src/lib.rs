@@ -68,8 +68,11 @@ mod validation_env;
 pub use build_sandbox::{
     BUILD_FETCH_PHASE_SUPPORTED, BuildLog, BuildPhaseEnd, BuildPhaseNetwork, BuildPhaseRequest,
     BuildSandboxProbe, BuildSandboxSpec, PLUGIN_BUILD_DIR_CAP_BYTES, PLUGIN_BUILD_FETCH_PORT,
-    PLUGIN_BUILD_LOG_CAP_BYTES, compile_linux_build_argv, compile_macos_build_profile,
-    probe_build_sandbox, run_build_phase,
+    PLUGIN_BUILD_LOG_CAP_BYTES, SCRIPT_LOG_CAP_BYTES, SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS,
+    SCRIPT_STDOUT_CAP_BYTES, SCRIPT_TERMINATION_GRACE, ScriptRunEnd, ScriptSandboxRequest,
+    ScriptSandboxRun, ScriptSandboxSpec, compile_linux_build_argv, compile_linux_script_argv,
+    compile_macos_build_profile, probe_build_sandbox, probe_script_sandbox, run_build_phase,
+    run_script_sandboxed,
 };
 pub use credential_paths::default_credential_read_denies;
 pub use linux_landlock::{
@@ -89,6 +92,8 @@ pub use linux_sandbox::{
     linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
     probe_bwrap, probe_bwrap_fresh, report_bwrap_deferral, spawn_under_linux_bwrap,
 };
+#[cfg(feature = "test-support")]
+pub use macos_sandbox::force_seatbelt_refusal_for_test;
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest, SandboxExecApplyProbe,
     append_macos_file_mask, append_macos_network_access, append_macos_read_boundary,
@@ -97,7 +102,8 @@ pub use macos_sandbox::{
     sandbox_exec_available, sandbox_exec_path, sandbox_exec_program_for_audit,
     sandbox_exec_unavailable_message, seatbelt_deferral_notice, spawn_under_macos_sandbox,
 };
-pub use path_identity::{lexical_normalize, physical_with_missing_tail};
+// Compatibility paths; the definitions live in `orbit_common::fs::physical`.
+pub use orbit_common::fs::physical::{lexical_normalize, physical_with_missing_tail};
 pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{

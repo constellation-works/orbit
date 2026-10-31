@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 
@@ -75,6 +76,18 @@ MALFORMED_YAML = """extensions:
     data:
       - [
           "crate::sanitize",
+"""
+
+MALFORMED_NESTED_SEQUENCE_PACK = """name: constellation-works/orbit-rust-path-validation
+version: 0.0.1
+library: true
+
+extensionTargets:
+  codeql/rust-all: "*"
+
+dataExtensions:
+  - foo: bar
+    - baz
 """
 
 UNSUPPORTED_PREDICATE = """extensions:
@@ -168,7 +181,9 @@ def release_row(callable_path=RELEASE_CALLABLE, output=RELEASE_OUTPUT, kind="tra
 
 class CodeqlExtensionSchemaTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="orbit-codeql-schema-")
+        scratch = REPO_ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="orbit-codeql-schema-", dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
@@ -187,6 +202,37 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.write_pack(TWO_VALID_ROWS)
         self.assertEqual(self.errors(), [])
 
+    def test_flow_separators_through_cli(self):
+        data_file = self.write_pack(TWO_VALID_ROWS)
+        valid = '''extensions: [{addsTo: {pack: "codeql/rust-all", extensible: "barrierModel",}, data: [["orbit_store::driver::file::friction_store::validated_friction_root", "ReturnValue", "path-injection", "manual",],],},]
+'''
+        cases = {
+            "valid nesting and trailing commas": (valid, None),
+            "missing sequence comma": (valid.replace('"path-injection", "manual"',
+                                                       '"path-injection" "manual"'), "flow sequence"),
+            "repeated sequence comma": (valid.replace('"path-injection", "manual"',
+                                                        '"path-injection",, "manual"'), "flow sequence"),
+            "leading sequence comma": (valid.replace('data: [[', 'data: [,['), "flow sequence"),
+            "missing mapping comma": (valid.replace('"codeql/rust-all", extensible:',
+                                                      '"codeql/rust-all" extensible:'), "flow mapping"),
+            "repeated mapping comma": (valid.replace('"codeql/rust-all", extensible:',
+                                                       '"codeql/rust-all",, extensible:'), "flow mapping"),
+            "leading mapping comma": (valid.replace('addsTo: {pack:', 'addsTo: {,pack:'), "flow mapping"),
+        }
+        for label, (source, diagnostic) in cases.items():
+            with self.subTest(case=label):
+                data_file.write_text(source, encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, str(CHECKER_PATH), "--root", str(self.root)],
+                    capture_output=True, text=True, timeout=120)
+                if diagnostic is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("malformed YAML", result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertIn(data_file.relative_to(self.root).as_posix(), result.stderr)
+
     def test_five_field_merged_barrier_reports_file_predicate_and_row(self):
         data_file = self.write_pack(FIVE_FIELD_MERGED_ROW)
         errors = self.errors()
@@ -204,6 +250,21 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("malformed YAML", errors[0])
         self.assertIn(data_file.relative_to(self.root).as_posix(), errors[0])
+
+    def test_malformed_nested_sequence_fails_clearly(self):
+        # A sequence item nested under a "- key: value" mapping used to stall
+        # the parser without advancing; the guard must refuse it promptly
+        # with a path/location diagnostic (ORB-19558).
+        pack_dir = self.root / ".github/codeql/extensions/orbit-rust-path-validation"
+        pack_dir.mkdir(parents=True)
+        pack_file = pack_dir / "codeql-pack.yml"
+        pack_file.write_text(MALFORMED_NESTED_SEQUENCE_PACK, encoding="utf-8")
+        (pack_dir / "path-validation.yaml").write_text(TWO_VALID_ROWS, encoding="utf-8")
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("malformed YAML", errors[0])
+        self.assertIn(pack_file.relative_to(self.root).as_posix(), errors[0])
+        self.assertIn("line 10", errors[0])
 
     def test_unsupported_predicate_fails_clearly(self):
         self.write_pack(UNSUPPORTED_PREDICATE)
@@ -255,8 +316,8 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
 
     def test_generated_style_yaml_discovery_includes_extension(self):
         data_file = self.write_pack(TWO_VALID_ROWS)
-        discovered = list(data_file.parent.rglob("*.yaml"))
-        self.assertEqual(discovered, [data_file])
+        discovered = CHECK.discover_packs(self.root)
+        self.assertEqual(discovered, [data_file.parent / CHECK.PACK_FILENAME])
         self.assertEqual(self.errors(), [])
 
     def test_yml_extension_fails_generated_discovery_gate(self):

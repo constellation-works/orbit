@@ -23,8 +23,18 @@ use super::process::execute_with_transient_retry;
 /// Largest failed-job log excerpt one read returns.
 const MAX_JOB_LOG_BYTES: usize = 64 * 1024;
 
+// Project inside gh, before the process supervisor captures stdout. A page of
+// repository metadata, commit messages or job-step timestamps can exceed its
+// normal capture bound. Keep the original 100-row window and total_count so
+// exact-tip completeness checks and bounded ancestry selection stay unchanged.
+// Do not default a missing list to []: a malformed read must still fail.
+const COMMIT_RUN_FIELDS: &str = "{total_count, workflow_runs: (.workflow_runs | if type != \"array\" then error(\"workflow_runs must be an array\") else map({id, name, workflow_id, repository: {id: .repository.id, full_name: .repository.full_name}, status, conclusion, run_started_at, run_attempt, event, head_branch, head_sha, pull_requests}) end)}";
+const RUN_JOB_FIELDS: &str = "{total_count, jobs: (.jobs | if type != \"array\" then error(\"jobs must be an array\") else map({id, name, status, conclusion, started_at, completed_at, steps: (.steps | if type == \"array\" then map({name, number, status, conclusion}) else . end)}) end)}";
+
 /// Every job of the newest attempt of each workflow run GitHub recorded for
-/// `commit`, with its conclusion and first failed step.
+/// `commit`, with its conclusion and first failed step. Base ancestry reads
+/// retain completed successful pushes on the accepted base or its descendants;
+/// the candidate rerun supplies the other half of attribution evidence.
 pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
     let commit = required_string(input, "commit")?;
     let workspace_path = Path::new(required_string(input, "workspace_path")?);
@@ -33,19 +43,29 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             "private automation VCS commit jobs requires a full commit id, not '{commit}'"
         )));
     }
-    // Auto-fix compares against the latest push run of each workflow on the
-    // exact base tip, never an older green run or a PR run of the same commit.
+    // Exact-tip reads retain the latest push per workflow. Untouched-file
+    // evidence reads retain the latest push per workflow and commit in the
+    // accepted base's ancestry range, including superseded base tips.
     let push_branch = input.get("latest_push_branch").and_then(Value::as_str);
+    let base_push_tip = input.get("base_push_tip").and_then(Value::as_str);
+    if let Some(tip) = base_push_tip
+        && (push_branch.is_none() || !valid_expected_remote_sha(Some(tip)))
+    {
+        return Err(OrbitError::InvalidInput(
+            "base push history requires a branch and full tip commit id".into(),
+        ));
+    }
     let mut args = vec![
         "api".to_string(),
         "--method".to_string(),
         "GET".to_string(),
         "repos/{owner}/{repo}/actions/runs".to_string(),
         "-F".to_string(),
-        format!("head_sha={commit}"),
-        "-F".to_string(),
         "per_page=100".to_string(),
     ];
+    if base_push_tip.is_none() {
+        args.extend(["-F".into(), format!("head_sha={commit}")]);
+    }
     if let Some(branch) = push_branch {
         args.extend([
             "-F".into(),
@@ -54,23 +74,33 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             format!("branch={branch}"),
         ]);
     }
-    let runs = gh_json(args, workspace_path, "commit runs")?;
+    let runs = projected_ci_json(args, workspace_path, "commit runs", COMMIT_RUN_FIELDS)?;
     let listed = runs["workflow_runs"]
         .as_array()
         .ok_or_else(|| OrbitError::Execution("commit runs carried no workflow run list".into()))?;
     let mut selected: Vec<&Value> = listed.iter().collect();
     if let Some(branch) = push_branch {
-        if runs["total_count"]
-            .as_u64()
-            .is_none_or(|total| total > listed.len() as u64)
+        if base_push_tip.is_none()
+            && runs["total_count"]
+                .as_u64()
+                .is_none_or(|total| total > listed.len() as u64)
         {
             return Err(OrbitError::Execution(
                 "base push runs were incomplete".into(),
             ));
         }
-        let mut newest = BTreeMap::<u64, &Value>::new();
+        let mut newest = BTreeMap::<(u64, &str), &Value>::new();
         for run in &selected {
-            if run["event"] != "push" || run["head_sha"] != commit || run["head_branch"] != branch {
+            if run["event"] != "push" || run["head_branch"] != branch {
+                continue;
+            }
+            let Some(sha) = run["head_sha"]
+                .as_str()
+                .filter(|sha| valid_expected_remote_sha(Some(sha)))
+            else {
+                continue;
+            };
+            if base_push_tip.is_none() && sha != commit {
                 continue;
             }
             let (Some(workflow), Some(id)) = (run["workflow_id"].as_u64(), run["id"].as_u64())
@@ -80,20 +110,42 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 ));
             };
             if newest
-                .get(&workflow)
+                .get(&(workflow, sha))
                 .is_none_or(|prior| prior["id"].as_u64().is_some_and(|prior| id > prior))
             {
-                newest.insert(workflow, run);
+                newest.insert((workflow, sha), run);
             }
         }
         selected = newest.into_values().collect();
     }
     let mut jobs = Vec::new();
     for run in selected {
+        // A partial or cancelled workflow cannot establish a passing base result.
+        // The bounded recent-run window can miss evidence, which conservatively
+        // keeps the base wait; it never treats a partial listing as a pass.
+        if let Some(tip) = base_push_tip {
+            if run["status"] != "completed" || run["conclusion"] != "success" {
+                continue;
+            }
+            let sha = run["head_sha"].as_str().unwrap_or_default();
+            if !super::super::git::git_command_success(
+                workspace_path,
+                &["merge-base", "--is-ancestor", commit, sha],
+            )
+            .unwrap_or(false)
+                || !super::super::git::git_command_success(
+                    workspace_path,
+                    &["merge-base", "--is-ancestor", sha, tip],
+                )
+                .unwrap_or(false)
+            {
+                continue;
+            }
+        }
         let Some(run_id) = run["id"].as_u64() else {
             continue;
         };
-        let listing = gh_json(
+        let listing = projected_ci_json(
             vec![
                 "api".to_string(),
                 "--method".to_string(),
@@ -104,6 +156,7 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             ],
             workspace_path,
             "run jobs",
+            RUN_JOB_FIELDS,
         )?;
         let listed_jobs = listing["jobs"]
             .as_array()
@@ -126,15 +179,44 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 .map(|step| step["name"].clone())
                 .collect();
             let failed_step = failed_steps.first().and_then(Value::as_str);
+            let pull_requests = if run["pull_requests"].is_array() {
+                run["pull_requests"].clone()
+            } else {
+                json!([])
+            };
+            let pull_request_numbers: Vec<Value> = pull_requests
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|pull_request| {
+                    pull_request
+                        .as_u64()
+                        .or_else(|| pull_request["number"].as_u64())
+                        .map(|number| json!(number))
+                })
+                .collect();
             jobs.push(json!({
                 "run_id": run_id,
                 "job_id": job["id"],
                 "workflow": run["name"],
+                "workflow_id":run["workflow_id"],
+                "repository_id":run["repository"]["id"],
+                "repository":run["repository"]["full_name"],
                 "name": job["name"],
                 "status": job["status"],
                 "conclusion": job["conclusion"],
                 "failed_step": failed_step,
                 "failed_steps": failed_steps,
+                "started_at": job["started_at"],
+                "completed_at": job["completed_at"],
+                "run_status": run["status"],
+                "run_started_at": run["run_started_at"],
+                "run_attempt": run["run_attempt"],
+                "event": run["event"],
+                "head_branch": run["head_branch"],
+                "head_sha": run["head_sha"],
+                "pull_requests": pull_requests,
+                "pull_request_numbers": pull_request_numbers,
             }));
         }
     }
@@ -143,7 +225,8 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
 
 /// One failed job's bounded, redacted failed-step log. `fallback_error` is
 /// the redacted reason the read recovered no text, so the caller can tell an
-/// unreadable log from a readable one. Complete command evidence or bounded
+/// unreadable log from a readable one; `read_throttle` beside it, or on a
+/// failed primary read, is the provider's typed throttling answer. Complete command evidence or bounded
 /// failure regions accompany the display with their source; callers must bind
 /// them to the provider's failed job and step before recovery.
 pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
@@ -174,15 +257,25 @@ pub(super) fn ci_job_log(input: &Value) -> Result<Value, OrbitError> {
         super::super::completion_deadline::probe("prerequisite log", deadline.remaining()?);
         deadline.remaining()?;
     }
-    Ok(json!({
+    let mut answer = json!({
         "log": read.log.text,
         "truncated": read.log.truncated,
         "source_complete": read.log.source_complete,
         "diagnostic": read.log.diagnostic,
+        "diagnostic_command": read.log.diagnostic_command,
         "failure_regions": read.log.failure_regions,
+        "source_bytes": read.log.total_bytes,
+        "source_jobs": read.source_jobs,
         "source": read.source,
         "fallback_error": read.fallback_error,
-    }))
+    });
+    // Present only beside `fallback_error`, so readers that refuse an
+    // unreadable log keep refusing it.
+    if let Some(throttle) = read.fallback_throttle {
+        answer["read_throttle"] = serde_json::to_value(throttle)
+            .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    }
+    Ok(answer)
 }
 
 /// Rerun one workflow run's failed jobs. Single-shot: the landing reruns a
@@ -195,8 +288,27 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
             "invalid private automation VCS workflow run id '{run_id}'"
         )));
     }
+    if let Some(expected) = input.get("plan") {
+        let plan: orbit_types::workflow::CiRerunPlan = serde_json::from_value(expected.clone())
+            .map_err(|_| super::prerequisite::unreadable("CI retry reservation"))?;
+        if plan.run_id.to_string() != run_id {
+            return Err(super::prerequisite::unreadable("CI retry action run"));
+        }
+        let refreshed = super::ci_rerun::ci_rerun_plan(
+            &json!({"workspace_path":workspace_path,"pr":plan.pr_number,"head_sha":plan.head_sha,"head_branch":plan.head_branch,"base_branch":plan.base_branch,"accepted_base":plan.accepted_base,"run_id":plan.run_id,"roots":plan.roots,"deadline_ms":input["deadline_ms"]}),
+        )?;
+        let refreshed: orbit_types::workflow::CiRerunPlan =
+            serde_json::from_value(refreshed["plan"].clone())
+                .map_err(|_| super::prerequisite::unreadable("refreshed CI retry plan"))?;
+        if refreshed != plan {
+            return Err(super::prerequisite::unreadable(
+                "CI retry authorization changed before send",
+            ));
+        }
+    }
     let deadline = input
         .get("prerequisite")
+        .or_else(|| input.get("plan"))
         .map(|_| super::super::completion_deadline::Deadline::from_input(input))
         .transpose()?;
     if let Some(deadline) = deadline {
@@ -260,7 +372,13 @@ pub(super) fn ci_rerun_failed(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({ "stdout": result.stdout, "stderr": result.stderr }))
 }
 
-fn gh_json(args: Vec<String>, workspace_path: &Path, label: &str) -> Result<Value, OrbitError> {
+fn projected_ci_json(
+    mut args: Vec<String>,
+    workspace_path: &Path,
+    label: &str,
+    fields: &str,
+) -> Result<Value, OrbitError> {
+    args.extend(["--jq".into(), fields.into()]);
     let result =
         execute_with_transient_retry("gh", &args, Some(workspace_path), DEFAULT_TIMEOUT_MS, label)?;
     serde_json::from_str(&result.stdout).map_err(|error| {

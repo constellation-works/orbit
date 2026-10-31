@@ -1,0 +1,37 @@
+Settle tasks to done whose delivery pull request was merged outside Orbit
+
+Usage: orbit task settle-merged [OPTIONS] [TASK_ID]
+
+Arguments:
+  [TASK_ID]
+          Settle only this task, reading each pull request Orbit recorded for it. Without it, every candidate task is matched against the recently merged pull requests
+
+Options:
+      --recovered-claim <CLAIM_ID>
+          Owner-recovered follower claim whose delivery was rescued by hand
+
+      --pull-request <NUMBER>
+          Merged delivery pull request, even if its refused handoff recorded no PR
+
+      --published-head <COMMIT>
+          Full original published head commit, attested by the operator
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+A blocked, in-progress or review task settles when its Orbit delivery pull request is merged into its target branch and no run or claim of its own is live. The task records a landing note naming the pull request and merge commit. No work starts, so another task's claim on the same files does not refuse it.
+A handed-off claim whose completion authority an operator revoked settles with its task when exactly the handoff's pull request merged into the handoff's landing branch.
+After owner recovery, use --recovered-claim, --pull-request and --published-head together for a refused follower handoff whose pull request was rescued by hand. The original admission and delivery identity must match. History records the operator-reported published head, the merged head and the merge commit.
+Each `orbit run auto` pass does the ordinary settlement from the recently merged pull requests.
+
+Examples:
+  orbit task settle-merged             # settle every task whose delivery merged recently
+  orbit task settle-merged <task-id>   # settle one task, reading each of its pull requests
+  orbit task settle-merged <task-id> --recovered-claim <claim-id> --pull-request <number> --published-head <commit>

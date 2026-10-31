@@ -5,8 +5,13 @@
 //! audit database. Reporting that insert as a call failure makes a caller
 //! that retries errors create a second object. The failure here is a trigger,
 //! so the test does not hold a database lock or wait out a busy timeout.
+//!
+//! An audit insert that loses only to another writer's SQLite lock is retried
+//! once. The busy result is told apart by its typed lock-busy class, not by
+//! SQLite's message text, so that case holds a real writer lock.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use orbit_core::OrbitRuntime;
 use serde_json::{Value, json};
@@ -71,6 +76,54 @@ fn committed_task_add_stays_success_when_its_audit_insert_fails() {
     );
     assert_eq!(tasks_titled(&runtime, NORMAL_TITLE).len(), 1);
     assert_eq!(tasks_titled(&runtime, FAILED_AUDIT_TITLE), vec![id]);
+}
+
+/// A committed call whose audit insert outlasts one busy timeout behind
+/// another connection's writer lock retries the insert once, so the row
+/// still lands. The lock is held for one busy timeout plus a margin: the
+/// first insert gives up while it is held, and the retry outlasts it.
+#[test]
+fn audit_insert_held_out_by_a_sqlite_writer_lock_is_retried() {
+    let (_root, runtime, repo_root, database) = test_runtime();
+    let busy_timeout = Duration::from_millis(u64::from(
+        orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+    ));
+    let (held, held_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let connection = rusqlite::Connection::open(&database).expect("open audit database");
+        connection
+            .execute_batch("BEGIN IMMEDIATE;")
+            .expect("hold the audit writer lock");
+        held.send(()).expect("report the held lock");
+        std::thread::sleep(busy_timeout + Duration::from_millis(2_500));
+        connection
+            .execute_batch("ROLLBACK;")
+            .expect("release the audit writer lock");
+    });
+    held_rx.recv().expect("the holder takes the lock");
+
+    let listed = runtime
+        .execute_tool_command(
+            "orbit.task.list",
+            json!({"workspace": repo_root.to_string_lossy(), "model": "grok"}),
+            None,
+            Some("grok".into()),
+        )
+        .expect("a read-only call succeeds behind the audit lock");
+    holder.join().expect("the holder releases the lock");
+
+    assert!(
+        listed.get("audit_warning").is_none(),
+        "the retried insert persisted: {listed}"
+    );
+    let rows = runtime
+        .list_audit_events(None, Some("orbit.task.list".to_string()), None, None, 20)
+        .expect("list audit rows");
+    assert_eq!(
+        rows.len(),
+        1,
+        "the insert that lost to the lock is retried into exactly one row: {rows:?}"
+    );
 }
 
 /// The caller from the incident: a reported failure is retried once, and a

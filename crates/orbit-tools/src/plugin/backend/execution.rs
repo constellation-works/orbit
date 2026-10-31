@@ -235,6 +235,7 @@ impl PluginBackendSpec {
                 && self.granted(PluginGrant::Unsandboxed),
             // Set by `with_callback_session` once the session exists.
             callback_fd: None,
+            host_route_fd: None,
         })
     }
 

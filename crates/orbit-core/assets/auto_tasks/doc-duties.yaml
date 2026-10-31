@@ -124,10 +124,13 @@ template:
   - orbit.task.artifact.put
   - orbit.task.list
   - orbit.task.show
-  # A batch may edit docs/ and root or workspace-specific documentation.
-  # Reserve the workspace until the batch's concrete paths are known.
+  # A batch edits only docs/ and the tracked top-level README/CONTRIBUTING
+  # documents its brief validates, so the minted task locks just that scope
+  # instead of the whole tree (a dir:. lock starves on a busy drain).
   context_files:
-  - 'dir:.'
+  - 'dir:docs'
+  - 'file:README.md'
+  - 'file:CONTRIBUTING.md'
   priority: medium
   complexity: low
   status: backlog

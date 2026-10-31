@@ -90,6 +90,7 @@ pub(super) fn tool(spec: Arc<PluginBackendSpec>, output_schema: Option<Value>) -
         binding: Arc::new(PluginToolBinding {
             provenance: spec.provenance.clone(),
             execution_kind: PluginExecutionKind::ReadOnly,
+            agent_callable: false,
             diagnostic: None,
         }),
         backend: PluginBackend::Exec(spec),

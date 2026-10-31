@@ -254,6 +254,153 @@ fn mid_log_nextest_blocks_survive_independent_command_and_display_limits() {
 }
 
 #[test]
+fn nextest_block_with_invalid_utf8_keeps_source_byte_accounting() {
+    let mut raw = b"FAIL [ 0.123s] suite failing_test\n".to_vec();
+    raw.extend_from_slice(b"output \xff\xfe from the failing test\n");
+    raw.extend_from_slice(b"thread 'failing_test' panicked at tests/sample.rs:12:3:\n");
+    raw.extend_from_slice(b"Summary [ 1.0s] 1 tests run: 1 failed\n");
+    for chunk in [1, 7, raw.len()] {
+        let mut collector = gh::StreamedLogCollector::new(262_144, 40);
+        for bytes in raw.chunks(chunk) {
+            collector.push(bytes);
+        }
+        let log = collector.finish();
+        let regions = log.failure_regions.unwrap();
+        let number = |value: &Value| value.as_u64().unwrap();
+        for range in regions["byte_ranges"].as_array().unwrap() {
+            assert_eq!(
+                number(&range["retained_source_bytes"]) + number(&range["omitted_bytes"]),
+                number(&range["end_byte"]) - number(&range["start_byte"]),
+                "chunk {chunk}: every block accounts for its source bytes"
+            );
+        }
+        assert_eq!(
+            number(&regions["retained_source_bytes"]) + number(&regions["omitted_bytes"]),
+            number(&regions["command_bytes"]),
+            "chunk {chunk}: the total accounts for the command bytes"
+        );
+        assert!(number(&regions["omitted_bytes"]) < raw.len() as u64);
+        let text = regions["text"].as_str().unwrap();
+        assert!(text.contains("panicked at tests/sample.rs"));
+        assert!(!text.contains('\u{fffd}'));
+    }
+}
+
+/// Cuts one credential-bearing log at every byte and line boundary, under two
+/// excerpt caps and both collector shapes. A window that cuts a credential,
+/// through its introducer or its value, may expose no fragment of it. Any other
+/// window may expose a fragment only when the complete log exposes it too. The
+/// fixtures pin one window per spelling; this sweep covers the shapes they miss.
+#[test]
+fn every_selected_window_hides_credential_fragments() {
+    const FRAGMENT_BYTES: usize = 12;
+    let github_token = format!("ghp_{}", "a".repeat(36));
+    let header_value = "q7Lx2Rv9Kp4Nm8Zs3Tw6";
+    let equals_value = "B6w2R9k4N7c1F3a8Y5mQ0";
+    let colon_value = "Z8p3T1v6H4d9L2x5C7nA0";
+    let service_value = "Yh5Dc8Bn2Mj6Qe1Ua4Wr9";
+    let split_value = "Gt3Pk7Lz0Xv5Fs8Ob2Hd6";
+    let raw = format!(
+        "Authorization: Bearer {github_token}\n\
+         HTTPAPIKey={header_value}\n\
+         note= HTTPAPIKey={equals_value}\n\
+         Error: HTTPAPIKey={colon_value}\n\
+         2026-10-26T14:42:00.0000000Z SERVICEAPIKey: {service_value}\n\
+         api_key:\n\
+         {split_value}\n"
+    );
+    // A credential runs from its introducer to the end of its value.
+    let span = |introducer: &str, value: &str| {
+        let start = raw.find(introducer).unwrap();
+        (start, raw.find(value).unwrap() + value.len())
+    };
+    let credentials = [
+        (
+            github_token.as_str(),
+            span("Authorization:", github_token.as_str()),
+        ),
+        (header_value, span("HTTPAPIKey=", header_value)),
+        (equals_value, span("note=", equals_value)),
+        (colon_value, span("Error:", colon_value)),
+        (service_value, span("SERVICEAPIKey:", service_value)),
+        (split_value, span("api_key:", split_value)),
+    ];
+    let fragments: Vec<Vec<&str>> = credentials
+        .iter()
+        .map(|&(secret, _)| {
+            let mut parts: Vec<&str> = (0..=secret.len() - FRAGMENT_BYTES)
+                .map(|start| &secret[start..start + FRAGMENT_BYTES])
+                .collect();
+            parts.sort_unstable();
+            parts.dedup();
+            parts
+        })
+        .collect();
+    let mut line_starts = vec![0];
+    line_starts.extend(raw.match_indices('\n').map(|(index, _)| index + 1));
+    // Each window carries the source bytes it covers, for the cut test.
+    let mut windows = Vec::new();
+    for start in 0..raw.len() {
+        for end in start + 1..=raw.len() {
+            windows.push((json!({"byte_start": start, "byte_end": end}), (start, end)));
+        }
+    }
+    for first in 1..line_starts.len() {
+        for last in first + 1..=line_starts.len() {
+            windows.push((
+                json!({"line_start": first, "line_end": last}),
+                (line_starts[first - 1], line_starts[last - 1]),
+            ));
+        }
+    }
+    let complete = {
+        let mut collector = gh::StreamedLogCollector::new(16_384, 40);
+        collector.push(raw.as_bytes());
+        collector.finish().text
+    };
+    let mut leaks = Vec::new();
+    for (window, (covered_start, covered_end)) in &windows {
+        let selection = gh::log_selection_from_input(window)
+            .unwrap()
+            .expect("a byte or line window selects log text");
+        // A window that starts or ends inside a credential cuts it.
+        let cut: Vec<bool> = credentials
+            .iter()
+            .map(|&(_, (start, end))| {
+                (start < *covered_start && *covered_start < end)
+                    || (start < *covered_end && *covered_end < end)
+            })
+            .collect();
+        for (cap, tail_weighted) in [(16_384, false), (16_384, true), (40, false), (40, true)] {
+            let mut collector = if tail_weighted {
+                gh::StreamedLogCollector::tail_weighted_scoped(cap, 40, selection.clone())
+            } else {
+                gh::StreamedLogCollector::scoped(cap, 40, selection.clone())
+            };
+            collector.push(raw.as_bytes());
+            let text = collector.finish().text;
+            for (index, parts) in fragments.iter().enumerate() {
+                let exposed = parts.iter().find(|fragment| {
+                    text.contains(**fragment) && (cut[index] || !complete.contains(**fragment))
+                });
+                if let Some(fragment) = exposed {
+                    leaks.push(format!(
+                        "{window} cap={cap} tail_weighted={tail_weighted} cut={} exposes {fragment:?}: {text:?}",
+                        cut[index]
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "{} window variants exposed a credential fragment: {:#?}",
+        leaks.len(),
+        &leaks[..leaks.len().min(5)]
+    );
+}
+
+#[test]
 fn request_fixture_goldens() {
     golden("requests", &read("requests.json"), |case| {
         let input = &case["input"];
@@ -312,6 +459,20 @@ fn request_fixture_goldens() {
             Err(error) => json!({"error": error.to_string()}),
         }
     });
+}
+
+#[test]
+fn landing_request_refuses_empty_and_dot_only_repository_segments() {
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    assert!(gh::commit_pull_requests_request("acme/orbit", commit).is_ok());
+    for repository in [
+        "acme/..", "../orbit", "acme/.", "./orbit", "acme/", "/orbit", "acme", "a/b/c", "",
+    ] {
+        assert!(
+            gh::commit_pull_requests_request(repository, commit).is_err(),
+            "{repository:?} must be refused"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -449,6 +610,23 @@ fn fallback_fixture_goldens() {
                 })
             })
         };
+        if let Some(expected) = case.get("expected_log") {
+            let output = result.as_ref().unwrap();
+            assert_eq!(
+                &output["log"], expected,
+                "byte selection must not expose a cut credential: {}",
+                case["name"]
+            );
+            let selection = &output["selection"];
+            assert_eq!(selection["byte_start"], case["input"]["byte_start"]);
+            assert_eq!(selection["byte_end"], case["input"]["byte_end"]);
+            assert_eq!(
+                selection["selected_bytes"].as_u64().unwrap(),
+                case["input"]["byte_end"].as_u64().unwrap()
+                    - case["input"]["byte_start"].as_u64().unwrap(),
+                "redaction must preserve source-coordinate selection counts"
+            );
+        }
         let calls = std::fs::read_to_string(root.path().join("calls"))
             .unwrap_or_default()
             .lines()

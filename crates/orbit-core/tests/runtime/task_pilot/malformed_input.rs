@@ -46,12 +46,15 @@ fn apply_input(workspace: &Workspace, prepared: &Value, task_id: &str) -> Value 
 }
 
 fn apply(workspace: &Workspace, input: &Value) -> Result<Value, String> {
+    // The fixture pilot read its checkout: results that do not carry an
+    // observed-revision proof get the real one, as in `Workspace::action`.
+    let input = workspace.with_inspection_proof(input.clone());
     workspace
         .runtime
         .run_deterministic(
             "apply_task_pilot_results",
             &json!({}),
-            input,
+            &input,
             ToolContext::default(),
         )
         .map_err(|error| error.to_string())
@@ -525,8 +528,17 @@ fn explicit_status_is_refused_before_assessment() {
                 )
                 .unwrap();
         }
+        // The scripted pilot read its checkout: its static answer carries
+        // the observed-revision proof of the revision prepare pins (the
+        // fixture's `main` HEAD, which nothing moves during the run).
+        let revision = workspace.git(&["rev-parse", "HEAD"]).trim().to_string();
+        let tree = workspace
+            .git(&["rev-parse", "HEAD^{tree}"])
+            .trim()
+            .to_string();
         std::fs::write(&response, json!({"schemaVersion": 1, "status": "success", "error": null,
-            "result": {"partition_index": 0, "task_ids": [task.id], "tasks": [assessment(&task.id)]}
+            "result": {"partition_index": 0, "observed_revision": revision, "observed_tree": tree,
+                "task_ids": [task.id], "tasks": [assessment(&task.id)]}
         }).to_string()).unwrap();
         let outcome = workspace.runtime.run_job_v2_from_yaml(
             &assets.join("jobs/task_pilot_pipeline.yaml"),

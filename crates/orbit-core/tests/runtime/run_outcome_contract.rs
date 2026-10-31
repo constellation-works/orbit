@@ -1,6 +1,7 @@
 //! Stable response tokens for cancellation and drain controls.
 
-use orbit_core::application::distributed::{AdmissionReceiptLookupOutcome, PullSettlementOutcome};
+use orbit_core::application::contracts::PullSettlementOutcome;
+use orbit_core::application::distributed::AdmissionReceiptLookupOutcome;
 use orbit_core::application::job::{
     DrainAdmissionsStopOutcome, DrainWindowExtensionOutcome, DrainWorkerLimitOutcome,
     JobRunCancelOutcome,

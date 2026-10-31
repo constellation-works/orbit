@@ -1,5 +1,5 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
-// Legacy public provider surfaces still need a focused documentation pass.
+// Existing provider APIs lack caller-facing docs, so this crate opts out of `missing_docs`.
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
@@ -26,7 +26,7 @@ pub use providers::{
     antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
     latest_assistant_message, muse_terminal_failure_diagnostic, normalize_cli_stdout,
-    project_cli_response, provider_usage_windows,
+    project_cli_response, provider_long_prompt_requests, provider_usage_windows,
 };
 pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
 pub use types::{

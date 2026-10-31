@@ -1,0 +1,351 @@
+//! Lease-only HTTP routes shared by the dashboard and the lease listener.
+//!
+//! The runtime operations own the JSON input/output contract. Backends return
+//! those values unchanged, including structured answers such as a queued
+//! request's `granted: false, queued: true`.
+//! Notice polling and the SSE event stream share their handlers too
+//! ([`super::lease_notices`]), so both servers frame the same pages the same way.
+
+use std::sync::Arc;
+
+use axum::Router;
+use axum::extract::{FromRequestParts, Path, Query, State};
+use axum::http::request::Parts;
+use axum::response::{IntoResponse, Json, Response};
+use axum::routing::{get, post};
+use orbit_auth::scope::LeaseTokenScope;
+use orbit_common::governance::authorization::DASHBOARD_LEASE_WRITE;
+use orbit_common::protocol::tool_input::optional_string_alias;
+use orbit_core::runtime::task::locks::lease;
+use orbit_core::{OrbitError, OrbitRuntime};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
+use tokio::sync::mpsc;
+
+use super::lease_notices;
+use super::routines::{authorization_denied, authorized_caller};
+use super::{OptionalJson, bad_request, map_runtime_error, server_error};
+use crate::state::DashboardState;
+
+/// Caller attribution and workspace selection for a lease operation.
+///
+/// The dashboard accepts these in the query string; JSON operations may also
+/// declare `principal` in their body. As on SSH, dashboard declarations are
+/// attribution, not authentication. A server that authenticates its callers
+/// puts a [`LeaseCallerToken`] in the request's extensions; the router then
+/// takes the principal from it and ignores every declared one.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct LeaseCaller {
+    /// Declared person or agent name; required by the request operation.
+    pub principal: Option<String>,
+    /// Workspace selector, or the server's default when omitted.
+    pub workspace: Option<String>,
+    /// The authenticated token, set only from the request's extensions.
+    #[serde(skip)]
+    pub token: Option<LeaseCallerToken>,
+}
+
+/// A caller authenticated by a lease token, which the mounting server's
+/// authentication inserts into the request's extensions.
+#[derive(Clone, Debug)]
+pub struct LeaseCallerToken {
+    /// The token's public id.
+    pub token_id: String,
+    /// The token's principal, class and scope.
+    pub scope: LeaseTokenScope,
+    /// The workspace the request addresses, already checked against the
+    /// token's scope.
+    pub workspace: String,
+    /// The resolved client address.
+    pub client_address: String,
+}
+
+/// The query-string caller plus the authenticated token, if any.
+pub(super) struct LeaseCallerParts(pub(super) LeaseCaller);
+
+impl<S: Send + Sync> FromRequestParts<S> for LeaseCallerParts {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let Query(mut caller) = Query::<LeaseCaller>::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        caller.token = parts.extensions.get::<LeaseCallerToken>().cloned();
+        Ok(Self(caller))
+    }
+}
+
+/// A runtime-contract JSON answer, or an HTTP error using the web error mapping.
+/// Structured operation refusals remain JSON answers, not transport errors.
+pub type LeaseBackendResult = Result<Value, Box<Response>>;
+
+/// The pages of one notice stream, oldest first, each the
+/// `orbit.lease.notices` contract. A page with no notices means none arrived
+/// since the previous page; an error, or the sender closing, ends the stream.
+/// Dropping the receiver tells the backend the client has gone.
+pub type LeaseNoticePages = mpsc::Receiver<LeaseBackendResult>;
+
+/// Operations needed by the lease-only HTTP router.
+///
+/// Methods run on Tokio's blocking pool, so implementations may use the runtime
+/// or blocking intake-socket I/O. Each method receives the caller separately
+/// from the operation input. Implementations enforce their own write authority;
+/// the dashboard backend requires its operator session. Authentication and
+/// transport-specific Origin checks belong to the mounting server.
+pub trait LeaseBackend: Send + Sync + 'static {
+    /// Request a lease, returning the `orbit.lease.request` contract.
+    fn request(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// Renew the URL's lease, returning the `orbit.lease.renew` contract.
+    fn renew(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// Expand the URL's lease, returning the `orbit.lease.expand` contract.
+    fn expand(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// Release the URL's lease, returning the `orbit.lease.release` contract.
+    fn release(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// Show the URL's lease, returning the `orbit.lease.show` contract.
+    fn show(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// List leases, returning the `orbit.lease.list` contract.
+    fn list(&self, caller: &LeaseCaller) -> LeaseBackendResult;
+    /// Check paths, returning the `orbit.lease.check` contract.
+    fn check(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// Read one page of notices after `input.after`, returning the
+    /// `orbit.lease.notices` contract.
+    fn notices(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// Open a notice stream from `input.after`. Read and check the first page
+    /// before returning, so a refusal is an HTTP error rather than an empty
+    /// stream; then keep reading pages from each page's cursor until the
+    /// receiver is dropped, waiting between empty pages. The backend admits
+    /// its own streams and holds whatever allowance it took until the stream
+    /// ends.
+    fn notice_stream(
+        &self,
+        caller: &LeaseCaller,
+        input: Value,
+    ) -> Result<LeaseNoticePages, Box<Response>>;
+}
+
+/// Build only the `/leases` routes over a caller-supplied backend.
+///
+/// Nest this router under `/api`. It contains the lease operations, notice
+/// polling (`GET /leases/notices`) and the SSE event stream
+/// (`GET /leases/events`, resuming from `Last-Event-ID`), and no dashboard or
+/// health routes. It applies no dashboard session or localhost middleware.
+pub fn lease_router(backend: impl LeaseBackend) -> Router {
+    let backend: Arc<dyn LeaseBackend> = Arc::new(backend);
+    Router::new()
+        .route("/leases", get(list_leases).post(request_lease))
+        .route("/leases/check", post(check_leases))
+        .route("/leases/notices", get(lease_notices::get_lease_notices))
+        .route("/leases/events", get(lease_notices::stream_lease_notices))
+        .route("/leases/{id}", get(show_lease).delete(release_lease))
+        .route("/leases/{id}/renew", post(renew_lease))
+        .route("/leases/{id}/expand", post(expand_lease))
+        .with_state(backend)
+}
+
+/// The dashboard's runtime adapter; the listener supplies its own backend.
+pub(super) struct RuntimeLeaseBackend {
+    pub(super) state: DashboardState,
+}
+
+impl RuntimeLeaseBackend {
+    pub(super) fn lease_runtime(
+        &self,
+        caller: &LeaseCaller,
+        write: bool,
+    ) -> Result<Arc<OrbitRuntime>, Box<Response>> {
+        if write {
+            authorized_caller(&DASHBOARD_LEASE_WRITE, self.state.operator_session())
+                .map_err(|denial| Box::new(authorization_denied(denial)))?;
+        }
+        let pinned = self.state.pin();
+        let workspace = caller
+            .workspace
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| pinned.default_workspace())
+            .ok_or_else(|| {
+                Box::new(bad_request(
+                    "no workspace selected and no default is configured; pass ?workspace=<id>"
+                        .to_string(),
+                ))
+            })?;
+        pinned
+            .runtime_for(workspace)
+            .map_err(|error| Box::new(error.into_response()))
+    }
+}
+
+impl LeaseBackend for RuntimeLeaseBackend {
+    fn request(&self, caller: &LeaseCaller, mut input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, true)?;
+        if let Some(principal) = &caller.principal {
+            input["principal"] = json!(principal);
+        }
+        lease::request(&runtime, input, None, None).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn renew(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, true)?;
+        lease::renew(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn expand(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, true)?;
+        lease::expand(&runtime, input, None, None).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn release(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, true)?;
+        lease::release(&runtime, input, None, None).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn show(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, false)?;
+        lease::show(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn list(&self, caller: &LeaseCaller) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, false)?;
+        lease::list(&runtime).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn check(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, false)?;
+        lease::check(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn notices(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, false)?;
+        lease::notices(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn notice_stream(
+        &self,
+        caller: &LeaseCaller,
+        input: Value,
+    ) -> Result<LeaseNoticePages, Box<Response>> {
+        lease_notices::open_runtime_notice_stream(self, caller, input)
+    }
+}
+
+pub(super) fn lease_call_input(
+    mut caller: LeaseCaller,
+    input: &Value,
+) -> Result<LeaseCaller, Box<Response>> {
+    if !input.is_object() {
+        return Err(Box::new(bad_request(
+            "lease input must be a JSON object".to_string(),
+        )));
+    }
+    if let Some(token) = &caller.token {
+        caller.principal = Some(token.scope.principal.clone());
+        return Ok(caller);
+    }
+    let principal =
+        optional_string_alias(input, &["principal"]).map_err(|e| Box::new(map_runtime_error(e)))?;
+    if let Some(principal) = principal {
+        if caller
+            .principal
+            .as_ref()
+            .is_some_and(|declared| declared != &principal)
+        {
+            return Err(Box::new(bad_request(
+                "query and body principal must match".to_string(),
+            )));
+        }
+        caller.principal = Some(principal);
+    }
+    Ok(caller)
+}
+
+pub(super) async fn lease_backend_call(
+    backend: Arc<dyn LeaseBackend>,
+    caller: LeaseCaller,
+    input: Value,
+    operation: fn(&dyn LeaseBackend, &LeaseCaller, Value) -> LeaseBackendResult,
+) -> Response {
+    let caller = match lease_call_input(caller, &input) {
+        Ok(caller) => caller,
+        Err(error) => return *error,
+    };
+    match tokio::task::spawn_blocking(move || operation(backend.as_ref(), &caller, input)).await {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(error)) => *error,
+        Err(error) => server_error(OrbitError::Execution(format!(
+            "lease operation panicked: {error}"
+        ))),
+    }
+}
+
+async fn request_lease(
+    State(backend): State<Arc<dyn LeaseBackend>>,
+    LeaseCallerParts(caller): LeaseCallerParts,
+    Json(input): Json<Value>,
+) -> Response {
+    lease_backend_call(backend, caller, input, |b, c, i| b.request(c, i)).await
+}
+
+// `OptionalJson` rather than `Option<Json<_>>`: a zero-length body with a JSON
+// Content-Type must default, not fail as malformed JSON.
+async fn renew_lease(
+    State(backend): State<Arc<dyn LeaseBackend>>,
+    LeaseCallerParts(caller): LeaseCallerParts,
+    Path(id): Path<String>,
+    OptionalJson(mut input): OptionalJson<Map<String, Value>>,
+) -> Response {
+    input.insert("lease_id".to_string(), json!(id));
+    lease_backend_call(backend, caller, Value::Object(input), |b, c, i| {
+        b.renew(c, i)
+    })
+    .await
+}
+
+async fn expand_lease(
+    State(backend): State<Arc<dyn LeaseBackend>>,
+    LeaseCallerParts(caller): LeaseCallerParts,
+    Path(id): Path<String>,
+    OptionalJson(mut input): OptionalJson<Map<String, Value>>,
+) -> Response {
+    input.insert("lease_id".to_string(), json!(id));
+    lease_backend_call(backend, caller, Value::Object(input), |b, c, i| {
+        b.expand(c, i)
+    })
+    .await
+}
+
+async fn release_lease(
+    State(backend): State<Arc<dyn LeaseBackend>>,
+    LeaseCallerParts(caller): LeaseCallerParts,
+    Path(id): Path<String>,
+) -> Response {
+    lease_backend_call(backend, caller, json!({"lease_id": id}), |b, c, i| {
+        b.release(c, i)
+    })
+    .await
+}
+
+async fn show_lease(
+    State(backend): State<Arc<dyn LeaseBackend>>,
+    LeaseCallerParts(caller): LeaseCallerParts,
+    Path(id): Path<String>,
+) -> Response {
+    lease_backend_call(backend, caller, json!({"lease_id": id}), |b, c, i| {
+        b.show(c, i)
+    })
+    .await
+}
+
+async fn list_leases(
+    State(backend): State<Arc<dyn LeaseBackend>>,
+    LeaseCallerParts(caller): LeaseCallerParts,
+) -> Response {
+    lease_backend_call(backend, caller, json!({}), |b, c, _| b.list(c)).await
+}
+
+async fn check_leases(
+    State(backend): State<Arc<dyn LeaseBackend>>,
+    LeaseCallerParts(caller): LeaseCallerParts,
+    Json(input): Json<Value>,
+) -> Response {
+    lease_backend_call(backend, caller, input, |b, c, i| b.check(c, i)).await
+}

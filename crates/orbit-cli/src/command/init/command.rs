@@ -22,7 +22,7 @@ use crate::command::{CommandOut, CommandOutput, Execute, Payload};
     about = "Initialize the global Orbit root (~/.orbit)",
     after_help = "On Linux, sandbox preparation failures warn and initialization continues.\n\
                   linux-bwrap dispatch stays blocked until orbit doctor providers reports\n\
-                  the sandbox ready. Fix the host using docs/runbooks/linux-sandbox.md,\n\
+                  the sandbox ready. Fix the cause named in the warning,\n\
                   then retry with orbit init --host-prerequisites-only. JSON output includes\n\
                   linux_sandbox.status (ready, skipped, or not_ready) and its reason."
 )]
@@ -596,7 +596,7 @@ impl LinuxSandboxReadiness {
         if self.status == LinuxSandboxStatus::NotReady {
             eprintln!(
                 "warning: Linux sandbox is not ready: {}; initialization continues. \
-                 Fix the host using docs/runbooks/linux-sandbox.md, then retry \
+                 Fix the cause named in the warning, then retry \
                  `orbit init --host-prerequisites-only`. linux-bwrap dispatch stays blocked \
                  until `orbit doctor providers` reports the sandbox ready.",
                 self.reason

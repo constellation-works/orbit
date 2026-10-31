@@ -101,19 +101,25 @@ fn task_mutations_redact_prose_before_persistence() {
 /// Resume and auto-drain are ordinary only when the request does not ask for completion.
 const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("POST", "/tasks"),
-    ("PATCH", "/tasks/:id"),
-    ("POST", "/tasks/:id/comments"),
-    ("POST", "/tasks/:id/approve"),
-    ("POST", "/tasks/:id/reject"),
-    ("POST", "/tasks/:id/archive"),
+    ("PATCH", "/tasks/{id}"),
+    ("POST", "/tasks/{id}/comments"),
+    ("POST", "/tasks/{id}/approve"),
+    ("POST", "/tasks/{id}/reject"),
+    ("POST", "/tasks/{id}/archive"),
+    // A decision answer is the dashboard's human write like approve and
+    // reject: it applies through the same human funnel in core.
+    ("POST", "/decisions/{id}/answer"),
     ("POST", "/frictions"),
-    ("PATCH", "/frictions/:id"),
-    ("POST", "/frictions/:id/resolve"),
-    ("POST", "/job-runs/:id/resume"),
+    ("PATCH", "/frictions/{id}"),
+    ("POST", "/frictions/{id}/resolve"),
+    ("POST", "/job-runs/{id}/resume"),
     ("POST", "/workflows/auto"),
     ("POST", "/workflows/ship"),
-    ("POST", "/runs/:id/cancel"),
+    ("POST", "/runs/{id}/cancel"),
     ("POST", "/metrics/invocations"),
+    // The one-time browser ticket authenticates the exchange; the session it
+    // yields grants no operator capability.
+    ("POST", "/session"),
 ];
 
 /// Discover paths from registrations, then ask the real HTTP router for methods.
@@ -136,12 +142,12 @@ fn registered_paths() -> impl Iterator<Item = &'static str> {
 
 fn body(path: &str) -> Value {
     match path {
-        "/distributed/handoffs/:id/retry" => {
+        "/distributed/handoffs/{id}/retry" => {
             json!({"expected_candidate_commit":"a","expected_base_commit":"b","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":"HTTP guard check","request_key":"guard-fixture"})
         }
-        "/runs/:id/replay" => json!({}),
-        "/config/keys/:key" => json!({"value":"agent-main","init":"fresh"}),
-        "/config/crews/:name" => json!({"fields":{}}),
+        "/runs/{id}/replay" => json!({}),
+        "/config/keys/{key}" => json!({"value":"agent-main","init":"fresh"}),
+        "/config/crews/{name}" => json!({"fields":{}}),
         "/routines/clock" => json!({
             "action":"disable", "machine_name":"fixture", "expected_enabled":true,
             "expected_cadence_seconds":300,
@@ -150,7 +156,18 @@ fn body(path: &str) -> Value {
             "name":"missing", "source":"fixture", "target":"job:missing",
             "machine_name":"fixture", "expected_enabled":true,"enabled":false,
         }),
+        "/routines/trigger" => json!({
+            "name":"missing", "source":"fixture", "target":"job:missing",
+            "machine_name":"fixture",
+            "expected_trigger":{"cron":"0 * * * *","missed_run":"skip"},
+            "trigger":{"cron":"0 * * * *","missed_run":"skip"},
+        }),
         "/auto-tasks/toggle" => json!({"name":"missing","expected_enabled":true,"enabled":false}),
+        "/auto-tasks/schedule" => json!({
+            "name":"missing",
+            "expected_schedule":{"cron":"0 * * * *"},
+            "schedule":{"cron":"0 * * * *"},
+        }),
         "/auto-tasks/mint" => json!({"name":"missing","acknowledge_unconditional":true}),
         "/workflows/auto" => json!({"for_duration":"1m","complete":false}),
         _ => json!({
@@ -184,7 +201,7 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
             let mut mutations = BTreeSet::new();
             for (path, id) in registered_paths().flat_map(|path| {
                 // Resume inherits completion from saved input, not the HTTP body.
-                let ids: &[&str] = if path == "/job-runs/:id/resume" {
+                let ids: &[&str] = if path == "/job-runs/{id}/resume" {
                     &["jrun-resume-review", "jrun-resume-done"]
                 } else {
                     &["missing"]
@@ -192,15 +209,15 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                 ids.iter().map(move |&id| (path, id))
             }) {
                 let concrete = path
-                    .replace(":id", id)
-                    .replace(":key", "workflow.base_branch")
-                    .replace(":name", "missing")
-                    .replace(":namespace", "missing")
-                    .replace(":panel", "missing")
-                    .replace(":kind", "routine")
-                    .replace(":batch", "missing")
-                    .replace("*path", "missing")
-                    .replace("*rest", "tasks");
+                    .replace("{id}", id)
+                    .replace("{key}", "workflow.base_branch")
+                    .replace("{name}", "missing")
+                    .replace("{namespace}", "missing")
+                    .replace("{panel}", "missing")
+                    .replace("{kind}", "routine")
+                    .replace("{batch}", "missing")
+                    .replace("{*path}", "missing")
+                    .replace("{*rest}", "tasks");
                 let uri = format!("/api{concrete}?workspace=ws_http_fixture");
                 let discovery = operator.request("OPTIONS", &uri).send().unwrap();
                 assert_eq!(discovery.status().as_u16(), 405, "route discovery: {path}");
@@ -259,7 +276,7 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                         let status = response.status().as_u16();
                         let payload: Value = response.json().unwrap();
                         let completion_resume =
-                            path == "/job-runs/:id/resume" && id == "jrun-resume-done";
+                            path == "/job-runs/{id}/resume" && id == "jrun-resume-done";
                         let completion_auto =
                             path == "/workflows/auto" && probe_body["complete"] == true;
                         let approve_auto =
@@ -491,7 +508,7 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
             for (key, value) in [
                 ("workflow.base_brunch", json!("main")),
                 ("execution.codex.sandbox", json!("wide-open")),
-                ("workflow.auto_ship", json!("true")),
+                ("decision_channel.enabled", json!("true")),
             ] {
                 let before = std::fs::read(&config).unwrap();
                 let response = server.send(
@@ -530,7 +547,7 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
             }
             let written = super::support::json_ok(server.send(
                 "PUT",
-                "/api/config/keys/workflow.auto_ship?workspace=ws_http_fixture",
+                "/api/config/keys/decision_channel.enabled?workspace=ws_http_fixture",
                 json!({"value":true}),
             ));
             assert_eq!(written["old_value"], false);
@@ -540,7 +557,7 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|row| row["key"] == "workflow.auto_ship" && row["value"] == true)
+                    .any(|row| row["key"] == "decision_channel.enabled" && row["value"] == true)
             );
             let read = super::support::json_ok(
                 server.get("/api/config/effective?workspace=ws_http_fixture"),
@@ -550,7 +567,7 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                 .unwrap()
                 .iter()
                 .flat_map(|section| section["keys"].as_array().unwrap())
-                .find(|row| row["key"] == "workflow.auto_ship")
+                .find(|row| row["key"] == "decision_channel.enabled")
                 .unwrap();
             assert_eq!(
                 row["value"], true,

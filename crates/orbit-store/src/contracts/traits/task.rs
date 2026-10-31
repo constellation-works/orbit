@@ -75,10 +75,22 @@ pub trait TaskStoreBackend: Send + Sync {
     /// Internal lifecycle seam; unavailable backends fail closed.
     fn mutate_execution_claim(
         &self,
+        context: Option<&crate::contracts::ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &crate::contracts::ClaimMutation,
+    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+        self.mutate_execution_claim_outcome(context, mutation_id, mutation)
+            .map(|outcome| outcome.result)
+    }
+    /// [`Self::mutate_execution_claim`], also reporting whether this call
+    /// committed the mutation or replayed its receipt. Unavailable backends
+    /// fail closed.
+    fn mutate_execution_claim_outcome(
+        &self,
         _context: Option<&crate::contracts::ClaimInvocation>,
         _mutation_id: &str,
         _mutation: &crate::contracts::ClaimMutation,
-    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+    ) -> Result<crate::contracts::ClaimMutationOutcome, OrbitError> {
         Err(OrbitError::Store("claim lifecycle unavailable".into()))
     }
     /// Refuse a worker invocation whose claim no longer carries the authority
@@ -123,10 +135,25 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
         Ok(Vec::new())
     }
+    /// Every recorded census row, live or not: the latest declaration of
+    /// each executor that ever pulled from or drained this workspace. Label
+    /// placement reads it to know which capability labels the fleet carries.
+    /// A store without a coordination journal records none.
+    fn recorded_executor_census(
+        &self,
+    ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
+        Ok(Vec::new())
+    }
     fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
+    /// Read-only logical storage diagnostic for admission and mutation receipts.
+    fn inspect_admission_receipt_storage(
+        &self,
+    ) -> Result<crate::contracts::AdmissionReceiptStorage, OrbitError> {
+        Err(OrbitError::Store("receipt inspection unavailable".into()))
     }
     /// Repairing claim read: settles an interrupted commit before reading.
     /// Unavailable backends fail closed.
@@ -217,6 +244,17 @@ pub trait TaskStoreBackend: Send + Sync {
             "observational task candidates unavailable".into(),
         ))
     }
+    /// [`Self::task_candidate_keys`] as an informational snapshot, under the
+    /// same terms as [`Self::observe_task_candidates`]: no coordination,
+    /// recovery, index repair or persisted freshness proofs. A backend
+    /// without a boundary answers with the coordinated read.
+    fn observe_task_candidate_keys(
+        &self,
+        filter: &crate::contracts::TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
+        self.task_candidate_keys(filter, limit)
+    }
     /// Select a fully indexed page from the generated index alone, reading no
     /// envelope; `None` when the filter or the index cannot answer that way.
     fn task_candidate_keys(
@@ -282,6 +320,52 @@ pub trait TaskStoreBackend: Send + Sync {
         _targets: &BTreeSet<String>,
     ) -> Result<BTreeMap<OrbitId, TaskStatus>, OrbitError> {
         self.task_status_index()
+    }
+    /// Every task of this workspace with its status and last update, for a
+    /// change watcher to compare between reads. An informational snapshot
+    /// with no coordination, recovery or index repair. Backends with a
+    /// generated index override this; the default answers from
+    /// [`Self::list_tasks`].
+    fn task_change_stamps(&self) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        Ok(self
+            .list_tasks()?
+            .into_iter()
+            .map(|task| crate::contracts::TaskChangeStamp {
+                id: task.id,
+                status: task.status,
+                updated_at: task.updated_at,
+            })
+            .collect())
+    }
+    /// Bodyless scan identity inputs. Unlike the change watcher's compatibility
+    /// fallback, this must never hydrate task bodies. The caller first validates
+    /// the index in the same read section; an unavailable index fails closed.
+    fn task_metadata_scan_stamps(
+        &self,
+    ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        let keys = self
+            .task_candidate_keys(&crate::contracts::TaskListFilter::default(), usize::MAX)?
+            .ok_or_else(|| OrbitError::Store("bodyless task change stamps unavailable".into()))?;
+        let mut stamps = Vec::with_capacity(keys.items.len());
+        for chunk in keys.items.chunks(128) {
+            let ids = chunk.iter().map(|key| key.id.clone()).collect();
+            let envelopes = self.task_envelopes_for_ids(&ids)?;
+            if envelopes.len() != chunk.len() {
+                return Err(OrbitError::Store(
+                    "task change stamp population changed".into(),
+                ));
+            }
+            stamps.extend(
+                envelopes
+                    .into_iter()
+                    .map(|task| crate::contracts::TaskChangeStamp {
+                        id: task.id,
+                        status: task.status,
+                        updated_at: task.updated_at,
+                    }),
+            );
+        }
+        Ok(stamps)
     }
     /// Which of `task_ids` carry `tag`, in any workspace on the host. Backends
     /// with a host-wide registry override this; the default answers from

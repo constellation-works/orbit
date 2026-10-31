@@ -9,9 +9,18 @@ use super::metrics::DiagnosticsRange;
 /// Bucket widths a series may use, narrowest first: 5m, 1h, 6h, 1d, 7d.
 const BUCKET_LADDER_SECS: [i64; 5] = [300, 3_600, 21_600, 86_400, 604_800];
 /// A window takes the narrowest width that splits it into fewer buckets.
+/// The floored first bucket can add one partial bucket, so an accepted
+/// response carries at most `MAX_BUCKETS + 1` buckets. This ceiling is
+/// independent of the caller's date span: an explicit `since`/`month`
+/// window no ladder width can split this finely is refused, and an
+/// `all` window widens whole weeks past the ladder until it fits.
 const MAX_BUCKETS: i64 = 60;
 /// Weekly buckets start on Mondays: 1970-01-05 is four days after the epoch.
 const WEEK_OFFSET_SECS: i64 = 4 * 86_400;
+/// Widest ladder width, used to widen `all` windows in whole weeks.
+const WEEK_SECS: i64 = 604_800;
+/// Length of the trailing sum a "per day" view draws at each bucket.
+const DAY_SECS: i64 = 86_400;
 
 /// Window a trend request without `since` or `month` covers.
 const DEFAULT_SINCE: &str = "24h";
@@ -20,18 +29,66 @@ const DEFAULT_SINCE: &str = "24h";
 pub(super) fn trend_range(
     q: &DiagnosticsQuery,
 ) -> Result<DiagnosticsRange, orbit_core::OrbitError> {
-    if q.since.is_some() || q.month.is_some() {
-        return DiagnosticsRange::from_query(q, false);
+    let range = if q.since.is_some() || q.month.is_some() {
+        DiagnosticsRange::from_query(q, false)?
+    } else {
+        DiagnosticsRange::from_query(
+            &DiagnosticsQuery {
+                outcome: None,
+                since: Some(DEFAULT_SINCE.to_string()),
+                month: None,
+                limit: None,
+            },
+            false,
+        )?
+    };
+    validate_trend_range(&range)?;
+    Ok(range)
+}
+
+/// Refuse an explicit window the bucket ladder cannot bound, or whose
+/// equally long previous window is not representable. `all` windows have
+/// no previous window and are widened in [`TrendWindow::new`] instead.
+fn validate_trend_range(range: &DiagnosticsRange) -> Result<(), orbit_core::OrbitError> {
+    let Some(since) = range.since else {
+        return Ok(());
+    };
+    let until = range.until.min(Utc::now());
+    let open = since.min(until);
+    let span = (until - open).num_seconds().max(1);
+    let Some(bucket_secs) = BUCKET_LADDER_SECS
+        .iter()
+        .copied()
+        .find(|width| span / width < MAX_BUCKETS)
+    else {
+        return Err(orbit_core::OrbitError::InvalidInput(format!(
+            "trend window '{}' is too large: it would exceed {MAX_BUCKETS} buckets",
+            range.key
+        )));
+    };
+    let start = floor(open, bucket_secs);
+    if start.checked_sub_signed(until - start).is_none() {
+        return Err(orbit_core::OrbitError::InvalidInput(format!(
+            "trend window '{}' is too large: its previous window is not representable",
+            range.key
+        )));
     }
-    DiagnosticsRange::from_query(
-        &DiagnosticsQuery {
-            outcome: None,
-            since: Some(DEFAULT_SINCE.to_string()),
-            month: None,
-            limit: None,
-        },
-        false,
-    )
+    Ok(())
+}
+
+/// Narrowest ladder width splitting `span` into fewer than
+/// [`MAX_BUCKETS`] buckets, or a whole-week multiple past the ladder
+/// that does so for an `all` window's unbounded span.
+fn bucket_secs_for_span(span: i64) -> i64 {
+    if let Some(width) = BUCKET_LADDER_SECS
+        .iter()
+        .copied()
+        .find(|width| span / width < MAX_BUCKETS)
+    {
+        return width;
+    }
+    let weeks = span / (MAX_BUCKETS * WEEK_SECS) + 1;
+    weeks.saturating_mul(WEEK_SECS)
 }
 
 /// The buckets a series is cut into, with the equally long window before it.
@@ -46,28 +103,50 @@ pub(super) struct TrendWindow {
     bucket_secs: i64,
     /// `[start - (until - start), start)`; `None` for an `all` window.
     pub(super) previous: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// Buckets of history before `start` that a trailing 24h sum at the
+    /// first bucket needs; zero when buckets are a day or wider.
+    lead: usize,
 }
 
 impl TrendWindow {
     /// An `all` range (no `since`) opens at `earliest`, the oldest sample the
     /// caller read, or at `until` when there is none.
     pub(super) fn new(range: &DiagnosticsRange, earliest: Option<DateTime<Utc>>) -> Self {
+        Self::build(range, earliest, false)
+    }
+
+    /// [`Self::new`] plus the lead buckets a trailing-24h sum needs at the
+    /// first bucket, for the count series that offer a per-day view.
+    pub(super) fn with_day_lead(range: &DiagnosticsRange, earliest: Option<DateTime<Utc>>) -> Self {
+        Self::build(range, earliest, true)
+    }
+
+    fn build(range: &DiagnosticsRange, earliest: Option<DateTime<Utc>>, day_lead: bool) -> Self {
         let until = range.until.min(Utc::now());
         let open = range.since.or(earliest).unwrap_or(until).min(until);
         let span = (until - open).num_seconds().max(1);
-        let bucket_secs = BUCKET_LADDER_SECS
-            .iter()
-            .copied()
-            .find(|width| span / width < MAX_BUCKETS)
-            .unwrap_or(BUCKET_LADDER_SECS[BUCKET_LADDER_SECS.len() - 1]);
+        let bucket_secs = bucket_secs_for_span(span);
         let start = floor(open, bucket_secs);
-        let previous = range.since.map(|_| (start - (until - start), start));
+        // Checked: an explicit window whose previous window is not
+        // representable is refused by `trend_range` before this runs;
+        // never panic if a caller reaches here without that admission.
+        let previous = range.since.and_then(|_| {
+            start
+                .checked_sub_signed(until - start)
+                .map(|previous_start| (previous_start, start))
+        });
+        let lead = if day_lead && bucket_secs < DAY_SECS && DAY_SECS % bucket_secs == 0 {
+            usize::try_from(DAY_SECS / bucket_secs - 1).unwrap_or(0)
+        } else {
+            0
+        };
         Self {
             key: range.key.clone(),
             start,
             until,
             bucket_secs,
             previous,
+            lead,
         }
     }
 
@@ -78,6 +157,38 @@ impl TrendWindow {
             let window = Self::new(range, None);
             window.previous.map_or(window.start, |(start, _)| start)
         })
+    }
+
+    /// [`Self::read_since`] reaching back far enough to fill the lead buckets.
+    pub(super) fn read_since_with_day_lead(range: &DiagnosticsRange) -> Option<DateTime<Utc>> {
+        range.since.map(|_| {
+            let window = Self::with_day_lead(range, None);
+            let oldest = window.previous.map_or(window.start, |(start, _)| start);
+            oldest.min(window.lead_start())
+        })
+    }
+
+    /// Buckets of history before the window that [`Self::lead_bucket_of`]
+    /// places rows in, oldest first.
+    pub(super) fn lead_count(&self) -> usize {
+        self.lead
+    }
+
+    /// Where the lead buckets open: `lead_count` bucket widths before `start`.
+    fn lead_start(&self) -> DateTime<Utc> {
+        let offset = Duration::seconds(self.bucket_secs.saturating_mul(self.lead as i64));
+        self.start.checked_sub_signed(offset).unwrap_or(self.start)
+    }
+
+    /// The lead bucket `at` falls in, or `None` outside `[lead start, start)`.
+    pub(super) fn lead_bucket_of(&self, at: DateTime<Utc>) -> Option<usize> {
+        if self.lead == 0 || at < self.lead_start() || at >= self.start {
+            return None;
+        }
+        let index = (at - self.lead_start()).num_seconds() / self.bucket_secs;
+        usize::try_from(index)
+            .ok()
+            .map(|index| index.min(self.lead - 1))
     }
 
     pub(super) fn bucket_count(&self) -> usize {
@@ -102,7 +213,8 @@ impl TrendWindow {
     }
 
     pub(super) fn bucket_start(&self, index: usize) -> DateTime<Utc> {
-        self.start + Duration::seconds(self.bucket_secs * index as i64)
+        let offset = Duration::seconds(self.bucket_secs.saturating_mul(index as i64));
+        self.start.checked_add_signed(offset).unwrap_or(self.start)
     }
 
     pub(super) fn to_json(&self) -> Value {
@@ -111,6 +223,7 @@ impl TrendWindow {
             "since": self.start.to_rfc3339(),
             "until": self.until.to_rfc3339(),
             "bucket_seconds": self.bucket_secs,
+            "lead_buckets": self.lead,
             "previous_since": self.previous.map(|(start, _)| start.to_rfc3339()),
             "previous_until": self.previous.map(|(_, end)| end.to_rfc3339()),
         })
@@ -118,7 +231,9 @@ impl TrendWindow {
 }
 
 fn floor(at: DateTime<Utc>, width: i64) -> DateTime<Utc> {
-    let offset = if width == 604_800 {
+    // Whole-week widths (the ladder's widest and its widened multiples)
+    // start on Mondays; narrower widths start on the epoch clock.
+    let offset = if width % WEEK_SECS == 0 {
         WEEK_OFFSET_SECS
     } else {
         0

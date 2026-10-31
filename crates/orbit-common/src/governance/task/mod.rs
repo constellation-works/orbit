@@ -4,11 +4,17 @@
 //! MCP and runtime handler wiring derive from it; the task subcommands with
 //! no tool stay hand-wired beside them.
 
+mod artifact_hints;
 mod lifecycle_operations;
+mod list_projection;
 mod nested_operations;
 pub mod operations;
 mod write_operations;
 
+pub use artifact_hints::{
+    ARTIFACT_LISTING_HINT_CLI, ARTIFACT_LISTING_HINT_MCP, artifact_listing_hint,
+};
+pub use list_projection::{MINIMAL_TASK_FIELDS, project_task_list_output, select_fields};
 pub use operations::{
     TASK, TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_OPERATIONS, TASK_ORIGIN_VALUES,
     TASK_PRIORITY_VALUES, TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskOperation, TaskVerb,

@@ -77,6 +77,10 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
             "pr_prepare",
             "git_rebase",
             "candidate_validate",
+            "visual_capture",
+            "visual_review_prepare",
+            "visual_verify_prepare",
+            "visual_verify_prepare",
             "review_gate_admit",
             "agent_review_repair",
             "review_gate_settle",
@@ -90,9 +94,15 @@ fn accept_publishes_the_implementation_head_without_revalidation() {
             "review_gate_settle",
             "review_gate_admit",
             "review_gate_settle",
+            "visual_landed",
+            "visual_capture",
+            "visual_review_prepare",
+            "visual_verify_prepare",
         ],
-        "one review, no revalidation, then delivery; the before-landing gate and both \
-         completion re-review rounds only admit and settle as not applicable"
+        "one review, no revalidation, then delivery; the visual capture of a task without \
+         the phase reports it does not apply, the before-landing gate and both completion \
+         re-review rounds only admit and settle as not applicable, and the landed task files \
+         no visual follow-up and its post-landing comparison captures nothing"
     );
     let pr_open = &host.inputs("pr_open")[0];
     assert_eq!(pr_open["reviewed_head_sha"], "candidate");
@@ -352,6 +362,15 @@ const ACTIVITIES: &[&str] = &[
     "claim_validate",
     "claim_handoff",
     "claim_candidate_carry",
+    "visual_capture",
+    "visual_checks",
+    "visual_review_prepare",
+    "visual_review",
+    "visual_verify_prepare",
+    "visual_verify",
+    "visual_settle",
+    "visual_recapture",
+    "visual_landed",
 ];
 
 pub(super) fn position(actions: &[String], action: &str) -> usize {
@@ -544,6 +563,8 @@ impl ScriptedHost {
             return Ok(json!({
                 "gate": "not_required",
                 "reviewed_head_sha": "",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "",
                 "reviewer_fixed": false,
                 "review_fixes": "",
@@ -559,6 +580,8 @@ impl ScriptedHost {
                 "verdict": "accept",
                 "attempt_id": attempt,
                 "reviewed_head_sha": implementation,
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "base-sha",
                 "implementation_head_sha": implementation,
                 "reviewer_fixed": false,
@@ -572,6 +595,8 @@ impl ScriptedHost {
                     "verdict": "accept_with_fixes",
                     "attempt_id": attempt,
                     "reviewed_head_sha": *head,
+                    "selective_selection_head_sha": "",
+                    "selective_receipt": null,
                     "reviewed_base_sha": "base-sha",
                     "implementation_head_sha": implementation,
                     "reviewer_fixed": true,
@@ -732,6 +757,19 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
             }),
             "claim_handoff" => json!({ "decision": "handed_off" }),
             "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
+            "visual_capture" => json!({ "applies": false, "captures": [] }),
+            "visual_review_prepare" => {
+                json!({ "applies": false, "review_count": 0, "reviews": [], "records": [] })
+            }
+            "visual_verify_prepare" => {
+                json!({ "applies": false, "partition_count": 0, "partitions": [], "records": [] })
+            }
+            "visual_landed" => json!({
+                "applies": false,
+                "filed": [],
+                "measure": false,
+                "measure_task_ids": [],
+            }),
             other => {
                 return Err(DispatchError::DeterministicActionFailed {
                     action: other.to_string(),

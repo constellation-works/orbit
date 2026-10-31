@@ -13,6 +13,16 @@ spec:
     - json
     - --tools
     - default
+  # `--tools default` above already enables the native Read and Bash tools a
+  # pinned-source inspection run uses; inspection adds no arguments.
+  inspection_args: []
+  # Claude Code's Read tool presents image files to the model: staged images
+  # are listed in the prompt and the agent reads each one. Declared because
+  # the canary probe (`orbit agents vision-probe`) passed on this lane.
+  image_input:
+    mode: native_read
+    formats: [png, jpeg, webp, gif]
+    max_images: 40
   stdout_format: envelope
   sandbox: macos-sandbox-exec
   model_flag: "--model"

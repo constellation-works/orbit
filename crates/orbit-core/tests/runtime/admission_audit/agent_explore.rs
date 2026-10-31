@@ -7,7 +7,15 @@
 //! admission; every refusal is a typed error that leaves no run behind.
 //! Each row runs in its own child process because it sets that environment.
 
+#[cfg(unix)]
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
+use std::sync::{Arc, Mutex};
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -78,11 +86,104 @@ timeout_seconds = 300
 "#;
 
 struct Fixture {
-    _root: TempDir,
     runtime: OrbitRuntime,
     repo: PathBuf,
     parent: JobRun,
     worktree: PathBuf,
+    /// Shared marker. A substitute observes it only after Drop releases its handshake.
+    worker_release: PathBuf,
+    #[cfg(unix)]
+    listener: std::net::TcpListener,
+    #[cfg(unix)]
+    workers: Mutex<Vec<Substitute>>,
+    /// Set only after release was observed, the substitute was reaped, and the
+    /// supervisor's observer finished. `root` is removed after `Drop::drop`.
+    #[cfg(unix)]
+    cleaned: Arc<AtomicBool>,
+    // Fields drop in declaration order after `Drop::drop`. `root` stays last
+    // so the directory outlives the workers Drop reaps.
+    root: TempDir,
+}
+
+#[cfg(unix)]
+struct Substitute {
+    run: String,
+    pid: u32,
+    starttime: u64,
+    process: orbit_common::process::signal::BoundProcess,
+    control: std::net::TcpStream,
+}
+
+#[cfg(unix)]
+#[derive(Clone)]
+struct HeldWorker {
+    run: String,
+    pid: u32,
+    starttime: u64,
+}
+
+/// Stops a substitute an assertion left alive. A reaped pid, or a pid whose
+/// start time no longer matches, is left alone.
+#[cfg(unix)]
+struct StopSurvivors(Vec<HeldWorker>);
+
+#[cfg(unix)]
+impl Drop for StopSurvivors {
+    fn drop(&mut self) {
+        for worker in &self.0 {
+            let still_ours = orbit_common::process::ancestry::process_start_and_parent(worker.pid)
+                .is_some_and(|(key, parent)| {
+                    key.starttime == worker.starttime && parent == std::process::id()
+                });
+            if still_ours {
+                // SAFETY: the pid and start time still name the substitute this
+                // fixture spawned, so the signal cannot land on a reused pid.
+                unsafe { libc::kill(worker.pid as libc::pid_t, libc::SIGKILL) };
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn reaped(pid: u32) -> bool {
+    // Signal zero is observational and, unlike process_is_alive, includes
+    // zombies. ESRCH therefore proves the supervisor has reaped the child.
+    // SAFETY: signal zero neither mutates memory nor delivers a signal.
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let mut failure = None;
+            if let Err(error) = self.own_outstanding() {
+                self.root.disable_cleanup(true);
+                failure = Some(format!("owned worker acquisition; root retained: {error}"));
+            }
+            if failure.is_none()
+                && let Err(error) = self.release_reap_and_settle()
+            {
+                self.root.disable_cleanup(true);
+                failure = Some(error);
+            }
+            if let Some(error) = &failure {
+                self.log_owned_workers();
+                let _ = writeln!(io::stderr(), "owned substitute cleanup failed: {error}");
+            }
+            self.cleaned.store(failure.is_none(), Ordering::SeqCst);
+            if let Some(error) = failure
+                && !std::thread::panicking()
+            {
+                panic!("{error}");
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::fs::write(&self.worker_release, b"");
+        }
+    }
 }
 
 /// A git workspace whose implement run is live in its own linked worktree,
@@ -94,6 +195,10 @@ fn fixture(explore: &str) -> Fixture {
 fn fixture_with(crews: &str, explore: &str) -> Fixture {
     let (root, runtime, repo) =
         super::engine_support::runtime_with_workspace_config(Some(&format!("{crews}\n{explore}")));
+    // The default sampler writes under this root and has no join handle, so
+    // it can recreate the tree while `root` is removed. A calm probe does not.
+    let runtime =
+        runtime.with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
     orbit_core::bootstrap::init::init_workspace_at_root(
         &runtime.global_root(),
         orbit_core::bootstrap::init::InitOptions {
@@ -112,19 +217,398 @@ fn fixture_with(crews: &str, explore: &str) -> Fixture {
     git(&repo, &["add", ".gitignore", "src/lib.rs"]);
     git(&repo, &["commit", "-qm", "seed"]);
     let (parent, worktree) = live_run(&runtime, &repo, "T-EXPLORE-1");
-    orbit_core::test_support::install_substitute_pipeline_worker([
-        std::env::current_exe()
-            .expect("test binary")
-            .to_string_lossy()
-            .into_owned(),
-        "--list".into(),
-    ]);
+    // A worker that exits at once is settled as an interrupted startup while
+    // its explorer is still pending, which races the row's own start. The
+    // substitute blocks on its release handshake until this fixture drops, so
+    // only the row decides the explorer's start and finish. Drop then releases
+    // the handshake and reaps the process before `root` is removed.
+    let worker_release = root.path().join("release-substitute-worker");
+    #[cfg(unix)]
+    let listener = crate::worker_fixture::install_owned(&worker_release);
+    #[cfg(not(unix))]
+    crate::worker_fixture::install(&worker_release, "created");
     Fixture {
-        _root: root,
         runtime,
         repo,
         parent,
         worktree,
+        worker_release,
+        #[cfg(unix)]
+        listener,
+        #[cfg(unix)]
+        workers: Mutex::new(Vec::new()),
+        #[cfg(unix)]
+        cleaned: Arc::new(AtomicBool::new(false)),
+        root,
+    }
+}
+
+#[cfg(unix)]
+impl Fixture {
+    /// Accept substitutes that already spawned. A run that never started a
+    /// worker has no log, so this does not wait for it.
+    fn own_outstanding(&self) -> io::Result<()> {
+        let mut pending: Vec<String> = self
+            .spawned_runs()?
+            .into_iter()
+            .filter(|run| !self.is_owned(run))
+            .collect();
+        while !pending.is_empty() {
+            let substitute = self.acquire_one(&pending)?;
+            pending.retain(|run| run != &substitute.run);
+            self.workers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(substitute);
+        }
+        Ok(())
+    }
+
+    fn spawned_runs(&self) -> io::Result<Vec<String>> {
+        let logs = &self.runtime.paths().logs_dir;
+        let entries = match std::fs::read_dir(logs) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut runs = Vec::new();
+        for entry in entries {
+            let name = entry?.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if let Some(run) = name.strip_suffix(".worker.log") {
+                runs.push(run.to_string());
+            }
+        }
+        Ok(runs)
+    }
+
+    fn is_owned(&self, run: &str) -> bool {
+        self.workers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|worker| worker.run == run)
+    }
+
+    fn held_workers(&self) -> Vec<HeldWorker> {
+        self.workers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|worker| HeldWorker {
+                run: worker.run.clone(),
+                pid: worker.pid,
+                starttime: worker.starttime,
+            })
+            .collect()
+    }
+
+    fn acquire_one(&self, pending: &[String]) -> io::Result<Substitute> {
+        let phase = std::cell::Cell::new("poll_listener");
+        self.acquire_one_at(pending, &phase).inspect_err(|error| {
+            let _ = writeln!(
+                io::stderr(),
+                "owned explorer worker acquisition failed: phase={} kind={:?} raw_os_error={:?} error={error}",
+                phase.get(),
+                error.kind(),
+                error.raw_os_error()
+            );
+        })
+    }
+
+    fn acquire_one_at(
+        &self,
+        pending: &[String],
+        phase: &std::cell::Cell<&'static str>,
+    ) -> io::Result<Substitute> {
+        use std::os::fd::AsRawFd;
+        let mut ready = libc::pollfd {
+            fd: self.listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // A bounded readiness wait, not a sleep that hides the marker race.
+        phase.set("poll_listener");
+        // SAFETY: one initialized pollfd, retained listener, bounded timeout.
+        let polled = unsafe { libc::poll(&mut ready, 1, 5_000) };
+        if polled <= 0 {
+            return Err(if polled == 0 {
+                io::Error::new(io::ErrorKind::TimedOut, "owned worker handshake")
+            } else {
+                io::Error::last_os_error()
+            });
+        }
+        phase.set("accept");
+        let (control, _) = self.listener.accept()?;
+        // Darwin inherits O_NONBLOCK from this fixture's listener. Readiness
+        // proves a connection is queued, not that the peer has written its
+        // identity. SO_RCVTIMEO does not make a nonblocking read wait.
+        phase.set("set_blocking");
+        control.set_nonblocking(false)?;
+        phase.set("set_read_timeout");
+        control.set_read_timeout(Some(Duration::from_secs(5)))?;
+        phase.set("set_write_timeout");
+        control.set_write_timeout(Some(Duration::from_secs(5)))?;
+        let mut reader = io::BufReader::new(control);
+        let mut identity = String::new();
+        phase.set("read_identity");
+        reader.read_line(&mut identity)?;
+        phase.set("parse_identity");
+        let (run, pid) = identity
+            .trim()
+            .split_once(' ')
+            .ok_or_else(|| io::Error::other("worker handshake identity"))?;
+        let pid: u32 = pid.parse().map_err(io::Error::other)?;
+        if !pending.iter().any(|expected| expected == run) {
+            return Err(io::Error::other(format!(
+                "worker is not a substitute this fixture spawned: {run}"
+            )));
+        }
+        phase.set("kernel_identity");
+        let (key, parent) = orbit_common::process::ancestry::process_start_and_parent(pid)
+            .ok_or_else(|| io::Error::other("worker kernel identity"))?;
+        if parent != std::process::id() {
+            return Err(io::Error::other("worker is not this fixture's child"));
+        }
+        phase.set("bind_process");
+        let process = orbit_common::process::signal::BoundProcess::bind(pid, None)?
+            .ok_or_else(|| io::Error::other("worker exited before ownership"))?;
+        phase.set("recheck_identity");
+        if orbit_common::process::ancestry::process_start_and_parent(pid) != Some((key, parent)) {
+            return Err(io::Error::other("worker changed during identity binding"));
+        }
+        Ok(Substitute {
+            run: run.to_string(),
+            pid,
+            starttime: key.starttime,
+            process,
+            control: reader.into_inner(),
+        })
+    }
+
+    /// Write the marker, release every handshake, and return only after each
+    /// substitute has observed the marker, been reaped, and had its supervisor
+    /// observer finish. A stop fallback is a failure: the caller keeps `root`.
+    fn release_reap_and_settle(&mut self) -> Result<(), String> {
+        let repo = self.runtime.paths().repo_root.clone();
+        let workers = self
+            .workers
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if workers.is_empty() {
+            return Ok(());
+        }
+        let mut failure = None;
+        if let Err(error) = std::fs::write(&self.worker_release, b"") {
+            failure = Some(format!("write release marker: {error}"));
+        }
+        for worker in workers.iter_mut() {
+            if failure.is_some() {
+                let _ = worker.process.signal(libc::SIGKILL);
+                continue;
+            }
+            if let Err(error) = worker.control.write_all(&[1]) {
+                failure = Some(format!(
+                    "run={} pid={} phase=write_release kind={:?} raw_os_error={:?} error={error}",
+                    worker.run,
+                    worker.pid,
+                    error.kind(),
+                    error.raw_os_error()
+                ));
+                let _ = worker.process.signal(libc::SIGKILL);
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let release_deadline = Instant::now() + Duration::from_secs(1);
+        let mut stopped = false;
+        loop {
+            if workers.iter().all(|worker| reaped(worker.pid)) {
+                break;
+            }
+            if !stopped && (failure.is_some() || Instant::now() >= release_deadline) {
+                stopped = true;
+                for worker in workers.iter().filter(|worker| !reaped(worker.pid)) {
+                    if let Err(error) = worker.process.signal(libc::SIGKILL) {
+                        failure = Some(format!("stop {}: {error}", worker.run));
+                    }
+                }
+                failure.get_or_insert_with(|| "owned worker did not observe release".to_string());
+            }
+            if Instant::now() >= deadline {
+                return Err(failure
+                    .unwrap_or_else(|| "owned worker reap deadline; root retained".to_string()));
+            }
+            // Bounded predicate observation, not an interleaving based on delay.
+            std::thread::park_timeout(Duration::from_millis(20));
+        }
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        for worker in workers.iter() {
+            if !release_observed(&self.runtime, &worker.run) {
+                return Err(format!(
+                    "run={} pid={} exited without observing the release marker",
+                    worker.run, worker.pid
+                ));
+            }
+        }
+        let settle_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let settled = workers.iter().all(|worker| {
+                orbit_core::test_support::pipeline_worker_observer_completed(
+                    &repo,
+                    &worker.run,
+                    worker.pid,
+                )
+            });
+            if settled {
+                return Ok(());
+            }
+            if Instant::now() >= settle_deadline {
+                return Err("supervisor settlement deadline; root retained".to_string());
+            }
+            std::thread::park_timeout(Duration::from_millis(20));
+        }
+    }
+
+    fn log_owned_workers(&mut self) {
+        let workers = self
+            .workers
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for worker in workers.iter() {
+            let path = self
+                .runtime
+                .paths()
+                .logs_dir
+                .join(format!("{}.worker.log", worker.run));
+            if let Ok(log) = std::fs::read_to_string(path) {
+                let _ = writeln!(
+                    io::stderr(),
+                    "owned substitute log: run={} pid={}\n{log}",
+                    worker.run,
+                    worker.pid
+                );
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn release_observed(runtime: &OrbitRuntime, run: &str) -> bool {
+    let path = runtime.paths().logs_dir.join(format!("{run}.worker.log"));
+    std::fs::read_to_string(path).is_ok_and(|log| log.contains("worker release observed:"))
+}
+
+/// The substitute is still at its release handshake: the marker is absent,
+/// the process is not reaped, and its supervisor has not finished.
+#[cfg(unix)]
+fn assert_held_before_teardown(fx: &Fixture) {
+    let held = fx.held_workers();
+    assert!(
+        !held.is_empty(),
+        "the admission row started no substitute to reap"
+    );
+    assert!(
+        !fx.worker_release.exists(),
+        "release marker must stay absent until teardown"
+    );
+    let repo = fx.runtime.paths().repo_root.clone();
+    for worker in &held {
+        assert!(
+            !reaped(worker.pid),
+            "substitute was reaped before teardown released the handshake"
+        );
+        assert!(
+            !orbit_core::test_support::pipeline_worker_observer_completed(
+                &repo,
+                &worker.run,
+                worker.pid,
+            ),
+            "supervisor completed before teardown released the handshake"
+        );
+    }
+}
+
+/// Drop has returned, so `root` is already gone only when release was
+/// observed, the substitute was reaped, and the supervisor finished first.
+#[cfg(unix)]
+fn assert_reaped_before_root_removal(
+    held: &[HeldWorker],
+    cleaned: &AtomicBool,
+    repo: &Path,
+    root: &Path,
+) {
+    assert!(
+        cleaned.load(Ordering::SeqCst),
+        "owned explorer substitute still live or zombie after teardown"
+    );
+    for worker in held {
+        assert!(
+            reaped(worker.pid),
+            "owned explorer substitute still live or zombie after teardown"
+        );
+        assert!(
+            orbit_core::test_support::pipeline_worker_observer_completed(
+                repo,
+                &worker.run,
+                worker.pid,
+            ),
+            "supervisor completion must be observed before the temporary root is removed"
+        );
+    }
+    assert!(
+        !root.exists(),
+        "the temporary root is removed only after the substitute is reaped"
+    );
+}
+
+#[cfg(unix)]
+fn prove_substitute_reaped_on_teardown(fx: Fixture) {
+    fx.own_outstanding()
+        .expect("own the explorer substitute before teardown");
+    assert_held_before_teardown(&fx);
+    let held = fx.held_workers();
+    let root = fx.root.path().to_path_buf();
+    let cleaned = Arc::clone(&fx.cleaned);
+    let repo = fx.runtime.paths().repo_root.clone();
+    // A failed assertion must not leave the substitute until its own deadline.
+    let _guard = StopSurvivors(held.clone());
+    drop(fx);
+    assert_reaped_before_root_removal(&held, &cleaned, &repo, &root);
+}
+
+#[cfg(unix)]
+fn prove_substitute_reaped_when_the_scenario_unwinds() {
+    for panic in [false, true] {
+        let fx = fixture(BUDGETS);
+        as_managed_agent(&fx.parent.run_id, "agent_implement");
+        let session = agent_session();
+        let cwd = fx.worktree.display().to_string();
+        let _submission = explore(&fx.runtime, ask(&cwd, &session));
+        fx.own_outstanding()
+            .expect("own the explorer substitute before teardown");
+        assert_held_before_teardown(&fx);
+        let held = fx.held_workers();
+        let root = fx.root.path().to_path_buf();
+        let cleaned = Arc::clone(&fx.cleaned);
+        let repo = fx.runtime.paths().repo_root.clone();
+        let _guard = StopSurvivors(held.clone());
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _fx = fx;
+            if panic {
+                panic!("injected explorer assertion unwind");
+            }
+            Err::<(), &str>("injected explorer observation error")
+        }));
+        assert_eq!(outcome.is_err(), panic);
+        if !panic {
+            let returned = outcome.expect("observation error stays inside the row");
+            assert!(returned.is_err(), "observation error stays inside the row");
+        }
+        assert_reaped_before_root_removal(&held, &cleaned, &repo, &root);
     }
 }
 
@@ -454,6 +938,116 @@ fn an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree() {
         listed[0].parent_activity.as_deref(),
         Some("agent_implement")
     );
+
+    #[cfg(unix)]
+    {
+        prove_substitute_reaped_on_teardown(fx);
+        prove_substitute_reaped_when_the_scenario_unwinds();
+        let _ = writeln!(
+            io::stderr(),
+            "explorer substitute observed release during teardown and was reaped before root removal"
+        );
+    }
+}
+
+/// Automatic exploration records the same pressure weights as other pools;
+/// a named crew stays pinned and an idempotent retry keeps the original draw.
+fn explorer_draws_record_pressure_and_retries_keep_the_original_pool() {
+    let crews = TWO_EXPLORER_CREWS
+        .replace(
+            "[workflow]",
+            "[workflow]\ncrew_selection = \"usage_pressure\"",
+        )
+        .replace(
+            "explorer = [\"haiku\", \"sonnet\"]",
+            "explorer = [\"haiku:1\", \"sonnet:3\", \"opus:0\"]",
+        )
+        .replace(
+            "[crews.sonnet]\nprovider = \"claude\"",
+            "[crews.sonnet]\nprovider = \"codex\"",
+        );
+    let fx = fixture_with(&crews, BUDGETS);
+    as_managed_agent(&fx.parent.run_id, "agent_implement");
+    crate::usage_pressure_draws::record_week(
+        &fx.runtime,
+        "claude",
+        10.0,
+        chrono::Duration::hours(6),
+    );
+    crate::usage_pressure_draws::record_week(&fx.runtime, "codex", 0.0, chrono::Duration::days(7));
+    let session = agent_session();
+    let cwd = fx.worktree.display().to_string();
+    let submission = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            idempotency_key: Some("weighted"),
+            ..ask(&cwd, &session)
+        },
+    );
+    // Compare the persisted JSON representation, including its float decode.
+    let recorded: Value =
+        serde_json::from_slice(&serde_json::to_vec(&submission).unwrap()).unwrap();
+    crate::usage_pressure_draws::assert_pool(
+        &recorded["eligible_pool"],
+        &[("haiku", 1, 8.0), ("opus", 0, 0.0), ("sonnet", 3, 3.0)],
+    );
+    assert_eq!(
+        input_of(&fx.runtime, &submission.run_id)["eligible_pool"],
+        recorded["eligible_pool"]
+    );
+    crate::usage_pressure_draws::record_week(
+        &fx.runtime,
+        "claude",
+        80.0,
+        chrono::Duration::days(6),
+    );
+    let retried = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            idempotency_key: Some("weighted"),
+            crew: Some("sonnet"),
+            ..ask(&cwd, &session)
+        },
+    );
+    assert!(retried.deduplicated);
+    assert_eq!(retried.crew, submission.crew);
+    assert_eq!(json!(retried)["eligible_pool"], recorded["eligible_pool"]);
+    let response = fx
+        .runtime
+        .run_tool(
+            "orbit.agent.invoke",
+            json!({
+                "prompt": "inspect the retry budget", "cwd": cwd, "crew": "sonnet",
+                "idempotency_key": "weighted",
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        response["eligible_pool"], recorded["eligible_pool"],
+        "the governed tool exposes the frozen draw too"
+    );
+
+    let current = jobs(&fx.runtime)
+        .get_job_run(&submission.run_id)
+        .expect("read explorer before finishing")
+        .expect("explorer exists");
+    if current.state == JobRunState::Pending {
+        // The substitute worker can win the enqueue race and interrupt the
+        // run before this fixture gets to its manual start.
+        finish(&fx.runtime, &submission.run_id);
+    }
+    let pinned = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            crew: Some("sonnet"),
+            ..ask(&cwd, &session)
+        },
+    );
+    assert_eq!(pinned.crew, "sonnet");
+    assert_eq!(
+        json!(pinned)["eligible_pool"],
+        json!([{"name": "sonnet", "weight": 3}])
+    );
 }
 
 fn an_out_of_pool_crew_and_a_foreign_cwd_are_refused() {
@@ -542,6 +1136,261 @@ fn explorer_budgets_refuse_with_the_setting_named() {
         "workflow.explore.max_calls_per_run",
     );
     assert_eq!(explorer_count(&fx.runtime), 2);
+}
+
+/// A read-only primary state directory still admits one bounded explorer from
+/// the calling run's own writable worktree [ORB-19448].
+///
+/// The admission lock lives in the worktree scratch, so the primary
+/// `.orbit/state` mount being read-only refuses nothing. The run-id and stale
+/// task-fallback worktrees share one admission lock, even when concurrent
+/// calls start in different roots; neither root splits the per-run budgets.
+fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
+    struct ReadOnlyStateGuard {
+        path: PathBuf,
+        original: std::fs::Permissions,
+    }
+
+    impl ReadOnlyStateGuard {
+        fn make(state_dir: &Path) -> Self {
+            let original = std::fs::metadata(state_dir)
+                .expect("stat the primary state directory")
+                .permissions();
+            let mut read_only = original.clone();
+            read_only.set_readonly(true);
+            std::fs::set_permissions(state_dir, read_only)
+                .expect("make the primary state directory read-only");
+            Self {
+                path: state_dir.to_path_buf(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for ReadOnlyStateGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.path, self.original.clone());
+        }
+    }
+
+    // Leave two calls after the first finishes, so the race must enforce the
+    // concurrency ceiling rather than merely consuming the last call slot.
+    let fx = fixture(&BUDGETS.replace("max_calls_per_run = 2", "max_calls_per_run = 3"));
+    let owned = orbit_engine::run_worktree_paths(&fx.repo, &fx.parent)
+        .expect("the parent's owned worktrees");
+    assert_eq!(owned.len(), 2, "the run has a task-derived fallback path");
+    let fallback = &owned[1];
+    git(
+        &fx.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            fallback.to_str().expect("utf-8 fallback worktree"),
+        ],
+    );
+    let tests_dir = fallback.join("tests");
+    std::fs::create_dir_all(&tests_dir).expect("directory in the fallback worktree");
+    // The worker log and other state stores are created before the primary
+    // state directory goes read-only: existing writable subdirectories stay
+    // writable under a read-only parent (only new entries directly in the
+    // parent refuse), which is exactly the mount state the regression covers.
+    for dir in [
+        &fx.runtime.paths().logs_dir,
+        &fx.runtime.paths().audit_dir,
+        &fx.runtime.paths().job_runs_dir,
+    ] {
+        std::fs::create_dir_all(dir).expect("pre-create a writable state subdirectory");
+    }
+    let guard = ReadOnlyStateGuard::make(&fx.runtime.paths().state_dir);
+    as_managed_agent(&fx.parent.run_id, "agent_implement");
+    let session = agent_session();
+    let src_cwd = fx.worktree.join("src").display().to_string();
+    let tests_cwd = tests_dir.display().to_string();
+
+    // Through the governed tool surface, as the MCP server calls it.
+    let response = fx
+        .runtime
+        .run_tool(
+            "orbit.agent.invoke",
+            json!({
+                "prompt": "where is the retry budget enforced",
+                "cwd": src_cwd,
+                "idempotency_key": "readonly-first",
+            }),
+        )
+        .expect("a read-only primary state directory still admits an explorer");
+    assert_eq!(response["job_id"], json!(EXPLORE_JOB_ID));
+    assert_eq!(
+        (&response["sandboxed"], &response["read_only"]),
+        (&json!(true), &json!(true))
+    );
+    assert_eq!(response["deduplicated"], json!(false));
+    assert_eq!(response["parent_run_id"], json!(fx.parent.run_id));
+    assert!(
+        response.get("authorized_by").is_none(),
+        "no operator authorized an explorer"
+    );
+    let run_id = response["run_id"]
+        .as_str()
+        .expect("explorer run")
+        .to_string();
+    assert_eq!(explorer_count(&fx.runtime), 1);
+    let scratch_lock = fx.worktree.join(".orbit/tmp/.agent_explore_admission.lock");
+    assert!(
+        scratch_lock.exists(),
+        "the admission lock lives in the calling worktree scratch: {}",
+        scratch_lock.display()
+    );
+    let state_lock = fx
+        .runtime
+        .paths()
+        .state_dir
+        .join(".agent_explore_admission.lock");
+    assert!(
+        !state_lock.exists(),
+        "no admission lock is placed in the read-only primary state directory"
+    );
+    let persisted = input_of(&fx.runtime, &run_id);
+    assert!(
+        persisted.get(TRUSTED_HOST_ADMISSION_KEY).is_none(),
+        "an explorer never carries a trusted-host admission"
+    );
+
+    // A retry with the same key but a different owned root resolves the same run
+    // and keeps its persisted settings, so differing `cwd` values share the
+    // same per-parent lock.
+    let retried = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            idempotency_key: Some("readonly-first"),
+            crew: Some("haiku"),
+            timeout_seconds: Some(30),
+            ..ask(&tests_cwd, &session)
+        },
+    );
+    assert!(retried.deduplicated);
+    assert_eq!(retried.run_id, run_id);
+    assert_eq!(
+        retried.cwd,
+        response["cwd"].as_str().expect("persisted cwd")
+    );
+    assert_eq!(explorer_count(&fx.runtime), 1);
+    let fallback_lock = fallback.join(".orbit/tmp/.agent_explore_admission.lock");
+    assert!(
+        !fallback_lock.exists(),
+        "the fallback cwd must use the run-id worktree's existing admission lock"
+    );
+
+    // A second new call from the fallback worktree while one explorer is active
+    // is refused on the concurrency budget, not split into a second run.
+    let concurrent = refusal(&fx.runtime, ask(&tests_cwd, &session));
+    assert!(
+        matches!(&concurrent, OrbitError::CapabilityDenied(message)
+            if message.contains("workflow.explore.max_concurrent_per_run")),
+        "a second active explorer is refused: {concurrent:?}"
+    );
+    assert_eq!(explorer_count(&fx.runtime), 1);
+
+    finish(&fx.runtime, &run_id);
+
+    // Race the public tool from both owned roots with two call slots free:
+    // exactly one is admitted and the other names the concurrency ceiling.
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let (first, second) = std::thread::scope(|scope| {
+        let fx_ref = &fx;
+        let barrier_first = std::sync::Arc::clone(&barrier);
+        let barrier_second = std::sync::Arc::clone(&barrier);
+        let src = src_cwd.clone();
+        let fallback_cwd = tests_cwd.clone();
+        let first = scope.spawn(move || {
+            barrier_first.wait();
+            fx_ref.runtime.run_tool(
+                "orbit.agent.invoke",
+                json!({
+                    "prompt": "where is the retry budget enforced",
+                    "cwd": src,
+                }),
+            )
+        });
+        let second = scope.spawn(move || {
+            barrier_second.wait();
+            fx_ref.runtime.run_tool(
+                "orbit.agent.invoke",
+                json!({
+                    "prompt": "where is the retry budget enforced",
+                    "cwd": fallback_cwd,
+                }),
+            )
+        });
+        (
+            first.join().expect("first concurrent call joins"),
+            second.join().expect("second concurrent call joins"),
+        )
+    });
+    let admitted = [first, second]
+        .into_iter()
+        .partition::<Vec<_>, _>(|result| result.is_ok());
+    assert_eq!(
+        admitted.0.len(),
+        1,
+        "exactly one concurrent call is admitted while the other keeps the budget"
+    );
+    let refused = admitted.1.into_iter().next().expect("one refusal");
+    let error = refused.expect_err("the losing call is refused");
+    assert!(
+        matches!(&error, OrbitError::CapabilityDenied(message)
+            if message.contains("workflow.explore.max_concurrent_per_run")),
+        "the concurrent loser names the concurrency budget: {error:?}"
+    );
+    assert_eq!(explorer_count(&fx.runtime), 2);
+
+    assert!(
+        !fallback_lock.exists(),
+        "concurrent calls from both owned worktrees must keep one admission lock"
+    );
+    let winner = admitted
+        .0
+        .into_iter()
+        .next()
+        .expect("one admitted explorer")
+        .expect("successful tool response");
+    finish(&fx.runtime, winner["run_id"].as_str().expect("winning run"));
+    let last = explore(&fx.runtime, ask(&tests_cwd, &session));
+    assert_eq!(last.calls_used, 3);
+    finish(&fx.runtime, &last.run_id);
+
+    // The per-run call budget is now spent across both worktrees.
+    let exhausted = refusal(&fx.runtime, ask(&src_cwd, &session));
+    assert!(
+        matches!(&exhausted, OrbitError::CapabilityDenied(message)
+            if message.contains("workflow.explore.max_calls_per_run")),
+        "an exhausted run names its call budget: {exhausted:?}"
+    );
+    assert_eq!(explorer_count(&fx.runtime), 3);
+
+    // Invalid caller and outside-worktree directories still refuse before an
+    // explorer is submitted, even with the primary state read-only.
+    let foreign = refusal(&fx.runtime, ask(&fx.repo.display().to_string(), &session));
+    assert!(
+        matches!(foreign, OrbitError::PolicyDenied(_)),
+        "an explorer reads only its caller's own worktree, got {foreign:?}"
+    );
+    as_managed_agent(&fx.parent.run_id, "agent_review");
+    let wrong_activity = refusal(&fx.runtime, ask(&src_cwd, &session));
+    assert!(
+        matches!(wrong_activity, OrbitError::CapabilityDenied(_)),
+        "only an implement or review-repair agent delegates: {wrong_activity:?}"
+    );
+    as_managed_agent(&fx.parent.run_id, "agent_implement");
+    assert_eq!(explorer_count(&fx.runtime), 3);
+
+    drop(guard);
+    #[cfg(unix)]
+    {
+        prove_substitute_reaped_on_teardown(fx);
+    }
 }
 
 fn the_switch_off_refuses_every_caller() {
@@ -783,6 +1632,7 @@ fn the_explorer_sandbox_denies_writes_the_implementer_may_make() {
 fn implement_invocation(runtime: &OrbitRuntime, run_id: &str, activity: &str, ms: u64, usd: f64) {
     runtime
         .insert_invocation_trace_record(&orbit_store::contracts::InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: run_id.to_string(),
             account: None,
             activity_id: activity.to_string(),
@@ -886,7 +1736,9 @@ fn compare_explorer_invocations(implement_step: &str, explore_step: &str) {
 crate::scenario_table!(
     agent_explore_admission_scenarios,
     an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree,
+    a_read_only_primary_state_dir_still_admits_one_bounded_explorer,
     an_out_of_pool_crew_and_a_foreign_cwd_are_refused,
+    explorer_draws_record_pressure_and_retries_keep_the_original_pool,
     explorer_budgets_refuse_with_the_setting_named,
     the_switch_off_refuses_every_caller,
     other_agents_and_explorers_themselves_are_refused,

@@ -14,12 +14,13 @@
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_types::task::{RegressionEscape, RegressionNature};
+use orbit_types::task::{DefectSeverity, RegressionEscape, RegressionNature};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Map, Value, json};
 
 use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts, filing_attempt};
-use super::records::{Cause, complexity_weight, label};
+use super::records::{Cause, label};
+use super::roles::pilot_warnings::{Assessment, Outcome};
 use super::roles::pilots::{Graded, costly_charge_detail, wait_charge_detail};
 use super::{AgentFacts, AgentRole, MODEL_UNKNOWN};
 use crate::application::task::FindingVerdict;
@@ -58,6 +59,16 @@ pub struct Charge {
     pub detail: String,
     /// The rework cause, for rework.
     pub(super) cause: Option<Cause>,
+    /// The regression link's severity, for a regression.
+    pub severity: Option<DefectSeverity>,
+}
+
+impl Charge {
+    /// How much the charge counts in its term: a regression by its
+    /// severity's weight (critical 8 down to nit 0.25), anything else 1.
+    pub(super) fn severity_weight(&self) -> f64 {
+        self.severity.map_or(1.0, DefectSeverity::weight)
+    }
 }
 
 /// Landed credit for the implementation run whose candidate landed.
@@ -67,7 +78,7 @@ pub struct Credit {
     pub crew: Option<String>,
     pub model: Option<String>,
     pub run_id: Option<String>,
-    /// The landed task's complexity weight.
+    /// Unit landed credit; retained for consumers of the scan's credits.
     pub weight: i64,
     /// When the task was done.
     pub at: Option<DateTime<Utc>>,
@@ -89,6 +100,7 @@ pub(super) fn attribute(
         for record in &task.records {
             charges.push(record_charge(task, record));
         }
+        charges.extend(pilot_warning_charge(task));
         for review in &task.reviews {
             charges.extend(review_charge(task, review));
             for finding in review.disposed() {
@@ -98,6 +110,7 @@ pub(super) fn attribute(
                     at: review.at,
                     detail: format!("review attempt {}: {}", review.attempt_id, finding.line),
                     cause: None,
+                    severity: None,
                 };
                 charges.push(charge.reviewer(Some(review)));
             }
@@ -106,13 +119,14 @@ pub(super) fn attribute(
             && let Some(attempt) = task
                 .final_attempt
                 .and_then(|index| task.attempts.get(index))
+                .filter(|attempt| !attempt.no_diff())
         {
             credits.push(Credit {
                 task_id: task.id.clone(),
                 crew: attempt.runner.crew.clone(),
                 model: attempt.runner.model.clone(),
                 run_id: attempt.runner.run_id.clone(),
-                weight: complexity_weight(task.complexity),
+                weight: 1,
                 at: task.landed_at,
                 anchor: attempt.start,
             });
@@ -140,6 +154,7 @@ pub(super) fn attribute(
             at,
             detail: "finding verification REJECTED this review-filed finding".to_string(),
             cause: None,
+            severity: None,
         };
         charges.push(draft.review_job(filing_attempt(&by_id, task)));
     }
@@ -154,6 +169,70 @@ pub(super) fn attribute(
     (charges, credits)
 }
 
+/// A confirmed scope warning charges its orchestrator once per task. The
+/// shared pilot settlement is authoritative, without the pilot score's
+/// minimum support. Keep existing charges when they already count the event
+/// that confirmed any qualifying warning; unrelated later defects still count.
+fn pilot_warning_charge(task: &TaskFacts) -> Option<Charge> {
+    task.orchestrator.as_ref()?;
+    let mut confirmed = None;
+    for assessment in &task.warnings.assessments {
+        if assessment.outcome != Outcome::Confirmed
+            || !assessment
+                .held
+                .iter()
+                .any(|finding| spec_warning(&finding.kind))
+        {
+            continue;
+        }
+        let Some((at, _)) = &assessment.settled else {
+            continue;
+        };
+        if task.records.iter().any(|record| {
+            record.at == *at
+                && matches!(
+                    record.problem,
+                    Problem::SpecEdit | Problem::CriteriaBlock | Problem::CriteriaEscalation
+                )
+        }) {
+            return None;
+        }
+        confirmed.get_or_insert(assessment);
+    }
+    let assessment: &Assessment = confirmed?;
+    let (at, settlement) = assessment.settled.as_ref()?;
+    let findings: Vec<String> = assessment
+        .held
+        .iter()
+        .filter(|finding| spec_warning(&finding.kind))
+        .map(|finding| format!("{}: {}", finding.kind, finding.text))
+        .collect();
+    let run_id = assessment.run_id();
+    Some(
+        Draft {
+            task,
+            problem: Problem::PilotWarning,
+            at: *at,
+            detail: format!(
+                "confirmed task-pilot hold (pilot run {}): {}; {settlement}",
+                run_id.as_deref().unwrap_or("unknown"),
+                findings.join("; ")
+            ),
+            cause: None,
+            severity: None,
+        }
+        .orchestrator(),
+    )
+}
+
+/// Prerequisite ordering (`blocked_by`) is not an unattainable specification.
+fn spec_warning(kind: &str) -> bool {
+    matches!(
+        kind,
+        "validation_tool_warnings" | "adr_conflicts" | "surface_warnings" | "utility_warnings"
+    )
+}
+
 /// A problem on `task` before its owner is decided.
 struct Draft<'a> {
     task: &'a TaskFacts,
@@ -161,6 +240,7 @@ struct Draft<'a> {
     at: DateTime<Utc>,
     detail: String,
     cause: Option<Cause>,
+    severity: Option<DefectSeverity>,
 }
 
 impl Draft<'_> {
@@ -183,6 +263,7 @@ impl Draft<'_> {
             anchor,
             detail: self.detail,
             cause: self.cause,
+            severity: self.severity,
         }
     }
 
@@ -211,11 +292,16 @@ impl Draft<'_> {
     }
 
     /// The implementation attempt at `index`, or Not scored when the task
-    /// has no attempt to charge.
+    /// has no attempt to charge. An attempt admitted as
+    /// `no-diff-expected` work is not implementation, so its problems
+    /// charge no implementer row.
     fn implementer(self, index: Option<usize>) -> Charge {
         let Some(attempt) = index.and_then(|index| self.task.attempts.get(index)) else {
             return self.not_scored("no_run");
         };
+        if attempt.no_diff() {
+            return self.not_scored("no_diff_expected");
+        }
         let runner = attempt.runner.clone();
         let anchor = attempt.start;
         self.charge(
@@ -271,6 +357,7 @@ fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
         at: record.at,
         detail: record.detail.clone(),
         cause: record.cause,
+        severity: None,
     };
     match record.problem {
         Problem::SpecEdit | Problem::CriteriaBlock | Problem::CriteriaEscalation => {
@@ -298,7 +385,8 @@ fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
         }
         // Read from settlements, verdicts, relations and pilot grading, never
         // from records.
-        Problem::ReviewReject
+        Problem::PilotWarning
+        | Problem::ReviewReject
         | Problem::ReviewFixes
         | Problem::Regression
         | Problem::DisposedFinding
@@ -332,6 +420,7 @@ fn review_charge(task: &TaskFacts, review: &Review) -> Option<Charge> {
             review.verdict.as_str()
         ),
         cause: None,
+        severity: None,
     };
     Some(match problem {
         Problem::FalseReject => Draft {
@@ -350,18 +439,21 @@ fn review_charge(task: &TaskFacts, review: &Review) -> Option<Charge> {
 
 /// The owner of a regression: its escape names the safeguard that failed.
 fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
-    let classification = link.classification;
+    let classification = &link.classification;
     let draft = Draft {
         task,
         problem: Problem::Regression,
         at: link.at,
         detail: format!(
-            "{} regressed it (nature {}, escape {})",
+            "{} regressed it (nature {}, escape {}, severity {} from {})",
             link.regressing,
             label(&classification.nature),
             label(&classification.escape),
+            classification.severity.as_str(),
+            classification.severity_source.as_str(),
         ),
         cause: None,
+        severity: Some(classification.severity),
     };
     match classification.nature {
         RegressionNature::MergeReintroduced => return draft.not_scored("merge_reintroduced"),
@@ -405,6 +497,7 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
             anchor: graded.at,
             detail,
             cause: None,
+            severity: None,
         }
     };
     let misses = graded.costly.iter().map(move |(path, contest)| {

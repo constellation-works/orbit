@@ -60,11 +60,20 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
 fn both_promotion_authorities_keep_real_warning_holds() {
     for sweep in [false, true] {
         let workspace = Workspace::new();
-        let blocker = workspace.task(
-            "unfinished prerequisite",
-            &[],
-            &["file:README.md"],
-            TaskComplexity::Low,
+        workspace.commit_file(
+            "AGENTS.md",
+            "The integrator owns fixture-tool.json. Feature tasks may edit README.md only.\n",
+            "record fixture ownership",
+        );
+        let revision = workspace.commit_file(
+            "fixture-tool.json",
+            r#"{"name":"fixture.read","output_schema_json":{"type":"object","properties":{"value":{"type":"string"}},"additionalProperties":false}}"#,
+            "pin tool output without ready",
+        );
+        let missing_contract = format!(
+            "Criterion 1 requires fixture.read output field ready, absent from fixture-tool.json:1 at {revision}. \
+             Dependency coverage: none. AGENTS.md:1 reserves schema edits for the integrator. \
+             Add an integrator prerequisite supplying ready: boolean, or rewrite the criterion."
         );
         let cases = [
             (
@@ -73,7 +82,7 @@ fn both_promotion_authorities_keep_real_warning_holds() {
             ),
             (
                 "utility_warnings",
-                json!({"text": "The lane cannot validate this criterion.", "holds_promotion": true}),
+                json!({"text": missing_contract, "holds_promotion": true}),
             ),
             ("surface_warnings", json!("Legacy surface warning")),
             ("utility_warnings", json!("Legacy utility warning")),
@@ -81,7 +90,8 @@ fn both_promotion_authorities_keep_real_warning_holds() {
                 "adr_conflicts",
                 json!("The current contract conflicts with this task."),
             ),
-            ("blocked_by", json!(blocker.id)),
+            // A prerequisite no dependency edge enforces still holds.
+            ("blocked_by", json!("Wait for ORB-999999999 to land")),
         ];
         for (index, (field, finding)) in cases.into_iter().enumerate() {
             let tags = if sweep {
@@ -95,10 +105,26 @@ fn both_promotion_authorities_keep_real_warning_holds() {
                 &["file:README.md"],
                 TaskComplexity::Low,
             );
+            if index == 1 {
+                workspace.edit(
+                    &task,
+                    TaskUpdateParams {
+                        description: Some("Display fixture.read readiness in README.md without changing the integrator's schema.".into()),
+                        acceptance_criteria: Some(vec![
+                            "Read the boolean ready output field from fixture.read.".into(),
+                        ]),
+                        ..Default::default()
+                    },
+                );
+            }
             let mut assessed = assessment(&task);
             assessed[field] = json!([finding]);
             // An advisory item must not hide a holding item in the same list.
-            assessed["surface_warnings"]
+            let advisory_field = match field {
+                "surface_warnings" | "utility_warnings" => field,
+                _ => "surface_warnings",
+            };
+            assessed[advisory_field]
                 .as_array_mut()
                 .unwrap()
                 .push(json!({"text": "Optional adjacent cleanup.", "holds_promotion": false}));
@@ -126,6 +152,69 @@ fn both_promotion_authorities_keep_real_warning_holds() {
                     .as_str()
                     .unwrap_or_else(|| finding["text"].as_str().unwrap());
                 assert_eq!(held["findings"][0]["text"], text);
+            }
+            if index == 1 {
+                let shown = workspace
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": task.id}))
+                    .unwrap();
+                assert_eq!(
+                    shown["pilot_warnings"],
+                    json!([{
+                        "kind": "utility_warnings", "text": missing_contract,
+                    }])
+                );
+
+                // The same feature may be promoted once an explicit dependency
+                // owns the missing contract. The dependency gates execution;
+                // the pilot need not manufacture an additional warning hold.
+                let dependency = workspace.task(
+                    "Integrator adds fixture.read ready output",
+                    &[],
+                    &["file:fixture-tool.json"],
+                    TaskComplexity::Low,
+                );
+                workspace.edit(
+                    &dependency,
+                    TaskUpdateParams {
+                        description: Some(
+                            "Integrator work: extend the fixture.read output schema.".into(),
+                        ),
+                        acceptance_criteria: Some(vec![
+                            "fixture-tool.json defines ready as a boolean output field.".into(),
+                        ]),
+                        plan: Some(
+                            "Add ready to fixture-tool.json and its output producer.".into(),
+                        ),
+                        ..Default::default()
+                    },
+                );
+                workspace.edit(
+                    &task,
+                    TaskUpdateParams {
+                        dependencies: Some(vec![dependency.id.clone()]),
+                        ..Default::default()
+                    },
+                );
+                let mut covered = assessment(&task);
+                covered["assessment_rationale"] = json!(format!(
+                    "fixture.read.ready is absent at {revision} (fixture-tool.json:1); \
+                     dependency {} explicitly adds that boolean field within its integrator scope. \
+                     The feature edits only README.md under AGENTS.md:1.",
+                    dependency.id
+                ));
+                let covered = apply_authority(&workspace, &task, covered, sweep);
+                assert_eq!(covered[key][0]["decision"], "promote", "{covered}");
+                assert_eq!(workspace.status(&task), TaskStatus::Backlog);
+                let shown = workspace
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": task.id}))
+                    .unwrap();
+                assert_eq!(shown["pilot_warnings"], json!([]), "{shown}");
+                assert_eq!(
+                    workspace.runtime.get_task(&task.id).unwrap().dependencies(),
+                    [dependency.id]
+                );
             }
         }
         let task = workspace.task(
@@ -216,6 +305,145 @@ fn malformed_advisories_are_rejected_without_approval() {
     }
 }
 
+fn dependency_warnings_agree_across_promotion_projection_and_triage() {
+    for sweep in [false, true] {
+        let workspace = Workspace::new();
+        let dependency = workspace.task(
+            "prerequisite",
+            &[],
+            &["file:README.md"],
+            TaskComplexity::Low,
+        );
+        let unfinished =
+            workspace.task("unrecorded", &[], &["file:README.md"], TaskComplexity::Low);
+        let done = workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: "landed prerequisite".into(),
+                description: "Already landed.".into(),
+                acceptance_criteria: vec!["Done.".into()],
+                plan: "Nothing remains.".into(),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap();
+        for field in ["utility_warnings", "surface_warnings"] {
+            for (case, text, holds) in [
+                (
+                    "dependencies",
+                    format!("Wait for {} to land", dependency.id),
+                    false,
+                ),
+                (
+                    "relations",
+                    format!("Wait for {} to land", dependency.id),
+                    false,
+                ),
+                ("done", format!("Wait for {} to land", done.id), false),
+                (
+                    "unrecorded",
+                    format!("Wait for {} to land", unfinished.id),
+                    true,
+                ),
+                (
+                    "mixed",
+                    format!("Wait for {} and {} to land", dependency.id, unfinished.id),
+                    true,
+                ),
+                ("no ID", "A prerequisite has not landed".into(), true),
+            ] {
+                let task = workspace.task(
+                    &format!("{field} {case}"),
+                    &["ci-failure-sweep", "ci-failure:fixture-key"],
+                    &["file:README.md"],
+                    TaskComplexity::Low,
+                );
+                workspace.edit(
+                    &task,
+                    TaskUpdateParams {
+                        dependencies: (case != "relations").then(|| vec![dependency.id.clone()]),
+                        relations: (case == "relations").then(|| {
+                            vec![TaskRelation {
+                                relation_type: TaskRelationType::BlockedBy,
+                                target: dependency.id.clone(),
+                                regression: None,
+                            }]
+                        }),
+                        ..Default::default()
+                    },
+                );
+                let mut assessed = assessment(&task);
+                assessed[field] = json!([{"text": text, "holds_promotion": true}]);
+
+                // First persist without promotion authority: warning projection
+                // and triage must agree while the task is still proposed.
+                let pilot = workspace.running("task_pilot_pipeline", json!({}));
+                let applied = workspace
+                    .apply(&pilot, vec![assessed.clone()], json!({}))
+                    .unwrap();
+                assert_eq!(applied["status"], "succeeded", "{applied}");
+                assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+                let shown = workspace
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": task.id}))
+                    .unwrap();
+                assert_eq!(
+                    shown["pilot_warnings"].as_array().unwrap().len(),
+                    usize::from(holds),
+                    "{field} {case}: {shown}"
+                );
+                let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+                assert_eq!(
+                    triage["qualifying"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|candidate| candidate["task_id"] == task.id.as_str()),
+                    holds,
+                    "{field} {case}: {triage}"
+                );
+
+                let applied = apply_authority(&workspace, &task, assessed, sweep);
+                let key = if sweep {
+                    "ci_sweep_admission"
+                } else {
+                    "drain_approval"
+                };
+                assert_eq!(applied["status"], "succeeded", "{applied}");
+                assert_eq!(
+                    applied[key][0]["decision"],
+                    if holds { "withhold" } else { "promote" },
+                    "{field} {case}: {applied}"
+                );
+                if !sweep {
+                    assert_eq!(applied[key][0]["approved"] == true, !holds, "{applied}");
+                }
+                assert_eq!(
+                    workspace.status(&task),
+                    if holds {
+                        TaskStatus::Proposed
+                    } else {
+                        TaskStatus::Backlog
+                    }
+                );
+                // Warnings never invent an edge for an unfinished named task.
+                assert_eq!(
+                    workspace.runtime.get_task(&task.id).unwrap().dependencies(),
+                    [dependency.id.as_str()]
+                );
+                if !sweep {
+                    let selection = workspace.select(applied["fixture_drain"].as_str().unwrap());
+                    assert_eq!(
+                        held_reason(&selection, &task),
+                        holds.then_some("warnings"),
+                        "{field} {case}: {selection}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn apply_authority(workspace: &Workspace, task: &Task, assessed: Value, sweep: bool) -> Value {
     if sweep {
         let run = workspace.running("ci_failure_sweep_pipeline", json!({}));
@@ -243,5 +471,6 @@ crate::scenario_table!(
     advisory_promotion_scenarios,
     advisory_findings_are_approved_and_reach_the_worker,
     both_promotion_authorities_keep_real_warning_holds,
-    malformed_advisories_are_rejected_without_approval
+    malformed_advisories_are_rejected_without_approval,
+    dependency_warnings_agree_across_promotion_projection_and_triage
 );

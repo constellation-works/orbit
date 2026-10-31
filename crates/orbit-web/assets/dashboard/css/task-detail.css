@@ -139,6 +139,71 @@
 .attention-action:hover { border-color: var(--attention-fg); color: var(--fg-strong); }
 .attention-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* Read-only facts for a blocked task or a held delivery run. The block
+   callout above it keeps the actions; this card only answers why. */
+.why-stuck {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+}
+.why-stuck-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--fg-strong);
+}
+.why-stuck-rows { display: grid; gap: 8px; margin: 0; }
+.why-stuck-row {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+}
+.why-stuck-label {
+  margin: 0;
+  color: var(--fg-mute);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.why-stuck-value {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.why-stuck-value.clamped .why-stuck-text {
+  max-height: 7.25em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
+  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+.why-stuck-checks {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.why-stuck-check {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.why-stuck-check-name { min-width: 0; overflow-wrap: anywhere; }
+.why-stuck-state { flex: none; font-variant-numeric: tabular-nums; color: var(--fg-mute); }
+.why-stuck-check[data-state="failed"] .why-stuck-state { color: var(--state-failed); font-weight: 600; }
+.why-stuck-check[data-state="passed"] .why-stuck-state { color: var(--state-success); }
+.why-stuck-check[data-state="pending"] .why-stuck-state { color: var(--warn-fg); }
+
 /* Implemented → Handed off → Approved → Landing → Done, from the claim. */
 .delivery-progress {
   list-style: none;
@@ -172,12 +237,30 @@
   grid-column: 1 / -1;
 }
 
+/* Everything above the tab content (the pane head, the state block, the
+   callouts, delivery progress, stage strip and the tab strip) sits on one
+   darker band.
+   The band runs to the detail's edges and up to the sticky head; the strip's
+   bottom edge is its 1px border line. */
+.detail-band {
+  display: grid;
+  /* Keep intrinsic child widths, such as the delivery-stage strip, from
+     widening the band beyond the pane's available width. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  margin: -16px -20px 0;
+  padding: 16px 20px 0;
+  background: var(--bg);
+}
 .detail-tabs {
   display: flex;
-  gap: 20px;
+  align-items: flex-end;
+  gap: 2px;
   margin: 2px -20px 0;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--hair);
+  /* The 1px bottom padding is the band's edge: it is drawn here, inside the
+     strip's overflow clip, so the active tab can overlap it. */
+  padding: 0 12px 1px;
+  background: linear-gradient(var(--border), var(--border)) bottom / 100% 1px no-repeat;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -185,11 +268,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 38px;
+  flex: none;
+  min-height: 40px;
   margin-bottom: -1px;
-  padding: 0 1px;
-  border: 0;
-  border-bottom: 2px solid transparent;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
   background: transparent;
   color: var(--fg-mute);
   font: inherit;
@@ -198,20 +283,31 @@
   cursor: pointer;
 }
 .detail-tab:hover { color: var(--fg); }
-.detail-tab.active { color: var(--fg-strong); font-weight: 500; border-bottom-color: var(--accent); }
+/* The raised tab takes the content colour and its bottom edge is open, so it
+   joins the content below with no seam. */
+.detail-tab.active {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  border-bottom: 0;
+  box-shadow: inset 0 2px 0 var(--accent);
+  color: var(--fg-strong);
+  font-weight: 500;
+}
 .detail-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Narrow panes scroll the tab strip as labels and counts outgrow the sheet. */
 @container task-pane (max-width: 440px) {
   .task-detail-pane .row-detail { padding: 14px 16px 16px; }
-  .detail-tabs { gap: 12px; margin: 2px -16px 0; padding: 0 16px; }
+  .task-detail-pane .detail-band { margin: -14px -16px 0; padding: 14px 16px 0; }
+  .detail-tabs { gap: 2px; margin: 2px -16px 0; padding: 0 8px 1px; }
   .detail-tab { gap: 4px; }
+  .why-stuck-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 .detail-tab-count { color: var(--fg-mute); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .detail-tab-count:empty { display: none; }
 .detail-tabpanel { min-width: 0; }
 .detail-tabpanel[hidden] { display: none; }
 
-.history-list { display: flex; flex-direction: column; }
+.history-list { min-width: 0; }
 
 .task-run-list {
   display: flex;
@@ -344,6 +440,7 @@
   gap: 18px;
 }
 .task-levers {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -380,6 +477,12 @@
 .task-chip-host {
   --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='2' width='20' height='8' rx='2'/%3E%3Crect x='2' y='14' width='20' height='8' rx='2'/%3E%3Cpath d='M6 6h.01M6 18h.01'/%3E%3C/svg%3E");
 }
+.task-chip-risk {
+  --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z'/%3E%3Cpath d='M12 9v4M12 17h.01'/%3E%3C/svg%3E");
+  font-variant-numeric: tabular-nums;
+}
+.task-chip-risk.risk-elevated { border-color: var(--warn-line); color: var(--warn-fg); }
+.task-chip-risk.risk-none .risk-value { color: var(--fg-mute); font-weight: 400; }
 .task-chip .fact-note { color: var(--fg-mute); font-weight: 400; }
 .task-chip .value { display: inline-flex; align-items: center; gap: 6px; }
 
@@ -406,12 +509,15 @@
   border-radius: 999px;
   font-size: 12.5px;
   font-weight: 500;
-  text-transform: capitalize;
   appearance: none;
   -webkit-appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%238b95a3' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 10px center;
+}
+.task-levers .task-complexity-select,
+.task-crew-control .task-crew-select {
+  text-transform: capitalize;
 }
 .task-levers .task-status-select {
   padding: 0 28px 0 24px;
@@ -491,17 +597,19 @@
 .task-levers .field-empty { font-style: normal; }
 
 /* Where the status sits on the way to done. */
-.task-lifecycle {
+.task-lifecycle,
+.task-stage {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
+  min-width: 0;
 }
+.task-lifecycle { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .task-lifecycle-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .task-lifecycle-bar { height: 3px; border-radius: 2px; background: var(--border); }
-.task-lifecycle-step.past .task-lifecycle-bar { background: color-mix(in srgb, var(--fg-mute) 50%, transparent); }
+.task-lifecycle-step.past .task-lifecycle-bar { background: var(--state-success); }
 .task-lifecycle-step.current .task-lifecycle-bar { background: var(--dot); }
 .task-lifecycle-label {
   font-size: 11px;
@@ -511,6 +619,44 @@
   text-overflow: ellipsis;
 }
 .task-lifecycle-step.current .task-lifecycle-label { color: var(--fg-strong); font-weight: 600; }
+
+/* The delivery stage closes the detail band above the tabs, using the same
+   past/current/future language and spacing as the lifecycle strip, but thinner. */
+.task-stage {
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+.task-stage-step { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.task-stage-bar { height: 2px; border-radius: 2px; background: var(--border); }
+.task-stage-step.past .task-stage-bar { background: var(--state-success); }
+.task-stage-step.current .task-stage-bar { background: var(--state-running); }
+.task-stage-label {
+  font-size: 11px;
+  color: var(--fg-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-stage-step.current .task-stage-label {
+  color: var(--fg-strong);
+  font-weight: 600;
+  /* The current stage wraps instead of ellipsizing, so it stays readable
+     at 375px where every other segment is cut. The word itself must break
+     inside its equal-width cell, otherwise its painted range overflows the
+     4px gap into the next segment. */
+  white-space: normal;
+  overflow: hidden;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+.task-stage.ended .task-stage-step.current .task-stage-bar { background: var(--state-failed); }
+.task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-bar { background: var(--state-cancelled); }
+.task-stage.ended .task-stage-step.current .task-stage-label { color: var(--state-failed); }
+.task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-label { color: var(--state-cancelled); }
+.task-stage-link { text-decoration: none; }
+.task-stage-link:hover { text-decoration: underline; }
+.task-stage.awaiting .task-stage-step.current .task-stage-bar { background: var(--warn-fg); }
+.task-stage.awaiting .task-stage-step.current .task-stage-label { color: var(--warn-fg); }
 
 /* The pull request, the run, who carried the task and its readiness. */
 .task-delivery-card {
@@ -529,6 +675,16 @@
 .task-delivery-card .property-row + .property-row { border-top: 1px solid var(--hair); }
 .task-delivery-card .property-row .label { font-size: 12px; line-height: 20px; }
 .task-delivery-card .property-row.fact .value { padding: 0; }
+.task-delivery-card .schedule > .field-editor-cell { min-width: 0; width: 100%; }
+.task-delivery-card .schedule .field-editor { overflow-wrap: anywhere; }
+.task-delivery-card .schedule .field-editor:has(> .field-edit) {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 20px;
+}
+.task-delivery-card .schedule .field-editor > :first-child { min-width: 0; }
+.task-delivery-card .schedule .field-edit { flex: none; line-height: 20px; }
 .task-delivery-card .property-row.readiness { align-items: start; }
 .task-delivery-card .readiness-list { min-width: 0; overflow-wrap: anywhere; }
 .task-delivery-card .readiness-drain-head strong { font-weight: 500; }
@@ -552,6 +708,40 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* One row per relation type: its ids sit inline, wrapping as needed. */
+.task-delivery-relations {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* A classified Regression from row stacks one entry per target, so each id
+   keeps its own nature and escape labels and its own sites below it. */
+.task-delivery-relations.regression {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.regression-entry { min-width: 0; }
+.regression-head {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 20px;
+}
+.regression-label { color: var(--fg-soft); font-size: 12.5px; }
+.regression-label.regression-unclassified { color: var(--fg-mute); font-style: italic; }
+/* Each target discloses its full defect sites, wrapping even long symbols. */
+.regression-sites { margin-top: 4px; }
+.regression-sites > summary { cursor: pointer; color: var(--fg-dim); font-size: 12px; }
+.regression-sites > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.regression-site-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.regression-site {
+  min-width: 0;
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .task-delivery-card .property-row.relation .label::first-letter { text-transform: uppercase; }
 .task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .task-hand {
@@ -570,6 +760,7 @@
 .task-hand[data-agent="codex"] { --hand: var(--ag-codex); background: var(--ag-codex-low); }
 .task-hand[data-agent="gemini"] { --hand: var(--ag-gemini); background: var(--ag-gemini-low); }
 .task-hand[data-agent="grok"] { --hand: var(--ag-grok); background: var(--ag-grok-low); }
+.task-hand[data-agent="muse"] { --hand: var(--ag-muse); background: var(--ag-muse-low); }
 .task-hand-name { color: var(--fg); font-weight: 500; }
 .task-hand-verb { color: var(--fg-dim); }
 .task-hand-sep {
@@ -851,8 +1042,8 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
-/* Context files has no section-header action slot: give its edit action a button. */
-.context-files-block .field-edit {
+/* Context files' edit action sits in its tab's sticky footer as a button. */
+.task-action-footer .field-edit {
   align-self: flex-start;
   min-height: 30px;
   padding: 0 10px;
@@ -862,7 +1053,7 @@
   color: var(--fg-soft);
   font-weight: 500;
 }
-.context-files-block .field-edit:hover:not(:disabled) {
+.task-action-footer .field-edit:hover:not(:disabled) {
   border-color: var(--fg-mute);
   color: var(--fg-strong);
   text-decoration: none;
@@ -945,7 +1136,9 @@ input.field-editor-input {
    item's own text (rendered inline Markdown) stays untouched. */
 .row-detail .ac-list {
   margin: 0;
-  padding: 0;
+  /* With each item's 6px, the first and last criteria sit 16px from the
+     card edge, the same inset as the Description panel. */
+  padding: 10px 0;
   list-style: none;
   counter-reset: ac;
   display: flex;
@@ -1036,7 +1229,8 @@ input.field-editor-input {
   mask-image: linear-gradient(to bottom, #000 65%, transparent);
 }
 .description-toggle,
-.ac-toggle {
+.ac-toggle,
+.why-stuck-toggle {
   margin-top: 8px;
   min-height: 28px;
   padding: 0;
@@ -1049,18 +1243,25 @@ input.field-editor-input {
   text-underline-offset: 3px;
   cursor: pointer;
 }
+/* The fade already separates the toggle from the clamped note. */
+.why-stuck-toggle { display: block; margin-top: 0; }
 .description-toggle:hover,
-.ac-toggle:hover { color: var(--fg-strong); text-decoration: underline; }
+.ac-toggle:hover,
+.why-stuck-toggle:hover { color: var(--fg-strong); text-decoration: underline; }
 .description-toggle:focus-visible,
-.ac-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.ac-toggle:focus-visible,
+.why-stuck-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 .task-detail[data-editing*="description"] .description-toggle,
 .task-detail[data-editing*="acceptance_criteria"] .ac-toggle { display: none; }
 .row-detail .file-list {
   margin: 0;
-  padding: 0;
+  /* Rows' own 6px inset lines paths up with the header's 14px. */
+  padding: 4px 8px;
   list-style: none;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -1069,87 +1270,245 @@ input.field-editor-input {
   border-radius: 0;
   background: transparent;
 }
-.row-detail .file-list > li { padding: 9px 14px; }
+.row-detail .file-list > li { padding: 0; min-width: 0; max-width: 100%; }
 .row-detail .file-list > li + li { border-top: 1px solid var(--hair); }
-.row-detail .file-list .context-selector {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  row-gap: 2px;
-}
-.row-detail .file-list .selector-base {
-  grid-row: 1;
-  grid-column: 1 / -1;
-  font-weight: 500;
-  color: var(--fg-strong);
-}
-.row-detail .file-list .selector-kind,
-.row-detail .file-list .selector-dim {
-  grid-row: 2;
-  color: var(--fg-dim);
-  line-height: 1.45;
-}
-.row-detail .file-list .selector-kind {
-  padding-right: 5px;
-  font-weight: 500;
-}
+.context-files-view { display: flex; flex-direction: column; width: 100%; align-self: stretch; min-width: 0; max-width: 100%; container: cf-view / inline-size; }
+.cf-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 14px; border-top: 1px solid var(--hair); }
+.cf-header[hidden], .cf-banner[hidden] { display: none; }
+.cf-summary { color: var(--fg-dim); font-size: 12px; margin-right: auto; }
+.cf-copy-all { height: 26px; padding: 0 10px; border: 1px solid var(--hair); border-radius: 6px; background: var(--bg-control); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+.cf-banner { margin: 0 14px 8px; padding: 8px 10px; border: 1px solid var(--warn-line); background: var(--warn-wash); color: var(--warn-fg); border-radius: 6px; font-size: 12px; }
+.cf-row, .row-detail .file-list .cf-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 24px; box-sizing: border-box; padding: 2px 34px 2px 6px; border-radius: 4px; min-width: 0; max-width: 100%; }
+.cf-row:hover { background: var(--bg-hover); }
+.row-detail .file-list .context-selector { display: inline-flex; align-items: baseline; gap: 0; flex: 1 1 0; width: 0; min-width: 0; max-width: 100%; text-decoration: none; color: inherit; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.row-detail .file-list .selector-base { font-weight: 500; color: var(--fg-strong); white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.row-detail .file-list .selector-kind, .row-detail .file-list .selector-dim { color: var(--fg-dim); line-height: 1.45; }
+.row-detail .file-list .selector-kind { font-weight: 500; white-space: nowrap; flex: 0 0 auto; margin-right: 5px; }
 .row-detail .file-list .selector-kind[data-kind="file"] { display: none; }
-.row-detail .file-list .selector-root {
-  color: var(--fg);
-  font-weight: 600;
-}
-.row-detail .file-list .context-duplicate-base .selector-dim {
-  color: var(--fg-soft);
-  font-weight: 500;
-}
-.row-detail .file-list .context-duplicate-base .selector-root {
-  color: var(--accent);
-  font-weight: 600;
-}
-.row-detail .file-list .context-duplicate-base .selector-base[data-disambig]::after {
-  content: " (" attr(data-disambig) ")";
-  color: var(--fg-mute);
-  font-size: 11px;
-  font-weight: 400;
-}
-.row-detail .file-list .context-contended-backlog .context-selector,
-.row-detail .file-list .context-contended-backlog .selector-base,
-.row-detail .file-list .context-contended-backlog .selector-dim,
-.row-detail .file-list .context-contended-backlog .selector-root {
-  color: #fbbf24;
-}
-.row-detail .file-list .context-contended-active .context-selector,
-.row-detail .file-list .context-contended-active .selector-base,
-.row-detail .file-list .context-contended-active .selector-dim,
-.row-detail .file-list .context-contended-active .selector-root {
-  color: #fca5a5;
-}
-.row-detail .file-list .context-selector {
-  text-decoration: none;
-  color: inherit;
-}
+/* The directory runs straight into its basename and gives up its width first,
+   so a narrow row ellipsizes the directory before the file name. */
+.row-detail .file-list .selector-dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; flex: 0 1000 auto; min-width: 0; }
+.row-detail .file-list .selector-dim wbr { display: none; }
+.row-detail .file-list .selector-base { overflow-wrap: normal; }
+.row-detail .file-list .selector-root { color: var(--fg); font-weight: 600; }
+.cf-pill { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--warn-line); background: var(--warn-wash); color: var(--warn-fg); white-space: nowrap; }
+.cf-pill-unknown { border-color: var(--hair); background: transparent; color: var(--fg-dim); border-style: dashed; }
+.row-detail .file-list .context-contended-backlog .context-selector, .row-detail .file-list .context-contended-backlog .selector-base { color: var(--warn-fg); }
+.row-detail .file-list .context-contended-active .context-selector, .row-detail .file-list .context-contended-active .selector-base { color: var(--danger-fg); }
+.row-detail .file-list .context-contended-active .cf-pill { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
+.cf-copy { position: absolute; right: 6px; top: 2px; width: 20px; height: 20px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; opacity: 0; border: 1px solid var(--hair); background: var(--bg-control); color: var(--fg-dim); border-radius: 4px; cursor: pointer; font: inherit; font-size: 11px; line-height: 1; }
+.cf-row:hover .cf-copy, .cf-row:focus-within .cf-copy, .cf-copy:focus-visible { opacity: 1; }
 .row-detail .file-list .context-selector:hover { text-decoration: underline; }
-.row-detail .file-list .context-selector:focus-visible {
+.row-detail .file-list .context-selector:focus-visible, .cf-copy:focus-visible, .cf-copy-all:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.row-detail .file-list .context-contention-unknown .context-selector { text-decoration: underline dotted; }
+@media (max-width: 480px) { .cf-header { padding: 8px 10px; } }
+@container cf-view (max-width: 480px) { .cf-row { flex-wrap: wrap; } .row-detail .file-list .context-selector { flex-basis: 140px; } .cf-pill { white-space: normal; overflow-wrap: anywhere; } }
+
+/* ORB-17931: the History tab as a timeline. Rows sit on a vertical rail under
+   a day heading; the node's icon and colour follow the event's category. */
+.history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+}
+.history-filters, .history-order-toggle { display: flex; flex-wrap: wrap; gap: 6px; }
+.history-chip, .history-order {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-control);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.history-chip[aria-pressed="true"], .history-order[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.history-chip-count { color: var(--fg-mute); font-variant-numeric: tabular-nums; }
+.history-chip:focus-visible, .history-order:focus-visible, .history-toggle:focus-visible, .history-copy:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.row-detail .file-list .context-contention-unknown .context-selector {
-  text-decoration: underline dotted;
+
+.history-day-head {
+  margin: 14px 0 6px;
+  color: var(--fg-mute);
+  font-size: 12.5px;
+  font-weight: 600;
 }
+.history-day:first-child .history-day-head { margin-top: 2px; }
 
 .row-detail .history-line {
-  font-family: var(--font-mono);
-  font-size: 12px;
+  --history-hue: var(--fg-mute);
+  position: relative;
+  display: grid;
+  grid-template-columns: 64px 22px minmax(0, 1fr);
+  column-gap: 10px;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--fg-dim);
-  line-height: 1.6;
-  padding: 4px 8px;
-  border-radius: 4px;
   overflow-wrap: anywhere;
 }
-.row-detail .history-line:nth-child(odd) {
-  background: rgba(255, 255, 255, 0.02);
-}
+.history-line[data-category="lifecycle"] { --history-hue: var(--accent); --history-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='4'/%3E%3C/svg%3E"); }
+.history-line[data-category="context"] { --history-hue: var(--status-review); --history-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E"); }
+.history-line[data-category="crew"] { --history-hue: var(--status-in-progress); --history-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='9' cy='7' r='4'/%3E%3Cpath d='M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75'/%3E%3C/svg%3E"); }
+.history-line[data-category="run"] { --history-hue: var(--state-success); --history-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 4l14 8-14 8z'/%3E%3C/svg%3E"); }
+.history-line[data-category="warning"] { --history-hue: var(--warn-fg); --history-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4v10M12 19h.01'/%3E%3C/svg%3E"); }
+.history-line[data-category="other"] { --history-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12h.01M12 12h.01M18 12h.01'/%3E%3C/svg%3E"); }
 
-.row-detail .history-line .actor { color: var(--accent-hover); font-weight: 500; }
+.history-time {
+  padding-top: 7px;
+  color: var(--fg-mute);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+.history-node {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+/* The rail runs the row's full height; the first and last rows of a day stop
+   at the node so the line never trails past the day. */
+.history-node::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--hair);
+}
+.history-day-head + .history-line .history-node::before { top: 8px; }
+.history-day .history-line:last-child .history-node::before { bottom: calc(100% - 22px); }
+.history-dot {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  margin-top: 4px;
+  border: 1px solid var(--history-hue);
+  border-radius: 50%;
+  background: var(--bg-elev);
+}
+.history-dot::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  background: var(--history-hue);
+  -webkit-mask: var(--history-icon) center / contain no-repeat;
+  mask: var(--history-icon) center / contain no-repeat;
+}
+.history-content { min-width: 0; padding: 4px 0 8px; }
+.history-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.history-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
+.history-sentence { color: var(--fg); }
+.history-sentence strong { font-weight: 600; }
+.row-detail .history-line .actor { color: var(--accent-hover); font-weight: 600; }
+.history-sentence a { color: var(--accent); }
+.history-summary, .history-note { color: var(--fg-dim); font-size: 12.5px; }
+.history-summary { font-family: var(--font-mono); }
+.history-note { flex-basis: 100%; white-space: pre-wrap; }
+.history-merge {
+  margin-left: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--warn-line);
+  border-radius: 999px;
+  background: var(--warn-wash);
+  color: var(--warn-fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+.history-event {
+  flex: none;
+  padding-top: 2px;
+  color: var(--fg-mute);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.history-flow { display: inline-flex; align-items: center; gap: 6px; vertical-align: middle; }
+.history-flow .pill {
+  padding: 1px 8px;
+  border: 1px solid var(--dot);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dot) 14%, transparent);
+  color: var(--dot);
+  font-size: 12px;
+}
+.history-flow .pill::before { display: none; }
+.history-arrow { color: var(--fg-mute); }
+.history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-size: 12px;
+}
+.history-toggle::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.12s ease;
+}
+.history-toggle[aria-expanded="true"]::after { transform: rotate(45deg); }
+.history-details {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  background: var(--bg-control);
+}
+.history-details[hidden] { display: none; }
+.history-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; }
+.history-kv dt { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; padding-top: 1px; }
+.history-kv dd { margin: 0; min-width: 0; color: var(--fg); font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; word-break: break-all; }
+.history-kv-list { display: flex; flex-direction: column; gap: 2px; }
+.history-details-actions { margin-top: 10px; }
+.history-copy {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+@media (max-width: 480px) {
+  .row-detail .history-line { grid-template-columns: 56px 22px minmax(0, 1fr); column-gap: 6px; }
+  .history-time { font-size: 11px; }
+  .history-head { flex-direction: column; gap: 2px; }
+  .history-kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .history-kv dd { margin-bottom: 6px; }
+}
 
 /* ORB-12645/ORB-12651: the comment thread. It sits in the left/main
    detail column, capped to keep actions visible, with per-card collapse,
@@ -1430,6 +1789,8 @@ input.field-editor-input {
   overflow-y: auto;
 }
 .task-action-footer[hidden] { display: none; }
+/* An open editor empties its footer's edit slot; drop the empty bar. */
+.task-action-footer:has(> .field-actions:empty) { display: none; }
 .task-detail-pane .row-detail .task-action-footer .actions { padding-top: 0; border-top: 0; }
 .task-action-footer .reject-form { animation: none; }
 @container task-pane (max-width: 440px) {
@@ -1466,6 +1827,8 @@ input.field-editor-input {
 }
 
 .task-action-notice {
+  min-width: 0;
+  max-width: 100%;
   padding: 8px 12px;
   border-left: 3px solid var(--state-success);
   border-radius: 4px;
@@ -1473,6 +1836,7 @@ input.field-editor-input {
   font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre-line;
+  overflow-wrap: anywhere;
   background: rgba(16, 185, 129, 0.1);
 }
 /* A folded status change whose task has no row on screen (its new status is
@@ -1489,6 +1853,17 @@ input.field-editor-input {
   font-size: 12px;
   background: var(--bg-elev);
 }
+.task-status-notice > .mono { flex: none; }
+/* Feedback beside a detail's status or crew pill, or in a folded status
+   notice, wraps a long refusal in its box instead of ellipsizing it on one
+   line past the pane edge (the list row's status cell keeps its ellipsis). */
+.task-levers .mutation-feedback,
+.task-status-notice > .mutation-feedback {
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 .pilot-warning-findings {
   margin: 10px 0 0;
@@ -1498,3 +1873,54 @@ input.field-editor-input {
   white-space: pre-wrap;
 }
 .pilot-warning-findings li + li { margin-top: 8px; }
+.operator-record-actions { margin-top: 12px; }
+.owed-criteria { display: grid; gap: 8px; }
+.owed-criterion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.owed-criterion > span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+
+.decision-requests { display: grid; gap: 12px; }
+.decision-request { display: grid; gap: 8px; }
+.decision-note {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 2px;
+  padding: 4px 8px; font-size: 12px; width: 100%; box-sizing: border-box;
+}
+.decision-answers { display: grid; gap: 8px; }
+.decision-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
+.decision-pending { color: var(--fg-mute); font-size: 12px; }
+
+/* The Risk pill describes itself with the complete estimate. The tooltip
+   spans the lever row so it fits a narrow pane regardless of the pill's position. */
+.task-risk-hint { display: inline-flex; }
+.task-chip-risk { cursor: help; font-family: inherit; }
+.task-chip-risk:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-risk-tooltip {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.task-risk-hint:not(.dismissed):hover > .task-risk-tooltip,
+.task-risk-hint:not(.dismissed):focus-within > .task-risk-tooltip {
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: visible;
+  clip-path: none;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--fg-soft);
+  font: 400 12px/1.45 var(--font-sans);
+}

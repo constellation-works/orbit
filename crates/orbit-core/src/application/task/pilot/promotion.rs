@@ -7,8 +7,10 @@
 //! honour the filer's `no-auto-approve` opt-out. Reading and validating those
 //! findings lives here once so the two modes cannot drift.
 
+use std::collections::BTreeSet;
+
 use orbit_engine::DispatchError;
-use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskComment, TaskStatus};
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskComment, TaskStatus, is_valid_orb_task_id};
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
@@ -25,6 +27,9 @@ const WARNING_FIELDS: [&str; 5] = [
     "surface_warnings",
     VALIDATION_TOOL_WARNINGS,
 ];
+
+/// Findings whose named prerequisites may already be enforced or completed.
+const PREREQUISITE_FIELDS: [&str; 3] = ["blocked_by", "utility_warnings", "surface_warnings"];
 
 /// Only surface and utility findings may explicitly be advisory. Legacy
 /// strings and malformed findings hold by default; prerequisite, conflict and
@@ -43,6 +48,68 @@ pub(super) fn warning_text(finding: &Value) -> Option<&str> {
     finding
         .as_str()
         .or_else(|| finding.get("text").and_then(Value::as_str))
+}
+
+fn task_id_character(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '-' | '_')
+}
+
+/// Whole task IDs named in one finding's text.
+fn finding_task_ids(finding: &Value) -> Vec<String> {
+    let Some(text) = warning_text(finding) else {
+        return Vec::new();
+    };
+    text.split(|character| !task_id_character(character))
+        .filter(|id| id.starts_with("ORB-") && is_valid_orb_task_id(id))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Named tasks whose completion promotion checks must read under their locks.
+/// Warning IDs do not create dependency edges; only `blocked_by` does that.
+pub(super) fn promotion_task_ids(assessment: &Value) -> BTreeSet<String> {
+    PREREQUISITE_FIELDS
+        .iter()
+        .flat_map(|field| {
+            assessment[*field]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(move |finding| finding_holds_promotion(field, finding))
+                .flat_map(finding_task_ids)
+        })
+        .collect()
+}
+
+/// Whether one `blocked_by` finding withholds promotion. A prerequisite
+/// already enforced as a dependency edge (or already `done` in this
+/// workspace) holds nothing: the dependency graph gates admission instead.
+/// Prose naming no task, a missing or other-workspace task, or an unfinished
+/// task that is not a recorded dependency still holds, because no edge
+/// enforces it.
+pub(super) fn blocked_by_holds_promotion(
+    finding: &Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> bool {
+    let ids = finding_task_ids(finding);
+    ids.is_empty()
+        || ids
+            .iter()
+            .any(|id| !dependencies.iter().any(|dep| dep == id) && !is_done(id))
+}
+
+/// Whether `field`'s `finding` withholds promotion. Prerequisite, utility and
+/// surface findings share the current dependency and completion exemption.
+fn holds_promotion(
+    field: &str,
+    finding: &Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> bool {
+    finding_holds_promotion(field, finding)
+        && (!PREREQUISITE_FIELDS.contains(&field)
+            || blocked_by_holds_promotion(finding, dependencies, is_done))
 }
 
 /// Whether the task's filer opted it out of automatic approval. The tag is
@@ -65,6 +132,8 @@ pub(crate) fn promotion_findings<'a>(
     action: &str,
     task_id: &str,
     assessment: &'a Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
 ) -> Result<PromotionFindings<'a>, DispatchError> {
     let duplicate_of = assessment.get("duplicate_of").ok_or_else(|| {
         DispatchError::action_failed(action, format!("task {task_id} is missing duplicate_of"))
@@ -91,7 +160,7 @@ pub(crate) fn promotion_findings<'a>(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(move |value| finding_holds_promotion(field, value))
+                .filter(move |value| holds_promotion(field, value, dependencies, is_done))
                 .map(move |value| json!({ "field": field, "value": value }))
         })
         .collect();
@@ -104,7 +173,11 @@ pub(crate) fn promotion_findings<'a>(
 
 /// The warning findings an approval hold can show: one entry per warning-field
 /// item, with the original kind and full text.
-pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding> {
+pub(crate) fn warning_hold_findings(
+    assessment: &Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Vec<DrainHoldFinding> {
     WARNING_FIELDS
         .iter()
         .flat_map(|field| {
@@ -113,7 +186,7 @@ pub(crate) fn warning_hold_findings(assessment: &Value) -> Vec<DrainHoldFinding>
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter(move |value| finding_holds_promotion(field, value))
+                .filter(move |value| holds_promotion(field, value, dependencies, is_done))
                 .filter_map(|value| {
                     finding_text(value).map(|text| DrainHoldFinding {
                         kind: (*field).to_string(),
@@ -151,15 +224,53 @@ pub(crate) fn recommendation_has_evidence(value: &Value) -> bool {
 /// Ordinary edits and comments preserve the last findings until re-piloted;
 /// a clean verification or leaving proposed clears the readout. No live
 /// drain or drain-pass snapshot is needed, and advisory findings are excluded.
-pub fn task_pilot_warnings(status: TaskStatus, comments: &[TaskComment]) -> Vec<DrainHoldFinding> {
-    if status != TaskStatus::Proposed {
-        return Vec::new();
-    }
-    let Some((_, receipt)) = super::pilot_receipts(comments).next() else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Value>(receipt.body)
-        .ok()
-        .and_then(|audit| audit.get("assessment").map(warning_hold_findings))
+pub fn task_pilot_warnings(
+    status: TaskStatus,
+    comments: &[TaskComment],
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Vec<DrainHoldFinding> {
+    held_pilot_warnings(status, comments, dependencies, is_done)
+        .map(|held| held.findings)
         .unwrap_or_default()
+}
+
+/// The assessment whose warning findings hold a `proposed` task's promotion:
+/// the receipt that persisted it, the pilot run that wrote it, and the
+/// findings that hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HeldPilotWarnings {
+    /// Operation id of the task-pilot receipt carrying the assessment.
+    pub(crate) operation_id: String,
+    /// The task-pilot run that wrote the assessment, when the audit names it.
+    pub(crate) pilot_run_id: Option<String>,
+    /// Every holding finding, never empty.
+    pub(crate) findings: Vec<DrainHoldFinding>,
+}
+
+/// [`task_pilot_warnings`] with the assessment it read: `None` unless the
+/// task is `proposed` and its latest pilot receipt holds promotion on at
+/// least one warning finding.
+pub(crate) fn held_pilot_warnings(
+    status: TaskStatus,
+    comments: &[TaskComment],
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Option<HeldPilotWarnings> {
+    if status != TaskStatus::Proposed {
+        return None;
+    }
+    let (_, receipt) = super::pilot_receipts(comments).next()?;
+    let audit = serde_json::from_str::<Value>(receipt.body).ok()?;
+    let findings = warning_hold_findings(audit.get("assessment")?, dependencies, is_done);
+    (!findings.is_empty()).then(|| HeldPilotWarnings {
+        operation_id: receipt.operation_id.to_string(),
+        pilot_run_id: audit
+            .get("pilot_run_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|run_id| !run_id.is_empty())
+            .map(str::to_string),
+        findings,
+    })
 }

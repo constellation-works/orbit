@@ -115,6 +115,7 @@ pub(super) fn admit_through_section(
                 &claim,
                 workspace_root,
                 runtime.unlocked_context_paths(),
+                runtime.footprint_lock_modes(),
             );
         }
     }

@@ -14,7 +14,7 @@ use crate::application::task::{MachineRequirement, NativeOsRequirement};
 
 use super::input::{required_string, required_string_array, string_array_value};
 use super::source::{GitPathKind, SourceSnapshot};
-use super::{CONTEXT_EVIDENCE_DROPPED, VALIDATION_TOOL_WARNINGS};
+use super::{CONTEXT_EVIDENCE_DROPPED, FINDING_INVALID, VALIDATION_TOOL_WARNINGS};
 
 pub(super) struct ValidatedSelectors {
     pub(super) values: Vec<String>,
@@ -231,9 +231,14 @@ pub(in super::super) fn member_ready(assessment: &Value) -> bool {
                         .all(|finding| !super::promotion::finding_holds_promotion(field, finding))
                 })
         })
-        && ["duplicate_of", "already_landed", "release_action_required"]
-            .iter()
-            .all(|field| assessment.get(field).is_none_or(Value::is_null))
+        && [
+            "duplicate_of",
+            "already_landed",
+            "release_action_required",
+            FINDING_INVALID,
+        ]
+        .iter()
+        .all(|field| assessment.get(field).is_none_or(Value::is_null))
 }
 
 /// Coerce a formatting slip in `evidence_gaps` into the array the contract
@@ -354,6 +359,7 @@ pub(super) fn validate_recommendations(
         "release_action_required",
         &["action", "evidence"],
     )?;
+    validate_optional_finding(action, task_id, assessment, FINDING_INVALID, &["evidence"])?;
     Ok(complexity)
 }
 
@@ -382,13 +388,18 @@ const NATIVE_FACILITY_TERMS: &[&str] = &[
 /// is no finding. Admission holds only this typed field, never warning prose.
 ///
 /// A criterion that names none of [`NATIVE_FACILITY_TERMS`] cannot justify
-/// the finding. Apply rejects it so the repair pilot leaves `required_os`
-/// empty instead of holding a portable task on a native host.
+/// the finding unless its evidence cites a `#[cfg(target_os = "<os>")]` gate
+/// that the pinned source confirms, on an item the criterion names, with
+/// `os` equal to that gate. Any other citation is rejected so the repair
+/// pilot leaves `required_os` empty instead of holding a portable task on a
+/// native host.
 pub(super) fn required_os(
     action: &str,
     task_id: &str,
     assessment: &Value,
     criteria: &[String],
+    workspace_root: &Path,
+    source: Option<&SourceSnapshot>,
 ) -> Result<Vec<NativeOsRequirement>, DispatchError> {
     let Some(entries) = assessment
         .get("required_os")
@@ -420,7 +431,7 @@ pub(super) fn required_os(
             .and_then(Value::as_str)
             .and_then(HostOs::parse)
             .ok_or_else(|| invalid("os must be linux, macos, or windows"))?;
-        entry
+        let evidence = entry
             .get("evidence")
             .and_then(Value::as_str)
             .map(str::trim)
@@ -428,11 +439,25 @@ pub(super) fn required_os(
             .ok_or_else(|| invalid("evidence must be a non-empty string"))?;
         // `criterion` is a checked 1-based index of `criteria`.
         if !criterion_names_native_facility(&criteria[criterion - 1]) {
-            return Err(invalid(&format!(
-                "criterion {criterion} names no OS or native facility ({}); leave required_os \
-                 empty for portable criteria",
-                NATIVE_FACILITY_TERMS.join(", ")
-            )));
+            match super::cfg_gate::admit_cfg_gate(&super::cfg_gate::CfgGateCheck {
+                action,
+                task_id,
+                criterion_index: criterion,
+                criterion: &criteria[criterion - 1],
+                evidence,
+                os,
+                workspace_root,
+                source,
+            })? {
+                super::cfg_gate::CfgGateDecision::NotCited => {
+                    return Err(invalid(&format!(
+                        "criterion {criterion} names no OS or native facility ({}); leave required_os \
+                         empty for portable criteria",
+                        NATIVE_FACILITY_TERMS.join(", ")
+                    )));
+                }
+                super::cfg_gate::CfgGateDecision::Admit => {}
+            }
         }
         let requirement = NativeOsRequirement { criterion, os };
         if !requirements.contains(&requirement) {

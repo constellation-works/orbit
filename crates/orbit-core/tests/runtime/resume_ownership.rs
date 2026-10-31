@@ -159,10 +159,14 @@ impl Fixture {
             .unwrap();
         self.stamp_input(&run.run_id, &input);
         let mut state = PipelineState::new(run.run_id.clone(), JOB.into(), input);
+        // A resume refuses reused checkpoints whose worktree is gone, so the
+        // recorded checkout exists.
+        let checkout = self._root.path().join("worktree");
+        std::fs::create_dir_all(&checkout).unwrap();
         let worktree = json!({
             "job_run_id": batch,
             "batch_id": batch,
-            "workspace_path": "/fixture/worktree",
+            "workspace_path": checkout,
             "task_ids": [task],
         });
         state.record_step(0, JobRunState::Success, Some(worktree.clone()), None);

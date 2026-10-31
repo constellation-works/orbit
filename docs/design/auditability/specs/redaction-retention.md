@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Redaction and Retention Boundaries
-last_validated: 2026-10-19
+last_validated: 2026-10-29
 ---
 
 # Spec: Redaction and Retention Boundaries
@@ -26,6 +26,7 @@ Auditability and secrecy pull in opposite directions. Orbit needs faithful recor
   scrubbed for sensitive live environment values and known secret patterns before
   they become downstream step input or persisted pipeline state. JSON keys and
   non-string values retain their types.
+- Lease audit payload string values, including nested selectors and intake errors, are scrubbed with the shared redactor before persistence; lease target IDs and returned intake errors are scrubbed too. Non-secret principal, public token ID, client address, operation and outcome remain available for attribution. Minted token secrets remain available only in the one-time mint response.
 - HTTP-shaped payload redaction covers authorization headers, x-api-key headers, JSON API-key fields, and bearer tokens.
 - Shared pattern redaction covers high-confidence provider token shapes embedded in prose; exact whole-token artifact fields are rejected instead of persisted.
 - Shared pattern redaction covers structural OpenSSH fingerprints, public-key comments, and connection hosts without applying a general hostname or high-entropy-string heuristic.
@@ -75,12 +76,12 @@ Run pipeline state:
 Per-minute resource history:
 
 - Lives in the host-wide `run_resource_minutes` (per run, with task id, work class and complexity; no payloads) and `host_resource_minutes` tables.
-- Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, a fixed window independent of `retention.runs_days`.
+- Is pruned by the same `orbit gc runs --apply` pass when older than 30 days, independent of `retention.runs_days`, except the newest `max(200, machine.auto_concurrency.profile_window)` deliveries per workspace, work class and complexity, which stay at any age.
 
 Admission forecasts:
 
 - Live in the host-wide `admission_forecasts` table (drain workspace and run, forecast time and mode, host size, forecast values, and the task ids the pass admitted and gap fit judged, or the pull request sent/no-headroom decisions; no payloads).
-- Are pruned with the per-minute resource history by `orbit gc runs --apply` when older than 30 days.
+- Are pruned with the per-minute resource history by `orbit gc runs --apply` when older than 30 days, except the newest 10,000 forecasts and the host minutes from the oldest kept forecast onward, which stay at any age.
 
 Admission reservations:
 
@@ -95,7 +96,8 @@ Applied task commit journal:
 - `retention.store_warn_bytes` controls a warning only and deletes nothing.
 - Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working
   across audit, run and journal pruning. Auto-concurrency profiles and forecast accuracy
-  retain their supported 30-day resource/forecast window; older raw samples are lost.
+  keep working on the rows the count exceptions keep at any age; raw samples outside
+  those counts are lost.
 
 Invocation metrics:
 

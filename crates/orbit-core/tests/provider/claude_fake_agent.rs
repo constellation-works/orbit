@@ -172,11 +172,13 @@ fn try_dispatch_spec(
 
 fn spec() -> AgentLoopSpec {
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("claude-opus-4-8".to_string()),
@@ -192,6 +194,7 @@ fn spec() -> AgentLoopSpec {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 

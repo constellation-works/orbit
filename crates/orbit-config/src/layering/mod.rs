@@ -8,7 +8,10 @@
 //! - nested tables merge recursively, so a workspace can override one crew
 //!   field without restating the crew;
 //! - a registry key is one setting, so a workspace value for a registered
-//!   table key replaces the global table rather than merging into it;
+//!   table key replaces the global table rather than merging into it. The
+//!   exception is `workflow.type_complexity_crews`, whose `<type>.<tier>`
+//!   pools are each one setting: they merge recursively, so a workspace pool
+//!   replaces only the same type and tier from global;
 //! - the replace-only keys below never inherit from global once a distinct
 //!   workspace file exists;
 //! - the `[machine]` table is global-only: a workspace file that supplies it
@@ -41,8 +44,9 @@ pub(crate) use document::{set_value_at_path, value_at_path};
 pub use load::load_effective_config;
 pub(crate) use load::{
     LoadedResolvedConfig, load_layered_resolved, reject_workspace_crew_env,
-    reject_workspace_machine_table, resolve_workspace_file_document,
-    validate_staged_global_document, validate_staged_workspace_document,
+    reject_workspace_lease_intake, reject_workspace_machine_table, resolve_workspace_file_document,
+    strip_workspace_refused_keys, validate_staged_global_document,
+    validate_staged_workspace_document,
 };
 pub use types::{
     ConfigFallback, ConfigValueSource, ConfigValueSourceKind, ConfigValueState, EffectiveConfig,
@@ -52,7 +56,7 @@ pub use types::{
 /// Security-sensitive settings that a workspace file must restate to keep.
 /// Inheriting a machine-global sandbox, approval, or environment allowlist
 /// into a workspace that never asked for it is the failure mode this prevents.
-const WORKSPACE_REPLACE_ONLY_KEYS: &[&str] = &[
+pub(crate) const WORKSPACE_REPLACE_ONLY_KEYS: &[&str] = &[
     "execution.codex.approval_policy",
     "execution.codex.sandbox",
     "execution.env.pass",

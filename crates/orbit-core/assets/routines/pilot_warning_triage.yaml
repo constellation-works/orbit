@@ -1,0 +1,49 @@
+# Default pilot-warning triage routine. Seeded into `.orbit/routines/` on
+# `orbit init` with the routine name, this host's registered machine id
+# (`owner_machine`) and the workspace's registered base branch resolved at
+# seed time. It is intentionally disabled: enabling scheduled triage is an
+# explicit, versioned workspace decision.
+#
+# A `proposed` task whose latest applied task-pilot assessment holds
+# promotion on warning findings waits for a person to notice it. Enabled,
+# this routine finds each such assessment that no operator has decided and
+# the lane has not triaged and, once it has settled for debounce_minutes or
+# waited max_wait_minutes, submits up to batch_size of them that share one
+# stored crew into one `escalation_triage_pipeline` run. A hard-tier triager
+# reads each hold once and records a decision proposal or a human action
+# through `orbit.task.block_triage`; the `pilot_warning_triaged` marker it
+# writes takes that assessment out of observation. The lane only proposes:
+# it never approves, promotes, clears a hold or edits task material. An
+# operator's approval or task-pilot admission decision also ends
+# membership, and a material edit that re-pilots into a new holding
+# assessment makes a new member.
+#
+# Only this host evaluates the trigger (`owner_machine`). Explicit runs
+# (`orbit run job escalation_triage_pipeline --input 'task_ids=["<id>"]'`)
+# remain available and do not use this gate. See
+# docs/design/automation-triggers/2_design.md.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Triage proposed tasks whose task-pilot assessment holds promotion on
+  warnings, once per assessment, into a ready-to-choose decision proposal or
+  a named human action. State-triggered: fires when such a hold appears and
+  stays quiet otherwise. Propose-only. Disabled by default; set enabled to
+  true in this versioned definition to opt this workspace in.
+enabled: false
+trigger:
+  state:
+    kind: pilot_warnings_held
+    owner_machine: __ORBIT_OWNER_MACHINE__
+    branch: __ORBIT_BASE_BRANCH__
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    batch_size: 5
+    retries: 1
+    deadline_minutes: 90
+target: job:escalation_triage_pipeline
+policy:
+  timeout_minutes: 90
+  overlap: forbid
+  retries: {max: 1, backoff_minutes: 5}

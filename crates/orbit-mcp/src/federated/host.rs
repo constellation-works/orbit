@@ -3,6 +3,9 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use orbit_common::governance::authorization::{
+    self, CallerCapabilities, CallerEnvelope, OperationSurface,
+};
 use orbit_common::{HostRegistryCode, OrbitError};
 use orbit_registry::hosts::{HostEntry, TaskPrefixRoute, TaskPrefixTable, unknown_task_prefix};
 use orbit_types::tool::{
@@ -292,7 +295,13 @@ impl FederatedMcpHost {
                 ));
             }
         } else {
-            ensure_on_public_surface(session.as_mut(), destination, name, &input)?;
+            ensure_on_public_surface(
+                session.as_mut(),
+                destination,
+                name,
+                &input,
+                &session_context,
+            )?;
         }
 
         tracing::info!(
@@ -416,7 +425,7 @@ impl FederatedMcpHost {
             .snapshot()
             .map_err(|error| delivery_unreachable(destination, error))?;
         confirm_pinned_identity(destination, &snapshot)?;
-        ensure_on_public_surface(session.as_mut(), destination, name, input)?;
+        ensure_on_public_surface(session.as_mut(), destination, name, input, session_context)?;
         Ok(session)
     }
 
@@ -554,13 +563,17 @@ fn federated_workspace_list_definition() -> McpToolDefinition {
 
 /// Refuse a tool, or an extension argument, the destination does not serve.
 ///
-/// A tools/list miss is a delivery miss; a tool or argument the destination
-/// does not advertise is `tool_not_on_this_host`.
+/// A tools/list miss is a delivery miss. A tool omitted only because this
+/// session cannot authorize it still reaches the destination's call-time
+/// chokepoint, preserving its `capability_denied` refusal and audit record.
+/// Other tools or arguments the destination does not advertise are
+/// `tool_not_on_this_host`.
 fn ensure_on_public_surface(
     session: &mut dyn RoutedSession,
     destination: &Destination,
     name: &str,
     input: &Value,
+    session_context: &ToolSessionContext,
 ) -> Result<(), OrbitError> {
     let advertised = session
         .advertised_tools()
@@ -585,13 +598,36 @@ fn ensure_on_public_surface(
             )));
         }
     }
-    if !tool_on_surface(&advertised, name) {
+    if !tool_on_surface(&advertised, name)
+        && !session_cannot_authorize_governed_tool(name, session_context)
+    {
         return Err(OrbitError::ToolNotOnThisHost(format!(
             "'{name}' is not advertised on '{}'",
             destination.machine_id
         )));
     }
     Ok(())
+}
+
+/// Whether the public-list filter would omit this governed tool for the caller.
+///
+/// The federated list is intentionally capability-filtered, while the remote
+/// MCP dispatcher still handles direct calls so its existing authorization
+/// chokepoint can return and audit the normal refusal.
+fn session_cannot_authorize_governed_tool(
+    name: &str,
+    session_context: &ToolSessionContext,
+) -> bool {
+    let advertised_name = mcp_advertised_tool_name(name);
+    let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(session_context));
+    authorization::GOVERNED_OPERATIONS
+        .iter()
+        .find(|operation| {
+            operation.surface == OperationSurface::Tool
+                && operation.id != "orbit.agent.invoke"
+                && mcp_advertised_tool_name(operation.id) == advertised_name
+        })
+        .is_some_and(|operation| authorization::authorize(operation, &caller).is_err())
 }
 
 /// The operator's config pin is the identity of record; a live answer only

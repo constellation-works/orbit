@@ -5,12 +5,14 @@ use std::path::Path;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
+use orbit_core::InvocationInsertParams;
 use orbit_core::V2AuditEventInsertParams;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
 };
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
@@ -287,6 +289,343 @@ fn cost_and_metrics_windows_scope_rows_and_timestamp_arithmetic() {
     );
 }
 
+/// One invocation row, then moved to `at` (and, for `partition`, to another
+/// workspace) the way only the store can. Legacy metrics JSONL stays absent.
+fn seed_metrics_invocation(
+    fixture: &Fixture,
+    run: &str,
+    task_id: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    at: DateTime<Utc>,
+    partition: Option<&str>,
+) {
+    seed_metrics_invocation_with_filters(
+        fixture,
+        run,
+        "implement",
+        "codex",
+        Some("fixture-a"),
+        task_id,
+        "read",
+        input_tokens,
+        output_tokens,
+        at,
+        partition,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seed_metrics_invocation_with_filters(
+    fixture: &Fixture,
+    run: &str,
+    activity_id: &str,
+    agent: &str,
+    model: Option<&str>,
+    task_id: &str,
+    tool_name: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    at: DateTime<Utc>,
+    partition: Option<&str>,
+) {
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: run.into(),
+            activity_id: activity_id.into(),
+            agent: agent.into(),
+            provider: None,
+            account: None,
+            model: model.map(str::to_string),
+            task_ids: vec![task_id.into()],
+            trace: InvocationTrace {
+                usage: TokenUsage {
+                    input: input_tokens,
+                    output: output_tokens,
+                    ..TokenUsage::default()
+                },
+                tool_calls: vec![ToolCallTrace {
+                    seq: 1,
+                    tool_name: tool_name.into(),
+                    result_bytes: 8,
+                    result_payload: None,
+                }],
+                duration_ms: 1_000,
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET ts = ?1, workspace_id = COALESCE(?2, workspace_id)
+                     WHERE id = (SELECT id FROM invocations WHERE job_run_id = ?3 ORDER BY id DESC LIMIT 1)",
+                    (at.to_rfc3339(), partition, run),
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn diagnostics_metrics_fallback_keeps_foreign_rows_out_of_the_limit() {
+    isolated(
+        "projections::diagnostics_metrics_fallback_keeps_foreign_rows_out_of_the_limit",
+        || {
+            let fixture = Fixture::new();
+            assert_eq!(fixture.runtime.workspace_id().unwrap(), "ws_http_fixture");
+            assert!(
+                !fixture
+                    .runtime
+                    .data_root()
+                    .join("state/diagnostics/metrics")
+                    .exists(),
+                "legacy metrics must be absent so the invocation fallback runs"
+            );
+            let now = Utc::now();
+            let older = now - Duration::hours(2);
+            let newer = now - Duration::hours(1);
+            let foreign_at = now - Duration::minutes(1);
+            seed_metrics_invocation(&fixture, "a-old", "ORB-A-OLD", 1, 1, older, None);
+            seed_metrics_invocation(&fixture, "a-new", "ORB-A", 4, 6, newer, None);
+            // Newest row on the shared host store, recorded under another workspace.
+            seed_metrics_invocation(
+                &fixture,
+                "b-foreign",
+                "ORB-B",
+                100,
+                100,
+                foreign_at,
+                Some("ws_other"),
+            );
+            let server = fixture.server(false);
+            let path = |limit: u32| {
+                format!(
+                    "/api/diagnostics/metrics?since=all&limit={limit}&workspace=ws_http_fixture"
+                )
+            };
+            let limited = json_ok(server.get(&path(1)));
+            let rows = limited.as_array().unwrap();
+            assert_eq!(rows.len(), 1, "limit applies after the workspace predicate");
+            assert_eq!(rows[0]["job_run"], "a-new");
+            assert_eq!(rows[0]["task_id"], "ORB-A");
+            assert_eq!(rows[0]["step"], "implement");
+            assert_eq!(rows[0]["actor_identity"], "codex / fixture-a");
+            assert_eq!(rows[0]["token_usage"], 10);
+            assert_eq!(rows[0]["tool_invocations"], 1);
+            assert_eq!(rows[0]["step_duration_ms"], 1_000);
+            assert_eq!(rows[0]["retry_count"], 0);
+            assert_eq!(rows[0]["ts"], newer.to_rfc3339());
+            let both = json_ok(server.get(&path(2)));
+            let runs: Vec<_> = both
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["job_run"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                runs,
+                ["a-new", "a-old"],
+                "a newer foreign row must not displace either workspace row"
+            );
+            let foreign_left = fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute(
+                            "DELETE FROM invocations WHERE workspace_id = ?1",
+                            ["ws_http_fixture"],
+                        )
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    let count: i64 = tx
+                        .connection()
+                        .query_row(
+                            "SELECT COUNT(*) FROM invocations WHERE workspace_id = 'ws_other'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(count)
+                })
+                .unwrap();
+            assert_eq!(
+                foreign_left, 1,
+                "the other workspace still has history in the shared store"
+            );
+            let empty = json_ok(server.get(&path(1)));
+            assert!(
+                empty.as_array().unwrap().is_empty(),
+                "an invocation-empty workspace returns [] while another workspace still has history"
+            );
+        },
+    );
+}
+
+#[test]
+fn invocation_metrics_scope_workspace_before_filters_and_limit() {
+    isolated(
+        "projections::invocation_metrics_scope_workspace_before_filters_and_limit",
+        || {
+            let fixture = Fixture::new();
+            assert_eq!(fixture.runtime.workspace_id().unwrap(), "ws_http_fixture");
+            let now = Utc::now();
+            let selected_at = now - Duration::minutes(2);
+            let foreign_at = now - Duration::minutes(1);
+            let run = "shared-run";
+
+            let seed = |activity_id: &str,
+                        agent: &str,
+                        model: Option<&str>,
+                        task_id: &str,
+                        tool_name: &str,
+                        at: DateTime<Utc>,
+                        partition: Option<&str>| {
+                seed_metrics_invocation_with_filters(
+                    &fixture,
+                    run,
+                    activity_id,
+                    agent,
+                    model,
+                    task_id,
+                    tool_name,
+                    1,
+                    1,
+                    at,
+                    partition,
+                );
+            };
+
+            // Every selected-workspace distractor misses exactly one filter.
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "other-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "other-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("other-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-OTHER",
+                "selected-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "other-tool",
+                selected_at,
+                None,
+            );
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                now - Duration::minutes(10),
+                None,
+            );
+            // A second workspace shares the run identity and matches every
+            // filter, but its newer row must not consume this workspace's limit.
+            seed(
+                "selected-activity",
+                "selected-agent",
+                Some("selected-model"),
+                "ORB-SELECTED",
+                "selected-tool",
+                foreign_at,
+                Some("ws_other"),
+            );
+
+            let server = fixture.server(false);
+            let unfiltered =
+                json_ok(server.get("/api/metrics/invocations?limit=1&workspace=ws_http_fixture"));
+            let unfiltered_rows = unfiltered.as_array().unwrap();
+            assert_eq!(unfiltered_rows.len(), 1);
+            assert_eq!(unfiltered_rows[0]["job_run_id"], run);
+            let unfiltered_at =
+                DateTime::parse_from_rfc3339(unfiltered_rows[0]["ts"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
+            assert_eq!(unfiltered_at, selected_at);
+
+            let since = (now - Duration::minutes(3))
+                .to_rfc3339()
+                .replace("+00:00", "Z");
+            let until = (now - Duration::seconds(30))
+                .to_rfc3339()
+                .replace("+00:00", "Z");
+            let query = format!(
+                "/api/metrics/invocations?job_run_id={run}&activity_id=selected-activity&agent=selected-agent&model=selected-model&task_id=ORB-SELECTED&tool_name=selected-tool&since={since}&until={until}&limit=20&workspace=ws_http_fixture",
+            );
+            let filtered = json_ok(server.get(&query));
+            let filtered_rows = filtered.as_array().unwrap();
+            assert_eq!(
+                filtered_rows.len(),
+                1,
+                "all filters compose with workspace selection"
+            );
+            assert_eq!(filtered_rows[0]["job_run_id"], run);
+            assert_eq!(filtered_rows[0]["activity_id"], "selected-activity");
+            assert_eq!(filtered_rows[0]["agent"], "selected-agent");
+            assert_eq!(filtered_rows[0]["model"], "selected-model");
+            assert_eq!(filtered_rows[0]["task_ids"], json!(["ORB-SELECTED"]));
+            assert_eq!(
+                filtered_rows[0]["tool_calls"][0]["tool_name"],
+                "selected-tool"
+            );
+            let filtered_at =
+                DateTime::parse_from_rfc3339(filtered_rows[0]["ts"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
+            assert_eq!(filtered_at, selected_at);
+        },
+    );
+}
+
 #[test]
 fn duration_overflow_is_a_client_error_and_server_remains_responsive() {
     isolated(
@@ -331,18 +670,10 @@ fn auto_task_and_routine_schedules_distinguish_armed_and_hypothetical_times() {
         || {
             let fixture = Fixture::new();
             for (name, schedule) in [
-                ("interval", AutoTaskSchedule::Interval { every_minutes: 60 }),
-                (
-                    "cron",
-                    AutoTaskSchedule::Cron {
-                        cron: "* * * * *".into(),
-                    },
-                ),
-                ("disabled", AutoTaskSchedule::Interval { every_minutes: 60 }),
-                (
-                    "unobserved",
-                    AutoTaskSchedule::Interval { every_minutes: 60 },
-                ),
+                ("interval", AutoTaskSchedule::every_minutes(60)),
+                ("cron", AutoTaskSchedule::cron("* * * * *")),
+                ("disabled", AutoTaskSchedule::every_minutes(60)),
+                ("unobserved", AutoTaskSchedule::every_minutes(60)),
             ] {
                 fixture
                     .runtime
@@ -507,12 +838,12 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
         || {
             let fixture = Fixture::replica_of("hm_fixture_remote");
             fixture.job("worktree_gc_pipeline");
-            fixture.job("workspace_ship_pipeline");
+            fixture.job("ci_failure_sweep_pipeline");
             let routines = fixture.work.join("routines");
             fs::create_dir_all(&routines).unwrap();
             for (name, job) in [
                 ("replica-gc", "worktree_gc_pipeline"),
-                ("replica-ship", "workspace_ship_pipeline"),
+                ("replica-ci-sweep", "ci_failure_sweep_pipeline"),
             ] {
                 fs::write(
                     routines.join(format!("{name}.yaml")),
@@ -522,8 +853,8 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
                 )
                 .unwrap();
             }
-            let ship_path = routines.join("replica-ship.yaml");
-            let ship_before = fs::read(&ship_path).unwrap();
+            let ci_sweep_path = routines.join("replica-ci-sweep.yaml");
+            let ci_sweep_before = fs::read(&ci_sweep_path).unwrap();
             let server = fixture.server(true);
             let report = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
             let scheduled = report["routines"].as_array().unwrap();
@@ -532,11 +863,11 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
             assert_eq!(scheduled[0]["origin"], "workspace", "{report}");
             let owner_only = report["owner_only"].as_array().unwrap();
             assert_eq!(owner_only.len(), 1, "{report}");
-            assert_eq!(owner_only[0]["name"], "replica-ship");
+            assert_eq!(owner_only[0]["name"], "replica-ci-sweep");
             assert_eq!(owner_only[0]["owner_machine"], "hm_fixture_remote");
             assert_eq!(
                 fs::canonicalize(owner_only[0]["path"].as_str().unwrap()).unwrap(),
-                fs::canonicalize(&ship_path).unwrap(),
+                fs::canonicalize(&ci_sweep_path).unwrap(),
                 "{report}"
             );
 
@@ -563,7 +894,7 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
                     "workspace_mismatch",
                 ),
                 (
-                    toggle("replica-gc", "job:workspace_ship_pipeline"),
+                    toggle("replica-gc", "job:ci_failure_sweep_pipeline"),
                     409,
                     "target_mismatch",
                 ),
@@ -577,7 +908,7 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
                 assert_eq!(fs::read(&gc_path).unwrap(), gc_before, "{code} wrote");
             }
             let refused = error_code(
-                toggle("replica-ship", "job:workspace_ship_pipeline"),
+                toggle("replica-ci-sweep", "job:ci_failure_sweep_pipeline"),
                 409,
                 "owner_authority",
             );
@@ -587,7 +918,7 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
                     .is_some_and(|error| error.contains("hm_fixture_remote")),
                 "{refused}"
             );
-            assert_eq!(fs::read(&ship_path).unwrap(), ship_before);
+            assert_eq!(fs::read(&ci_sweep_path).unwrap(), ci_sweep_before);
             let enabled = json_ok(toggle("replica-gc", "job:worktree_gc_pipeline"));
             assert_eq!(enabled["changed"], true, "{enabled}");
             assert!(
@@ -613,7 +944,7 @@ fn replica_auto_task_controls_explain_owner_authority_and_refuse_mutations() {
                 .auto_task_add(AutoTaskAddParams {
                     name: "qa-sweep".into(),
                     description: "Replica control boundary fixture".into(),
-                    schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+                    schedule: AutoTaskSchedule::every_minutes(60),
                     template: AutoTaskTemplate {
                         title: "Should remain unminted".into(),
                         description: "An auto-task may not issue work from a replica.".into(),
@@ -893,7 +1224,8 @@ fn github_pr_refs_link_the_pull_request_from_the_origin_remote() {
 
 /// The dashboard serves the task JSON every read surface shares and adds only
 /// its own extras: the detail is the tool host's `orbit.task.show` record plus
-/// `status_transitions`, `job_run_navigable` and `readiness.preparing`, and a
+/// `status_transitions`, `job_run_navigable` and `readiness.preparing` (plus
+/// `escalation_triage` on a held proposed or blocked task), and a
 /// list row carries the same base keys as `orbit.task.list` minus the prose
 /// bodies. A crew this host no longer configures reads as `crew_unresolved` on
 /// the detail, as it does on the CLI and tool host, instead of being swapped
@@ -927,10 +1259,11 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
                 )
                 .unwrap();
 
-            let mut detail =
+            let full_detail =
                 json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")));
+            let mut detail = full_detail.clone();
             let extras = detail.as_object_mut().unwrap();
-            for key in ["status_transitions", "job_run_navigable"] {
+            for key in ["status_transitions", "job_run_navigable", "riskiness"] {
                 assert!(extras.remove(key).is_some(), "dashboard extra `{key}`");
             }
             assert!(
@@ -949,6 +1282,10 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
             assert_eq!(detail["artifacts"][0]["size_bytes"], 16);
 
             let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+            assert!(
+                page.get("detail").is_none(),
+                "ordinary task pages keep their existing shape"
+            );
             let row = page["items"]
                 .as_array()
                 .or_else(|| page.as_array())
@@ -977,6 +1314,19 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
                 }
             }
             assert!(row.as_object().unwrap().contains_key("job_run_machine"));
+            let bundled = json_ok(server.get(&format!(
+                "/api/tasks?workspace=ws_http_fixture&detail={id}&detail_runs=true"
+            )));
+            assert_eq!(
+                bundled["detail"], full_detail,
+                "the optional list projection equals task detail"
+            );
+            assert!(
+                bundled["detail_runs"]["items"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
             drop(server);
 
             // Author a task while its crew exists, then serve it from a host
@@ -1065,8 +1415,10 @@ fn block_with_final_recovery(
 }
 
 /// `GET /api/tasks/:id` serves the shared show record plus the dashboard extras.
-/// A blocked task's explanation and guidance match `orbit.task.show`.
-/// List rows and mutation responses omit show-only guidance.
+/// A blocked task's explanation and guidance match `orbit.task.show`, and an
+/// escalated blocked task also carries the dashboard-only `escalation_triage`
+/// readout and the `why_stuck` card. List rows and mutation responses omit
+/// show-only guidance and the triage readout.
 #[test]
 fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
     isolated(
@@ -1118,10 +1470,20 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 "move the task back to backlog after fixing the cause"
             );
             assert!(raw["final_recovery"]["at"].as_str().unwrap().contains('T'));
+            assert_eq!(raw["escalation_triage"]["available"], true);
+            assert_eq!(raw["escalation_triage"]["subject"], "block");
+            assert_eq!(raw["escalation_triage"]["run_id"], Value::Null);
 
             let mut detail = raw.clone();
             let stripped = detail.as_object_mut().unwrap();
-            for key in ["status_transitions", "job_run_navigable"] {
+            for key in [
+                "status_transitions",
+                "job_run_navigable",
+                "escalation_triage",
+                "why_stuck",
+                "riskiness",
+                "job_run_worktree",
+            ] {
                 assert!(stripped.remove(key).is_some(), "dashboard extra `{key}`");
             }
             if let Some(readiness) = stripped.get_mut("readiness").and_then(Value::as_object_mut) {
@@ -1132,7 +1494,13 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 .run_tool("orbit.task.show", json!({"id": blocked}))
                 .unwrap();
             assert_eq!(detail, shown, "the detail is the shared show record");
-            for extra in ["status_transitions", "job_run_navigable"] {
+            for extra in [
+                "status_transitions",
+                "job_run_navigable",
+                "escalation_triage",
+                "why_stuck",
+                "job_run_worktree",
+            ] {
                 assert!(
                     shown.get(extra).is_none(),
                     "the tool show does not add dashboard extra `{extra}`"
@@ -1147,7 +1515,9 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
             for id in [&blocked, &plain] {
                 let row = rows.iter().find(|row| row["id"] == id.as_str()).unwrap();
                 assert!(
-                    row.get("next_step").is_none() && row.get("final_recovery").is_none(),
+                    row.get("next_step").is_none()
+                        && row.get("final_recovery").is_none()
+                        && row.get("escalation_triage").is_none(),
                     "a list row omits show guidance: {row}"
                 );
             }
@@ -1173,17 +1543,24 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
             ));
             assert!(updated.get("status_transitions").is_some());
             assert!(
-                updated.get("next_step").is_none() && updated.get("final_recovery").is_none(),
+                updated.get("next_step").is_none()
+                    && updated.get("final_recovery").is_none()
+                    && updated.get("escalation_triage").is_none(),
                 "a mutation response omits show guidance: {updated}"
             );
             let again =
                 json_ok(server.get(&format!("/api/tasks/{blocked}?workspace=ws_http_fixture")));
             assert!(again.get("next_step").is_some() && again.get("final_recovery").is_some());
+            // The operator comment above is a human touch since the escalation,
+            // so the readout stays but no longer offers the action.
+            assert_eq!(again["escalation_triage"]["available"], false);
+            assert_eq!(again["escalation_triage"]["subject"], "block");
 
             let quiet =
                 json_ok(server.get(&format!("/api/tasks/{plain}?workspace=ws_http_fixture")));
             assert!(quiet.get("next_step").is_none() && quiet.get("final_recovery").is_none());
             assert!(quiet.get("block").is_none());
+            assert!(quiet.get("escalation_triage").is_none());
         },
     );
 }
@@ -1202,7 +1579,7 @@ fn task_payloads_expose_durable_holding_pilot_warnings() {
             };
             use orbit_types::workflow::{JobRunState, PipelineState};
             use std::io::Write;
-            let fixture = Fixture::new();
+            let fixture = Fixture::host("orbit", "ORB");
             let id = fixture
                 .runtime
                 .add_task(TaskAddParams {
@@ -1283,6 +1660,11 @@ fn task_payloads_expose_durable_holding_pilot_warnings() {
                     )
                     .unwrap();
                 assert_eq!(&shown, expected);
+                let full_shown = fixture
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": id}))
+                    .unwrap();
+                assert_eq!(&full_shown["pilot_warnings"], expected);
                 let listed = fixture
                     .runtime
                     .run_tool("orbit.task.list", json!({}))
@@ -1377,6 +1759,462 @@ fn task_payloads_expose_durable_holding_pilot_warnings() {
                 json!({}),
             ));
             assert_payloads(&json!([]));
+
+            // Non-dependency prerequisite tasks:
+            // A finished prerequisite holds nothing and clears pilot warnings on every read surface.
+            let done_prereq = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Done prerequisite".into(),
+                    status: Some(TaskStatus::Done),
+                    ..Default::default()
+                })
+                .unwrap();
+            let unfin_prereq = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Unfinished prerequisite".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+
+            let prereq_task = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Prerequisite check task".into(),
+                    complexity: TaskComplexity::Low,
+                    description: "Prerequisite verification".into(),
+                    acceptance_criteria: vec!["Acceptance".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+
+            let record_prereq = |operation: char, assessment: Value| {
+                fixture
+                    .runtime
+                    .update_task_as_human(
+                        &prereq_task,
+                        TaskUpdateParams {
+                            comment: Some(format!(
+                                "operation_id={}\n{}",
+                                operation.to_string().repeat(64),
+                                json!({"assessment": assessment})
+                            )),
+                            ..Default::default()
+                        },
+                        "task-pilot".into(),
+                    )
+                    .unwrap();
+                let dir = super::codebase::bundle_dir(&fixture.path(""), &prereq_task).unwrap();
+                let path = dir.join(TASK_EVENTS_FILE_NAME);
+                let count = fs::read_to_string(&path).unwrap().lines().count();
+                let event = TaskEventRowV2 {
+                    schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+                    event_id: format!("EV-{:04}", count + 1),
+                    at: Utc::now(),
+                    by: "task-pilot".into(),
+                    event_type: "task_pilot_applied".into(),
+                    note: None,
+                    from_status: None,
+                    to_status: None,
+                    operation_id: Some(operation.to_string().repeat(64)),
+                    decision: Some(TaskDecision::DrainApprovalHeld {
+                        classification: "warnings".into(),
+                    }),
+                };
+                let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+                writeln!(file, "{}", serde_json::to_string(&event).unwrap()).unwrap();
+            };
+
+            let assert_prereq_payloads = |expected: &Value| {
+                let detail = json_ok(server.get(&format!(
+                    "/api/tasks/{prereq_task}?workspace=ws_http_fixture"
+                )));
+                assert_eq!(&detail["pilot_warnings"], expected);
+                let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+                let rows = page["items"]
+                    .as_array()
+                    .or_else(|| page.as_array())
+                    .unwrap();
+                let row = rows.iter().find(|row| row["id"] == prereq_task).unwrap();
+                assert_eq!(&row["pilot_warnings"], expected);
+                let shown = fixture
+                    .runtime
+                    .run_tool(
+                        "orbit.task.show",
+                        json!({"id": prereq_task, "fields": ["pilot_warnings"]}),
+                    )
+                    .unwrap();
+                assert_eq!(&shown, expected);
+                let full_shown = fixture
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": prereq_task}))
+                    .unwrap();
+                assert_eq!(&full_shown["pilot_warnings"], expected);
+                let listed = fixture
+                    .runtime
+                    .run_tool("orbit.task.list", json!({}))
+                    .unwrap();
+                let row = listed["tasks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["id"] == prereq_task)
+                    .unwrap();
+                assert_eq!(&row["pilot_warnings"], expected);
+            };
+
+            // 1. Proposed task whose receipt names only a done task that is not a dependency has empty pilot_warnings
+            record_prereq(
+                'd',
+                json!({
+                    "blocked_by": [format!("Wait for {} to land", done_prereq.id)],
+                }),
+            );
+            assert_prereq_payloads(&json!([]));
+
+            // 2. Proposed task whose receipt names a missing task still reports the finding on full show record
+            let missing_expected =
+                json!([{"kind": "blocked_by", "text": "Wait for ORB-99999 to land"}]);
+            record_prereq(
+                'e',
+                json!({
+                    "blocked_by": ["Wait for ORB-99999 to land"],
+                }),
+            );
+            assert_prereq_payloads(&missing_expected);
+
+            // 3. Proposed task whose receipt names an unfinished task that is not a dependency still reports the finding
+            let unfin_expected = json!([{"kind": "blocked_by", "text": format!("Wait for {} to land", unfin_prereq.id)}]);
+            record_prereq(
+                'f',
+                json!({
+                    "blocked_by": [format!("Wait for {} to land", unfin_prereq.id)],
+                }),
+            );
+            assert_prereq_payloads(&unfin_expected);
+        },
+    );
+}
+
+fn add_scope_workspace(fixture: &Fixture, id: &str, name: &str) -> orbit_core::OrbitRuntime {
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    let mut workspace = registry.workspaces[0].clone();
+    workspace.id = id.into();
+    workspace.name = name.into();
+    let repo = fixture.path(name);
+    let work = repo.join(".orbit");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(
+        work.join("config.yaml"),
+        format!("schema_version: 1\nworkspace_id: {id}\n"),
+    )
+    .unwrap();
+    let checkout = orbit_types::workspace::WorkspaceCheckout::owner(id.into(), repo, work);
+    registry.workspaces.push(workspace.clone());
+    registry.checkouts.push(checkout.clone());
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+        &fixture.global,
+        &workspace,
+        &checkout,
+    )
+    .unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seed_scope_aggregate(
+    runtime: &orbit_core::OrbitRuntime,
+    run: &str,
+    activity: &str,
+    agent: &str,
+    model: &str,
+    tool: &str,
+    input: u64,
+    output: u64,
+    result_bytes: u64,
+) {
+    runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: run.into(),
+            activity_id: activity.into(),
+            agent: agent.into(),
+            provider: None,
+            account: None,
+            model: Some(model.into()),
+            task_ids: Vec::new(),
+            trace: InvocationTrace {
+                usage: TokenUsage {
+                    input,
+                    output,
+                    ..TokenUsage::default()
+                },
+                tool_calls: vec![ToolCallTrace {
+                    seq: 1,
+                    tool_name: tool.into(),
+                    result_bytes,
+                    result_payload: None,
+                }],
+                duration_ms: 1_000,
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+}
+
+fn null_scope_workspace(fixture: &Fixture, run: &str) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET workspace_id = NULL WHERE job_run_id = ?1",
+                    [run],
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// [ORB-20152] Workspace-selected activity/tool aggregates must count only
+/// the selected runtime partition. Two workspaces seed deliberately
+/// different populations plus unscoped legacy rows; each selection must see
+/// only its own partition with preserved grouping, totals and ordering.
+#[test]
+fn activity_and_tool_aggregates_scope_to_selected_workspace_partition() {
+    isolated(
+        "projections::activity_and_tool_aggregates_scope_to_selected_workspace_partition",
+        || {
+            let fixture = Fixture::new();
+            let other = add_scope_workspace(&fixture, "ws_http_scope_other", "scope_other");
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-a-1",
+                "scope-alpha",
+                "agent-a",
+                "model-a",
+                "scope-tool-a",
+                10,
+                20,
+                12,
+            );
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-a-2",
+                "scope-alpha",
+                "agent-a",
+                "model-a",
+                "scope-tool-a",
+                10,
+                20,
+                12,
+            );
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-a-low",
+                "scope-alpha-low",
+                "agent-a",
+                "model-a",
+                "scope-tool-a",
+                1,
+                1,
+                12,
+            );
+            seed_scope_aggregate(
+                &other,
+                "scope-b-1",
+                "scope-beta",
+                "agent-b",
+                "model-b",
+                "scope-tool-b",
+                100,
+                200,
+                34,
+            );
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-null-a",
+                "scope-alpha",
+                "agent-a",
+                "model-a",
+                "scope-tool-a",
+                1_000,
+                1_000,
+                999,
+            );
+            null_scope_workspace(&fixture, "scope-null-a");
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-null-b",
+                "scope-beta",
+                "agent-b",
+                "model-b",
+                "scope-tool-b",
+                1_000,
+                1_000,
+                999,
+            );
+            null_scope_workspace(&fixture, "scope-null-b");
+            seed_scope_aggregate(
+                &fixture.runtime,
+                "scope-null-legacy",
+                "scope-legacy",
+                "legacy-agent",
+                "legacy-model",
+                "legacy-tool",
+                1_000,
+                1_000,
+                999,
+            );
+            null_scope_workspace(&fixture, "scope-null-legacy");
+            let server = fixture.server(false);
+            let activity_a = json_ok(server.get("/api/metrics/activity?workspace=ws_http_fixture"));
+            let rows_a = activity_a.as_array().unwrap();
+            assert_eq!(
+                rows_a.len(),
+                2,
+                "selected workspace sees only its groups: {rows_a:?}"
+            );
+            assert!(
+                rows_a.iter().all(|row| row["activity_id"] != "scope-beta"),
+                "other workspace leaked into activity: {rows_a:?}"
+            );
+            assert!(
+                rows_a
+                    .iter()
+                    .all(|row| row["activity_id"] != "scope-legacy"),
+                "unscoped legacy leaked into activity: {rows_a:?}"
+            );
+            assert_eq!(rows_a[0]["activity_id"], "scope-alpha");
+            assert_eq!(rows_a[1]["activity_id"], "scope-alpha-low");
+            let alpha = &rows_a[0];
+            assert_eq!(alpha["agent"], "agent-a");
+            assert_eq!(alpha["model"], "model-a");
+            assert_eq!(alpha["invocation_count"], 2);
+            assert_eq!(alpha["total_input_tokens"], 20);
+            assert_eq!(alpha["total_output_tokens"], 40);
+            assert_eq!(alpha["total_tokens"], 60);
+            assert!(
+                (alpha["avg_tokens"].as_f64().unwrap() - 30.0).abs() < 1e-9,
+                "avg preserves selected population: {alpha}"
+            );
+            assert_eq!(alpha["p50_tokens"], 30);
+            assert_eq!(alpha["p95_tokens"], 30);
+            assert_eq!(alpha["total_tool_calls"], 2);
+            let low = &rows_a[1];
+            assert_eq!(low["invocation_count"], 1);
+            assert_eq!(low["total_input_tokens"], 1);
+            assert_eq!(low["total_output_tokens"], 1);
+            assert_eq!(low["total_tokens"], 2);
+            assert_eq!(low["total_tool_calls"], 1);
+            let activity_b =
+                json_ok(server.get("/api/metrics/activity?workspace=ws_http_scope_other"));
+            let rows_b = activity_b.as_array().unwrap();
+            assert_eq!(
+                rows_b.len(),
+                1,
+                "other workspace sees only its group: {rows_b:?}"
+            );
+            let beta = &rows_b[0];
+            assert_eq!(beta["activity_id"], "scope-beta");
+            assert_eq!(beta["agent"], "agent-b");
+            assert_eq!(beta["model"], "model-b");
+            assert_eq!(beta["invocation_count"], 1);
+            assert_eq!(beta["total_input_tokens"], 100);
+            assert_eq!(beta["total_output_tokens"], 200);
+            assert_eq!(beta["total_tokens"], 300);
+            assert!(
+                (beta["avg_tokens"].as_f64().unwrap() - 300.0).abs() < 1e-9,
+                "avg preserves selected population: {beta}"
+            );
+            assert_eq!(beta["p50_tokens"], 300);
+            assert_eq!(beta["p95_tokens"], 300);
+            assert_eq!(beta["total_tool_calls"], 1);
+            let tools_a = json_ok(server.get("/api/metrics/tools?workspace=ws_http_fixture"));
+            let tool_rows_a = tools_a.as_array().unwrap();
+            assert_eq!(
+                tool_rows_a.len(),
+                2,
+                "selected workspace sees only its tool groups: {tool_rows_a:?}"
+            );
+            assert!(
+                tool_rows_a
+                    .iter()
+                    .all(|row| row["activity_id"] != "scope-beta"),
+                "other workspace leaked into tools: {tool_rows_a:?}"
+            );
+            assert!(
+                tool_rows_a
+                    .iter()
+                    .all(|row| row["activity_id"] != "scope-legacy"),
+                "unscoped legacy leaked into tools: {tool_rows_a:?}"
+            );
+            assert_eq!(tool_rows_a[0]["activity_id"], "scope-alpha");
+            assert_eq!(tool_rows_a[0]["tool_name"], "scope-tool-a");
+            assert_eq!(tool_rows_a[0]["call_count"], 2);
+            assert_eq!(tool_rows_a[0]["total_result_bytes"], 24);
+            assert!(
+                (tool_rows_a[0]["avg_result_bytes"].as_f64().unwrap() - 12.0).abs() < 1e-9,
+                "avg preserves selected population: {}",
+                tool_rows_a[0]
+            );
+            assert_eq!(tool_rows_a[1]["activity_id"], "scope-alpha-low");
+            assert_eq!(tool_rows_a[1]["call_count"], 1);
+            assert_eq!(tool_rows_a[1]["total_result_bytes"], 12);
+            let tools_b = json_ok(server.get("/api/metrics/tools?workspace=ws_http_scope_other"));
+            let tool_rows_b = tools_b.as_array().unwrap();
+            assert_eq!(
+                tool_rows_b.len(),
+                1,
+                "other workspace sees only its tool group: {tool_rows_b:?}"
+            );
+            assert_eq!(tool_rows_b[0]["activity_id"], "scope-beta");
+            assert_eq!(tool_rows_b[0]["tool_name"], "scope-tool-b");
+            assert_eq!(tool_rows_b[0]["call_count"], 1);
+            assert_eq!(tool_rows_b[0]["total_result_bytes"], 34);
+            assert!(
+                (tool_rows_b[0]["avg_result_bytes"].as_f64().unwrap() - 34.0).abs() < 1e-9,
+                "avg preserves selected population: {}",
+                tool_rows_b[0]
+            );
+            let detail_a =
+                json_ok(server.get("/api/metrics/invocations?limit=20&workspace=ws_http_fixture"));
+            let runs_a: std::collections::BTreeSet<String> = detail_a
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["job_run_id"].as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(
+                runs_a,
+                std::collections::BTreeSet::from([
+                    "scope-a-1".to_string(),
+                    "scope-a-2".to_string(),
+                    "scope-a-low".to_string(),
+                ]),
+                "detailed listing stays workspace-isolated: {runs_a:?}"
+            );
+            let detail_b = json_ok(
+                server.get("/api/metrics/invocations?limit=20&workspace=ws_http_scope_other"),
+            );
+            let runs_b: std::collections::BTreeSet<String> = detail_b
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["job_run_id"].as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(
+                runs_b,
+                std::collections::BTreeSet::from(["scope-b-1".to_string()]),
+                "detailed listing stays workspace-isolated: {runs_b:?}"
+            );
         },
     );
 }

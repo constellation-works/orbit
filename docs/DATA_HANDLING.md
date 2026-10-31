@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Data Handling — what stays on your machine, what leaves it, and to whom"
-last_validated: 2026-10-19
+last_validated: 2026-10-29
 ---
 
 # Orbit Data Handling
@@ -43,6 +43,7 @@ data-handling review:
 | Redacted agent output blobs | `<repo>/.orbit/state/audit/blobs/` | Content-addressed; secrets are redacted at write time (see below). |
 | Process logs | `~/.orbit/state/logs/orbit.jsonl`, `orbit-agent.jsonl` beside it | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
 | Lexical task index | `<repo>/.orbit/state/semantic.db` | Local SQLite FTS5 index; regenerable with `orbit search reindex`. No model or network request. |
+| Lease tokens (lease listener user only) | `~orbit-lease/.orbit/lease-tokens.db` (SQLite) | Exists only where root provisioned it for the listener user. Holds each token's SHA-256, never the secret, with its scope and an audit of mints, revocations, refused verifications and other lease listener refusals; listener rows carry the client address and request method and path. |
 | Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
 | Machine identity (`machine.id`, `machine.name`, `machine.task_prefix`) | `~/.orbit/config.toml` `[machine]` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
 | Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Host-global configuration only. |
@@ -63,18 +64,22 @@ choose, or through federated MCP over SSH to hosts you configure.
 | Plugin archive fetch | When `orbit plugin add` or `orbit plugin upgrade` uses an HTTPS archive source | The configured archive URL | The archive is fetched with `curl`; Orbit requires and checks a pinned SHA-256 digest before unpacking it. |
 | Git plugin source | When `orbit plugin add` or `orbit plugin upgrade` uses a `git+` source | The configured Git remote | Orbit runs Git to clone or fetch the requested source and ref. |
 | Task publication | When you explicitly publish tasks to a bound Git repository | The repository you chose | The selected task bundles and history are pushed through Git. |
+| Optional decision assistance | Only when a host-owned `[assistance]` policy enables it (off by default: `policies = []`) | `https://api.openai.com/v1/decisions` (fixed; no configurable endpoint, proxy, or crew route) | The policy's allowed evidence fields and question text, sent with the model fixed in the policy. Ungranted fields and references are omitted; secrets are redacted before transmission. No agent crew makes these calls. |
 
 Every Orbit crew dispatches through a provider CLI. Selecting an HTTP-only
 provider such as `openai_compat` fails structurally before making a request.
+The only Orbit-initiated model call is the optional decision assistance
+listed in the table above.
 
 Orbit has no update check on startup, no crash reporter, no usage analytics,
 and no "phone home" of any kind. There is no network call you cannot trace to a
-command you ran or a crew you configured.
+command you ran, a crew you configured, or an assistance policy you enabled.
 
 ### Initiated by tools Orbit runs for you
 
 Most Orbit work is done by agent CLIs — for example Claude Code, Codex, Gemini,
-Copilot, Cursor, Grok, Pi, Antigravity, OpenCode, and Muse — running as
+Copilot, Grok, Antigravity, and Muse (the Cursor, Pi, and OpenCode lanes were
+[retired](CONFIG.md#retired-providers)) — running as
 subprocesses. Those processes talk to their own
 providers with their own credentials under their own terms of service. Orbit
 does not proxy, log, or inspect that traffic beyond the stdout/stderr it
@@ -83,17 +88,14 @@ invoked by an activity: a pull request is opened against the remote you
 configured, using the GitHub identity you already have.
 
 If your organisation's compliance posture depends on where model traffic goes,
-that decision is made when you choose which agent CLIs and providers to install
-and which crews to enable — not by Orbit.
+that decision is made when you choose which agent CLIs and providers to install,
+which crews to enable, and which assistance policies to add — not by Orbit.
 
-Two specifics worth knowing:
+One specific worth knowing:
 
 - Agent subprocesses keep host network access. Orbit's OS sandbox is a
   filesystem boundary, not a network boundary. The control on exfiltration is
   the environment allowlist described next.
-- Orbit invokes Pi with `--offline`, which suppresses Pi's own version check,
-  package update checks, and install telemetry ping. Model API traffic is
-  unaffected.
 
 ### Optional network surfaces you turn on
 
@@ -102,6 +104,7 @@ Two specifics worth knowing:
 | Dashboard (`orbit web serve`) | Binds `127.0.0.1` | Reach a remote workspace with `orbit web connect`, which tunnels over SSH. |
 | MCP server (`orbit mcp serve`) | Local stdio | Remote access (`--mode remote`) is a byte-transparent SSH stdio proxy; authorization is by the SSH identity you configure. |
 | MCP TCP listener (`orbit mcp listen`) | Loopback-bound TCP socket | A wider bind must be requested explicitly with `--allow-non-loopback`. |
+| Lease listener (`orbit lease listen`) | Off | Runs as a dedicated listener user at the address in its own `lease.listener.bind`. Serves only the lease routes and `/healthz`, each lease request authenticated by a bearer lease token, and forwards operations to Orbit Web over a local Unix socket. Refuses `0.0.0.0` or `::` unless a proxy is declared. |
 | Federated MCP | Off | Presents one MCP namespace over this host plus the hosts you register with `orbit host add`. Only hosts you name; there is no discovery. |
 | Task publication | Off | Pushes task bundles to a Git repository you bind. |
 
@@ -109,13 +112,35 @@ Two specifics worth knowing:
 
 - **Provider keys are yours and stay on your host.** Provider CLIs read
   their own credentials — from their credential store (for example the macOS
-  login keychain for Claude and Copilot) or from variables you forward through
-  `[execution.env].pass`. Orbit never stores a provider key in its own state.
+  login keychain for Claude and Copilot) or from variables you forward, either
+  to every crew through `[execution.env].pass` or to one crew through its
+  global `[crews.<name>] env` entry. Orbit never stores a provider key in its
+  own state.
 - **Agent subprocesses get an allowlist-composed environment.** Nothing is
-  forwarded to an agent unless it is a named Orbit envelope variable or a
-  name you list in `[execution.env].pass`. A benignly named credential such
-  as `DATABASE_URL` does not reach an agent by accident. See
+  forwarded to an agent unless it is a baseline variable, a named Orbit
+  envelope variable, a name you list in `[execution.env].pass`, a variable its
+  provider runtime declares it needs, or an `env` entry of the crew that agent
+  runs as. A benignly named credential such as `DATABASE_URL` does not reach an
+  agent by accident. See
   [CONFIG.md — `[execution.env]`](./CONFIG.md#executionenv--the-agent-subprocess-environment).
+- **Audit three grant surfaces, not one.** The shared `[execution.env].pass`
+  list is one. The others are the global crew `env` entries and the provider's
+  own credential store. A crew `env` entry reaches only that crew's agents and can
+  admit a name `pass` does not list, so removing a name from `pass` does not
+  stop a crew entry from delivering it. Orbit accepts `env` only in the global
+  `~/.orbit/config.toml`, so a checkout cannot add one, and `orbit config show`
+  prints the entries as written.
+- **Shared and crew-only grants stay separate.** Take `pass` holding
+  `CLAUDE_CODE_OAUTH_TOKEN` and a global crew `opus-credits` with
+  `env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]`. Agents of `opus`
+  get the OAuth token and no API key. Agents of `opus-credits` get the API key
+  and not the OAuth token, because the crew's Claude credential replaces the
+  shared one. Neither crew's agents receive the source name
+  `ANTHROPIC_CREDITS_API_KEY_1`; `opus-credits` gets its value only as
+  `ANTHROPIC_API_KEY`. A bare
+  crew entry such as `env = ["EXTRA_SHARED_VAR"]` reaches only the crew that
+  lists it, even though `pass` does not list it. Where a crew entry and `pass`
+  name the same variable, the crew's entry wins for that crew.
 - **Redaction runs before persistence.** Environment values whose names contain
   `TOKEN`, `SECRET`, `PASSWORD`, or `API_KEY`, or another credential marker such
   as `PRIVATE`, `CREDENTIAL`, `COOKIE`, `BEARER`, or a `_KEY` suffix;
@@ -156,8 +181,8 @@ project security reporting.
   task. Do not paste customer records or PHI into a task.
 - **Choose providers first.** Enable only crews whose provider terms and
   agreements match your obligations; a disabled crew sends nothing.
-- **Pin what agents can see.** Use `[execution.env].pass` deliberately and
-  the sandbox `fsProfile` / `denyRead` policies to keep secrets and
+- **Pin what agents can see.** Use `[execution.env].pass` and each global crew
+  `env` entry deliberately, and the sandbox `fsProfile` / `denyRead` policies to keep secrets and
   out-of-scope directories away from agents.
 - **Treat `~/.orbit/` as sensitive storage.** Back it up and encrypt it under
   the same policy as the repositories it references. The
@@ -166,8 +191,8 @@ project security reporting.
 - **Retention is yours.** Logs rotate locally ([logging](./runbooks/logging.md));
   audit history in `orbit.db` is kept until you delete it. Nothing ages out to
   a remote.
-- **Air-gapped use works** apart from explicit update downloads and
-  whatever your agent CLIs need. Install the binary
+- **Air-gapped use works** apart from explicit update downloads,
+  whatever your agent CLIs need, and any assistance policy you enable. Install the binary
   by hand and Orbit initiates no further connections.
 
 ## Related

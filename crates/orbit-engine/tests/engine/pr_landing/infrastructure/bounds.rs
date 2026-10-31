@@ -8,9 +8,7 @@ fn complete_infrastructure(
     let mut input = fx.complete_ungated_input();
     input["auto_fix"] = json!(true);
     input["completion"] = json!("review");
-    // The action wrapper's public error is returned as OrbitError for row assertions.
     action(host, "pr_complete", &input)
-        .map_err(|error| orbit_common::OrbitError::Execution(error.to_string()))
 }
 fn rerun_count(fx: &Fixture) -> usize {
     fs::read_to_string(fx.forge.join("calls"))
@@ -562,12 +560,26 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                             )
                         },
                     );
-                    let error = result.expect_err(case).to_string();
-                    assert!(
-                        error.contains("deadline"),
-                        "{case}: {error}; reads={:?}",
-                        reads.borrow()
-                    );
+                    let error = result.expect_err(case);
+                    if matches!(case, "evidence" | "observation") {
+                        assert!(
+                            matches!(
+                                &error,
+                                orbit_common::OrbitError::DeliveryRefused {
+                                    refusal: orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                                    message,
+                                } if message.contains("auto_fix_stopped")
+                            ),
+                            "{case}: expected typed infrastructure deadline hold with stop diagnostic, got {error}; reads={:?}",
+                            reads.borrow()
+                        );
+                    } else {
+                        assert!(
+                            error.to_string().contains("deadline"),
+                            "{case}: {error}; reads={:?}",
+                            reads.borrow()
+                        );
+                    }
                     let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
                     if matches!(case, "evidence" | "observation") {
                         assert!(
@@ -634,4 +646,140 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
             }
         },
     );
+}
+
+#[test]
+fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
+    struct CompletionDeadlineHost {
+        checks: std::sync::atomic::AtomicUsize,
+        clock: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        fail_read: bool,
+    }
+
+    impl orbit_engine::test_support::NullRuntimeHost for CompletionDeadlineHost {
+        fn get_task(
+            &self,
+            _task_id: &str,
+        ) -> Result<orbit_types::task::Task, orbit_common::OrbitError> {
+            Ok(super::super::task(super::super::TaskStatus::Review))
+        }
+
+        fn get_job_run(
+            &self,
+            _run_id: &str,
+        ) -> Result<Option<orbit_types::workflow::JobRun>, orbit_common::OrbitError> {
+            Ok(None)
+        }
+
+        fn run_private_vcs_operation(
+            &self,
+            operation: &str,
+            input: Value,
+        ) -> Result<Value, orbit_common::OrbitError> {
+            match operation {
+                "pr.status" => Ok(json!({"pull_request": {
+                    "number": 42,
+                    "state": "OPEN",
+                    "headRefOid": "candidate",
+                    "mergeStateStatus": "BLOCKED",
+                    "reviewDecision": "APPROVED",
+                    "statusCheckRollup": [{
+                        "name": "optional-check",
+                        "status": "COMPLETED",
+                        "conclusion": "FAILURE"
+                    }]
+                }})),
+                "pr.required_checks" => {
+                    let read = self
+                        .checks
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                        + 1;
+                    if read == 1 {
+                        return Ok(json!({"pull_request": {
+                            "headRefOid": "candidate",
+                            "commits": {"nodes": [{"commit": {
+                                "oid": "candidate",
+                                "statusCheckRollup": null
+                            }}]}
+                        }}));
+                    }
+                    self.clock
+                        .store(2_000_000, std::sync::atomic::Ordering::SeqCst);
+                    if self.fail_read {
+                        return Err(orbit_common::OrbitError::PrivateVcs(Box::new(
+                            orbit_common::PrivateVcsFailure {
+                                operation: "PR required checks".into(),
+                                class: orbit_common::PrivateVcsFailureClass::TransientObservation,
+                                message: "private automation VCS PR required checks failed: error connecting to api.github.com".into(),
+                                read_throttle: None,
+                            },
+                        )));
+                    }
+                    orbit_engine::run_private_vcs_operation(operation, &input)
+                }
+                _ => panic!("unexpected private VCS operation: {operation}"),
+            }
+        }
+    }
+
+    for (fail_read, expected_failure) in [(false, false), (true, true)] {
+        let clock = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1_000_000));
+        let host = CompletionDeadlineHost {
+            checks: std::sync::atomic::AtomicUsize::new(0),
+            clock: std::sync::Arc::clone(&clock),
+            fail_read,
+        };
+        let input = json!({
+            "workspace_path": std::env::current_dir().unwrap(),
+            "job_run_id": super::super::RUN_ID,
+            "completed_task_ids": [super::super::TASK_ID],
+            "pr_number": "42",
+            "max_wait_seconds": 60,
+            "auto_fix": true,
+            "completion": "review"
+        });
+        let result = orbit_engine::test_support::with_prerequisite_clock(
+            move || clock.load(std::sync::atomic::Ordering::SeqCst),
+            |_, _| {},
+            || {
+                orbit_engine::execute_deterministic_action(
+                    &host,
+                    "pr_complete",
+                    &json!({}),
+                    &input,
+                    false,
+                    &std::collections::HashMap::new(),
+                    None,
+                )
+            },
+        );
+        assert_eq!(host.checks.load(std::sync::atomic::Ordering::SeqCst), 2);
+        if expected_failure {
+            // [ORB-19430] Nothing was mutated, so the run holds on the
+            // unreadable forge, not on the budget, and keeps the provider text.
+            assert!(
+                matches!(
+                    &result,
+                    Err(orbit_common::OrbitError::DeliveryRefused {
+                        refusal: orbit_types::workflow::DeliveryRefusal::ForgeObservationUnavailable,
+                        message,
+                    }) if message.contains("its required checks could not be read")
+                        && message.contains("error connecting to api.github.com")
+                ),
+                "a transport read failure after the deadline holds as an unreadable forge, not \
+                 an expired budget: {result:?}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    &result,
+                    Err(orbit_common::OrbitError::DeliveryRefused {
+                        refusal: orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                        message,
+                    }) if message.contains("auto_fix_stopped")
+                ),
+                "a read refused before starting after expiry must remain a typed hold: {result:?}"
+            );
+        }
+    }
 }

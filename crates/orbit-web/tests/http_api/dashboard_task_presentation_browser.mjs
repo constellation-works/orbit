@@ -20,6 +20,26 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
         { task_id: 'PANEL-9', eligible: false, reason: 'claimed_by_live_child', run_ids: ['jrun-fixture-live'] },
       ];
     });
+    // Delivery attention: badge on the failed review row, banner in its detail.
+    const badge = row(page, 'PANEL-3').locator('.delivery-attention-badge');
+    assert.equal(await badge.innerText(), 'review · CI failed');
+    assert.match(await badge.getAttribute('title'), /complete_pr/);
+    assert.match(await badge.getAttribute('title'), /attempt 1 of 3/);
+    assert.equal(await row(page, 'PANEL-1').locator('.delivery-attention-badge').count(), 0, 'Unaffected rows have no delivery badge');
+    await row(page, 'PANEL-3').locator('.title').click();
+    await waitShown(page, 'PANEL-3');
+    const banner = page.locator('#detail-PANEL-3 .delivery-attention');
+    await banner.waitFor();
+    assert.match(await banner.innerText(), /Failed step: complete_pr/);
+    assert.match(await banner.innerText(), /Blocker: failed_checks/);
+    assert.match(await banner.innerText(), /Observed head: abc123/);
+    assert.match(await banner.innerText(), /Auto-fix attempt 1 of 3/);
+    assert.equal(await banner.getByRole('link', { name: 'View run' }).getAttribute('href') !== null, true);
+    assert.equal(await banner.getByRole('link', { name: 'PR #42' }).getAttribute('href'), 'https://github.com/o/r/pull/42');
+    await capture(page, `delivery-attention-dark-${width}.png`);
+    await page.getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await page.locator('#task-detail-pane').waitFor({ state: 'hidden' });
+
     await row(page, 'PANEL-6').locator('.title').click();
     await waitShown(page, 'PANEL-6');
     const detail = page.locator('#detail-PANEL-6');
@@ -40,7 +60,7 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
     await capture(page, `presentation-pane-dark-${width}.png`);
 
     const body = page.locator('#task-detail-body');
-    const footer = detail.locator('.task-action-footer');
+    const footer = detail.locator('.task-action-footer[data-footer-tab="overview"]');
     const visibleFooter = async () => {
       await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || !a.effect?.target?.closest?.('#task-detail-pane')));
       const b = await body.boundingBox();
@@ -129,18 +149,16 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
       await footer.getByRole('button', { name: 'archive', exact: true }).click();
       await page.waitForFunction(() => panelFixture.lifecycle.length === 2);
     }
-    // The Drain wait card opens the same task renderer and scroll viewport.
+    // A direct task route opens the same renderer and scroll viewport.
     if (width === 375) {
-      await page.locator('button.tab[data-tab="drain"]').click();
-      const drainLink = page.locator('#drain-waits-panel .drain-wait-task-links').getByRole('link', { name: 'PANEL-6', exact: true });
-      await drainLink.click();
+      await page.evaluate(() => { location.hash = '#tasks?open=PANEL-6'; });
       await waitShown(page, 'PANEL-6');
       await visibleFooter();
-      await capture(page, `presentation-from-drain-dark-${width}.png`);
+      await capture(page, `presentation-from-route-dark-${width}.png`);
       await readiness.getByRole('link', { name: 'PANEL-2', exact: true }).click();
       await waitShown(page, 'PANEL-2');
       await capture(page, `presentation-short-task-dark-${width}.png`);
-      const shortFooter = page.locator('#detail-PANEL-2 .task-action-footer');
+      const shortFooter = page.locator('#detail-PANEL-2 .task-action-footer[data-footer-tab="overview"]');
       const b = await body.boundingBox();
       const f = await shortFooter.boundingBox();
       assert.ok(Math.abs(f.y + f.height - b.y - b.height) <= 1, 'Short task actions also anchor to the viewport bottom');

@@ -1,5 +1,5 @@
 // Usage: node dashboard_orchestrators_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/orchestrators-browser
-// Header boxes of the shipped Agents › Orchestrators ranking do not overlap at
+// Header boxes of the shipped Analytics › Agents › Orchestrators ranking do not overlap at
 // 1440 or 375, the ranking scrolls in its own box at 375, the Jobs badge counts
 // runs, and the UTC/Local control defaults to UTC
 // and survives a reload.
@@ -159,7 +159,7 @@ try {
 
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
-    await page.goto(`${origin}/?workspace=one&window=24h#agents/orchestrators`);
+    await page.goto(`${origin}/?workspace=one&window=24h#analytics/agents/orchestrators`);
     await settled();
     await page.evaluate(() => document.fonts.ready);
     const jobs = await page.locator('#rail-count-jobs').textContent();

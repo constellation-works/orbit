@@ -10,14 +10,14 @@ pub use catalog::{
     find_workspace_by_id, find_workspace_by_path, local_workspaces, parse_workspace_registry,
     rebind_workspace_ship_mode, rebind_workspace_source_remote, reconcile_workspace_source_remote,
     register_checkout, register_workspace, remove_workspace, resolve_logical_workspace,
-    set_path_override, validate_workspace_registry, validate_workspaces,
+    validate_workspace_registry, validate_workspaces,
 };
 pub use io::{
     ReadOnlyRegistryLoad, WorkspaceValidationMode, global_orbit_dir, load_registry,
-    load_registry_from, load_registry_from_read_only, load_registry_from_read_only_with_machine,
-    load_registry_from_with_machine, load_validated_registry_from,
-    load_validated_registry_from_with_machine, registry_file_fingerprint, registry_path,
-    registry_path_for, save_registry_to, with_registry_lock,
+    load_registry_from, load_registry_from_read_only, load_registry_from_with_machine,
+    load_validated_registry_from, load_validated_registry_from_with_machine,
+    registry_file_fingerprint, registry_path, registry_path_for, save_registry_to,
+    with_registry_lock,
 };
 pub use publication::{
     bind_publication, bind_publication_by_id, find_publication_binding_by_id,

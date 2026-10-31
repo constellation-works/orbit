@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Vision
 owner: grok
-last_updated: 2026-10-13
-last_validated: 2026-10-20
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: federated-mcp
 doc_role: vision
@@ -34,7 +34,7 @@ Forward-looking only. The contract in [specs/federated-workspace-mcp.md](./specs
 
 ### Host-registry catalog roles
 
-Owner vs replica checkouts, `machine_id` vs `host_id`, and checkout-health as repo-root presence are live v1 catalog rules. This feature maps new nouns onto those roles instead of creating a parallel ownership vocabulary. See [host-registry 2_design.md](../host-registry/2_design.md). A workspace with absent `owner_machine_id` cannot advertise `control_plane`.
+Owner vs replica checkouts keyed by `owner_machine_id` (the retired `owner_host_ids` key is accepted but never written), and checkout health as repo-root presence, are live v1 catalog rules. This feature maps new nouns onto those roles instead of creating a parallel ownership vocabulary. See [host-registry 2_design.md](../host-registry/2_design.md). A workspace with absent `owner_machine_id` cannot advertise `control_plane`.
 
 ### mcp-bridge v1
 
@@ -73,5 +73,10 @@ Nothing in the mux topology is novel: it is a configured reverse-proxy in front 
 - [ORB-11008] — recorded the federated multi-host MCP policy
 - [ORB-11009] — opened this vision folder as the contract home and left the questions above unresolved (PR #1139)
 - [ORB-11010] — closed review holes in the spec without resolving these vision questions
+- [ORB-11052] — destination-side caller authorization, Tier 1 (built, then removed)
+- [ORB-11053] — key-bound caller identity, Tier 2 (built, then removed)
+- [ORB-12564] — settled transport authentication: an SSH login is ownership,
+  so the destination serves the argv authority with no authenticated principal
+- [ORB-14449] — task-ID prefix routing for id-only calls to id-routed task tools
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

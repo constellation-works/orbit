@@ -11,26 +11,23 @@ git worktree prune
 echo "Removing worktrees..."
 main_path=$(pwd)
 
-git worktree list | while read -r line; do
-    # Extract path and the branch name (last field in brackets)
-    wt_path=$(echo "$line" | awk '{print $1}')
-    branch_field=$(echo "$line" | awk '{print $NF}')
-    
-    # Strip brackets if present
-    branch="${branch_field#\[}"
-    branch="${branch%\]}"
-    
+git worktree list --porcelain | awk '
+    /^worktree / { path = substr($0, 10) }
+    /^branch / { branch = substr($0, 8); sub(/^refs\/heads\//, "", branch) }
+    /^$/ { print path "\t" branch; path = ""; branch = "" }
+    END { if (path != "") print path "\t" branch }
+' | while IFS=$'\t' read -r wt_path branch; do
     # Skip the main working tree
     if [[ "$wt_path" == "$main_path" ]]; then
         continue
     fi
-    
-    # Skip if branch is main or agent-main
+
+    # Skip if branch is main or agent-main (detached worktrees have no branch)
     if [[ "$branch" == "main" || "$branch" == "agent-main" ]]; then
         continue
     fi
-    
-    echo "Removing worktree: $wt_path (branch: $branch)"
+
+    echo "Removing worktree: $wt_path (branch: ${branch:-detached})"
     git worktree remove --force "$wt_path" || true
 done
 

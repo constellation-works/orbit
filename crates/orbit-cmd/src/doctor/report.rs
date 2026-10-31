@@ -8,13 +8,14 @@
 
 use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
 use orbit_core::OrbitRuntime;
-use orbit_types::task::HostOs;
+use orbit_types::task::{HostOs, quoted_labels};
 use orbit_types::workflow::{ExecutorDef, provider_account_label};
 use serde_json::{Value, json};
 
 use super::browser_kit::browser_kit_rows;
 use super::git_protection::git_protection_row;
 use super::permissions::state_directory_permissions_row;
+use super::script_grants::script_grant_rows;
 use super::worker_containment::worker_containment_row;
 use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -28,6 +29,7 @@ const REPORT_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("worker-containment", |runtime, _| {
         worker_containment_row(runtime)
     }),
+    DoctorProbe::many("script-grants", |runtime, _| script_grant_rows(runtime)),
     DoctorProbe::many("provider", |runtime, _| routed_provider_rows(runtime)),
     DoctorProbe::many("provider-auth", |runtime, _| provider_auth_rows(runtime)),
     DoctorProbe::many("provider-limits", |runtime, _| provider_limit_rows(runtime)),
@@ -43,7 +45,35 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         crate::hosts::doctor_hosts_row(&runtime.global_root())
     }),
     DoctorProbe::many("browser-kit", |runtime, _| browser_kit_rows(runtime)),
+    DoctorProbe::one("host-labels", |runtime, _| host_labels_row(runtime)),
 ];
+
+/// The capability labels this host carries for tasks' `requires_labels`:
+/// its `machine.labels` plus its OS as an implicit label.
+fn host_labels_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let labels = runtime.host_labels().into_iter().collect::<Vec<_>>();
+    let message = if labels.is_empty() {
+        "This host carries no capability labels: `machine.labels` is unset and its OS is \
+         unknown."
+            .to_string()
+    } else {
+        format!(
+            "This host carries capability labels {} (`machine.labels` plus its OS).",
+            quoted_labels(&labels)
+        )
+    };
+    WorkspaceDoctorResult {
+        duration_ms: 0,
+        check_name: "host-labels".into(),
+        status: WorkspaceDoctorStatus::Info,
+        message,
+        remediation: runtime.machine_labels().is_empty().then(|| {
+            "Declare `machine.labels` in machine settings for tasks that require a capability \
+             this host has."
+                .to_string()
+        }),
+    }
+}
 
 fn build_budget_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     match runtime.build_budget_capacity_warnings() {
@@ -335,7 +365,7 @@ pub fn provider_limit_findings(
             let readings = view
                 .provider_readings(&provider.provider, provider.account.as_deref())
                 .collect::<Vec<_>>();
-            let finding = if provider.gated {
+            let mut finding = if provider.gated {
                 let gated = readings
                     .iter()
                     .filter(|reading| reading.gated)
@@ -404,6 +434,9 @@ pub fn provider_limit_findings(
                     None,
                 )
             };
+            finding
+                .message
+                .push_str(&format!("; pressure {}", provider.usage.describe(now)));
             (Some(provider.provider.clone()), finding)
         })
         .collect::<Vec<_>>();

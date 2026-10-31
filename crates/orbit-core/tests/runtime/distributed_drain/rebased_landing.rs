@@ -6,13 +6,15 @@
 
 use super::before_pr::{ReviewedHandoff, revision};
 use super::*;
+use crate::admission_test_support::{
+    admission_request, admission_review_contract, admission_ship_contract,
+};
 
 use orbit_automation::review::REBASED_CLEAN_ASSURANCE;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest,
-    AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, ExecutionLocation,
+    AdmissionReviewContract, AdmissionRunContext, AdmissionShipContract, ExecutionLocation,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{
@@ -20,7 +22,6 @@ use orbit_types::task::{
     TaskEnvelopeV2,
 };
 use orbit_types::workflow::automation::AutomationState;
-use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, ReviewBudget};
 
 /// Land an unrelated change on `main` as pull request #41 after the review
 /// settled, so the reviewed base is no longer the landing base.
@@ -142,6 +143,167 @@ fn public_retry_adopts_a_clean_provider_base_update_and_lands_normally() {
     retry_native_handoff(true, false, true);
 }
 
+fn handoff_ci_history_uses_the_claim_scoped_mutation() {
+    use orbit_core::application::task::TaskUpdateParams;
+
+    let reviewed = ReviewedHandoff::accept(ReviewTiming::BeforeLanding);
+    let owner = &reviewed.owner;
+    let claim_id = owner.distributed_claim_console().unwrap()["claims"][0]["claim_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let accepted = owner.accepted_task_handoff(&claim_id).unwrap();
+    let expected = orbit_core::application::review::ExpectedCandidate {
+        candidate_commit: accepted.handoff.candidate.candidate.commit.clone(),
+        base_commit: accepted.handoff.candidate.base.commit.clone(),
+    };
+    owner
+        .approve_handoff_as_operator(
+            &accepted.handoff_id,
+            &expected,
+            "operator",
+            "approve-ci-history",
+        )
+        .unwrap();
+    let landing = ClaimInvocation::trusted_operator(
+        accepted.handoff.task_id.clone(),
+        accepted.handoff.claim_id.clone(),
+        "owner-landing".into(),
+    );
+    owner
+        .mutate_execution_claim(
+            Some(&landing),
+            "dispatch-ci-history",
+            &ClaimMutation::DispatchLanding {
+                handoff_id: accepted.handoff_id.clone(),
+                job_run_id: None,
+            },
+        )
+        .unwrap();
+
+    for (event, note) in [
+        ("ci_check_rerun", r#"{"run_id":7}"#),
+        ("ci_base_suspect", r#"{"check":"CI"}"#),
+    ] {
+        RuntimeHost::record_handoff_landing_history(owner, &accepted.handoff_id, event, note)
+            .unwrap();
+    }
+    let history = owner.get_task_history(&accepted.handoff.task_id).unwrap();
+    for (event, note) in [
+        ("ci_check_rerun", r#"{"run_id":7}"#),
+        ("ci_base_suspect", r#"{"check":"CI"}"#),
+    ] {
+        assert!(
+            history
+                .iter()
+                .any(|row| row.event == event && row.note.as_deref() == Some(note)),
+            "the handed-off claim records {event} through its scoped mutation"
+        );
+    }
+
+    let unscoped = RuntimeHost::apply_task_automation_update(
+        owner,
+        &accepted.handoff.task_id,
+        orbit_engine::TaskAutomationUpdate {
+            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".into(),
+                event: "unscoped-test-event".into(),
+                note: Some("must remain fenced".into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        unscoped
+            .to_string()
+            .contains("active execution claim requires a claim-scoped mutation"),
+        "unscoped automation history remains fenced: {unscoped}"
+    );
+    assert!(
+        owner
+            .update_task_as_human(
+                &accepted.handoff.task_id,
+                TaskUpdateParams {
+                    tags: Some(vec!["operator-change".into()]),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("active execution claim requires a claim-scoped mutation"),
+        "other unscoped task commits remain fenced"
+    );
+
+    let mutation = ClaimMutation::RecordLandingHistory {
+        handoff_id: accepted.handoff_id.clone(),
+        event: "ci_check_rerun".into(),
+        note: "wrong invocation".into(),
+    };
+    let other_claim = ClaimInvocation::trusted_operator(
+        accepted.handoff.task_id.clone(),
+        "different-claim".into(),
+        "owner-landing".into(),
+    );
+    assert!(
+        owner
+            .mutate_execution_claim(Some(&other_claim), "wrong-claim", &mutation)
+            .is_err(),
+        "a scoped mutation for another claim is refused"
+    );
+    let wrong_run = ClaimInvocation::trusted_worker(
+        accepted.handoff.task_id.clone(),
+        accepted.handoff.claim_id.clone(),
+        accepted.handoff.machine_id.clone(),
+        Some(orbit_store::contracts::ClaimRun {
+            machine_id: accepted.handoff.machine_id.clone(),
+            run_id: "different-run".into(),
+        }),
+    );
+    assert!(
+        owner
+            .mutate_execution_claim(Some(&wrong_run), "wrong-run", &mutation)
+            .is_err(),
+        "a scoped mutation for another run is refused"
+    );
+    assert!(
+        RuntimeHost::record_handoff_landing_history(
+            owner,
+            &accepted.handoff_id,
+            "other_history_event",
+            "must be refused",
+        )
+        .is_err(),
+        "the scoped history capability rejects every event outside its two-event allowlist"
+    );
+    let wrong_handoff = ClaimMutation::RecordLandingHistory {
+        handoff_id: "different-handoff".into(),
+        event: "ci_check_rerun".into(),
+        note: "must be refused".into(),
+    };
+    assert!(
+        owner
+            .mutate_execution_claim(Some(&landing), "wrong-handoff", &wrong_handoff)
+            .is_err(),
+        "the scoped mutation rejects a different handoff identity"
+    );
+    let final_history = owner.get_task_history(&accepted.handoff.task_id).unwrap();
+    assert_eq!(
+        final_history
+            .iter()
+            .filter(|row| row.event == "ci_check_rerun" || row.event == "ci_base_suspect")
+            .count(),
+        2,
+        "refused mutations append no history rows"
+    );
+}
+
 fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     let reviewed = ReviewedHandoff::accept_with_commands(
         ReviewTiming::BeforeLanding,
@@ -215,13 +377,22 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
             "name: CI\non:\n  pull_request:\n    branches: [main]\njobs:\n  protected:\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n",
         );
     }
+    // [ORB-19393] An operator's second update-branch merge on top of the
+    // first is still the accepted candidate plus base merges.
     let provider_head = if base_update {
-        advance_main(&reviewed, "src/other.rs", "fn other() {}\n");
+        for (file, content) in [
+            ("src/other.rs", "fn other() {}\n"),
+            ("src/later.rs", "fn later() {}\n"),
+        ] {
+            advance_main(&reviewed, file, content);
+            git(&reviewed.repo, &["checkout", "-q", &reviewed.branch]);
+            git(
+                &reviewed.repo,
+                &["merge", "--no-ff", "-qm", "Provider base update", "main"],
+            );
+            git(&reviewed.repo, &["checkout", "-q", "main"]);
+        }
         git(&reviewed.repo, &["checkout", "-q", &reviewed.branch]);
-        git(
-            &reviewed.repo,
-            &["merge", "--no-ff", "-qm", "Provider base update", "main"],
-        );
         let head = revision(&reviewed.repo, "HEAD").commit;
         git(&reviewed.repo, &["checkout", "-q", "main"]);
         head
@@ -608,6 +779,21 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
             },
         )
         .unwrap();
+    // [ORB-19393] A landing that waits for its base records why in task
+    // history through the handed-off claim, which refuses unscoped writes.
+    let wait = r#"{"state":"waiting_for_base","reason":"the base is still red"}"#;
+    RuntimeHost::record_handoff_landing_wait(owner, &accepted.handoff_id, wait).unwrap();
+    assert!(
+        owner
+            .get_task_history(&accepted.handoff.task_id)
+            .unwrap()
+            .iter()
+            .any(
+                |row| row.event == orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT
+                    && row.note.as_deref() == Some(wait)
+            ),
+        "the wait is in task history"
+    );
     if stop {
         // Model a lost external reply via the normal trusted intent boundary.
         RuntimeHost::record_handoff_landing(
@@ -725,7 +911,8 @@ crate::scenario_table!(
     a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_clean_scenarios,
     a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_clean,
     a_conflicting_base_or_a_head_pushed_after_review_stays_pending,
-    public_retry_reconciles_an_already_merged_native_handoff_without_merging_again
+    public_retry_reconciles_an_already_merged_native_handoff_without_merging_again,
+    handoff_ci_history_uses_the_claim_scoped_mutation
 );
 crate::scenario_table!(
     public_retry_provider_update_already_merged,
@@ -782,6 +969,105 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
         ),
         "authority recheck never grants another provider update"
     );
+    let landing = ClaimInvocation::trusted_operator(
+        accepted.handoff.task_id.clone(),
+        accepted.handoff.claim_id.clone(),
+        "owner-ci-retry".into(),
+    );
+    owner
+        .mutate_execution_claim(
+            Some(&landing),
+            "dispatch-ci-retry",
+            &ClaimMutation::DispatchLanding {
+                handoff_id: accepted.handoff_id.clone(),
+                job_run_id: None,
+            },
+        )
+        .unwrap();
+    let retry = orbit_types::workflow::CiRerunPlan {
+        schema_version: 1,
+        repository: request.repository.clone(),
+        repository_id: 1,
+        pr_number: request.pr_number.clone(),
+        head_sha: request.head_sha.clone(),
+        head_branch: request.head_branch.clone(),
+        base_branch: request.base_branch.clone(),
+        accepted_base: request.base_sha.clone(),
+        run_id: 700,
+        run_attempt: 1,
+        workflow_id: 600,
+        roots: vec![orbit_types::workflow::CiRerunRoot {
+            job_id: 1000,
+            check: "test".into(),
+            classification: "flaky".into(),
+            signature: "observed failure".into(),
+        }],
+        failed_jobs: vec![json!({"id":1000})],
+        authentication: json!({"fixture":"provider authenticated by engine"}),
+    };
+    let barrier = std::sync::Barrier::new(2);
+    let decisions = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            barrier.wait();
+            RuntimeHost::admit_ci_rerun(
+                owner,
+                std::slice::from_ref(&accepted.handoff.task_id),
+                Some(&accepted.handoff_id),
+                &retry,
+            )
+            .unwrap()
+        });
+        let second = scope.spawn(|| {
+            barrier.wait();
+            RuntimeHost::admit_ci_rerun(
+                owner,
+                std::slice::from_ref(&accepted.handoff.task_id),
+                Some(&accepted.handoff_id),
+                &retry,
+            )
+            .unwrap()
+        });
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|decision| matches!(
+                decision,
+                orbit_types::workflow::CiRerunAdmission::Reserved
+            ))
+            .count(),
+        1,
+        "two observations share exactly one pre-action CI reservation"
+    );
+    assert_eq!(
+        decisions
+            .iter()
+            .filter(|decision| matches!(
+                decision,
+                orbit_types::workflow::CiRerunAdmission::Observe(_)
+            ))
+            .count(),
+        1
+    );
+    let reopened = calm_host(
+        OrbitRuntime::from_roots(&owner.paths().global_dir, &owner.paths().orbit_dir)
+            .unwrap()
+            .with_automation_machine_identity(Some(OWNER.to_string())),
+    );
+    assert!(
+        matches!(RuntimeHost::admit_ci_rerun(&reopened,std::slice::from_ref(&accepted.handoff.task_id),Some(&accepted.handoff_id),&retry).unwrap(),orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior==retry),
+        "a fresh runtime re-observes the durable authorization after an unknown reply, without admitting another send"
+    );
+    assert_eq!(
+        reopened
+            .get_task_history(&accepted.handoff.task_id)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
+            .count(),
+        1
+    );
     owner
         .revoke_handoff_as_operator(
             &accepted.handoff_id,
@@ -795,6 +1081,16 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
     assert!(
         RuntimeHost::admit_handoff_base_update(owner, &accepted.handoff_id, &request).is_err(),
         "revocation refuses even a reserved mutation before the provider call"
+    );
+    assert!(
+        RuntimeHost::admit_ci_rerun(
+            owner,
+            std::slice::from_ref(&accepted.handoff.task_id),
+            Some(&accepted.handoff_id),
+            &retry
+        )
+        .is_err(),
+        "a revoked source/PR lease cannot reauthorize a reserved CI action"
     );
     assert_eq!(
         owner.get_task_history(&accepted.handoff.task_id).unwrap(),
@@ -927,21 +1223,13 @@ fn light_base_update(tag: LightTag, outside: bool) {
 
     let captured_review = tag.captured_review();
     let ship = AdmissionShipContract {
-        mode: "pr".into(),
-        base_branch: "main".into(),
-        landing_branch: "main".into(),
         before_pr: captured_review,
-        before_landing: false,
-        completion: "review".into(),
-        authorization_reference: None,
         review: captured_review.then(|| AdmissionReviewContract {
-            contract_version: REVIEW_CONTRACT_VERSION,
             crew: Some("reviewer".into()),
-            budget: ReviewBudget::default(),
             required_validation_commands: Some(commands.clone()),
-            baseline_commands: Vec::new(),
-            host_evidence: Vec::new(),
+            ..admission_review_contract()
         }),
+        ..admission_ship_contract()
     };
     let boundary = TaskCommitBoundary::new(
         owner.sqlite_store().unwrap(),
@@ -950,22 +1238,18 @@ fn light_base_update(tag: LightTag, outside: bool) {
     )
     .unwrap();
     let request = AdmissionRequest {
-        request_id: format!("light-{path}"),
-        caller_version: "test".into(),
-        caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-        caller_fingerprint: None,
-        caller_before_pr: false,
         review_gate: captured_review,
-        run_context: AdmissionRunContext {
-            run_id: "drain".into(),
-            job_name: "workspace_pull_pipeline".into(),
-            machine_name: None,
-        },
-        ship: ship.clone(),
-        crews: None,
-        os: None,
-        browser_kit: false,
-        admissible: None,
+        // The owner admits only its own version, passed to `admit_task` below.
+        caller_version: "test".into(),
+        ..admission_request(
+            format!("light-{path}"),
+            AdmissionRunContext {
+                run_id: "drain".into(),
+                job_name: "workspace_pull_pipeline".into(),
+                machine_name: None,
+            },
+            ship.clone(),
+        )
     };
     let AdmissionLookup::Found { receipt, .. } = boundary
         .admit_task(
@@ -1036,6 +1320,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
         footprint_widening: vec![],
         owed_criteria: vec![],
         regression_from: vec![],
+        visual: None,
     };
     let observation = HandoffObservation {
         footprint_widening: vec![],

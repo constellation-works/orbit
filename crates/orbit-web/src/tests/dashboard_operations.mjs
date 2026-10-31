@@ -1,6 +1,6 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
-const { setHost, setWorkspace, setRegisteredHosts, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
+const { setHost, setHostWrites, setWorkspace, setRegisteredHosts, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderJobs, fetchAndRenderAutoDrainPane, triggerFeedbackClear, OPERATION_FEEDBACK_CLEAR_MS } = await import('./js/operations.js');
 globalThis.triggerFeedbackClear = triggerFeedbackClear;
 globalThis.OPERATION_FEEDBACK_CLEAR_MS = OPERATION_FEEDBACK_CLEAR_MS;
@@ -43,9 +43,8 @@ let failJobRunsWorkspace = null;
 let workspaceTwoRunId = null;
 let nextTask = 1;
 let drainRunId = null;
-// The page the harness reports; the Drain Overview reads run detail only on Drain.
+// The page the harness reports for optional forecast reads.
 let harnessTab = 'operations';
-let runDetailFixture = null;
 let drainPhase = 'idle';
 let controlsAuthorized = true;
 let replicaWorkspace = false;
@@ -68,6 +67,13 @@ let releaseFleetReads = [];
 let nullCapacity = false;
 let resourceThrottle = null;
 let drainCapacityOverride = {};
+// Backlog forecast fixture for the drain-card summary. '' is an empty body
+// (no estimate). ready / nocost / notokens carry quantiles. empty has null
+// hours. error and missing are a failed and an absent endpoint.
+let backlogForecastMode = '';
+let delayBacklogForecast = false;
+let releaseBacklogForecast = null;
+const backlogForecastSearches = [];
 let drainTasksOverride = null;
 let providerLimitsFixture = null;
 let providerAuthFixture = null;
@@ -98,9 +104,12 @@ const readinessTasks = [
   { task_id: 'ORB-9', status: 'backlog', eligible: false, reason: 'unmet_dependency' },
 ];
 window.confirm = message => { confirmations.push(message); return true; };
+// Queued windows the fixture server has since started.
+const startedQueuedRuns = new Set();
 // What readiness reports the composer may start: the owner drains its own
 // backlog; a replica pulls from its owner, and the runtime's refusal for the
 // other source is shown as it words it.
+let extraStartCrews = [];
 const LOCAL_REFUSAL = 'destination capability refused: this checkout is a replica of ws-one; its owner m-owner drains the backlog';
 const PULL_REFUSAL = "destination capability refused: `--pull` runs on a replica checkout; this checkout is its workspace's owner, whose drain is plain `orbit run auto`";
 const startOptions = () => ({
@@ -112,7 +121,7 @@ const startOptions = () => ({
   pull_selector: replicaWorkspace ? 'm-owner/ws-one' : null,
   local_refusal: replicaWorkspace ? LOCAL_REFUSAL : null,
   pull_refusal: replicaWorkspace ? null : PULL_REFUSAL,
-  crews: [{ name: 'opus', enabled: true }, { name: 'sol', enabled: true }, { name: 'luna', enabled: true }, { name: 'retired', enabled: false }],
+  crews: [{ name: 'opus', enabled: true }, { name: 'sol', enabled: true }, { name: 'luna', enabled: true }, { name: 'retired', enabled: false }, ...extraStartCrews.map((name) => ({ name, enabled: true }))],
   complexity_pools: {
     low: { crews: [{ name: 'luna', weight: 1 }], source: 'workflow.low_complexity_crews' },
     medium: { crews: [{ name: 'sol', weight: 2 }, { name: 'luna', weight: 1 }], source: 'workflow.medium_complexity_crews' },
@@ -146,6 +155,13 @@ globalThis.fetch = async (path, options = {}) => {
       const runId = decodeURIComponent(cancelledRun);
       if (Array.isArray(drainCapacityOverride.queued_drains)) {
         drainCapacityOverride = { ...drainCapacityOverride, queued_drains: drainCapacityOverride.queued_drains.filter(drain => drain.run_id !== runId) };
+      }
+      // A queued window that started after its card rendered: the server
+      // refuses a queued-only cancel and the window keeps running.
+      if (startedQueuedRuns.has(runId)) {
+        if (body?.queued_only === true) return response({ error: `job run '${runId}' is no longer queued (it is running); the queued-only cancel was refused and the run left untouched` }, 409);
+        startedQueuedRuns.delete(runId);
+        return response({ run_id: runId, outcome: 'cancelled', previous_state: 'running', final_state: 'cancelled' });
       }
       return response({ run_id: runId, outcome: 'cancelled', previous_state: 'pending', final_state: 'cancelled' });
     }
@@ -221,8 +237,6 @@ globalThis.fetch = async (path, options = {}) => {
     readinessPending = false;
   }
   if (url.pathname === '/api/workflows/auto/readiness' && failThisReadiness) return response({ error: 'readiness unavailable' }, thisReadinessFailureStatus);
-  const detailRun = url.pathname.match(/^\/api\/runs\/([^/]+)$/)?.[1];
-  if (detailRun && runDetailFixture) return response(runDetailFixture);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     auto_concurrency: { mode: 'enforce', source: 'explicit', configured_mode: 'shadow' },
     controls_authorized: controlsAuthorized,
@@ -249,6 +263,24 @@ globalThis.fetch = async (path, options = {}) => {
     ...(providerLimitsFixture ? { provider_limits: providerLimitsFixture } : {}),
     ...(providerAuthFixture ? { provider_auth_failures: providerAuthFixture } : {}),
   });
+  if (url.pathname === '/api/diagnostics/backlog_forecast') {
+    backlogForecastSearches.push(url.search);
+    const mode = backlogForecastMode;
+    if (delayBacklogForecast) await new Promise(resolve => { releaseBacklogForecast = resolve; });
+    if (mode === 'error') return response({ error: 'forecast failed' }, 500);
+    if (mode === 'missing') return response({ error: '' }, 404);
+    const hours = { p50: 6.5, p90: 20 };
+    const tokens = { p50: 1500000, p90: 4800000 };
+    const usd = { p50: 12.5, p90: 40 };
+    const backlog = { backlog: 18, in_progress: 2 };
+    if (mode === 'empty') return response({ backlog: { backlog: 0, in_progress: 0 }, forecast: { tasks: 0, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null } } });
+    if (mode === 'regression') return response({ inputs: { history_deliveries: 12, concurrency: 5, concurrency_source: 'default', iterations: 1000, lookback_days: 30, min_history_tasks: 50 }, backlog, coverage: { tasks: 8, regression_history_missing: 8, risk_unestimated: 0, regression_history_thin: 0 }, forecast: { tasks: 8, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null }, unavailable: { regression_history_missing: true, risk_unestimated: false, arrival_conflict_unknown: false }, regression_rework: { available: false, support: { missing_fix_history: 36, history_fixes: 4, history_bundles: 5, history_thin: false } }, pre_regression_baseline: { time_to_drain_hours: { p50: 2.68, p90: null }, usd: { p50: 10, p90: 25 }, tokens: { p50: null, p90: null } } } });
+    if (mode === 'horizon') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 5, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null } } });
+    if (mode === 'nocost') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd: { p50: null, p90: null } } });
+    if (mode === 'notokens') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens: { p50: null, p90: null }, usd } });
+    if (mode === 'ready') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd } });
+    return response({});
+  }
   return response({});
 };
 setWorkspace('one');
@@ -315,18 +347,17 @@ assert(getComputedStyle(mintedStatus, '::before').backgroundColor === getCompute
 assert(getComputedStyle(mintedStatus).getPropertyValue('--dot').trim() === getComputedStyle(mintedStatus).getPropertyValue('--status-in-progress').trim(), 'in-progress status uses its theme colour');
 taskStatus.remove();
 
-// The Drain pane leads with a host-throttle banner, then the status card
+// The Tasks dock holds the status card
 // (live window, workspace slots, holds, Stop) and Start a window (duration,
 // concurrency, completion, approving, Start). The Tasks list reads each
 // backlog task's wait from the same readiness payload.
 const drainBody = get('auto-drain-body');
-const startBody = get('auto-drain-start-body');
-const drainBanner = get('drain-banner');
-const drainText = () => `${drainBanner.textContent} ${get('auto-drain-body').textContent} ${get('auto-drain-start-body').textContent}`;
-const drainButton = label => button('auto-drain-body', label) || button('auto-drain-start-body', label);
-const startNode = id => descendants(get('auto-drain-start-body')).find(node => node.id === id);
+const startBody = get('auto-drain-quick-start-body');
+const drainText = () => `${get('auto-drain-body').textContent} ${get('auto-drain-quick-start-body').textContent}`;
+const drainButton = label => button('auto-drain-body', label) || button('auto-drain-quick-start-body', label);
+const startNode = id => descendants(get('auto-drain-quick-start-body')).find(node => node.id === id);
 const durations = descendants(startBody.querySelector('.drain-durations')).filter(node => node.type === 'button');
-assert(durations.map(node => node.textContent).join(' ') === 'One pass 30m 1h 2h 4h 8h 12h', `duration segments: ${durations.map(node => node.textContent)}`);
+assert(durations.map(node => node.textContent).join(' ') === '1h 2h 4h 8h 12h 24h', `duration segments: ${durations.map(node => node.textContent)}`);
 assert(durations.every(node => node.type === 'button' && ['true', 'false'].includes(node.getAttribute('aria-pressed'))), 'duration segments are pressed-state buttons');
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
 const pools = ids => ids.map(id => drainReadinessFor(id)?.pool).join(' ');
@@ -343,7 +374,7 @@ for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot
 assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String(node.className || ''))), 'no readiness rows or slot tiles');
 assert(get('auto-drain-phase-label').textContent === 'Idle' && !get('auto-drain-live'), 'no live window reads idle');
 assert(drainBody.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', 'a readiness payload with no forecast says no forecast this pass');
-assert(!get('auto-drain-start').hidden, 'the Start card shows for a writable workspace');
+assert(!get('auto-drain-quick-start').hidden, 'the Start card shows for a writable workspace');
 // With no live window Stop becomes "Send pending results": the settle-only pass
 // needs no drain, so it stays usable and says what it does in visible text.
 assert(!drainButton('Stop') && drainButton('Send pending results') && !drainButton('Send pending results').disabled, 'Stop relabels to Send pending results and stays enabled without a live window');
@@ -506,245 +537,6 @@ typeConcurrency('');
 assert(!drainButton('Start 2h window').disabled, 'blank means the runtime default and is valid');
 typeConcurrency('2');
 
-// Start a window covers every `orbit run auto` start option, each beside its
-// flag, and the command it shows is the one Start submits. A claim token is
-// sent and never shown: not in the command, the confirm dialog or the receipt.
-const startCommand = () => startNode('auto-drain-command')?.textContent || '';
-const commandParts = () => startCommand().split(/ (?=--(?!host\b))/);
-const startIssues = () => [...(startNode('auto-drain-issues')?.children || [])].map(node => node.textContent);
-const startFlags = [...startBody.querySelectorAll('.drain-flag')].map(node => node.textContent).join(' | ');
-for (const flag of ['--workspace ws-one', '--for', '--concurrency', '--auto-concurrency', '--complete', '--approve-proposed', '--auto-fix', '--review', '--allow-crew', '--<tier>-complexity-crews', '--strict-worker-containment', '--claim-token']) {
-  assert(startFlags.includes(flag), `the composer names ${flag}: ${startFlags}`);
-}
-assert(startCommand() === 'orbit run auto --workspace ws-one --for 2h --concurrency 2', `the live command mirrors the choices: ${startCommand()}`);
-assert(![...startBody.querySelectorAll('[data-crew]')].some(chip => chip.dataset.crew === 'retired'), 'a disabled crew is not offered');
-const tierButton = (tier, label) => [...startBody.querySelectorAll(`[data-tier="${tier}"] button`)].find(node => node.textContent === label);
-startBody.querySelector('[data-crew="luna"]').click();
-assert(startBody.querySelector('[data-crew="luna"]').getAttribute('aria-pressed') === 'false' && commandParts().includes('--allow-crew opus,sol'), `excluding a crew lists the allowed ones: ${startCommand()}`);
-assert(startIssues().includes('Low pool has no allowed crew: unassigned low tasks will wait.'), `a tier with no allowed crew warns: ${startIssues()}`);
-tierButton('hard', 'Override').click();
-assert(startNode('auto-drain-pool-hard').value === 'opus', 'an override starts from the workspace pool');
-startNode('auto-drain-pool-hard').value = 'opus:3, sol:1';
-startNode('auto-drain-pool-hard').dispatchEvent(new Event('input'));
-startNode('auto-drain-pool-hard').dispatchEvent(new Event('change'));
-tierButton('xhard', 'Off').click();
-setSwitch(startNode('auto-drain-strict'), true);
-const claimToken = startNode('auto-drain-claim-token');
-assert(claimToken.type === 'password', 'the claim token is a password field');
-claimToken.value = 'SECRET-CLAIM-7f3a';
-claimToken.dispatchEvent(new Event('input'));
-await fetchAndRenderOperations();
-assert(startNode('auto-drain-claim-token').value === 'SECRET-CLAIM-7f3a', 'a poll keeps the typed token in its field');
-assert(['--hard-complexity-crews opus:3,sol:1', '--xhard-complexity-crews', '--strict-worker-containment', '--claim-token <token>'].every(part => commandParts().includes(part)), `pools, containment and the token placeholder are in the command: ${startCommand()}`);
-drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
-const fullStart = autoPosts().at(-1).body;
-assert(JSON.stringify(fullStart.allow_crew) === '["opus","sol"]' && JSON.stringify(fullStart.hard_complexity_crews) === '["opus:3","sol:1"]'
-  && JSON.stringify(fullStart.xhard_complexity_crews) === '[]' && !Object.hasOwn(fullStart, 'low_complexity_crews') && !Object.hasOwn(fullStart, 'medium_complexity_crews')
-  && fullStart.strict_worker_containment === true && fullStart.claim_token === 'SECRET-CLAIM-7f3a' && fullStart.for_duration === '2h', `Start submits what the command says: ${JSON.stringify(fullStart)}`);
-for (const [surface, text] of [['command', startCommand()], ['confirm dialog', confirmations.at(-1)], ['receipt', get('auto-drain-operation-feedback').textContent], ['page', document.body.innerHTML]]) {
-  assert(!text.includes('SECRET-CLAIM-7f3a'), `the claim token never appears in the ${surface}`);
-}
-assert(startNode('auto-drain-claim-token').value === '', 'a token is for one start and is cleared after it');
-startBody.querySelector('.drain-crews-bulk button').click();
-for (const tier of ['hard', 'xhard']) tierButton(tier, 'Workspace').click();
-setSwitch(startNode('auto-drain-strict'), false);
-// One pass is a window with no --for.
-drainButton('One pass').click();
-assert(drainButton('Run one pass') && !commandParts().some(part => part.startsWith('--for')), `one pass drops --for: ${startCommand()}`);
-drainButton('Run one pass').click(); await tick(); await tick(); await tick();
-assert(autoPosts().at(-1).body.one_pass === true && !Object.hasOwn(autoPosts().at(-1).body, 'for_duration'), `one pass posts one_pass: ${JSON.stringify(autoPosts().at(-1).body)}`);
-drainButton('2h').click();
-
-// A replica pulls from its owner by host; the selector it resolves to is
-// shown, Local is blocked with the runtime's words, and Start submits the
-// same pull run `orbit run auto --pull <workspace> --host <owner>` does.
-replicaWorkspace = true;
-await fetchAndRenderOperations();
-assert(startNode('auto-drain-source-pull').getAttribute('aria-checked') === 'true', 'a replica starts on Pull');
-assert(startNode('auto-drain-pull-selector').textContent.includes('m-owner/ws-one') && startNode('auto-drain-source-local').textContent.includes(LOCAL_REFUSAL), 'the resolved selector and the local refusal are shown');
-assert(commandParts().slice(0, 3).join(' | ') === 'orbit run auto | --pull ws-one --host server | --for 2h', `the pull command names the owner host: ${startCommand()}`);
-startBody.querySelector('[data-crew="opus"]').click();
-drainButton('Start pulling for 2h').click(); await tick(); await tick(); await tick();
-const pullStart = autoPosts().at(-1).body;
-assert(JSON.stringify(Object.keys(pullStart).sort()) === '["allow_crew","concurrency","for_duration","host","pull"]' && pullStart.pull === 'ws-one' && pullStart.host === 'server' && JSON.stringify(pullStart.allow_crew) === '["sol","luna"]', `a pull start sends only what --pull takes: ${JSON.stringify(pullStart)}`);
-assert(get('auto-drain-operation-feedback').textContent.startsWith('Run jrun-pull-1 submitted: pulling from m-owner/ws-one.'), `the pull receipt names the owner: ${get('auto-drain-operation-feedback').textContent}`);
-startBody.querySelector('.drain-crews-bulk button').click();
-// Options --pull refuses are refused here in the CLI's words before dispatch,
-// and Local on a replica is refused as the runtime refuses it.
-startNode('auto-drain-source-local').click();
-assert(startIssues().includes(LOCAL_REFUSAL) && drainButton('Start 2h window').disabled, `local on a replica is blocked verbatim: ${startIssues()}`);
-setSwitch(approveSwitch(), true);
-modeInput().value = 'enforce'; modeInput().dispatchEvent(new Event('change'));
-startNode('auto-drain-review').value = 'before-pr'; startNode('auto-drain-review').dispatchEvent(new Event('change'));
-startNode('auto-drain-source-pull').click();
-for (const refusal of [
-  "the argument '--pull <SELECTOR>' cannot be used with '--auto-concurrency <MODE>'",
-  "the argument '--pull <SELECTOR>' cannot be used with '--approve-proposed'",
-  "--review does not apply to a pull drain: the owner decides the review of the claims it hands out, so request review on the owner's own run or in its workspace policy",
-]) assert(startIssues().includes(refusal), `pull refuses as the CLI does: ${refusal} in ${startIssues()}`);
-assert(drainButton('Start pulling for 2h').disabled, 'a refused option blocks Start');
-setSwitch(approveSwitch(), false);
-modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
-startNode('auto-drain-review').value = ''; startNode('auto-drain-review').dispatchEvent(new Event('change'));
-assert(!drainButton('Start pulling for 2h').disabled && startIssues().length === 0, `clearing the refused options unblocks Start: ${startIssues()}`);
-// Pull on the owner is refused with the runtime's words.
-replicaWorkspace = false;
-await fetchAndRenderOperations();
-assert(startIssues().includes(PULL_REFUSAL) && drainButton('Start pulling for 2h').disabled, `pull on the owner is blocked verbatim: ${startIssues()}`);
-startNode('auto-drain-source-local').click();
-assert(drainButton('Start 2h window') && !drainButton('Start 2h window').disabled, 'Local starts again on the owner');
-
-// Overview: how the live window was started, from the inputs its run
-// recorded, with each setting's flag or config key; the equivalent command;
-// and "Start a window like this", which loads those settings.
-harnessTab = 'drain';
-drainPhase = 'draining';
-drainRunId = 'jrun-20260923-0400-a1';
-runDetailFixture = { run: { run_id: drainRunId, input: {
-  for_seconds: 14400, max_active_leaf_runs: 3, allowed_crews: ['opus', 'sol'], auto_fix: true,
-  auto_concurrency: 'enforce', auto_concurrency_source: 'explicit',
-  auto_crew_pools: {
-    low: { crews: [{ name: 'luna', weight: 1 }], source: 'workflow.low_complexity_crews' },
-    medium: { crews: [{ name: 'sol', weight: 2 }, { name: 'luna', weight: 1 }], source: 'workflow.medium_complexity_crews' },
-    hard: { crews: [{ name: 'opus', weight: 3 }, { name: 'sol', weight: 1 }], source: 'run_input.hard_complexity_crews' },
-    xhard: { crews: [], source: 'run_input.xhard_complexity_crews' },
-  },
-} }, claimed_leaves: [] };
-await fetchAndRenderOperations();
-const startedCells = () => Object.fromEntries([...get('drain-started-body').querySelectorAll('.drain-started-cell')].map(cell => [cell.querySelector('dt').textContent, `${cell.querySelector('.drain-started-value').textContent} ← ${cell.querySelector('.drain-flag').textContent}`]));
-let cells = startedCells();
-assert(!get('drain-started-panel').hidden && get('drain-pull-panel').hidden, 'a local window shows how it started and no pull claims');
-for (const [label, value] of [
-  ['Source', 'Local backlog ← --workspace'], ['Concurrency', '3 ← --concurrency'], ['Admission control', 'enforce ← --auto-concurrency'],
-  ['Allowed crews', 'opus, sol ← --allow-crew'], ['Low pool', 'luna ← workflow.low_complexity_crews'], ['Hard pool', 'opus:3, sol:1 ← --hard-complexity-crews'],
-  ['Extra hard pool', 'Off ← --xhard-complexity-crews'], ['Authority', 'stops at review · auto-fix ← --auto-fix'],
-  ['Review', 'not recorded ← --review'], ['Workspace claim', 'not recorded ← --claim-token'],
-]) assert(cells[label] === value, `${label} reads ${value}: ${cells[label]}`);
-assert(cells.Window.startsWith('4h · admits until'), `the window shows its length and close: ${cells.Window}`);
-const startedCommand = get('drain-started-command').textContent;
-assert(startedCommand === 'orbit run auto --workspace ws-one --for 4h --concurrency 3 --auto-concurrency enforce --allow-crew opus,sol --hard-complexity-crews opus:3,sol:1 --xhard-complexity-crews --auto-fix', `the equivalent command is rebuilt from the run: ${startedCommand}`);
-get('drain-start-like').click();
-assert(startCommand() === startedCommand, `Start a window like this loads the run's settings: ${startCommand()}`);
-// Cloning must not extend a recorded window to the composer's default merely
-// because its duration is absent from the preset buttons. Check the public
-// Start-like action through confirmation and the HTTP submission, including
-// a preset and a one-pass control.
-for (const [seconds, window] of [[900, '15m'], [91, '91s'], [14400, '4h'], [null, 'once']]) {
-  runDetailFixture.run.input.for_seconds = seconds;
-  await fetchAndRenderOperations();
-  const recordedCommand = get('drain-started-command').textContent;
-  get('drain-start-like').click();
-  await fetchAndRenderOperations();
-  assert(startCommand() === recordedCommand, `cloning ${window} keeps its command across a readiness poll: ${startCommand()}`);
-  const selected = [...startBody.querySelectorAll('.drain-durations [aria-pressed="true"]')];
-  const label = window === 'once' ? 'One pass' : window;
-  assert(selected.length === 1 && selected[0].textContent === label, `cloning ${window} shows its selected duration`);
-  const postsBeforeClone = autoPosts().length;
-  const start = startBody.querySelector('.drain-start');
-  assert(start && !start.disabled, `cloning ${window} can be submitted`);
-  start.click(); await tick(); await tick(); await tick();
-  assert(autoPosts().length === postsBeforeClone + 1, `cloning ${window} submits exactly once`);
-  assert(confirmations.at(-1).includes(`Duration: ${window === 'once' ? 'one pass' : window} ·`), `cloning ${window} confirms the recorded duration`);
-  const cloned = autoPosts().at(-1).body;
-  assert(window === 'once'
-    ? cloned.one_pass === true && !Object.hasOwn(cloned, 'for_duration')
-    : cloned.for_duration === window && !Object.hasOwn(cloned, 'one_pass'),
-  `cloning ${window} preserves the HTTP window semantics: ${JSON.stringify(cloned)}`);
-}
-startBody.querySelector('.drain-crews-bulk button').click();
-for (const tier of ['hard', 'xhard']) tierButton(tier, 'Workspace').click();
-modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
-autoFixInput().click();
-drainButton('2h').click();
-typeConcurrency('2');
-
-// A replica's pull drain: the owner selector, the claim budget written out as
-// `held − min(reviewing, N) < N` over 2N cells, claims by stage as `orbit run
-// show` counts them, and the owner's settings greyed.
-replicaWorkspace = true;
-drainPhase = 'idle';
-drainRunId = null;
-pullDrainRunId = 'jrun-pull-1';
-const leaf = (id, stage) => ({ leaf_run_id: `jrun-leaf-${id}`, job_id: 'task_pr_pipeline', task_id: `ORB-${id}`, owner: 'm-owner', leaf_state: 'running', stage });
-runDetailFixture = { run: { run_id: 'jrun-pull-1', input: {
-  for_seconds: 28800, max_active_leaf_runs: 3, allowed_crews: ['sol'],
-  destination: { owner_machine_id: 'm-owner', owner_workspace_id: 'ws-one', selector: 'm-owner/ws-one', execution_machine_id: 'm-mac' },
-} }, pull_occupancy: { occupied: 4, reviewing: 2 }, claimed_leaves: [leaf(1, 'implementing'), leaf(2, 'reviewing'), leaf(3, 'reviewing'), leaf(4, 'implementing')], refused_settlements: [] };
-await fetchAndRenderOperations();
-assert(!get('drain-pull-panel').hidden && get('drain-pull-body').textContent.includes('m-owner/ws-one'), 'the pull panel names the owner selector');
-const budgetCells = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => cell.classList[1]).join(' ');
-assert(budgetCells === 'implementing implementing reviewing reviewing open later', `the budget draws 2N cells: ${budgetCells}`);
-assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 4 − min(2, 3) = 2 < 3 → claims up to 1 more', `the admission sum is written out: ${get('drain-claim-budget-sum').textContent}`);
-assert(get('drain-claims-summary').textContent === 'Claimed leaves: 4 running (2 implementing, 2 reviewing)', `claims by stage match orbit run show: ${get('drain-claims-summary').textContent}`);
-cells = startedCells();
-assert(cells.Source === 'Pull from m-owner/ws-one ← --pull --host server', `a pull window names its owner: ${cells.Source}`);
-const greyed = [...get('drain-started-body').querySelectorAll('.drain-started-cell.owner-decides dt')].map(node => node.textContent).join(', ');
-assert(greyed === 'Complexity pools, Authority, Review, Worker containment', `owner-decided settings are greyed: ${greyed}`);
-
-// A pull drain's live ceiling can move independently of its submitted input.
-// One implementing claim uses the lower live value, then a raised value; an
-// unsent composer request must not override the live run's budget.
-runDetailFixture = {
-  run: {
-    ...runDetailFixture.run,
-    drain_worker_limit: { max_active_leaf_runs: 1 },
-  },
-  pull_occupancy: { occupied: 1, reviewing: 0 },
-  claimed_leaves: [leaf(5, 'implementing')],
-  refused_settlements: [],
-};
-drainCapacityOverride = { max_active_leaf_runs: 1, limit_source: 'pull_run_control' };
-await fetchAndRenderOperations();
-assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 1) = 1 ≥ 1 → no new claim', `the live lowered ceiling closes admission at one claim: ${get('drain-claim-budget-sum').textContent}`);
-
-runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 4 };
-drainCapacityOverride = { max_active_leaf_runs: 4, limit_source: 'pull_run_control' };
-await fetchAndRenderOperations();
-assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 4) = 1 < 4 → claims up to 3 more', `the live raised ceiling opens three claims: ${get('drain-claim-budget-sum').textContent}`);
-const raisedBudgetCells = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => cell.classList[1]).join(' ');
-assert(raisedBudgetCells === 'implementing open open open later later later later', `the raised budget draws eight cells: ${raisedBudgetCells}`);
-
-typeConcurrency('6');
-runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 1 };
-drainCapacityOverride = { max_active_leaf_runs: 6, limit_source: 'requested' };
-await fetchAndRenderOperations();
-assert(lastReadiness().concurrency === '6', 'the unsent composer value is included in readiness');
-assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 1) = 1 ≥ 1 → no new claim', `the unsent requested limit does not change the live budget: ${get('drain-claim-budget-sum').textContent}`);
-
-typeConcurrency('2');
-drainCapacityOverride = {};
-assert(get('drain-started-command').textContent === 'orbit run auto --pull ws-one --host server --for 8h --concurrency 3 --allow-crew sol', `the pull command is rebuilt: ${get('drain-started-command').textContent}`);
-// Capacity comes from the allocator's workspace reading, independently of
-// this drain's running-leaf table or whether settlement has a refusal yet.
-runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 1 };
-for (const fixture of [
-  { name: 'launching admission', occupied: 1, reviewing: 0, leaves: [], open: false },
-  { name: 'running bound claim counted once', occupied: 1, reviewing: 0, leaves: [leaf(6, 'implementing')], open: false },
-  { name: 'review replacement', occupied: 1, reviewing: 1, leaves: [leaf(6, 'reviewing')], open: true },
-  { name: 'capped review credit', occupied: 2, reviewing: 2, leaves: [leaf(6, 'reviewing'), leaf(7, 'reviewing')], open: false },
-  { name: 'terminal leaf awaiting settlement', occupied: 1, reviewing: 0, leaves: [], open: false, refused: true },
-  { name: 'other workspace leaf', occupied: 1, reviewing: 0, leaves: [], open: false },
-  { name: 'settlement released capacity', occupied: 0, reviewing: 0, leaves: [], open: true },
-]) {
-  runDetailFixture.pull_occupancy = { occupied: fixture.occupied, reviewing: fixture.reviewing };
-  runDetailFixture.claimed_leaves = fixture.leaves;
-  runDetailFixture.refused_settlements = fixture.refused ? [{ owner: 'm-owner/ws-one', refusals: 1, reason: 'validation evidence missing' }] : [];
-  await fetchAndRenderOperations();
-  const sum = get('drain-claim-budget-sum').textContent;
-  const counted = fixture.occupied - Math.min(fixture.reviewing, 1);
-  assert(sum.includes(`${fixture.occupied} − min(${fixture.reviewing}, 1) = ${counted}`) && sum.endsWith(fixture.open ? 'claims up to 1 more' : 'no new claim'), `${fixture.name}: authoritative occupancy determines admission: ${sum}`);
-  assert(fixture.leaves.length ? get('drain-claims-summary').textContent.includes(`${fixture.leaves.length} running`) : get('drain-claims-summary').textContent === 'No running claimed leaves.', `${fixture.name}: stage table describes only live claimed leaves`);
-  if (fixture.refused) assert(get('drain-pull-body').textContent.includes('validation evidence missing'), 'settlement refusal stays visible beside held capacity');
-}
-runDetailFixture.pull_occupancy = null;
-await fetchAndRenderOperations();
-assert(!get('drain-claim-budget-sum') && get('drain-pull-body').textContent.includes('occupancy is unavailable'), 'an unavailable read never advertises free capacity');
-replicaWorkspace = false;
-pullDrainRunId = null;
-runDetailFixture = null;
-harnessTab = 'operations';
-await fetchAndRenderOperations();
-
 // A payload without capacity figures reads as unknown, not as zero: `Number(null)`
 // is 0, which printed "0 free slots" and a placeholder of "null".
 nullCapacity = true;
@@ -774,15 +566,11 @@ assert(
   `the throttle names both thresholds for held resources above high and in hysteresis band: ${drainText()}`
 );
 assert(!drainText().includes('89% ≥'), 'hysteresis band reading must not render a false comparison against high threshold');
-assert(descendants(drainBanner).some(node => node.getAttribute?.('role') === 'status' && node.textContent.includes('Admissions throttled')), 'the throttle banner is announced as status');
-assert(!drainBanner.hidden && !drainBody.querySelector('.drain-throttle-note'), 'the throttle leads the page once, not again in the status card');
-// The card keeps its own one-line copy for the Tasks dock, which hides the
-// banner; on the Drain page that copy is not drawn.
 const throttleLine = drainBody.querySelector('.drain-throttle-line');
-assert(throttleLine?.getAttribute('role') === 'status' && throttleLine.textContent.startsWith('Admissions throttled: memory 93%') && throttleLine.getClientRects().length === 0, `the card's throttle note is held back on Drain: ${throttleLine?.outerHTML}`);
+assert(throttleLine?.getAttribute('role') === 'status' && throttleLine.textContent.startsWith('Admissions throttled: memory 93%'), `the card's throttle note is visible in Tasks: ${throttleLine?.outerHTML}`);
 resourceThrottle = null;
 await fetchAndRenderOperations();
-assert(!drainText().includes('Admissions throttled') && drainBanner.hidden, 'the note clears with the throttle');
+assert(!drainText().includes('Admissions throttled') , 'the note clears with the throttle');
 
 // ORB-14705: every readiness task lands in exactly one pool, so the Backlog
 // strip's counts add up to the backlog; "blocked" stays a task status.
@@ -796,23 +584,6 @@ drainTasksOverride = [
   backlogTask(35, 'surface_reserved'),
 ];
 await fetchAndRenderAutoDrainPane();
-const waitsBody = get('drain-waits-body');
-const waitRows = [...waitsBody.querySelectorAll('.drain-wait')];
-const waitTaskLinks = [...waitsBody.querySelectorAll('.drain-wait-task-links a')];
-const waitTaskIdsIn = row => [...row.querySelectorAll('.drain-wait-task-links a')].map(link => link.textContent).sort();
-const expectedWaitGroups = [
-  Array.from({ length: 17 }, (_, i) => `ORB-${9000 + i}`),
-  Array.from({ length: 13 }, (_, i) => `ORB-${9017 + i}`),
-  Array.from({ length: 3 }, (_, i) => `ORB-${9030 + i}`),
-  ['ORB-9033'], ['ORB-9034'], ['ORB-9035'],
-].sort((left, right) => left[0].localeCompare(right[0]));
-const actualWaitGroups = waitRows.map(waitTaskIdsIn).sort((left, right) => left[0].localeCompare(right[0]));
-assert(waitTaskLinks.length === 36 && waitTaskLinks.every(link => link.getAttribute('href')?.includes(link.textContent)), 'every readiness task is linked from its reason row');
-assert(JSON.stringify(actualWaitGroups) === JSON.stringify(expectedWaitGroups), 'each wait reason links exactly the tasks in its reason group');
-const lockWaitRow = waitRows.find(row => row.dataset.pool === 'locks' && row.querySelector('.drain-wait-count')?.textContent === '17');
-assert(lockWaitRow?.querySelector('details.drain-wait-task-disclosure') && !lockWaitRow.querySelector('details').open && lockWaitRow.querySelectorAll('.drain-wait-task-links a').length === 17, 'long reason groups fold all member task links in a closed disclosure');
-const shortWaitRow = waitRows.find(row => row.dataset.pool === 'capacity' && row.querySelector('.drain-wait-count')?.textContent === '3');
-assert(shortWaitRow && !shortWaitRow.querySelector('details') && shortWaitRow.querySelectorAll('.drain-wait-task-links a').length === 3, 'short reason groups show their task links inline');
 const poolSizes = {};
 for (const task of drainTasksOverride) {
   const pool = drainReadinessFor(task.task_id)?.pool;
@@ -823,19 +594,37 @@ assert(drainReadinessFor('ORB-9017').title.includes('throttled') && drainReadine
 assert(!drainTasksOverride.some(task => /blocked/i.test(drainReadinessFor(task.task_id).label)), 'no pool label calls a readiness group blocked');
 drainTasksOverride = null;
 
-// The throttle note and the top bar's load chip state one CPU reading in one
-// unit: 164% of cores is "1.6× cores" in both, and 75% is a bare 0.75× threshold.
+// The host block separates its load label and value; the throttle note also
+// spells out the unit. Their CPU reading and hysteresis values must agree.
 {
   const { renderHostResources } = await import('./js/host-resources.js');
   const reading = percent => ({ percent, severity: 'critical' });
   renderHostResources({ cpu: reading(164), memory: reading(40), disk: { path: '/', ...reading(50) }, throttle: true, pressures: [{ resource: 'cpu' }], reason: 'cpu high', thresholds: { enabled: true }, stale: false, sample_age_seconds: 1 });
-  const chip = get('host-resource-chips').querySelector('[data-resource="cpu"] .v');
+  const chip = get('host-block').querySelector('[data-resource="cpu"] .v');
   resourceThrottle = { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
   await fetchAndRenderAutoDrainPane();
-  const note = drainBanner.querySelector('.drain-throttle-note').textContent;
-  assert(chip.textContent === '1.6× cores' && note.includes(`load ${chip.textContent} (throttled at ≥ 0.9× cores`) && note.includes('resumes below 0.75× cores'), `chip ${chip.textContent} vs note ${note}`);
+  const note = drainBody.querySelector('.drain-throttle-line').textContent;
+  const cpuReadings = [...note.matchAll(/(\d+(?:\.\d+)?×)\s+cores/g)].map(([, value]) => value);
+  assert(cpuReadings.length === 3 && cpuReadings[0] === chip.textContent.trim() && cpuReadings[1] === '0.9×' && cpuReadings[2] === '0.75×', `host load ${chip.textContent} vs throttle readings ${cpuReadings.join(', ')}`);
   assert(!/cpu \d|164/.test(note), `the note never states cpu as a bare percentage: ${note}`);
   resourceThrottle = null;
+  await fetchAndRenderAutoDrainPane();
+}
+
+// ORB-16658: a host whose CPU source is utilization reports a busy
+// percentage, so the banner, its gauge, the wait detail and the Start foot
+// name cpu in percent and never as load per core.
+{
+  const savedCapacity = drainCapacityOverride;
+  drainCapacityOverride = { ...savedCapacity, resource_cpu_source: 'utilization' };
+  resourceThrottle = { resources: [{ resource: 'cpu', percent: 92, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
+  drainTasksOverride = [{ task_id: 'ORB-9100', status: 'backlog', eligible: false, reason: 'resource_throttled' }];
+  await fetchAndRenderAutoDrainPane();
+  const note = drainBody.querySelector('.drain-throttle-line');
+  assert(note.textContent.includes('Admissions throttled: cpu 92% (throttled at ≥ 90% since 2026-10-04 08:40 UTC; resumes below 75%)') && !/load|×|cores/.test(note.textContent), `utilization reads as a busy percentage: ${note.textContent}`);
+  drainTasksOverride = null;
+  resourceThrottle = null;
+  drainCapacityOverride = savedCapacity;
   await fetchAndRenderAutoDrainPane();
 }
 
@@ -922,7 +711,11 @@ const settleFeedback = get('auto-drain-operation-feedback');
 assert(settleFeedback.textContent.includes('No auto-delivery window was live'), `idle stop names what did not change: ${settleFeedback.textContent}`);
 assert(settleFeedback.textContent.includes('2 settlements delivered'), `delivered settlements are counted: ${settleFeedback.textContent}`);
 assert(settleFeedback.textContent.includes('1 waiting for the owner (unreachable)') && settleFeedback.textContent.includes('[ORB-3]'), `an unreachable owner is called out with its task: ${settleFeedback.textContent}`);
-assert(settleFeedback.textContent.includes('1 launch uncertain — needs manual recovery, see the distributed drain runbook') && settleFeedback.textContent.includes('[ORB-4]'), `an uncertain launch points at the runbook: ${settleFeedback.textContent}`);
+assert(settleFeedback.textContent.includes('[ORB-4]')
+  && settleFeedback.textContent.includes('launch uncertain')
+  && settleFeedback.textContent.includes('the leaf may still be running')
+  && settleFeedback.textContent.includes("recover the claim on the owner's dashboard")
+  && settleFeedback.textContent.includes('do not start another attempt'), `an uncertain launch explains its safe recovery: ${settleFeedback.textContent}`);
 assert(settleFeedback.className.includes('error') && !settleFeedback.className.includes('success'), 'unfinished settlements are not styled as success');
 stopSettlements = [{ owner: 'host:/owner', drain_run_id: 'jrun-old', task_id: 'ORB-1', leaf_run_id: 'jrun-leaf-1', outcome: 'settled' }];
 drainButton('Send pending results').click(); await tick(); await tick(); await tick();
@@ -995,6 +788,29 @@ for (const [surface, runId] of [
     assert(intercepted === false, `${surface} preserves the browser default for ${modifier} clicks`);
   }
 }
+// ORB-14680 refuses forwarded writes without the operator session, but GETs
+// still reach the host: with a workspace selected, Jobs Live, the Catalogue
+// and Auto-task definitions render from their successful reads while Run,
+// the auto-task switch and Mint stay refused with the host's reason, and
+// nothing is posted.
+const hostReadOnly = 'Read-only on hostb: host.forward needs the operator session';
+setHostWrites({ authorized: false, reason: 'host.forward needs the operator session' });
+const writesBeforeReadOnly = requests.filter(r => r.method !== 'GET').length;
+await fetchAndRenderOperations();
+assert(get('jobs-live-body').textContent.includes('jrun-fixture-running') && get('jobs-live-count').textContent.includes('in flight · one'), `Jobs Live lists the remote runs in flight: ${get('jobs-live-body').textContent.slice(0, 200)}`);
+const readOnlyJobRun = descendants(get('jobs-body')).find(node => node.dataset?.job === 'fixture');
+assert(readOnlyJobRun?.textContent.includes('jrun-fixture-running'), `the Catalogue lists the remote jobs: ${get('jobs-body').textContent.slice(0, 200)}`);
+const readOnlyRunButton = descendants(readOnlyJobRun).find(node => node.type === 'button' && node.textContent === 'Run ▸');
+assert(readOnlyRunButton?.disabled && descendants(readOnlyJobRun).some(node => String(node.title || '').includes(hostReadOnly)), 'Run stays refused with the host reason');
+assert(get('auto-tasks-body').textContent.includes('Chore one') && !get('auto-tasks-body').textContent.includes('Select a workspace'), `Auto-task definitions render on a read-only host: ${get('auto-tasks-body').textContent.slice(0, 200)}`);
+assert(get('auto-tasks-body').querySelector('.operations-readonly-note')?.textContent === hostReadOnly, 'the auto-task note gives the host refusal');
+const readOnlySwitch = descendants(get('auto-tasks-body')).find(node => node.type === 'button' && node.getAttribute('role') === 'switch' && node.getAttribute('aria-label')?.includes('Chore one'));
+assert(button('auto-tasks-body', 'Mint now').disabled && readOnlySwitch?.disabled, 'auto-task writes stay refused');
+assert(get('auto-drain-quick-start').hidden, 'the Start card stays hidden on a read-only host');
+button('auto-tasks-body', 'Mint now').click(); await tick();
+assert(requests.filter(r => r.method !== 'GET').length === writesBeforeReadOnly, 'a read-only host is sent no write');
+setHostWrites(null);
+await fetchAndRenderOperations();
 setMultiWorkspace(true);
 setWorkspace(null);
 const aggregateRunUrl = new URL(runHref('jrun-aggregate'), window.location.href);
@@ -1039,7 +855,7 @@ drainPhase = 'winding_down';
 setWorkspace(null);
 const readinessRequests = requests.filter(r => r.path === '/api/workflows/auto/readiness').length;
 await fetchAndRenderOperations();
-assert(get('auto-drain-body').querySelector('.fleet-drains') && get('auto-drain-phase-label').textContent === 'Fleet' && get('auto-drain-start').hidden, 'aggregate mode shows the fleet and offers no Start');
+assert(get('auto-drain-body').querySelector('.fleet-drains') && get('auto-drain-phase-label').textContent === 'Fleet' && get('auto-drain-quick-start').hidden, 'aggregate mode shows the fleet and offers no Start');
 assert(requests.filter(r => r.path === '/api/workflows/auto/readiness').length === readinessRequests, 'aggregate mode does not fetch readiness');
 setWorkspace('one');
 drainPhase = 'idle';
@@ -1051,7 +867,7 @@ assert(routineGroups.some(text => text.startsWith('Active1')) && routineGroups.s
 const routineSwitch = descendants(get('routines-body')).find(node => String(node.className || '').includes('operation-switch'));
 const routineSwitchName = routineSwitch?.getAttribute('aria-label');
 assert(routineSwitch?.getAttribute('role') === 'switch' && routineSwitch.getAttribute('aria-checked') === 'true' && routineSwitch.textContent === 'Disable' && routineSwitchName?.includes('Routine one'), 'routine switch names its item and keeps its visible readback text');
-assert(descendants(get('routines-body')).some(node => node.getAttribute?.('href') === '#jobs/catalogue?job=fixture'), 'routine row links the job it runs');
+assert(descendants(get('routines-body')).some(node => node.getAttribute?.('href') === '#jobs/catalogue'), 'routine row links the job catalogue without an ignored selection query');
 assert(descendants(get('routines-body')).some(node => String(node.className || '').includes('operation-timeline')), 'routines pane projects the next hour');
 assert(!get('routines-body').textContent.includes('Routine two'), 'routines stay scoped to the selected workspace');
 assert(descendants(get('clock-body')).some(node => String(node.className || '').includes('operation-clock-bar')), 'clock renders as a bar');
@@ -1082,6 +898,87 @@ const runButton = descendants(fixtureCard).find(node => node.textContent === 'Ru
 assert(runButton && !runButton.disabled, 'authorized job run is enabled');
 assert(!jobRunButton('parked_pipeline').disabled, 'a paused routine does not disable manual Run');
 assert(fixtureCard.textContent.includes('orbit run job fixture --workspace one'), 'job details carry the CLI command');
+// A workspace name with spaces, quotes or shell metacharacters stays one
+// literal shell word in the displayed command and the copied text. Argv is
+// checked by POSIX shell-word parsing, without executing injected syntax.
+{
+  const shared = await import('./js/operations-shared.js');
+  const jobsMod = await import('./js/operations-jobs.js');
+  const originalGetWorkspaces = shared.operationsState.context.getWorkspaces;
+  const originalLastOperations = shared.operationsState.lastOperations;
+  const shellSplit = (command) => {
+    const words = [];
+    let current = '';
+    let quote = null;
+    for (let index = 0; index < command.length; index++) {
+      const char = command[index];
+      if (quote === "'") {
+        if (char === "'") {
+          if (command[index + 1] === '\\' && command[index + 2] === "'" && command[index + 3] === "'") {
+            current += "'"; index += 3;
+          } else {
+            quote = null;
+          }
+        } else {
+          current += char;
+        }
+      } else if (char === "'") {
+        quote = "'";
+      } else if (/\s/.test(char)) {
+        if (current) { words.push(current); current = ''; }
+      } else {
+        current += char;
+      }
+    }
+    if (quote) throw new Error(`unterminated quote in ${command}`);
+    if (current) words.push(current);
+    return words;
+  };
+  const checkWorkspaceArgv = (workspaceName) => {
+    shared.operationsState.context.getWorkspaces = () => [{ id: 'ws-spaced', name: workspaceName, status: 'active' }];
+    setWorkspace('ws-spaced');
+    shared.operationsState.lastOperations = {
+      ...(originalLastOperations || {}),
+      routines: [{ source: workspaceName, target: 'job:sweep', name: 'Sweep', enabled: true, cron: '0 * * * *', description: 'Sweep.', next_evaluation: { state: 'scheduled', at: '2026-09-07T21:30:00Z' } }],
+    };
+    jobsMod.renderJobs({ runs: { items: [] }, view: 'catalogue' });
+    const cards = descendants(get('jobs-body')).filter((node) => String(node.className || '').includes('job-card'));
+    const sweepCard = cards.find((card) => card.dataset.job === 'sweep');
+    assert(sweepCard, `spaced workspace renders its sweep job: ${workspaceName}`);
+    const code = descendants(sweepCard).find((node) => node.tagName === 'CODE' || node.tagName === 'code');
+    const command = code ? code.textContent : sweepCard.textContent.match(/orbit run job sweep --workspace .*/)?.[0];
+    assert(command && command.startsWith('orbit run job sweep --workspace '), `spaced job details carry the CLI command: ${command}`);
+    const argv = shellSplit(command.trim());
+    assert(JSON.stringify(argv.slice(0, 4)) === JSON.stringify(['orbit', 'run', 'job', 'sweep']), `job argv prefix stays intact for ${workspaceName}: ${command}`);
+    assert(argv[4] === '--workspace', `workspace flag stays separate for ${workspaceName}: ${command}`);
+    assert(argv.length === 6, `workspace name stays one shell word for ${workspaceName}: ${command}`);
+    assert(argv[5] === workspaceName, `workspace argv preserves the literal name for ${workspaceName}: ${command}`);
+    return command;
+  };
+  const spacedCommand = checkWorkspaceArgv('My Project');
+  assert(spacedCommand.includes("'My Project'"), `a space in the workspace name is quoted: ${spacedCommand}`);
+  const quotedCommand = checkWorkspaceArgv('a"b$(c)`d');
+  assert(quotedCommand === "orbit run job sweep --workspace 'a\"b$(c)`d'", `quotes and metacharacters stay literal: ${quotedCommand}`);
+  // The Copy command button copies the same quoted text.
+  const copyButton = [...document.querySelectorAll('#jobs-body button')].find((node) => node.textContent === 'Copy command');
+  assert(copyButton, 'spaced job details offer a Copy command button');
+  let copied = null;
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(navigator), 'clipboard');
+  try {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text) => { copied = text; } }, configurable: true });
+    copyButton.click();
+    await tick(); await tick();
+    assert(copied === quotedCommand, 'Copy command copies the quoted shell command');
+  } finally {
+    if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor);
+    else delete navigator.clipboard;
+  }
+  shared.operationsState.context.getWorkspaces = originalGetWorkspaces;
+  setWorkspace('one');
+  shared.operationsState.lastOperations = originalLastOperations;
+  await fetchAndRenderJobs();
+  assert(get('jobs-body').textContent.includes('orbit run job fixture --workspace one'), 'restored workspace renders its unquoted command');
+}
 assert(jobRunButton('task_pr_pipeline')?.disabled, 'delivery job needs task input');
 assert(descendants(jobCards.find(card => card.dataset.job === 'task_pr_pipeline')).some(node => String(node.title).includes('Use Ship or Drain')), 'disabled delivery button explains its reason');
 assert(requests.some(r => r.path === '/api/job-runs' && r.workspace === 'one'), 'jobs read the workspace-scoped recent runs');
@@ -1559,7 +1456,7 @@ drainCapacityOverride = { allowed_crews: ['sol', 'terra'] };
 await fetchAndRenderAutoDrainPane();
 const crewNote = get('auto-drain-body').querySelector('.drain-crew-note');
 assert(crewNote && crewNote.textContent.includes('Allowed crews: sol, terra.') && crewNote.textContent.includes('waits: ORB-6 (luna).') && !crewNote.textContent.includes('ORB-1 '), `crew note: ${crewNote?.textContent}`);
-assert(get('auto-drain-start-sub').textContent.startsWith('1 eligible now'), `a crew-excluded task is not eligible now: ${get('auto-drain-start-sub').textContent}`);
+assert(get('auto-drain-quick-start-sub').textContent.startsWith('1 eligible now'), `a crew-excluded task is not eligible now: ${get('auto-drain-quick-start-sub').textContent}`);
 assert(drainReadinessFor('ORB-6').label === 'Waiting, other: crew luna not allowed' && drainReadinessFor('ORB-6').title.includes('it allows only sol, terra'), `the task dot names the crew and allowlist: ${JSON.stringify(drainReadinessFor('ORB-6'))}`);
 drainCapacityOverride = {};
 await fetchAndRenderAutoDrainPane();
@@ -1610,6 +1507,7 @@ assert(forecastText.includes('Held') && forecastText.includes('Heavy candidate')
 assert(forecastText.includes('Small candidate') && forecastText.includes('waiting for the protected queue head to fit') && forecastText.includes('profile heaviest_on_host'), `a starvation hold names the guard, not a stored sentence: ${forecastText}`);
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Stuck head') && forecastText.includes('change/medium via exact') && forecastText.includes('3 protected passes'), `protected and stuck head: ${forecastText}`);
 assert(!forecastText.includes('ORB-LEAKED') && !forecastText.includes('FR-LEAKED'), `stored ids stay off the card: ${forecastText}`);
+assert(!forecastText.includes('window ended · nothing running') && !forecastText.includes('Admitted at'), `a live enforce forecast stays present tense (ORB-18957): ${forecastText}`);
 // A record written before the series was kept still draws its peaks as bars.
 assert(forecast.querySelectorAll('.drain-forecast-meter').length === 2 && !forecast.querySelector('.drain-forecast-spark'), 'a record without a series keeps the peak bars');
 drainCapacityOverride = { admission_forecast: { ...enforceForecast, mode: 'shadow' } };
@@ -1617,6 +1515,7 @@ await fetchAndRenderAutoDrainPane();
 forecast = forecastCard();
 forecastText = forecast?.textContent || '';
 assert(forecastText.includes('shadow · hypothetical') && forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Held'), `shadow decisions stay hypothetical: ${forecastText}`);
+assert(!forecastText.includes('window ended') && !forecastText.includes('Would have'), `a live shadow forecast stays hypothetical present (ORB-18957): ${forecastText}`);
 
 // With the recorded first hour each peak is a sparkline: 13 five-minute
 // points over 0-60 minutes, the admit threshold as a dashed line, and a dot on
@@ -1631,7 +1530,7 @@ drainCapacityOverride = { admission_forecast: { ...enforceForecast, series: fore
 await fetchAndRenderAutoDrainPane();
 forecast = forecastCard();
 forecastText = forecast?.textContent || '';
-assert([...forecast.querySelectorAll('.drain-forecast-meter')].every(meter => meter.getClientRects().length === 0), `a series replaces the bars on Drain: ${forecastText}`);
+assert([...forecast.querySelectorAll('.drain-forecast-meter')].every(meter => getComputedStyle(meter).display !== "none"), `the Tasks dock shows compact forecast meters: ${forecastText}`);
 const sparkExpect = [
   { name: 'CPU', minute: '6', label: '+6m', limit: 89, left: 2 * 5 / 60 * 100, peak: '90.0%', text: '90.0% / 89%', sub: 'peak at +6m · 7.2 cores · 1.0 pts over the ceiling' },
   { name: 'Memory', minute: '2', label: '+2m', limit: 74, left: 5 / 60 * 100, peak: '40.0%', text: '40.0% / 74%', sub: 'peak at +2m · 1.0 KiB · 34.0 pts under the ceiling' },
@@ -1687,8 +1586,123 @@ assert(forecast?.dataset.forecastState === 'retained' && forecast.querySelector(
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Heavy candidate'), `this pass still shows a protected head: ${forecastText}`);
 const retained = forecast.querySelector('.drain-forecast-retained');
 const retainedText = retained?.textContent || '';
-assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-17 05:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && retainedText.includes('Fitting candidate') && retainedText.includes('profile exact'), `retained forecast: ${retainedText}`);
+const retainedHasNoTaskDecisions = root => root?.querySelector('.drain-forecast-tasks') == null
+  && !/(?:Admitted at|Held at|Starvation guard protected at|Was a stuck head at|Would have admitted at|Would have held at|Starvation guard would have protected at)/.test(root?.textContent || '');
+assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-17 05:00') && retainedText.includes('50.0%') && retainedText.includes('20.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && retained.querySelectorAll('.drain-forecast-peak').length === 2, `retained header and CPU/Memory peaks: ${retainedText}`);
+assert(retainedHasNoTaskDecisions(retained) && !retainedText.includes('Fitting candidate'), `a retained forecast omits its per-task decision list: ${retainedText}`);
 assert([...retained.querySelectorAll('.drain-forecast-spark-label')].map(label => label.textContent).join() === '+4m,+1m', `the Last forecast panel draws its series: ${retainedText}`);
+assert(!retained.querySelector('.drain-forecast-ended'), `a retained forecast that does not say its drain ended stays unlabelled (ORB-18957): ${retainedText}`);
+// [ORB-18957] After the window ends, Last forecast keeps its resource peaks
+// and says the window ended without repeating its per-task decisions.
+const historyAt = '2026-10-27T03:59:00Z';
+const historyForecast = {
+  mode: 'enforce',
+  forecast_at: historyAt,
+  drain_live: false,
+  admitted: [{ task_id: 'ORB-18908', profile_source: 'exact' }],
+  skipped: [{ task_id: 'ORB-18901', profile_source: 'exact', resource: 'cpu', minute: 6, percent: 94, detail: 'protects ORB-LEAKED' }],
+  head: { task_id: 'ORB-18918', failing_since: historyAt, protected: true },
+  task_titles: { 'ORB-18901': 'Back in backlog', 'ORB-18918': 'Guarded head' },
+};
+// Shared occupancy readiness reports beside an ended window: an empty pool, an
+// independent delivery holding two slots, and a count the host cannot read.
+const emptyPool = { active_leaf_runs: 0, free_slots: 4, occupancy: { phases: { implementing: 0, lock_waiting: 0, post_implementation: 0, unknown: 0 } } };
+const independentLeafPool = { active_leaf_runs: 2, free_slots: 2, occupancy: { phases: { implementing: 2, lock_waiting: 0, post_implementation: 0, unknown: 0 } } };
+const unreadablePool = { active_leaf_runs: null, free_slots: null, occupancy: null };
+const renderDrainForecastScenario = async scenario => {
+  const terminal = scenario === 'terminal';
+  drainPhase = terminal ? 'idle' : 'draining';
+  drainRunId = terminal ? null : 'jrun-forecast-live';
+  pullDrainRunId = null;
+  pullDrainStopped = false;
+  drainTasksOverride = terminal
+    ? [{ task_id: 'ORB-18901', status: 'backlog', eligible: false, reason: 'gap_fit' }]
+    : null;
+  const forecast = terminal ? historyForecast : { ...enforceForecast, drain_live: true };
+  drainCapacityOverride = terminal
+    ? { ...emptyPool, admission_forecast: forecast, last_admission_forecast: forecast }
+    : { admission_forecast: forecast };
+  await fetchAndRenderAutoDrainPane();
+};
+globalThis.setDrainForecastScenarioForScreenshot = renderDrainForecastScenario;
+globalThis.setBacklogForecastScenarioForScreenshot = async mode => {
+  backlogForecastMode = mode;
+  harnessTab = 'tasks';
+  await fetchAndRenderAutoDrainPane();
+  await tick();
+};
+drainTasksOverride = [{ task_id: 'ORB-18901', status: 'backlog', eligible: false, reason: 'gap_fit' }];
+drainCapacityOverride = { ...emptyPool, last_admission_forecast: historyForecast };
+await fetchAndRenderAutoDrainPane();
+const ended = forecastCard().querySelector('.drain-forecast-retained');
+const endedText = ended?.textContent || '';
+assert(ended?.querySelector('.drain-forecast-ended')?.textContent === 'window ended · nothing running', `an ended window says nothing is running (ORB-18957): ${endedText}`);
+assert(retainedHasNoTaskDecisions(ended), `an ended retained forecast omits per-task decisions (ORB-18957): ${endedText}`);
+// [ORB-19042] The ended window names the shared occupancy readiness reports beside
+// it. An independent delivery holding a slot is other work, so its payload must
+// not read as an empty ended window. A count that cannot be read says only that
+// the window ended, and a winding-down drain is not ended, even with an empty pool.
+const beforeEndedNotes = { drainPhase, drainRunId, pullDrainRunId, pullDrainStopped };
+const endedNote = async ({ phase = 'idle', pool = emptyPool } = {}) => {
+  drainPhase = phase;
+  drainRunId = null;
+  pullDrainRunId = null;
+  pullDrainStopped = false;
+  drainCapacityOverride = { ...pool, last_admission_forecast: historyForecast };
+  await fetchAndRenderAutoDrainPane();
+  return forecastCard()?.querySelector('.drain-forecast-retained .drain-forecast-ended')?.textContent ?? null;
+};
+const idleWithLeaf = await endedNote({ pool: independentLeafPool });
+const emptyIdle = await endedNote();
+const unreadableIdle = await endedNote({ pool: unreadablePool });
+const windingDown = await endedNote({ phase: 'winding_down' });
+drainPhase = beforeEndedNotes.drainPhase;
+drainRunId = beforeEndedNotes.drainRunId;
+pullDrainRunId = beforeEndedNotes.pullDrainRunId;
+pullDrainStopped = beforeEndedNotes.pullDrainStopped;
+assert(idleWithLeaf === 'window ended · other work running' && emptyIdle === 'window ended · nothing running' && idleWithLeaf !== emptyIdle, `an ended window with an independent leaf and an empty ended window say distinct things (ORB-19042): ${idleWithLeaf} / ${emptyIdle}`);
+assert(unreadableIdle === 'window ended', `an ended window whose occupancy is unknown claims neither idle nor other work (ORB-19042): ${unreadableIdle}`);
+assert(windingDown === null, `a winding-down drain is not an ended window, even with an empty pool (ORB-19042): ${windingDown}`);
+// A terminal pass that built its forecast is the same history, even while
+// readiness returns it in both the current-pass and last-built fields.
+const previousDrainState = { drainPhase, drainRunId, pullDrainRunId, pullDrainStopped };
+await renderDrainForecastScenario('terminal');
+const finalPassBuilt = forecastCard();
+const finalPassBuiltText = finalPassBuilt?.textContent || '';
+const finalPassBuiltHistory = finalPassBuilt?.querySelector('.drain-forecast-retained');
+assert(finalPassBuilt?.dataset.forecastState === 'retained' && !finalPassBuilt.querySelector('.drain-forecast-state'), `a terminal built pass renders as retained history without a no-forecast line: ${finalPassBuiltText}`);
+assert(finalPassBuilt.querySelectorAll('.drain-forecast-retained').length === 1, `the terminal current forecast supersedes its duplicate last forecast: ${finalPassBuiltText}`);
+assert(finalPassBuiltHistory?.querySelector('.drain-forecast-ended')?.textContent === 'window ended · nothing running', `a terminal built pass says its window ended: ${finalPassBuiltText}`);
+assert(retainedHasNoTaskDecisions(finalPassBuiltHistory), `a terminal built pass omits per-task decisions: ${finalPassBuiltText}`);
+drainPhase = previousDrainState.drainPhase;
+drainRunId = previousDrainState.drainRunId;
+pullDrainRunId = previousDrainState.pullDrainRunId;
+pullDrainStopped = previousDrainState.pullDrainStopped;
+drainCapacityOverride = { admission_forecast: { ...enforceForecast, drain_live: true } };
+await fetchAndRenderAutoDrainPane();
+forecast = forecastCard();
+forecastText = forecast?.textContent || '';
+assert(forecast?.dataset.forecastState === 'built' && forecastText.includes('Admitted') && forecastText.includes('Held') && forecastText.includes('Starvation guard protects') && !forecastText.includes('Admitted at'), `a drain_live true enforce forecast keeps present-tense wording: ${forecastText}`);
+drainCapacityOverride = { admission_forecast: { ...enforceForecast, mode: 'shadow', drain_live: true } };
+await fetchAndRenderAutoDrainPane();
+forecast = forecastCard();
+forecastText = forecast?.textContent || '';
+assert(forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Would have'), `a drain_live true shadow forecast keeps hypothetical wording: ${forecastText}`);
+drainPhase = 'draining';
+drainCapacityOverride = { last_admission_forecast: { ...historyForecast, drain_live: true } };
+await fetchAndRenderAutoDrainPane();
+const liveRetained = forecastCard().querySelector('.drain-forecast-retained');
+const liveRetainedText = liveRetained?.textContent || '';
+assert(!liveRetained.querySelector('.drain-forecast-ended') && retainedHasNoTaskDecisions(liveRetained), `a live drain keeps its retained forecast without repeating past decisions (ORB-18957): ${liveRetainedText}`);
+drainPhase = 'idle';
+drainTasksOverride = null;
+drainCapacityOverride = { ...emptyPool, last_admission_forecast: { ...historyForecast, mode: 'shadow' } };
+await fetchAndRenderAutoDrainPane();
+const shadowRetained = forecastCard().querySelector('.drain-forecast-retained');
+const shadowRetainedText = shadowRetained?.textContent || '';
+assert(shadowRetained.querySelector('.drain-forecast-ended')?.textContent === 'window ended · nothing running' && retainedHasNoTaskDecisions(shadowRetained), `a retained shadow forecast omits past hypothetical decisions (ORB-18957): ${shadowRetainedText}`);
+drainPhase = 'idle';
+drainTasksOverride = null;
 drainCapacityOverride = {};
 await fetchAndRenderAutoDrainPane();
 assert(forecastCard()?.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', 'clearing the forecast returns the empty state');
@@ -1701,12 +1715,120 @@ await fetchAndRenderAutoDrainPane();
 forecastText = forecastCard()?.textContent || '';
 assert(forecastText.includes('host capacity unknown') && forecastText.includes('admit 89%') && forecastText.includes('headroom unknown'), `an unmeasured host says its headroom is unknown: ${forecastText}`);
 assert(!forecastText.includes('headroom 0.0'), `an unknown headroom must not read as zero: ${forecastText}`);
-drainCapacityOverride = {};
+// The backlog summary sits under that admission block and uses the default
+// lookback. Tokens and cost render only when those quantiles exist. An error,
+// a missing endpoint or no estimate is one muted line, and the admission
+// block stays.
+const backlogLink = () => forecastCard()?.querySelector(':scope > .drain-backlog-forecast');
+const forecastTextIncludesAdmission = () => (forecastCard()?.textContent || '').includes('host capacity unknown');
+// Hold only the optional forecast: readiness, fleet and action readback all
+// succeed. Neither the dashboard refresh promise nor its control may wait for
+// the forecast, and repeated readbacks must reuse the same in-flight request.
+// The summary is read only where the card is shown: the Tasks dock (ORB-19062).
+harnessTab = 'tasks';
+backlogForecastMode = 'ready';
+delayBacklogForecast = true;
+const searchesBeforeHeld = backlogForecastSearches.length;
+let heldRefreshCompleted = false;
+const heldRefresh = fetchAndRenderAutoDrainPane().then(() => { heldRefreshCompleted = true; });
+await tick();
+assert(releaseBacklogForecast && get('auto-drain-body').querySelector('[data-panel-status]')?.textContent.includes('Updated'), 'readiness completes while the forecast is held');
+const requestsBeforeHeldAction = requests.length;
+drainButton('Send pending results').click();
+await tick();
+assert(get('auto-drain-operation-feedback').textContent.includes('Admissions stopped') && requests.slice(requestsBeforeHeldAction).some(request => request.path === '/api/workflows/auto/readiness'), 'the mutation succeeds and reads readiness back while the forecast is held');
+assert(heldRefreshCompleted && drainButton('Send pending results') && !drainButton('Send pending results').disabled, `refresh and pending control finish before forecast release: refresh=${heldRefreshCompleted}, control=${get('auto-drain-body').querySelector('.drain-stop')?.textContent}`);
+assert(backlogForecastSearches.length === searchesBeforeHeld + 1, 'refresh and action readback deduplicate the held forecast');
+delayBacklogForecast = false;
+releaseBacklogForecast();
+releaseBacklogForecast = null;
+await heldRefresh;
+await tick();
+assert(backlogLink()?.querySelector('.drain-backlog-forecast-figures')?.textContent.startsWith('6.5h – 20h'), 'the forecast summary updates after its independent request settles');
+const searchesBeforeReady = backlogForecastSearches.length;
+backlogForecastMode = 'ready';
 await fetchAndRenderAutoDrainPane();
+await tick();
+const readySearch = backlogForecastSearches.at(-1) || '';
+const readyLink = backlogLink();
+const readyText = readyLink?.textContent || '';
+assert(backlogForecastSearches.length === searchesBeforeReady + 1 && !readySearch.includes('lookback_days') && !readySearch.includes('arrivals'), `the summary reads the default backlog forecast: ${readySearch}`);
+assert(readyLink?.tagName === 'A' && readyLink.getAttribute('href')?.includes('#analytics/forecast') && readyLink.getAttribute('title')?.endsWith('Analytics › Forecast'), `the summary links to Analytics › Forecast: ${readyLink?.outerHTML}`);
+// One line shows time to drain and cost; the counts and tokens are in the
+// tooltip and the accessible text.
+assert(readyLink.querySelector('.drain-backlog-forecast-figures')?.textContent === '6.5h – 20h · $13 – $40', `ready figures: ${readyText}`);
+assert(readyText.includes('p50 – p90') && readyText.includes('18 backlog · 2 in progress') && readyText.includes('Tokens 1.5M – 4.8M'), `ready accessible text: ${readyText}`);
+assert(readyLink.title.includes('18 backlog · 2 in progress') && readyLink.title.includes('Tokens 1.5M – 4.8M') && readyLink.title.includes('Exact cost $12.50 – $40.00'), `ready tooltip: ${readyLink.title}`);
+const built = forecastCard()?.querySelector('.drain-forecast-built');
+assert(built && readyLink && readyLink.parentElement === forecastCard() && readyLink === forecastCard().lastElementChild && (built.compareDocumentPosition(readyLink) & Node.DOCUMENT_POSITION_FOLLOWING), 'the summary follows the admission forecast');
+let summaryActivated = false;
+readyLink.addEventListener('click', (event) => { event.preventDefault(); summaryActivated = true; });
+readyLink.click();
+assert(summaryActivated, 'the summary is a clickable link');
+assert(forecastTextIncludesAdmission(), 'the admission block still renders beside the summary');
+backlogForecastMode = 'nocost';
+await fetchAndRenderAutoDrainPane();
+await tick();
+const nocostText = backlogLink()?.textContent || '';
+assert(nocostText.includes('Tokens 1.5M – 4.8M') && !nocostText.includes('$') && !nocostText.includes('—'), `cost is omitted when uncosted: ${nocostText}`);
+backlogForecastMode = 'notokens';
+await fetchAndRenderAutoDrainPane();
+await tick();
+const notokensText = backlogLink()?.textContent || '';
+assert(notokensText.includes('$13 – $40') && !notokensText.includes('Tokens'), `tokens are omitted when absent: ${notokensText}`);
+for (const mode of ['empty', 'error', 'missing']) {
+  backlogForecastMode = mode;
+  await fetchAndRenderAutoDrainPane();
+  await tick();
+  const missed = backlogLink();
+  const wantReason = mode === 'empty' ? 'empty' : 'transport';
+  const wantText = mode === 'empty' ? /no backlog/i : /couldn't load/i;
+  assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.dataset.forecastReason === wantReason && wantText.test(missed.textContent), `${mode}: one explained muted line (${wantReason}): ${missed?.textContent}`);
+  assert(missed.getAttribute('href')?.includes('#analytics/forecast') || String(missed.href || '').includes('analytics/forecast'), `${mode}: the explained line stays a link to Analytics › Forecast`);
+  assert(forecastTextIncludesAdmission() && get('auto-drain-body').querySelector('.drain-capacity'), `${mode}: the drain card still renders`);
+}
+backlogForecastMode = 'regression';
+await fetchAndRenderAutoDrainPane();
+await tick();
+const regressionLink = backlogLink();
+assert(regressionLink?.dataset.forecastReason === 'regression_history_missing' && /regression/i.test(regressionLink.querySelector('.drain-backlog-forecast-reason')?.textContent || ''), `regression gap explains itself visibly on the drain card: ${regressionLink?.textContent}`);
+assert(/pre-regression baseline/i.test(regressionLink.textContent) && /excludes unsupported regression/i.test(regressionLink.textContent) && regressionLink.textContent.includes('2.7h') && /p90 unknown/i.test(regressionLink.textContent), `regression baseline is labelled and keeps p90 unknown: ${regressionLink?.textContent}`);
+assert(!/90-day horizon/i.test(regressionLink.textContent), `regression gap is not a horizon exceedance: ${regressionLink?.textContent}`);
+backlogForecastMode = 'horizon';
+await fetchAndRenderAutoDrainPane();
+await tick();
+const horizonLink = backlogLink();
+assert(horizonLink?.dataset.forecastReason === 'horizon' && /90-day horizon/i.test(horizonLink.textContent) && !/regression/i.test(horizonLink.textContent), `true horizon exceedance is distinct on the drain card: ${horizonLink?.textContent}`);
+// A detached success or failure from the previous workspace cannot replace
+// the current workspace's summary.
+for (const staleMode of ['ready', 'error']) {
+  backlogForecastMode = staleMode;
+  delayBacklogForecast = true;
+  await fetchAndRenderAutoDrainPane();
+  const releaseStaleForecast = releaseBacklogForecast;
+  assert(releaseStaleForecast, `${staleMode}: the previous workspace forecast is held`);
+  delayBacklogForecast = false;
+  backlogForecastMode = 'nocost';
+  setWorkspace('two');
+  await fetchAndRenderAutoDrainPane();
+  await tick();
+  const currentSummary = backlogLink()?.textContent;
+  assert(currentSummary?.includes('6.5h – 20h') && !currentSummary.includes('$'), 'the new workspace paints its own forecast');
+  releaseStaleForecast();
+  releaseBacklogForecast = null;
+  await tick();
+  assert(backlogLink()?.textContent === currentSummary, `${staleMode}: a late previous-workspace forecast cannot alter the current summary`);
+  setWorkspace('one');
+}
+backlogForecastMode = '';
+drainCapacityOverride = {};
+harnessTab = 'operations';
+await fetchAndRenderOperations();
 // A window started while another runs waits for it. The card lists it under
 // the live window with its run, ceiling, completion, crews and window, flags a
 // Claude crew it would start with no credential, and cancels it alone through
-// the per-run cancel. With nothing queued the card is unchanged.
+// the per-run queued-only cancel, which a window that started after the card
+// rendered refuses. With nothing queued the card is unchanged.
 drainRunId = 'jrun-20260923-0400-a1';
 drainPhase = 'draining';
 drainCapacityOverride = {};
@@ -1739,13 +1861,17 @@ const cancelQueued = runId => descendants(get('auto-drain-body')).find(node => n
 assert(cancelQueued(queuedClaude) && !cancelQueued(queuedClaude).disabled, 'each queued window offers Cancel');
 const confirmsBeforeCancel = confirmations.length;
 const requestsBeforeCancel = requests.length;
+// The live window ended and this queued one started after the card rendered.
+startedQueuedRuns.add(queuedClaude);
 cancelQueued(queuedClaude).click(); await tick(); await tick(); await tick(); await tick();
 const cancelPosts = requests.slice(requestsBeforeCancel).filter(request => request.method === 'POST');
-assert(cancelPosts.length === 1 && cancelPosts[0].path === `/api/runs/${queuedClaude}/cancel` && cancelPosts[0].body.force === false && cancelPosts[0].workspace === 'one', `Cancel posts the per-run cancel for that window alone: ${JSON.stringify(cancelPosts)}`);
+assert(cancelPosts.length === 1 && cancelPosts[0].path === `/api/runs/${queuedClaude}/cancel` && cancelPosts[0].body.force === false && cancelPosts[0].body.queued_only === true && cancelPosts[0].workspace === 'one', `Cancel posts the per-run queued-only cancel for that window alone: ${JSON.stringify(cancelPosts)}`);
 assert(confirmations.length === confirmsBeforeCancel + 1 && confirmations.at(-1).includes(queuedClaude) && confirmations.at(-1).includes('the live window keeps running'), `Cancel confirms first: ${confirmations.at(-1)}`);
-assert(get('auto-drain-operation-feedback').textContent === `Queued window ${queuedClaude} cancelled.`, `the cancel reports its result: ${get('auto-drain-operation-feedback').textContent}`);
-assert(!queuedRow(queuedClaude) && queuedRow(queuedDone) && get('auto-drain-live'), 'the card drops the cancelled window and keeps the live one');
+assert(startedQueuedRuns.has(queuedClaude) && get('auto-drain-operation-feedback').textContent === `Queued window ${queuedClaude} has already started, so it was not cancelled. Stop it from the live window's controls if you mean to.`, `a window that started first is refused, not cancelled: ${get('auto-drain-operation-feedback').textContent}`);
+assert(!queuedRow(queuedClaude) && queuedRow(queuedDone) && get('auto-drain-live'), 'the refusal refreshes the card, which no longer lists the started window as queued');
+startedQueuedRuns.delete(queuedClaude);
 cancelQueued(queuedDone).click(); await tick(); await tick(); await tick(); await tick();
+assert(get('auto-drain-operation-feedback').textContent === `Queued window ${queuedDone} cancelled.`, `a still-queued window cancels: ${get('auto-drain-operation-feedback').textContent}`);
 assert(!get('auto-drain-queued') && cardMarkup() === unqueuedCard, 'with the last queued window cancelled the card shows only the live drain');
 drainCapacityOverride = {};
 drainRunId = null;

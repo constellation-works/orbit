@@ -10,7 +10,7 @@ use crate::command::{CommandOut, CommandOutput, Execute, Payload};
 
 #[derive(Args)]
 #[command(
-    after_help = "Examples:\n  orbit run job task_auto_pipeline\n  orbit run job task_auto_pipeline --input mode=local\n  orbit run job crates/orbit-core/assets/jobs/task_auto_pipeline.yaml --input mode=local\n  orbit run job task_pilot_pipeline --wait\n  orbit run job task_pilot_pipeline --input crew=luna --json\n\nThere is no `--crew` flag: crew selection is a run input, `--input crew=<name>`.\nThat picks this run's resolved crew; an activity with an explicit `crew` or\n`crew_config_key` pool still routes there instead. Check `activity_provenance` in\n`orbit run show <RUN_ID> --json` for what actually dispatched.\n\nThe run is submitted to a detached worker and the command returns as soon as it is durable.\nInspect it with `orbit run history -j <JOB_ID>` and `orbit run show <RUN_ID>`."
+    after_help = "Examples:\n  orbit run job task_auto_pipeline\n  orbit run job task_auto_pipeline --input mode=local\n  orbit run job task_pilot_pipeline --wait\n  orbit run job task_pilot_pipeline --input crew=luna --json\n\nThere is no `--crew` flag: crew selection is a run input, `--input crew=<name>`.\nThat picks this run's resolved crew; an activity with an explicit `crew` or\n`crew_config_key` pool still routes there instead. Check `activity_provenance` in\n`orbit run show <RUN_ID> --json` for what actually dispatched.\n\nThe run is submitted to a detached worker and the command returns as soon as it is durable.\nInspect it with `orbit run history -j <JOB_ID>` and `orbit run show <RUN_ID>`."
 )]
 pub struct JobRunArgs {
     /// Job ID from the catalog, or a direct path to a schemaVersion 2 job YAML.
@@ -84,8 +84,7 @@ fn render_wait(
         "pipeline": entry.pipeline,
     });
     let payload = Payload::detail(doc, wait_lines(invoke, entry, wait_timeout).join("\n"));
-    // Match core's canonical success token and its legacy wait-envelope alias.
-    if wait_timeout || !matches!(entry.status.as_str(), "success" | "succeeded") {
+    if wait_timeout || !entry.status.is_success() {
         return Ok(payload.with_exit_code(1).into());
     }
     Ok(payload.into())

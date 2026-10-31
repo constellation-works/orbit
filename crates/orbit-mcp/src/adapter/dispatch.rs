@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use crate::presentation_definition::presentation_definition;
 use orbit_common::OrbitError;
+use orbit_common::governance::authorization::{
+    self, CallerCapabilities, CallerEnvelope, OperationSurface,
+};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::normalize_self_reported_actor;
 use orbit_types::tool::{
@@ -135,15 +138,30 @@ impl OrbitToolServer {
         }
     }
 
-    /// Drop the tools the host hides for this session. Applied after the
-    /// response cache, which holds the full surface, so a toggle flipped
-    /// mid-session shows on the next `tools/list`.
+    /// Drop tools hidden by the host or refused by the session's fixed grants.
+    /// Applied after the response cache, which holds the full surface, so a
+    /// toggle flipped mid-session shows on the next `tools/list`. This only
+    /// changes advertisement; direct calls retain their authorization checks.
     fn without_hidden_tools(
         &self,
         mut result: ListToolsResult,
         definitions: &[McpToolDefinition],
     ) -> Result<ListToolsResult, McpError> {
-        let hidden = self.host.hidden_tool_names(&self.session_context());
+        let context = self.session_context();
+        let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&context));
+        let mut hidden = self.host.hidden_tool_names(&context);
+        hidden.extend(
+            authorization::GOVERNED_OPERATIONS
+                .iter()
+                .filter(|operation| {
+                    operation.surface == OperationSurface::Tool
+                        // The managed-run explorer admission can allow an agent
+                        // without the operator capability required by this row.
+                        && operation.id != "orbit.agent.invoke"
+                        && authorization::authorize(operation, &caller).is_err()
+                })
+                .map(|operation| operation.id.to_owned()),
+        );
         if presentation::reader(definitions, McpPresentationRead::Task)
             .is_some_and(|reader| hidden.contains(&reader.schema.name))
         {
@@ -297,7 +315,10 @@ impl OrbitToolServer {
                 .is_none_or(|selector| selector.trim().is_empty())
         {
             return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
-                "tool '{canonical}' requires an explicit workspace selector from discovery"
+                "tool '{canonical}' requires an explicit workspace selector from discovery: \
+                 `view` reads never use the session's bound workspace. Pass `workspace` with a \
+                 selector copied from `orbit_workspace_list`, or omit `view` to use the bound \
+                 workspace"
             ))));
         }
         let host = Arc::clone(&self.host);

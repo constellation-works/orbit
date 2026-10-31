@@ -101,7 +101,15 @@ fn readiness_and_run_show_name_lock_holders_and_unfinished_dependencies() {
         vec![],
         &["os:windows"],
     );
+    let windows_dependent = add_tagged(
+        "windows dependent",
+        TaskStatus::Backlog,
+        &["windows.rs"],
+        vec![dependency.clone()],
+        &["os:windows"],
+    );
     let windows_wait = "waits for a windows host (os:windows)";
+    let scoped_windows_wait = format!("On this {} host: {windows_wait}", std::env::consts::OS);
     let no_host = "no registered host runs windows";
     let before = fixture.json(&["run", "readiness", "--json"]);
     let task = |id: &str| {
@@ -149,11 +157,35 @@ fn readiness_and_run_show_name_lock_holders_and_unfinished_dependencies() {
         ready.contains(&dependency_detail),
         "missing dependency/status: {ready}"
     );
+    let windows_line = ready
+        .lines()
+        .find(|line| line.starts_with(&format!("{windows}:")))
+        .unwrap();
     assert!(
-        ready.contains(&format!(
-            "{windows}: waiting (host_os_mismatch): {windows_wait}; {no_host}"
+        windows_line.contains(&format!(
+            "waiting (host_os_mismatch): {scoped_windows_wait}; {no_host}"
         )),
-        "host-OS wait must name the matching hosts: {ready}"
+        "primary OS wait must retain its local scope and matching hosts: {ready}"
+    );
+    assert_eq!(
+        windows_line.matches(windows_wait).count(),
+        1,
+        "the primary OS wait must appear once: {ready}"
+    );
+    let dependent_line = ready
+        .lines()
+        .find(|line| line.starts_with(&format!("{windows_dependent}:")))
+        .unwrap();
+    assert!(
+        dependent_line.contains("waiting (unmet_dependency)")
+            && dependent_line.contains(&dependency_detail)
+            && dependent_line.contains(&format!("; then {scoped_windows_wait}; {no_host}")),
+        "a dependency wait must preserve the secondary scoped OS wait: {ready}"
+    );
+    assert_eq!(
+        dependent_line.matches(windows_wait).count(),
+        1,
+        "the secondary OS wait must appear once: {ready}"
     );
     let after = fixture.json(&["run", "readiness", "--json"]);
     assert_eq!(

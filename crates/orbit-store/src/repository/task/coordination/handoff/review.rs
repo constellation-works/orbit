@@ -4,7 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     BaselineRedFailures, EvidenceHostOs, KnownRedValidation, ReviewCertificate, ReviewEvidenceKind,
-    ReviewExternalEvidence, ReviewTiming, ValidationOutcome, ValidationRole, handoff::*,
+    ReviewExternalEvidence, ReviewTiming, SELECTIVE_REVIEW_RECEIPT_VERSION,
+    SelectiveBeforeLandingMode, SelectiveReviewResult, ValidationOutcome, ValidationRole,
+    handoff::*,
 };
 
 use super::super::lifecycle::invalid;
@@ -39,10 +41,84 @@ impl TaskCommitBoundary {
             }
             return Ok(Vec::new());
         }
+        // A claim that captured an active selective policy is judged by
+        // its host-authored selection receipt first: a positive enforced
+        // decision cannot be bypassed by a light-delivery skip, and a
+        // missing or stale receipt is never a `not_required`.
+        let selective_required = if let Some(policy) = ship.selective_policy() {
+            let Some(receipt) = &handoff.review.selective_receipt else {
+                return Err(review_refused(
+                    R::ReviewEvidenceMissing,
+                    "the claim captured an active selective before-landing policy; the \
+                     handoff must carry the leaf gate's selection receipt",
+                ));
+            };
+            if receipt.schema_version != SELECTIVE_REVIEW_RECEIPT_VERSION
+                || receipt.policy_digest != policy.digest
+                || receipt.evaluator_version != SELECTIVE_REVIEW_RECEIPT_VERSION
+                || receipt.workspace_id != handoff.workspace_id
+                || receipt.run_id != handoff.run_id
+                || receipt.task_ids != vec![handoff.task_id.clone()]
+                || receipt.risk_model_identity != policy.risk_model_identity
+                || receipt.mode != policy.mode
+                || receipt.base_sha != handoff.candidate.base.commit
+                || receipt.base_tree != handoff.candidate.base.tree
+                || (handoff.review.evidence().is_none()
+                    && (receipt.head_sha != handoff.candidate.candidate.commit
+                        || receipt.head_tree != handoff.candidate.candidate.tree))
+            {
+                return Err(review_refused(
+                    R::ReviewContractMismatch,
+                    &format!(
+                        "selective receipt (policy {}, {}..{}) does not pin the captured \
+                         policy ({}) and candidate ({}..{})",
+                        receipt.policy_digest,
+                        receipt.base_sha,
+                        receipt.head_sha,
+                        policy.digest,
+                        handoff.candidate.base.commit,
+                        handoff.candidate.candidate.commit,
+                    ),
+                ));
+            }
+            match (policy.mode, receipt.result) {
+                (SelectiveBeforeLandingMode::Enforce, SelectiveReviewResult::Unavailable) => {
+                    return Err(review_refused(
+                        R::ReviewEvidenceMissing,
+                        "selective selection was unavailable for this candidate; enforced \
+                         completion is held regardless of unknown_risk",
+                    ));
+                }
+                (SelectiveBeforeLandingMode::Enforce, SelectiveReviewResult::Required) => true,
+                _ => {
+                    // Observed, or enforced-but-not-selected: no review
+                    // evidence exists or is owed, and none may be claimed.
+                    if handoff.review.evidence().is_some()
+                        && ship.review_timing() == ReviewTiming::None
+                    {
+                        return Err(review_refused(
+                            R::ReviewEvidenceUnexpected,
+                            "the selective receipt did not require a review, but the \
+                             handoff carries review evidence for no captured timing",
+                        ));
+                    }
+                    if ship.review_timing() == ReviewTiming::None {
+                        return Ok(Vec::new());
+                    }
+                    false
+                }
+            }
+        } else {
+            false
+        };
         // [ORB-16855] A `skip-review` candidate within the owner's
-        // light-delivery paths carries no review, whatever the claim captured.
-        if handoff.review == HandoffReview::not_required()
-            && self.light_delivery_applies(handoff, light, orbit_types::task::SKIP_REVIEW_TAG)?
+        // light-delivery paths — or a mapped review-skip tag's candidate
+        // within its profile whose guard passed — carries no review,
+        // whatever the claim captured.
+        if !selective_required
+            && handoff.review.policy == ReviewTiming::None
+            && handoff.review.evidence().is_none()
+            && self.light_review_skip_applies(handoff, light)?
         {
             return Ok(Vec::new());
         }
@@ -66,8 +142,13 @@ impl TaskCommitBoundary {
         }
         // The evidence must be for the timing the claim captured: a
         // before-PR review cannot stand in for a before-landing one, nor the
-        // reverse [ORB-14849].
-        let captured = ship.review_timing();
+        // reverse [ORB-14849]. A selectively required review is a
+        // before-landing review.
+        let captured = if selective_required {
+            ReviewTiming::BeforeLanding
+        } else {
+            ship.review_timing()
+        };
         let evidence = match handoff.review.evidence() {
             Some(evidence)
                 if captured != ReviewTiming::None
@@ -185,6 +266,16 @@ impl TaskCommitBoundary {
             return Err(review_refused(
                 R::ReviewContractMismatch,
                 "certificate baseline commands differ from the owner's captured review contract",
+            ));
+        }
+        if let Some(selection) = &handoff.review.selective_receipt
+            && (selection.head_sha != certificate.reviewed_candidate.commit
+                || selection.head_tree != certificate.reviewed_candidate.tree
+                || selection.base_sha != certificate.base.commit
+                || selection.base_tree != certificate.base.tree)
+        {
+            return Err(certificate_refused(
+                "review certificate does not continue the selected candidate",
             ));
         }
         let reviewer_commit_matches = match &evidence.reviewer_commit {

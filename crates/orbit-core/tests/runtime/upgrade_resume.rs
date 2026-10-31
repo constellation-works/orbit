@@ -33,12 +33,14 @@ use orbit_store::contracts::{
 };
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    ChildDispatch, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
-    REVIEW_CONTRACT_VERSION, ReviewAdmission, ReviewTiming,
+    JobRunState, JobRunTrigger, JobTargetType, PipelineState, REVIEW_CONTRACT_VERSION,
+    ReviewAdmission, ReviewTiming,
 };
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
 use tempfile::TempDir;
+
+use crate::risk_history;
 
 struct SingleWorkspace(OrbitRuntime);
 
@@ -239,12 +241,14 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             execution_machine_id: "exec-m".into(),
         },
         request: AdmissionRequest {
+            labels: Vec::new(),
             request_id: "req-1".into(),
             caller_version: "1".into(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: false,
+            selective_review: false,
             run_context: AdmissionRunContext {
                 run_id: "parent-run".into(),
                 job_name: "workspace_auto_pipeline".into(),
@@ -473,10 +477,24 @@ fn upgrade_interrupted_run(
     interrupted_at: DateTime<Utc>,
     seed: impl FnOnce(&mut PipelineState),
 ) -> String {
-    let input = if ["workspace_auto_pipeline", "workspace_pull_pipeline"].contains(&job_id) {
-        json!({"review": review_admission(&ctx.runtime)})
-    } else {
-        json!({})
+    let review = ["workspace_auto_pipeline", "workspace_pull_pipeline"]
+        .contains(&job_id)
+        .then(|| review_admission(&ctx.runtime));
+    upgrade_interrupted_run_admitted(ctx, job_id, interrupted_at, review, seed)
+}
+
+/// [`upgrade_interrupted_run`] with the review admission the run captured
+/// named by the caller.
+fn upgrade_interrupted_run_admitted(
+    ctx: &TestContext,
+    job_id: &str,
+    interrupted_at: DateTime<Utc>,
+    review: Option<ReviewAdmission>,
+    seed: impl FnOnce(&mut PipelineState),
+) -> String {
+    let input = match review {
+        Some(review) => json!({"review": review}),
+        None => json!({}),
     };
     let run = ctx
         .jobs
@@ -510,6 +528,7 @@ fn review_admission(runtime: &OrbitRuntime) -> ReviewAdmission {
             runtime.workflow_required_validation_commands().to_vec(),
         ),
         baseline_commands: runtime.review_baseline_commands().to_vec(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
         host_evidence: Vec::new(),
     }
@@ -578,8 +597,7 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
     let current = upgrade_interrupted_run(&ctx, "test_pipeline", now, |_| {});
 
     // Drains the current upgrade interrupted: one whose window has elapsed,
-    // one an operator stopped while its window was still open, and a ship
-    // wrapper that never stamped a window of its own.
+    // and one an operator stopped while its window was still open.
     let expired_drain = upgrade_interrupted_run(&ctx, "workspace_auto_pipeline", now, |state| {
         state.record_pipeline_output(
             "open_window",
@@ -593,7 +611,6 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
         );
         state.set_drain_admissions_stop("operator".into(), Some("on-call".into()));
     });
-    let windowless_ship = upgrade_interrupted_run(&ctx, "workspace_ship_pipeline", now, |_| {});
     // [ORB-15383] A drain whose stamped window elapsed but which an operator
     // extended (`orbit run extend`) is still inside its window. Its job is
     // deployed the way `orbit init` does, so the resume can be planned.
@@ -620,43 +637,6 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
             now + Duration::hours(1),
             "operator".into(),
             None
-        ));
-    });
-
-    // A ship wrapper delegates its window and stop control to its auto drain
-    // child. The wrapper itself has no stop flag, so inspect the child state.
-    let child_input = json!({"review": review_admission(&ctx.runtime)});
-    let stopped_ship_child = ctx
-        .jobs
-        .insert_job_run(
-            "workspace_auto_pipeline",
-            1,
-            Utc::now(),
-            Some(child_input.clone()),
-            None,
-        )
-        .unwrap();
-    let mut child_state = PipelineState::new(
-        stopped_ship_child.run_id.clone(),
-        "workspace_auto_pipeline".into(),
-        child_input,
-    );
-    child_state.record_pipeline_output(
-        "open_window",
-        json!({"deadline": deadline(now + Duration::hours(1))}),
-    );
-    child_state.set_drain_admissions_stop("operator".into(), Some("on-call".into()));
-    ctx.jobs
-        .write_run_state(&stopped_ship_child.run_id, &child_state)
-        .unwrap();
-    let stopped_ship = upgrade_interrupted_run(&ctx, "workspace_ship_pipeline", now, |state| {
-        state.record_child_dispatch(ChildDispatch::submitted(
-            stopped_ship_child.run_id.clone(),
-            "workspace_auto_pipeline".into(),
-            "invoke_and_wait".into(),
-            true,
-            false,
-            now,
         ));
     });
 
@@ -719,21 +699,14 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
     assert_skipped(&ctx, &review_changed, "review_admission_changed");
     assert_skipped(&ctx, &expired_drain, "drain_window_elapsed");
     assert_skipped(&ctx, &stopped_drain, "drain_admissions_stopped");
-    assert_skipped(&ctx, &windowless_ship, "drain_window_elapsed");
-    assert_skipped(&ctx, &stopped_ship, "drain_admissions_stopped");
     assert_skipped(&ctx, &superseded, "superseded");
 
     // A skipped drain admitted nothing: no run of a drain job exists beyond
     // the interrupted ones and the extended drain's resume.
-    for job in [
-        "workspace_auto_pipeline",
-        "workspace_pull_pipeline",
-        "workspace_ship_pipeline",
-    ] {
+    for job in ["workspace_auto_pipeline", "workspace_pull_pipeline"] {
         let expected = match job {
-            "workspace_auto_pipeline" => 3, // includes the stopped ship child
+            "workspace_auto_pipeline" => 2,
             "workspace_pull_pipeline" => 3, // the extended drain resumed once
-            "workspace_ship_pipeline" => 2,
             _ => unreachable!(),
         };
         assert_eq!(
@@ -751,8 +724,6 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
         &review_changed,
         &expired_drain,
         &stopped_drain,
-        &windowless_ship,
-        &stopped_ship,
         &superseded,
     ] {
         assert_eq!(decisions(&ctx, run_id).len(), 1, "{run_id} decided once");
@@ -861,6 +832,105 @@ fn clock_sweep_resumes_a_drain_captured_under_the_deprecated_review_switches() {
     let other_layer = interrupted_drain("workspace");
     tick();
     assert_skipped(&ctx, &other_layer, "review_admission_changed");
+}
+
+/// [ORB-20235] An admission that froze a risk-threshold selective policy
+/// carries the owner's risk-model identity, which embeds the fit window's
+/// timestamps and the history it was fitted on. Resolving today's policy
+/// builds a different identity, so only the operator's predicates may decide
+/// whether the policy changed.
+#[test]
+fn clock_sweep_resumes_a_run_captured_under_a_risk_threshold_policy_until_it_changes() {
+    let test_name = "upgrade_resume::clock_sweep_resumes_a_run_captured_under_a_risk_threshold_policy_until_it_changes";
+    if run_isolated_test(test_name) {
+        return;
+    }
+    orbit_core::test_support::install_substitute_pipeline_worker(["true".to_string()]);
+    let mut ctx = setup_context();
+    let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    for (kind, name) in [
+        ("jobs", "workspace_pull_pipeline"),
+        ("activities", "drain_window"),
+        ("activities", "pull_refill"),
+        ("activities", "sleep"),
+    ] {
+        let dir = ctx.global.join("resources").join(kind);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(
+            assets.join(kind).join(format!("{name}.yaml")),
+            dir.join(format!("{name}.yaml")),
+        )
+        .unwrap();
+    }
+    let configure = |ctx: &mut TestContext, selective: &str| {
+        std::fs::write(
+            ctx.workspace.join("config.toml"),
+            format!("[review]\n{selective}"),
+        )
+        .unwrap();
+        ctx.runtime = OrbitRuntime::from_roots(&ctx.global, &ctx.workspace).unwrap();
+    };
+    const CAPTURED: &str = "selective_before_landing.mode = \"observe\"\n\
+                            selective_before_landing.risk_threshold = 0.4\n";
+    configure(&mut ctx, CAPTURED);
+    risk_history::seed_fitted_history(&ctx.runtime);
+    let mut admission = review_admission(&ctx.runtime);
+    admission.selective_before_landing = Some(risk_history::frozen_selective_policy(&ctx.runtime));
+    // Later landed history refits the model, as time passing would.
+    risk_history::land_one_more_clean_task(&ctx.runtime);
+
+    let now = Utc::now();
+    let deadline = (now + Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let interrupted_drain = |ctx: &TestContext| {
+        upgrade_interrupted_run_admitted(
+            ctx,
+            "workspace_pull_pipeline",
+            now,
+            Some(admission.clone()),
+            |state| state.record_pipeline_output("open_window", json!({"deadline": deadline})),
+        )
+    };
+    let tick = |ctx: &TestContext| {
+        let sweep = run_sweep_at_with_providers(
+            &ctx.global,
+            SweepOptions::default(),
+            RoutineMachineIdentity {
+                machine_id: "test-mach".into(),
+                machine_name: "test-host".into(),
+            },
+            &SingleWorkspace(ctx.runtime.clone()),
+        )
+        .expect("sweep runs");
+        assert!(!sweep.lock_busy);
+    };
+
+    let unchanged = interrupted_drain(&ctx);
+    tick(&ctx);
+    let resumed = decisions(&ctx, &unchanged);
+    assert_eq!(resumed.len(), 1, "{resumed:?}");
+    assert_eq!(resumed[0]["decision"], "resumed", "{resumed:?}");
+
+    // Each change to a predicate after capture is still a policy change.
+    for selective in [
+        // risk_threshold
+        "selective_before_landing.mode = \"observe\"\n\
+             selective_before_landing.risk_threshold = 0.6\n",
+        // mode
+        "selective_before_landing.mode = \"off\"\n",
+        // paths
+        "selective_before_landing.mode = \"observe\"\n\
+             selective_before_landing.risk_threshold = 0.4\n\
+             selective_before_landing.paths = [\"src/**\"]\n",
+        // unknown_risk
+        "selective_before_landing.mode = \"observe\"\n\
+             selective_before_landing.risk_threshold = 0.4\n\
+             selective_before_landing.unknown_risk = \"skip\"\n",
+    ] {
+        configure(&mut ctx, selective);
+        let changed = interrupted_drain(&ctx);
+        tick(&ctx);
+        assert_skipped(&ctx, &changed, "review_admission_changed");
+    }
 }
 
 #[test]

@@ -118,7 +118,7 @@ impl OrbitRuntime {
 
     /// One newer binding's acknowledged evidence, or the reason it cannot be
     /// set aside.
-    fn observe_successor_member(
+    pub(super) fn observe_successor_member(
         &self,
         source: &JobRun,
         task: &Task,
@@ -294,6 +294,7 @@ impl OrbitRuntime {
     pub(super) fn source_successor_unchanged(
         &self,
         binding: &SourceRepairBinding,
+        admitted_run_id: &str,
     ) -> Result<bool, OrbitError> {
         let Some(expected) = &binding.superseded else {
             return Ok(true);
@@ -303,6 +304,18 @@ impl OrbitRuntime {
             .ok_or_else(|| refuse("source disappeared"))?;
         let mut task = self.get_task(&binding.task_id)?;
         task.job_run_id = Some(expected.run_id.clone());
+        let state = self
+            .read_run_state(&source.run_id)?
+            .ok_or_else(|| refuse("source checkpoints disappeared"))?;
+        if source.state == JobRunState::Failed
+            && inline_publication::kept_inline_publication(&state)
+        {
+            return Ok(self.observe_inline_repair_lineage(
+                &source,
+                &task,
+                Some(admitted_run_id),
+            )? == *expected);
+        }
         Ok(self.observe_source_successor(&source, &task)? == *expected)
     }
 }

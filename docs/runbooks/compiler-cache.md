@@ -5,7 +5,7 @@ tags: [operations, rust, cache, worktrees, sandbox, linux]
 paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-19
+last_validated: 2026-10-29
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -41,22 +41,69 @@ a host that can create Linux mount namespaces.
 Hosted CI keeps no compiler-object cache. The Rust build caches in
 `.github/workflows/ci.yml` are the `Swatinem/rust-cache` dependency archives:
 `rust-1.98.1` for **Test build**, `rust-1.98.1-checks` for **Check / Clippy /
-Test**, and the MSRV job's entry for its own toolchain. rust-cache keys each on
-the toolchain, `Cargo.lock`, the manifests and the `CARGO*`/`RUST*`
-environment, and prunes `target/` to dependency artifacts before it saves.
+Test**, and the MSRV job's entry for its own toolchain. All three use
+`prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}`: the complete virtual-root
+manifest, including workspace dependencies and build profiles, is an explicit
+cache input. The pinned action discovers manifests through Cargo's packages;
+that omits a virtual workspace root. Its `key` input would also be ignored
+beside `shared-key`, so the root digest belongs in `prefix-key`. A root change
+invalidates both the exact key and its fallback prefix; even a comment change
+starts a new namespace. Unchanged root bytes keep the same namespace.
+
+The action additionally keys each archive on the installed compiler versions,
+`Cargo.lock`, member manifests and the `CARGO*`/`RUST*` environment, and prunes
+`target/` to dependency artifacts before it saves.
 Workspace members are never cached: each run compiles them from the checkout,
 and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
 
-- **Who writes.** Every rust-cache step has
+- **Who writes.** Every producer rust-cache step has
   `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or
-  `agent-main` saves, after the job's work, on failure too
-  (`cache-on-failure`), and only when it missed the exact key. A PR run
+  `agent-main` saves, after the job's work. Check and Test build also save on
+  failure (`cache-on-failure`); MSRV saves on success. Only a miss or prefix
+  hit allows a save; an exact hit cannot replace an existing archive. A PR run
   restores and never writes, so no PR-built entry exists for another PR or an
   `agent-main` run to restore. A PR can restore the base branch's entries
   ([GitHub cache scope](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)).
   `python3 scripts/test-pr-state-workflows.py` evaluates every cache writer's
   condition for each event and fails on an `actions/cache` step, whose
   implicit post-job save runs on every event.
+- **Reseeding a validated merge.** `ci.yml` keeps its original two-step
+  `Change scope` proof: identical merged PR-head tree, that head's successful
+  full-workspace Check and a full-selection notice from the same suite. Its
+  required jobs, skip decisions and deadlines are unchanged. The separate
+  push-only `.github/workflows/ci-cache-seed.yml` classifies once with the
+  same script and admits two bounded Linux producers only for `skip`.
+  It never handles PRs or writes PR caches. Full/docs pushes use existing CI
+  without duplicate seed builds; scope errors or an empty mode admit full CI
+  and no seeders.
+
+  Each seeder uses its corresponding Check/Test build toolchain, root prefix,
+  compiler environment and shared key. A read-only `lookup-only` action
+  avoids downloads; an exact hit skips restore, cleanup and compilation.
+  Prefix/missing/error/empty results run the bounded producer and a push-only
+  rust-cache save on success. Check produces the existing production Clippy
+  and documentation dependency units; Test build compiles through the folded
+  lint wrapper with `cargo test --no-run`, without executing tests, making
+  archives or waiting for shards. Seeders disable the unused compiler-object
+  cache. They retain the corresponding 45/30 minute job limits and 32 GiB
+  disk admission. A failed seed stays visible and saves no partial archive;
+  a later normal push can recover. An exact cache hit proves key presence,
+  not complete warm artifacts or a measured speedup.
+
+  Active seeders are not cancelled by newer pushes. A superseded pending push
+  cannot strand the namespace: its replacement checks actual cache presence,
+  independently of `BEFORE`. A delayed writer checks out its triggering SHA.
+  The same path covers a single-PR merge and a literal fast-forward. No cache
+  deletion, permission expansion or extra validation is required. Hosted
+  writer/reuse outcomes and rolling full Check p90 still need collection
+  after normal publication; local fixtures do not establish the <600 s goal.
+- **Other Linux consumers.** The coverage workflow caches only registry/git
+  data (`cache-targets: false`), so it holds no compiled profile artifacts.
+  Desktop check/bundle caches use `desktop/`, whose root is a real package
+  manifest already included by the action. Neither consumes these three
+  virtual-root target archives. MSRV uses its own compiler identity and is
+  seeded by ordinary full pushes. The two optional seeders do not warm the
+  independent MSRV archive; an MSRV miss still rebuilds on its next full run.
 - **Misses and failures.** A missed key restores the newest entry that shares
   its toolchain and environment prefix, or nothing, and Cargo rebuilds every
   dependency the restored `target/` lacks or holds stale. A restore error is
@@ -251,6 +298,11 @@ scripts/test-compiler-cache.sh
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/test-compiler-cache-namespaces.sh
 ```
 
+The namespace script needs Python 3.11+ first on `PATH`, because its supervisor
+starts participants with `process_group=`. When the cache and user namespaces are
+available, it refuses an older `python3` before starting any participant and
+names the interpreter and version it found.
+
 On a control failure, the namespace script prints the stage, participant names
 (C/D, or E for warm reuse), exact exit statuses, and each participant's stdout
 and stderr before removing its temporary files. Each stream is limited to
@@ -261,6 +313,28 @@ add no compilation or waits to a successful live run. The companion
 `scripts/test-compiler-cache.sh` drives deterministic failures through the namespace
 entrypoint with transport fixtures; those checks cover diagnostic bounds and
 cleanup, while the live namespace run remains required for cache isolation.
+The fixtures use real offline Cargo lockfile generation for standalone probe
+workspaces under checkout-local scratch, including the benchmark caller's
+`TMPDIR=WORKDIR` route. Compilation and cache daemons stay simulated there.
+
+Every namespace participant, including warm reuse and the shared-daemon owner,
+has a deadline measured from its launch. Set
+`ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS` to a positive integer to override the
+300-second default. Timeout produces participant status 124; it cannot count
+as the shared-daemon control's expected compilation failure. Termination allows
+one second for SIGTERM, escalates to SIGKILL, and allows one more second to
+reap. Failure cleanup uses the same supervision. An owned group anchor ignores
+SIGTERM and stays unreaped through the final group signal, so transport exit
+cannot release the group identity early. If anchor startup fails, supervision
+reports the error with participant status 125 and cleans up with the transport
+leader unreaped until the final group signal. The independent Linux fixture
+watchdog observes exit without reaping its leader until its own last group signal.
+Deterministic API models check both identity lifetimes and failed anchor forks
+and preexec startup without PID churn or signaling unrelated processes. On Linux
+the supervisor adopts and reaps orphaned descendants, including processes that start new sessions;
+status 125 reports failure to reap within the grace. The public-entrypoint
+fixtures exercise TERM-ignoring trees, warm reuse, both shared-daemon modes,
+owner readiness failure and early failure cleanup without real compilation.
 
 When the cache is disabled, that namespace script prints one line,
 `test-compiler-cache-namespaces: not applicable: host compiler cache is disabled (...)`,
@@ -605,6 +679,33 @@ scripts/bench-compiler-cache.sh
 
 # On a host that can create user namespaces, also require the concurrent test:
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/bench-compiler-cache.sh
+```
+
+The benchmark requires Python 3 for path admission. Use a dedicated, exclusively
+owned `ORBIT_COMPILER_CACHE_BENCH_DIR`; do not modify it from another process
+while the benchmark runs. Before any build, daemon control, write or cleanup,
+the harness resolves parent components and symlink ancestors, including for
+paths that do not yet exist. `SCCACHE_DIR` must resolve strictly below that
+workdir, separate from generated source trees, targets, the installed binary,
+socket and output files. The workdir itself is never a cache reset destination.
+Escaping paths and cache aliases of reserved destinations are refused.
+An ordinary nested private cache, including an alias resolving inside the
+workdir, is accepted; the canonical path is used by resets and daemon controls.
+`ORBIT_COMPILER_CACHE_BENCH_RESULT` must also resolve below the workdir and stay
+separate from the cache and reserved destinations. Existing symlinks at reserved
+destinations or at the result file are refused. Source and target trees are
+replaced as directory entries before reuse so old symlinks within them cannot
+redirect extraction or target clearing. This admission check assumes exclusive
+ownership; it does not protect against concurrent filesystem changes.
+
+The disposable public-script regression uses fake build/cache transports and
+a deletion recorder that never deletes. It covers parent and symlink escapes,
+literal external caches, workdir equality, cache/target overlap and private
+cache operation without compiling or starting daemons:
+
+```bash
+python3 scripts/test-bench-compiler-cache.py
+# Also included in scripts/test-compiler-cache.sh and the CI guardrails.
 ```
 
 The harness records sequential no-cache cold builds, an unnormalized

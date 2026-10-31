@@ -31,7 +31,12 @@ impl Execute for ConfigShowArgs {
             let mut json = effective_json(runtime, effective.values());
             json["review"] = review.json;
             let purposes = orbit_core::application::config::crew_purposes_view(effective.values());
+            let review_skip = review_skip_view(runtime);
+            json["review_skip_tags"] = review_skip.json;
             let mut text = effective_text(runtime, effective.values(), self.all);
+            if self.all || !review_skip.text.is_empty() {
+                text.push_str(&review_skip.text);
+            }
             // Crew purposes and Review restate rows the sections above already
             // print. The default view omits them; `--all` and `--json` keep them.
             if self.all {
@@ -54,10 +59,12 @@ impl Execute for ConfigShowArgs {
     }
 }
 
-/// Every automatic-review switch with its source [ORB-13992]: before-PR
-/// review (`review.timing = before_pr`, minutes, crew), before-landing review
-/// (`review.timing = before_landing`) and after-landing review (the
-/// `delivery-code-review` auto-task, its next batch and health).
+/// Every automatic-review switch with its source [ORB-13992] [ORB-20099]:
+/// before-PR review (deprecated `review.timing = before_pr`, minutes, crew),
+/// before-landing review (`review.timing = before_landing`) and after-landing
+/// review (the `delivery-code-review` auto-task, its next batch and health).
+/// The before-PR line marks its deprecated timing; deprecation alone is never
+/// an error.
 struct ReviewView {
     json: JsonValue,
     text: String,
@@ -79,6 +86,38 @@ fn review_switches(runtime: &OrbitRuntime) -> ReviewView {
         ),
     };
     ReviewView { json, text }
+}
+
+/// The effective `[workflow.review_skip_tags]` mappings: each tag's
+/// `paths` and optional `guard`. Empty text when none is mapped (the
+/// JSON still carries an empty object).
+struct ReviewSkipView {
+    json: JsonValue,
+    text: String,
+}
+
+fn review_skip_view(runtime: &OrbitRuntime) -> ReviewSkipView {
+    let settings = runtime.review_skip_settings();
+    let mut map = Map::new();
+    let mut text = String::new();
+    if !settings.is_empty() {
+        text.push_str("\nReview skip tags:\n");
+        for (tag, profile) in settings.entries() {
+            map.insert(
+                tag.to_string(),
+                json!({"paths": profile.paths, "guard": profile.guard}),
+            );
+            let guard = profile.guard.as_deref().unwrap_or("none");
+            text.push_str(&format!(
+                "  {tag}: paths=[{}] guard={guard}\n",
+                profile.paths.join(", ")
+            ));
+        }
+    }
+    ReviewSkipView {
+        json: JsonValue::Object(map),
+        text,
+    }
 }
 
 /// The `Crew purposes:` block `orbit config show` prints.

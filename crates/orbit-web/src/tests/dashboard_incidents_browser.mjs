@@ -7,8 +7,8 @@
 // tiles (counts, filtering, pressed state), lifespan bars for a recurring and
 // a single-burst signature, the detail panel (full message and its copy, the
 // truncation note and its audit drill-down, related signatures, runs), the
-// last-hour and no-message filters, the local 6h window, the sticky panel and
-// a 375px phone with no horizontal page scroll. It also checks grouping by
+// last-hour window insight and no-message filters, the local 6h window, the
+// sticky panel and a 375px phone with no horizontal page scroll. It also checks grouping by
 // cause [ORB-15434]: cause headers over signatures that share one, a
 // single-signature cause as one row, the By signature toggle, and the
 // detail panel's same-cause list and grouping basis, and that a message the
@@ -275,7 +275,7 @@ const detail = () => page.locator('#diag-body .incident-detail').evaluate((node)
   sentence: node.querySelector('.incident-sentence').textContent,
   message: node.querySelector('.incident-full-message').textContent,
   messageClipped: node.querySelector('.incident-full-message').scrollWidth > node.querySelector('.incident-full-message').clientWidth + 1,
-  note: node.querySelector('.incident-message-note')?.textContent || null,
+  note: node.querySelector('.incident-message-note:not(.incident-evidence-note)')?.textContent || null,
   related: [...node.querySelectorAll('.incident-related-item')].map((item) => item.textContent),
   sameCause: [...node.querySelectorAll('.incident-same-cause .incident-related-item')].map((item) => item.textContent),
   basis: node.querySelector('.incident-cause-basis')?.textContent || null,
@@ -333,6 +333,7 @@ try {
   //    and the request asks the server for that class only.
   await page.goto(`${origin}/?workspace=ws_orbit#diagnostics/incidents?window=24h`);
   await page.locator('#diag-body .incident-row').first().waitFor({ state: 'visible' });
+  assert(await page.locator('#diag-body .incident-toolbar').getByRole('button', { name: 'Last hour only' }).count() === 0, 'the toolbar has no duplicate last-hour filter');
   assert(lastRequest().class === 'unexpected' && lastRequest().since === '24h', `the request names the class and window: ${JSON.stringify(lastRequest())}`);
   const tileState = await tiles();
   evidenceLog.tiles = tileState;
@@ -409,16 +410,22 @@ try {
   assert(/^4 events, all 3h( \d+m)? ago\.$/.test(panel.sentence), `a burst reads as one moment: ${panel.sentence}`);
   await page.screenshot({ path: path.join(evidence, 'incidents-detail-1440.png'), fullPage: true });
 
-  // 4. Last-hour filter: only signatures seen in the last hour stay.
+  // 4. The last-hour insight selects the 1h window and refetches the list.
+  const beforeLastHourRequest = incidentRequests.length;
   const lastHourChip = page.locator('#diag-body .incident-insight[data-insight="last-hour"]');
   assert(await lastHourChip.textContent() === '2 signatures failed in the last hour', 'the chip counts live signatures');
   await lastHourChip.click();
+  await until('the 1h answer', async () => incidentRequests.length > beforeLastHourRequest
+    && lastRequest().class === 'unexpected' && lastRequest().since === '1h' && (await rows()).length === 2);
   let filtered = await rows();
-  assert(filtered.length === 2 && filtered.every((row) => row.live), `the last-hour filter keeps live rows: ${JSON.stringify(filtered.map((row) => row.headline))}`);
+  assert(filtered.length === 2 && filtered.every((row) => row.live), `the 1h window keeps the recent rows: ${JSON.stringify(filtered.map((row) => row.headline))}`);
+  assert(await page.locator('#diag-body .incident-seg[data-window="1h"]').getAttribute('aria-pressed') === 'true', 'the chip selects the 1h window segment');
   assert(await lastHourChip.getAttribute('aria-pressed') === 'true', 'the chip shows it is on');
-  assert(await page.locator('#diag-body .incident-toggle').getAttribute('aria-pressed') === 'true', 'the list toggle agrees');
-  await page.locator('#diag-body .incident-toggle').click();
-  assert((await rows()).length === 8, 'the list toggle turns the filter off');
+  await page.locator('#diag-body .incident-toolbar').screenshot({ path: path.join(evidence, 'incidents-toolbar-1440.png') });
+  const beforeRestoreRequest = incidentRequests.length;
+  await page.locator('#diag-body .incident-seg[data-window="24h"]').click();
+  await until('the restored 24h answer', async () => incidentRequests.length > beforeRestoreRequest
+    && lastRequest().since === '24h' && (await rows()).length === 8);
 
   // No-message chip: only the silent signature, selected.
   await page.locator('#diag-body .incident-insight[data-insight="no-message"]').click();
@@ -699,6 +706,95 @@ try {
     }
   }
 
+  // A bounded list preview still sends the exact IDs for every raw row.
+  // Opening evidence must explain the preview and keep the Audit drilldown
+  // exact, rather than falling back to a broader actor/surface search.
+  const bounded = incident(80, { surface: 'fixture.validate', message: 'validation failed', runId: 'run-burst', firstAgo: HOUR, events: 65, now: Date.now() });
+  bounded.event_ids = bounded.events.map(event => event.id);
+  bounded.events = bounded.events.slice(0, 5);
+  bounded.events_omitted = 60;
+  await page.goto(`${origin}/message-scope?workspace=ws_orbit`);
+  await page.evaluate(async (row) => {
+    const { renderIncidents } = await import('/static/js/incidents.js');
+    renderIncidents({ window: '24h', class: 'unexpected', limit: 50, incidents: [row], shown_incident_count: 1, matching_incident_count: 1 });
+  }, bounded);
+  await page.locator('.incident-evidence-details > summary').click();
+  const previewNote = await page.locator('.incident-evidence-note').textContent();
+  assert(previewNote.includes('preview') && previewNote.includes('60'), `the bounded preview reports omitted evidence: ${previewNote}`);
+  assert(await page.locator('.incident-evidence tbody tr').count() === 5, 'only the bounded preview is rendered');
+  await page.locator('.incident-evidence-note button').click();
+  const drilldown = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+  assert(drilldown.get('ids') === bounded.event_ids.join(','), 'Audit receives every exact ID, including omitted evidence');
+  assert(!drilldown.has('role') && !drilldown.has('tool'), 'exact evidence does not broaden to actor or surface filters');
+  evidenceLog.boundedEvidence = { previewNote, ids: drilldown.get('ids') };
+
+  // The server recovers a cut root from all seven rows before sending only
+  // the newest five. The only complete copy is the second-oldest row.
+  const recoveredMessage = CUT_MESSAGE.slice(0, -1) + ' https://mirror.example.test/orbit.git';
+  const recovered = incident(81, { surface: 'orbit.workspace.sync', message: CUT_MESSAGE, runId: 'run-recovered', firstAgo: HOUR, lastAgo: HOUR - MINUTE, events: 7, now: Date.now() });
+  recovered.events[1].message = recoveredMessage;
+  recovered.message = recoveredMessage;
+  recovered.message_event_id = recovered.events[1].id;
+  recovered.event_ids = recovered.events.map(event => event.id).reverse();
+  recovered.events = recovered.events.slice(-5).reverse();
+  recovered.events_omitted = 2;
+  // Samples must not accidentally supply the omitted full copy to the UI.
+  recovered.sample_events = recovered.events.slice(0, 3);
+  const unrecoverable = { ...recovered, incident_id: 'inc-82', run_ids: ['run-unrecoverable'], message: CUT_MESSAGE, last_ts: new Date().toISOString() };
+  await page.goto(`${origin}/message-scope?workspace=ws_orbit`);
+  await page.evaluate(async (row) => {
+    const { renderIncidents } = await import('/static/js/incidents.js');
+    renderIncidents({ window: '24h', class: 'unexpected', limit: 50, incidents: [row], shown_incident_count: 1, matching_incident_count: 1 });
+  }, unrecoverable);
+  assert((await detail()).message === CUT_MESSAGE && (await detail()).note !== null, 'the cut note remains when all seven stored rows are cut');
+  await page.goto(`${origin}/message-scope?workspace=ws_orbit`);
+  await page.evaluate(async (incidents) => {
+    const { renderIncidents } = await import('/static/js/incidents.js');
+    renderIncidents({ window: '24h', class: 'unexpected', limit: 50, incidents, shown_incident_count: incidents.length, matching_incident_count: incidents.length });
+  }, [unrecoverable, recovered]);
+  const recoveredDetail = await detail();
+  assert(recoveredDetail.message === recoveredMessage && recoveredDetail.note === null,
+    `an omitted audit row recovers the full detail message without a cut note: ${JSON.stringify(recoveredDetail)}`);
+  await page.locator('#diag-body .incident-copy').click();
+  assert(await page.evaluate(() => navigator.clipboard.readText()) === recoveredMessage, 'Copy uses the complete message recovered outside the preview');
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.locator('.incident-detail-panel').scrollIntoViewIfNeeded();
+    assert(await noPageOverflow() <= 1, `the recovered message wraps at ${width}px`);
+    await page.screenshot({ path: path.join(evidence, `incidents-recovered-dark-${width}.png`) });
+  }
+  evidenceLog.recoveredDetail = recoveredDetail;
+
+  // Recovery can select an omitted row whose full text exceeds the feed cap.
+  // Its audit-row pointer must survive recovery across a newer cut-only run.
+  const cappedCut = REFUSAL_MESSAGE.slice(0, 180) + '…';
+  const cappedFields = { cls: 'expected', surface: 'orbit.task.transition', message: cappedCut, firstAgo: HOUR, events: 7, now: Date.now() };
+  const cappedRecovered = incident(83, { ...cappedFields, runId: 'run-capped-recovered' });
+  const cappedNewest = incident(84, { ...cappedFields, runId: 'run-capped-cut', lastAgo: 0 });
+  cappedRecovered.events[1].id = REFUSAL_EVENT_ID;
+  for (const row of [cappedRecovered, cappedNewest]) {
+    row.event_ids = row.events.map(event => event.id).reverse();
+    row.events = row.events.slice(-5).reverse();
+    row.sample_events = row.events.slice(0, 3);
+    row.events_omitted = 2;
+  }
+  cappedRecovered.message = REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES);
+  cappedRecovered.truncated = true;
+  cappedRecovered.message_event_id = REFUSAL_EVENT_ID;
+  await page.goto(`${origin}/message-scope?workspace=ws_orbit`);
+  await page.evaluate(async (incidents) => {
+    const { renderIncidents } = await import('/static/js/incidents.js');
+    renderIncidents({ window: '24h', class: 'expected', limit: 50, incidents, shown_incident_count: incidents.length, matching_incident_count: incidents.length });
+  }, [cappedNewest, cappedRecovered]);
+  await page.locator('#diag-body .incident-tile[data-class="expected"]').click();
+  assert((await detail()).message === REFUSAL_MESSAGE.slice(0, LIST_MESSAGE_MAX_BYTES), 'an omitted capped copy supplies the excerpt across runs');
+  await page.locator('#diag-body .incident-message-note:not(.incident-evidence-note) button').click();
+  await until('the omitted capped message', async () => (await detail()).message === REFUSAL_MESSAGE);
+  assert((await detail()).note === null, 'a loaded omitted message has no cut note');
+  await page.locator('#diag-body .incident-copy').click();
+  assert(await page.evaluate(() => navigator.clipboard.readText()) === REFUSAL_MESSAGE, 'Copy uses the full text loaded from the omitted audit row');
+  evidenceLog.cappedRecovery = await detail();
+
   assert(pageErrors.length === 0, `no page errors: ${pageErrors.join('; ')}`);
   fs.writeFileSync(path.join(evidence, 'incidents-assertions.json'), `${JSON.stringify({
     passed: true,
@@ -711,7 +807,7 @@ try {
       'browser-incidents-detail-full-message-and-copy',
       'browser-incidents-truncation-note-opens-audit-events',
       'browser-incidents-related-signatures',
-      'browser-incidents-last-hour-filter',
+      'browser-incidents-last-hour-chip-selects-1h-window',
       'browser-incidents-no-message-filter',
       'browser-incidents-local-6h-window',
       'browser-incidents-sticky-detail-panel',
@@ -724,6 +820,8 @@ try {
       'browser-incidents-late-message-keeps-selected-host',
       'browser-incidents-message-host-round-trip',
       'browser-incidents-message-workspace-round-trip',
+      'browser-incidents-bounded-preview-keeps-exact-audit-evidence',
+      'browser-incidents-message-recovered-outside-five-row-preview',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,

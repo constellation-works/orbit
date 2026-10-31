@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
-    ClaimInspection, ClaimInvocation, ClaimMutation, ClaimMutationResult, ExecutionClaimPhase,
-    HandoffObservation,
+    ClaimInspection, ClaimInvocation, ClaimMutation, ClaimMutationOutcome, ClaimMutationResult,
+    ExecutionClaimPhase, HandoffObservation,
 };
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::handoff::{
@@ -16,7 +16,10 @@ use orbit_types::workflow::handoff::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
+use crate::application::job::JobDrainPort;
 use crate::application::landing::dispatch_recorded_authority;
+use crate::application::task;
 
 impl OrbitRuntime {
     pub fn accepted_task_handoff(
@@ -32,7 +35,7 @@ impl OrbitRuntime {
 
     /// Accepting a completion-authorized handoff records its landing-start
     /// request; the owner landing job is dispatched from that request here, so
-    /// no drain or ship sweep has to be running for authorized work to land.
+    /// no drain has to be running for authorized work to land.
     /// A review-only handoff records no request and dispatches nothing.
     ///
     /// An accepted before-PR handoff's certificate is recorded in this
@@ -46,11 +49,26 @@ impl OrbitRuntime {
         handoff: TaskHandoff,
         observation: HandoffObservation,
     ) -> Result<ClaimMutationResult, OrbitError> {
+        self.accept_task_handoff_outcome(context, request_id, handoff, observation)
+            .map(|outcome| outcome.result)
+    }
+
+    /// [`Self::accept_task_handoff`], also reporting whether this call
+    /// committed the acceptance rather than replaying its receipt.
+    pub(crate) fn accept_task_handoff_outcome(
+        &self,
+        context: &ClaimInvocation,
+        request_id: &str,
+        handoff: TaskHandoff,
+        observation: HandoffObservation,
+    ) -> Result<ClaimMutationOutcome, OrbitError> {
         let claim_id = handoff.claim_id.clone();
         // A worker cannot owe a criterion its pilot finding did not type.
         self.check_owed_criteria(&self.get_task(&handoff.task_id)?, &handoff.owed_criteria)?;
+        // A `verify-mock-ui` claim's capture must be the contract's (§6.2).
+        self.check_handoff_visual_capture(&handoff)?;
         let context = context.clone().with_handoff_observation(observation);
-        let result = self.mutate_execution_claim(
+        let outcome = self.mutate_execution_claim_outcome(
             Some(&context),
             request_id,
             &ClaimMutation::AcceptHandoff(handoff),
@@ -77,14 +95,14 @@ impl OrbitRuntime {
             }
         }
         dispatch_recorded_authority(self);
-        Ok(result)
+        Ok(outcome)
     }
 
     /// Record the certificate an accepted before-PR handoff pinned, read
     /// back through the claim journal's digest check.
     fn record_handoff_review_certificate(&self, claim_id: &str) -> Result<(), OrbitError> {
         let Some(certificate) = self
-            .admission_boundary()?
+            .owner_commit_boundary()?
             .accepted_review_certificate(claim_id)?
         else {
             return Ok(());
@@ -129,8 +147,8 @@ impl OrbitRuntime {
         )
     }
 
-    /// The durable outbox, readable without a live drain or ship sweep. Dispatch
-    /// and external merge reconciliation belong to
+    /// The durable outbox, readable without a live drain. Dispatch and external
+    /// merge reconciliation belong to
     /// [`crate::application::landing`].
     pub fn landing_start_requests(&self) -> Result<Vec<LandingStartRequest>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
@@ -280,7 +298,7 @@ impl OrbitRuntime {
                 "refusal": HandoffConsoleRefusal::ReplicaCheckout.code(),
                 "refusal_detail": error.to_string(),
                 "distributed_execution_enabled":
-                    crate::application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED,
+                    DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED,
                 "claims": Vec::<serde_json::Value>::new(),
             }));
         }
@@ -367,7 +385,7 @@ impl OrbitRuntime {
             "refusal": serde_json::Value::Null,
             "refusal_detail": serde_json::Value::Null,
             "distributed_execution_enabled":
-                crate::application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED,
+                DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED,
             "claims": rows,
         }))
     }
@@ -393,7 +411,7 @@ impl OrbitRuntime {
             footprint_widening: accepted.handoff.footprint_widening.clone(),
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
-            owner_completion_authority: self.owner_completion_authority(),
+            owner_completion_authority: self.handoff_completion_authority(),
             // Acceptance observed the review's base and repository; the store
             // rechecks the review evidence the handoff pinned without them.
             review: None,
@@ -454,7 +472,10 @@ impl OrbitRuntime {
     /// death, so this exists precisely because an operator has to decide.
     ///
     /// `expected_phase` is the phase the operator saw. A claim that moved on
-    /// since the page was rendered is refused rather than recovered.
+    /// since the page was rendered is refused rather than recovered, unless
+    /// this request is an identical replay of the recovery that moved it:
+    /// the phase precondition is enforced inside the store transaction,
+    /// after the recorded receipt has had its chance to replay.
     pub fn recover_claim_as_operator(
         &self,
         claim_id: &str,
@@ -485,8 +506,8 @@ impl OrbitRuntime {
                 kind: ClaimRefusalKind::StaleClaim,
                 message: format!("no claim '{claim_id}' is current on this owner (stale_claim)"),
             })?;
-        let observed = phase_label(claim.claim.phase);
-        if observed != expected_phase {
+        let observed = task::execution_claim_phase_label(claim.claim.phase);
+        let Some(expected_phase) = phase_from_label(expected_phase) else {
             return Err(OrbitError::ClaimRefused {
                 kind: ClaimRefusalKind::StaleClaim,
                 message: format!(
@@ -494,7 +515,7 @@ impl OrbitRuntime {
                      action was prepared against (stale_claim)"
                 ),
             });
-        }
+        };
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),
             claim.claim.claim_id.clone(),
@@ -506,11 +527,12 @@ impl OrbitRuntime {
             &ClaimMutation::Recover {
                 status,
                 reason: reason.to_string(),
+                expected_phase,
             },
         )?;
         Ok(serde_json::json!({
             "claim_id": result.claim_id,
-            "phase": phase_label(result.phase),
+            "phase": task::execution_claim_phase_label(result.phase),
             "task_status": result.status.to_string(),
         }))
     }
@@ -585,7 +607,7 @@ fn settled_claim_summary_json(claim: &ClaimInspection) -> serde_json::Value {
         "claim_id": claim.claim.claim_id,
         "task_id": claim.claim.task_id,
         "host": location.machine_name.as_deref().unwrap_or(&location.machine_id),
-        "outcome": phase_label(claim.claim.phase),
+        "outcome": task::execution_claim_phase_label(claim.claim.phase),
         "settled_at": claim.updated_at,
     })
 }
@@ -594,21 +616,23 @@ fn mutation_json(handoff_id: &str, result: &ClaimMutationResult) -> serde_json::
     serde_json::json!({
         "handoff_id": handoff_id,
         "claim_id": result.claim_id,
-        "phase": phase_label(result.phase),
+        "phase": task::execution_claim_phase_label(result.phase),
         "task_status": result.status.to_string(),
     })
 }
 
-fn phase_label(phase: ExecutionClaimPhase) -> &'static str {
-    match phase {
-        ExecutionClaimPhase::Claimed => "claimed",
-        ExecutionClaimPhase::Running => "running",
-        ExecutionClaimPhase::HandedOff => "handed_off",
-        ExecutionClaimPhase::RepairPending => "repair_pending",
-        ExecutionClaimPhase::Failed => "failed",
-        ExecutionClaimPhase::Revoked => "revoked",
-        ExecutionClaimPhase::Landed => "landed",
-    }
+fn phase_from_label(label: &str) -> Option<ExecutionClaimPhase> {
+    [
+        ExecutionClaimPhase::Claimed,
+        ExecutionClaimPhase::Running,
+        ExecutionClaimPhase::HandedOff,
+        ExecutionClaimPhase::RepairPending,
+        ExecutionClaimPhase::Failed,
+        ExecutionClaimPhase::Revoked,
+        ExecutionClaimPhase::Landed,
+    ]
+    .into_iter()
+    .find(|phase| task::execution_claim_phase_label(*phase) == label)
 }
 
 /// What the phase means for an operator, in the words the lifecycle uses.
@@ -662,7 +686,7 @@ fn claim_json(
         "claim_id": claim.claim.claim_id,
         "task_id": claim.claim.task_id,
         "request_id": claim.claim.request_id,
-        "phase": phase_label(claim.claim.phase),
+        "phase": task::execution_claim_phase_label(claim.claim.phase),
         "phase_summary": phase_summary(claim.claim.phase),
         "authorizes_execution": matches!(
             claim.claim.phase,
@@ -865,8 +889,13 @@ fn review_summary(review: &orbit_types::workflow::handoff::HandoffReview) -> Str
             evidence.attempt_id,
             evidence.reviewed_head_sha
         ),
-        None => {
-            "review not required (policy none) — no reviewer ran and no verdict exists".to_string()
-        }
+        None => match &review.selective_receipt {
+            Some(receipt) => format!(
+                "no reviewer ran — {} (selection evidence only, never a passed review)",
+                receipt.summary()
+            ),
+            None => "review not required (policy none) — no reviewer ran and no verdict exists"
+                .to_string(),
+        },
     }
 }

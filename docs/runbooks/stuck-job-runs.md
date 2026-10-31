@@ -2,10 +2,10 @@
 type: runbook
 summary: Diagnose, cancel, resume, or replay pending and running Orbit job runs.
 tags: [operations, jobs, runs, recovery, debugging]
-paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/audit/run.rs"]
+paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-runtime/src/audit/run/trail.rs"]
 related_features: [activity-job, auditability]
-related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179]
-last_validated: 2026-10-20
+related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179, ORB-18166]
+last_validated: 2026-10-29
 ---
 
 # Recover Stuck Job Runs
@@ -69,13 +69,19 @@ The State: line above is `.run.state`, not a top-level `.state`;
 
 `.pipeline_state.drain_last_pass` also records a pull drain's `last_pass_error`, `consecutive_pass_failures`, and sticky `degraded` warning; after three consecutive failed passes it stops admitting and keeps settling until its window closes. A local drain records there an admission pass it deferred because a task-store lock stayed held past its deadline (`last_pass_error_code` `lock_busy`, the Admission pass deferred: line, whose `last_pass_error` names the holder): that pass admits nothing, keeps the previous pass's waiting backlog with its `waiting_recorded_at`, and the next pass retries after the poll interval; ten consecutive deferred passes fail the drain with that error, and a pass that completes resets the count.
 
-`.pipeline_state.drain_pass_counters` (the Admission passes: line) counts what limited every admission pass of a drain's lineage, local or pull, since `since`: `passes`, and `outcomes` with exactly one per pass, the first that applies of `admitted`, `failed`, `held`, `throttle`, `no_candidate`, `ceiling_full`, `gap_fit_held` and `deferred`; `held_by_reason` and `throttle_by_resource` split those two, and `waiting_by_reason` counts the passes in which a reason kept at least one task waiting, so its entries overlap. The counters survive terminalization and resume; a pull pass whose window has closed only settles and is not counted. Its `admission_refusal` (the Requests held: line) says why the last pass requested no claim although the window was open: `circuit_open` (the failure breaker is open), `circuit_half_open` (it waits for this drain's claims to settle before one probe claim), `settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff` (a claimed leaf was released because the owner's store stayed locked: no claim is requested for 5 minutes from when it ended, `.crew_window.owner_busy_backoff` names `until`, and a third such episode in the window suppresses the host with `.crew_window.host_suppressed_by_busy_owner` set, whose remedy is on the owner), or the owner's probe refusal; `before_pr_reviewer_unavailable` names the review's timing (before-PR or before-landing) and, while its crew is only backed off for capacity, the time it lifts, when requests resume by themselves.
+On the owner, `orbit run settlements --json` distinguishes a before-landing review refusal
+awaiting a recorded decision with `review_decision_pending: true`. Its `kind` stays `fail` and
+`failure_class` stays `candidate`, so the claim remains failed and the task blocked until that
+decision, with no release-budget charge. Count these separately from leaf failures. Older
+settlements without the flag read as false; absence is not evidence of a pending decision.
+
+`.pipeline_state.drain_pass_counters` (the Admission passes: line) counts what limited every admission pass of a drain's lineage, local or pull, since `since`: `passes`, and `outcomes` with exactly one per pass, the first that applies of `admitted`, `failed`, `held`, `throttle`, `no_candidate`, `ceiling_full`, `gap_fit_held` and `deferred`; `held_by_reason` and `throttle_by_resource` split those two, and `waiting_by_reason` counts the passes in which a reason kept at least one task waiting, so its entries overlap. The counters survive terminalization and resume; a pull pass whose window has closed only settles and is not counted. Its `admission_refusal` (the Requests held: line) says why the last pass requested no claim although the window was open: `circuit_open` (the failure breaker is open), `circuit_half_open` (it waits for this drain's claims to settle before one probe claim), `settlement_refused`, `delivery_settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff` (a claimed leaf was released because the owner's store stayed locked: no claim is requested for 5 minutes from when it ended, `.crew_window.owner_busy_backoff` names `until`, and a third such episode in the window suppresses the host with `.crew_window.host_suppressed_by_busy_owner` set, whose remedy is on the owner), or the owner's probe refusal; `before_pr_reviewer_unavailable` names the review's timing (before-PR or before-landing) and, while its crew is only backed off for capacity, the time it lifts, when requests resume by themselves.
 
 `.pipeline_state.pull_breaker` (the Breaker: line) is the failure breaker while it is open or half-open: it opens after three claims in a row settle as failures (released claims and Orbit's refusals of an implementer's handoff do not count), with `failures`, their `failure_classes` newest first, `opened_at` and `half_open_at`, when it admits one probe claim; a probe that succeeds closes it and one that fails reopens it with twice the wait. It is absent while closed. A pull drain's Throttled: line is this host's own pressure; the owner's throttle never holds a pull claim.
 
 `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines), each with its `stage`: `implementing`, or `reviewing` once it is in the before-landing review of its open PR, when the drain admits a replacement beside it, up to its concurrency; it is empty for every other run;
 
-`.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: the drain requests no new claim while one is held, retries it with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once;
+`.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: non-delivery refusals hold new claims, while delivery refusals hold only their own settlement; the drain retries each with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once;
 
 `.crew_window` (the Crews: lines) is a pull drain's runnable crews and the crews it excluded for its window, each with `source` (`preflight`, `provider_unavailable`, `leaf_released` or `provider_limit`) and `reason`, and `auth_exclusions` (provider, host, excluded_at, error_class, relogin_hint, credential_source and next_probe_at). Declared auth probes may re-admit these crews in the same window. A `provider_limit` exclusion, and a `provider_unavailable` one for model capacity (a backoff of 10 minutes that doubles with each repeat in the window, up to an hour), carry `until` (the Crews: line reads `(<source> until <time>)`) and lift by themselves then, in the same window; other exclusions, provider authentication among them, last until the next drain. It is null for every other run; a pull drain being cancelled gracefully stays `running` with `.run.drain_cancel` set (the Cancelling: line) until those leaves finish and settle. An Agent: line marked `blocked=stopped-descendant` (`.provider_processes[].blocked_on_stopped_descendant`) is a live agent waiting on a descendant that has stayed stopped past the supervisor's threshold and is still stopped;
 
@@ -162,6 +168,37 @@ run was persisted but its detached worker could not start, Orbit terminalizes it
 (plus transient `retrying` and step-level `skipped`). A `held` run is resumable through its
 specific recovery path; it is not an ordinary failed terminal run.
 
+When `worktree_setup` cannot reach origin before admitting tasks, the run is held as
+`delivery_origin_unavailable` only while every task is still in backlog. A bounded origin
+probe also confirms transport failure before a fetch-lock timeout is held; authentication,
+permission and missing-ref errors remain failures. Once origin answers, admit the same
+backlog task through a new run; do not resume the held run. If a task is already in progress,
+ordinary run failure handling applies (or claim settlement for a claimed leaf) instead of
+leaving it in an unresumable hold.
+
+Completion and owner landing also end `held` on typed parked decisions: a
+reported head changed, a repair is already dispatched, the PR is draft or
+closed, the task refuses promotion, owner landing needs a validated conflict
+repair, or required reviews/checks are unsatisfied without a red check. A
+completion budget expiry is also held as `delivery_completion_budget_expired`:
+the task stays in review, and the PR was unmerged at the last state the run
+observed but may have merged since, through auto-merge (a held run does not
+cancel it) or another actor, so check the forge. Failed checks that need the
+base's own result are held as `delivery_base_checks_pending` until candidate
+recovery can proceed. Their `delivery_*` diagnostic codes are listed in
+[delivery refusals](../CONFIG.md#delivery-refusals-are-held).
+The task keeps the state the refusing action left it in, and gate/auto parents
+pass the held child. Missing or contradictory evidence, permanent forge read
+refusals (credentials, permissions) and red candidate checks still fail. A
+provider read that errors or times out for a permanent or other non-transient
+reason, including a non-transport subprocess timeout, remains a failure;
+eligible transient transport failures may use the read-only recovery below.
+Transport failures that outlast it, or that it cannot take,
+hold as `delivery_forge_observation_unavailable` unless a completion mutation
+started. Resolve the decision before a new delivery attempt; apart from
+`delivery_forge_observation_unavailable`, which `orbit job resume` continues
+once the forge answers, these holds do not add a generic checkpoint-resume path.
+
 `interrupted` means the run was orphaned: its owner process died through a crash, SIGKILL,
 or reboot without finalizing the run. A job that genuinely failed is `failed`;
 `interrupted` means the worker died.
@@ -203,8 +240,9 @@ worker; once it has, the two race to settle the run. A run interrupted with
 `reason=process_not_found` or `token_mismatch` then ends its diagnostic with a
 `worker exit:` clause:
 
-- `its supervisor reaped pid <pid> at <time>: killed by signal 9 (SIGKILL)` (or
-  `exited with code <n>`): the observer recorded the exit before reconciliation won.
+- `its supervisor reaped pid <pid> at <time>: killed by signal 9 (SIGKILL), sender
+  unknown: …` (or `exited with code <n>`): the observer recorded the exit before
+  reconciliation won.
 - `no supervisor observed or recorded its exit status; …`: nobody had recorded an exit.
   The launching process had exited, so the init process or the user manager reaped the
   worker, or reconciliation won the race. What follows is what the worker's scope, recorded
@@ -225,6 +263,32 @@ job run marked interrupted because recorded worker process is no longer alive (r
 ```
 
 The clause adds evidence only; it changes neither which runs are interrupted nor when.
+
+#### Who sent the signal
+
+A signalled exit also names its sender. On Linux a worker catches SIGTERM, SIGINT and
+SIGHUP for its whole life (unless it inherited them ignored or another handler owns
+them). When another process sends one, the worker writes that process's pid, uid and
+command name to its log and then dies from the same signal, so the reaped status and
+the run's classification are unchanged. The observer reads the line before it records
+the exit. The `pipeline.worker.exited` row carries it as `signal_sender` (`pid`, `uid`,
+and `command`, which is `null` if the sender had already exited). The diagnostic says
+`sent by pid <pid> (uid <uid>, command '<name>')`, or `command unreadable`. When the observer settles the run
+itself, that clause follows the status:
+
+```text
+pipeline worker for run '…' exited with status signal: 15 (SIGTERM) (sent by pid 812 (uid 1000, command 'systemd')) after claiming the persisted run …
+```
+
+Look the pid up in `journalctl --user` or `journalctl -b` around the exit time to find
+the unit or tool behind it. A signalled exit with no captured sender reads `sender
+unknown: the worker captured none`; nothing is guessed. That covers SIGKILL, which no
+process can catch, a signal the kernel generated, and any worker on macOS. It also
+covers a signal that arrived before the worker installed its handler, or while a
+supervised step was intercepting signals for its own children. Orbit forwards such a
+signal itself, so the original sender is lost. An authorized `orbit run cancel` still
+records the run `cancelled`; when its SIGTERM ended the worker, the worker's
+`pipeline.worker.exited` row names the cancelling process as the sender.
 
 For a claimed follower leaf, reconciliation samples this evidence immediately before
 finalization records its claim release in the durable outbox. The owner receives that
@@ -363,6 +427,14 @@ page, including the recorded time, next step and a link to the escalation
 comment or run. When no reason or time was recorded, it says so explicitly.
 Long reasons are summarized in the callout; open the evidence for the full text.
 
+The same task page shows a read-only Why stuck card for a blocked task and for
+a task whose latest delivery run is held. The card lists the escalation note,
+the landing-review verdict with its finding count, the latest run's root-cause
+line, whether the pull request is mergeable or conflicting, and each required
+check by name and state. A fact that cannot be read, including a pull request
+with no open request or a forge that cannot answer, says unavailable instead of
+leaving the row out. The card adds no action.
+
 ## Cancel a conclusively stuck run
 
 After verifying that the owner is gone or that the run should no longer continue:
@@ -409,6 +481,8 @@ Cancels a job run that has not reached a terminal state: signals the owner proce
 A running follower pull drain (`workspace_pull_pipeline`) is cancelled gracefully: it stops requesting work at once, returns the claims it had not launched to the owner's backlog, and keeps running — reported as `cancelling`, with the leaves it is waiting for — until every launched leaf has finished and its outcome reached the owner; then it ends `cancelled`. The command returns immediately; `orbit run show <run_id>` follows the wait. `--force` does not wait: it stops the drain and each of its running leaves, and returns every claim to the owner's backlog with a comment naming the drain and the reason. It touches only the leaves that drain carries. A leaf whose stop cannot be confirmed keeps its claim on the owner, is listed, and makes the command exit 1. A queued drain, or one whose worker is gone, is cancelled at once. Cancelling a drain that already ended delivers whatever it left behind, and `--force` also stops leaves it left running.
 
 `--force` on a local auto drain (`workspace_auto_pipeline`) also cancels the task runs it started, which a plain cancel leaves running. A child whose stop cannot be confirmed is listed with its reason and makes the command exit 1. For any other run it changes nothing.
+
+The dashboard's queued-window **Cancel** is queued-only (`POST /api/runs/<id>/cancel` with `queued_only: true`): it cancels the run only while it is still `pending`, deciding in the same store transaction that starts runs, and refuses a run that started first with 409 without recording, signalling or stopping anything. Cancel a running window from its run view or with `orbit run cancel`.
 
 Cancelling a task leaf returns its task to the backlog with the reason and keeps the candidate available to resume. `--block` keeps the task blocked for the existing manual recovery flow, including for the leaves and children a `--force` or cascading cancel stops; a pull drain's released claims always return to the owner's backlog.
 
@@ -474,9 +548,10 @@ and the calling agent continues without the answer. Never resume or resubmit one
 
 The v2 executor checkpoints every completed top-level step into
 `job_run_states.pipeline_state_json` (one row per run, beside `job_runs`) in
-`~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`, and a `held` run whose push the
-forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)). Any
-other state errors with `resume requires an interrupted, failed, or timed-out run`.
+`~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`, a `held` run whose push the
+forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)), and
+a `held` run whose completion could not read the forge
+(`delivery_forge_observation_unavailable`). Any other state errors with `resume requires an interrupted, failed, or timed-out run`.
 
 ```sh
 orbit job resume <run_id>
@@ -493,6 +568,12 @@ child result and fails again. `orbit run show <coordinator>` prints a `Resume:` 
 the failed leaf whenever one can be resumed (`orbit job resume <leaf>`); the leaf carries
 the worktree and checkpoints, and on success it hands the task to `review` like the
 original run would have.
+
+A resume reuses the worktree its checkpoints recorded. When that worktree no longer
+exists, the resume is refused before the task or the run lineage changes, since the steps
+it would rerun cannot start there. A blocked task whose run published a pull request is
+requeued instead (`orbit task requeue`); its next run sets up a fresh worktree on the
+published branch.
 
 A **claimed** leaf cannot use this path, whether its claim is still live or
 has settled. Resume would mint a different run that cannot inherit the
@@ -610,13 +691,27 @@ candidate, or restart hosted CI. Final recovery must be enabled for the run.
 An eligible lookup is one of completion's authenticated reads made before any
 mutation: the PR status, required-check and merge-policy reads, and the
 base-refresh and missing-prerequisite evidence reads, such as a commit's combined
-status. Only a transport failure qualifies: an HTTP 5xx answer, a GraphQL
-timeout, or a TLS handshake timeout, including a REST call that never reached
-GraphQL. Invalid or truncated evidence, a changed head, base, policy or
-identity, a credential, permission, administrative-rule or other permanent
-refusal, and an exhausted completion deadline keep their ordinary failure. A
-failed read never counts as passing required checks; the resumed completion
-reads them again.
+status. Only a transient failure of the kind `classify` in
+`crates/orbit-engine/src/executor/automation/vcs/operations/process.rs`
+assigns qualifies: an HTTP 499 or HTTP 5xx answer, a GraphQL timeout, a TLS
+handshake timeout, a connection the peer reset or one `gh` could not open,
+including a REST call that never reached GraphQL, GitHub's `we couldn't
+respond to your request in time` response, or a GraphQL response containing
+`something went wrong while executing your query`. Invalid or truncated
+evidence, a changed head, base, policy or identity, a credential, permission,
+rate-limit, administrative-rule or other permanent refusal, or a permanent HTTP
+4xx diagnostic keep their ordinary failure. If the completion budget expires
+between reads or while waiting, completion instead returns the typed
+`delivery_completion_budget_expired` hold: the task stays in review, and this
+read-only final-recovery path is not dispatched. The PR state the hold reports is
+the last one completion read, so the PR may have merged since, through auto-merge
+(a hold does not cancel it) or another actor; check the forge. A provider
+read that itself errors or exhausts its subprocess timeout is not reclassified
+as a budget hold, even when the completion deadline has also passed: unless a
+completion mutation started, a qualifying failure holds as
+`delivery_forge_observation_unavailable` (below), and any other failure remains
+a failure. A failed read never counts as passing required checks; the resumed
+completion reads them again.
 
 The host first authenticates the successful commit, preparation, synchronization,
 push and PR chain, exact clean checkout on the published head and branch,
@@ -655,8 +750,16 @@ completion, which merges only the published head. Unknown mutation replies
 retain the existing reconciliation path; they are not classified as read-only
 failures. The original completion deadline and final-recovery charge survive
 retries and checkpoint resumes, so a run retries once. A second failed
-observation runs the failure handoff, which keeps the PR and the task in review
-and records the failure on the task.
+observation ends the run `held` as `delivery_forge_observation_unavailable`
+without the failure handoff: the task and PR stay in review, nothing on the
+forge changed, and `orbit job resume <run>` reads the forge again and continues
+completion from its checkpoints once it answers. The same hold ends a run whose
+job has no final recovery, a read after the completion budget expired, and a
+read that repair, reservation or source-repair provenance kept from the
+authenticated retry. A transport failure after a merge, auto-merge or rebase
+request, in that run or recorded in the task's history, and a credential or
+permission refusal still fail. `gh`'s `error connecting to api.github.com`
+counts as a transport failure.
 
 Changed task meaning, policy, candidate, review repairs, publication, ownership,
 lease or a dirty checkout refuses reuse, blocks the task with the refusal as
@@ -679,14 +782,17 @@ orbit task requeue <task-id> --reason '<why this candidate can continue>'
 
 The MCP equivalent is `orbit.task.requeue` with `id`, `reason` and optional
 `discard_candidate`; it needs operator authority and is unavailable inside a
-managed run. Every return from `blocked` to `backlog` is authenticated the
-same way: a plain `orbit task update --status backlog` (and the same move
-through MCP, HTTP or the dashboard) applies the requeue publication
-pre-flight in the shared core operation before writing. A publication a
+managed run. An operator or agent return from `blocked` or `review` to
+`backlog` is authenticated the same way: a plain
+`orbit task update --status backlog` (and the same move through MCP, HTTP or
+the dashboard) applies the requeue publication preflight in the shared core
+operation before writing. A publication a
 requeue would refuse (a specification changed after publication, or a pull
 request or preserved candidate no handoff receipt binds) refuses the plain
 update with the same message and discard/explicit-source-repair guidance,
-and the task stays `blocked` with nothing written. A publication a requeue
+and the task keeps its current status with nothing written to the task,
+history or publication. Starting a fresh shipment does not bypass this
+authentication. A publication a requeue
 would accept is returned to `backlog` with the same `requeued` decision and
 publication-preservation record a requeue writes, so its next run resumes
 it; with no publication on record the task simply returns to `backlog`. A
@@ -741,8 +847,9 @@ publication (an interrupted or timed-out run, a newer execution, a foreign
 source) offers the same discard exit. Also refused, with
 the same discard exit:
 
-- a run that published through its own push and `pr_open` steps with no
-  handoff receipt; use explicit source repair (below) or discard;
+- a run that published through its own push and `pr_open` steps whose
+  pull request is not ready to land (see
+  [An escalated run that published its own pull request](#an-escalated-run-that-published-its-own-pull-request));
 - a task last delivered by an owner pull-request run, with no handoff receipt,
   that still has a pull request or preserved candidate on record, which its
   next run would refuse to start from. A claimed delivery keeps its own
@@ -754,6 +861,140 @@ the same discard exit:
   meaning, required tools, crew or complexity). That record no longer
   describes the task, and a second one would make the next run refuse, so use
   discard.
+
+### An escalated run that published its own pull request
+
+A run can push and open its pull request through its own `push` and `pr_open`
+steps and then fail completion, for example on a required check that later
+passes on a rerun. Its failure handoff keeps that pull request open and
+unmerged (`review_completion_failure` or `landing_review_failure`), and when
+final recovery escalates the task stays `blocked` with no `[BLOCKED]` pull
+request. Requeue can carry a green candidate; explicit source repair can
+authorize repairs to that same publication under fresh operator policy.
+
+Once every required check has passed on the recorded head, requeue the task:
+
+```bash
+orbit task requeue <task-id> --reason '<why the published head can land>'
+```
+
+A plain `orbit task update <task-id> --status backlog` from `blocked` or
+`review` applies the same check. A review task with failed, pending or stale
+required checks stays in review; returning it to backlog cannot authorize
+repair or renew an expired completion deadline.
+The requeue resumes the pull request only when all of these hold, and
+otherwise refuses with nothing written:
+
+- the failure handoff's receipt names this run and the task, and its
+  recorded task specification still matches the task;
+- the stopped run is this machine's own single-task delivery, conclusively
+  stopped, still the task's newest execution, and its candidate was not
+  discarded;
+- the run's checkpoints authenticate the branch, and the pull request is open
+  and unmerged at the head they record, with that head still on the local
+  branch and the remote;
+- the forge reports every required check on exactly that head as passed: none
+  failed, none unfinished, and at least one reported. Checks on another head
+  describe a different candidate and are refused.
+
+It writes the same `requeued` decision and publication-preservation record a
+final-recovery requeue writes, and the answer's `resumes.source` is
+`pipeline`. The next run sets up a fresh worktree, adopts the branch and pull
+request without re-implementing (`resumed_carried`), then validates, reviews,
+pushes and lands it afresh. The stopped run's worktree does not have to exist.
+
+When checks are still running, requeue once they pass. When the candidate
+needs source changes, use the explicit repair protocol below. A pull
+request that already merged is settled with `orbit task settle-merged
+<task-id>`; a closed one, a moved head or a changed specification leaves
+`--discard-candidate` as the exit. A run whose receipt was written before the
+receipt named its run and specification is refused the same way.
+
+Do not resume such a run with `orbit job resume`. Its checkpoints reuse the
+stopped run's worktree, and a resume whose recorded worktree no longer exists
+is refused before the task or the lineage changes.
+
+### Repair a kept inline publication after completion expired
+
+Use `orbit.workflow.run.resume` with `source_repair` on the owning host when
+the run published through its own host steps but its candidate needs repair.
+This works with red hosted checks and an expired completion budget. It grants
+one new repair attempt on the original branch and PR; it neither renews the
+old completion deadline nor resumes the old completion authority.
+
+Select the **original publishing run** explicitly, even when the task now names
+a later failed attempt with no publication. Use `orbit.workflow.run.list` and
+the original run's checkpoints and failure receipt to identify it; do not pick
+the newest run merely because it is the current binding. Stop all delivery
+attempts first. Inspect with:
+
+```json
+{
+  "id": "<original-publishing-run>",
+  "source_repair": {"action": "inspect", "task_id": "<task>"}
+}
+```
+
+Inspection requires a conclusively stopped owner-local single-task publisher
+with settled final recovery and a kept-publication receipt naming that run,
+task and unchanged task specification. The receipt is scope and preservation
+evidence, not a publication or validation certificate. Original successful host
+commit, preparation, synchronization, review corrections, push and PR
+checkpoints must authenticate the exact candidate. The retained branch,
+origin repository, remote lease and current open, unmerged PR must agree on
+branch and head, with automatic merge disabled. Missing, contradictory or
+ambiguous evidence refuses before any source effect; no replacement PR is
+created. A dirty retained checkout also needs explicit reconciliation.
+
+The returned `binding.superseded` names the task binding being acknowledged
+and digests the complete stopped delivery lineage within the 64-run inspection
+window. Every intervening replacement must meet the cancelled/empty failed
+successor contract below. Completion-only checkpoint retries must trace back
+to the original publisher and preserve its exact publication prefix and final
+and rebase recovery checkpoints. A supported completion-repair grant may have
+cleared and renewed the deadline before its reader failed. Inspection matches
+that grant's task, source, PR, head, blocker and drain against its unique host
+start record; copied input alone grants nothing. Later plain retries must
+preserve the renewed deadline and marker. An inherited failure receipt must
+match its actual origin's complete receipt, belong to the original publication,
+and remain unchanged through every intervening parent. No old receipt or run
+is rewritten to make this proof fit.
+
+The grant records permission, not proof that a repair ran. Admission still
+requires bounded host step-start audits, unchanged non-null outputs and
+publication checkpoints, no repair-agent admission or mutation provenance, and
+no source-work step or dirty or divergent shared checkout. Missing or ambiguous
+grant, receipt-origin or parent history refuses. A held retry is acceptable only after its worker
+has conclusively stopped. Active, foreign, claimed, missing, changed or
+candidate-producing members refuse; none is silently skipped to find an older
+usable publication. A change to a member invalidates the inspected binding.
+
+Review `binding`, `review` and `policy_digest`, then submit the exact objects
+using the existing [bounded rework payload](#explicit-rework-of-a-successful-unmerged-publication)
+with this original run's `id`, a fresh `request_key`, a concrete `diagnosis`
+and `unmet_acceptance` evidence naming the failed check and published head.
+Keep the task specification unchanged; changed scope requires separate
+reconciliation. The operator testimony authorizes the repair; inspection does
+not certify the diagnosis or waive hosted checks.
+
+The append-only reservation captures current validation/review policy and
+operator provenance before admission. The new run has `completion: review`
+and `auto_fix: false`, inherits no successful checkpoints, and must implement,
+validate and undergo configured review afresh. Publication remains lease
+checked and reuses the original PR. The lineage and current policy are checked
+again before source effects. Replay the identical key and payload after an
+unknown reply; a divergent payload or another key on that reserved head refuses.
+Original failure evidence, receipts, deadlines and retained candidates stay
+intact. This repair grants no completion, merge or automatic-fix authority.
+
+The operational case remains ORB-19689 / PR #6851; ORB-19771 owns its
+post-deployment inspection, submission and recovery. After deploying this change
+to its owner, an operator still needs to verify the stopped lineage, inspect
+the original publishing run ending `0437-c18`, review the exact current PR head
+and submit the repair with fresh policy and the red help-entrypoint evidence.
+Then observe the same-PR repair's native validation, configured review and
+hosted checks; make any subsequent landing decision separately. The offline
+fixtures require no live owner credentials and do not perform that recovery.
 
 ### A task blocked on transient infrastructure
 
@@ -878,6 +1119,76 @@ The original successful execution, performance observations, receipts and
 retained checkout stay intact. No replacement PR, synthetic failure or
 cancellation, checkpoint edits, or release/install action is involved.
 
+## A source-repair reservation stranded before run admission
+
+Before submitting source repair, author the task's real execution plan through
+normal task updates. A blocked or review task cannot enter `in-progress` with
+an empty plan or the unauthored-plan placeholder. Source repair now preflights
+these lifecycle prerequisites before reserving an attempt, charging the repair
+budget, changing task state or submitting a worker. Lifecycle guards remain in
+force.
+
+An older binary may already have persisted `source_repair_reserved` before
+refusing that transition. An ordinary submit cannot reuse its old consent after
+the plan changes, and a new key cannot spend another attempt on the same head.
+On the owning host, an authenticated operator can reconcile this **unbound**
+reservation explicitly:
+
+1. Preserve the original request, reservation and receipts. Correct only the
+   missing or placeholder plan through a legitimate task update. Leave the
+   original publishing run, stopped successors, PR and branch untouched.
+2. Inspect the original publishing run again with `source_repair.action: inspect`.
+   Review its fresh `binding`, `review`, `policy_digest`, immutable `reservations`
+   and `reservation_digests` (a map from original request key to payload digest).
+3. Submit `action: reconcile` through the same operator `orbit.workflow.run.resume`
+   route. Supply the **original** request key, its `reservation_digest`, the fresh
+   binding, and the original diagnosis, unmet-acceptance evidence and policy
+   digest. This is a new authorization of the corrected plan, not a retry of old
+   consent. For successful or kept inline publications, both rework fields remain
+   mandatory.
+
+```json
+{
+  "id": "<original-publishing-run>",
+  "source_repair": {
+    "action": "reconcile",
+    "task_id": "<task>",
+    "request_key": "<original-key>",
+    "reservation_digest": "<reservation_digests[original-key] from inspect>",
+    "binding": "<fresh binding object from inspect>",
+    "policy_digest": "<unchanged current digest from inspect>",
+    "diagnosis": "<original diagnosis>",
+    "unmet_acceptance": "<original unmet-acceptance evidence>"
+  }
+}
+```
+
+Replace the binding placeholder with the returned object. The host accepts
+only correction of an empty or placeholder plan: every other meaning field,
+original source/head/PR/lease, complete stopped lineage, policy, authenticated
+actor and provenance must still match. A reservation without its original full
+policy digest cannot establish unchanged policy and refuses reconciliation.
+A valid earlier plan cannot be replaced
+through this operation. Changed or uncertain evidence refuses without starting
+work or altering the reservation.
+
+The append-only `source_repair_reconciled` event retains both the immutable
+original reservation and the fresh authorization. It keeps the original key,
+payload, history and budget charge; original completion deadlines and receipts
+are untouched. The run uses the fresh binding and freshly captured review
+admission, stays `completion: review` with `auto_fix: false`, and owes current
+native validation, review and hosted checks. It reuses the same PR.
+
+After a lost reply, replay the **identical reconciliation payload**, even if
+inspection is no longer available because the admitted worker rebound the task.
+Concurrent requests and interrupted worker-start replies resolve the same run;
+they never launch another worker or add another reservation or charge. Missing,
+contradictory, ambiguous or truncated run-link evidence refuses safely. If the
+original reservation already admitted a run, replay its original submit payload
+instead; reconciliation does not restart a stopped attempt. No raw store or
+receipt edits, plan rollback, candidate discard, replacement PR, merge or deploy
+is part of this recovery.
+
 ## A cancelled published source repair
 
 A transient completion-observation failure can requeue an owner-local task
@@ -971,7 +1282,10 @@ alone provides no validation. Inspection checks the original PR, branch and
 remote lease; submission requires fresh validation and configured review and
 grants no merge approval. Source receipts stay unchanged. Completion-preservation
 receipts are a distinct contract and cannot substitute for blocked-publication
-evidence; a direct final-recovery requeue suppresses the terminal hook.
+evidence; a direct final-recovery requeue suppresses the terminal hook. A kept
+inline publication uses green requeue or fresh explicit repair, as
+[An escalated run that published its own pull request](#an-escalated-run-that-published-its-own-pull-request)
+describes.
 
 A generic resume whose own final-recovery repair was refused at the commit
 boundary, and whose terminal hook then pushed that repair and opened or kept
@@ -1010,8 +1324,11 @@ refuses. Settling performs reads only: it cannot push again or create a PR.
 The task history's `source_repair_publication_observed` entries retain waiting
 and converged observations with cumulative `settling` counters, reserved delay,
 independent `remote_branch` evidence and the authenticated push hash. Delay is
-recorded before waiting, so interruption cannot replenish the budget. Original
-pipeline receipts are unchanged. A later exact candidate read can reconcile an
+recorded before waiting, so interruption cannot replenish the budget. Automation
+replays the typed `source_repair_publication` decision on each history entry;
+only older entries without a decision replay the diagnostic JSON note. Editing
+the note on a typed entry does not change its reservation. Original pipeline
+receipts are unchanged. A later exact candidate read can reconcile an
 exhausted wait without repeating the push.
 
 If publication refuses the PR identity after pushing, inspect the task history's
@@ -1202,6 +1519,103 @@ window closes first, the run holds and the leaf releases its claim to the owner 
 offering the crew or the host, and the task's next claim on that follower continues
 the kept candidate ([distributed drain](distributed-drain.md)).
 
+## A delivery held at the landing review gate
+
+During delivery, the pipeline runs the before-landing review gate at step
+`landing_review_gate_settle`. When final recovery escalates from this step
+(recording the task history event `final_recovery_escalated`), the delivery run
+ends `held` or the task becomes `blocked` with an open pull request.
+
+Unlike a transient forge failure (see [A delivery held for the forge](#a-delivery-held-for-the-forge)),
+a run held at the landing review gate requires an operator decision.
+
+### Read the situation
+
+Before deciding how to recover the task, gather three pieces of evidence:
+
+1. **Review verdict and findings:** Inspect the captured logs for the review gate step:
+   ```bash
+   orbit run logs <run-id> -s landing_review_gate_settle
+   ```
+   Check whether the reviewer issued `verdict complete`, `verdict incomplete`,
+   or `verdict reject`, and note the finding count (such as 0 findings versus
+   concrete defect findings).
+2. **Escalation note in task history:** Inspect the task's history entries:
+   ```bash
+   orbit task show <task-id>
+   ```
+   Look for the `final_recovery_escalated` event under `History:` and read its note,
+   which details why final recovery escalated rather than settling or retrying
+   automatically.
+3. **Pull request required checks:** Inspect the open pull request on the forge (such
+   as GitHub CI check status). Confirm whether all required checks are passing on
+   the candidate head.
+
+### The decision rule
+
+The evidence determines which recovery path to take:
+
+- **0 findings, every required check green, and the failure unrelated to the diff:**
+  The reviewer returned `verdict incomplete` with 0 findings because of an
+  environmental or baseline condition rather than a defect in the candidate diff—such
+  as an empty `workflow.required_validation_commands`, a host-resident baseline
+  failure on a specific runner (see [A task held for a red base](#a-task-held-for-a-red-base)),
+  or `validation_contradicted` from a reproduction check using a reverted fix. If every
+  required check on the pull request is green, merge the pull request directly on the
+  forge, then settle the task to `done`:
+  ```bash
+  orbit task settle-merged <task-id>
+  ```
+  See [A delivery pull request merged outside Orbit](#a-delivery-pull-request-merged-outside-orbit)
+  for settlement rules.
+- **A real finding:**
+  The reviewer returned `verdict reject` with a genuine defect (such as an unbounded
+  scan or a summary-only finding where the implementation omitted required deliverables).
+  Steer the agent by appending an operator comment explaining the correction, then requeue:
+  ```bash
+  orbit task update <task-id> --comment '<guidance on fixing the finding>'
+  orbit task requeue <task-id> --reason '<why the task is requeued>'
+  ```
+  See [Requeue a failure-handoff task onto its published candidate](#requeue-a-failure-handoff-task-onto-its-published-candidate)
+  and [An escalated run that published its own pull request](#an-escalated-run-that-published-its-own-pull-request).
+- **Unreachable criteria:**
+  The escalation arose from acceptance criteria the leaf cannot measure or reach inside
+  an isolated execution worktree (such as live-drain throughput numbers or deployed-service
+  metrics). Re-scope the task's acceptance criteria to what the leaf's own build can
+  demonstrate, keep the existing candidate as an attached patch artifact, and update the
+  criteria:
+  ```bash
+  orbit task artifact put <task-id> .orbit/tmp/<patch-file> --path <artifact-name>
+  orbit task update <task-id> --acceptance-criteria '<scoped-criterion-1>' --acceptance-criteria '<scoped-criterion-2>'
+  ```
+  (or attach via `orbit task update <task-id> --artifact <path=content>`). Then requeue or
+  re-run the task under the reachable criteria.
+
+### Refusals and workarounds
+
+An operator attempting to recover a held or blocked delivery may meet two common refusals:
+
+- **A held run refuses source-repair requeue:**
+  Source-repair requeue requires a conclusively stopped, failed run. When the run is `held`,
+  `orbit task requeue` without discard refuses because the source is not in `failed` or
+  `cancelled` state (`published source is live, discarded, changed, or lacks an applied requeue`).
+  **Workaround:** Save the candidate patch first as a task artifact using `orbit task artifact put`
+  (or `orbit task update --artifact`), then discard the candidate to implement fresh:
+  ```bash
+  orbit task requeue <task-id> --discard-candidate --reason '<reason for fresh run>'
+  ```
+  (or `orbit task update <task-id> --status backlog --discard-candidate`).
+- **A task in `review` cannot be requeued:**
+  `orbit task requeue` accepts only tasks currently in `blocked` status (`only a blocked task can be requeued; <task-id> is review`).
+  If the held delivery left the task in `review`, requeue is refused.
+  **Workaround:** Move the task directly to `backlog` with `--discard-candidate`:
+  ```bash
+  orbit task update <task-id> --status backlog --discard-candidate
+  ```
+  This discards the preserved candidate, closes any unmerged Orbit pull request, and returns
+  the task to `backlog` for fresh execution. If no live run watches the pull request, see
+  also [A conflicting or red pull request no run is watching](#a-conflicting-or-red-pull-request-no-run-is-watching).
+
 ## A delivery leaf that died after opening its pull request
 
 An owner-local delivery leaf (`task_pr_pipeline`) watches the pull request it
@@ -1305,9 +1719,15 @@ bounds the pass; a task whose newest run finished is left alone:
 - the pull request's auto-fix ledger would admit a repair of that head and
   blocker, and no earlier hand-back covered them.
 
-The hand-back is a checkpoint resume of the run, rewound to `pr_complete`, with
-`auto_fix` and deferred footprint locks granted and the repair recorded under
-`out_of_run_auto_fix` in its input. The task returns to `review`. The watcher
+The hand-back is a checkpoint resume of the run, rewound to the first
+`pr_complete` round after the last publication (`git_push`) the run checkpointed, with `auto_fix` and deferred footprint locks
+granted and the repair recorded under `out_of_run_auto_fix` in its input. When a
+reviewed head conflicted and a re-review republished it (`re_push`, `re_push_2`),
+the rerun round is the one that completes that publication, so it pins the head
+the pull request carries. The last round (`complete_reviewed_pr_2`) has no
+re-review left, so a reviewed head that conflicts there ends `review_gate_stale`,
+and a red one ends `auto_fix_stopped`; requeue the task for a fresh delivery. The
+task returns to `review`. The watcher
 admits the repair against the pull request's attempt ledger, and the
 `workflow.purpose_crews.auto_fix` crew takes the task's footprint locks before it
 edits, then pushes to the same branch. Completion then merges only when the run
@@ -1339,6 +1759,10 @@ For the full persisted pass, including every skip and any `pass_error`, run
 - `authority`: the run was started with `--complete` and the drain was not;
 - `not_orbit_pull_request`: a branch, body or author that is not Orbit's;
 - `pull_request_not_recorded`, `pull_request_not_open` or `no_pull_request`;
+- `failure_handoff`: the run published its pull request through its failure
+  handoff instead of `pr_open`, so the drain cannot resume it. When the
+  published candidate is sound, run
+  `orbit task requeue <task-id> --reason '<why this candidate can continue>'`;
 - `no_blocker` and `checked_recently`: nothing to repair;
 - `mergeability_unknown`: GitHub is still calculating this pull request's
   mergeability; other candidates in the pass are still checked;
@@ -1351,8 +1775,52 @@ For the full persisted pass, including every skip and any `pass_error`, run
 
 A write-free pass reports `hold_reason: "write_free"` and does not scan or
 persist candidates. A stopped drain or a host shutdown hold also starts no
-scan. A drain without `--auto-fix` never repairs out of run. Repair such a pull request
-yourself, or requeue the task.
+scan. A drain without `--auto-fix` never repairs out of run. To repair one
+task's pull request without starting a drain, use **Fix PR** in the dashboard
+(below). Otherwise repair the pull request yourself, or requeue the task.
+
+### Fix PR from the dashboard
+
+The task details panel shows **Fix PR** beside approve, reject and archive on a
+`review` task that records a pull request. It starts the hand-back described
+above for that one task, through the same checks, ledger, budget, footprint
+locks and `pr_auto_fix_out_of_run` record, with no drain. The record and the
+resumed run's `out_of_run_auto_fix` input name no `drain_run_id`. When the panel
+opens, it reads the pull request's state from GitHub
+(`GET /api/tasks/<task>/auto-fix`), skipping the drain's five-minute recheck.
+That reading is cached for 60 seconds; a dashboard refresh after the cache
+interval reads it again, so a pull request whose checks or mergeability
+changed is re-evaluated without reopening the task.
+The button is enabled only when the pull request conflicts with its base or a
+required check failed on its head. Otherwise it is disabled, and its title names
+the reason: no blocker, mergeability still being calculated, budget spent, a
+repair already running, and so on.
+
+The action needs an operator session, governed as `auto_drain.auto_fix`. It
+grants repair only. The resumed leaf keeps its own `completion`, so a pull
+request whose leaf lacked `--complete` stays in `review` after the repair. A
+leaf started with `--complete` is resumed only when the session also holds
+`auto_drain.complete`; without it the reason is `authority`.
+
+A refused start (`POST /api/tasks/<task>/auto-fix`) answers `409` with
+`code: "task_auto_fix_<reason>"`, `reason` and `error`, and starts nothing. The
+reasons are those listed above, except `no_capacity` and `checked_recently`,
+which a single-task start never reports. These are added:
+
+- `no_delivery_leaf`: the task has no `task_pr_pipeline` run of its own;
+- `leaf_not_stopped`: the newest delivery finished or was cancelled;
+- `live_run`: also when the newest delivery, or an earlier repair, is still
+  running;
+- `task_status` or `no_pull_request`: the task is not delivered, or records no
+  pull request;
+- `write_free`: the dashboard is read-only;
+- `replica_checkout`: this checkout is a replica, so repair on its owner;
+- `claimed_execution`: also when the task is bound to another machine's run (a
+  follower);
+- `resource_throttled`: host resource pressure holds new runs.
+
+A session without the operator capability gets `403` `authorization_denied`
+naming `auto_drain.auto_fix`. An unknown task gets `404`.
 
 ## A delivery pull request merged outside Orbit
 
@@ -1398,7 +1866,8 @@ as its own live claim or no merge into its target branch.
 ### After revoking a claimed handoff
 
 Revoking a claimed handoff's completion authority (the dashboard's **Revoke
-authority**) cannot be undone, and nothing lands that handoff afterwards. Its
+authority**, or `orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --reason <reason> --request <key>`)
+cannot be undone, and nothing lands that handoff afterwards. Its
 claim stays `handed_off` and keeps the task in `review`, so **Approve** and a plain
 status write are both refused. The owner console's authority line names the way
 out:
@@ -1411,13 +1880,40 @@ out:
   no completion authority, records no merge intent or landing attempt, and leaves
   the revoked request revoked.
 - Otherwise, recover the claim to `blocked` or `backlog` from the dashboard's
-  claim panel.
+  claim panel, or with `orbit task recover-claim <claim-id> --phase <phase> --status blocked --reason <reason> --request <key>`
+  (or `--status backlog`).
 
 Settlement is refused, with the reason, while an owner landing job still carries
 the handoff (its attempt is `dispatched`) or a merge intent is unresolved. It is
 also refused when the handoff's pull request is unmerged or merged into another
 branch, or when only some other pull request merged. A handoff whose authority was
 never revoked is refused too: approval or the owner's landing job completes it.
+
+### After recovering a refused follower handoff
+
+A refused follower handoff may have recorded no delivery PR on the owner. If an
+operator then rebased and merged that PR, first recover the stopped claim to
+`blocked` with `orbit task recover-claim`. In the owning checkout, settle it with:
+
+```bash
+orbit task settle-merged <task-id> --recovered-claim <claim-id> --pull-request <number> --published-head <full-original-commit>
+```
+
+Use the follower's original published candidate for `--published-head`, before
+the operator's rebase. This is an explicit operator attestation when the refused
+handoff left no owner-held candidate. The owner reads the PR's merged head and
+merge commit from the forge, verifies its delivery branch, task identity and
+delivery author, and requires a merge into the original admission's landing
+branch. A missing or expired receipt, a later claim, a live run, a dispatched
+landing attempt, unresolved merge intent or an owed post-deploy criterion refuses
+settlement. Existing preserved or accepted candidate evidence must agree with
+the supplied PR, branch and original head.
+
+History records the merge commit and both heads as `operator-rescued`, labeling
+the original head `operator-reported`. The task reaches `done` without `--force`;
+the recovered claim stays `revoked`. The follower's next settlement delivery sees
+that ended claim before observing the obsolete PR head, closes its local pending
+record with one warning, and does not retry it on later passes.
 
 ## Replay from the beginning
 

@@ -11,13 +11,15 @@ mod dispatch;
 mod plugin;
 mod registry;
 
+pub use orbit_tools::tool_suggestions;
+
 #[cfg(unix)]
 pub(crate) use dispatch::RunDispatch;
 pub use dispatch::{
     AuditContext, DryRunResult, ToolDispatchOutcome, ToolEntryPoint, audit_role_label,
     audit_role_label_for_entry_point, execute_global_in_process_tool_dispatch,
     mark_tool_audit_recorded, refuse_plugin_child_cli_command, take_tool_audit_recorded,
-    trusted_mcp_audit_context,
+    tool_suggestion_context, trusted_mcp_audit_context,
 };
 #[cfg(unix)]
 pub use dispatch::{ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable};
@@ -27,8 +29,9 @@ pub use plugin::{
     PluginEnableResult, PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary,
     PluginPermissionChange, PluginPermissionSummary, PluginRemoveOptions, PluginSecretStatus,
     PluginSecretValue, PluginSeedAction, PluginSeedOutcome, PluginSkillLink, PluginSummary,
-    PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport, PluginToolSummary,
-    PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport, execute_global_plugin_tool,
-    host_plugin_cli_groups, host_plugin_mcp_definitions, host_plugin_rows, migrate_plugin_sidecars,
+    PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport,
+    PluginTestValidationGate, PluginToolSummary, PluginUpgradeOptions, PluginUpgradeResult,
+    PluginValidationReport, execute_global_plugin_tool, host_plugin_cli_groups,
+    host_plugin_mcp_definitions, host_plugin_rows, migrate_plugin_sidecars,
 };
 pub use registry::{DoctorResult, DoctorStatus, ToolInfo};

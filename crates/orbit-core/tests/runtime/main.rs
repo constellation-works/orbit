@@ -12,8 +12,12 @@
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+#[path = "../support/admission.rs"]
+mod admission_test_support;
 #[path = "../support/git.rs"]
 mod git_test_support;
+#[path = "../support/task_params.rs"]
+mod task_params_test_support;
 
 orbit_common::isolate_test_process!();
 
@@ -25,7 +29,7 @@ macro_rules! scenario_table {
         #[test]
         fn $table() {
             crate::scenarios::run(module_path!(), stringify!($table), &[
-                $((stringify!($row), $row as fn())),+
+                $((stringify!($row), $row as fn() -> _)),+
             ]);
         }
     };
@@ -34,26 +38,40 @@ pub(crate) use scenario_table;
 
 mod actor_identity;
 mod admission_forecast;
+mod admitted_crew_write_back;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod agent_sandbox_mask;
 mod artifact_tools;
 mod audit_commit_report;
+mod auto_task_job_steps;
 mod auto_task_update;
+mod backlog_resource_fit;
+mod backlog_review_modes;
 mod baseline_hold_refresh;
 mod baseline_hold_tick;
 mod baseline_red_repair;
 mod blocked_task_triage;
+mod bundle_validation;
 mod cascade_outcomes;
 mod child_wait_audit;
 #[cfg(target_os = "macos")]
 mod claude_worker_credential;
 mod config_settings;
 mod crew_accounts;
+mod crew_ladder_trials;
+mod decision_channel;
+mod decision_requested;
+mod default_catalog;
+#[cfg(unix)]
+mod delivery_holds;
 mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;
 mod drain_cancel;
 mod drain_extend;
+mod experiment_lifecycle;
+mod experiment_readout;
+mod explore_brief;
 mod final_recovery;
 mod finding_verification;
 mod fixture_template;
@@ -61,9 +79,16 @@ mod flaky_validation;
 mod forecast_accuracy;
 mod forge_hold_resume;
 mod git_protection;
+mod granted_mutation_proposals;
+mod granted_tools;
+mod granted_tools_window;
 mod held_child_guard;
+#[cfg(unix)]
+mod local_provider_holds;
 #[cfg(target_os = "linux")]
 mod muse_state_grant;
+#[cfg(unix)]
+mod origin_fetch_hold;
 mod rebase_recovery_attempts;
 mod relation_auto_close;
 mod resume_ownership;
@@ -81,7 +106,9 @@ mod review_held_resume;
 mod review_record_ids;
 mod review_report_revisions;
 mod review_run_option;
+mod rule_findings_sweep;
 mod sandbox_off;
+mod scheduled_tasks;
 mod search_hydration;
 mod security_alert_sweep;
 mod session_events;
@@ -90,6 +117,9 @@ mod step_recovery;
 mod system_work_crews;
 mod workspace_seed;
 
+mod codebase_regressions;
+mod codebase_related;
+mod host_labels;
 mod host_os_executor;
 mod host_os_routing;
 mod host_resources;
@@ -113,6 +143,7 @@ mod purpose_crews;
 mod readiness_population;
 mod regression_risk;
 mod resource_profiles;
+mod risk_history;
 
 mod run_cli_invocations;
 mod run_history;
@@ -123,9 +154,12 @@ mod task_external_merge;
 mod task_lint_paths;
 mod task_pilot;
 mod task_pr_closure;
+mod task_quality_restoration;
 mod task_update;
 mod upgrade_pending_requeue;
 mod upgrade_resume;
+mod usage_pressure_draws;
+mod vision_probe;
 mod worker_exit_diagnostic;
 mod worker_fixture;
 mod worktree_reclaim;

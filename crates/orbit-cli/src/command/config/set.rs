@@ -1,10 +1,32 @@
+use std::path::Path;
+
 use clap::Args;
+use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_core::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::config::{ConfigScope, ConfigWriteInit, set_key_literal};
 
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
+
+/// Refuse a workspace `config set` before runtime open when the working
+/// directory's uninitialized `.orbit/` is not the workspace that resolution
+/// selected. Opening the runtime would otherwise bootstrap that other root.
+/// An explicit workspace selector names its target directly, so the working
+/// directory's roots are never resolved in that case.
+pub fn preflight_indirect_workspace_write(
+    root_override: Option<&Path>,
+    global: bool,
+    explicit_workspace: bool,
+) -> Result<(), OrbitError> {
+    if global || root_override.is_some() || explicit_workspace {
+        return Ok(());
+    }
+    let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
+    let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, None)?;
+    orbit_core::runtime::refuse_indirect_uninitialized_caller_orbit(&cwd, &roots.shared_root, false)
+}
 
 #[derive(Args)]
 pub struct ConfigSetArgs {

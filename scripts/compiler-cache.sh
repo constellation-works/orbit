@@ -120,7 +120,19 @@ cmd_status() {
   if cache_bin="$(resolve_sccache)"; then
     printf '  sccache:            %s\n' "$cache_bin"
     printf '  sccache_version:    %s\n' "$("$cache_bin" --version 2>/dev/null || echo unknown)"
-    if [[ -d "$dir" && -w "$dir" && "${ORBIT_COMPILER_CACHE:-}" != "0" ]]; then
+    # The wrapper creates a missing cache dir (mkdir -p) before checking
+    # writability, so a not-yet-created dir under a writable ancestor is usable.
+    cache_usable=false
+    if [[ -d "$dir" && -w "$dir" ]]; then
+      cache_usable=true
+    elif [[ ! -e "$dir" ]]; then
+      ancestor="$dir"
+      while [[ ! -e "$ancestor" && "$ancestor" == */* ]]; do
+        ancestor="$(dirname "$ancestor")"
+      done
+      [[ -d "$ancestor" && -w "$ancestor" ]] && cache_usable=true
+    fi
+    if [[ "$cache_usable" == true && "${ORBIT_COMPILER_CACHE:-}" != "0" ]]; then
       printf '  effective:          enabled (wrapper will exec sccache)\n'
     else
       printf '  effective:          sccache present but cache not usable; wrapper falls back to rustc\n'
@@ -166,8 +178,12 @@ install_sccache() (
   tar -xzf "$tmp/$asset" -C "$tmp" "$member"
   [[ -f "$tmp/$member" && ! -L "$tmp/$member" ]] || die "extracted sccache binary missing or not a regular file"
   mkdir -p "$bindir"
-  cp "$tmp/$member" "$dest"
-  chmod +x "$dest"
+  # Install by rename so an interrupted copy never leaves a partial binary
+  # at $dest that resolve_sccache would accept as runnable.
+  staged="$bindir/.sccache.tmp.$$"
+  cp "$tmp/$member" "$staged"
+  chmod +x "$staged"
+  mv -f "$staged" "$dest"
   "$dest" --version
 )
 

@@ -11,6 +11,7 @@ use orbit_types::workflow::automation::members::MemberEvidence;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 use crate::application::task::{
     FindingVerification, VerdictWrite, VerifierReport, VerifierVerdict, next_tier,
 };
@@ -19,7 +20,9 @@ use super::prepare::task_snapshot;
 use crate::application::task::pilot::input::{
     requested_workspace_root, required_string, required_string_array,
 };
-use crate::application::task::pilot::source::SourceSnapshot;
+use crate::application::task::pilot::source::{
+    INSPECTION_PROOF_KEY, SourceSnapshot, inspection_proof_error, inspection_proof_required,
+};
 
 const MAX_PARTITION_SIZE: usize = 5;
 
@@ -59,9 +62,10 @@ pub(crate) fn apply(
         DispatchError::action_failed(action, "prepared.source must pin a revision")
     })?;
     source.ensure_commit(action, &workspace_root)?;
-    let claim =
-        crate::application::automation::members::claim(runtime, prepared).map_err(failed)?;
+    let source_tree = source.tree_id(action, &workspace_root)?;
+    let claim = runtime.state_claim(prepared).map_err(failed)?;
     let escalation_round = prepared.get("round").and_then(Value::as_str) == Some("escalation");
+    let proof_required = inspection_proof_required(prepared);
     let partitions = prepared
         .get("partitions")
         .and_then(Value::as_array)
@@ -120,6 +124,25 @@ pub(crate) fn apply(
             .get(position)
             .and_then(|result| result.get("tasks"))
             .and_then(Value::as_array);
+        // The proof the verifier read the pinned source, checked before any
+        // verdict in this partition is trusted: a crew whose native tools
+        // never ran cannot report the pinned revision's tree, which the
+        // envelope never carries. Every task it held stays unverified. A run
+        // prepared before the proof existed keeps a proofless verdict.
+        let proof_error = reports.and_then(|_| {
+            let result = results.get(position);
+            inspection_proof_error(
+                proof_required,
+                result
+                    .and_then(|result| result.get("observed_revision"))
+                    .and_then(Value::as_str),
+                result
+                    .and_then(|result| result.get("observed_tree"))
+                    .and_then(Value::as_str),
+                &source.source_revision,
+                &source_tree,
+            )
+        });
         for task_id in &task_ids {
             let snapshot = snapshots.get(task_id).ok_or_else(|| {
                 DispatchError::action_failed(
@@ -135,6 +158,14 @@ pub(crate) fn apply(
                         snapshot.crew
                     ),
                 ));
+            }
+            if let Some(error) = &proof_error {
+                task_outcomes.push(unverified(
+                    task_id,
+                    error.reason(),
+                    error.message().to_string(),
+                ));
+                continue;
             }
             let Some(report) = reports.and_then(|reports| {
                 reports
@@ -268,11 +299,16 @@ pub(crate) fn apply(
                 "partition_index": partition_index,
                 "task_ids": entries.iter().map(|entry| &entry["task_id"]).collect::<Vec<_>>(),
                 "crew": crew,
+                "draws": entries.iter().map(|entry| json!({
+                    "task_id": entry["task_id"], "eligible_pool": entry["eligible_pool"],
+                })).collect::<Vec<_>>(),
             })
         })
         .collect::<Vec<_>>();
     let mut escalation_prepared = prepared.clone();
     escalation_prepared["round"] = json!("escalation");
+    // This apply drew the escalation verifiers under the proof contract.
+    escalation_prepared[INSPECTION_PROOF_KEY] = json!(true);
     escalation_prepared["task_ids"] = json!(
         escalation_tasks
             .iter()

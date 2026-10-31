@@ -40,6 +40,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
     let prior = pr_base_update_reservations(&history)
         .map_err(|why| refused(&why))?
         .into_iter()
+        .rev()
         .find(|row| {
             row.repository == candidate.repository
                 && row.pr_number.parse::<u64>().ok() == status.number
@@ -53,7 +54,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
             deadline.remaining()?;
         }
         // The shared reservation also fences inherited-failure updates. Its
-        // own recovery handles old-head failures; no cause grants a second write.
+        // own recovery handles old-head failures and the bounded later updates.
         if matches!(
             prior.evidence.get("cause").and_then(Value::as_str),
             Some("inherited" | "auto_fix_landed")
@@ -128,9 +129,14 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
         return Ok(RefreshStep::None);
     }
     match &status.review_decision {
-        super::super::pr::ReviewDecision::NotApplicable => {}
-        super::super::pr::ReviewDecision::Reported(value) if value == "APPROVED" => {}
-        _ => return Err(refused("required or unreadable review decision")),
+        super::super::pr::ReviewDecision::NotApplicable
+        | super::super::pr::ReviewDecision::Approved => {}
+        super::super::pr::ReviewDecision::ReviewRequired
+        | super::super::pr::ReviewDecision::ChangesRequested
+        | super::super::pr::ReviewDecision::Other(_)
+        | super::super::pr::ReviewDecision::Unavailable => {
+            return Err(refused("required or unreadable review decision"));
+        }
     }
     let number = status
         .number

@@ -38,7 +38,7 @@ pub(in crate::command::mcp::setup) fn write_toml_document(
     if fs::read_to_string(&target).is_ok_and(|current| current == rendered) {
         return Ok(());
     }
-    let parsed: toml::Value = rendered.parse().map_err(|err| {
+    let parsed: toml::Value = toml::from_str(&rendered).map_err(|err| {
         OrbitError::InvalidInput(format!("invalid TOML '{}': {err}", path.display()))
     })?;
     let root = serde_json::to_value(parsed).map_err(|err| {

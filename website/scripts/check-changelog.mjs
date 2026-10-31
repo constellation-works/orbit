@@ -25,6 +25,15 @@ try {
   await originalPage.setContent(original.html);
   const authoredText = await originalPage.evaluate(() => {
     for (const heading of document.querySelectorAll('h2')) {
+      if (heading.textContent.trim() !== 'Unreleased') continue;
+      for (let sibling = heading.nextSibling; sibling && sibling.nodeName !== 'H2';) {
+        const next = sibling.nextSibling;
+        sibling.remove();
+        sibling = next;
+      }
+      heading.remove();
+    }
+    for (const heading of document.querySelectorAll('h2')) {
       heading.textContent = heading.textContent.match(/^\d+\.\d+\.\d+/)?.[0] ?? heading.textContent;
     }
     return document.body.textContent.replace(/\[[A-Z][A-Z0-9]{1,15}-\d{1,8}\]/g, 'Pull request').replace(/\s+/g, ' ').trim();
@@ -63,6 +72,8 @@ try {
           })),
         };
       });
+      assert.equal(await page.locator('.orbit-changelog h2').filter({ hasText: 'Unreleased' }).count(), 0, 'Unreleased must not appear among shipped versions');
+      assert.equal(await page.locator('a[href="#unreleased"]').count(), 0, 'Unreleased must not appear in the released-only table of contents');
       assert.equal(result.width, width, 'The changelog must not overflow horizontally');
       assert.equal(result.authoredText, authoredText, 'Folding releases must preserve all authored notes');
       if (width === 1440) assert.ok(result.height < 15000, `Page height is ${result.height}px`);
@@ -123,10 +134,13 @@ try {
     fileURL: new URL('../../CHANGELOG.md', import.meta.url),
     hastPlugins: [changelogLinks, changelogReleases],
   };
-  const fixture = '# Changelog\n\n## 9.8.7 — 2026-10-07\n\n### Highlights\n\n- A change ([TASK-1234], [TASK-5678]).\n\n`[TASK-1111]` and [existing link](https://example.com).';
+  const fixture = '# Changelog\n\n## Unreleased\n\n### Planned\n\n- Pending change.\n\n## 9.8.7 — 2026-10-07\n\n### Highlights\n\n- A change ([TASK-1234], [TASK-5678]).\n\n`[TASK-1111]` and [existing link](https://example.com).';
   const rendered = await markdownToHtml(fixture, options);
   const fixturePage = await browser.newPage();
   await fixturePage.setContent(rendered.html);
+  assert.equal(await fixturePage.locator('h2').count(), 1, 'An Unreleased heading and its section must be omitted');
+  assert.equal(await fixturePage.locator('h3').textContent(), 'Highlights', 'Unreleased subsections must be omitted');
+  assert.ok(!(await fixturePage.locator('body').textContent()).includes('Pending change.'), 'Unreleased notes must not be published as shipped');
   assert.equal(await fixturePage.locator('h2').getAttribute('id'), '987', 'Future dated headings must keep their version anchors');
   assert.equal(await fixturePage.locator('time').getAttribute('datetime'), '2026-10-07');
   assert.equal(await fixturePage.locator('a[href*="/pulls?q="]').count(), 2, 'Multiple references in one text node must become separate links');

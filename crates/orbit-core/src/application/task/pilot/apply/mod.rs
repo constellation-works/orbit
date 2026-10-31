@@ -20,7 +20,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::sweep_filing::ci_failure::admission as ci_failure_admission;
+use crate::application::task::{TaskAutomationPort, TaskJobPort, TaskSweepFilingPort};
 
 use super::drain_promotion::DrainAuthority;
 use super::requested_workspace_root;
@@ -55,6 +55,10 @@ struct ApplyContext<'a> {
     /// The prepared payload verbatim, for the receipt and write boundaries.
     prepared: &'a Value,
     source: Option<&'a SourceSnapshot>,
+    /// The pinned revision's tree id, recomputed host-side: the value a
+    /// result's `observed_tree` must match. `None` for a non-Git workspace,
+    /// which skips the inspection proof.
+    source_tree: Option<&'a str>,
     policy: &'a PreparationPolicy,
     authority: &'a PromotionAuthority<'a>,
     /// Tasks whose material the branch changed since preparation.
@@ -62,6 +66,8 @@ struct ApplyContext<'a> {
     /// The pilot job run applying these results, recorded on each receipt so
     /// the assessment can be attributed to the run's crew and model.
     run_id: Option<&'a str>,
+    /// That run's crew, recorded in an explore brief's provenance.
+    pilot_crew: Option<&'a str>,
 }
 
 /// What the applied tasks of every partition contribute to the report.
@@ -80,31 +86,37 @@ pub(crate) fn apply(
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
     let mut envelope = ApplyInput::parse(action, input)?.envelope(action, &workspace_root)?;
-    let claim = crate::application::automation::members::claim(runtime, &envelope.prepared)
+    let claim = runtime
+        .state_claim(&envelope.prepared)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     // The same consumer policy prepare fingerprinted under; a run without a
     // claim evaluates the default eligibility and configured freshness
     // [ORB-12745, ORB-13638].
-    let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
+    let policy = runtime
+        .claim_preparation_policy(claim.as_ref())
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let source = SourceSnapshot::from_prepared(&envelope.prepared, action)?;
-    if let Some(source) = &source {
-        source.ensure_commit(action, &workspace_root)?;
-    }
+    let source_tree = match &source {
+        Some(source) => {
+            source.ensure_commit(action, &workspace_root)?;
+            Some(source.tree_id(action, &workspace_root)?)
+        }
+        None => None,
+    };
     let prepared_before = input::snapshots(action, &envelope.tasks, source.as_ref())?;
     // Tasks whose material the branch changed since preparation settle
     // superseded, whatever their pilot returned, so their members are claimed
     // afresh at the head; disjoint siblings still apply [ORB-14476].
     let source_superseded = match &claim {
-        Some(claim) => crate::application::automation::members::stale_tasks(
-            runtime,
-            claim,
-            &policy,
-            &envelope.prepared,
-            &prepared_before.keys().cloned().collect::<Vec<_>>(),
-            &BTreeMap::new(),
-        )
-        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
+        Some(claim) => runtime
+            .stale_claimed_tasks(
+                claim,
+                &policy,
+                &envelope.prepared,
+                &prepared_before.keys().cloned().collect::<Vec<_>>(),
+                &BTreeMap::new(),
+            )
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
         None => BTreeMap::new(),
     };
     let authority = authority(
@@ -121,16 +133,25 @@ pub(crate) fn apply(
     )?;
     let partitions = partitions(action, &envelope.partitions, &prepared_before)?;
 
+    // Best effort: a brief's provenance names the crew when the run says.
+    let pilot_crew = envelope
+        .authority
+        .run_id
+        .as_deref()
+        .and_then(|run_id| runtime.stored_job_run(run_id).ok().flatten())
+        .and_then(|run| run.resolved_crew);
     let context = ApplyContext {
         runtime,
         action,
         workspace_root: &workspace_root,
         prepared: &envelope.prepared,
         source: source.as_ref(),
+        source_tree: source_tree.as_deref(),
         policy: &policy,
         authority: &authority,
         source_superseded: &source_superseded,
         run_id: envelope.authority.run_id.as_deref(),
+        pilot_crew: pilot_crew.as_deref(),
     };
     let mut applied = Applied::default();
     let mut partition_decisions = partitions
@@ -196,8 +217,8 @@ fn authority<'a>(
     let piloted_elsewhere = if let Some(filing) = ci_sweep_filing
         && selection.tasks.is_empty()
     {
-        let task_id = filing.fields.task_id.non_empty("task_id", action)?;
-        ci_failure_admission::piloted_elsewhere(action, task_id, selection.prepared)?
+        let task_id = filing.required_task_id(action)?;
+        runtime.ci_sweep_piloted_elsewhere(action, task_id, selection.prepared)?
     } else {
         None
     };
@@ -222,7 +243,7 @@ fn authority<'a>(
                 "ci_sweep_filing and drain_promotion are separate authorities; supply one",
             ));
         }
-        (Some(filing), None) => PromotionAuthority::CiSweep(&filing.raw, promotion_authorized),
+        (Some(filing), None) => PromotionAuthority::CiSweep(filing, promotion_authorized),
         (None, Some(_)) if !promotion_authorized => {
             return Err(DispatchError::action_failed(
                 action,
@@ -239,7 +260,7 @@ fn authority<'a>(
     };
     if let (Some(filing), Some(prepared_task_id)) = (ci_sweep_filing, selection.tasks.keys().next())
     {
-        let filed_task_id = filing.fields.task_id.non_empty("task_id", action)?;
+        let filed_task_id = filing.required_task_id(action)?;
         if filed_task_id != prepared_task_id {
             return Err(DispatchError::action_failed(
                 action,

@@ -3,7 +3,9 @@
 use super::source::Source;
 use crate::OrbitRuntime;
 use crate::runtime::run_input::recorded_task_ids;
-use orbit_automation::{AutomationError, automation_error_to_orbit, delivery::digest};
+use orbit_automation::{
+    AutomationError, DeferredReason, automation_error_to_orbit, delivery::digest,
+};
 use orbit_common::OrbitError;
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
@@ -161,7 +163,7 @@ pub(super) fn observe(
                 .any(|sha| delivery.commits.contains(sha))
         }) {
             return Err(AutomationError::Deferred(
-                "delivery_grouping_ambiguous".into(),
+                DeferredReason::DeliveryGroupingAmbiguous,
             ));
         }
 

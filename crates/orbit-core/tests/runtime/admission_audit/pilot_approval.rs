@@ -149,6 +149,21 @@ fn pilot_with_findings(
         assessment[field] = value.clone();
     }
 
+    // The fixture pilot read its checkout: report the observed pair of
+    // the prepared revision and its tree.
+    let revision = prepared["source"]["source_revision"]
+        .as_str()
+        .expect("prepared source revision")
+        .to_string();
+    let tree = {
+        let output = crate::git_test_support::command()
+            .args(["rev-parse", &format!("{revision}^{{tree}}")])
+            .current_dir(&workspace.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
     let applied = runtime.run_deterministic(
         "apply_task_pilot_results",
         &json!({}),
@@ -156,7 +171,10 @@ fn pilot_with_findings(
             "run_id": pilot,
             "workspace_path": workspace.repo,
             "prepared": prepared,
-            "results": [{"partition_index": 0, "task_ids": [task.id], "tasks": [assessment]}],
+            "results": [{
+                "partition_index": 0, "observed_revision": revision, "observed_tree": tree,
+                "task_ids": [task.id], "tasks": [assessment],
+            }],
             "promotion_authorized": true,
             "drain_promotion": {"run_id": drain},
         }),

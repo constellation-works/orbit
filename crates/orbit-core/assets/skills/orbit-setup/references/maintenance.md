@@ -37,9 +37,9 @@ is pinned at `refs/orbit/rescue/worktree-gc/<run>-<tree>` until a deleting
 sweep sees that the patch file is gone. `recovery` in the
 report names which source. Kept terminal worktrees report `retained_bytes`, and
 `orbit run show <gc-run>` lists them with their reasons. Details:
-`docs/runbooks/worktree-reclaim.md` in the Orbit repository. Run the report a
-few times before automating it, then enable the `worktree-gc` routine for
-hourly reclamation — [automation.md](automation.md).
+[worktree reclaim runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/worktree-reclaim.md).
+Run the report a few times before automating it, then enable the `worktree-gc`
+routine for hourly reclamation — [automation.md](automation.md).
 
 ### Workspace scratch
 
@@ -126,6 +126,17 @@ settled task. A running run is never touched, and a path holding anything Git
 tracks is kept (`skipped:tracked_content`). The scheduled pipeline does the
 same for every kept terminal worktree. `bytes_reclaimed` reports the size of
 the removed paths.
+
+`worktree.reclaim_below_free_mib` adds admission-time reclamation: unset by
+default, or a non-negative integer MiB (`u64`; `0` never triggers). While free
+space beneath the state directory is below it, admission reclaims the declared
+`worktree.reclaim` paths from oldest terminal worktrees first, keeping their
+checkouts and protecting active runs. Read the effective mark with
+`orbit config show --all`. Inspect eligible output without deletion using
+`orbit gc worktrees --reclaim --dry-run --estimate-bytes`; this previews GC
+eligibility, not a forced low-space admission. Actual admission reclamation
+records a `worktree.reclaim` audit event with reclaimed bytes. See
+[Configuration](configuration.md#common-settings) for the setting and limits.
 
 With `workflow.validation_env.build_output_env` configured, required validation
 binds the workspace's output variables to host-owned output under
@@ -230,6 +241,62 @@ catalog and update them deliberately.
 Sync updates managed files, not workspace ownership or task publication. The
 plugin skill bundle updates through its plugin distribution; global skill
 symlinks and a plugin installation are distinct delivery paths.
+
+## Removing or re-targeting a workspace
+
+Choose by intent:
+
+- To stop tracking a checkout but keep its data, use
+  `orbit workspace remove <workspace>`. It removes the workspace and checkout
+  records and the local task-publication binding. It keeps the checkout's
+  `.orbit/` directory and task-store partition, including task bundles; the
+  publication Git repository is not changed. This command has no `--confirm`
+  or `--dry-run` option. Require the user's explicit authorization before
+  running it.
+- To delete Orbit data for a checkout, use
+  `orbit workspace teardown <workspace> --confirm`. It deletes the task-store
+  partitions bound to that checkout, Orbit-owned skill links under
+  `.agents/skills/` and `.claude/skills/`, and its `.orbit/` directory, then
+  deregisters the workspace. It leaves the source checkout and global Orbit
+  data directory itself in place. Without `--confirm`, it prints the resolved
+  deletion plan and
+  refuses; there is no `--dry-run` option. Require the user's explicit
+  authorization and a verified backup or task export before teardown.
+- If the repository moved, use
+  `orbit workspace source-remote rebind --remote <URL>`. First inspect and
+  save the current identity with `orbit workspace source-remote show --json`,
+  then validate the proposed change with
+  `orbit workspace source-remote rebind --remote <URL> --dry-run --json`.
+  After reviewing that result, apply the same command without `--dry-run` and
+  update the checkout's Git `origin` separately. The new URL must be portable;
+  credentials, local paths and remote aliases are refused. Rebinding changes
+  the registered source remote and repository identity and reconciles the
+  task-registry source pairing. Equivalent SSH and HTTPS URLs compare equal.
+  Repeat the command with the registered URL to repair a pairing left stale
+  by an older Orbit version, even when the source reports `unchanged`.
+  Git configuration is updated separately.
+  It refuses to rewrite an existing publication binding or its lineage and
+  snapshots; record and remove that binding before the move, then use
+  `orbit workspace publication rebind` with a new publication ID and an empty
+  publication branch. Verify with `orbit workspace publication show --json`.
+  See [Publication](publication.md) and [Multi-host](multi-host.md) before
+  moving state between hosts.
+
+Before `remove` or `teardown`, manually confirm there are no live drains, runs,
+or claims, and identify any unpublished tasks. The commands do not enforce
+these checks. Inspect `orbit task publication status --json`; a `current`
+status does not prove that every recent task change is published. Preserve the
+task data you need with a verified publication or export, and back up required
+host configuration separately, following [Publication](publication.md),
+before teardown.
+
+Capture `orbit workspace show --json` and
+`orbit workspace source-remote show --json` before a change. After removal or
+teardown, use `orbit workspace list --json` to confirm the workspace is no
+longer registered on this host. After a rebind, use
+`orbit workspace list --json`, `orbit workspace show --json` and
+`orbit workspace source-remote show --json` to verify the registration and
+new source identity.
 
 ## Persistent MCP clients during upgrades
 
@@ -372,6 +439,9 @@ backups" section has the full rule.
 ```bash
 orbit migrate               # inspect pending migrations without applying
 orbit migrate --confirm     # apply
+orbit migrate --backfill-diff-stats [--limit N]  # apply, then record diff stats for done tasks landed earlier
+orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery (run or claimed-leaf settlement)
+orbit migrate --adopt-authority ~/.orbit  # record this home as the authority protecting a workspace that recorded none (stop its clients first)
 ```
 
 Both ledgers — the SQLite schema and the workspace layout — auto-apply when a
@@ -427,9 +497,12 @@ is always kept. `gc runs` never touches a held run or one still in flight, so
 the same unregistered workspace ids. The same pass prunes the host's
 per-minute run and host resource history (`run_resource_minutes`,
 `host_resource_minutes`) and admission forecasts older than 30 days, whatever the
-run window. Auto-concurrency profiles and forecast accuracy keep their supported
-30-day window. Durable lock-denial facts and commit outcomes preserve Lock
-contention and succeeded implement_one durations after pruning; upgrade backfills
+run window, except the rows its counts keep at any age: each workspace, work class
+and complexity's newest `max(200, machine.auto_concurrency.profile_window)`
+deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept
+forecast onward. Auto-concurrency profiles and forecast accuracy keep working on
+those rows; older raw samples outside them are lost.
+Durable lock-denial facts and commit outcomes preserve Lock contention and succeeded implement_one durations after pruning; upgrade backfills
 existing evidence before GC. Health Events, Incidents, Denials, `orbit audit` and
 the diagnostics friction view lose raw history past the audit cutoff with no
 rollups. Task-store Codebase rankings, `orbit task flow` and friction stats keep
@@ -462,6 +535,59 @@ audit and run sweeps daily, enable the seeded `store-gc` routine ([automation.md
 On a replica checkout the same cron routine runs against that host's own store
 and does not call the owner. Enable it there when this machine is the only
 place those rows live. A delivery- or state-triggered copy stays owner-only.
+
+## Admission receipt storage
+
+Workspaces that admit tasks for replica checkouts keep admission request
+history apart from ordinary store garbage collection. Logical payload
+accounting and permanent replay tombstones are not file-size reclaim; for
+file size, see Store retention above.
+
+```bash
+orbit doctor admission-receipts          # read-only inspection
+orbit doctor admission-receipts --json
+```
+
+Run the inspection on the owning checkout, or through the owner's federated
+selector. A replica checkout refuses owner tools and names the owner to
+contact instead. The report carries three separate totals, each with a count
+and logical payload bytes: full admission receipts, permanent tombstones, and
+claim-mutation receipts. Logical bytes count UTF-8 JSON payload lengths only;
+they exclude row keys, indexes, free pages and write-ahead log state, and are
+not filesystem usage.
+
+The read-only inspection refuses while a commit is pending recovery rather
+than repairing state. Recover first, then re-run the inspection.
+
+Compaction is explicit maintenance, never automatic: admitting tasks does not
+scan receipt history, so idle payloads accumulate until an operator runs it.
+Capture the read-only report before and after to verify the change. Run
+compaction only when deliberately authorized:
+
+```bash
+orbit doctor admission-receipts --compact
+```
+
+Under the exclusive admission boundary it first recovers pending commits,
+then replaces eligible full receipts with permanent tombstones. A tombstone
+keeps only the originating machine identity, request identity and input
+digest in the same persisted encoding as replay. Eligible are idle receipts
+with no claim and receipts whose claim has settled, except failed or revoked
+claims that kept a pull request: those keep their full receipt to authorize
+later external-merge settlement. Unsettled claims — claimed, running,
+handed-off and repair-pending — keep their full receipts, as does a receipt
+whose claim record is missing. Reservation expiry and age never count as
+settlement, and there is no age-based tombstone deletion.
+
+Replay stays refused: an exact replay of a tombstoned request reports expiry,
+and a replay with changed input reports a mismatch; neither admits again.
+Repeated runs are idempotent and report how many receipts were compacted plus
+the resulting storage snapshot.
+
+Claim-mutation receipts are reported alongside but pruned separately: they are
+kept for seven days after settlement and this command does not run that
+pruning. Never delete receipts by age or edit the store directly; use only the
+inspection and `--compact` above.
 
 ## Logs
 

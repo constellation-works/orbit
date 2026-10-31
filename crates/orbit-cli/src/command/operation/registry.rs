@@ -20,8 +20,8 @@ impl Commands {
                 let (subcommand, runtime_need, governed) = match &command.command {
                     WorkspaceSubcommand::Init(_) => ("init", RuntimeNeed::Forbidden, false),
                     WorkspaceSubcommand::Sync(_) => ("sync", RuntimeNeed::Forbidden, false),
-                    WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::ReadOnly, false),
-                    WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::ReadOnly, false),
+                    WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::HostReadOnly, false),
+                    WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::HostReadOnly, false),
                     WorkspaceSubcommand::SourceRemote(command) => match &command.command {
                         WorkspaceSourceRemoteSubcommand::Show(_) => {
                             ("source-remote-show", RuntimeNeed::Required, false)
@@ -124,7 +124,7 @@ impl Commands {
                 )
             }
             Commands::Migrate(command) => CommandOperation::new(
-                if command.confirm {
+                if command.applies() {
                     RuntimeNeed::Required
                 } else {
                     RuntimeNeed::Forbidden
@@ -162,12 +162,6 @@ impl Commands {
                         Some("workflow"),
                         Some("ship"),
                         RuntimeNeed::Required,
-                    ),
-                    RunSubcommand::ShipSweep(_) => (
-                        "ship-sweep",
-                        Some("workflow"),
-                        Some("ship-sweep"),
-                        RuntimeNeed::Forbidden,
                     ),
                     RunSubcommand::TaskPilot(_) => (
                         "task-pilot",
@@ -337,6 +331,48 @@ impl Commands {
                     dispatch_routine,
                 )
             }
+            Commands::Script(command) => {
+                use super::super::script::ScriptSubcommand;
+                let (subcommand, target_id, runtime_need, governed) = match &command.command {
+                    ScriptSubcommand::List(_) => ("list", None, RuntimeNeed::ReadOnly, false),
+                    ScriptSubcommand::Show(args) => (
+                        "show",
+                        Some(args.name.as_str()),
+                        RuntimeNeed::ReadOnly,
+                        false,
+                    ),
+                    ScriptSubcommand::Grant(args) => (
+                        "grant",
+                        Some(args.name.as_str()),
+                        RuntimeNeed::Required,
+                        true,
+                    ),
+                    ScriptSubcommand::Revoke(args) => (
+                        "revoke",
+                        Some(args.name.as_str()),
+                        RuntimeNeed::Required,
+                        true,
+                    ),
+                    ScriptSubcommand::History(args) => (
+                        "history",
+                        Some(args.name.as_str()),
+                        RuntimeNeed::ReadOnly,
+                        false,
+                    ),
+                };
+                CommandOperation::new(
+                    runtime_need,
+                    Some(admin_meta(
+                        "script",
+                        Some(subcommand),
+                        Some("script"),
+                        target_id,
+                    )),
+                    None,
+                    runtime_dispatch!(Script),
+                )
+                .governed_when(governed, "script", subcommand)
+            }
             Commands::Task(command) => {
                 use super::super::task::TaskInvocation;
                 use super::super::task::TaskPublicationSubcommand;
@@ -423,8 +459,38 @@ impl Commands {
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
             // runtime need and audit metadata derive from its spec. A new
             // friction verb needs no edit here.
+            Commands::Lease(command) => {
+                use super::super::lease::LeaseSubcommand;
+                match &command.command {
+                    LeaseSubcommand::Operation(invocation) => {
+                        registry_operation(invocation, runtime_dispatch!(Lease))
+                    }
+                    // Token and listen commands run as the lease listener user
+                    // against its own token store, which audits mints,
+                    // revocations and refusals itself. They open no workspace,
+                    // so no Orbit audit row is written.
+                    LeaseSubcommand::Token(_) | LeaseSubcommand::Listen(_) => {
+                        CommandOperation::new(
+                            RuntimeNeed::Forbidden,
+                            None,
+                            None,
+                            dispatch_lease_listener_user,
+                        )
+                    }
+                }
+            }
             Commands::Friction(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Friction))
+            }
+            // Decision requests are registry-driven like friction; the
+            // answer verb's write effect makes its runtime need required.
+            // Answering is the operator's, so it is authorized before
+            // dispatch; the handler applies it as a human write.
+            Commands::Decision(command) => {
+                use orbit_common::governance::decision::DecisionVerb;
+                let answers = command.command.spec.verb == DecisionVerb::Answer;
+                registry_operation(&command.command, runtime_dispatch!(Decision))
+                    .governed_when(answers, "decision", "answer")
             }
             Commands::Audit(command) => {
                 use super::super::audit::AuditSubcommand;
@@ -436,13 +502,45 @@ impl Commands {
                 CommandOperation::new(RuntimeNeed::Required, None, None, runtime_dispatch!(Audit))
                     .governed_when(prunes, "audit", "prune")
             }
+            // Experiments are registry-driven like friction.
+            Commands::Experiment(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Experiment))
+            }
             // Codebase analytics is registry-driven like friction.
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))
             }
+            // The crew ladder report is registry-driven like codebase.
+            Commands::Crew(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Crew))
+            }
+            // Visual capture is registry-driven like codebase; its Write
+            // effect (serving the checkout and writing captures) makes its
+            // runtime need required through the registry operation.
+            Commands::Visual(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Visual))
+            }
             // The agent scorecards are registry-driven like codebase.
             Commands::Agents(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Agents))
+                use super::super::agents::AgentsSubcommand;
+                match &command.command {
+                    AgentsSubcommand::Operation(invocation) => {
+                        registry_operation(invocation, runtime_dispatch!(Agents))
+                    }
+                    // The probe submits one canary run per crew, so it opens
+                    // the full runtime and audits as an admin action.
+                    AgentsSubcommand::VisionProbe(_) => CommandOperation::new(
+                        RuntimeNeed::Required,
+                        Some(admin_meta(
+                            "agents",
+                            Some("vision-probe"),
+                            Some("crew"),
+                            None,
+                        )),
+                        None,
+                        runtime_dispatch!(Agents),
+                    ),
+                }
             }
             // The deprecated orchestrator aliases are registry-driven too.
             Commands::Orchestrator(command) => {
@@ -456,11 +554,21 @@ impl Commands {
             ),
             Commands::Doctor(command) => {
                 use super::super::doctor::DoctorSubcommand;
-                // The focused diagnostics only read definitions, so they stay
-                // available while another executable generation holds the
-                // store; the health checks and repairs need the full runtime.
+                // Focused inspection avoids reconciliation on open. Receipt
+                // compaction, like the health checks and repairs, needs the
+                // full runtime and its writable generation gate.
                 let (subcommand, target_type, target_id, runtime_need) = match &command.command {
                     None => (None, "workspace", None, RuntimeNeed::Required),
+                    Some(DoctorSubcommand::AdmissionReceipts(args)) => (
+                        Some("admission-receipts"),
+                        "workspace",
+                        None,
+                        if args.compact {
+                            RuntimeNeed::Required
+                        } else {
+                            RuntimeNeed::ReadOnly
+                        },
+                    ),
                     Some(DoctorSubcommand::Providers(_)) => {
                         (Some("providers"), "executor", None, RuntimeNeed::ReadOnly)
                     }
@@ -485,6 +593,10 @@ impl Commands {
             }
             Commands::AutoTask(command) => {
                 registry_operation(&command.command, runtime_dispatch!(AutoTask))
+            }
+            // Condition explain is registry-driven like crew.
+            Commands::Automation(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Automation))
             }
             Commands::Job(command) => {
                 use super::super::job::JobSubcommand;
@@ -548,7 +660,7 @@ impl Commands {
                         arguments_json: None,
                         job_run_id: None,
                     }),
-                    Some(args.pretty),
+                    Some(false),
                     |command, context| match command {
                         Commands::PluginGroup(invocation) => {
                             (*invocation).execute(context.runtime()?)
@@ -641,6 +753,7 @@ impl Commands {
                 let subcommand = match &command.command {
                     WebSubcommand::Serve(_) => "serve",
                     WebSubcommand::Connect(_) => "connect",
+                    WebSubcommand::Open(_) => "open",
                 };
                 CommandOperation::new(
                     RuntimeNeed::Forbidden,
@@ -670,17 +783,6 @@ impl Commands {
                     runtime_dispatch!(Skill),
                 )
             }
-            Commands::Artifacts(command) => CommandOperation::new(
-                RuntimeNeed::Required,
-                Some(admin_meta(
-                    "artifacts",
-                    None,
-                    Some(if command.task { "task" } else { "job_run" }),
-                    Some(&command.id),
-                )),
-                None,
-                runtime_dispatch!(Artifacts),
-            ),
         }
     }
 }

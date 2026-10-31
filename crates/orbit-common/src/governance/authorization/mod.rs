@@ -26,9 +26,13 @@
 //! registry counterparts (`register_mcp`, `register`, `register_inactive`):
 //! which surfaces *list* a tool. It is an audience decision — what an agent
 //! reading `tools/list` is pointed at — and it authorizes nothing.
-//! `tools/list` does no capability filtering, and the tool registry's
-//! `execute` never consults availability, so a tool registered active but
-//! unadvertised is still reachable through `orbit tool run`.
+//! The MCP list adapter further filters `tools/list` by the session's fixed grants,
+//! omitting governed tools those grants cannot authorize. `orbit.agent.invoke`
+//! remains discoverable because of its separate managed-run explorer admission.
+//! This only changes advertisement:
+//! the tool registry's `execute` never consults availability, so a tool
+//! registered active but unadvertised is still reachable through
+//! `orbit tool run`, subject to the capability chokepoint.
 //!
 //! `register_inactive` is the one placement that also removes reach: CLI
 //! dispatch applies `ensure_tool_agent_facing` too, so an inactive tool needs
@@ -49,7 +53,8 @@
 //! The two therefore need not agree, and deliberately do not. A tool may be
 //! advertised and governed (the operator MCP surface: a session served by
 //! `orbit mcp serve --operator` sees and performs it, an ordinary agent session
-//! sees and is refused), or unadvertised and ungoverned (`orbit friction show`
+//! omits it from its list and is still refused if it calls the name directly),
+//! or unadvertised and ungoverned (`orbit friction show`
 //! — kept off the agent MCP surface because `list` already returns what an
 //! agent needs, but freely readable from any CLI).
 //! What must never happen is for a pairing to change by accident. The
@@ -69,18 +74,26 @@ mod caller;
 mod catalog;
 mod decision;
 mod env;
+mod grants;
 
 pub use caller::{CallerCapabilities, CallerEnvelope, CallerProvenance, CapabilityResolution};
 pub use catalog::{
     DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_AUTO_FIX,
     DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_MODE, DASHBOARD_AUTO_DRAIN_STOP,
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE, DASHBOARD_CLAIM_RECOVER,
-    DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE, DASHBOARD_CONFIG_SET,
-    DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_RETRY, DASHBOARD_HANDOFF_REVOKE,
-    DASHBOARD_HOST_EDIT, DASHBOARD_HOST_FORWARD, DASHBOARD_JOB_RUN, DASHBOARD_PLUGIN_DISABLE,
-    DASHBOARD_PLUGIN_ENABLE, DASHBOARD_ROUTINE_TOGGLE, DESKTOP_TASK_COMPLETE, DESKTOP_TASK_EDIT,
-    GOVERNED_OPERATIONS, GovernedOperation, OperationSurface, PLUGIN_TOOL_MUTATING,
-    PLUGIN_TOOL_READ_ONLY, governed_command, governed_plugin_tool, governed_tool,
+    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_CLAIM_RECOVER, DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE,
+    DASHBOARD_CONFIG_SET, DASHBOARD_EXPERIMENT_CONCLUDE, DASHBOARD_EXPERIMENT_CREATE,
+    DASHBOARD_EXPERIMENT_START, DASHBOARD_EXPERIMENT_UPDATE, DASHBOARD_HANDOFF_APPROVE,
+    DASHBOARD_HANDOFF_RETRY, DASHBOARD_HANDOFF_REVOKE, DASHBOARD_HOST_EDIT, DASHBOARD_HOST_FORWARD,
+    DASHBOARD_JOB_RUN, DASHBOARD_LEASE_WRITE, DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE,
+    DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER, DASHBOARD_TASK_PILOT_ADMISSION,
+    DASHBOARD_TASK_POST_DEPLOY, DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED,
+    DESKTOP_TASK_COMPLETE, DESKTOP_TASK_EDIT, GOVERNED_OPERATIONS, GovernedOperation,
+    OperationSurface, PLUGIN_TOOL_AGENT_CALLABLE, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY,
+    TASK_GRANT_TOOLS_OPERATION_ID, governed_command, governed_plugin_tool, governed_tool,
 };
 pub use decision::{AuthorizationDenial, authorize};
 pub use env::{OPERATOR_OVERRIDE_ENV, agent_context_declared, operator_override_active};
+pub use grants::{
+    GrantedToolEffect, ToolGrantClassification, ToolGrantability, classify_agent_tool_grant,
+};

@@ -1,0 +1,48 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_review_prepare
+spec:
+  type: deterministic
+  description: >
+    Assemble the mock comparison review's input from `visual/capture.json`
+    for a `verify-mock-ui` delivery: stage each shown mock with its capture
+    (the side-by-side only when both would not fit), check
+    `visual_review.max_mocks`, `max_images` (with the drawn executor's own
+    `spec.image_input.max_images`), `max_image_tokens` (estimated per
+    provider; Claude width x height / 750) and `max_findings` before any
+    dispatch, and list what does not fit as not shown. Draws the reviewer
+    from `workflow.purpose_crews.visual_review` filtered to `image_input`
+    crews (else the task's complexity pool under the same filter), seeded
+    by task and candidate, and a verifier and one escalation crew other
+    than the reviewer's and the implementer's. With no image-capable crew
+    the review records `not_established: no_vision_crew`; with
+    `visual_review.reviewer = false` it records `reviewer_disabled`.
+    Writes nothing; `visual_settle` records the outcome.
+  input_schema_json:
+    type: object
+    required: [workspace_path, capture]
+    properties:
+      workspace_path:
+        type: string
+      capture:
+        type: [object, "null"]
+        description: The visual_capture output for this run.
+  output_schema_json:
+    type: object
+    required: [applies, review_count, reviews, records]
+    properties:
+      applies:
+        type: boolean
+      review_count:
+        type: number
+      reviews:
+        type: array
+        items:
+          type: object
+      records:
+        type: array
+        items:
+          type: object
+  action: visual_review_prepare
+  config: {}

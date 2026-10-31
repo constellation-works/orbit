@@ -1,7 +1,7 @@
 //! The provider's pull-request answers, parsed once where each private PR
 //! operation's response is read.
 //!
-//! `operations/pr.rs` produces these responses from `gh` and the private
+//! `operations/pr/` produces these responses from `gh` and the private
 //! transport carries them as JSON. This module is the one reader of that
 //! JSON: every decision takes the typed value, so the provider's field names
 //! appear here and in the producer only. Unknown fields are ignored.
@@ -29,6 +29,8 @@ pub struct PullRequestStatus {
     pub(in crate::executor::automation::vcs) number_selector: Option<String>,
     /// The pull request's web URL.
     pub url: Option<String>,
+    /// Exact live body from the view operation, used to authorize draft recovery.
+    pub(crate) body: Option<String>,
     /// The provider's state: `OPEN`, `CLOSED` or `MERGED`.
     pub state: Option<String>,
     /// Explicit automatic merge intent; absent metadata stays uncertain.
@@ -108,6 +110,7 @@ impl PullRequestStatus {
             number: pull_request.get("number").and_then(Value::as_u64),
             number_selector: pull_request.get("number").and_then(number_selector),
             url: text("url"),
+            body: exact("body"),
             state: exact("state"),
             head_branch: text("headRefName"),
             head_sha: text("headRefOid"),
@@ -144,8 +147,16 @@ pub(crate) enum ReviewDecision {
     /// `gh pr view --json` serializes that same null as an empty string
     /// [ORB-13759].
     NotApplicable,
-    /// A decision such as `APPROVED` or `REVIEW_REQUIRED`.
-    Reported(String),
+    /// The provider reported `APPROVED`.
+    Approved,
+    /// The provider reported `REVIEW_REQUIRED`.
+    ReviewRequired,
+    /// The provider reported `CHANGES_REQUESTED`.
+    ChangesRequested,
+    /// A nonempty decision this reader does not recognize, retained with
+    /// its exact provider spelling for diagnostics. It cannot authorize
+    /// merge or base refresh.
+    Other(String),
     /// The field is absent or not a string.
     Unavailable,
 }
@@ -155,15 +166,31 @@ impl ReviewDecision {
         match value {
             Some(Value::Null) => Self::NotApplicable,
             Some(Value::String(decision)) if decision.is_empty() => Self::NotApplicable,
-            Some(Value::String(decision)) => Self::Reported(decision.clone()),
+            Some(Value::String(decision)) => match decision.as_str() {
+                "APPROVED" => Self::Approved,
+                "REVIEW_REQUIRED" => Self::ReviewRequired,
+                "CHANGES_REQUESTED" => Self::ChangesRequested,
+                _ => Self::Other(decision.clone()),
+            },
             _ => Self::Unavailable,
+        }
+    }
+
+    /// The exact provider spelling, for diagnostics only.
+    pub(crate) fn provider_spelling(&self) -> Option<&str> {
+        match self {
+            Self::NotApplicable | Self::Unavailable => None,
+            Self::Approved => Some("APPROVED"),
+            Self::ReviewRequired => Some("REVIEW_REQUIRED"),
+            Self::ChangesRequested => Some("CHANGES_REQUESTED"),
+            Self::Other(value) => Some(value),
         }
     }
 }
 
 /// One entry of a pull request's status check rollup: a CheckRun
 /// (`status`/`conclusion`) or a StatusContext (`state`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StatusCheck {
     /// The CheckRun's name or the StatusContext's context, trimmed.
     pub(crate) name: Option<String>,

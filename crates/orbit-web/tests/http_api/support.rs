@@ -154,6 +154,13 @@ impl Fixture {
             "schema_version: 1\nworkspace_id: ws_http_fixture\n",
         )
         .unwrap();
+        if task_prefix == orbit_types::identity::LEGACY_TASK_PREFIX {
+            fs::write(
+                global.join("config.toml"),
+                format!("[machine]\nid = \"hm_0000000000000001\"\nname = \"{machine_name}\"\ntask_prefix = \"{task_prefix}\"\n"),
+            )
+            .unwrap();
+        }
         orbit_registry::ensure_machine_identity(&global, || {
             Ok(orbit_registry::NewMachineIdentity {
                 name: machine_name.into(),
@@ -240,6 +247,15 @@ impl Fixture {
             None,
             &env,
         )
+    }
+
+    /// A server with extra environment for the server child.
+    pub(super) fn server_with_envs(
+        &self,
+        operator: bool,
+        env: &[(&str, &std::ffi::OsStr)],
+    ) -> Server {
+        self.server_impl_with_env(operator, false, false, &self.path("process.log"), None, env)
     }
 
     pub(super) fn counted_task_server(&self) -> Server {
@@ -678,6 +694,26 @@ pub(super) fn serve_fixture() {
             .unwrap()
             .with_host_resource_probe(Arc::new(Probe(AtomicUsize::new(0))));
         orbit_web::serve(&runtime, args).unwrap();
+    } else if std::env::var("ORBIT_HTTP_EMBEDDED").as_deref() == Ok("1") {
+        let global = root.join("global");
+        let registry = orbit_registry::workspace_registry::load_registry_from(
+            &orbit_registry::workspace_registry::registry_path_for(&global),
+        )
+        .unwrap();
+        let runtime =
+            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+                &global,
+                &registry.workspaces[0],
+                &registry.checkouts[0],
+            )
+            .unwrap();
+        // fixture_command runs from root, outside repo and its .orbit directory.
+        assert_eq!(
+            std::env::current_dir().unwrap(),
+            root.canonicalize().unwrap()
+        );
+        assert_ne!(runtime.workspace_id().unwrap(), "default");
+        orbit_web::serve(&runtime, args).unwrap();
     } else {
         orbit_web::serve_from_env(args, Some(&root.join("global"))).unwrap();
     }
@@ -716,9 +752,10 @@ pub(super) fn error_code(response: Response, status: u16, code: &str) -> Value {
 
 /// Restore the pre-retention-analytics store shape so the public open path
 /// must backfill existing rows, rewinding the later executor census, crew
-/// account readings and handoff write guards with it. The fixture records
-/// invocations with the current binary before the upgrade, so
-/// `invocations.account` stays.
+/// account readings, handoff write guards, task-run ownership and worker
+/// resource evidence and agent execution identities with it. The fixture records
+/// invocations with the current binary before the upgrade, so its nullable
+/// `invocations.account` and `invocations.agent_execution_id` columns stay.
 /// Fixture-only; every caller runs in a child.
 pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
     fixture
@@ -728,20 +765,32 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
         .with_transaction(|tx| {
             tx.connection()
                 .execute_batch(
-                    "DROP TRIGGER handoff_settlement_insert_guard;
+                    "DROP TABLE IF EXISTS agent_executions;
+             DROP TABLE IF EXISTS worker_resource_limits;
+             DROP TABLE IF EXISTS assistance_attempts;
+             DROP TABLE IF EXISTS assistance_slots;
+             DROP TABLE IF EXISTS assistance_budgets;
+             DROP TABLE IF EXISTS assistance_work;
+             DROP TABLE IF EXISTS automation_condition_audit;
+             DROP TABLE IF EXISTS automation_condition_states;
+             DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0054';
+             DROP TABLE landed_diff_stats;
+             DROP TRIGGER job_run_tasks_insert;
+             DROP TRIGGER job_run_tasks_update;
+             DROP TRIGGER job_run_tasks_delete;
+             DROP TABLE job_run_tasks;
+             DROP TABLE IF EXISTS crew_performance_cells;
+             DROP TABLE IF EXISTS crew_performance_snapshot;
+             DROP TRIGGER handoff_settlement_insert_guard;
              DROP TRIGGER handoff_settlement_update_guard;
-             DELETE FROM schema_meta WHERE key = 'migration.v0057';
              DROP TABLE provider_account_limit_observations;
-             DELETE FROM schema_meta WHERE key = 'migration.v0056';
              DROP TABLE executor_census;
-             DELETE FROM schema_meta WHERE key = 'migration.v0055';
              DROP TRIGGER retain_task_lock_denial;
              DROP TRIGGER retain_run_commit_insert;
              DROP TRIGGER retain_run_commit_update;
              DROP TABLE task_lock_denials;
              ALTER TABLE job_runs DROP COLUMN commit_decision;
-             ALTER TABLE job_runs DROP COLUMN commit_committed;
-             DELETE FROM schema_meta WHERE key = 'migration.v0054';",
+             ALTER TABLE job_runs DROP COLUMN commit_committed;",
                 )
                 .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
             Ok(())

@@ -244,6 +244,14 @@ impl Fixture {
         git(&self.repo, &["rev-parse", "HEAD"]).trim().to_string()
     }
 
+    /// The tree of `HEAD`: the `observed_tree` half of a verifier's
+    /// inspection proof.
+    fn tree(&self) -> String {
+        git(&self.repo, &["rev-parse", "HEAD^{tree}"])
+            .trim()
+            .to_string()
+    }
+
     /// A task a review would file: a proposed `bug` tagged `code-review`.
     fn finding(&self, title: &str, complexity: TaskComplexity) -> Task {
         self.task(title, complexity, TaskType::Bug, &["code-review"], None)
@@ -320,7 +328,12 @@ impl Fixture {
                     })
                     .cloned()
                     .collect::<Vec<_>>();
-                json!({"partition_index": partition["partition_index"], "tasks": tasks})
+                json!({
+                    "partition_index": partition["partition_index"],
+                    "observed_revision": self.head(),
+                    "observed_tree": self.tree(),
+                    "tasks": tasks,
+                })
             })
             .collect::<Vec<_>>();
         let mut input = json!({
@@ -567,6 +580,63 @@ fn a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew() {
     assert_eq!(fixture.status(&unsure), TaskStatus::Rejected);
 }
 
+/// The initial and escalation checkpoints must explain each task's own
+/// pressure-weighted draw, including when several tasks share a partition.
+fn verification_partitions_record_pressure_in_both_rounds() {
+    let config = FIXTURE_CONFIG
+        .replace(
+            "[workflow]",
+            "[workflow]\ncrew_selection = \"usage_pressure\"",
+        )
+        .replace(
+            "[\"medium_codex\", \"medium_claude\"]",
+            "[\"medium_codex:3\", \"medium_claude:1\", \"low_lane:0\"]",
+        );
+    let fixture = Fixture::with_config(&format!("{config}\n[review]\nverify_findings = true\n"));
+    crate::usage_pressure_draws::record_week(&fixture.runtime, "claude", 10.0, Duration::hours(6));
+    crate::usage_pressure_draws::record_week(&fixture.runtime, "codex", 0.0, Duration::days(7));
+    let medium = fixture.finding("Weighted initial verifier", TaskComplexity::Medium);
+    let low = fixture.finding("Weighted escalation verifier", TaskComplexity::Low);
+    let prepared = fixture.prepare(&[&medium.id, &low.id]);
+    let assert_draw = |prepared: &Value, task: &Task| {
+        let entry = Fixture::prepared_entry(prepared, task);
+        crate::usage_pressure_draws::assert_pool(
+            &entry["eligible_pool"],
+            &[("medium_claude", 1, 8.0), ("medium_codex", 3, 3.0)],
+        );
+        let partition = prepared["partitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|partition| {
+                partition["task_ids"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(task.id))
+            })
+            .unwrap();
+        let recorded = partition["draws"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|draw| draw["task_id"] == task.id)
+            .unwrap();
+        assert_eq!(recorded["eligible_pool"], entry["eligible_pool"]);
+    };
+    assert_draw(&prepared, &medium);
+    assert_eq!(
+        Fixture::prepared_crew(&fixture.prepare(&[&medium.id]), &medium),
+        Fixture::prepared_crew(&prepared, &medium),
+        "seeded retry is stable"
+    );
+    let applied = fixture.apply(
+        &prepared,
+        &[confirmed(&medium, "high"), rejected(&low, "high")],
+        None,
+    );
+    assert_draw(&applied["escalation_prepared"], &low);
+}
+
 fn the_verifier_is_not_the_filers_crew_when_the_pool_offers_another() {
     let fixture = Fixture::new();
     let params = |title: &str, complexity| TaskAddParams {
@@ -626,8 +696,8 @@ fn the_verifier_is_not_the_filers_crew_when_the_pool_offers_another() {
     );
 }
 
-/// Pools mixing crews whose providers cannot inspect pinned source natively
-/// (gemini, grok) with ones that can. `shared_claude` sits in two tiers.
+/// Pools mixing crews whose shipped executors declare no `inspection_args`
+/// (gemini, grok) with ones that do. `shared_claude` sits in two tiers.
 const MIXED_POOL_CONFIG: &str = r#"
 [workflow]
 default_crew = "default_codex"
@@ -744,6 +814,80 @@ fn without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_
         error.to_string().contains("inspection_crew_unavailable"),
         "{error}"
     );
+}
+
+fn the_inspection_proof_is_owed_by_runs_prepared_for_it_and_its_failures_are_told_apart() {
+    let fixture = Fixture::new();
+    let task = fixture.finding("Proved verdict", TaskComplexity::Medium);
+    let prepared = fixture.prepare(&[&task.id]);
+    let (revision, tree) = (fixture.head(), fixture.tree());
+    let apply = |prepared: &Value, observed_revision: Value, observed_tree: Value| {
+        fixture.action(
+            "apply_finding_verification",
+            json!({
+                "prepared": prepared, "workspace_path": fixture.repo,
+                "run_id": "fixture-run",
+                "results": [{
+                    "partition_index": 0,
+                    "observed_revision": observed_revision,
+                    "observed_tree": observed_tree,
+                    "tasks": [confirmed(&task, "high")],
+                }],
+            }),
+        )
+    };
+    // A run prepared for the proof records nothing without it, and says
+    // whether the proof was missing or did not match.
+    for (observed_revision, observed_tree, reason) in [
+        (Value::Null, Value::Null, "inspection_proof_missing"),
+        (json!(revision), Value::Null, "inspection_proof_missing"),
+        (
+            json!(revision),
+            json!("0".repeat(40)),
+            "inspection_revision_mismatch",
+        ),
+        (
+            json!("0".repeat(40)),
+            json!(tree),
+            "inspection_revision_mismatch",
+        ),
+    ] {
+        let applied = apply(&prepared, observed_revision, observed_tree);
+        let entry = outcome(&applied, &task);
+        assert_eq!(entry["outcome"], "unverified", "{applied}");
+        assert_eq!(entry["reason"], reason, "{applied}");
+        assert_eq!(applied["recorded_count"], 0, "{applied}");
+    }
+    assert!(fixture.verification(&task).is_none());
+
+    // A run prepared before the proof existed, still in flight across the
+    // upgrade, keeps the verdict it returned without one.
+    let mut legacy = prepared.clone();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("inspection_proof_required");
+    let applied = apply(&legacy, Value::Null, Value::Null);
+    assert_eq!(applied["recorded_count"], 1, "{applied}");
+    assert!(fixture.verification(&task).is_some());
+
+    // Git accepts uppercase hex, so a proof read that way still matches.
+    let task = fixture.finding("Uppercase proof", TaskComplexity::Medium);
+    let prepared = fixture.prepare(&[&task.id]);
+    let applied = fixture.action(
+        "apply_finding_verification",
+        json!({
+            "prepared": prepared, "workspace_path": fixture.repo,
+            "run_id": "fixture-run",
+            "results": [{
+                "partition_index": 0,
+                "observed_revision": revision.to_ascii_uppercase(),
+                "observed_tree": tree.to_ascii_uppercase(),
+                "tasks": [confirmed(&task, "high")],
+            }],
+        }),
+    );
+    assert_eq!(applied["recorded_count"], 1, "{applied}");
 }
 
 fn promotion_and_backlog_admission_refuse_an_unverified_review_finding() {
@@ -1424,7 +1568,12 @@ impl orbit_engine::test_support::NullRuntimeHost for VerificationHost<'_> {
                     }
                 })
                 .collect::<Vec<_>>();
-            return Ok(json!({"partition_index": input["partition_index"], "tasks": tasks}));
+            return Ok(json!({
+                "partition_index": input["partition_index"],
+                "observed_revision": self.fixture.head(),
+                "observed_tree": self.fixture.tree(),
+                "tasks": tasks,
+            }));
         }
         let result = self
             .fixture
@@ -1584,8 +1733,10 @@ crate::scenario_table!(
     a_verdict_citing_lines_absent_at_the_pinned_revision_is_not_recorded,
     a_doubtful_verdict_is_reverified_by_the_next_tier_and_names_every_crew,
     the_verifier_is_not_the_filers_crew_when_the_pool_offers_another,
+    verification_partitions_record_pressure_in_both_rounds,
     verifiers_are_drawn_only_from_inspection_capable_crews,
     without_a_capable_pool_crew_the_default_verifies_and_without_one_preparation_fails,
+    the_inspection_proof_is_owed_by_runs_prepared_for_it_and_its_failures_are_told_apart,
     promotion_and_backlog_admission_refuse_an_unverified_review_finding,
     without_the_setting_a_review_finding_is_approved_promoted_and_admitted,
     the_state_trigger_picks_up_only_unverified_review_findings,

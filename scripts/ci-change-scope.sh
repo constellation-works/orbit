@@ -21,7 +21,8 @@
 #   skip      a push whose commit has exactly the tree of the merged pull
 #             request's head, and that head's latest `Check / Clippy / Test`
 #             succeeded in a run that tested every crate: the same bytes
-#             already passed the full gate.
+#             already passed the full gate. The push-only ci-cache-seed.yml
+#             uses this same proof before seeding missing dependency archives.
 #   full      everything else. A push never narrows to affected crates.
 #
 # A pull request run that tests every crate says so in a `Test selection`

@@ -11,8 +11,14 @@ use orbit_types::task::Task;
 use super::params::TaskRecordUpdateParams;
 use crate::context::OrbitStores;
 
-impl OrbitStores {
-    pub(crate) fn task_records(&self) -> TaskRecordService<'_> {
+/// Coordinated task-record writes over [`OrbitStores`], which the runtime
+/// kernel crate owns.
+pub(crate) trait TaskRecords {
+    fn task_records(&self) -> TaskRecordService<'_>;
+}
+
+impl TaskRecords for OrbitStores {
+    fn task_records(&self) -> TaskRecordService<'_> {
         TaskRecordService {
             store: self.tasks(),
             document: self.task_documents(),
@@ -118,6 +124,9 @@ impl TaskRecordService<'_> {
                     dependencies: params.dependencies.clone(),
                     relations: params.relations.clone(),
                     tags: params.tags.clone(),
+                    granted_tools: params.granted_tools.clone(),
+                    requires_labels: params.requires_labels.clone(),
+                    not_before: params.not_before,
                     plan: params.plan.clone(),
                     execution_summary: params.execution_summary.clone(),
                     context_files: params.context_files.clone(),
@@ -212,6 +221,21 @@ impl crate::OrbitRuntime {
         self.stores()
             .tasks()
             .mutate_execution_claim(context, mutation_id, mutation)
+    }
+
+    /// [`Self::mutate_execution_claim`], also reporting whether this call
+    /// committed the mutation rather than replaying its receipt: the only
+    /// authority for a side effect that must follow the commit exactly once.
+    pub(crate) fn mutate_execution_claim_outcome(
+        &self,
+        context: Option<&orbit_store::contracts::ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &orbit_store::contracts::ClaimMutation,
+    ) -> Result<orbit_store::contracts::ClaimMutationOutcome, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.stores()
+            .tasks()
+            .mutate_execution_claim_outcome(context, mutation_id, mutation)
     }
 
     /// Refuse a worker whose claim could no longer take its own update: the

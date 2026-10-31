@@ -112,6 +112,8 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
     assert_eq!(scorecard["cache_ttl_seconds"], 0, "{scorecard}");
     let rows = scorecard["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 2, "{scorecard}");
+    // A plain record includes effort among six fixed columns, plus one per term.
+    let width = 6 + scorecard["terms"].as_array().unwrap().len();
     let opus = rows.iter().find(|row| row["crew"] == "opus").unwrap();
     assert_eq!(opus["units"], 2, "{opus}");
     assert_eq!(opus["below_support"], false, "{opus}");
@@ -131,6 +133,20 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         scan_independent(tool),
         "the command prints the tool's payload"
     );
+
+    let last1000 = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "orchestrators",
+        "--window",
+        "last1000",
+        "--min-support",
+        "2",
+        "--json",
+    ]);
+    assert_eq!(last1000["requested_window"], "last1000", "{last1000}");
+    assert_eq!(last1000["window_attempts"], 1000, "{last1000}");
 
     let detail_input = json!({
         "role": "orchestrators", "crew": "sonnet", "window": "30d", "min_support": 2,
@@ -367,6 +383,81 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         "the landed task is listed under its count:\n{shown}"
     );
 
+    // Plain stdout is the record stream: one tab-separated row per crew and
+    // model, each with a field per column, and the selection and units
+    // summary on stderr. `--header` puts the column header before the rows.
+    let plain = |extra: &[&str]| {
+        fixture
+            .command(
+                &[
+                    &["agents", "scorecard", "--role", "orchestrators"][..],
+                    &selection,
+                    extra,
+                ]
+                .concat(),
+            )
+            .env("NO_COLOR", "1")
+            .assert()
+            .success()
+            .get_output()
+            .clone()
+    };
+    let piped = plain(&[]);
+    let piped_stdout = String::from_utf8(piped.stdout).unwrap();
+    let records: Vec<Vec<&str>> = piped_stdout
+        .lines()
+        .map(|line| line.split('\t').collect())
+        .collect();
+    assert_eq!(records.len(), 2, "one record per row:\n{piped_stdout}");
+    assert!(
+        records.iter().all(|fields| fields.len() == width),
+        "every record has one field per column:\n{piped_stdout}"
+    );
+    let status = String::from_utf8_lossy(&piped.stderr);
+    assert!(
+        status.contains("tasks scanned") && status.contains("Units:"),
+        "the summary stays on stderr:\n{status}"
+    );
+    let with_header = plain(&["--header"]);
+    let with_header = String::from_utf8(with_header.stdout).unwrap();
+    let header: Vec<&str> = with_header.lines().next().unwrap().split('\t').collect();
+    assert_eq!(header.len(), width, "{with_header}");
+    assert_eq!(header[0], "RANK", "{with_header}");
+    assert_eq!(header[3], "EFFORT", "{with_header}");
+    assert!(
+        records.iter().all(|fields| fields[3] == "unknown"),
+        "historical rows must not guess an effort: {piped_stdout}"
+    );
+    assert_eq!(
+        with_header.lines().count(),
+        records.len() + 1,
+        "--header adds exactly one line before the rows:\n{with_header}"
+    );
+
+    // An empty scorecard leaves stdout empty; its status is on stderr.
+    let empty = fixture
+        .command(
+            &[
+                &["agents", "scorecard", "--role", "implementers"][..],
+                &selection,
+            ]
+            .concat(),
+        )
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert!(
+        empty.stdout.is_empty(),
+        "an empty scorecard prints no stdout: {}",
+        String::from_utf8_lossy(&empty.stdout)
+    );
+    assert!(
+        !empty.stderr.is_empty(),
+        "an empty scorecard still explains itself on stderr"
+    );
+
     let refused = fixture
         .command(&[
             "agents",
@@ -386,6 +477,60 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         refused.contains("nobody"),
         "a crew with no row is refused by name: {refused}"
     );
+    // [ORB-19171] The missing-row refusal keeps crew, role and window and
+    // offers a usable scorecard or window-selection next step instead of
+    // implying the crew is unconfigured: a configured crew with no work in
+    // the window also has no row.
+    for part in [
+        "orchestrators",
+        "30d",
+        "scorecard",
+        "orbit agents scorecard --role orchestrators",
+        "--window",
+        "no work in the window has no row",
+    ] {
+        assert!(
+            refused.contains(part),
+            "the missing-row refusal names a recovery step ({part}): {refused}"
+        );
+    }
+    for part in ["unconfigured", "not configured", "unknown crew"] {
+        assert!(
+            !refused.contains(part),
+            "the missing-row refusal must not mislabel the crew ({part}): {refused}"
+        );
+    }
+
+    // The tool surface refuses with the same code and recovery step.
+    let refused = fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.agents.show",
+            "--input",
+            &json!({ "role": "orchestrators", "crew": "nobody" }).to_string(),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let refused: Value = serde_json::from_slice(&refused).unwrap();
+    assert_eq!(refused["code"], "invalid_input", "{refused}");
+    let message = refused["error"].as_str().unwrap();
+    for part in [
+        "nobody",
+        "orchestrators",
+        "30d",
+        "orbit.agents.scorecard",
+        "window",
+        "no work in the window has no row",
+    ] {
+        assert!(
+            message.contains(part),
+            "the tool refusal names a recovery step ({part}): {message}"
+        );
+    }
 }
 
 /// A crew that ran two models in the window has two implementers rows, so
@@ -707,4 +852,174 @@ fn orchestrator_show_aliases_select_a_row_among_legacy_and_recorded_models() {
             "the tool alias answers the {model} row as orbit.agents.show does"
         );
     }
+}
+
+/// `--by-type` returns the cell matrix and the configured type list, is
+/// refused for other roles, and leaves the plain ranking's shape alone.
+#[test]
+fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::agents_scorecard_by_type_returns_cells_and_the_type_list",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let config_path = workspace_root.join("config.toml");
+    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+    std::fs::write(
+        &config_path,
+        format!(
+            "{existing}\n[[workflow.crew_performance_types]]\nname = \"review\"\ntags = [\"no-diff-expected\"]\n"
+        ),
+    )
+    .unwrap();
+
+    let card = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "implementers",
+        "--by-type",
+        "--json",
+    ]);
+    assert_eq!(card["by_type"], true, "{card}");
+    assert_eq!(card["types"][0]["name"], "review", "{card}");
+    assert!(card["cells"].is_array(), "{card}");
+    for cell in card["cells"].as_array().unwrap() {
+        for field in [
+            "crew",
+            "model",
+            "tier",
+            "type",
+            "n",
+            "raw",
+            "crew_mean",
+            "score",
+        ] {
+            assert!(cell.get(field).is_some(), "cell misses {field}: {cell}");
+        }
+    }
+
+    // The plain ranking keeps its rows shape and carries no cells.
+    let plain = fixture.json(&["agents", "scorecard", "--role", "implementers", "--json"]);
+    assert!(plain["rows"].is_array(), "{plain}");
+    assert!(plain.get("cells").is_none(), "{plain}");
+
+    // Other roles refuse the switch.
+    fixture
+        .command(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "orchestrators",
+            "--by-type",
+            "--json",
+        ])
+        .assert()
+        .failure();
+}
+
+/// `--by-type --shadow` returns the share report, including an empty window,
+/// and is refused without `--by-type` or for another role. A call without
+/// the switch keeps the ranking.
+#[test]
+fn agents_scorecard_shadow_reports_shares_and_refuses_a_partial_request() {
+    if crate::isolated_test::run_in_child(
+        "agents_cli::agents_scorecard_shadow_reports_shares_and_refuses_a_partial_request",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let card = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "implementers",
+        "--by-type",
+        "--shadow",
+        "--window",
+        "7d",
+        "--json",
+    ]);
+    assert_eq!(card["shadow"], true, "{card}");
+    assert_eq!(card["by_type"], true, "{card}");
+    assert_eq!(card["window"], "7d", "{card}");
+    assert_eq!(card["requested_window"], "7d", "{card}");
+    assert!(card["pools"].as_array().unwrap().is_empty(), "{card}");
+    assert_eq!(card["static_draws"]["draws"], 0, "{card}");
+    assert!(
+        card["static_draws"]["pools"].as_array().unwrap().is_empty(),
+        "{card}"
+    );
+    assert!(card.get("cells").is_none(), "{card}");
+    assert!(card.get("rows").is_none(), "{card}");
+
+    let plain = fixture.json(&["agents", "scorecard", "--role", "implementers", "--json"]);
+    assert!(plain.get("shadow").is_none(), "{plain}");
+    assert!(plain["rows"].is_array(), "{plain}");
+
+    let by_type = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "implementers",
+        "--by-type",
+        "--json",
+    ]);
+    assert!(by_type.get("shadow").is_none(), "{by_type}");
+    assert!(by_type["cells"].is_array(), "{by_type}");
+
+    let shown = fixture
+        .command(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "implementers",
+            "--by-type",
+            "--shadow",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&shown.stdout),
+        String::from_utf8_lossy(&shown.stderr),
+    );
+    assert!(
+        text.contains("Would-be"),
+        "the report says how to read would-be shares: {text}"
+    );
+    assert!(
+        text.to_lowercase().contains("static"),
+        "the report names the static bucket: {text}"
+    );
+    assert!(text.contains("no recorded draw in the window"), "{text}");
+
+    fixture
+        .command(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "implementers",
+            "--shadow",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    fixture
+        .command(&[
+            "agents",
+            "scorecard",
+            "--role",
+            "orchestrators",
+            "--by-type",
+            "--shadow",
+            "--json",
+        ])
+        .assert()
+        .failure();
 }

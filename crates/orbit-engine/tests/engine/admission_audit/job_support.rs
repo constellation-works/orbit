@@ -106,16 +106,22 @@ pub(super) fn deterministic_target(action: &str) -> TargetStep {
 pub(super) fn target_step(id: &str, action: &str) -> JobV2Step {
     JobV2Step {
         id: id.to_string(),
+        stage: None,
         when: None,
         retry: None,
         recovery_activity: None,
         resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
         body: JobV2StepBody::Target(deterministic_target(action)),
     }
 }
 
 pub(super) fn job_with_steps(steps: Vec<JobV2Step>) -> JobV2 {
     JobV2 {
+        schema_version: 2,
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
         task_delivery: None,
@@ -129,6 +135,7 @@ pub(super) fn job_with_steps(steps: Vec<JobV2Step>) -> JobV2 {
         steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
+        expire_when: None,
         steps,
     }
 }

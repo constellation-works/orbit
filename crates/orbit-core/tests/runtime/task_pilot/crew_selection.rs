@@ -364,13 +364,19 @@ fn admission_recovers_automatic_history_and_reports_current_tier_selection() {
                 "{shown}"
             );
         }
+        // An explicit crew is kept; an automatic one is rewritten to the
+        // crew admission drew [ORB-19416].
         let persisted = workspace.runtime.get_task(&task.id).unwrap();
-        assert_eq!(persisted.crew.as_deref(), Some("low_lane"));
-        assert_eq!(
-            persisted.crew_source,
-            if legacy { None } else { task.crew_source },
-            "admission never rewrites the task"
-        );
+        if explicit {
+            assert_eq!(persisted.crew.as_deref(), Some("low_lane"));
+            assert_eq!(
+                persisted.crew_source,
+                if legacy { None } else { task.crew_source }
+            );
+        } else {
+            assert_eq!(persisted.crew.as_deref(), Some("hard_lane"));
+            assert_eq!(persisted.crew_source.as_deref(), Some("redraw:pool"));
+        }
     }
 }
 
@@ -380,3 +386,5 @@ crate::scenario_table!(
     pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins,
     complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier
 );
+
+mod admitted_scope;

@@ -1,0 +1,141 @@
+schema_version = 1
+
+[app.dashboard]
+setup = ["scripts/visual-fixture-server.sh", "{fixture}"]
+setup_timeout_s = 180
+themes = ["dark"]
+color_scheme_invariant = true
+design_rules = ["docs/design/user-interface/specs/theme.md"]
+tokens = ["crates/orbit-web/assets/dashboard/css/base.css"]
+
+[[view]]
+id = "tasks-list"
+app = "dashboard"
+title = "Tasks list"
+route = "#tasks"
+fixture = "busy-workspace"
+ready = "#tasks-main"
+responsive = true
+states = ["default", "empty", "loading", "error"]
+mask = []
+
+[[view]]
+id = "task-detail"
+app = "dashboard"
+title = "Task detail"
+route = "#tasks/{task}"
+fixture = "busy-workspace"
+ready = "#tasks-main"
+responsive = true
+states = ["default", "loading", "error"]
+mask = []
+
+[[view]]
+id = "run-detail"
+app = "dashboard"
+title = "Run detail"
+route = "#runs/{run}"
+fixture = "busy-workspace"
+ready = "#run-detail-panel"
+responsive = true
+states = ["default", "error"]
+mask = []
+
+[[view]]
+id = "jobs-live"
+app = "dashboard"
+title = "Jobs live"
+route = "#jobs/live"
+fixture = "busy-workspace"
+ready = "#jobs-live-body"
+responsive = true
+states = ["default", "empty"]
+mask = []
+
+[[view]]
+id = "analytics-metrics"
+app = "dashboard"
+title = "Analytics metrics"
+route = "#analytics/metrics"
+fixture = "busy-workspace"
+ready = "#metrics-panel"
+responsive = true
+states = ["default", "loading"]
+mask = []
+
+[[view]]
+id = "analytics-implementers"
+app = "dashboard"
+title = "Analytics implementers"
+route = "#analytics/agents/implementers"
+fixture = "busy-workspace"
+ready = "#agents-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "analytics-forecast"
+app = "dashboard"
+title = "Analytics forecast"
+route = "#analytics/forecast"
+fixture = "busy-workspace"
+ready = "#forecast-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "analytics-experiments"
+app = "dashboard"
+title = "Analytics experiments"
+route = "#analytics/experiments"
+fixture = "experiments"
+ready = "#experiments-panel"
+responsive = true
+states = ["default", "empty"]
+mask = []
+
+[[view]]
+id = "health-diagnostics"
+app = "dashboard"
+title = "Health diagnostics"
+route = "#diagnostics"
+fixture = "busy-workspace"
+ready = "#diagnostics-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "health-doctor"
+app = "dashboard"
+title = "Health doctor"
+route = "#diagnostics/doctor"
+fixture = "busy-workspace"
+ready = "#doctor-panel"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
+id = "automation-routines"
+app = "dashboard"
+title = "Automation routines"
+route = "#operations/routines"
+fixture = "busy-workspace"
+ready = "#routines-panel"
+responsive = true
+states = ["default", "empty"]
+mask = []
+
+[[view]]
+id = "settings"
+app = "dashboard"
+title = "Settings"
+route = "#config"
+fixture = "busy-workspace"
+ready = "#config-panel"
+responsive = true
+states = ["default"]
+mask = []

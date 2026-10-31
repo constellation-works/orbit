@@ -195,7 +195,7 @@ fn grok_reads_shared_location(scope: McpClientScope, home_dir: Option<&Path>) ->
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return true,
         Err(_) => return false,
     };
-    let Ok(config) = raw.parse::<toml::Value>() else {
+    let Ok(config) = toml::from_str::<toml::Value>(&raw) else {
         return false;
     };
     if config
@@ -308,7 +308,7 @@ fn registration_matches(
     let entry = if client == McpClient::Codex
         || (client == McpClient::Grok && path.extension().is_some_and(|ext| ext == "toml"))
     {
-        let Ok(doc) = contents.parse::<toml::Value>() else {
+        let Ok(doc) = toml::from_str::<toml::Value>(&contents) else {
             return false;
         };
         doc.get("mcp_servers")

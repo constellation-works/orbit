@@ -435,6 +435,81 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0057".to_string(),
                 "handoff_settlement_sidecars".to_string(),
             ),
+            (
+                "migration.v0058".to_string(),
+                "crew_performance_snapshot".to_string(),
+            ),
+            (
+                "migration.v0059".to_string(),
+                "job_run_task_recency".to_string(),
+            ),
+            (
+                "migration.v0060".to_string(),
+                "landed_diff_stats".to_string(),
+            ),
+            (
+                "migration.v0061".to_string(),
+                "task_reservation_leases".to_string(),
+            ),
+            (
+                "migration.v0062".to_string(),
+                "backlog_forecasts".to_string(),
+            ),
+            ("migration.v0063".to_string(), "experiments".to_string()),
+            (
+                "migration.v0064".to_string(),
+                "experiment_admissions".to_string(),
+            ),
+            ("migration.v0065".to_string(), "lease_notices".to_string()),
+            (
+                "migration.v0066".to_string(),
+                "task_reservation_lease_token".to_string(),
+            ),
+            (
+                "migration.v0067".to_string(),
+                "task_reservation_lease_queue".to_string(),
+            ),
+            (
+                "migration.v0068".to_string(),
+                "resource_minute_regime".to_string(),
+            ),
+            (
+                "migration.v0069".to_string(),
+                "run_resource_minutes_freshness_index".to_string(),
+            ),
+            (
+                "migration.v0070".to_string(),
+                "reopen_legacy_experiment_admissions".to_string(),
+            ),
+            (
+                "migration.v0071".to_string(),
+                "invocation_long_prompt_requests".to_string(),
+            ),
+            (
+                "migration.v0072".to_string(),
+                "decision_assistance".to_string(),
+            ),
+            (
+                "migration.v0073".to_string(),
+                "worker_resource_limits".to_string(),
+            ),
+            ("migration.v0074".to_string(), "script_grants".to_string(),),
+            (
+                "migration.v0075".to_string(),
+                "delivery_runs_stamp".to_string(),
+            ),
+            (
+                "migration.v0076".to_string(),
+                "job_run_step_activity_window_index".to_string(),
+            ),
+            (
+                "migration.v0077".to_string(),
+                "condition_triggers".to_string(),
+            ),
+            (
+                "migration.v0078".to_string(),
+                "agent_execution_identity".to_string()
+            ),
         ]
     );
 }

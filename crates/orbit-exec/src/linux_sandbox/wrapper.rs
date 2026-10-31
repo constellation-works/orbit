@@ -51,13 +51,13 @@ impl BwrapSource {
 
 /// Resolve a plan's wrapper to a binary the sandboxed process cannot have
 /// replaced, checked at the moment of the call.
-pub(super) fn trusted_wrapper(wrapper: &str) -> Result<PathBuf, OrbitError> {
-    trusted_wrapper_at(wrapper, Path::new(BUNDLED_BWRAP_PATH))
+pub(super) fn verified_bwrap_path(wrapper: &str) -> Result<PathBuf, OrbitError> {
+    verified_bwrap_path_at(wrapper, Path::new(BUNDLED_BWRAP_PATH))
 }
 
-/// [`trusted_wrapper`] with the bundled location supplied, so the ownership
+/// [`verified_bwrap_path`] with the bundled location supplied, so the ownership
 /// refusal can be exercised against files a test can create.
-pub(super) fn trusted_wrapper_at(wrapper: &str, bundled: &Path) -> Result<PathBuf, OrbitError> {
+pub(super) fn verified_bwrap_path_at(wrapper: &str, bundled: &Path) -> Result<PathBuf, OrbitError> {
     if wrapper == HOST_BWRAP_PATH {
         return Ok(PathBuf::from(HOST_BWRAP_PATH));
     }

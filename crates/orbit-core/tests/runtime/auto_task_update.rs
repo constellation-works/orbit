@@ -24,7 +24,7 @@ fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() 
         .auto_task_add(AutoTaskAddParams {
             name: "concurrent-template".into(),
             description: "Concurrent template edits".into(),
-            schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+            schedule: AutoTaskSchedule::every_minutes(60),
             template: AutoTaskTemplate {
                 title: "Original title".into(),
                 description: "Keep this body".into(),

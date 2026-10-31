@@ -1,5 +1,28 @@
 use std::process::Command;
 
+/// Remove v72/v73/v77/v78 tables and the v75 counter with its triggers before fixtures
+/// replay their migrations from an older schema: a `job_runs` trigger names
+/// `run_resource_minutes`, which those fixtures drop.
+pub fn drop_replayed_migration_tables(connection: &rusqlite::Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "DROP TRIGGER IF EXISTS delivery_runs_stamp_run_insert;
+         DROP TRIGGER IF EXISTS delivery_runs_stamp_run_delete;
+         DROP TRIGGER IF EXISTS delivery_runs_stamp_run_update;
+         DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_insert;
+         DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_delete;
+         DROP TRIGGER IF EXISTS delivery_runs_stamp_minute_rekey;
+         DROP TABLE IF EXISTS delivery_runs_stamp;
+         DROP TABLE IF EXISTS agent_executions;
+         DROP TABLE IF EXISTS worker_resource_limits;
+         DROP TABLE IF EXISTS assistance_attempts;
+         DROP TABLE IF EXISTS assistance_slots;
+         DROP TABLE IF EXISTS assistance_budgets;
+         DROP TABLE IF EXISTS assistance_work;
+         DROP TABLE IF EXISTS automation_condition_audit;
+         DROP TABLE IF EXISTS automation_condition_states;",
+    )
+}
+
 pub fn isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_STORE_ADMISSION_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
@@ -34,6 +57,8 @@ use orbit_types::task::{ExternalRef, TaskComment, TaskPriority, TaskStatus, Task
 pub fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskCreateParams {
+        granted_tools: Vec::new(),
+        requires_labels: Vec::new(),
         actor: "codex:gpt-5.5".to_string(),
         parent_id: None,
         title: title.to_string(),
@@ -66,7 +91,9 @@ pub fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
+        created_by_model: None,
         origin: None,
+        rule_fingerprint: None,
         comments: vec![TaskComment {
             at: now,
             by: "daniel".to_string(),
@@ -74,5 +101,7 @@ pub fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
             operation_id: None,
         }],
         context_creation: Vec::new(),
+        creation_decision: None,
+        not_before: None,
     }
 }

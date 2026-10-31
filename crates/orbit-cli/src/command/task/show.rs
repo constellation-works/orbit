@@ -148,10 +148,20 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
                 .get("regression")
                 .map(|regression| {
                     let part = |key| regression.get(key).and_then(Value::as_str);
+                    let sites = regression
+                        .get("sites")
+                        .and_then(Value::as_array)
+                        .map(|sites| {
+                            let sites = sites.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+                            format!(", sites: {}", sites.join(", "))
+                        })
+                        .unwrap_or_default();
                     format!(
-                        " (nature: {}, escape: {})",
+                        " (nature: {}, escape: {}, severity: {}, severity source: {}{sites})",
                         part("nature").unwrap_or_default(),
-                        part("escape").unwrap_or_default()
+                        part("escape").unwrap_or_default(),
+                        part("severity").unwrap_or_default(),
+                        part("severity_source").unwrap_or_default()
                     )
                 })
                 .unwrap_or_default();
@@ -207,6 +217,18 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         };
         let _ = writeln!(out, "{} {runs_on}", bold("Runs on:"));
     }
+    let requires_labels = list("requires_labels");
+    if !requires_labels.is_empty() {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            bold("Requires Labels:"),
+            requires_labels.join(", ")
+        );
+    }
+    if let Some(wait) = task.get("placement_wait").and_then(Value::as_str) {
+        let _ = writeln!(out, "{} {wait}", bold("Placement:"));
+    }
     let required_tools = list("required_tools");
     if !required_tools.is_empty() {
         let _ = writeln!(
@@ -214,6 +236,15 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
             "{} {}",
             bold("Required Tools:"),
             required_tools.join(", ")
+        );
+    }
+    let granted_tools = list("granted_tools");
+    if !granted_tools.is_empty() {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            bold("Granted Tools:"),
+            granted_tools.join(", ")
         );
     }
     let external_refs = task
@@ -266,6 +297,7 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
     }
     for (label, key) in [
         ("Created By:", "created_by"),
+        ("Created By Model:", "created_by_model"),
         ("Planned By:", "planned_by"),
         ("Implemented By:", "implemented_by"),
         ("Execution Crew:", "crew"),
@@ -315,6 +347,15 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
             let _ = writeln!(out, "  {line}");
         }
     }
+    // A `verify-mock-ui` task's capture of record: what was captured and
+    // checked, or why it is not established.
+    if let Some(summary) = task
+        .get("visual_review")
+        .and_then(|visual| visual.get("summary"))
+        .and_then(Value::as_str)
+    {
+        let _ = writeln!(out, "{} {summary}", bold("Visual Review:"));
+    }
     if pr.is_none()
         && let Some(pr_status) = field("pr_status")
     {
@@ -325,6 +366,14 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
     }
     if let Some(source_task_id) = field("source_task_id") {
         let _ = writeln!(out, "{} {}", bold("Source Task:"), source_task_id);
+    }
+    for (label, key) in [
+        ("Scheduled:", "not_before"),
+        ("Actual start:", "started_at"),
+    ] {
+        if let Some(value) = field(key) {
+            let _ = writeln!(out, "{} {}", bold(label), timestamp(value));
+        }
     }
     let _ = writeln!(
         out,
@@ -460,7 +509,13 @@ fn write_field(value: &Value, field: &str, text: &mut String) -> Result<(), Orbi
                 let _ = writeln!(text, "- {}", criterion);
             }
         }
-        "dependencies" | "resolved_dependencies" | "tags" | "required_tools" | "context_files" => {
+        "dependencies"
+        | "resolved_dependencies"
+        | "tags"
+        | "required_tools"
+        | "granted_tools"
+        | "requires_labels"
+        | "context_files" => {
             for item in strings(value) {
                 let _ = writeln!(text, "{}", item);
             }

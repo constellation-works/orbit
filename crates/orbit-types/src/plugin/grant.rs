@@ -1,6 +1,7 @@
 //! Grants: the operator's answer to a manifest's `permissions` request.
 //!
-//! A manifest *requests* (`spec.permissions`, `spec.backend.sandbox`); the
+//! A manifest *requests* (`spec.permissions`, `spec.backend.sandbox`,
+//! `spec.tools[].agent_callable`); the
 //! operator *grants* at `orbit plugin enable --grant …`. Only the second is
 //! authority (design §4.1). This module is the one mapping from request to
 //! grant name, so the loader, `orbit plugin show`, and the audit row all
@@ -28,16 +29,20 @@ pub enum PluginGrant {
     OrbitTools,
     /// `backend.sandbox: none`: the backend runs unconfined.
     Unsandboxed,
+    /// `tools[].agent_callable`: agent sessions may call the declared
+    /// append-only or proposal-only mutating tools.
+    AgentTools,
 }
 
 impl PluginGrant {
     /// Every grant, in the order surfaces list them.
-    pub const ALL: [PluginGrant; 5] = [
+    pub const ALL: [PluginGrant; 6] = [
         PluginGrant::Fs,
         PluginGrant::Network,
         PluginGrant::EnvPass,
         PluginGrant::OrbitTools,
         PluginGrant::Unsandboxed,
+        PluginGrant::AgentTools,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -47,6 +52,7 @@ impl PluginGrant {
             Self::EnvPass => "env_pass",
             Self::OrbitTools => "orbit_tools",
             Self::Unsandboxed => "unsandboxed",
+            Self::AgentTools => "agent_tools",
         }
     }
 
@@ -74,6 +80,7 @@ impl PluginGrant {
             Self::EnvPass => "spec.permissions.env_pass",
             Self::OrbitTools => "spec.permissions.orbit_tools",
             Self::Unsandboxed => "spec.backend.sandbox: none",
+            Self::AgentTools => "spec.tools[].agent_callable",
         }
     }
 }
@@ -440,6 +447,19 @@ pub struct PluginGrantRequest {
 }
 
 impl PluginManifest {
+    /// Sorted manifest verbs requesting consent for agent-session mutation.
+    pub fn agent_callable_tool_verbs(&self) -> Vec<String> {
+        let mut verbs: Vec<_> = self
+            .spec
+            .tools
+            .iter()
+            .filter(|tool| tool.agent_callable)
+            .map(|tool| tool.name.clone())
+            .collect();
+        verbs.sort();
+        verbs
+    }
+
     /// Every grant with the manifest's request beside it, in canonical order.
     pub fn grant_requests(&self) -> Vec<PluginGrantRequest> {
         let permissions = &self.spec.permissions;
@@ -469,6 +489,10 @@ impl PluginManifest {
                         .then(|| permissions.orbit_tools.join(",")),
                     PluginGrant::Unsandboxed => (self.spec.backend.sandbox == PluginSandbox::None)
                         .then(|| "backend.sandbox: none".to_string()),
+                    PluginGrant::AgentTools => {
+                        let verbs = self.agent_callable_tool_verbs();
+                        (!verbs.is_empty()).then(|| verbs.join(","))
+                    }
                 };
                 PluginGrantRequest { grant, requested }
             })

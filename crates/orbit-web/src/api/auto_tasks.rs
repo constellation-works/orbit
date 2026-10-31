@@ -9,10 +9,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
 };
-use orbit_core::application::auto_tasks::AutoTaskListingRow;
 use orbit_core::application::auto_tasks::scheduler::open_auto_task_instances_from_tasks;
+use orbit_core::application::auto_tasks::{
+    AutoTaskListingRow, AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile,
+};
 use orbit_core::{OrbitRuntime, Task};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
 use serde::Deserialize;
@@ -91,9 +93,8 @@ pub(super) async fn list_auto_tasks(
 
 /// `POST /api/auto-tasks/toggle` — set one definition's versioned `enabled` flag.
 ///
-/// Compare-and-set uses the raw flag the client observed. "Already in that
-/// state" follows the effective switch, so Disable on a legacy-enabled
-/// consumer (raw flag still false) reaches the write and stamps the operator.
+/// The observed profile of the shared toggle command decides; this handler
+/// binds the operator, audits an attempted write and renders the outcome.
 pub(super) async fn toggle_auto_task(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
@@ -127,56 +128,50 @@ pub(super) async fn toggle_auto_task(
         }
     };
     let started = Instant::now();
-    let name = body.name.clone();
-    let current = match blocking("auto-task show", {
+    let outcome = match blocking("auto-task toggle", {
         let runtime = runtime.clone();
-        move || runtime.auto_task_show(&name)
+        let name = body.name.clone();
+        let profile = AutoTaskToggleProfile::Observed {
+            expected_enabled: body.expected_enabled,
+        };
+        let enabled = body.enabled;
+        move || Ok(runtime.auto_task_toggle_command(&name, enabled, profile))
     })
     .await
     {
-        Ok(Some(definition)) => definition,
-        Ok(None) => {
+        Ok(outcome) => outcome,
+        Err(response) => return *response,
+    };
+    let updated = match outcome {
+        Ok(AutoTaskToggleOutcome::Written(updated)) => updated,
+        Ok(AutoTaskToggleOutcome::AlreadySet(_)) => {
+            return Json(json!({
+                "name": body.name,
+                "enabled": body.enabled,
+                "changed": false,
+                "message": if body.enabled { "Auto-task already enabled" } else { "Auto-task already disabled" },
+            }))
+            .into_response();
+        }
+        Ok(AutoTaskToggleOutcome::Stale { actual_enabled }) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "auto-task state changed while this action was pending; refresh before retrying",
+                    "code": "stale_auto_task_state",
+                    "actual_enabled": actual_enabled,
+                })),
+            )
+                .into_response();
+        }
+        Ok(AutoTaskToggleOutcome::NotFound) => {
             return named_entity_not_found(
                 "auto_task_not_found",
                 format!("auto-task '{}' was not found", body.name),
             );
         }
-        Err(response) => return *response,
-    };
-    if current.enabled != body.expected_enabled {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "auto-task state changed while this action was pending; refresh before retrying",
-                "code": "stale_auto_task_state",
-                "actual_enabled": current.enabled,
-            })),
-        )
-            .into_response();
-    }
-    // A legacy after-landing consumer is on while its raw flag is still
-    // false. Comparing the request to that raw flag would report Disable as
-    // a no-op and leave the consumer running.
-    if runtime.auto_task_enabled(&current) == body.enabled {
-        return Json(json!({
-            "name": body.name,
-            "enabled": body.enabled,
-            "changed": false,
-            "message": if body.enabled { "Auto-task already enabled" } else { "Auto-task already disabled" },
-        }))
-        .into_response();
-    }
-    let updated = match blocking("auto-task toggle", {
-        let runtime = runtime.clone();
-        let name = body.name.clone();
-        let enabled = body.enabled;
-        let expected_enabled = body.expected_enabled;
-        move || Ok(runtime.auto_task_toggle_checked(&name, expected_enabled, enabled))
-    })
-    .await
-    {
-        Ok(Ok(updated)) => updated,
-        Ok(Err(error)) => {
+        Err(AutoTaskToggleError::Read(error)) => return map_runtime_error(error),
+        Err(AutoTaskToggleError::Write(error)) => {
             let error_message = error.to_string();
             record_operation_audit(
                 &runtime,
@@ -193,7 +188,6 @@ pub(super) async fn toggle_auto_task(
             .await;
             return auto_task_control_error(error);
         }
-        Err(response) => return *response,
     };
     record_operation_audit(
         &runtime,
@@ -313,7 +307,7 @@ pub(super) async fn mint_auto_task(
     .into_response()
 }
 
-fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
+pub(super) fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
     match error {
         orbit_core::OrbitError::CapabilityRefused(message) => (
             StatusCode::FORBIDDEN,
@@ -329,7 +323,7 @@ fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
     }
 }
 
-async fn resolve_workspace_blocking(
+pub(super) async fn resolve_workspace_blocking(
     state: &DashboardState,
     workspace: &str,
 ) -> Result<Arc<OrbitRuntime>, Box<Response>> {
@@ -377,6 +371,7 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
         "capabilities": {
             "auto_task_toggle": {"authorized": false, "reason": reason},
             "auto_task_mint": {"authorized": false, "reason": reason},
+            "auto_task_schedule": {"authorized": false, "reason": reason},
         },
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
@@ -447,6 +442,10 @@ fn list_json(
         || action_capability(&DASHBOARD_AUTO_TASK_MINT, operator_session),
         |reason| json!({"authorized": false, "reason": reason}),
     );
+    let schedule_capability = role_refusal.as_deref().map_or_else(
+        || action_capability(&DASHBOARD_AUTO_TASK_SCHEDULE, operator_session),
+        |reason| json!({"authorized": false, "reason": reason}),
+    );
     let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session)
         .is_ok()
         && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok()
@@ -459,6 +458,7 @@ fn list_json(
         "capabilities": {
             "auto_task_toggle": toggle_capability,
             "auto_task_mint": mint_capability,
+            "auto_task_schedule": schedule_capability,
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
@@ -520,6 +520,12 @@ fn definition_json(
         "schedule": definition.schedule,
         "schedule_summary": schedule_summary(&definition.schedule),
         "automation": automation,
+        // A condition definition's ownership, arm counts, stall and last
+        // fire and skip.
+        "condition": match runtime.auto_task_condition_listing(definition) {
+            Ok(listing) => json!(listing),
+            Err(error) => json!({"unavailable": error.to_string()}),
+        },
         "template_summary": template_summary(&definition.template),
         "template": {
             "title": definition.template.title,
@@ -568,20 +574,28 @@ fn definition_json(
 }
 
 fn schedule_summary(schedule: &AutoTaskSchedule) -> String {
-    match schedule {
+    let base = match schedule {
         AutoTaskSchedule::Deliveries {
             deliveries_landed: t,
+            ..
         } => format!(
             "{} deliveries on {} ({})",
             t.threshold, t.branch, t.coverage
         ),
-        AutoTaskSchedule::Cron { cron } => format!("cron {cron}"),
-        AutoTaskSchedule::Interval { every_minutes } if *every_minutes == 1 => {
+        AutoTaskSchedule::Cron { cron, .. } => format!("cron {cron}"),
+        AutoTaskSchedule::Interval { every_minutes, .. } if *every_minutes == 1 => {
             "every 1 minute".to_string()
         }
-        AutoTaskSchedule::Interval { every_minutes } => {
+        AutoTaskSchedule::Interval { every_minutes, .. } => {
             format!("every {every_minutes} minutes")
         }
+        AutoTaskSchedule::Condition { condition } => {
+            format!("{} condition: {}", condition.scope.as_str(), condition.when)
+        }
+    };
+    match schedule.guard().and_then(|guard| guard.when.as_deref()) {
+        Some(when) => format!("{base}, when {when}"),
+        None => base,
     }
 }
 

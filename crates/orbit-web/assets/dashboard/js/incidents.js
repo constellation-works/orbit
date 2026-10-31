@@ -61,7 +61,6 @@ const GROUP_MODES = [["cause", "By cause"], ["signature", "By signature"]];
 let incidentClass = "unexpected";
 let windowOverride = null;
 let searchQuery = "";
-let lastHourOnly = false;
 let groupMode = "cause";
 let noMessageOnly = false;
 let selectedKey = null;
@@ -139,9 +138,9 @@ function incidentMessageText(row) {
 
 // The feed bounds every message and flags a cut one `truncated` [ORB-15527];
 // `message_event_id` names the audit row the detail panel loads it from. A
-// message that ends in an ellipsis was cut before it was stored; when one of
-// the incident's own audit events carries a longer copy of the same text,
-// that copy is the message.
+// message that ends in an ellipsis was cut before it was stored. The server
+// recovers complete copies before bounding the evidence preview; consider
+// those messages across runs, plus preview rows from older servers.
 function fullMessage(incidents) {
   const sample = incidents[0];
   const recorded = recordedMessage(sample);
@@ -153,9 +152,14 @@ function fullMessage(incidents) {
   if (!TRAILING_ELLIPSIS.test(recorded)) return { text: recorded, recorded: true, truncated: false };
   const stem = recorded.replace(TRAILING_ELLIPSIS, "");
   for (const incident of incidents) {
-    for (const event of incidentEvents(incident)) {
+    for (const event of [incident, ...incidentEvents(incident)]) {
       const message = recordedMessage(event);
       if (message.length > stem.length && message.startsWith(stem) && !TRAILING_ELLIPSIS.test(message)) {
+        if (event.truncated === true) {
+          const sourceId = event === incident ? event.message_event_id : event.id;
+          const eventId = Number.isSafeInteger(sourceId) && sourceId > 0 ? sourceId : null;
+          return { text: message, recorded: true, truncated: true, eventId };
+        }
         return { text: message, recorded: true, truncated: false };
       }
     }
@@ -614,15 +618,16 @@ function selectClass(key) {
 function insightsNode(groups, now) {
   const live = groups.filter(group => isLive(group, now)).length;
   const silent = groups.filter(group => !group.message.recorded).length;
+  const lastHourSelected = getIncidentWindow() === "1h";
   const chips = [];
-  if (live > 0 || lastHourOnly) {
+  if (live > 0) {
     const chip = el("button", {
-      class: `incident-insight live${lastHourOnly ? " on" : ""}`,
+      class: `incident-insight live${lastHourSelected ? " on" : ""}`,
       type: "button",
-      "aria-pressed": lastHourOnly ? "true" : "false",
+      "aria-pressed": lastHourSelected ? "true" : "false",
     }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), `${plural(live, "signature")} failed in the last hour`]);
     chip.dataset.insight = "last-hour";
-    chip.addEventListener("click", () => { lastHourOnly = !lastHourOnly; rerender(); });
+    chip.addEventListener("click", () => selectWindow("1h"));
     chips.push(chip);
   }
   if (silent > 0 || noMessageOnly) {
@@ -644,7 +649,7 @@ function insightsNode(groups, now) {
   }
   const node = el("div", { class: "incident-insights", role: "group", "aria-label": "Insights" }, chips);
   node.dataset.key = "incident-insights";
-  node.dataset.hash = JSON.stringify([live, silent, lastHourOnly, noMessageOnly]);
+  node.dataset.hash = JSON.stringify([live, silent, lastHourSelected, noMessageOnly]);
   return node;
 }
 
@@ -661,8 +666,7 @@ function matchesSearch(group, query) {
 
 function visibleGroups(groups, now) {
   const query = searchQuery.trim().toLowerCase();
-  return groups.filter(group => (!lastHourOnly || isLive(group, now))
-    && (!noMessageOnly || !group.message.recorded)
+  return groups.filter(group => (!noMessageOnly || !group.message.recorded)
     && matchesSearch(group, query));
 }
 
@@ -791,8 +795,6 @@ function ensureLayout(body) {
   search.addEventListener("input", () => { searchQuery = search.value; rerender(); });
   const searchLabel = el("label", { class: "visually-hidden", text: "Filter incidents" });
   searchLabel.htmlFor = "incident-search";
-  const lastHour = el("button", { class: "incident-toggle", type: "button", text: "Last hour only" });
-  lastHour.addEventListener("click", () => { lastHourOnly = !lastHourOnly; rerender(); });
   const modes = el("div", { class: "incident-windows incident-modes", role: "group", "aria-label": "Group rows" });
   const modeButtons = GROUP_MODES.map(([mode, text]) => {
     const button = el("button", { class: "incident-seg", type: "button", text });
@@ -809,7 +811,6 @@ function ensureLayout(body) {
     heading,
     el("div", { class: "incident-search-wrap" }, [searchLabel, search]),
     modes,
-    lastHour,
   ]);
   const axisHead = el("div", { class: "incident-axis-head", "aria-hidden": "true" });
   const rows = el("div", { class: "incident-rows", role: "group", "aria-label": "Incident signatures" });
@@ -819,7 +820,7 @@ function ensureLayout(body) {
   const root = el("div", { class: "incident-layout" }, [master, detail]);
   root.dataset.key = "incident-layout";
   root.dataset.hash = "incident-layout";
-  layout = { root, heading, search, lastHour, modeButtons, axisHead, rows, footer, master, detail };
+  layout = { root, heading, search, modeButtons, axisHead, rows, footer, master, detail };
   return layout;
 }
 
@@ -829,7 +830,6 @@ function emptyNode(text, { clear = false, status = false } = {}) {
     const button = el("button", { class: "incident-link-button", type: "button", text: "Clear filters" });
     button.addEventListener("click", () => {
       searchQuery = "";
-      lastHourOnly = false;
       noMessageOnly = false;
       if (layout) layout.search.value = "";
       rerender();
@@ -895,13 +895,15 @@ function factsNode(group, ctx) {
 }
 
 function groupEventIds(group) {
-  const ids = group.incidents.flatMap(incident => Array.isArray(incident.events) ? incident.events.map(event => event.id) : [])
+  const ids = group.incidents.flatMap(incident => Array.isArray(incident.event_ids)
+    ? incident.event_ids
+    : (Array.isArray(incident.events) ? incident.events.map(event => event.id) : []))
     .filter(id => Number.isSafeInteger(id) && id > 0);
   return ids.length > 0 && ids.length === group.events ? ids : null;
 }
 
-// Exact event IDs when the payload carried every one; otherwise the actor and
-// surface narrow Events to the same population.
+// The complete ID list survives a bounded evidence preview. Older servers
+// carry IDs only in events; otherwise actor and surface narrow the population.
 function openAuditEvents(group) {
   const eventIds = groupEventIds(group);
   const sample = group.sample;
@@ -998,14 +1000,23 @@ function evidenceTable(events, ctx) {
   return table;
 }
 
-// The forensic record: why these rows grouped, what they propagated to, and
-// every underlying audit row the payload carried.
+// The forensic record: the grouping signature and propagation chain, plus a
+// five-row-per-incident audit evidence preview. When events_omitted is
+// positive, the panel shows that count and offers an Open all events action.
 function evidenceNode(group, ctx) {
   const details = el("details", { class: "incident-disclosure incident-evidence-details" });
   details.open = evidenceOpen;
   details.addEventListener("toggle", () => { if (details.isConnected !== false) evidenceOpen = details.open; });
   const events = group.incidents.flatMap(incidentEvents);
   details.appendChild(el("summary", { text: `Audit evidence (${events.length} of ${eventCountLabel(group.events)} shown)` }));
+  const omitted = group.incidents.reduce((sum, incident) => sum + asCount(incident.events_omitted), 0);
+  if (omitted > 0) {
+    details.appendChild(el("p", { class: "incident-message-note incident-evidence-note" }, [
+      `This list shows an evidence preview; ${eventCountLabel(omitted)} omitted. `,
+      auditButton(group, `Open all ${eventCountLabel(group.events)}`, "incident-link-button"),
+      " to read the complete records.",
+    ]));
+  }
   const signatures = [...new Set(group.incidents.map(incident => incident.signature).filter(Boolean))];
   details.appendChild(el("dl", { class: "incident-signature" }, [
     el("dt", { text: "Grouping signature" }),
@@ -1228,8 +1239,6 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
     button.className = `incident-seg${on ? " on" : ""}`;
     button.setAttribute("aria-pressed", on ? "true" : "false");
   }
-  view.lastHour.className = `incident-toggle${lastHourOnly ? " on" : ""}`;
-  view.lastHour.setAttribute("aria-pressed", lastHourOnly ? "true" : "false");
   const axisHead = el("div", { class: "incident-axis-row" }, [
     el("span", { class: "incident-main", text: byCause ? "Cause · signature" : "Signature" }),
     axisNode(axis, 2, "incident-track incident-axis"),

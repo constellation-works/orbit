@@ -1,0 +1,3 @@
+{"payload_type":"run.lifecycle.started","payload":{"prompt":"Reply with exactly: ok"}}
+{"payload_type":"status","payload":{"kind":"run_usage","models":[],"allowance":{"tier":null,"window":{"used_percent":27,"resets_at_ms":1792740094000},"weekly":{"used_percent":10,"resets_at_ms":1792972800000},"as_of_ms":1792728789169,"source":"stream"}}}
+{"payload_type":"run.terminal.completed","payload":{"terminal":"completed","text":"ok"}}

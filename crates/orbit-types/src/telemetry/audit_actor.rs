@@ -45,8 +45,9 @@ use crate::identity::{agent_from_model, all_agent_families, provider_for_agent_f
 ///
 /// History: v2 moved `fable` from a shorthand alias to a family rule, so
 /// versioned Fable labels (`fable-5.1`) resolve to `claude` instead of an
-/// unrecognized family.
-pub const ACTOR_ALIAS_MAP_VERSION: u32 = 2;
+/// unrecognized family. v3 registers `muse` as a canonical family, so
+/// `muse` and `muse-*` labels resolve to the `muse` family (vendor `meta`).
+pub const ACTOR_ALIAS_MAP_VERSION: u32 = 3;
 
 /// What kind of thing performed an audited invocation.
 ///
@@ -116,7 +117,7 @@ pub struct CanonicalActor {
     /// Provider that serves the model (`anthropic`, `openai`, …). `None` for
     /// non-agents and for agent labels whose family is unrecognized.
     pub vendor: Option<String>,
-    /// Orbit agent family (`claude`, `codex`, `gemini`, `grok`, `ollama`).
+    /// Orbit agent family (`claude`, `codex`, `gemini`, `grok`, `muse`, `ollama`).
     pub family: Option<String>,
     /// Model string as recorded, when the label named a model rather than a
     /// bare family. `None` when only the family was recorded.

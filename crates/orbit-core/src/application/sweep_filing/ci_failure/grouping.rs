@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_engine::ci_log_signature::LineKind;
 use orbit_tools::github_cli::strip_ansi_sequences;
+use orbit_types::task::CiFailureSource;
 use serde_json::Value;
 
 use super::cluster::{FailureCluster, job_log_source};
@@ -51,7 +52,7 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         let regions = valid_failure_regions(&failure["diagnostic_unit"]);
         // Partial command retention cannot prove an exhaustive compiler set.
         let compiler_cause = (!regions).then(|| compiler_cause(&log_excerpt)).flatten();
-        let legacy_key = compiler_cause.as_ref().map(|_| {
+        let legacy_key = (compiler_cause.is_some() || !test_identity.is_empty()).then(|| {
             let lines = classify_log_lines(&log_excerpt);
             let legacy = legacy_signature(&lines, &step);
             digest(&[&workflow, &job, &step, &legacy])
@@ -114,6 +115,7 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
                     .unwrap_or(false),
                 log_source_job: job_log_source(failure),
                 runs: Vec::new(),
+                sources: Vec::new(),
             }
         });
         if !job.is_empty() {
@@ -127,6 +129,7 @@ pub(super) fn cluster_failures(failures: &[Value]) -> Vec<FailureCluster> {
         if per_job_key != cluster.failure_key {
             cluster.legacy_keys.insert(per_job_key);
         }
+        cluster.sources.push(failure_source(failure));
         cluster.runs.push(failure.clone());
     }
 
@@ -257,16 +260,11 @@ pub(super) fn failure_test_names(failure: &Value) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// Generated descriptions shipped these exact provenance labels. This is a
-/// compatibility check for old tags, not a free-text root-cause heuristic.
-pub(super) fn legacy_source_matches(description: &str, run: &Value) -> bool {
-    let run_id = value_string(run, "run_id");
-    let job_id = value_string(run, "job_id");
-    let checkout = tested_commit(run);
-    !run_id.is_empty()
-        && !job_id.is_empty()
-        && !checkout.is_empty()
-        && description.contains(&format!("run `{run_id}`"))
-        && description.contains(&format!("(id `{job_id}`)"))
-        && description.contains(&format!("commit actually checked out: `{checkout}`"))
+/// Parse supplying provenance at the snapshot boundary, before dedupe comparisons.
+fn failure_source(run: &Value) -> CiFailureSource {
+    CiFailureSource {
+        run_id: value_string(run, "run_id"),
+        job_id: value_string(run, "job_id"),
+        checkout: tested_commit(run),
+    }
 }

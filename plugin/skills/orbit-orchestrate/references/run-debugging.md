@@ -4,9 +4,10 @@ Debug an Orbit job run without guessing. A failed run has multiple layers of evi
 
 ## Quick Triage
 
-Given a run id `<run_id>`, first read it through the authoritative
-`orbit_workflow_run_show` (`id`, `workspace`) or the owning host's
-`orbit run show`. Record the owner host and workspace before inspecting evidence:
+Given a run id `<run_id>`, first read it through the owning host's
+`orbit run show`. The authoritative `orbit_workflow_run_show` (`id`,
+`workspace`) requires operator authority and is denied for agent sessions.
+Record the owner host and workspace before inspecting evidence:
 
 1. Inspect run state, step summary, and process details:
 
@@ -73,10 +74,13 @@ complete.
 
 ### Tell a working agent from an abandoned wrapper
 
-For a run that is still `running`, `orbit_workflow_run_show` carries
+For a run that is still `running`, the operator-only `orbit_workflow_run_show`
+(operator authority; denied for agent sessions) carries
 `execution_progress`: the activity step that is open and the provider children
-it spawned. Only `show` carries it — `orbit_workflow_run_list` pages many runs
-and does not pay for an audit scan and a liveness probe per row.
+it spawned. Only `show` carries it — `orbit_workflow_run_list` (also
+operator-only) pages many runs and does not pay for an audit scan and a
+liveness probe per row. A session with a shell on the owning host reads the
+same liveness with `orbit run show <run_id> --json` (`provider_processes`).
 
 Its `state` is `observed` when the run has a v2 audit trail and `unavailable`
 when it has none, so an empty projection never has to be read as "nothing is
@@ -176,6 +180,196 @@ evidence. Treat `checkout_identity.state: incomplete`, `missing`, or
 - **Recovery failure:** the original step failed and `step_failure_recovery` also failed — report both, keep the original step as primary unless recovery caused additional damage.
 - **Parent orchestration failure:** a child run failed and a gate/auto parent is still running or waiting — identify both run ids.
 
+## Local required-validation replay
+
+A failed local required command can receive one bounded, isolated replay of
+the selected failing tests on the same candidate. This is an automatic
+validation evidence path, not permission to repeat checks manually or to add
+retries.
+
+The replay is eligible only when the synchronized base has a comparable
+passing result without a host-coverage refusal, the original candidate command
+did not pass, time out, lack a required tool, fail from infrastructure or
+network trouble, defer execution, or refuse host output, and the runner can
+identify one to three failing tests. If these conditions do not hold, no
+candidate replay can establish a pass. When eligible, the system runs the
+original command once with the exact failing-test selection on the same
+candidate.
+
+The replay resolves the original command only if it passes without a timeout,
+missing tool, infrastructure failure, deferred outcome, or host-output
+refusal; reports exactly the handed failing-test selection; and executes at
+least as many tests as that selection contains. This ties the passing result
+to every named original failure. A qualifying replay is recorded in task
+history as `flaky_validation`, and delivery may continue with the original
+failure and successful replay preserved as evidence. An attempted replay that
+fails or cannot prove the required selection and coverage remains a required
+command failure. Its replay log is kept, while the original log has no
+accepted `flaky` record. Ineligible failures remain failures as well.
+
+### Inspect the local replay evidence
+
+List a task's artifact paths and history first:
+
+```bash
+orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["artifacts","history"]}'
+```
+
+For the relevant command index, fetch the original candidate log, its base
+comparison log, and the replay log when present:
+
+```bash
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.json","model":"<agent-family>"}'
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.baseline.json","model":"<agent-family>"}'
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"validation/<run-id>/<index>.rerun.json","model":"<agent-family>"}'
+```
+
+The original log's `candidate_rerun` field links to the last path. The replay
+log identifies its `role` as `candidate_rerun`; the base log is named by the
+original log's baseline record. Cross-check `command` and `run_id` across all
+three logs. The original log's `base_sha` should match the base log and the
+accepted history record; its `tested_head` should match the replay log and
+history record. Compare each log's `validation_env` and captured outputs. The
+typed `flaky_validation` history record binds `command`, `run_id`, `base_sha`,
+and `tested_head`, and carries the selected failing tests, original/base/replay
+outputs, replay environment, and `rerun_tests_run`. Confirm the event's record
+matches the artifacts before treating delivery as resolved. If the replay
+path or accepted history event is absent, the command has no accepted local
+replay evidence.
+
+This mechanism is separate from [hosted-check diagnosis](#hosted-check-failures-and-inherited-red-bases), which classifies provider jobs and their permitted landing reruns. A red or unproven base follows the separate [red-base hold procedure](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base). The weekly [`flaky-test-hunt` auto-task](../../orbit-setup/references/auto-tasks.md#the-twenty-three-seeded-definitions) analyzes hosted CI history and files tasks; it does not explain this local command replay.
+
+## Hosted-check failures and inherited red bases
+
+Use this procedure when owner landing is waiting on or stopped by a failed
+hosted check. It classifies required checks and checks explicitly owed by
+review on the pinned PR head before spending candidate recovery. A red rollup
+alone does not establish a code defect or an abandoned run.
+
+### Inspect the owner, task and provider evidence
+
+1. On the owning host and workspace, find the landing run as well as the
+   delivery leaf and drain. Inspect each relevant run; the shipped
+   `task_landing_pipeline` uses step `land` for activity `handoff_land`:
+
+   ```bash
+   orbit run show <landing-run-id> --no-reconcile --json
+   orbit run show <landing-run-id> --step land --no-reconcile --json
+   orbit run events <landing-run-id> --no-reconcile --json
+   orbit run logs <landing-run-id> --step land --no-reconcile --json
+   orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>","fields":["status","job_run_id","external_refs","history","comments"]}'
+   ```
+
+   Copy actual step IDs when a job is customized. Run JSON uses `.run.state`;
+   a step read exposes `step_output`. Read the run's error and task history
+   even if a failed deterministic step has no successful output or agent log.
+   These run commands inspect the host where they execute; an agent without
+   owner access reports that gap rather than substituting a follower's store.
+
+2. In task history, inspect `event` and decode its JSON `note` where present:
+   - `landing_waiting_for_base`: `state: "waiting_for_base"`, `head`, `reason`
+     and absolute `deadline_ms`. A recorded wait is evidence of a bounded
+     landing poll, not an instruction to restart it.
+   - `ci_base_suspect`: `base`, `head`, `check`, `signature`, `run_id`, `job_id`,
+     `run_attempt`, `pr_number`, `event`, `started_at`, `completed_at`, `reason`.
+   - `ci_check_rerun`: `head`, `run_id`, `pr_number`, `event`, and `jobs[]`
+     containing `check`, `classification`, `signature`, `job_id`,
+     `run_attempt`, `started_at` and `completed_at` from the earlier attempt.
+   - `pr_base_update_reserved`: `execution`, `repository`, `pr_number`,
+     `head_sha`, `base_sha`, `base_branch`, `deadline_ms` and `evidence`.
+     Inherited handoff recovery names `evidence.cause: "inherited"` and
+     `evidence.handoff_id`; count reservations for that PR, not polls.
+   - `landing_stopped`: the stop reason, including classification, diagnostic
+     signature/log excerpt or the evidence that could not be read. The owner
+     claim's stopped landing attempt retains the full evidence: structured PR
+     refusals have `kind: "owner_landing_refusal"`, `reason`, `repairable`,
+     `accepted`, `observation` and, for a requeue stop, `requeue: true`.
+
+   Completed landing output has `phase: "landed"` and `evidence`; when check
+   recovery acted, `evidence.check_recovery` lists its actions. Recovery
+   activity success alone does not prove a check passed or a PR merged.
+
+3. Independently inspect the PR and the exact failed job and base push runs
+   using the installed GitHub CLI in the owning repository:
+
+   ```bash
+   gh pr view <pr-number> --repo <owner/repo> --json number,url,state,headRefOid,baseRefName,mergeStateStatus,statusCheckRollup
+   gh pr checks <pr-number> --repo <owner/repo> --required
+   gh run view <workflow-run-id> --repo <owner/repo> --attempt <attempt> --verbose
+   gh run view <workflow-run-id> --repo <owner/repo> --attempt <attempt> --job <job-id> --log
+   gh run list --repo <owner/repo> --branch <base-branch> --event push --commit <base-sha>
+   ```
+
+   Repeat the job/log reads for the relevant base runs. Record the workflow
+   and job name, failed step, emitted diagnostic signature, head/base SHAs,
+   event, PR association, run/attempt identities and timestamps. A shared job
+   name or failed-step label alone is insufficient. For latest-base push
+   evidence, landing can look back at most eight first-parent commits for the
+   same job's success/failure: a skipped or absent job says nothing; a pending
+   same job waits. An unreadable listing/log is a gap, never a passing base.
+
+### Interpret the classification before choosing recovery
+
+| Class | Decisive evidence and owner-landing behavior |
+|---|---|
+| **Inherited** | The same emitted signature fails on the accepted base, or a moved base tip passes the same workflow/job. Untouched-file failures need the base-suspect procedure below unless matching base failure evidence establishes inheritance. Landing updates the PR branch onto the current base when admitted, then reads checks again; a still-red or unproven base waits without a repair agent. |
+| **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs once and waits again. A repeated transient failure stops in review, without a code repair. |
+| **Base-suspect** | The log cites only repository files the candidate did not change and the base does not establish the same failure. Wait for a successful same-check push run on the accepted base ancestry; even a pass predating the PR failure only permits one unchanged-head PR rerun. A passing rerun clears it. Candidate attribution needs the same signature repeated on that rerun. A matching base failure remains inherited. |
+| **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. Landing stops for its one automatic repair, or the bounded backlog return when that repair is spent. |
+| **Inconclusive** | Job identity, listing, logs or diagnostic evidence is missing/unreadable; an empty log or signature containing only the step name proves no cause. Stop in review without rerunning, updating or repairing. |
+
+An unchanged-head rerun must be a verified `pull_request` execution for the
+same PR and head, the same workflow run with a later `run_attempt`, starting
+after the earlier attempt completed, with the same check and signature.
+Compare provider evidence with `ci_base_suspect` or `ci_check_rerun`; a
+suspicion note, another push/dispatch run or a green base alone cannot spend
+the repair. The rerunnable untouched-file case can appear as `flaky` in
+`ci_check_rerun.jobs[].classification`. It shares landing's one-rerun budget
+with transient recovery.
+
+Every failed required check needs its own evidence. A required aggregate
+check with no answering workflow job is candidate-owned only when its own
+failure annotations all name files the candidate changed; otherwise it is
+inconclusive. Passing analysis jobs do not clear a failed aggregate.
+
+### Recognize the bounded wait and its outcome
+
+Inherited handoff base updates share a persisted budget of at most three
+cumulative updates, each onto a different base commit, across polls, retries
+and restarts. After the first update, a newer tip where every inherited job
+passes can permit another update. A red, pending or unproven tip keeps waiting
+within the landing deadline, including when the update budget is spent. Only
+a head already containing that passing tip that still fails earns candidate
+repair. These are verified merges of base advances into the PR branch;
+landing does not edit or rebase the candidate to bypass a check.
+
+The `landing_waiting_for_base` note makes that wait visible. At the landing
+deadline, an unresolved base wait stops in review with the reason `the base
+never recovered before the landing deadline`. Base-suspect observations also
+have `max_base_ci_cycles` (default 3) per unchanged head/check/signature;
+exhaustion stops in review naming the check, signature and missing evidence.
+Inspect the effective activity input and recorded deadline instead of
+extending or restarting the wait by assumption.
+
+A conclusive candidate failure stops for one automatic repair leaf with
+fresh validation and a new handoff. Once that repair is spent, the owner
+ends the claim and returns the task to `backlog`, preserving the candidate
+and failure evidence for its next run. Exhausting the task's landing repair
+budget blocks it for an operator. Unreadable evidence and unresolved base
+waits spend no candidate repair. Confirm the actual task and latest landing
+attempt state before recommending any action.
+
+These outcomes describe existing owner landing, not new operator authority.
+For completion-watcher repairs use [auto-fix authorization](orchestration.md#auto-fix-authorization);
+its repair and single base-update limits remain separate. A **missing**
+protected result uses that reference's narrowly proved HTTP-prerequisite
+infrastructure rerun, not this failed-job classification. Local required
+validation failures use [red-base validation holds](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base),
+not hosted landing waits. None of these diagnoses authorizes manual requeue,
+a second drain, weaker checks or a merge. A stopped healthy handoff follows
+the existing operator-only [retry landing](orchestration.md#retry-a-stopped-owner-landing)
+procedure only when its authority and evidence qualify.
+
 ## Operator Agent Invocations
 
 A run of `agent_invoke_pipeline` is not a delivery pipeline. It is one operator
@@ -235,6 +429,96 @@ orbit tool run orbit.task.show --full --input '{"id":"<task_id>","model":"<agent
 ```
 
 Check status/history, plan/execution_summary, comments, workspace_path, external_refs/PR metadata, dependencies/resolved_dependencies. If implementation succeeded but a later workflow step failed, the task may already have a useful execution summary — preserve that context.
+
+## Decision requests on held work
+
+Some held work waits for a human judgment rather than a retry. Orbit then
+records a **decision request** on the task. The request names its gate
+(`block_triage`, `pilot_admission`, `proposed_approval` or `review_approval`),
+the allowed answers with each one's consequence, the binding it was raised
+against, and an expiry. It is a task-history entry, so it stays with the task.
+
+A request reads in one of four effective states:
+
+- `open`: waiting for an answer.
+- `answered`: an allowed answer was applied. Terminal.
+- `superseded`: the hold changed before an answer arrived, such as a new block
+  episode, a newer pilot assessment, a newer request on the same task, a task
+  that moved, or an answer given on another surface. Terminal.
+- `expired`: `expires_at` passed while the request was open. Terminal.
+
+Supersession and expiry are derived when a request is read, so a request can
+read `superseded` before any sweeper has run.
+
+### Find requests
+
+```bash
+orbit decision list                          # open requests in the active workspace
+orbit decision list --gate pilot_admission   # one gate only
+orbit decision list --task <task-id> --all   # one task, including closed requests
+orbit decision show <request-id>             # allowed answers, binding, expiry, resolution
+```
+
+The task lists its open requests in `open_decisions`:
+
+```bash
+orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["status","open_decisions"]}'
+```
+
+An agent session reads the same requests through the registered read-only tools
+`orbit.decision.list` (`gate`, `task_id`, `include_closed`) and
+`orbit.decision.show` (`id`).
+
+The dashboard's **Why stuck** card links each blocked or held task to the run or
+finding that stopped it, with one-click requeue, settle-merged and
+pilot-admission actions. Use the card to find what stopped a task, and answer
+its request as described below.
+
+### Answer requests (operator only)
+
+An operator answers a request from the CLI or the dashboard:
+
+```bash
+orbit decision answer <request-id> <answer-id> --note "<evidence>"
+```
+
+`<answer-id>` must be one of the request's allowed answers, as
+`orbit decision show` lists them. The answer is applied as the human operator.
+For a pilot-admission verdict the note is the verdict's evidence, so give one.
+A superseded or expired request is refused and nothing changes.
+
+### Agents read, never answer
+
+An agent session may read a request: seeing it never answers it. It may not
+answer one. `orbit.decision.answer` is registered inactive, so only the operator
+CLI and the dashboard answer. It may not submit one either: `orbit.decision.submit`
+is governed and never callable from an agent session. Submissions come from a
+registered decision channel's plugin, which presents a per-request token;
+`orbit decision submit` is the CLI form of that operation.
+
+When a request waits on an answer, report its id, gate and allowed answers to
+the operator and leave the answer to them. Do not route around the request with
+a task update.
+
+### Verify an answer applied
+
+1. `orbit decision show <request-id>` reads `answered`, and its `resolution`
+   names the chosen answer, the answering human, the note and when it was applied.
+2. `orbit decision list --task <task-id>` no longer lists the request as open,
+   and `open_decisions` no longer names it.
+3. The task history holds a `decision_answered` entry for the request, beside the
+   entry the answer itself produced (a pilot verdict, a triage application or an
+   approval):
+
+   ```bash
+   orbit tool run orbit.task.show --input '{"id":"<task-id>","fields":["history"]}'
+   ```
+
+4. Check the outcome the answer asked for in the task's own state, such as its
+   status.
+
+If the command errored or the request still reads `open`, do not assume the
+answer was applied. Read the request again before answering it a second time.
 
 ## Check Parent And Child Runs
 

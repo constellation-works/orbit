@@ -19,6 +19,25 @@ pub use orbit_store::contracts::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage, TaskRow,
 };
 
+/// A store-wide scan can omit a corrupt bundle, but must disclose why. Other
+/// failures (including I/O and authorization errors) still fail the scan.
+pub(crate) fn task_bundle_scan_result<T>(
+    result: Result<T, OrbitError>,
+    warnings: &mut Vec<String>,
+) -> Result<Option<T>, OrbitError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error @ OrbitError::TaskBundleCorrupt { .. }) => {
+            let warning = error.to_string();
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[derive(Debug)]
 pub struct TaskListQuery {
     pub filter: TaskListFilter,
@@ -128,8 +147,17 @@ fn query_task_store(
         let mut ids = BTreeSet::new();
         for task in candidates.items {
             let comments = runtime.get_task_comments(&task.id)?;
-            if !super::task_pilot_warnings(task.status, &comments).is_empty() {
-                ids.insert(task.id);
+            let task_id = task.id.clone();
+            let status = task.status;
+            let dependencies = metadata_task(task).dependencies();
+            let is_done = |id: &str| {
+                matches!(
+                    runtime.get_task(id),
+                    Ok(found) if found.status == TaskStatus::Done
+                )
+            };
+            if !super::task_pilot_warnings(status, &comments, &dependencies, &is_done).is_empty() {
+                ids.insert(task_id);
             }
         }
         Some(ids)
@@ -210,6 +238,21 @@ impl OrbitRuntime {
         self.stores().tasks().task_candidates(filter, limit)
     }
 
+    /// [`Self::task_candidates`] as an informational snapshot: no
+    /// commit-boundary section, recovery, index repair or persisted
+    /// freshness proofs, so an observational poll never queues behind a
+    /// drain's task commits. Never an admission decision.
+    pub fn observe_task_candidates(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<TaskCandidates, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(TaskCandidates::default());
+        }
+        self.stores().tasks().observe_task_candidates(filter, limit)
+    }
+
     /// [`Self::task_candidates`] answered by the generated index alone, for a
     /// filter it fully covers: the selected ids and creation times, with no
     /// envelope read. `None` sends the caller to [`Self::task_candidates`].
@@ -222,6 +265,21 @@ impl OrbitRuntime {
             return Ok(Some(Default::default()));
         }
         self.stores().tasks().task_candidate_keys(filter, limit)
+    }
+
+    /// [`Self::task_candidate_keys`] under the observational terms of
+    /// [`Self::observe_task_candidates`].
+    pub fn observe_task_candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(Some(Default::default()));
+        }
+        self.stores()
+            .tasks()
+            .observe_task_candidate_keys(filter, limit)
     }
 
     /// Return the bounded registry status projection needed to label one
@@ -286,6 +344,7 @@ impl OrbitRuntime {
         let tasks = list_task_metadata_in(self.stores().tasks())?;
         let workspace_root = self.paths().repo_root.as_path();
         let unlocked = self.unlocked_context_paths();
+        let lock_modes = self.footprint_lock_modes();
         let lock_holders = active_task_lock_holders(&tasks, workspace_root, unlocked);
         let holder_index = lock_holder_index(&lock_holders);
         let mut candidates: Vec<&Task> = tasks
@@ -304,7 +363,8 @@ impl OrbitRuntime {
 
         let mut eligibility = TaskEligibility::default();
         for task in candidates {
-            let overlaps = task_lock_overlaps(task, &holder_index, workspace_root, unlocked);
+            let overlaps =
+                task_lock_overlaps(task, &holder_index, workspace_root, unlocked, lock_modes);
             if !overlaps.is_empty() {
                 eligibility.conflicting.push(TaskEligibilityConflict {
                     task: task.clone(),

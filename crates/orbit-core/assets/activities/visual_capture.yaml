@@ -1,0 +1,57 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_capture
+spec:
+  type: deterministic
+  description: >
+    The capture of record for a `verify-mock-ui` task whose
+    `visual_review.mode` is not `off`. Checks out the delivery's head
+    detached, runs each app's setup there, and captures every budgeted mock
+    twice (a third time when they differ) at the mock digests frozen when
+    the delivery was admitted, with a side-by-side image each. The images
+    and `visual/capture.json` are attached by Orbit's system writer under
+    the reserved `visual/` prefix. A host without a verified browser kit at
+    this build's pin, or whose every setup fails, records `not_established`
+    with its reason, never a pass. A claimed leaf captures against the
+    contract its owner captured at admission. Reports `applies: false` and
+    writes nothing for any other task, and for a `no-diff-expected` skip.
+  input_schema_json:
+    type: object
+    required: [completed_task_ids, workspace_path]
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      workspace_path:
+        type: string
+      # A `no-diff-expected` skip delivers no candidate to capture.
+      skipped_no_diff_expected:
+        type: [boolean, "null"]
+      pass:
+        type: string
+        enum: [delivery, recapture, measure]
+        description: >
+          `delivery` (default) writes under `visual/`; `measure`, the
+          post-landing comparison of the landed head, under `visual/measure/`.
+  output_schema_json:
+    type: object
+    required: [applies, captures]
+    properties:
+      applies:
+        type: boolean
+      captures:
+        type: array
+        items:
+          type: object
+      task_id:
+        type: string
+      capture_artifact:
+        type: string
+      capture_sha256:
+        type: string
+  action: visual_capture
+  config: {}

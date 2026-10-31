@@ -61,6 +61,11 @@ pub struct ClaimSettlementRecord {
     pub evidence: ClaimSettlementEvidence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<orbit_types::workflow::ClaimFailureClass>,
+    /// A review refusal awaiting a recorded decision, rather than an
+    /// implementation failure. The claim's blocking outcome is unchanged.
+    /// Missing on settlements from older builds; those default to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub review_decision_pending: bool,
     /// The typed failure's reason, else the settlement summary; bounded.
     pub reason: String,
     /// The crew the leaf ran as: the settlement's own report, else the crew
@@ -71,6 +76,14 @@ pub struct ClaimSettlementRecord {
     /// Absent for a follower that predates the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_model: Option<String>,
+    /// The leaf's worktree branch, when its follower reported it. Absent for
+    /// a follower that predates the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The leaf's absolute worktree path on its executing machine, when its
+    /// follower reported it. Absent for a follower that predates the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
     /// The first leaf step that did not complete, when the leaf kept a
     /// candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,6 +117,7 @@ impl ClaimSettlementRecord {
             kind,
             evidence: ClaimSettlementEvidence::of(evidence),
             failure_class: failure.map(|failure| failure.class),
+            review_decision_pending: failure.is_some_and(|failure| failure.review_decision_pending),
             reason: reason[..cut].to_string(),
             crew: named(&evidence.crew)
                 .or_else(|| named(&reported.crew))
@@ -115,6 +129,8 @@ impl ClaimSettlementRecord {
                         .and_then(|provider| provider.crew.clone())
                 }),
             crew_model: named(&evidence.crew_model).or_else(|| named(&reported.crew_model)),
+            branch: named(&reported.branch),
+            worktree_path: named(&reported.worktree_path),
             failed_step_id: failure
                 .and_then(|failure| failure.candidate.as_ref())
                 .and_then(|candidate| candidate.failed_step_id.clone()),
@@ -377,6 +393,13 @@ pub enum ClaimMutation {
     Recover {
         status: TaskStatus,
         reason: String,
+        /// The phase the operator observed. It is part of the mutation's
+        /// receipt identity, so an identical request replays its recorded
+        /// recovery after the claim has moved to `Revoked`, while reuse of
+        /// the same request key against a different observed phase is a
+        /// mismatched reuse. The transactional application enforces it as
+        /// a precondition of a fresh recovery.
+        expected_phase: ExecutionClaimPhase,
     },
     /// Durable guard for the later external merge consumer. Only operators can record
     /// or reconcile intent; revocation cannot race past an unresolved intent.
@@ -405,6 +428,19 @@ pub enum ClaimMutation {
         request_key: String,
         job_run_id: String,
     },
+    /// Record in task history that the live landing attempt waits for its
+    /// base to recover. Changes no attempt, authority, phase or status.
+    RecordLandingWait {
+        handoff_id: String,
+        reason: String,
+    },
+    /// Append one of the narrowly allowed CI observations to a live landing
+    /// attempt. The store validates the event name before writing history.
+    RecordLandingHistory {
+        handoff_id: String,
+        event: String,
+        note: String,
+    },
     /// Complete an authorized landing against verified external merge evidence.
     /// Refused while a merge intent is unresolved or the authority is stale.
     CompleteLanding {
@@ -425,6 +461,10 @@ pub enum ClaimMutation {
         base_branch: String,
         merge_commit: String,
         note: String,
+        /// Independently verified by the owner for a stopped authorized handoff.
+        /// Absent on the historical operator-revoked settlement path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verified_candidate_head: Option<String>,
     },
     /// Stop the live attempt with durable evidence, leaving the task in review.
     /// A `repairable` stop — the candidate conflicts with, or is stale
@@ -522,6 +562,16 @@ pub struct ClaimMutationResult {
     pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub friction: Option<orbit_types::record::FrictionRecord>,
+}
+
+/// A claim mutation's result and whether this call committed it. Exactly one
+/// call commits a mutation; every replay of its receipt, including one that
+/// raced the commit, reports `committed: false`. Never persisted: the receipt
+/// keeps only the result, so a replay returns the original result unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimMutationOutcome {
+    pub result: ClaimMutationResult,
+    pub committed: bool,
 }
 
 /// SQL effects checked and published at the journal's existing commit point.

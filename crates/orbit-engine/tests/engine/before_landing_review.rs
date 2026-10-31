@@ -361,6 +361,12 @@ fn shipped_job() -> orbit_types::workflow::JobV2 {
 struct Host {
     outcome: Outcome,
     dirty: bool,
+    /// Decision the before-landing admit stub returns. `admitted` and
+    /// `resumed` still start the reviewer; `evidence_received` must not.
+    landing_decision: &'static str,
+    /// The reviewer stub fails if called, so a skipped step is the only
+    /// way an evidence-received run can succeed.
+    reviewer_fails: bool,
     completions: Mutex<usize>,
     last_completion: Mutex<Option<Value>>,
     calls: Mutex<Vec<(String, Value)>>,
@@ -371,6 +377,22 @@ impl Host {
         Self {
             outcome,
             dirty,
+            landing_decision: "admitted",
+            reviewer_fails: false,
+            completions: Mutex::default(),
+            last_completion: Mutex::default(),
+            calls: Mutex::default(),
+        }
+    }
+
+    /// A before-landing admit of `decision`. When `reviewer_fails`, the
+    /// reviewer stub refuses, so success means the step was not dispatched.
+    fn landing(decision: &'static str, reviewer_fails: bool) -> Self {
+        Self {
+            outcome: Outcome::Approve,
+            dirty: false,
+            landing_decision: decision,
+            reviewer_fails,
             completions: Mutex::default(),
             last_completion: Mutex::default(),
             calls: Mutex::default(),
@@ -409,7 +431,9 @@ impl Host {
             };
         }
         if input.get("before_landing") == Some(&json!(true)) {
-            return applies("rvw-landing");
+            let mut admitted = applies("rvw-landing");
+            admitted["decision"] = json!(self.landing_decision);
+            return admitted;
         }
         json!({ "applies": false, "reason": "review_before_landing", "timing": "before-landing" })
     }
@@ -419,6 +443,8 @@ impl Host {
             return Ok(json!({
                 "gate": "not_required",
                 "reviewed_head_sha": "",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "",
                 "reviewer_fixed": false,
                 "review_fixes": "",
@@ -429,6 +455,8 @@ impl Host {
             return Ok(json!({
                 "gate": "passed",
                 "reviewed_head_sha": "rebased-head",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "rebased-base",
                 "implementation_head_sha": "rebased-head",
                 "reviewer_fixed": false,
@@ -446,6 +474,8 @@ impl Host {
             Outcome::Approve => Ok(json!({
                 "gate": "passed",
                 "reviewed_head_sha": "candidate",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "base-sha",
                 "implementation_head_sha": "candidate",
                 "reviewer_fixed": false,
@@ -454,6 +484,8 @@ impl Host {
             Outcome::Fix => Ok(json!({
                 "gate": "passed",
                 "reviewed_head_sha": "landing-fix",
+                "selective_selection_head_sha": "",
+                "selective_receipt": null,
                 "reviewed_base_sha": "base-sha",
                 "implementation_head_sha": "candidate",
                 "reviewer_fixed": true,
@@ -539,6 +571,14 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
             }),
             "test_stub_review_gate_admit" => self.admit(input),
             "test_stub_agent_review_repair" => {
+                if self.reviewer_fails {
+                    return Err(DispatchError::DeterministicActionRefused {
+                        action: "test_stub_agent_review_repair".to_string(),
+                        message: "the landing reviewer must not run once evidence_received is \
+                                  decided"
+                            .to_string(),
+                    });
+                }
                 if self.outcome == Outcome::Timeout {
                     return Err(DispatchError::DeterministicActionRefused {
                         action: "test_stub_agent_review_repair".to_string(),
@@ -589,10 +629,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
 /// pre-publication validation is carried through unchanged.
 fn a_claimed_leaf_reviews_its_open_pr_and_hands_off_the_head_it_settled() {
     for fix in [true, false] {
-        let host = LeafHost {
-            fix,
-            calls: Mutex::default(),
-        };
+        let host = LeafHost::approving(fix);
         let audit_root = tempfile::tempdir().expect("audit tempdir");
         let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), RUN);
         let result = execute_job_with_resume(
@@ -678,6 +715,15 @@ const LEAF_ACTIVITIES: &[&str] = &[
     "final_recovery",
     RECOVERY,
     "pr_conflict_recovery",
+    "visual_capture",
+    "visual_checks",
+    "visual_review_prepare",
+    "visual_review",
+    "visual_verify_prepare",
+    "visual_verify",
+    "visual_settle",
+    "visual_recapture",
+    "visual_landed",
 ];
 
 fn shipped_leaf() -> orbit_types::workflow::JobV2 {
@@ -713,7 +759,32 @@ fn shipped_leaf() -> orbit_types::workflow::JobV2 {
 /// reviewer commits a fix when `fix` is set.
 struct LeafHost {
     fix: bool,
+    /// Decision the before-landing admit stub returns.
+    landing_decision: &'static str,
+    /// The reviewer stub fails if called.
+    reviewer_fails: bool,
     calls: Mutex<Vec<(String, Value)>>,
+}
+
+impl LeafHost {
+    fn approving(fix: bool) -> Self {
+        Self {
+            fix,
+            landing_decision: "admitted",
+            reviewer_fails: false,
+            calls: Mutex::default(),
+        }
+    }
+
+    /// A before-landing admit of `decision` that settles without a fix.
+    fn landing(decision: &'static str, reviewer_fails: bool) -> Self {
+        Self {
+            fix: false,
+            landing_decision: decision,
+            reviewer_fails,
+            calls: Mutex::default(),
+        }
+    }
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
@@ -754,7 +825,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
             }),
             "test_stub_review_gate_admit" if input["before_landing"] == true => json!({
                 "applies": true,
-                "decision": "admitted",
+                "decision": self.landing_decision,
                 "first_task_id": "T-1",
                 "attempt_id": "rvw-landing",
                 "lineage_key": "claim-1",
@@ -766,12 +837,24 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
             "test_stub_review_gate_admit" => {
                 json!({ "applies": false, "reason": "review_before_landing" })
             }
-            "test_stub_agent_review_repair" => json!({ "summary": "reviewed" }),
+            "test_stub_agent_review_repair" => {
+                if self.reviewer_fails {
+                    return Err(DispatchError::DeterministicActionRefused {
+                        action: "test_stub_agent_review_repair".to_string(),
+                        message: "the landing reviewer must not run once evidence_received is \
+                                  decided"
+                            .to_string(),
+                    });
+                }
+                json!({ "summary": "reviewed" })
+            }
             "test_stub_review_gate_settle" => {
                 if input.pointer("/admission/applies") == Some(&json!(true)) {
                     json!({
                         "gate": "passed",
                         "reviewed_head_sha": reviewed,
+                        "selective_selection_head_sha": "",
+                        "selective_receipt": null,
                         "reviewed_base_sha": "base-sha",
                         "implementation_head_sha": "candidate",
                         "reviewer_fixed": self.fix,
@@ -782,6 +865,8 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
                     json!({
                         "gate": "not_required",
                         "reviewed_head_sha": "",
+                        "selective_selection_head_sha": "",
+                        "selective_receipt": null,
                         "reviewed_base_sha": "",
                         "reviewer_fixed": false,
                         "review_fixes": "",
@@ -817,6 +902,13 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
             }),
             "test_stub_pr_open" => json!({ "pr_number": "41" }),
             "test_stub_claim_handoff" => json!({ "handed_off": true, "merged": false }),
+            "test_stub_visual_capture" => json!({ "applies": false, "captures": [] }),
+            "test_stub_visual_review_prepare" => {
+                json!({ "applies": false, "review_count": 0, "reviews": [], "records": [] })
+            }
+            "test_stub_visual_verify_prepare" => {
+                json!({ "applies": false, "partition_count": 0, "partitions": [], "records": [] })
+            }
             other => panic!("unexpected action `{other}`"),
         };
         Ok(output)
@@ -832,6 +924,103 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
     ) -> Result<Option<u64>, OrbitError> {
         Ok(None)
     }
+}
+
+fn run_leaf(host: &LeafHost) -> Result<JobOutcome, DispatchError> {
+    let audit_root = tempfile::tempdir().expect("audit tempdir");
+    let (writer, _envelope, _inner) = build_writer_and_sinks(audit_root.path(), RUN);
+    execute_job_with_resume(
+        &shipped_leaf(),
+        json!({
+            "task_ids": ["T-1"],
+            "base_branch": "main",
+            "base_sync": "remote",
+        }),
+        RUN,
+        writer,
+        host,
+        None,
+    )
+}
+
+fn landing_settle_saw(calls: &[(String, Value)], decision: &str) -> bool {
+    inputs_of(calls, "test_stub_review_gate_settle")
+        .iter()
+        .any(|input| input.pointer("/admission/decision").and_then(Value::as_str) == Some(decision))
+}
+
+/// An owed hold whose evidence already arrived: both shipped pipelines
+/// settle the unchanged candidate and never dispatch the reviewer, even
+/// though that stub refuses if it is called.
+fn an_evidence_received_before_landing_review_settles_without_a_reviewer() {
+    let host = Host::landing("evidence_received", true);
+    let result = run(&host, "done");
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "owner: {result:?}"
+    );
+    let calls = host.calls();
+    assert!(
+        inputs_of(&calls, "test_stub_agent_review_repair").is_empty(),
+        "owner landing reviewer ran: {:?}",
+        actions(&calls)
+    );
+    assert!(
+        landing_settle_saw(&calls, "evidence_received"),
+        "owner settlement did not see evidence_received: {:?}",
+        inputs_of(&calls, "test_stub_review_gate_settle")
+    );
+    assert_eq!(inputs_of(&calls, "test_stub_pr_complete").len(), 1);
+
+    let leaf = LeafHost::landing("evidence_received", true);
+    let result = run_leaf(&leaf);
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "claimed: {result:?}"
+    );
+    let calls = leaf.calls.lock().expect("calls").clone();
+    assert!(
+        inputs_of(&calls, "test_stub_agent_review_repair").is_empty(),
+        "claimed landing reviewer ran: {:?}",
+        actions(&calls)
+    );
+    assert!(
+        landing_settle_saw(&calls, "evidence_received"),
+        "claimed settlement did not see evidence_received"
+    );
+    let handoff = &inputs_of(&calls, "test_stub_claim_handoff")[0];
+    assert_eq!(
+        handoff["landing_review_evidence"]["reviewed_head_sha"],
+        "candidate"
+    );
+}
+
+/// A resumed before-landing attempt is not an evidence receipt: both
+/// pipelines still start their reviewer. The before-PR step stays skipped.
+fn a_resumed_before_landing_review_still_invokes_its_reviewer() {
+    let host = Host::landing("resumed", false);
+    let result = run(&host, "done");
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "owner: {result:?}"
+    );
+    let calls = host.calls();
+    let reviewers = inputs_of(&calls, "test_stub_agent_review_repair");
+    assert_eq!(reviewers.len(), 1, "owner: {:?}", actions(&calls));
+    assert_eq!(reviewers[0]["attempt_id"], "rvw-landing");
+    assert!(landing_settle_saw(&calls, "resumed"));
+
+    let leaf = LeafHost::landing("resumed", false);
+    let result = run_leaf(&leaf);
+    assert!(
+        matches!(&result, Ok(outcome) if outcome.success),
+        "claimed: {result:?}"
+    );
+    let calls = leaf.calls.lock().expect("calls").clone();
+    let reviewers = inputs_of(&calls, "test_stub_agent_review_repair");
+    assert_eq!(reviewers.len(), 1, "claimed: {:?}", actions(&calls));
+    assert_eq!(reviewers[0]["attempt_id"], "rvw-landing");
+    assert!(landing_settle_saw(&calls, "resumed"));
 }
 
 /// Behavior-distinct rows share one bounded family process.
@@ -871,6 +1060,14 @@ fn landing_review_contracts_2() {
             (
                 "a_claimed_leaf_reviews_its_open_pr_and_hands_off_the_head_it_settled",
                 a_claimed_leaf_reviews_its_open_pr_and_hands_off_the_head_it_settled,
+            ),
+            (
+                "an_evidence_received_before_landing_review_settles_without_a_reviewer",
+                an_evidence_received_before_landing_review_settles_without_a_reviewer,
+            ),
+            (
+                "a_resumed_before_landing_review_still_invokes_its_reviewer",
+                a_resumed_before_landing_review_still_invokes_its_reviewer,
             ),
         ]);
     });

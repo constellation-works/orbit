@@ -18,14 +18,19 @@ use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
 use crate::bootstrap::product_profile::ProductProfile;
 use crate::bootstrap::task_migration::apply_configured_id_start;
+use crate::bootstrap::workspace_authority::admit_workspace_layout_authority;
+pub use crate::bootstrap::workspace_authority::{
+    AuthorityAdoptionEvidence, WorkspaceAuthorityAdoption, adopt_workspace_layout_authority,
+    verify_workspace_layout_authority,
+};
 #[cfg(target_os = "macos")]
 use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
-    HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, RuntimeConfigLoader,
-    WorkspaceRootHint, WorkspaceRuntimeBinding, resolve_bootstrap_roots,
-    resolve_bootstrap_roots_with_hint, resolve_global_root, resolve_initialize_roots,
-    resolve_initialize_roots_with_hint,
+    APPLICATION_PORT, HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots,
+    RuntimeConfigLoader, RuntimeKernel, WorkspaceRootHint, WorkspaceRuntimeBinding,
+    resolve_bootstrap_roots, resolve_bootstrap_roots_with_hint, resolve_global_root,
+    resolve_initialize_roots, resolve_initialize_roots_with_hint,
 };
 
 impl OrbitRuntime {
@@ -50,7 +55,12 @@ impl OrbitRuntime {
         ])?;
         // Library consumers must also refuse before bootstrap can migrate or
         // reconcile resources under a participating persistent CLI/MCP client.
-        let _generation = pin_executable_generation(&roots.global_root, false)?;
+        let generation = pin_executable_generation(&roots.global_root, false)?;
+        if !generation.joined_foreign_generation() {
+            // The workspace's clients may participate in another authority:
+            // refuse before bootstrap writes under them [ORB-20244].
+            verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
+        }
         ensure_orbit_root_initialized(&roots.global_root, &roots.shared_root)?;
         build_runtime(
             &roots.global_root,
@@ -232,7 +242,7 @@ impl OrbitRuntime {
         let _generation = pin_executable_generation(global_root, true)?;
         let layout_report = observe_or_upgrade_layout(shared_root, true)?;
         let config = ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?;
-        Self::build_from_resolved_config_write_free(
+        RuntimeKernel::build_from_resolved_config_write_free(
             &OrbitRuntimeRoots {
                 global_root: global_root.to_path_buf(),
                 shared_root: shared_root.to_path_buf(),
@@ -243,7 +253,9 @@ impl OrbitRuntime {
             layout_report,
             HostLifetime::ShortLived,
             runtime_config_loader(global_root, shared_root),
+            &APPLICATION_PORT,
         )
+        .map(Self::from_kernel)
     }
 
     pub fn in_memory() -> Result<Self, OrbitError> {
@@ -254,13 +266,15 @@ impl OrbitRuntime {
         let data_root = temp_dir.path().to_path_buf();
         let workspace_root = data_root.join(".orbit");
         let runtime_config = prepare_resolved_config(&data_root, &workspace_root)?;
-        Self::build_in_memory_from_resolved_config(
+        RuntimeKernel::build_in_memory_from_resolved_config(
             &data_root,
             &workspace_root,
             &runtime_config,
             temp_dir,
             runtime_config_loader(&data_root, &workspace_root),
+            &APPLICATION_PORT,
         )
+        .map(Self::from_kernel)
     }
 }
 
@@ -319,7 +333,15 @@ fn build_runtime(
     ProductProfile::Orbit.validate_roots(&[global_root, shared_root, local_root])?;
     let generation = pin_executable_generation(global_root, read_only)?;
     let write_free = generation.joined_foreign_generation();
+    let authority = if write_free {
+        None
+    } else {
+        Some(admit_workspace_layout_authority(global_root, shared_root)?)
+    };
     let layout_report = observe_or_upgrade_layout(shared_root, write_free)?;
+    // The admission recorded the authority before the layout changed and
+    // fenced other first adoptions until now.
+    drop(authority);
     let runtime_config = if write_free {
         ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?
     } else {
@@ -348,17 +370,18 @@ fn build_runtime(
         shared_root: shared_root.to_path_buf(),
         local_root: local_root.to_path_buf(),
     };
-    let runtime = if write_free {
-        OrbitRuntime::build_from_resolved_config_write_free(
+    let kernel = if write_free {
+        RuntimeKernel::build_from_resolved_config_write_free(
             &roots,
             binding,
             &runtime_config,
             layout_report,
             host_lifetime,
             config_loader,
+            &APPLICATION_PORT,
         )?
     } else {
-        OrbitRuntime::build_from_resolved_config(
+        RuntimeKernel::build_from_resolved_config(
             &roots,
             binding,
             &runtime_config,
@@ -366,8 +389,10 @@ fn build_runtime(
             host_lifetime,
             read_only,
             config_loader,
+            &APPLICATION_PORT,
         )?
     };
+    let runtime = OrbitRuntime::from_kernel(kernel);
     let _generation = generation;
     if reconcile_stale_runs && !write_free && !managed_run_context_from_env() {
         runtime.reconcile_stale_job_runs_on_open();
@@ -503,4 +528,50 @@ pub fn host_resource_monitor(
         snapshot.resource_throttle(),
     )
     .with_shared_history(global_root))
+}
+
+/// Compose optional assistance from host-only settings and the host store.
+/// No worker or consumer is automatically started. The loader reopens global
+/// configuration at each boundary so an operator's off switch takes effect.
+pub fn host_assistance_service(
+    global_root: &Path,
+    store: Arc<dyn orbit_store::contracts::assistance::AssistanceStoreBackend>,
+) -> crate::application::assistance::AssistanceService {
+    let root = global_root.to_path_buf();
+    crate::application::assistance::AssistanceService::new(
+        store,
+        Arc::new(crate::adapter::decisions::OpenAiDecisionsAdapter::default()),
+        Arc::new(move || {
+            Ok(orbit_config::ConfigStore::open(
+                orbit_config::ConfigScope::Global,
+                root.join("config.toml"),
+            )?
+            .snapshot()?
+            .assistance_settings)
+        }),
+    )
+}
+
+impl OrbitRuntime {
+    /// Join the private task consumer to the host-only adapter and ledger.
+    pub(crate) fn task_quality_service(
+        &self,
+    ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
+        Ok(host_assistance_service(
+            &self.global_root(),
+            orbit_store::compose::assistance_store_from_store(self.sqlite_store()?),
+        ))
+    }
+}
+
+impl OrbitRuntime {
+    /// Join the private delivery consumer to host-only policy and bounded assistance.
+    pub(crate) fn delivery_quality_service(
+        &self,
+    ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
+        Ok(host_assistance_service(
+            &self.global_root(),
+            orbit_store::compose::assistance_store_from_store(self.sqlite_store()?),
+        ))
+    }
 }

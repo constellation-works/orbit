@@ -1,0 +1,52 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_verify_prepare
+spec:
+  type: deterministic
+  description: >
+    Validate the comparison reviewer's evidence against this delivery's
+    capture and partition the findings for in-line verification. A finding
+    naming an image not in the capture, a region outside its image, or a
+    cited line that does not exist at the candidate is dropped as
+    `invalid_evidence` and counted; findings past
+    `visual_review.max_findings` are dropped and counted. The
+    deterministic check findings join the same verification. Batches of
+    five, each carrying only the images its findings cite and any declared
+    deviation they touch. With `round: escalation` it instead partitions
+    the findings whose verdicts were low confidence for the one escalation
+    crew `visual_review_prepare` drew.
+  input_schema_json:
+    type: object
+    required: [workspace_path, prepared]
+    properties:
+      workspace_path:
+        type: string
+      prepared:
+        type: [object, "null"]
+        description: The visual_review_prepare (or, for escalation, the initial visual_verify_prepare) output.
+      review_results:
+        description: The visual_review fan-out results.
+      verify_results:
+        description: The visual_verify fan-out results (escalation round).
+      round:
+        type: string
+        enum: [initial, escalation]
+  output_schema_json:
+    type: object
+    required: [applies, partition_count, partitions, records]
+    properties:
+      applies:
+        type: boolean
+      partition_count:
+        type: number
+      partitions:
+        type: array
+        items:
+          type: object
+      records:
+        type: array
+        items:
+          type: object
+  action: visual_verify_prepare
+  config: {}

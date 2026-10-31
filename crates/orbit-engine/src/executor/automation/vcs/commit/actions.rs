@@ -25,6 +25,7 @@ use super::checkpoint::{
     verify_clean_tree,
 };
 use super::diagnostics::{changed_head_error, empty_stage_error};
+use super::finding_invalid;
 use super::git_ops::{
     ensure_named_branch, ensure_no_unmerged_changes, git_commit_paths_with_identity,
     git_commit_with_identity, stage_paths, staged_changed_files,
@@ -128,7 +129,7 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
         }
 
         stage_paths(&workspace_path, &changed_files)?;
-        let message = task_commit_message(&task);
+        let message = task_commit_message(&task, &host.pr_config());
         git_commit_paths_with_identity(
             &workspace_path,
             &message,
@@ -190,7 +191,7 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let files_to_commit: Vec<String> = files_to_commit.into_iter().collect();
     stage_paths(&workspace_path, &files_to_commit)?;
-    let mut message = finalize_commit_message(&affected_tasks);
+    let mut message = finalize_commit_message(&affected_tasks, &host.pr_config());
     let (_, coauthors) = commit_author_for_tasks(&affected_tasks);
     append_co_author_trailers(&mut message, &coauthors);
     let resolved_model = host.resolved_crew_model(batch_id)?;
@@ -419,6 +420,24 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         }
         let run_id = input_string_field(input, "run_id");
         let run_id = run_id.as_deref().unwrap_or(batch_id);
+        // A review finding this run judged absent at its base is rejected,
+        // not delivered: nothing lands and no workspace gate runs.
+        if let Some(base_sha) = base_sha.as_deref()
+            && finding_invalid::claims_run(host, &task, run_id)?
+        {
+            if claimed {
+                return Err(finding_invalid::claimed_refusal());
+            }
+            let base_branch = input_string_field(input, "base_ref").unwrap_or_default();
+            return finding_invalid::reject(
+                host,
+                &task,
+                &workspace_path,
+                run_id,
+                base_sha,
+                &base_branch,
+            );
+        }
         // ORB-14791: a claimed tagged task whose implementer supplied no
         // clean-tree report (a review files findings, not a report) skips as
         // on the owner, pinned to this run and base for the NoDiff handoff.
@@ -466,7 +485,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         std::slice::from_ref(&task),
         true,
     );
-    let message = batch_commit_message(&task);
+    let message = batch_commit_message(&task, &host.pr_config());
     let resolved_model = host.resolved_crew_model(batch_id)?;
 
     git_commit_with_identity(&workspace_path, &message, resolved_model.as_deref())?;
@@ -515,7 +534,7 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
             std::slice::from_ref(task),
             true,
         );
-        let message = batch_commit_message(task);
+        let message = batch_commit_message(task, &host.pr_config());
         let resolved_model = host.resolved_crew_model(run_id)?;
         git_commit_with_identity(workspace_path, &message, resolved_model.as_deref())?;
     }

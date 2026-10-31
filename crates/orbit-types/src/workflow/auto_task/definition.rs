@@ -14,6 +14,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use super::super::automation::ScheduleGuard;
 use super::super::error::WorkflowError;
 use crate::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 
@@ -47,17 +48,27 @@ pub fn auto_task_builds_by_design(name: &str) -> bool {
     BUILDS_BY_DESIGN_AUTO_TASKS.contains(&name)
 }
 
-/// The shipped review auto-tasks whose template files each confirmed finding
-/// with a `regression_from` relation to the task that introduced it.
-const REGRESSION_FINDING_AUTO_TASKS: [&str; 2] = ["delivery-code-review", "code-review"];
+/// The shipped review and QA auto-tasks whose templates file confirmed
+/// findings with a `regression_from` relation to the task that introduced them.
+const REGRESSION_FINDING_AUTO_TASKS: [&str; 4] = [
+    "delivery-code-review",
+    "code-review",
+    "qa-sweep",
+    "qa-full-sweep",
+];
 
-/// Whether a task with `tags` was minted by a review auto-task that files
-/// regression findings [ORB-14792]: it carries one of their
-/// `auto-task:<name>` provenance tags.
+/// Whether a task's durable tags identify a review or QA task that files
+/// regression findings. Scheduler-minted tasks carry an `auto-task:<name>`
+/// provenance tag. Coordinator-filed area tasks instead carry
+/// `no-diff-expected` together with `full-code-review` or `qa-full-sweep`.
 pub fn files_regression_findings(tags: &[String]) -> bool {
     REGRESSION_FINDING_AUTO_TASKS
         .iter()
         .any(|name| tags.contains(&auto_task_tag(name)))
+        || (tags.iter().any(|tag| tag == "no-diff-expected")
+            && tags
+                .iter()
+                .any(|tag| matches!(tag.as_str(), "full-code-review" | "qa-full-sweep")))
 }
 
 /// Artifact path a completed sweep writes its cursor to, and the scheduler's
@@ -203,11 +214,77 @@ pub enum AutoTaskSchedule {
     /// Verified landings, independent of task completion.
     Deliveries {
         deliveries_landed: super::super::automation::DeliveryTrigger,
+        /// Optional `when:` guard; a false guard keeps the coverage debt.
+        #[serde(flatten)]
+        guard: ScheduleGuard,
     },
     /// Standard 5-field cron expression, evaluated in host-local time.
-    Cron { cron: String },
+    Cron {
+        cron: String,
+        /// Optional `when:` guard; a false guard leaves the slot unconsumed.
+        #[serde(flatten)]
+        guard: ScheduleGuard,
+    },
     /// Fire every N minutes, anchored at the definition's first-observed slot.
-    Interval { every_minutes: u64 },
+    Interval {
+        every_minutes: u64,
+        /// Optional `when:` guard; a false guard leaves the slot unconsumed.
+        #[serde(flatten)]
+        guard: ScheduleGuard,
+    },
+    /// A CEL predicate over workspace state: one mint per subject edge.
+    Condition {
+        condition: super::super::automation::ConditionTrigger,
+    },
+}
+
+impl AutoTaskSchedule {
+    /// A cron schedule with no guard.
+    pub fn cron(cron: impl Into<String>) -> Self {
+        Self::Cron {
+            cron: cron.into(),
+            guard: ScheduleGuard::default(),
+        }
+    }
+
+    /// An interval schedule with no guard.
+    pub fn every_minutes(every_minutes: u64) -> Self {
+        Self::Interval {
+            every_minutes,
+            guard: ScheduleGuard::default(),
+        }
+    }
+
+    /// A delivery schedule with no guard.
+    pub fn deliveries(deliveries_landed: super::super::automation::DeliveryTrigger) -> Self {
+        Self::Deliveries {
+            deliveries_landed,
+            guard: ScheduleGuard::default(),
+        }
+    }
+
+    /// The `when:` guard beside a typed kind; `None` for a condition.
+    pub fn guard(&self) -> Option<&ScheduleGuard> {
+        match self {
+            Self::Deliveries { guard, .. }
+            | Self::Cron { guard, .. }
+            | Self::Interval { guard, .. } => Some(guard),
+            Self::Condition { .. } => None,
+        }
+    }
+
+    /// Replace the guard of a typed kind; a condition keeps none.
+    pub fn with_guard(mut self, replacement: ScheduleGuard) -> Self {
+        match &mut self {
+            Self::Deliveries { guard, .. }
+            | Self::Cron { guard, .. }
+            | Self::Interval { guard, .. } => {
+                *guard = replacement;
+            }
+            Self::Condition { .. } => {}
+        }
+        self
+    }
 }
 
 /// Wire representation used to preserve field-specific errors while enforcing
@@ -218,6 +295,9 @@ struct RawSchedule {
     cron: Option<String>,
     every_minutes: Option<u64>,
     deliveries_landed: Option<super::super::automation::DeliveryTrigger>,
+    condition: Option<super::super::automation::ConditionTrigger>,
+    when: Option<String>,
+    guard_miss: Option<super::super::automation::ConditionGuardMiss>,
 }
 
 impl<'de> Deserialize<'de> for AutoTaskSchedule {
@@ -237,13 +317,37 @@ impl<'de> Deserialize<'de> for AutoTaskSchedule {
         if raw.deliveries_landed.is_some() {
             forms.push("deliveries_landed");
         }
+        if raw.condition.is_some() {
+            forms.push("condition");
+        }
 
-        match (raw.cron, raw.every_minutes, raw.deliveries_landed) {
-            (Some(cron), None, None) => Ok(Self::Cron { cron }),
-            (None, Some(every_minutes), None) => Ok(Self::Interval { every_minutes }),
-            (None, None, Some(deliveries_landed)) => Ok(Self::Deliveries { deliveries_landed }),
+        let guard = ScheduleGuard {
+            when: raw.when,
+            guard_miss: raw.guard_miss,
+        };
+        match (
+            raw.cron,
+            raw.every_minutes,
+            raw.deliveries_landed,
+            raw.condition,
+        ) {
+            (Some(cron), None, None, None) => Ok(Self::Cron { cron, guard }),
+            (None, Some(every_minutes), None, None) => Ok(Self::Interval {
+                every_minutes,
+                guard,
+            }),
+            (None, None, Some(deliveries_landed), None) => Ok(Self::Deliveries {
+                deliveries_landed,
+                guard,
+            }),
+            (None, None, None, Some(condition)) if guard.is_empty() => {
+                Ok(Self::Condition { condition })
+            }
+            (None, None, None, Some(_)) => Err(<D::Error as serde::de::Error>::custom(
+                "schedule.when: a condition takes no guard; its own `when` is the expression",
+            )),
             _ => Err(<D::Error as serde::de::Error>::custom(format!(
-                "schedule must have exactly one of cron, every_minutes, deliveries_landed; found: {}",
+                "schedule must have exactly one of cron, every_minutes, deliveries_landed, condition; found: {}",
                 if forms.is_empty() {
                     "none".to_string()
                 } else {
@@ -374,14 +478,23 @@ impl AutoTaskDefinition {
             )));
         }
         match &self.schedule {
-            AutoTaskSchedule::Deliveries { deliveries_landed } => deliveries_landed.validate()?,
-            AutoTaskSchedule::Cron { cron } if cron.trim().is_empty() => {
+            AutoTaskSchedule::Deliveries {
+                deliveries_landed,
+                guard,
+            } => {
+                deliveries_landed.validate()?;
+                guard.validate("schedule", false)?;
+            }
+            AutoTaskSchedule::Condition { condition } => {
+                condition.validate("schedule.condition")?;
+            }
+            AutoTaskSchedule::Cron { cron, .. } if cron.trim().is_empty() => {
                 return Err(WorkflowError::Invalid(format!(
                     "auto-task '{}' schedule.cron must not be empty",
                     self.name
                 )));
             }
-            AutoTaskSchedule::Interval { every_minutes }
+            AutoTaskSchedule::Interval { every_minutes, .. }
                 if *every_minutes == 0 || *every_minutes > MAX_AUTO_TASK_INTERVAL_MINUTES =>
             {
                 return Err(WorkflowError::Invalid(format!(
@@ -390,6 +503,11 @@ impl AutoTaskDefinition {
                 )));
             }
             _ => {}
+        }
+        if let AutoTaskSchedule::Cron { guard, .. } | AutoTaskSchedule::Interval { guard, .. } =
+            &self.schedule
+        {
+            guard.validate("schedule", true)?;
         }
         if self.template.title.trim().is_empty() {
             return Err(WorkflowError::Invalid(format!(

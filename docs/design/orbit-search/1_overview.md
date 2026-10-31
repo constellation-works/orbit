@@ -4,8 +4,10 @@ type: design
 title: "Task Search — Overview"
 owner: codex
 last_updated: 2026-09-23
-last_validated: 2026-10-21
+last_validated: 2026-10-30
 status: Accepted
+stage: shipped
+next: "—"
 feature: orbit-search
 doc_role: overview
 tags: ["orbit-search"]

@@ -30,6 +30,15 @@ spec:
         description: >
           Budget for waiting out required checks on a pull request. Exceeding
           it stops the attempt with the task left in review.
+      max_base_ci_cycles:
+        type: [integer, "null"]
+        minimum: 1
+        maximum: 100
+        description: >
+          Maximum number of landing polls that may recheck the same
+          base-suspect failure before the attempt escalates it with the
+          required check, signature and missing evidence. Defaults to 3;
+          values below 1 are treated as 1.
       poll_interval_seconds:
         type: [integer, "null"]
   output_schema_json:

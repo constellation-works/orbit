@@ -121,6 +121,8 @@ impl Owner {
     fn create(&self, spec: Spec<'_>) -> Task {
         self.tasks
             .create_task(TaskCreateParams {
+                granted_tools: Vec::new(),
+                requires_labels: Vec::new(),
                 actor: "codex".into(),
                 parent_id: None,
                 title: spec.title.into(),
@@ -148,9 +150,13 @@ impl Owner {
                 orchestrator: None,
                 orchestrator_model: None,
                 orchestrator_model_source: None,
+                created_by_model: None,
                 origin: None,
+                rule_fingerprint: None,
                 comments: Vec::new(),
                 context_creation: Vec::new(),
+                creation_decision: None,
+                not_before: None,
             })
             .expect("create task")
     }
@@ -225,12 +231,14 @@ impl<'a> Spec<'a> {
 
 fn request(id: &str) -> AdmissionRequest {
     AdmissionRequest {
+        labels: Vec::new(),
         request_id: id.into(),
         caller_version: "test".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
+        selective_review: false,
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "auto".into(),

@@ -70,6 +70,149 @@ impl PurposeCrewPools {
     }
 }
 
+/// The `workflow.type_complexity_crews` key as written in `config.toml`.
+pub const TYPE_COMPLEXITY_CREWS_KEY: &str = "workflow.type_complexity_crews";
+
+/// The admitted `workflow.type_complexity_crews.<type>.<tier>` pools: per
+/// `workflow.crew_performance_types` type, one optional pool per complexity
+/// tier. A configured pool replaces `workflow.<tier>_complexity_crews` for a
+/// task classified to that type; every other draw keeps the complexity pool.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypeComplexityCrewPools {
+    pools: BTreeMap<String, ComplexityCrewPools>,
+}
+
+impl TypeComplexityCrewPools {
+    /// Pools from the admitted `type → tier → name[:weight]` table. Tiers
+    /// were validated at admission, so an unknown one is dropped here.
+    pub fn from_table(table: &BTreeMap<String, BTreeMap<String, Vec<String>>>) -> Self {
+        let pools = table
+            .iter()
+            .map(|(task_type, tiers)| {
+                let mut pools = ComplexityCrewPools::default();
+                for (tier, pool) in tiers {
+                    let slot = match tier.parse::<TaskComplexity>() {
+                        Ok(TaskComplexity::Low) => &mut pools.low,
+                        Ok(TaskComplexity::Medium) => &mut pools.medium,
+                        Ok(TaskComplexity::Hard) => &mut pools.hard,
+                        Ok(TaskComplexity::XHard) => &mut pools.xhard,
+                        Ok(TaskComplexity::Unassessed) | Err(_) => continue,
+                    };
+                    *slot = Some(pool.clone());
+                }
+                (task_type.clone(), pools)
+            })
+            .collect();
+        Self { pools }
+    }
+
+    /// The pool configured for `task_type` at `complexity`, if any.
+    pub fn pool(&self, task_type: &str, complexity: TaskComplexity) -> Option<&[String]> {
+        self.pools
+            .get(task_type)
+            .and_then(|pools| pools.pool(complexity))
+    }
+
+    /// Every configured pool as `(type, tier, entries)`, in type then tier
+    /// order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, TaskComplexity, &[String])> {
+        self.pools.iter().flat_map(|(task_type, pools)| {
+            [
+                TaskComplexity::Low,
+                TaskComplexity::Medium,
+                TaskComplexity::Hard,
+                TaskComplexity::XHard,
+            ]
+            .into_iter()
+            .filter_map(move |tier| {
+                pools
+                    .pool(tier)
+                    .map(|entries| (task_type.as_str(), tier, entries))
+            })
+        })
+    }
+}
+
+/// The full key of one type pool: `workflow.type_complexity_crews.<type>.<tier>`.
+pub fn type_complexity_crews_key(task_type: &str, tier: TaskComplexity) -> String {
+    format!("{TYPE_COMPLEXITY_CREWS_KEY}.{task_type}.{tier}")
+}
+
+/// Admit `workflow.type_complexity_crews` in place against the crew registry
+/// and the admitted `workflow.crew_performance_types`.
+///
+/// Every pool must name only known, enabled crews, hold at least one entry,
+/// and give each entry a positive weight; tiers are `low`, `medium`, `hard`
+/// or `xhard`. With `known_types`, a type absent from that list is refused;
+/// `None` skips that check for a single-file view whose types may come from
+/// the other layer. Each pool is rewritten in its canonical form.
+pub(crate) fn admit_type_complexity_crews(
+    table: &mut BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    known_types: Option<&[crate::CrewPerformanceType]>,
+    crews: &BTreeMap<String, Crew>,
+) -> Result<(), OrbitError> {
+    for (task_type, tiers) in table.iter_mut() {
+        if let Some(types) = known_types
+            && !types.iter().any(|entry| entry.name == *task_type)
+        {
+            let known = types
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>();
+            return Err(OrbitError::InvalidInput(format!(
+                "{TYPE_COMPLEXITY_CREWS_KEY}.{task_type} names a type that \
+                 {} does not define; known types: {}",
+                crate::CREW_PERFORMANCE_TYPES_KEY,
+                if known.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    known.join(", ")
+                }
+            )));
+        }
+        for (tier, pool) in tiers.iter_mut() {
+            let setting = format!("{TYPE_COMPLEXITY_CREWS_KEY}.{task_type}.{tier}");
+            if !matches!(
+                tier.parse::<TaskComplexity>(),
+                Ok(TaskComplexity::Low
+                    | TaskComplexity::Medium
+                    | TaskComplexity::Hard
+                    | TaskComplexity::XHard)
+            ) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{setting} names an unknown complexity tier; expected one of: low, medium, \
+                     hard, xhard"
+                )));
+            }
+            if pool.is_empty() {
+                return Err(OrbitError::InvalidInput(format!(
+                    "{setting} must name at least one crew; remove the key to use \
+                     workflow.{tier}_complexity_crews"
+                )));
+            }
+            let canonical = canonical_crew_pool(pool, crews, &setting)?;
+            for entry in &canonical.entries {
+                if entry.weight == 0 {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{setting} gives crew '{}' weight 0; every type-pool entry needs a \
+                         positive weight",
+                        entry.name
+                    )));
+                }
+                if crews.get(&entry.name).is_some_and(|crew| !crew.enabled) {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{setting} names crew '{}', which is disabled ([crews.{}] enabled = \
+                         false)",
+                        entry.name, entry.name
+                    )));
+                }
+            }
+            *pool = canonical.to_setting_value();
+        }
+    }
+    Ok(())
+}
+
 /// One validated pool member: a canonical crew name and its relative,
 /// non-negative draw weight. Weights are ratios, not percentages, so they need
 /// not sum to anything in particular; weight `0` parks a crew without deleting

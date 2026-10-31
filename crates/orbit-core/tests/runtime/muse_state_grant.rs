@@ -55,7 +55,7 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
     std::fs::create_dir_all(&worktree).expect("managed fixture checkout");
 
     let default_roots = [home.join(".config/muse"), home.join(".local/share/muse")];
-    for provider in ["claude", "codex", "opencode", "pi"] {
+    for provider in ["claude", "codex", "grok", "copilot"] {
         let modify = resolved_modify(&runtime, provider, &worktree);
         for root in &default_roots {
             assert!(
@@ -129,6 +129,8 @@ fn seed_executor(runtime: &OrbitRuntime, provider: &str) {
             executor_type: ExecutorType::DirectAgent,
             command: Some(provider.to_string()),
             args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,

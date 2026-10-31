@@ -8,6 +8,13 @@
 //! per-invocation environment (index file, deterministic commit identity). That
 //! is a different contract, so it keeps its own runner here.
 //!
+//! Authentication uses an explicit inherited `GIT_ASKPASS` bridge or SSH
+//! (`SSH_AUTH_SOCK`, `GIT_SSH`, `GIT_SSH_COMMAND`). `PATH`, `HOME`,
+//! `XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, `GH_TOKEN` and `GITHUB_TOKEN` remain
+//! inherited for credential providers; no credential is copied into Git argv.
+//! Global credential helpers are deliberately not read. Transport diagnostics
+//! and Git tracing are suppressed because either can disclose helper secrets.
+//!
 //! Each invocation runs in its own process group under a finite deadline. A
 //! stalled transport is killed and reaped, and the caller receives
 //! [`OrbitError::ProcessTimeout`] instead of waiting forever.
@@ -118,6 +125,20 @@ impl<'a> GitRunner<'a> {
             .env_remove("GIT_CONFIG_COUNT")
             .env_remove("GIT_CONFIG_PARAMETERS")
             .env_remove("GIT_ATTR_SOURCE");
+        // Git tracing can write directly to ambient file targets, outside our
+        // captured stderr, and curl traces can include Authorization headers.
+        // Strip every trace family (including future Git trace variables).
+        let trace_keys: Vec<_> = std::env::vars_os()
+            .map(|(key, _)| key)
+            .chain(self.env.iter().map(|(key, _)| (*key).into()))
+            .filter(|key| {
+                let key = key.to_string_lossy();
+                key.starts_with("GIT_TRACE") || key == "GIT_CURL_VERBOSE"
+            })
+            .collect();
+        for key in trace_keys {
+            command.env_remove(key);
+        }
         let output = match run_bounded(&mut command, PUBLICATION_GIT_DEADLINE) {
             Ok(output) => output,
             Err(OrbitError::ProcessTimeout { timeout_ms, .. }) => {
@@ -138,7 +159,18 @@ impl<'a> GitRunner<'a> {
         Ok(GitAttempt {
             success: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            // A helper or remote may print arbitrary credential bytes. URL
+            // replacement alone cannot redact those unknown secrets. Keep
+            // local plumbing diagnostics, but never forward transport stderr.
+            stderr: if args
+                .iter()
+                .any(|arg| matches!(*arg, "clone" | "ls-remote" | "fetch" | "push"))
+            {
+                "transport diagnostics withheld; check unattended authentication and remote access"
+                    .to_string()
+            } else {
+                String::from_utf8_lossy(&output.stderr).into_owned()
+            },
         })
     }
 

@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::application::job::PipelineWorkerLogSnapshot;
-use orbit_core::runtime::audit::run::RunCliInvocationRecord;
+use orbit_core::runtime::audit::run_logs::RunCliInvocationProfile;
 use orbit_core::{JobRun, OrbitRuntime};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -293,10 +293,12 @@ fn run_logs_payload(
     let run = resolve_run(runtime, run_id, read)?;
     let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let step_filter = resolve_step_filter(&run, &audit_steps, step_id)?;
-    let records = filter_cli_invocation_records(
-        runtime.collect_run_cli_invocations(&run.run_id)?,
+    // The step filter applies before any blob is read.
+    let records = runtime.collect_new_run_cli_invocations(
+        &run.run_id,
         step_filter.as_deref(),
-    );
+        &HashSet::new(),
+    )?;
 
     if records.is_empty() {
         return worker_log_fallback_payload(runtime, &run);
@@ -305,7 +307,10 @@ fn run_logs_payload(
     let doc = json!({
         "run_id": run.run_id,
         "job_id": run.job_id,
-        "records": records.iter().map(cli_invocation_record_to_json).collect::<Vec<_>>(),
+        "records": records
+            .iter()
+            .map(|record| record.to_profile_json(RunCliInvocationProfile::Raw))
+            .collect::<Vec<_>>(),
     });
 
     // Subprocess stderr is diagnostic: keep it off the record stream so
@@ -349,25 +354,4 @@ fn worker_log_fallback_payload(runtime: &OrbitRuntime, run: &JobRun) -> CommandO
         None => "No raw stdout/stderr blobs recorded.".to_string(),
     };
     Ok(Payload::detail(doc, detail).into())
-}
-
-fn filter_cli_invocation_records(
-    records: Vec<RunCliInvocationRecord>,
-    step_filter: Option<&str>,
-) -> Vec<RunCliInvocationRecord> {
-    records
-        .into_iter()
-        .filter(|record| step_filter.is_none_or(|filter| record.step_id.as_deref() == Some(filter)))
-        .collect()
-}
-
-fn cli_invocation_record_to_json(record: &RunCliInvocationRecord) -> Value {
-    json!({
-        "step_id": record.step_id,
-        "provider": record.provider,
-        "stdout_blob_ref": record.stdout_blob_ref,
-        "stderr_blob_ref": record.stderr_blob_ref,
-        "stdout": record.stdout,
-        "stderr": record.stderr,
-    })
 }

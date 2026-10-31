@@ -13,8 +13,9 @@ use super::super::surface_reservation::{
 };
 use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
-    browser_kit_exclusion, clears_complexity_gate, host_os_exclusion,
-    inherited_only_epic_root_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion,
+    browser_kit_exclusion, clears_complexity_gate, host_labels_exclusion, host_os_exclusion,
+    inherited_only_epic_root_exclusion, mock_validation_exclusion, pilot_finding_exclusion,
+    pilot_preparation_exclusion, scheduled_exclusion,
 };
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
@@ -33,7 +34,7 @@ use crate::runtime::task::locks::{
 
 /// The ship mode an unattended drain delivers in.
 ///
-/// [`OrbitRuntime::automatic_delivery_ship_mode`]: the workspace binding's
+/// [`crate::runtime::RuntimeKernel::automatic_delivery_ship_mode`]: the workspace binding's
 /// mode, local when the workspace is unregistered. Readiness and doctor call
 /// the same method.
 pub(crate) fn workspace_ship_mode(runtime: &OrbitRuntime) -> ShipMode {
@@ -57,6 +58,31 @@ pub(crate) fn backlog_snapshot(
         pools,
         workspace_ship_mode(runtime),
         review,
+        false,
+    )
+}
+
+/// The readiness projection's snapshot: identical selection and exclusion
+/// rules, but its envelope selections observe the task population without a
+/// commit-boundary section (see `population::admission_population`), so those
+/// reads never queue behind — or hold up — a drain's task commits. Ancestor
+/// and explicit-id loads still settle a pending commit first. Observation
+/// only: nothing admission decides may consume this snapshot.
+pub(crate) fn backlog_snapshot_observed(
+    runtime: &OrbitRuntime,
+    action: &str,
+    allowlist: Option<&CrewAllowlist>,
+    pools: &CapturedCrewPools,
+    review: Option<&ReviewAdmission>,
+) -> Result<BacklogSnapshot, PassError> {
+    backlog_snapshot_in_mode(
+        runtime,
+        action,
+        allowlist,
+        pools,
+        workspace_ship_mode(runtime),
+        review,
+        true,
     )
 }
 
@@ -69,11 +95,12 @@ pub(super) fn backlog_snapshot_in_mode(
     pools: &CapturedCrewPools,
     mode: ShipMode,
     review: Option<&ReviewAdmission>,
+    observed: bool,
 ) -> Result<BacklogSnapshot, PassError> {
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
-    let task_lookup = admission_population(runtime.stores().tasks())
+    let task_lookup = admission_population(runtime.stores().tasks(), observed)
         .map_err(|error| PassError::store(action, "list tasks", error))?;
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
@@ -100,6 +127,7 @@ pub(super) fn backlog_snapshot_in_mode(
     // leaves unlocked are left out here as for any holder, though the claim
     // froze them.
     let unlocked = runtime.unlocked_context_paths();
+    let lock_modes = runtime.footprint_lock_modes();
     let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
@@ -124,6 +152,16 @@ pub(super) fn backlog_snapshot_in_mode(
     let dispatch_order = runtime.owner_dispatch_order(&executor_host_os);
     sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches, &dispatch_order);
     let mut excluded = Vec::new();
+    // A task scheduled ahead waits for its time whatever else holds it, so
+    // it reports `scheduled` first. Read every pass: the first pass after
+    // the time admits it, and an edited `not_before` counts at the next.
+    backlog.retain(|task| {
+        let Some(exclusion) = scheduled_exclusion(runtime, task) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
     let pilot_preparations = active_pilot_preparations(runtime, action)?;
     backlog.retain(|task| {
         if !pilot_preparations.contains_key(&task.id) {
@@ -214,11 +252,30 @@ pub(super) fn backlog_snapshot_in_mode(
         excluded.push(exclusion);
         false
     });
+    // A task requiring a capability label this host lacks is left for a host
+    // that carries it. Read every pass, so a relabelled task or host counts
+    // at its next admission.
+    backlog.retain(|task| {
+        let Some(exclusion) = host_labels_exclusion(runtime, task) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
     // A `ui` task is left for a host with a verified browser kit. The kit is
     // read once per pass, so one installed mid-window counts at the next.
     let kit_verified = runtime.browser_kit_verified();
     backlog.retain(|task| {
         let Some(exclusion) = browser_kit_exclusion(task, kit_verified) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
+    // A `verify-mock-ui` task whose mocks fail validation against the
+    // manifest at the base waits for the mocks to be fixed, naming each.
+    backlog.retain(|task| {
+        let Some(exclusion) = mock_validation_exclusion(runtime, task) else {
             return true;
         };
         excluded.push(exclusion);
@@ -408,7 +465,8 @@ pub(super) fn backlog_snapshot_in_mode(
             .iter()
             .filter(|task| !published_resumes.contains_key(&task.id))
             .filter_map(|task| {
-                let conflicts = task_lock_overlaps(task, &holder_index, workspace_root, unlocked);
+                let conflicts =
+                    task_lock_overlaps(task, &holder_index, workspace_root, unlocked, lock_modes);
                 (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
             })
             .collect();
@@ -465,6 +523,7 @@ pub(super) fn backlog_snapshot_in_mode(
                 &expiring_batches,
                 workspace_root,
                 unlocked,
+                lock_modes,
                 &mut excluded,
             );
         }
@@ -487,7 +546,7 @@ pub(super) fn backlog_snapshot_in_mode(
 }
 
 /// The backlog tasks whose frozen batch nears its deadline [ORB-14624].
-fn expiring_backlog_batches(
+pub(in crate::application::admission) fn expiring_backlog_batches(
     runtime: &OrbitRuntime,
     backlog: &[&Task],
 ) -> BTreeMap<String, DateTime<Utc>> {

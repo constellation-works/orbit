@@ -1,6 +1,8 @@
 //! Child Job submission: blocking `invoke_and_wait` and non-blocking `invoke_detached`.
 
-use crate::application::job::JobRunCancelOutcome;
+use crate::application::job::{
+    JobRunCancelOutcome, PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus,
+};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;
@@ -171,10 +173,11 @@ where
 /// Terminalize the dispatch record from the wait's outcome and hand the
 /// summary of the child's wait entry back to the caller.
 ///
-/// A wait that errored outright is not a failed child: the parent simply stopped
-/// being able to observe one it did durably submit. That is recorded as
-/// `unobserved` rather than as a child status the parent never saw, so a reader
-/// is never told the child failed on this evidence.
+/// A wait that errored outright, or answered in a shape that is not a wait
+/// result, is not a failed child: the parent simply stopped being able to
+/// observe one it did durably submit. That is recorded as `unobserved` rather
+/// than as a child status the parent never saw, so a reader is never told the
+/// child failed on this evidence.
 fn close_child_wait(
     runtime: &OrbitRuntime,
     action: &str,
@@ -183,8 +186,12 @@ fn close_child_wait(
     child_run_id: &str,
     wait_result: Result<Value, OrbitError>,
 ) -> Result<Value, DispatchError> {
-    let wait_output = match wait_result {
-        Ok(output) => output,
+    let answer = wait_result.and_then(|output| {
+        serde_json::from_value::<PipelineWaitResult>(output)
+            .map_err(|error| OrbitError::Execution(format!("unreadable wait result: {error}")))
+    });
+    let answer = match answer {
+        Ok(answer) => answer,
         Err(error) => {
             let message = format!("pipeline.wait failed: {error}");
             child_dispatch::advance_child_phase(
@@ -200,50 +207,39 @@ fn close_child_wait(
                 action,
                 parent_run_id,
                 child_run_id,
-                "unobserved",
+                &PipelineWaitStatus::Unobserved,
                 Some(&message),
             )?;
             return Err(DispatchError::action_failed(action, message));
         }
     };
 
-    let entry = wait_output
-        .get("results")
-        .and_then(Value::as_array)
-        .and_then(|arr| arr.first())
-        .cloned()
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "run_id": child_run_id,
-                "status": "pending",
-            })
+    let entry = answer
+        .results
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PipelineWaitEntry {
+            run_id: child_run_id.to_string(),
+            status: PipelineWaitStatus::Pending,
+            finished_at: None,
+            duration_ms: None,
+            pipeline: None,
+            error: None,
         });
-    let unfinished = entry
-        .get("status")
-        .and_then(Value::as_str)
-        .is_some_and(is_unfinished);
-    let (entry, cancelled) = if unfinished && cancels_child_on_timeout(input) {
+    let (entry, cancelled) = if is_unfinished(&entry.status) && cancels_child_on_timeout(input) {
         stop_unfinished_child(runtime, input, parent_run_id, child_run_id, entry)
     } else {
         (entry, None)
     };
-    let status = entry
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    let error_message = entry
-        .get("error")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
+    let status = entry.status.clone();
+    let error_message = entry.error.clone().filter(|value| !value.trim().is_empty());
 
     child_dispatch::advance_child_phase(
         runtime,
         parent_run_id,
         child_run_id,
         ChildDispatchPhase::Terminal,
-        Some(status.clone()),
+        Some(status.to_string()),
         error_message.clone(),
     );
     child_dispatch::record_child_wait_outcome(
@@ -255,7 +251,7 @@ fn close_child_wait(
         error_message.as_deref(),
     )?;
 
-    let mut summary = child_result_summary(&entry);
+    let mut summary = child_result_summary(action, entry)?;
     // A child left running, or one whose cancel failed, is named live so the
     // caller does not take it for settled.
     if is_unfinished(&status) && child_is_live(runtime, child_run_id) {
@@ -272,8 +268,11 @@ fn close_child_wait(
 
 /// A wait status that may name a child still pending or running: the wait's
 /// own deadline projects one as `timeout`.
-fn is_unfinished(status: &str) -> bool {
-    matches!(status, "timeout" | "pending" | "running")
+fn is_unfinished(status: &PipelineWaitStatus) -> bool {
+    matches!(
+        status,
+        PipelineWaitStatus::Timeout | PipelineWaitStatus::Pending | PipelineWaitStatus::Running
+    )
 }
 
 /// Whether the caller asked that a child its wait leaves unfinished be
@@ -314,8 +313,8 @@ fn stop_unfinished_child(
     input: &Value,
     parent_run_id: Option<&str>,
     child_run_id: &str,
-    entry: Value,
-) -> (Value, Option<CancelledChild>) {
+    entry: PipelineWaitEntry,
+) -> (PipelineWaitEntry, Option<CancelledChild>) {
     if !child_is_live(runtime, child_run_id) {
         // The entry's `timeout` may be the wait's projection onto a child
         // that settled after its last look; report what it settled as.
@@ -344,9 +343,8 @@ fn stop_unfinished_child(
             let kept = handoff
                 .as_ref()
                 .map_or_else(|| "it kept no candidate".to_string(), kept_clause);
-            stopped["status"] = Value::String("timeout".to_string());
-            stopped["error"] =
-                Value::String(format!("{reason}; the child was cancelled and {kept}"));
+            stopped.status = PipelineWaitStatus::Timeout;
+            stopped.error = Some(format!("{reason}; the child was cancelled and {kept}"));
             let candidate = handoff.as_ref().and_then(kept_candidate);
             (stopped, Some(CancelledChild { candidate }))
         }
@@ -356,37 +354,32 @@ fn stop_unfinished_child(
             None,
         ),
         Err(error) => {
-            stopped["status"] = Value::String("timeout".to_string());
-            stopped["error"] =
-                Value::String(format!("{reason}; cancelling the child failed: {error}"));
+            stopped.status = PipelineWaitStatus::Timeout;
+            stopped.error = Some(format!("{reason}; cancelling the child failed: {error}"));
             (stopped, None)
         }
     }
 }
 
 /// The settled child's own wait entry, read without waiting.
-fn observe_settled_child(runtime: &OrbitRuntime, child_run_id: &str) -> Option<Value> {
+fn observe_settled_child(runtime: &OrbitRuntime, child_run_id: &str) -> Option<PipelineWaitEntry> {
     runtime
         .wait_pipeline_runs(&[child_run_id.to_string()], 0, 1, None)
         .ok()
         .and_then(|result| result.results.into_iter().next())
-        .and_then(|entry| serde_json::to_value(entry).ok())
 }
 
 /// The wait entry fields a parent step, guard or reader uses. The child's
 /// pipeline stays out: the parent would otherwise store a copy of it in its
 /// own state, once more for every fan-in alias of the step [ORB-14587].
-fn child_result_summary(entry: &Value) -> Value {
-    let summary = ["run_id", "status", "finished_at", "duration_ms", "error"]
-        .into_iter()
-        .filter_map(|field| {
-            entry
-                .get(field)
-                .filter(|value| !value.is_null())
-                .map(|value| (field.to_string(), value.clone()))
-        })
-        .collect();
-    Value::Object(summary)
+fn child_result_summary(action: &str, entry: PipelineWaitEntry) -> Result<Value, DispatchError> {
+    let summary = PipelineWaitEntry {
+        pipeline: None,
+        ..entry
+    };
+    serde_json::to_value(summary).map_err(|error| {
+        DispatchError::action_failed(action, format!("serialize child wait summary: {error}"))
+    })
 }
 
 fn required_job_name(action: &str, input: &Value) -> Result<String, DispatchError> {

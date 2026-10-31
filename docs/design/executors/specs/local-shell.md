@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: the local-shell executor and the local_shell deterministic action"
 tags: ["executors", "activity-job"]
-last_validated: 2026-10-20
+last_validated: 2026-10-27
 ---
 
 # Spec: `local-shell`
@@ -22,7 +22,7 @@ agent is launched with. Model and provider selection stay entirely on the
 | Artifact | What it decides |
 | --- | --- |
 | The `local-shell` **executor definition** (`kind: Executor`) | The environment additions, the fallback program, a static argument prefix, the default timeout, and — if declared — the OS sandbox every shell step runs under. |
-| The **activity** (`kind: Activity`, `type: deterministic`, `action: local_shell`) | The program and arguments for this step, its working directory, its explicit environment, and its timeout. |
+| The **activity** (`kind: Activity`, `type: deterministic`, `action: local_shell`) | The step's declared program and arguments — or neither, to use the definition's `command`/`args` defaults — plus its working directory, its explicit environment, and its timeout. |
 
 The shipped definition declares no `command` and no `sandbox`, so out of the box
 each activity names its own program and the child runs bare under Orbit's
@@ -53,7 +53,13 @@ is an ordinary argument byte string.
 
 ### Step input never reaches argv
 
-The program and its arguments come from `config` only. A job step's `with:`
+The program and its arguments come from static declarations only: the
+activity's `config` may declare `command` + `args` or `shell` + `script`, or
+neither. When the activity names no program, the selected executor
+definition's `command` is the fallback program and its `args` are the argv;
+for an explicit `command`, the definition's static `args` prefix the
+activity's `args`, while `shell` + `script` runs exactly
+`<shell> -c <script>`. A job step's `with:`
 block is rendered from templates and can carry text an agent produced; letting
 it reach `argv` would make every shell step an injection surface. Runtime input
 contributes exactly one thing: `workspace_path`, the checkout to run in. This is
@@ -71,6 +77,8 @@ A job that needs a different command declares a different activity.
   "exit_code": 0,
   "stdout": "…",
   "stderr": "…",
+  "log_tail": "…",
+  "log_tail_truncated": false,
   "duration_ms": 42,
   "timed_out": false,
   "timeout_ms": 60000,
@@ -88,6 +96,34 @@ A nonzero exit, a timeout, or a child terminated by a signal fails the step
 unless `allow_nonzero_exit` is set; the failure message names the program, the
 directory, and the status. A missing or non-executable program fails before
 anything runs.
+
+Command results include a `log_tail` of at most 4096 UTF-8 bytes. It is the end
+of captured stdout followed by captured stderr (the streams have no shared
+ordering), redacted before truncation. `log_tail_truncated` says whether that
+display cap removed text. The supervisor's capture limit still applies.
+
+Failed commands persist only their bounded diagnostic summary, independently
+of successful checkpoints. A resume reruns the failed step; its diagnostic
+does not advance the resume cursor. Successful commands retain their normal
+stdout and stderr for templates alongside the bounded summary.
+
+`orbit run show <RUN_ID> --json` and `orbit.workflow.run.show` expose that
+summary in each displayed step's `output`, including `success`, `exit_code`,
+`duration_ms`, `timed_out`, `log_tail` and `log_tail_truncated`. The bounded run
+view exposes the same summary under `run.steps`. Its step-level `exit_code`
+also uses the command result when the step record has no status. Other step
+outputs and historical failures without captured command results yield
+`output: null`. Historical successful command checkpoints derive the same
+bounded summary from their stored stdout and stderr.
+These summaries omit raw streams, argv and provider responses.
+The bounded view reconstructs missing step records from its existing audit
+window. `steps_truncated` is true when that window or the 50-step display limit
+is exceeded; `steps_total` is null when the audit window cannot establish an
+exact total. The full run view remains available for complete history.
+
+Apps can select a routine with `orbit.routine.control` action `list` (or
+`orbit routine list --json`) and follow `last_fire.run_id` to these run views.
+`last_fire` is null until a fire exists; its `run_id` can be null before dispatch.
 
 ## Supervision
 

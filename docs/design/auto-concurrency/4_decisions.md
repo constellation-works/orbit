@@ -1,7 +1,7 @@
 ---
 title: Auto-concurrency — Decisions
 owner: claude
-last_updated: 2026-10-13
+last_updated: 2026-10-27
 last_validated: 2026-10-13
 status: Draft
 feature: auto-concurrency
@@ -188,5 +188,11 @@ No admission rule cancels, pauses or preempts a running task.
 ## Task References
 
 - [ORB-15757] — proposed these rules with the auto-concurrency design.
+- [ORB-15776] — sampled macOS workers from their process tree, the
+  measurement source these rules assume on macOS.
+- [ORB-15980] — measured native macOS host load so shadow forecasts and
+  accuracy could run.
+- [ORB-15994] — calibrated native macOS worker CPU-unit accounting and
+  provenance.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

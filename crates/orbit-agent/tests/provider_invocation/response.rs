@@ -3,7 +3,10 @@ mod envelope;
 #[path = "response/projection.rs"]
 mod projection;
 
-use orbit_agent::{AgentResponseStatus, ParsedStdout, normalize_cli_stdout, project_cli_response};
+use orbit_agent::{
+    AgentResponseStatus, ParsedStdout, normalize_cli_stdout, project_cli_response,
+    provider_long_prompt_requests,
+};
 use orbit_types::telemetry::TokenUsage;
 use orbit_types::tool::ExecutionResult;
 use serde_json::{Value, json};
@@ -428,6 +431,63 @@ fn codex_tool_telemetry_correlates_ids_and_keeps_payloads_opaque() {
 }
 
 #[test]
+fn codex_file_change_telemetry_dedupes_by_item_id_and_keeps_order() {
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
+    // Observed Codex shape (ORB-20043): item_13 file_change started then
+    // completed with 3 changes; patch contents are not retained.
+    let patch = "SECRET_PATCH_CONTENT";
+    let raw = [
+        json!({"type": "item.started", "item": {"type": "command_execution", "id": "read-1"}}),
+        json!({"type": "item.completed", "item": {"type": "command_execution", "id": "read-1", "aggregated_output": "alpha"}}),
+        json!({"type": "item.started", "item": {"type": "mcp_tool_call", "id": "read-2", "name": "fixture.read"}}),
+        json!({"type": "item.completed", "item": {"type": "mcp_tool_call", "id": "read-2", "name": "fixture.read", "result": {"ok": true}}}),
+        json!({"type": "item.started", "item": {"type": "file_change", "id": "item_13", "status": "in_progress", "changes": [{"path": "a.rs", "kind": {"type": "update"}, "diff": patch}]}}),
+        json!({"type": "item.completed", "item": {"type": "file_change", "id": "item_13", "status": "completed", "changes": [{"path": "a.rs", "kind": {"type": "update"}, "diff": patch}, {"path": "b.rs", "kind": {"type": "add"}, "diff": patch}, {"path": "c.rs", "kind": {"type": "delete"}, "diff": patch}]}}),
+        // A second distinct item identity is a second edit call.
+        json!({"type": "item.started", "item": {"type": "file_change", "id": "item_14"}}),
+        json!({"type": "item.completed", "item": {"type": "file_change", "id": "item_14", "status": "completed", "changes": []}}),
+        // Bare top-level and assistant-content file_change objects are not
+        // provider item frames and must not be counted.
+        json!({"type": "file_change", "id": "bare", "changes": []}),
+        json!({"type": "assistant", "message": {"content": [{"type": "file_change", "id": "in-message"}]}}),
+        // JSON nested inside an agent message remains prose, not a frame.
+        json!({"type": "item.completed", "item": {"type": "agent_message", "text": json!({"type": "item.completed", "item": {"type": "file_change", "id": "nested"}}).to_string()}}),
+        json!({"type": "item.completed", "item": {"type": "agent_message", "text": answer.to_string()}}),
+        json!({"type": "turn.completed"}),
+    ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
+    let normalized = normalize_cli_stdout("codex", raw.as_bytes());
+    let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+    let (_, _, trace) = ParsedStdout::parse(&stdout)
+        .parse_and_validate(&execution(stdout.clone()))
+        .unwrap();
+    let actual = trace
+        .tool_calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                1,
+                "command_execution",
+                serde_json::to_vec(&json!("alpha")).unwrap().len() as u64
+            ),
+            (
+                2,
+                "fixture.read",
+                serde_json::to_vec(&json!({"ok": true})).unwrap().len() as u64
+            ),
+            (3, "file_change", 0),
+            (4, "file_change", 0),
+        ]
+    );
+    // No patch payload is retained in the trace.
+    assert!(trace.tool_calls.iter().all(|c| c.result_payload.is_none()));
+    assert!(!format!("{:?}", trace.tool_calls).contains(patch));
+}
+
+#[test]
 fn tool_telemetry_preserves_direct_message_and_inline_contracts() {
     let answer = json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
     let payload = json!({"type": "tool_use", "name": "quoted.not_executed"});
@@ -740,6 +800,124 @@ fn claude_terminal_rollup_preserves_cache_ttl_without_counting_quotes() {
             }
         );
     }
+}
+
+// [ORB-19680] Prompt-size price tiers bill one request by its own prompt, and
+// Claude's `result` reports only the run's totals. Its assistant messages show
+// each request's prompt but repeat the request's starting output count, so a
+// request that may be long leaves per-request usage unknown, never
+// underpriced.
+#[test]
+fn claude_stream_proves_only_that_no_request_reached_the_tier() {
+    let message = |model: &str, cache_read: u64| {
+        json!({"type": "assistant", "message": {
+            "id": format!("msg_{cache_read}"), "model": model,
+            "usage": {"input_tokens": 3, "cache_read_input_tokens": cache_read,
+                      "cache_creation_input_tokens": 2_000, "output_tokens": 7},
+        }})
+        .to_string()
+    };
+    let result = json!({"type": "result", "usage": {"input_tokens": 9}}).to_string();
+    let stream = |messages: &[String]| {
+        let mut frames = vec![json!({"type": "system", "subtype": "init"}).to_string()];
+        frames.extend_from_slice(messages);
+        frames.push(result.clone());
+        frames.join("\n")
+    };
+    let short = stream(&[
+        message("claude-haiku-5-5", 40_000),
+        message("claude-haiku-5-5", 90_000),
+        // A subagent on another model is not this invocation's request.
+        message("claude-opus-5-5", 300_000),
+    ]);
+    let long = stream(&[
+        message("claude-haiku-5-5", 40_000),
+        message("claude-haiku-5-5", 120_000),
+    ]);
+    let now = chrono::Utc::now();
+    let haiku = Some("claude-haiku-5-5[1m]");
+
+    assert_eq!(
+        provider_long_prompt_requests("claude", short.as_bytes(), true, None, haiku, now),
+        Some(Vec::new()),
+        "every request on the invocation's model stayed under the floor"
+    );
+    assert_eq!(
+        provider_long_prompt_requests("claude", long.as_bytes(), true, None, haiku, now),
+        None,
+        "a long request's final output is not on the stream"
+    );
+    assert_eq!(
+        provider_long_prompt_requests("claude", short.as_bytes(), false, None, haiku, now),
+        None,
+        "a truncated capture may have lost requests"
+    );
+    assert_eq!(
+        provider_long_prompt_requests("claude", result.as_bytes(), true, None, None, now),
+        None,
+        "a single `--output-format json` document has no per-request usage"
+    );
+}
+
+// [ORB-19680] Codex's stdout totals only the turn; its session rollout records
+// each request's `last_token_usage`. A repeated `token_count` whose running
+// total did not move is no new request.
+#[test]
+fn codex_rollout_keeps_each_long_prompt_request() {
+    let codex_home = crate::support::scratch();
+    let now = chrono::Utc::now();
+    let day = now.with_timezone(&chrono::Local).date_naive();
+    let sessions = codex_home
+        .path()
+        .join("sessions")
+        .join(day.format("%Y").to_string())
+        .join(day.format("%m").to_string())
+        .join(day.format("%d").to_string());
+    std::fs::create_dir_all(&sessions).unwrap();
+    let token_count = |total: u64, input: u64, cached: u64| {
+        json!({"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"total_tokens": total},
+            "last_token_usage": {"input_tokens": input, "cached_input_tokens": cached,
+                                 "output_tokens": 900, "total_tokens": input + 900},
+        }}})
+        .to_string()
+    };
+    let rollout = [
+        json!({"type": "session_meta", "payload": {"id": "thread-a"}}).to_string(),
+        token_count(300_900, 300_000, 280_000),
+        // A rate-limit refresh repeats the last request.
+        token_count(300_900, 300_000, 280_000),
+        token_count(351_800, 50_000, 40_000),
+    ]
+    .join("\n");
+    std::fs::write(
+        sessions.join("rollout-2026-10-29T04-00-00-thread-a.jsonl"),
+        rollout,
+    )
+    .unwrap();
+    let stdout = json!({"type": "thread.started", "thread_id": "thread-a"}).to_string();
+
+    assert_eq!(
+        provider_long_prompt_requests(
+            "codex",
+            stdout.as_bytes(),
+            false,
+            Some(codex_home.path()),
+            None,
+            now
+        ),
+        Some(vec![TokenUsage {
+            input: 300_000,
+            cache_read: 280_000,
+            output: 900,
+            ..TokenUsage::default()
+        }])
+    );
+    assert_eq!(
+        provider_long_prompt_requests("grok", b"{}", true, None, None, now),
+        None,
+        "Grok reports invocation totals only"
+    );
 }
 
 fn execution(stdout: String) -> ExecutionResult {

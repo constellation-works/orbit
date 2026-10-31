@@ -99,6 +99,20 @@ pub enum StepRecoveryDecisionRead {
     Invalid { diagnostic: String },
 }
 
+/// Host authentication of a published completion after a transient read failure.
+/// Candidate, validation and captured review evidence must be checked before
+/// returning either admitted variant. Refused evidence remains an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionObservationAdmission {
+    /// Only observation is lost; retry once within the original deadline.
+    Retry,
+    /// The publication is intact but today's review obligations differ.
+    /// Requeue through current-policy candidate recovery, without reusing gates.
+    PolicyChanged { reason: String },
+    /// This host cannot authenticate a published prefix.
+    Unavailable,
+}
+
 /// [ORB-13907] What the engine asks a host before dispatching a job's final
 /// recovery for a failed run.
 #[derive(Debug, Clone, PartialEq, Eq)]

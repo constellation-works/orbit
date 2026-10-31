@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::envelope_cache::EnvelopeStamp;
+use super::envelope_cache;
 use super::repair_gate::{RepairEvidence, RepairGate, RepairTicket};
 use super::*;
 use crate::contracts::{
-    EnvelopeStampRecord, IndexedTaskRow, TaskCompletionByComplexity, TaskDefectFiling,
-    TaskTerminalTransition,
+    EnvelopeStampRecord, TaskCompletionByComplexity, TaskDefectFiling, TaskTerminalTransition,
 };
+use crate::driver::sqlite::task_registry::TaskIndexProofRow;
 use orbit_common::StorageLayer;
 use orbit_common::fs::io::hold_step;
 
@@ -40,6 +40,12 @@ impl TaskV2Store {
         task_ids: &BTreeSet<String>,
     ) -> Result<BTreeSet<String>, OrbitError> {
         self.registry.task_ids_with_tag(tag, task_ids)
+    }
+
+    pub(crate) fn task_change_stamps(
+        &self,
+    ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        self.registry.task_change_stamps(&self.workspace_id)
     }
 
     pub(crate) fn task_completion_by_complexity(
@@ -164,6 +170,9 @@ impl TaskV2Store {
     /// each new proof for later scans in any process. Reuse never replaces the index
     /// comparison — a reused envelope that disagrees with its index row still
     /// sends the caller to a rebuild.
+    /// Registry rows and their fingerprints are shared between reads until
+    /// SQLite's connection-local data version changes; filesystem probes are
+    /// never skipped. Fingerprints are computed once per registry snapshot.
     pub(super) fn validate_index(&self) -> Result<Option<Vec<String>>, OrbitError> {
         self.validate_index_with_proofs(true)
     }
@@ -199,43 +208,28 @@ impl TaskV2Store {
     }
 
     fn validate_index_once(&self, persist_proofs: bool) -> Result<Option<Vec<String>>, OrbitError> {
-        let (registered, indexed) = hold_step(INDEX_SNAPSHOT_STEP, || {
-            Ok::<_, OrbitError>((
-                self.registry.tasks_for_workspace(&self.workspace_id)?,
-                self.registry
-                    .indexed_task_rows_for_workspace(&self.workspace_id)?,
-            ))
+        let snapshot = hold_step(INDEX_SNAPSHOT_STEP, || {
+            self.registry.task_index_snapshot(&self.workspace_id)
         })?;
+        let registered = &snapshot.registered;
         orbit_common::tracing::debug!(
             target: "orbit.store.task_query",
             workspace_id = %self.workspace_id,
-            indexed_tasks = indexed.len(),
+            indexed_tasks = snapshot.indexed_count,
             "task index snapshot loaded",
         );
-        if registered.len() != indexed.len() {
+        let Some(rows) = &snapshot.rows else {
             return Ok(None);
-        }
-        self.envelope_cache.retain_registered(&registered);
-        let recorded = hold_step(INDEX_SNAPSHOT_STEP, || {
-            self.registry
-                .envelope_stamps_for_workspace(&self.workspace_id)
-        })?;
+        };
+        self.envelope_cache.retain_registered(registered);
 
         let mut unsettled = Vec::new();
         let mut proofs = Vec::new();
-        for binding in &registered {
-            let Some(row) = indexed.get(&binding.task_id) else {
-                return Ok(None);
-            };
-            let check = EnvelopeCheck {
-                task_id: &binding.task_id,
-                row,
-                recorded: recorded.get(&binding.task_id),
-            };
-            match self.settled_envelope_matches(check, &mut proofs)? {
+        for row in rows {
+            match self.settled_envelope_matches(row, &mut proofs)? {
                 Some(true) => {}
                 Some(false) => return Ok(None),
-                None => unsettled.push(binding.task_id.clone()),
+                None => unsettled.push(row.task_id.clone()),
             }
         }
         // Proofs only spare later scans a parse. Observation-only reads must
@@ -273,47 +267,25 @@ impl TaskV2Store {
     /// the registry does not hold yet is added to `proofs`.
     fn settled_envelope_matches(
         &self,
-        check: EnvelopeCheck<'_>,
+        row: &Arc<TaskIndexProofRow>,
         proofs: &mut Vec<EnvelopeStampRecord>,
     ) -> Result<Option<bool>, OrbitError> {
-        let EnvelopeCheck {
-            task_id,
-            row,
-            recorded,
-        } = check;
+        let task_id = &row.task_id;
         // Stamped before the parse it labels, so a write that races this read
         // costs one extra parse next scan instead of pinning stale content.
         let stamp = self
             .envelope_cache
             .stamp(&self.bundle_store.envelope_path(task_id)?);
-        let proof = |matches: bool| {
-            let fingerprint = row.fingerprint();
-            stamp
-                .as_ref()
-                .and_then(EnvelopeStamp::persisted)
-                .filter(|stamp| {
-                    matches
-                        && recorded.is_none_or(|recorded| {
-                            recorded.stamp != *stamp || recorded.fingerprint != fingerprint
-                        })
-                })
-                .map(|stamp| EnvelopeStampRecord {
-                    task_id: task_id.to_string(),
-                    stamp,
-                    fingerprint,
-                })
-        };
         if let Some(stamp) = &stamp {
-            if let Some(matches) = self
-                .envelope_cache
-                .inspect_fresh(task_id, stamp, |envelope| row.matches(envelope))
+            if let Some((matches, pending)) =
+                self.envelope_cache.cached_index_match(task_id, stamp, row)
             {
-                proofs.extend(proof(matches));
+                proofs.extend(pending);
                 return Ok(Some(matches));
             }
-            if let (Some(persisted), Some(recorded)) = (stamp.persisted(), recorded)
+            if let (Some(persisted), Some(recorded)) = (stamp.persisted(), &row.recorded)
                 && recorded.stamp == persisted
-                && recorded.fingerprint == row.fingerprint()
+                && recorded.fingerprint == row.fingerprint
             {
                 // Any parse this process still holds is of an older file.
                 self.envelope_cache.forget(task_id);
@@ -328,8 +300,10 @@ impl TaskV2Store {
         if let Some(stamp) = stamp {
             self.envelope_cache.remember(task_id, stamp, &envelope);
         }
-        let matches = row.matches(&envelope);
-        proofs.extend(proof(matches));
+        let matches = row.indexed.matches(&envelope);
+        if matches && let Some(stamp) = &stamp {
+            proofs.extend(envelope_cache::pending_envelope_proof(stamp, row));
+        }
         Ok(Some(matches))
     }
 
@@ -494,7 +468,14 @@ impl TaskV2Store {
         Ok(bundles)
     }
 
-    pub(super) fn replace_index_best_effort(&self, envelope: &TaskEnvelopeV2, operation: &str) {
+    pub(super) fn publish_task_index_and_lease_notices(
+        &self,
+        envelope: &TaskEnvelopeV2,
+        operation: &str,
+    ) -> Result<(), OrbitError> {
+        if let Some(boundary) = &self.coordination {
+            boundary.record_task_lease_overlaps(envelope)?;
+        }
         if let Err(err) = self
             .registry
             .replace_task_index(&self.workspace_id, envelope)
@@ -508,6 +489,7 @@ impl TaskV2Store {
                 "task bundle was updated but generated task index update failed",
             );
         }
+        Ok(())
     }
 
     pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
@@ -572,6 +554,8 @@ impl TaskV2Store {
         // inside it, so a caller that acquired them the other way round could
         // deadlock against it (ORB-12528).
         self.in_boundary(|| {
+            #[cfg(feature = "test-support")]
+            crate::repository::task::coordination::task_write_hold_hook::after_boundary_acquired();
             if let Some(boundary) = &self.coordination {
                 boundary.refuse_unscoped_claim_write(id)?;
             }
@@ -598,12 +582,4 @@ impl TaskV2Store {
             self.bundle_store.with_bundle_write_lock(id, || op(claimed))
         })
     }
-}
-
-/// One registered task as the freshness scan checks it.
-struct EnvelopeCheck<'a> {
-    task_id: &'a str,
-    row: &'a IndexedTaskRow,
-    /// The proof the registry holds for this task, if any.
-    recorded: Option<&'a EnvelopeStampRecord>,
 }

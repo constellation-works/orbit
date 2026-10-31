@@ -11,7 +11,7 @@ use orbit_types::workflow::ClaimFailureClass;
 
 use super::failure::release_evidence;
 use super::{Bind, PullDrain, PullPeer, Reconciled, ReconciliationHold, SettleScope};
-use crate::application::distributed::{is_owner_refusal, is_owner_transport_failure};
+use crate::application::distributed::{self, is_owner_refusal, is_owner_transport_failure};
 use crate::application::job::pipeline::WorkerLaunchError;
 
 /// A [`PullPeer`] that stops calling the owner after its first transport
@@ -331,6 +331,7 @@ impl PullDrain<'_> {
                                 let mut evidence = release_evidence(&record, &why);
                                 evidence.failure = Some(ClaimFailure {
                                     class: ClaimFailureClass::Environment,
+                                    review_decision_pending: false,
                                     reason: why,
                                     crew: record
                                         .receipt
@@ -378,7 +379,15 @@ impl PullDrain<'_> {
                 LocalPullPhase::Settling => {
                     let delivered = self.deliver(&record)?;
                     if delivered.phase == LocalPullPhase::Settling {
-                        return Ok(Reconciled::Held(ReconciliationHold::Settlement));
+                        let refusal_code = delivered
+                            .settlement_refusal
+                            .as_ref()
+                            .and_then(|refusal| refusal.code.as_deref());
+                        return Ok(if distributed::is_delivery_refusal_code(refusal_code) {
+                            Reconciled::Open
+                        } else {
+                            Reconciled::Held(ReconciliationHold::Settlement)
+                        });
                     }
                     delivered
                 }

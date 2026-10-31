@@ -8,12 +8,15 @@ use orbit_common::OrbitError;
 use orbit_types::task::{TaskComplexity, TaskRelation, TaskStatus};
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::task::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF};
+use crate::application::task::{
+    CiSweepAdmissionDecision, CiSweepFilingEvidence, NoDiffClosure, PILOT_VERIFIED_NO_DIFF,
+    PromotionDecision,
+};
 
-use super::super::drain_promotion::{self, Approval, DrainAuthority};
+use super::super::drain_promotion::{self, Approval, DrainAdmissionDecision, DrainAuthority};
 
 #[derive(Clone)]
 pub(in super::super) struct PreparedTaskSnapshot {
@@ -37,6 +40,8 @@ pub(in super::super) struct PreparedTaskSnapshot {
     /// Identity of the durable context creation grant the task held at
     /// preparation, `None` for none (or a payload prepared before grants).
     pub(in super::super) context_creation_identity: Option<String>,
+    /// Whether preparation requested an explore brief for the task.
+    pub(in super::super) explore_brief_requested: bool,
 }
 
 pub(in super::super) struct ValidatedTask {
@@ -67,6 +72,29 @@ pub(in super::super) struct ValidatedTask {
     /// The pilot job run that produced the assessment, persisted as the
     /// audit's `pilot_run_id`.
     pub(in super::super) pilot_run_id: Option<String>,
+    /// The pilot run's crew, recorded in an explore brief's provenance.
+    pub(in super::super) pilot_crew: Option<String>,
+    /// The explore brief decision, `None` when none was owed or returned.
+    pub(in super::super) explore_brief: Option<super::super::explore_brief::BriefDecision>,
+}
+
+impl ValidatedTask {
+    /// Keep the atomic status, typed history hold and apply report tied to the
+    /// admission decision made against the locked graph.
+    pub(in super::super) fn set_admission(&mut self, admission: Option<Admission>) {
+        self.promote = matches!(
+            &admission,
+            Some(Admission::CiSweep(decision))
+                if matches!(decision.decision, PromotionDecision::Promote)
+        );
+        self.history_decision = match &admission {
+            Some(Admission::Drain(decision)) => {
+                drain_promotion::drain_admission_hold_decision(decision)
+            }
+            _ => None,
+        };
+        self.admission = admission;
+    }
 }
 
 /// The pilot's authorized output, sealed in the same atomic mutation as its
@@ -84,8 +112,8 @@ pub(in super::super) struct AppliedTaskMaterial {
 
 /// One task's promotion decision, by the authority that requested it.
 pub(in super::super) enum Admission {
-    CiSweep(Value),
-    Drain(Value),
+    CiSweep(Box<CiSweepAdmissionDecision>),
+    Drain(Box<DrainAdmissionDecision>),
 }
 
 /// Who, if anyone, authorized this apply to move `proposed` work to backlog.
@@ -93,7 +121,7 @@ pub(in super::super) enum PromotionAuthority<'a> {
     None,
     /// A CI sweep's exact filing record; `promotion_authorized` is the literal
     /// authority, carried into each decision.
-    CiSweep(&'a Value, bool),
+    CiSweep(&'a CiSweepFilingEvidence, bool),
     /// A verified `--approve-proposed` drain.
     Drain(DrainAuthority),
 }
@@ -117,22 +145,22 @@ pub(in super::super) fn approve_promoted(
     let Some(Admission::Drain(decision)) = validated.admission.as_ref() else {
         return Ok(());
     };
-    if decision["decision"] != "promote" {
+    if !matches!(decision.decision, PromotionDecision::Promote) {
         return Ok(());
     }
     let approval = drain_promotion::approve(runtime, validated, snapshot, policy, &drain.run_id)?;
     let Some(Admission::Drain(decision)) = validated.admission.as_mut() else {
         return Ok(());
     };
-    decision["approved"] = json!(matches!(approval, Approval::Approved));
+    decision.approved = Some(matches!(approval, Approval::Approved));
     if let Approval::Held {
         classification,
         evidence,
     } = approval
     {
-        decision["decision"] = json!("withhold");
-        decision["classification"] = json!(classification);
-        decision["evidence"] = evidence;
+        decision.decision = PromotionDecision::Withhold;
+        decision.classification = classification.to_string();
+        decision.evidence = evidence;
     }
     Ok(())
 }
@@ -145,24 +173,25 @@ pub(in super::super) fn close_verified_no_diff(
     runtime: &OrbitRuntime,
     validated: &mut ValidatedTask,
 ) {
-    let decision = match validated.admission.as_mut() {
-        Some(Admission::CiSweep(decision) | Admission::Drain(decision))
-            if decision["classification"] == PILOT_VERIFIED_NO_DIFF =>
-        {
-            decision
+    let closure = match validated.admission.as_mut() {
+        Some(Admission::CiSweep(decision)) if decision.classification == PILOT_VERIFIED_NO_DIFF => {
+            &mut decision.closure
+        }
+        Some(Admission::Drain(decision)) if decision.classification == PILOT_VERIFIED_NO_DIFF => {
+            &mut decision.closure
         }
         _ => return,
     };
     match runtime.close_verified_no_diff(&validated.task_id) {
         Ok(Some(NoDiffClosure::Archived { covering_commits })) => {
-            decision["closed"] = json!(true);
-            decision["covering_commits"] = json!(covering_commits);
+            closure.closed = Some(true);
+            closure.covering_commits = Some(covering_commits);
         }
         Ok(Some(NoDiffClosure::Held { reason, .. })) => {
-            decision["closed"] = json!(false);
-            decision["not_closed_reason"] = json!(reason);
+            closure.closed = Some(false);
+            closure.not_closed_reason = Some(reason);
         }
-        Ok(None) => decision["closed"] = json!(false),
+        Ok(None) => closure.closed = Some(false),
         Err(error) => {
             tracing::warn!(
                 target: "orbit.core.task_pilot",
@@ -170,8 +199,8 @@ pub(in super::super) fn close_verified_no_diff(
                 %error,
                 "could not close a task task-pilot verified as already fixed"
             );
-            decision["closed"] = json!(false);
-            decision["not_closed_reason"] = json!(error.to_string());
+            closure.closed = Some(false);
+            closure.not_closed_reason = Some(error.to_string());
         }
     }
 }

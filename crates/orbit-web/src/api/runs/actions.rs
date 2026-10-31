@@ -94,6 +94,8 @@ pub(in crate::api) async fn ship_workflow_action(
             // Strict worker containment is a CLI-only flag.
             false,
             body.review,
+            // The schedule override is a CLI-only operator flag.
+            false,
         )?;
         let mut shipped = json!({
             "workflow": "ship",
@@ -584,6 +586,9 @@ pub(in crate::api) struct AutoDrainReadinessQuery {
     /// listing, so a task detail gets its own answer wherever it ranks.
     #[serde(default)]
     task: Option<String>,
+    /// Add one task's full readiness entry beside the bounded workspace list.
+    #[serde(default)]
+    also_task: Option<String>,
     /// Maximum tasks to explain, including an explicit selection (1-500).
     #[serde(default)]
     limit: Option<usize>,
@@ -602,12 +607,15 @@ fn readiness_task_ids(raw: Option<&str>) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N][&task=<id>,…][&limit=N][&allow_crew=<crew>,…]`
+/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N][&task=<id>,…][&also_task=<id>][&limit=N][&allow_crew=<crew>,…]`
 /// — the read-only eligible/waiting snapshot for backlog-discovery
 /// auto-drain, projected straight from `OrbitRuntime::workspace_auto_readiness`
 /// (the same snapshot `orbit run readiness` prints) rather than a
 /// dashboard-local recomputation of eligibility. `task` explains exactly
 /// those tasks, as `orbit run readiness <id>…` does; an unknown id is a 400.
+/// `also_task` adds one full entry beside the bounded list. If that task has
+/// disappeared from the workspace, the response keeps the bounded snapshot
+/// and reports its id in `detail_unavailable`.
 pub(in crate::api) async fn auto_drain_readiness(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -615,6 +623,11 @@ pub(in crate::api) async fn auto_drain_readiness(
 ) -> Response {
     let task_ids = match readiness_task_ids(query.task.as_deref()) {
         Ok(ids) => ids,
+        Err(message) => return bad_request(message),
+    };
+    let also_task_ids = match readiness_task_ids(query.also_task.as_deref()) {
+        Ok(ids) if ids.len() <= 1 => ids,
+        Ok(_) => return bad_request("also_task accepts one task id".to_string()),
         Err(message) => return bad_request(message),
     };
     let allowed_crews = query
@@ -630,6 +643,24 @@ pub(in crate::api) async fn auto_drain_readiness(
             query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
             &allowed_crews,
         )?;
+        if !also_task_ids.is_empty() {
+            match runtime.workspace_auto_readiness(
+                &also_task_ids,
+                query.concurrency,
+                query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
+                &allowed_crews,
+            ) {
+                Ok(detail) => payload["detail_tasks"] = detail["tasks"].clone(),
+                Err(orbit_core::OrbitError::InvalidInput(_)) => {
+                    payload["detail_tasks"] = json!([]);
+                    payload["detail_unavailable"] = json!({
+                        "task_id": also_task_ids[0],
+                        "reason": "task_not_found",
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
         payload["start_options"] = drain_start_options(
             &runtime,
             hosts.as_deref().map(|snapshot| &snapshot.registry),
@@ -708,7 +739,7 @@ fn drain_start_options(
     });
     let local_refusal = match owner {
         Some(_) => runtime
-            .drain_entry_admission(DrainEntryPoint::OwnerDrain, &[], false)?
+            .drain_entry_admission(DrainEntryPoint::OwnerDrain, &[])?
             .into_result()
             .err()
             .map(|error| error.to_string()),

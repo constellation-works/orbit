@@ -19,12 +19,20 @@ use serde_json::Value;
 
 const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
     (
+        "architecture-audit",
+        include_str!("../assets/auto_tasks/architecture-audit.yaml"),
+    ),
+    (
         "backlog-hygiene",
         include_str!("../assets/auto_tasks/backlog-hygiene.yaml"),
     ),
     (
-        "blocked-task-triage",
-        include_str!("../assets/auto_tasks/blocked-task-triage.yaml"),
+        "ci-budget-watch",
+        include_str!("../assets/auto_tasks/ci-budget-watch.yaml"),
+    ),
+    (
+        "code-health-sweep",
+        include_str!("../assets/auto_tasks/code-health-sweep.yaml"),
     ),
     (
         "code-review",
@@ -39,12 +47,20 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
         include_str!("../assets/auto_tasks/doc-duties.yaml"),
     ),
     (
+        "flaky-test-hunt",
+        include_str!("../assets/auto_tasks/flaky-test-hunt.yaml"),
+    ),
+    (
         "friction-curation",
         include_str!("../assets/auto_tasks/friction-curation.yaml"),
     ),
     (
         "full-code-review",
         include_str!("../assets/auto_tasks/full-code-review.yaml"),
+    ),
+    (
+        "path-risk-review",
+        include_str!("../assets/auto_tasks/path-risk-review.yaml"),
     ),
     (
         "qa-full-sweep",
@@ -242,7 +258,7 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
     // bundled cursor selector and task payload tags are used unchanged.
     let mut definition = definition;
     definition.enabled = true;
-    definition.schedule = AutoTaskSchedule::Interval { every_minutes: 1 };
+    definition.schedule = AutoTaskSchedule::every_minutes(1);
     definition.skip_if_unchanged.as_mut().unwrap().reference = "sweep-fixture".into();
     std::fs::write(
         workspace.join("auto_tasks/qa-full-sweep.yaml"),
@@ -599,41 +615,97 @@ fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
     );
 }
 
-/// The blocked-task triage holds no operator authority: none of its tools is
-/// governed, so it cannot requeue past the bound, reject, resume a run or
-/// merge, and it ships inert behind its blocked-candidate precondition.
+/// `orbit.task.add` refuses retired and undeclared keys before any task is
+/// filed, and a template tells the agent to run its payload verbatim. A
+/// payload carrying a retired key therefore files nothing (ORB-18588: the
+/// design-sync divergence payload carried `status`). Every payload in a
+/// shipped template may use only keys the public ADD operation declares.
 #[test]
-fn blocked_task_triage_declares_no_operator_only_tool() {
-    let source = BUNDLED_AUTO_TASKS
+fn shipped_template_task_add_payloads_use_only_declared_keys() {
+    let add = orbit_common::governance::task::TASK_OPERATIONS
         .iter()
-        .find_map(|(name, source)| (*name == "blocked-task-triage").then_some(*source))
-        .unwrap_or_else(|| panic!("blocked-task-triage is a bundled auto-task"));
-    let definition = parse_template("blocked-task-triage", source);
-    assert!(!definition.enabled, "bundled defaults ship inert");
-    assert!(definition.skip_unless_blocked_candidates);
-    assert!(
-        definition
-            .template
-            .tags
-            .iter()
-            .any(|tag| tag == "no-diff-expected")
-    );
-    assert!(has_required_tool(&definition, "orbit.task.block_triage"));
-    let tools = &definition.template.required_tools;
-    for tool in tools {
-        assert!(
-            orbit_common::governance::authorization::governed_tool(tool).is_none(),
-            "{tool} is operator-governed; the triage reports operator-only routes instead"
-        );
+        .find(|spec| spec.tool_name == "orbit.task.add")
+        .unwrap_or_else(|| panic!("orbit.task.add is a declared task operation"));
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/auto_tasks");
+    let mut templates = std::fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("read auto-task directory entry: {error}"))
+                .path()
+        })
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .collect::<Vec<_>>();
+    templates.sort();
+
+    let mut checked_payloads = 0;
+    let mut refused_keys = Vec::new();
+    for path in &templates {
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_else(|| panic!("template file name is not UTF-8: {}", path.display()));
+        let source = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let definition = parse_template(name, &source);
+        for payload in task_add_payloads(&definition.template.description) {
+            checked_payloads += 1;
+            let object = payload
+                .as_object()
+                .unwrap_or_else(|| panic!("{name}: task-add payload is a JSON object: {payload}"));
+            for key in object.keys() {
+                let retired = add.retired_fields.iter().any(|retired| retired.name == key);
+                if retired || add.is_undeclared_field(key.as_str()) {
+                    refused_keys.push(format!("{name}: `{key}`"));
+                }
+            }
+        }
     }
+    assert!(
+        checked_payloads > 0,
+        "no shipped auto-task template files a task through orbit.task.add"
+    );
+    assert!(
+        refused_keys.is_empty(),
+        "shipped auto-task templates pass orbit.task.add keys it refuses, so the filing is refused verbatim (ORB-18588):\n{}",
+        refused_keys.join("\n")
+    );
+}
+
+/// The escalation triage lane that replaced the blocked-task-triage
+/// auto-task requeues only through `orbit.task.block_triage`, whose shared
+/// bound and refusals it cannot bypass: its activity withholds every agent
+/// tool that would edit, requeue or resume a task another way, and lets
+/// it file the friction an Orbit-defect block needs.
+#[test]
+fn escalation_triage_holds_no_operator_only_tool() {
+    let activity: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../assets/activities/triage_escalation.yaml")).unwrap();
+    let disallowed: Vec<&str> = activity["spec"]["tool_disallow_list"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|tool| tool.as_str().unwrap())
+        .collect();
     for forbidden in [
         "orbit.task.update",
         "orbit.task.requeue",
-        "orbit.task.reject",
+        "orbit.workflow.run.resume",
     ] {
         assert!(
-            !tools.iter().any(|tool| tool == forbidden),
-            "the triage writes other tasks only through orbit.task.block_triage, not {forbidden}"
+            disallowed.contains(&forbidden),
+            "the triager writes other tasks only through orbit.task.block_triage, not {forbidden}"
         );
     }
+    assert!(
+        !disallowed.contains(&"orbit.task.block_triage")
+            && !disallowed.contains(&"orbit.friction.add"),
+        "the triager records block dispositions and Orbit-defect frictions: {disallowed:?}"
+    );
+    let routine: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../assets/routines/blocked_task_triage.yaml")).unwrap();
+    assert_eq!(
+        routine["enabled"], false,
+        "[ORB-10549] the replacing routine ships inert"
+    );
 }

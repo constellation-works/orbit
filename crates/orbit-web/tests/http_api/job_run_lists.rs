@@ -42,19 +42,25 @@ fn page_work(
 
     let instructions = Arc::new(AtomicUsize::new(0));
     let counter = instructions.clone();
-    store.connection().lock().unwrap().progress_handler(
-        1,
-        Some(move || {
-            counter.fetch_add(1, Ordering::Relaxed);
-            false
-        }),
-    );
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .progress_handler(
+            1,
+            Some(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
     let runs = store.list_job_runs_for_workspace("ws_http_fixture", query);
     store
         .connection()
         .lock()
         .unwrap()
-        .progress_handler(0, None::<fn() -> bool>);
+        .progress_handler(0, None::<fn() -> bool>)
+        .unwrap();
     (
         runs.unwrap().into_iter().map(|run| run.run_id).collect(),
         instructions.load(Ordering::Relaxed),
@@ -319,6 +325,61 @@ fn job_run_list_reconciles_a_worker_that_died_after_server_open() {
             assert_eq!(active["total"], 0);
             assert_eq!(active["items"], json!([]));
             assert_eq!(active["truncated"], false);
+        },
+    );
+}
+
+#[test]
+fn active_job_run_page_can_include_the_bounded_running_projection() {
+    isolated(
+        "job_run_lists::active_job_run_page_can_include_the_bounded_running_projection",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.counted_job_run_server();
+            json_ok(server.get("/api/job-runs?limit=1"));
+            seed_live_run(&fixture, "jrun-running-one", JobRunState::Running);
+            seed_live_run(&fixture, "jrun-running-two", JobRunState::Running);
+            seed_live_run(&fixture, "jrun-pending-one", JobRunState::Pending);
+
+            let page =
+                json_ok(server.get("/api/job-runs?state=active&limit=1&include_running=true"));
+            assert_eq!(page["total"], 3, "the rail keeps the active total");
+            assert_eq!(
+                page["items"].as_array().unwrap().len(),
+                1,
+                "the count page stays bounded"
+            );
+            let running = page["running_items"].as_array().unwrap();
+            assert_eq!(
+                running.len(),
+                2,
+                "the second projection contains running rows only"
+            );
+            assert!(running.iter().all(|item| item["state"] == "running"));
+            assert!(
+                running
+                    .iter()
+                    .any(|item| item["run_id"] == "jrun-running-one")
+            );
+            assert!(
+                running
+                    .iter()
+                    .any(|item| item["run_id"] == "jrun-running-two")
+            );
+
+            let ordinary = json_ok(server.get("/api/job-runs?state=active&limit=1"));
+            assert!(
+                ordinary.get("running_items").is_none(),
+                "ordinary API pages keep their existing shape"
+            );
+            assert_eq!(
+                server
+                    .get("/api/job-runs?state=running&limit=1&include_running=true")
+                    .status()
+                    .as_u16(),
+                400,
+                "the optional projection is only valid with the active count page"
+            );
         },
     );
 }

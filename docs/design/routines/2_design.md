@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-20
+last_updated: 2026-10-30
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -97,9 +97,12 @@ fields they render from it. Core also owns one clock-health classification,
 which each surface names in its own vocabulary: `orbit clock status` reads any
 reported health issue as `unhealthy`, while the dashboard's `health` stays
 `healthy` for an enabled clock with a future trigger and reports an enabled
-clock without one as `missed`. Dashboard and MCP routine toggles run the same
-Core selection (owner-only refusal, name lookup, source workspace, target);
-the dashboard keeps its own authorization, audit rows and error codes.
+clock without one as `missed`. Dashboard and MCP routine toggles and trigger
+edits (`set_trigger`) run the same Core selection (owner-only refusal, name
+lookup, source workspace, target); the dashboard keeps its own authorization,
+audit rows and error codes. A trigger edit compares the observed trigger,
+validates the replacement as the loader does, and rewrites only the file's
+`trigger:` block.
 Next evaluation uses schedule display state (`scheduled`, `disabled`, `paused`,
 `waiting`, `never_observed`, `unavailable`) so a disabled or paused routine
 does not look armed; a theoretical next slot is labeled hypothetical. The time
@@ -140,8 +143,9 @@ dispatch error without a run shows its outcome without a link. Consecutive
 failures include failed runs, timeouts and dispatch errors, and show their
 count and starting slot. A success, skipped slot or in-flight fire resets the
 streak. Cron retries count once per scheduled slot, using the latest attempt.
-State- and delivery-triggered routines include their automation-admitted runs,
-merged with retained cron fires when the trigger has changed.
+State-, delivery- and condition-triggered routines include their
+automation-admitted runs, merged with retained cron fires when the trigger has
+changed.
 
 Three or more consecutive failures produce a warning above the routine rows
 and a badge in the Health rail for the selected workspace and host. The badge
@@ -155,7 +159,7 @@ first) and `failure_streak` (`count`, `since`, `truncated`).
 
 A routine is one YAML file under the registered checkout's gitignored
 `.orbit/routines/`. Choose exactly one of `trigger.cron`,
-`trigger.deliveries_landed` or `trigger.state`. Routines use `schemaVersion: 1`;
+`trigger.deliveries_landed`, `trigger.state` or `trigger.condition`. A `condition` fires once per subject edge on the workspace owner and submits one run with the subject and fire in its input; `cron`, `state` and `deliveries_landed` take an optional `when` guard ([condition triggers](../condition-triggers/1_scope.md)). Routines use `schemaVersion: 1`;
 interval (`every_minutes`) scheduling belongs to auto-tasks, not routines.
 The cron form is:
 
@@ -251,7 +255,16 @@ policy:
 require `overlap: forbid` and the job fixed by their kind:
 `preparation_eligible` targets `job:task_pilot_pipeline`;
 `finding_unverified` targets `job:finding_verification_pipeline` and uses the
-[finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger).
+[finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger);
+`pilot_warnings_held` targets `job:escalation_triage_pipeline` and uses the
+[pilot warning hold contract](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held).
+`block_escalated` targets the same job for escalated blocked-task episodes;
+[ORB-17744] moved blocked-task triage from an auto-task to this state routine.
+The two triage kinds own separate consumers and member sets, so enabling both
+is supported. [ORB-17918] narrowed the duplicate-ownership guard: enabled
+state routines with the same source and target conflict only when their kinds
+match, while a state routine still conflicts with a non-state routine on that
+target. Status reports `duplicate_routine_ownership` for a skipped definition.
 `execution_failed` still parses for compatibility, but its retired target is
 skipped and dispatches nothing. These are domain eligibility checks, not arbitrary
 status-change subscriptions.
@@ -331,20 +344,29 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 ### Seeded defaults and ownership
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
-`task_pilot.yaml`, `finding_verification.yaml`, `ship_sweep.yaml`, `worktree_gc.yaml`, and `store_gc.yaml`
-with a workspace-unique name and `enabled: false`. The cron defaults resolve nothing else at
+`task_pilot.yaml`, `finding_verification.yaml`, `pilot_warning_triage.yaml`,
+`blocked_task_triage.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
+and `task_publication.yaml` with workspace-unique names and `enabled: false`.
+[ORB-17816] added `crew_performance_refresh.yaml`, seeded
+enabled: hourly at :23 it skips scanning and writes no snapshot while
+`workflow.crew_performance` is `off`, but still records a job run.
+[ORB-18378] added the disabled publication default: Sunday 04:47 host-local,
+`missed_run: skip`, `overlap: forbid`, owner-only, and a successful
+`publication_unbound` skip when no publication target is configured.
+The cron defaults resolve nothing else at
 seed time, so two hosts initializing the same workspace name write byte-identical cron
 definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state routine
 [ORB-12745]; a state trigger names the one machine that evaluates it, so its
 `owner_machine` renders this host's registered machine id and its `branch` the workspace's
 registered base branch — the only host-dependent bytes a seed writes. `finding_verification.yaml`
-is a `finding_unverified` state routine rendered the same way [ORB-15662]. Which edits re-pilot an
+is a `finding_unverified` state routine rendered the same way [ORB-15662]. The two
+triage state routines render the same owner and branch placeholders. Which edits re-pilot an
 assessed task is `[workflow.task_pilot_freshness]` in `config.toml` (default: title,
 description, criteria, plan and selectors; head moves ignored), overridable by the routine's
 optional `trigger.state.freshness` block [ORB-13638]. Auto-task definitions
 are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's
-`enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
-capability in the workspace.
+`enabled` field controls scheduled capability in the workspace; the performance
+refresh is the single seeded-enabled exception described above.
 
 `worktree_gc.yaml` uses `missed_run: catch_up_once`, so a gap in that hourly backstop runs one make-up GC instead of dropping the slots. Other seeded routines keep their own `missed_run` policy.
 
@@ -440,7 +462,7 @@ so later template changes cannot replace it. Once the directory has a manifest,
 a shipped name the manifest does not claim is genuinely
 user-authored and is still reported and preserved in place.
 
-The seeded `ci_failure_sweep` targets `job:ci_failure_sweep_pipeline` hourly at
+The seeded `ci_failure_sweep`, introduced by [ORB-11107], targets `job:ci_failure_sweep_pipeline` hourly at
 `5 * * * *` — deliberately clear of the other defaults' minutes — with `missed_run: skip`
 and `overlap: forbid`. The pipeline runs every GitHub query on the host, files each
 current, non-stale landing failure cluster as a proposed bug task carrying that evidence inline,
@@ -467,7 +489,14 @@ jobs a workflow concurrency group cancelled, and a run-scoped retryable error re
 three distinct consecutive workflow sweeps is reported as persistent instead of failing every
 sweep. A retry of the same workflow run counts once. The pipeline
 dedupes against still-open owners by failure key, and pilots each candidate through the
-existing task-pilot job. The all-join lets independently valid pilots apply even when a
+existing task-pilot job. CI sweep tasks retain their failure key, complete compiler-cause
+and coordinate-free diagnostic-set digests, concrete normalized signature (absent for a
+step fallback), tested commit and every supplying run/job/checkout in the
+`TaskDecision::CiFailureIdentity` decision on their creation history. Filing reads each
+task's creation identity once; description edits do not replace it. Only tasks without
+a creation decision use the single legacy description reader, including its completeness
+check for older compiler excerpts. A different creation decision never falls back to prose.
+The human-readable description and existing failure-key tags retain their formats. The all-join lets independently valid pilots apply even when a
 sibling is stale or fails. Within a returned partition, deterministic apply also commits
 valid tasks independently, then sends only invalid assessments through one targeted repair
 attempt at the original pinned revision; material edits require fresh preparation.
@@ -507,6 +536,30 @@ Without that proof (no commit cited, an unknown SHA, none on the base branch, or
 commits unrelated to the finding) the task stays proposed with that reason. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
 
+An operator-authorized creation grant is retained even when the requested work has
+landed. For a creation task, apply accepts a `verified_no_diff` finding only when
+every retained target exists with the expected kind at the pinned inspection
+revision, every citation resolves, and eligible covering commits on the base branch
+and at or before that revision collectively touch every creation target and every
+remaining scope selector. Culprit commits and unrelated changes do not count. A
+`selectors` assessment carrying `already_landed` must meet the same proof. Apply
+records the finding as `selectors` with an `already_landed` operator-reconciliation
+hold, the evidence, covering commits and pinned revision. It preserves the full
+scope, creation authorization and history. Neither drain approval nor state
+automation promotes the held task, and automatic no-diff closure never archives a
+task holding creation authorization, even when automation filed it. A person
+reconciles the existing delivery or explicitly overrides the finding through the
+supported admission decision. Missing targets or insufficient proof refuse the
+landed finding; ordinary outstanding creation work still follows normal preparation
+and approval.
+
+Every task-pilot run, not only a sweep's, may also judge a review-filed bug wrong: a
+`finding_invalid` result with `path:line` evidence at the pinned revision is never promoted
+(drain approval holds it as `finding_invalid`), and after the pilot write apply records a
+REJECTED finding verdict and rejects the task. The same result on any other task is an invalid
+assessment
+([finding verification §8](../finding-verification/2_design.md#8-default-rejection-routes)).
+
 Publication shares that release boundary. A job can fail because the repository already
 records a version, tag, or artifact its operator has not published or promoted yet; the
 only correct repair is that release action, which this sweep never performs. The pilot
@@ -520,13 +573,13 @@ wrong dependency requirement, a broken manifest, a packaging script bug — rema
 for ordinary promotion. The same finding also clears the state automation's readiness flag,
 so neither promotion path can turn a pending publication into automatic version edits.
 
-The seeded `ship_sweep` targets `job:workspace_ship_pipeline` with `missed_run: skip` and
-`overlap: forbid`. The wrapper resolves the source runtime's ship mode and configured base
-branch, invokes and waits for `workspace_auto_pipeline` without explicit task IDs, and guards
-its result. It never calls the legacy cross-workspace CLI sweep or consults
-`[workflow] auto_ship`; the child's existing empty-backlog path is a successful no-op.
-Waiting keeps the wrapper run active for the whole shipment, so routine overlap protection
-covers the child rather than only submission ([Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job)).
+The `ship_sweep` default and its `job:workspace_ship_pipeline` wrapper are retired: no routine
+ships work, and dispatch is an `orbit run auto` drain or `orbit run ship`. Its last shape is
+under `assets/routines/retired/`, and copies of the earlier superseded shape are judged retired
+too, so `orbit workspace sync` retires a seeded copy whatever its `enabled` flag. A workspace
+that keeps one loads it as `retired` (the target job no longer resolves) and never fires it
+([Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job)
+records the original design).
 
 ### Delivered worktree cleanup
 
@@ -587,14 +640,15 @@ entry is disposable.
 ## 2. Discovery and Registration
 
 Discovery reuses the global workspace registry (`~/.orbit/workspaces.json`) rather than a
-new pointer mechanism — the same shape `orbit run ship-sweep` established for unattended
-cross-workspace dispatch.
+new pointer mechanism — the shape the since-retired `orbit run ship-sweep` established for
+unattended cross-workspace dispatch.
 
 Registering an **owner** checkout is the whole opt-in — there is no config key
 ([Registration is the automation opt-in](./4_decisions.md#registration-is-the-automation-opt-in-there-is-no-routine-source-role)). On each pass, sweep loads the registry and loads
 `.orbit/routines/*.yaml` from every registered, active checkout whose `.orbit/`
 directory exists. Replica checkouts cannot write the owner's coordination store, so they
-contribute one kind of routine only (§2.1). Two properties fall out:
+contribute only their host-local worktree-GC and store-GC cron routines (§2.1).
+Two properties fall out:
 
 - **Registration is what already exists.** Registering the workspace with Orbit is the
   entire setup; nothing versioned has to agree per host.
@@ -609,12 +663,13 @@ jobs. Owner and replica definitions load together, so a name claimed in both
 still fails closed.
 
 `job:worktree_gc_pipeline` reclaims this host's own run worktrees [ORB-14173].
-It reads historical tasks carrying this machine's prefix locally and asks the
-owner over its tool surface only for the owner's prefix; it writes nothing to
-the owner's task store. The owner prefix comes from existing claim admissions,
-or a single foreign prefix in this workspace's stored task ids before any pull.
-Other prefixes, including ambiguous foreign mirrors without admissions, are
-retained as `skipped:task_prefix_unroutable` without an owner call.
+It reads historical tasks carrying this machine's prefix locally. [ORB-14449]
+added lookup through the registered host whose prefix a task ID names; the
+owner's prefix uses the owner route from the claim or registered workspace.
+An unregistered foreign prefix is retained as
+`skipped:task_prefix_unroutable` without a remote call. These lookups write
+nothing to the remote task store. The implementation is
+`crates/orbit-core/src/application/gc/worktrees.rs::worktree_gc_task_lookup`.
 
 `job:store_gc_pipeline` prunes this host's own store [ORB-16354]. The activity
 opens the local sqlite store and this workspace's audit directory. It deletes
@@ -626,7 +681,7 @@ coordination store. A follower-only host otherwise cannot trim that store:
 every checkout is a replica, and the owner's store-gc routine runs against the
 owner's store, not the follower's.
 
-Every other replica definition — ship sweep, task pilot, CI and Dependabot sweeps, and
+Every other replica definition — task pilot, CI and Dependabot sweeps, and
 any delivery- or state-triggered routine, including one targeting either GC job — is owner
 work. The sweep reports it as `skipped` with an `owner_only_in_replica:` reason naming
 the owner machine and never dispatches it. `orbit routine list` and `show`, the
@@ -664,8 +719,8 @@ The implementation boundary is vertical: `crates/orbit-cmd/src/registry/routines
 the `[machine]` identity from `config.toml` and `workspaces.json` through `orbit-registry`,
 validates local checkout paths, and constructs registered runtimes through `registry_runtime`.
 It projects those inputs through `RoutineWorkspaceProvider` into
-`crates/orbit-core/src/application/routines/`. Core owns the registry-neutral scheduler and does not
-read either registry file directly. There is no hub snapshot, satellite cache, fleet
+`crates/orbit-core/src/application/routines/`. Core supplies task facts and dispatch to the registry-neutral kernels in
+`crates/orbit-automation/src/routines/` and does not read either registry file directly. There is no hub snapshot, satellite cache, fleet
 health, or remote placement service in the v1 path.
 
 ---
@@ -673,8 +728,7 @@ health, or remote placement service in the v1 path.
 ## 3. Clock tick
 
 `orbit clock tick` is the stateless entrypoint the OS clock invokes every minute;
-`orbit sweep` invokes the same implementation as a compatibility alias. Like
-`ship-sweep`, it never bootstraps a workspace from the caller's cwd, isolates per-routine
+`orbit sweep` invokes the same implementation as a compatibility alias. It never bootstraps a workspace from the caller's cwd, isolates per-routine
 failures, and exits non-zero on infrastructure errors such as malformed host identity,
 an unreadable registry, or an unopenable store. A valid empty local registry simply
 produces no routines and exits successfully.
@@ -723,17 +777,6 @@ Per pass:
    accept no caller-supplied parameters, and every step in such a job must declare its own
    `default_input` rather than inheriting the job base input (which would expose the
    reserved field to the activity).
-   A due `workspace_ship_pipeline` slot's first attempt is consumed as `skipped` when a
-   `workspace_auto_pipeline` is already running or retrying in its source
-   workspace. A retry of a failed fire yields to that drain without writing another
-   skipped row, so the attempt stays free. A skipped retry already stored on the slot
-   does not stick later ticks on `slot_already_claimed`: the sweep dispatches the next
-   free attempt, and that skipped row does not spend `retries.max`. The tick reports
-   `workspace_drain_live: <run id>` even without
-   `--verbose`; `orbit routine show` retains that detail in recent fires when the
-   first attempt was recorded. It does not queue a sweep behind a manual drain: the
-   later sweep would use its
-   own review completion policy after a manual `--complete` window expires.
    Readiness names the running `workspace_auto_pipeline` and its live worker
    ceiling in `capacity.drain_run_id` and `capacity.max_active_leaf_runs`.
    Pending coordinators appear separately in `capacity.queued_drains` with
@@ -790,13 +833,18 @@ debuggable with the existing run tooling — there is no separate "scheduled run
 Every run records how it was submitted in its `trigger`, which run JSON projects and the
 `run.started` audit names as `<kind>:<name>`. `kind` is `cli`, `mcp` (a call over an MCP
 session), `dashboard` (`orbit web serve`), `child` (dispatched by a parent run), or
-`routine`. A cron fire carries `routine` and `slot`; a run a state-triggered or
-delivery-triggered routine admits carries `routine` and the automation `consumer` that
-admitted it, with no slot [ORB-12255, ORB-13016].
+`routine`. A cron fire carries `routine` and `slot`; a run a state-, delivery- or
+condition-triggered routine admits carries `routine` and the automation `consumer` that
+admitted it, with no slot ([ORB-12255], [ORB-13016]).
 
 Naming note: `orbit clock tick` is the general scheduler pass and `orbit sweep` is its
-compatibility alias. The seeded `ship_sweep` routine is workspace-local; the legacy
-`orbit run ship-sweep` cross-workspace entrypoint is separate.
+compatibility alias. The retired `ship_sweep` routine and `orbit run ship-sweep` command are
+unrelated to it.
+
+The shipped clock, delivery/state evaluation and replica-local exceptions are
+complete: [ORB-12237] consolidated the clock, [ORB-11330] and [ORB-11331]
+implemented delivery/state evaluation, and [ORB-14173] and [ORB-16354] added
+the replica-local GC jobs. Cross-host failover remains future work.
 
 ### 3.1 Delivery and state evaluation
 
@@ -981,20 +1029,41 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 
 ## Task References
 
-- [ORB-11315] — specified shared triggers and durable coverage; delivery/state
-  evaluation shipped in [ORB-11330]/[ORB-11331], while broader extensions remain deferred.
-
-- [ORB-10001] — authored this design-doc folder (proposal; no implementation).
-- [ORB-10021] — implemented routines v1 (types, store, sweep, CLI, clock units).
-- [ORB-12236] — removed the `hosts:` pin, its placement validation, and the
-  `[routines] role = "source"` key; eligibility is a registered owner checkout plus the
-  definition's own switches.
-- [ORB-10270] — historically implemented fleet-aware pin validation, retired with the pin.
-- [ORB-10319] — historical boundary extraction; current workspace composition
-  lives in `orbit-cmd` over `orbit-registry` local files.
-- [ORB-10207] — added disabled-by-default seeding and workspace-local ship sweep.
-- [ORB-00374] — removed the `shell` activity variant and `run_shell` dispatch (fail-closed);
-  routines inherit this constraint.
-- [ORB-10875] — added dashboard routine and host-clock status and controls.
+- [DANI-10392] reported retired scheduler definitions being treated as load errors.
+- [DANI-10502] refined retirement advice for seeded and operator-authored routine definitions.
+- [ORB-00374] removed the shell activity variant and run_shell dispatch.
+- [ORB-00422] made synchronous routine dispatch failures retryable under the fire policy.
+- [ORB-10001] authored the routines design proposal (historical citation).
+- [ORB-10021] implemented routines v1 and its OS clock integration.
+- [ORB-10207] seeded disabled defaults and the workspace-local shipment wrapper.
+- [ORB-10270] implemented historical fleet-aware routine pin diagnostics and reassignment baselines.
+- [ORB-10319] extracted historical registry/MCP composition boundaries, later replaced by the local registry composition.
+- [ORB-10395] retired the v1 executor stack and External Executor Protocol.
+- [ORB-10800] added managed-artifact diagnostics and stale-artifact repair.
+- [ORB-10875] added dashboard routine and clock status and controls.
+- [ORB-10986] re-armed Linux timers on installation and bounded timer coalescing.
+- [ORB-11082] made clock enable repair stale installed Linux timer units.
+- [ORB-11107] added host-owned CI evidence collection and failure filing.
+- [ORB-11154] corrected routine reconciliation without a prior managed manifest.
+- [ORB-11315] specified shared state and delivery triggers with durable coverage.
+- [ORB-11330] implemented shared delivery evaluation, frozen batches and receipt-based coverage.
+- [ORB-11331] implemented state-driven preparation and failure triage.
+- [ORB-12108] made the workspace selector constrain the scheduler pass.
+- [ORB-12236] removed routine host pins and the routine-source role.
+- [ORB-12237] combined routine and auto-task evaluation under orbit clock and retired the scheduler wrapper.
+- [ORB-12255] recorded actual run provenance and consistent workflow outcomes.
+- [ORB-12491] retired epic execution while retaining task hierarchy and historical GC discovery.
+- [ORB-12725] moved local machine identity into global config and removed owner display-name projections.
+- [ORB-12745] replaced task-pilot cron scheduling with owner-bound preparation eligibility.
+- [ORB-13016] corrected dashboard and state-triggered run provenance.
+- [ORB-13638] made task-pilot material freshness inputs configurable.
+- [ORB-14173] allowed replica-local scheduled worktree GC.
+- [ORB-14449] implemented task-prefix routing and --host selection.
+- [ORB-15662] added review-finding verification and its finding_unverified state trigger.
+- [ORB-16354] enabled replica-local store GC.
+- [ORB-17744] moved blocked-task triage onto the block_escalated state routine.
+- [ORB-17816] added the enabled hourly crew-performance snapshot refresh routine.
+- [ORB-17918] allowed distinct state-trigger kinds to share a job while retaining duplicate-ownership guards.
+- [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

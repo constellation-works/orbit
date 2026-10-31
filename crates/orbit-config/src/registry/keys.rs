@@ -8,10 +8,18 @@ use super::*;
 /// and a retired choice disappears from both at once.
 pub fn config_key_options(key: &str) -> Vec<&'static str> {
     match key {
+        "publication.routine_attachments" => vec!["omit", "fail", "include"],
         "execution.codex.sandbox" => CODEX_PROVIDER_SANDBOX_MODES.to_vec(),
         "execution.codex.approval_policy" => CODEX_APPROVAL_POLICIES.to_vec(),
         "security_alert_sweep.min_severity" => SECURITY_ALERT_SEVERITIES.to_vec(),
+        "ux_rules.file_at" => vec!["critical", "high", "medium", "low", "nit"],
         "review.timing" => crate::operation::ReviewTimingSetting::CHOICES.to_vec(),
+        "review.selective_before_landing.mode" => {
+            orbit_types::workflow::SelectiveBeforeLandingMode::CHOICES.to_vec()
+        }
+        "review.selective_before_landing.unknown_risk" => {
+            orbit_types::workflow::SelectiveUnknownRisk::CHOICES.to_vec()
+        }
         "machine.worker_containment" => crate::aliases::WorkerContainmentMode::CHOICES.to_vec(),
         "workflow.validation_env.shell_probe" => crate::aliases::ShellProbeMode::CHOICES.to_vec(),
         _ => Vec::new(),
@@ -147,6 +155,15 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
      conflict recovery) draws its crew from workflow.<tier>_complexity_crews for its \
      complexity. Delete the key and set those pools instead",
     ),
+    (
+        "workflow.regression_risk.record_sites",
+        "ignored: regression.sites on regression_from links are always recorded; delete the key",
+    ),
+    (
+        "workflow.auto_ship",
+        "ignored: the ship sweep it opted into was removed; dispatch with `orbit run auto` \
+     drains or `orbit run ship`, and delete the key",
+    ),
 ];
 
 const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks, the one pool \
@@ -154,7 +171,8 @@ const SWEEP_POOL_NOTE: &str = "translated to workflow.purpose_crews.sweep_tasks,
      from; move the value there";
 
 const REVIEW_TIMING_NOTE: &str = "translated to review.timing: before_pr = true is \"before_pr\", \
-     before_landing = true is \"before_landing\", both off is \"off\"; set review.timing instead";
+     before_landing = true is \"before_landing\", both off is \"off\"; set review.timing instead. \
+     review.timing = before_pr itself is deprecated (use off or before_landing) but still honoured";
 
 const SHELL_PROBE_NOTE: &str = "translated to workflow.validation_env.shell_probe: login_shell = \
      false is \"off\", interactive = false is \"login\", otherwise \"interactive\"; set \
@@ -237,12 +255,26 @@ pub(crate) fn is_machine_identity_key(key: &str) -> bool {
     matches!(key, "machine.id" | "machine.name" | "machine.task_prefix")
 }
 
+/// The OS user Orbit Web's lease intake socket accepts. Read only from the
+/// global `config.toml`: a checkout must not choose who may create leases.
+pub const LEASE_INTAKE_PEER_USER_KEY: &str = "lease.intake.peer_user";
+
+/// Dotted prefix of the lease listener's settings, read only from the
+/// listener user's global `config.toml`.
+pub const LEASE_LISTENER_KEY_PREFIX: &str = "lease.listener.";
+
 /// Whether `key` names a setting a workspace `config.toml` may not supply:
-/// the `[machine]` table, and each crew's `env` list, which routes host
-/// variables into that crew's agents.
+/// the `[machine]` table, each crew's `env` list, which routes host
+/// variables into that crew's agents, the lease intake peer user and the
+/// lease listener's settings.
 pub fn is_global_only_key(key: &str) -> bool {
-    key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
+    key == "assistance"
+        || key.starts_with("assistance.")
+        || key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
         || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
+        || key == LEASE_INTAKE_PEER_USER_KEY
+        || key == LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.')
+        || key.starts_with(LEASE_LISTENER_KEY_PREFIX)
         || matches!(
             parse_crew_field_key(key),
             Ok(Some(CrewFieldKey { field: "env", .. }))

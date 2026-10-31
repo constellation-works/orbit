@@ -19,7 +19,9 @@ use rusqlite::{Connection, OptionalExtension, params_from_iter};
 use super::partition_id::validate_partition_id;
 use super::store::TaskRegistryStore;
 use super::util::TERMINAL_STATUSES;
-use crate::contracts::{IndexedTaskRow, TaskIndexFilter, TaskIndexKey, TaskIndexSelection};
+use crate::contracts::{
+    IndexedTaskRow, TaskChangeStamp, TaskIndexFilter, TaskIndexKey, TaskIndexSelection,
+};
 
 /// Bound at most this many ids per `IN (...)` list; well under SQLite's
 /// default variable limit.
@@ -289,6 +291,52 @@ fn push_placeholders(sql: &mut String, count: usize) {
             sql.push_str(", ");
         }
         sql.push('?');
+    }
+}
+
+impl TaskRegistryStore {
+    /// Every indexed task of `partition_id` with its status and last update,
+    /// read from the generated index alone. A change watcher compares two
+    /// reads; the index row is rewritten with its envelope on every commit,
+    /// whichever process made it.
+    pub fn task_change_stamps(
+        &self,
+        partition_id: &str,
+    ) -> Result<Vec<TaskChangeStamp>, OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare_cached(
+                "SELECT task_id, status, updated_at FROM task_bundle_index WHERE workspace_id = ?1",
+            )
+            .map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map([&partition_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(sqlite_store_error)?;
+        let mut stamps = Vec::new();
+        for row in rows {
+            let (id, raw_status, raw_updated_at) = row.map_err(sqlite_store_error)?;
+            let status = parse_indexed_status(&id, &raw_status)?;
+            let updated_at = chrono::DateTime::parse_from_rfc3339(&raw_updated_at)
+                .map_err(|e| {
+                    OrbitError::Store(format!(
+                        "invalid indexed updated_at '{raw_updated_at}' for task '{id}': {e}"
+                    ))
+                })?
+                .with_timezone(&chrono::Utc);
+            stamps.push(TaskChangeStamp {
+                id,
+                status,
+                updated_at,
+            });
+        }
+        Ok(stamps)
     }
 }
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::adapter::command::PluginTestOptions;
+use orbit_core::adapter::command::{PluginTestOptions, PluginTestValidationGate};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -18,7 +18,7 @@ pub struct PluginTestArgs {
     #[arg(long)]
     pub first_party: bool,
     /// Consent to these grants for this run (repeatable, comma-separated):
-    /// fs, network, env_pass, orbit_tools, unsandboxed. Same names as
+    /// fs, network, env_pass, orbit_tools, unsandboxed, agent_tools. Same names as
     /// `orbit plugin enable --grant`. Required when the manifest asks for an
     /// unconfined backend, a write root that resolves outside the run's temp
     /// directory, `network: any`, or `env_pass`, unless `--accept-requested`
@@ -48,6 +48,9 @@ impl Execute for PluginTestArgs {
                 accept_requested: self.accept_requested,
                 case: self.case,
                 update_goldens: self.update_goldens,
+                validation_gate: validation_gate_from_env(),
+                require_sandbox_exec: std::env::var("ORBIT_REQUIRE_SANDBOX_EXEC").as_deref()
+                    == Ok("1"),
             },
         )?;
 
@@ -67,6 +70,8 @@ impl Execute for PluginTestArgs {
                 crate::output::color::cell(
                     if result.updated {
                         "updated"
+                    } else if result.deferred {
+                        "deferred"
                     } else if result.passed {
                         "passed"
                     } else {
@@ -79,7 +84,18 @@ impl Execute for PluginTestArgs {
         }
 
         let grant_line = format!("Requested grants: {}.", report.requested_grants);
-        let summary = if report.passed() {
+        let summary = if let Some(deferral) = &report.deferral {
+            // Each notice leads its own line: the validation step and the
+            // deferral handoff read them by prefix.
+            format!(
+                "{grant_line}\n{}\n{} conformance test(s) deferred to a host replay against \
+                 Orbit {}: sandbox-exec cannot apply the plugin's profile inside this sandbox; {}",
+                deferral.notices.join("\n"),
+                report.results.len(),
+                report.orbit_version,
+                report.certification_note
+            )
+        } else if report.passed() {
             format!(
                 "{grant_line}\n{} of {} conformance test(s) passed against Orbit {}; {}",
                 report.results.len(),
@@ -114,6 +130,12 @@ impl Execute for PluginTestArgs {
             "orbit_version": report.orbit_version,
             "requested_grants": report.requested_grants,
             "passed": report.passed(),
+            "deferred": report.deferral.is_some(),
+            "notices": report
+                .deferral
+                .as_ref()
+                .map(|deferral| deferral.notices.clone())
+                .unwrap_or_default(),
             "certified": report.certified,
             "certification": report.certification_note,
             "results": report
@@ -123,18 +145,38 @@ impl Execute for PluginTestArgs {
                     "name": result.name,
                     "tool": result.tool,
                     "passed": result.passed,
+                    "deferred": result.deferred,
                     "updated": result.updated,
                     "detail": result.detail,
                 }))
                 .collect::<Vec<_>>(),
         });
         // A failing suite exits non-zero: `orbit plugin test` is a gate a
-        // plugin's own CI runs, and a gate that always exits 0 is not one.
-        let exit_code = i32::from(!report.passed());
+        // plugin's own CI runs, and a gate that always exits 0 is not one. A
+        // suite deferred to a host replay exits 0 with its notices; only a
+        // gate run that asked for a validation summary can defer.
+        let exit_code = report.exit_code();
         Ok(
             Payload::blocks(doc, vec![Block::table(table), Block::text(summary)])
                 .with_exit_code(exit_code)
                 .into(),
         )
     }
+}
+
+/// The validation gate a runner named through `ORBIT_VALIDATION_SUMMARY`,
+/// `ORBIT_VALIDATION_GATE` and `ORBIT_VALIDATION_BASE`; `None` without a
+/// summary path.
+fn validation_gate_from_env() -> Option<PluginTestValidationGate> {
+    let named = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    Some(PluginTestValidationGate {
+        summary: PathBuf::from(named("ORBIT_VALIDATION_SUMMARY")?),
+        command: named("ORBIT_VALIDATION_GATE"),
+        base: named("ORBIT_VALIDATION_BASE"),
+    })
 }

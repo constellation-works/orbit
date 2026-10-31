@@ -292,7 +292,11 @@ orbit clock repair                   # rewrite a unit naming a missing, moved or
 orbit clock set --cadence-seconds 300
 ```
 
-Routines and auto-tasks still ship disabled; enabling them follows the
+The shipped `crew_performance_refresh` routine is enabled; its scheduled
+pipeline still records a job run hourly (`23 * * * *`). While
+`workflow.crew_performance` is off (the default), that run skips scanning and
+writes no snapshot. Other shipped routines and auto-tasks remain disabled by
+default; enabling them follows the
 [automation reference](../../crates/orbit-core/assets/skills/orbit-setup/references/automation.md).
 The service's `ExecStart` names the Orbit binary that installed it, so rerun
 `orbit clock repair` after moving or reinstalling Orbit.

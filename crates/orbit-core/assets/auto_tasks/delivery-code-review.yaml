@@ -13,20 +13,34 @@ schedule:
 template:
   title: Review a frozen delivery batch
   description: |-
-    Review the entire captured code range for correctness, concurrency, error handling and repository standards. Verify findings against the pinned source, search for duplicates and file confirmed findings with precise evidence.
+    Review the entire captured code range for correctness, concurrency, error handling and repository standards. For each documentation or skill sentence in the range that states a limit, default, config key, flag, ordering, or error behavior, open the source it describes and confirm the sentence, and for each behavior change search `docs/`, `website/`, and `crates/orbit-core/assets/skills/` for the old claim. Verify findings against the pinned source, search for duplicates and file confirmed findings with precise evidence.
     Use only the frozen automation input appended to this task. Examine every
     captured commit, including unattributed neighbors. Findings may remain open.
     Attribute every finding to the task that introduced it: locate the commit
     that made the code wrong, then read its task from the frozen input — each
     `deliveries[]` entry lists its `commits` and the `task_ids` that landed them.
     File each confirmed finding with
-    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["delivery-code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["delivery-code-review"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>","sites":["<defect site selector>"]}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
     A defect in an unattributed neighbor commit, or one that predates the batch
     and was merely exposed by it, is filed without the `regression_from` relation
     and says so — never blame a bystander delivery. Name the culprit task and
     commit in the finding's description and in the evidence finding text.
     Classify every `regression_from` relation you file by adding
-    `"regression":{"nature":"<nature>","escape":"<escape>"}` to it.
+    `"regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>","sites":["<defect site selector>"]}` to it.
+    `sites` names where the defect lives, not everything the culprit touched:
+    the `symbol:<path>#<name>:<kind>` of the function, method or type that is
+    wrong, or `file:<path>` when the file has no symbols, usually the
+    finding's source selector. Never list tests, goldens, docs or wiring the
+    culprit only touched alongside.
+    `severity` is how much the defect matters, on the one scale findings and
+    regression links share; a new link without it is refused. Rate the worst
+    real impact the evidence shows, not the size of the fix, and take the lower
+    level when torn:
+    - `critical`: data loss or corruption, a security hole, every drain halted, or silently wrong results (a migration drops task history).
+    - `high`: a core workflow broken with no workaround (every `ui` delivery fails at handoff).
+    - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` drops a field the plain output shows).
+    - `low`: an edge case, a misleading message or a minor UX defect (an error names the wrong flag).
+    - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a reference doc).
     Choose `unclassified` rather than guess. `nature` is what kind of regression
     the link records:
     - `broke_existing`: the culprit broke behavior that worked before it landed.
@@ -35,16 +49,26 @@ template:
     - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
     - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
     - `unclassified`: the evidence does not settle the nature.
-    `escape` is why the delivery gates missed it:
-    - `no_test`: no test covered the broken behavior.
-    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    `escape` is why the delivery gates missed it. Inspect the tests and gate
+    selection at the culprit commit: use `no_test` when no test exercises the
+    broken behavior there, and `test_not_selected` when a covering test exists
+    but the culprit's gates did not run it. Use `unclassified` only when the
+    evidence does not settle the escape, and state the unresolved evidence in
+    the finding's description. Mere visibility in the diff is not evidence
+    for `review_missed` when no test exercises the broken behavior.
+    - `no_test`: no test exercised the broken behavior at the culprit commit.
+    - `test_not_selected`: a covering test existed at the culprit commit but its gates did not run it.
     - `platform_only`: it shows only on a platform or host the gates did not exercise.
     - `review_missed`: it was visible in the diff and review did not flag it.
     - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
     - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
-    - `unclassified`: the evidence does not settle the escape.
-    Derive canonical `file:` selectors from every evidenced source path, removing
-    the line suffix, and add the matching regression-test location. Use existing
+    - `unclassified`: the evidence does not settle the escape; state why in the finding.
+    Derive canonical selectors from every evidenced source location, removing
+    the line suffix: `symbol:<path>#<name>:<kind>` for the function, method or
+    type that holds it (`<name>` qualified by its type for a member, e.g.
+    `Store::claim:method`), or `file:<path>` when the defect is file-wide or
+    the file has no symbols. Add the matching regression-test location as
+    `file:`. Use existing
     paths where possible; for a test file that must be created, set
     `allow_missing_context: true` and identify that intended path. Never file a
     finding without context selectors.
@@ -58,9 +82,11 @@ template:
     task's assigned executor run with
     `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"<agent-family>"}'`.
     `orbit tool show <tool.name>` prints the tool's schema.
-    Fill one `delivery_examinations` entry per frozen delivery: `examined_paths`
-    lists the changed paths you read and `skipped_paths` the ones you did not,
-    each with a `reason`; together they must be exactly what
+    Fill one `delivery_examinations` entry per frozen delivery. `examined_paths`
+    is an array of path strings: the changed paths you read. `skipped_paths` is
+    an array of `{"path": "<path>", "reason": "<why>"}` objects: the changed
+    paths you did not read. Only `skipped_paths` holds objects. Together they
+    must be exactly what
     `git diff --name-only --no-renames <before.commit> <after.commit>` lists for
     that delivery. Set `verdict` to `"clean"` or `{"findings": ["<finding task ID>"]}`
     and write a `rationale` of at least 40 characters, specific to that delivery,
@@ -68,13 +94,20 @@ template:
     match the frozen diff.
     Preserve the supplied schema_version and frozen identity. Batch/action IDs,
     consumer, epoch and input_digest are strings. The examined_commits,
-    examined_deliveries and findings arrays contain strings: copy commit SHAs
-    and delivery keys, not the frozen commit/delivery objects.
+    examined_deliveries, examined_paths and findings arrays contain strings:
+    copy commit SHAs, delivery keys and path strings, not the frozen
+    commit/delivery objects or `{path, reason}` objects.
     Each checks entry is an object with string subject, method and observation.
     For example, these fields have valid shapes (replace every example with
     your actual evidence; use findings: [] when there are no findings):
     ```json
     {"checks":[{"subject":"src/lib.rs","method":"git diff <before> <after> -- src/lib.rs","observation":"The error branch drops the caller's retry token."}],"findings":["<finding task ID>: retry token lost; introduced by <culprit task ID> at <commit SHA>"]}
+    ```
+    A delivery_examinations entry has this shape. Replace every placeholder
+    with the frozen delivery key and the changed paths from the frozen input;
+    settlement refuses a placeholder copied as a value:
+    ```json
+    {"delivery_examinations":[{"delivery":"<frozen delivery key>","examined_paths":["<changed path you read>"],"skipped_paths":[{"path":"<changed path you did not read>","reason":"<why it was not read>"}],"verdict":"clean","rationale":"<at least 40 characters, specific to this delivery>"}]}
     ```
     Verdict findings are task-ID strings, for example
     `{"findings":["<finding task ID>"]}`, not task objects.
@@ -91,7 +124,7 @@ template:
   - Every frozen delivery has an examination whose examined and skipped paths are exactly its changed paths, with a verdict and a delivery-specific rationale.
   - Concrete checks and findings are attached as valid automation-coverage.json evidence.
   - An execution summary of the examination is persisted.
-  - Every filed finding carries a `regression_from` relation targeting the delivery task whose commit introduced the defect, classified with a `regression` nature and escape (`unclassified` when the evidence does not settle one), or states why no captured delivery can be held responsible.
+  - Every filed finding carries a `regression_from` relation targeting the delivery task whose commit introduced the defect, classified with a `regression` nature and escape (`unclassified` when the evidence does not settle one) and a rubric `severity`, or states why no captured delivery can be held responsible.
   - Missing or skipped examination remains explicitly incomplete.
   task_type: chore
   tags:
@@ -100,6 +133,8 @@ template:
   required_tools:
   - orbit.task.add
   - orbit.task.artifact.put
+  - orbit.search
+  - orbit.task.update
   priority: medium
   complexity: hard
   status: backlog

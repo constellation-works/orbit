@@ -229,13 +229,14 @@ def _parse_flow(text: str, start: int, line: int) -> tuple[Any, int]:
             if text[index] == "]":
                 return items, index + 1
             if text[index] == ",":
-                index += 1
-                continue
+                raise YamlError("unexpected ',' in flow sequence", line)
             item, index = _parse_flow(text, index, line)
             items.append(item)
             index = _skip_space(text, index)
             if index < len(text) and text[index] == ",":
                 index += 1
+            elif index < len(text) and text[index] != "]":
+                raise YamlError("expected ',' or ']' in flow sequence", line)
         raise YamlError("unclosed flow sequence", line)
     if char == "{":
         mapping: dict[str, Any] = {}
@@ -247,8 +248,7 @@ def _parse_flow(text: str, start: int, line: int) -> tuple[Any, int]:
             if text[index] == "}":
                 return mapping, index + 1
             if text[index] == ",":
-                index += 1
-                continue
+                raise YamlError("unexpected ',' in flow mapping", line)
             key_obj, index = _parse_flow(text, index, line)
             if not isinstance(key_obj, str):
                 raise YamlError("flow mapping keys must be strings", line)
@@ -260,6 +260,8 @@ def _parse_flow(text: str, start: int, line: int) -> tuple[Any, int]:
             index = _skip_space(text, index)
             if index < len(text) and text[index] == ",":
                 index += 1
+            elif index < len(text) and text[index] != "}":
+                raise YamlError("expected ',' or '}' in flow mapping", line)
         raise YamlError("unclosed flow mapping", line)
 
     end = index
@@ -375,8 +377,14 @@ def _parse_sequence(lines: list[LogicalLine], index: int, indent: int) -> tuple[
                 mapping[key] = None
                 index += 1
             while index < len(lines) and lines[index].indent > indent:
-                nested, index = _parse_mapping(lines, index, lines[index].indent)
+                if _is_sequence_item(lines[index].text):
+                    raise YamlError("unexpected sequence item in mapping",
+                                    lines[index].line)
+                nested, next_index = _parse_mapping(lines, index, lines[index].indent)
+                if next_index <= index:
+                    raise YamlError("expected mapping content", lines[index].line)
                 mapping.update(nested)
+                index = next_index
             items.append(mapping)
             continue
         items.append(_parse_scalar(item_text, current.line))

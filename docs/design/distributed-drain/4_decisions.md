@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-10-20
-last_validated: 2026-10-12
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 feature: distributed-drain
 doc_role: decisions
@@ -797,5 +797,11 @@ work at a host ([Followers pull; the owner never places](#followers-pull-the-own
 - [ORB-14938] — added owner-relative OS affinity to pull admission, refined by [Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run).
 - [ORB-17304] — ordered admission against the live executor census ([Admission prefers work only the requesting executor can run](#admission-prefers-work-only-the-requesting-executor-can-run)).
 - [ORB-14247] — stopped `no-diff-expected` tasks holding context locks, and kept an unexpected diff on the ordinary commit and `sync_base` path ([No-diff-expected work does not hold context locks](#no-diff-expected-work-does-not-hold-context-locks)).
+- [ORB-12490] — preserved missing-file declarations through task storage, projections and locks.
+- [ORB-12495] — added claim lifecycle APIs, the read-only probe and receipt lookup.
+- [ORB-12564] — removed destination caller authorization and made SSH sessions honor argv authority.
+- [ORB-13642] — made sandboxed claimed implementations hand off through structured output.
+- [ORB-13897] — added typed final-recovery decisions and the deterministic applier.
+- [ORB-13989] — made the before-PR reviewer repair findings in a second commit.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

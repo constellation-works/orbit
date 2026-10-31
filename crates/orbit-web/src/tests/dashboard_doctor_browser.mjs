@@ -70,6 +70,7 @@ const HEALTHY_ROWS = (host) => ROWS(host).map((row) => (
 // whether the next run finds nothing wrong.
 const doctor = {};
 let routeLog = [];
+let oldhostRecovered = false;
 const FOUR_MINUTES = 4 * 60 * 1000;
 
 function doctorState(host) {
@@ -160,7 +161,7 @@ function hostApi(host, req, rest, url, res) {
   if (rest === 'doctor') {
     // An older host's router has no such route: axum's empty 404, which the
     // forward relays as an error with no text.
-    if (host === 'oldhost') return json({ error: '' }, 404);
+    if (host === 'oldhost' && !oldhostRecovered) return json({ error: '' }, 404);
     return doctorApi(host, url, json);
   }
   if (req.method !== 'GET') return json({ ok: true });
@@ -486,6 +487,15 @@ try {
   const oldRail = await railCount();
   assert(oldRail.text === '', 'an unavailable host shows no rail count');
   await capture('unavailable');
+  oldhostRecovered = true;
+  doctorState('oldhost').finished = Date.now();
+  await page.locator('#refresh-btn').click();
+  await until('cached report recovers unavailable Doctor', async () => (await page.locator('#doctor-body').textContent()).includes('provider:system'));
+  assert((await railCount()).text.includes('err'), 'recovered report and rail both show failures');
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.screenshot({ path: path.join(evidence, 'doctor-recovered-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await capture('recovered');
 
   // 6. No request ever carried a repair, --deep, or a write method.
   const requests = doctorRequests();

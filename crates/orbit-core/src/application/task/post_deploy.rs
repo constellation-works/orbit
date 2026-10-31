@@ -13,14 +13,100 @@ use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskHistoryEntry};
 use orbit_types::workflow::{
-    OwedCriterion, POST_DEPLOY_OWED_EVENT, POST_DEPLOY_RECORDED_EVENT, PostDeployOwed,
-    PostDeployRecord as OwedRecord, PostDeployResult, post_deploy_header,
+    OwedCriterion, POST_DEPLOY_HEADER, POST_DEPLOY_OWED_EVENT, POST_DEPLOY_RECORDED_EVENT,
+    PostDeployOutcome, PostDeployOwed, PostDeployRecord as OwedRecord, PostDeployResult,
+    post_deploy_header,
 };
 use serde_json::{Value, json};
 
-use super::TaskRecordUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
+use super::{TaskRecordUpdateParams, TaskUpdateParams};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
+
+/// Why an operator's post-deploy record was refused before any task was
+/// read. Each surface renders these through its own refusal contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostDeployRecordRefusal {
+    /// No criterion index was given.
+    CriterionRequired,
+    /// The measurement's evidence is missing or blank.
+    EvidenceRequired,
+}
+
+/// An operator's measurement of one owed criterion, with its evidence
+/// trimmed and present. Whether the task owes the criterion is checked by
+/// the trusted human update that records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostDeployOperatorRecord {
+    criterion: usize,
+    outcome: PostDeployOutcome,
+    evidence: String,
+}
+
+impl PostDeployOperatorRecord {
+    /// Normalize a structured record, refusing a missing criterion before
+    /// missing evidence. Index 0 is admitted here and refused as not owed.
+    pub fn from_operator_input(
+        criterion: Option<usize>,
+        outcome: PostDeployOutcome,
+        evidence: Option<&str>,
+    ) -> Result<Self, PostDeployRecordRefusal> {
+        let criterion = criterion.ok_or(PostDeployRecordRefusal::CriterionRequired)?;
+        let evidence = evidence.map(str::trim).unwrap_or_default();
+        if evidence.is_empty() {
+            return Err(PostDeployRecordRefusal::EvidenceRequired);
+        }
+        Ok(Self {
+            criterion,
+            outcome,
+            evidence: evidence.to_string(),
+        })
+    }
+
+    /// The record a `post-deploy: met|failed <N>` comment states, or `None`
+    /// when the comment is not one.
+    fn from_comment(message: &str) -> Option<Result<Self, OrbitError>> {
+        let (header, evidence) = message.split_once('\n').unwrap_or((message, ""));
+        let stated = post_deploy_header(header)?;
+        Some(
+            stated
+                .map_err(OrbitError::InvalidInput)
+                .and_then(|(outcome, criterion)| {
+                    Self::from_operator_input(Some(criterion), outcome, Some(evidence)).map_err(
+                        |_| {
+                            OrbitError::InvalidInput(
+                                "a post-deploy record requires the measurement's evidence after \
+                                 its first line"
+                                    .into(),
+                            )
+                        },
+                    )
+                }),
+        )
+    }
+
+    /// The criterion this record measures.
+    pub fn criterion(&self) -> usize {
+        self.criterion
+    }
+
+    /// The canonical human comment that records this measurement.
+    fn comment(&self) -> String {
+        format!(
+            "{POST_DEPLOY_HEADER} {} {}\n{}",
+            self.outcome.as_str(),
+            self.criterion,
+            self.evidence
+        )
+    }
+}
+
+fn criterion_not_owed(task_id: &str, criterion: usize) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "task {task_id} owes no criterion {criterion} after deploy"
+    ))
+}
 
 /// The `owed_criteria` section of a task record: each criterion the current
 /// delivery owes after deploy, with its state (`owed`, `met` or `failed`).
@@ -161,6 +247,27 @@ impl OrbitRuntime {
             .unwrap_or_default())
     }
 
+    /// Record an operator's measurement as a trusted human write under
+    /// `actor_label`: the canonical comment and its history entry land
+    /// together, or nothing is written.
+    pub fn record_post_deploy_as_human(
+        &self,
+        task_id: &str,
+        record: &PostDeployOperatorRecord,
+        actor_label: String,
+    ) -> Result<Task, OrbitError> {
+        if record.criterion == 0 {
+            // Index 0 names no criterion and has no canonical comment form.
+            self.get_task(task_id)?;
+            return Err(criterion_not_owed(task_id, 0));
+        }
+        let params = TaskUpdateParams {
+            comment: Some(record.comment()),
+            ..TaskUpdateParams::default()
+        };
+        self.update_task_as_human(task_id, params, actor_label)
+    }
+
     /// The history entry an operator's `post-deploy: met|failed <N>` comment
     /// records, or `None` when the comment is not one. Only the trusted human
     /// update path calls this; a worker's comment of the same shape records
@@ -171,39 +278,24 @@ impl OrbitRuntime {
         comment: Option<&str>,
         actor: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
-        let Some(message) = comment else {
+        let Some(record) = comment.and_then(PostDeployOperatorRecord::from_comment) else {
             return Ok(None);
         };
-        let (header, evidence) = message.split_once('\n').unwrap_or((message, ""));
-        let Some(stated) = post_deploy_header(header) else {
-            return Ok(None);
-        };
-        let (outcome, criterion) = stated.map_err(OrbitError::InvalidInput)?;
-        let evidence = evidence.trim();
-        if evidence.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "a post-deploy record requires the measurement's evidence after its first line"
-                    .into(),
-            ));
-        }
+        let record = record?;
         let history = self.get_task_history(&task.id)?;
-        let owes = OwedRecord::read(&history).is_some_and(|record| {
-            record
-                .owed
+        let owes = OwedRecord::read(&history).is_some_and(|owed| {
+            owed.owed
                 .criteria
                 .iter()
-                .any(|owed| owed.criterion == criterion)
+                .any(|owed| owed.criterion == record.criterion)
         });
         if !owes {
-            return Err(OrbitError::InvalidInput(format!(
-                "task {} owes no criterion {criterion} after deploy",
-                task.id
-            )));
+            return Err(criterion_not_owed(&task.id, record.criterion));
         }
         let note = serde_json::to_string(&PostDeployResult {
-            criterion,
-            outcome,
-            evidence: evidence.to_string(),
+            criterion: record.criterion,
+            outcome: record.outcome,
+            evidence: record.evidence,
         })
         .map_err(|error| OrbitError::Execution(format!("encode post-deploy result: {error}")))?;
         Ok(Some(TaskHistoryEntry {

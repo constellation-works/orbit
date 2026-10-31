@@ -1,0 +1,24 @@
+Force a task into an active arm of a running experiment (shadow or live)
+
+Usage: orbit experiment assign [OPTIONS] --task <TASK_ID> --arm <ARM> <ID>
+
+Arguments:
+  <ID>
+          The experiment's id or name
+
+Options:
+      --task <TASK_ID>
+          The task to assign
+
+      --arm <ARM>
+          The active arm to assign
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

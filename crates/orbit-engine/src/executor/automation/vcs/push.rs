@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::TaskComment;
-use orbit_types::workflow::ForgeUnavailableHold;
+use orbit_types::workflow::{
+    ForgeUnavailableHold, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixBlocker, PrAutoFixPush,
+    pr_auto_fix_pushes,
+};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -12,8 +15,9 @@ use super::super::input::{canonicalize_existing_dir, input_string_field, require
 use super::claim::carry_to_durable_ref;
 use super::freshness::commit_sha;
 use super::git::{
-    GitTimeoutBudget, GitTimeoutBudgetGuard, fetch_remote_base, git_command_success, git_output,
-    git_success, normalize_base_branch,
+    GitTimeoutBudget, GitTimeoutBudgetGuard, direct_remote_target, fetch_remote_base,
+    git_command_success, git_output, git_success, normalize_base_branch,
+    verify_direct_remote_target,
 };
 use super::handoff::{
     FAILED_HANDOFF_ACTOR, FailedHandoffPhase, HandoffContext, completed_task_ids_from_input,
@@ -39,7 +43,12 @@ pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Size
     };
 
     match push_batch_changes_inner(host, input, &workspace_path) {
-        Ok(output) => Ok(output),
+        Ok(output) => {
+            if let Some(context) = handoff.as_ref() {
+                record_landing_push(host, context, input, &output)?;
+            }
+            Ok(output)
+        }
         Err(error) => {
             if let Some(context) = handoff.as_ref() {
                 match ForgeUnavailableHold::from_text(&error.to_string()) {
@@ -56,6 +65,81 @@ pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Size
             Err(error)
         }
     }
+}
+
+/// Bind a before-landing reviewer push (`landing_push`) onto the PR's
+/// host-recorded published-head chain so completion conflict recovery and
+/// repair adoption authenticate the post-review head.
+fn record_landing_push<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffContext,
+    input: &Value,
+    output: &Value,
+) -> Result<(), OrbitError> {
+    let (Some(lease), Some(pr_number), Some(local_sha)) = (
+        input_string_field(input, "lease_remote_sha"),
+        input_string_field(input, "pr_number"),
+        output.get("local_sha").and_then(Value::as_str),
+    ) else {
+        return Ok(());
+    };
+    let Some(primary_task) = context.tasks.iter().map(|task| task.id.as_str()).min() else {
+        return Ok(());
+    };
+    let run_id = input_string_field(input, "run_id").unwrap_or_else(|| context.batch_id.clone());
+    record_published_pr_head(
+        host,
+        primary_task,
+        &run_id,
+        &pr_number,
+        &lease,
+        local_sha,
+        PrAutoFixBlocker::LandingReview,
+    )
+}
+
+/// Record a head this run published on the pull request.
+pub(in crate::executor::automation::vcs) fn record_published_pr_head<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    run_id: &str,
+    pr_number: &str,
+    from_head_sha: &str,
+    to_head_sha: &str,
+    blocker: PrAutoFixBlocker,
+) -> Result<(), OrbitError> {
+    if from_head_sha == to_head_sha || host.worker_invocation().is_some() {
+        return Ok(());
+    }
+    let push = PrAutoFixPush {
+        pr_number: pr_number.to_string(),
+        from_head_sha: from_head_sha.to_string(),
+        to_head_sha: to_head_sha.to_string(),
+        blocker,
+        run_id: run_id.to_string(),
+    };
+    if pr_auto_fix_pushes(&host.get_task_history(task_id)?, pr_number).contains(&push) {
+        return Ok(());
+    }
+    let note = serde_json::to_string(&push).map_err(|error| {
+        OrbitError::Execution(format!("auto_fix: published head not recorded: {error}"))
+    })?;
+    host.apply_task_automation_update(
+        task_id,
+        TaskAutomationUpdate {
+            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".to_string(),
+                event: PR_AUTO_FIX_PUSHED_EVENT.to_string(),
+                note: Some(note),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..TaskAutomationUpdate::default()
+        },
+    )
 }
 
 /// Tell the task's readers once per batch that its push is held for the
@@ -132,10 +216,10 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         ));
     }
 
-    ensure_origin_publishes_elsewhere(workspace_path, &branch)?;
+    let push_url = ensure_origin_publishes_elsewhere(workspace_path, &branch)?;
 
     let local_sha = commit_sha(workspace_path, &branch)?;
-    let probe = pre_push_remote_branch(workspace_path, &branch)?;
+    let probe = pre_push_remote_branch(workspace_path, &branch, &push_url)?;
     let remote_sha = &probe.sha;
     let repair_admission =
         super::candidate_resume::source_repair::publication_admission(host, input)?;
@@ -217,7 +301,13 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
                 .map_or_else(|| "missing".to_string(), |sha| format!("at {sha}"))
         )));
     }
-    let decision = push_decision(workspace_path, &branch, &local_sha, remote_sha.as_deref())?;
+    let decision = push_decision(
+        workspace_path,
+        &push_url,
+        &branch,
+        &local_sha,
+        remote_sha.as_deref(),
+    )?;
     let (label, force_with_lease) = match decision {
         PushDecision::Missing => ("performed_create", false),
         PushDecision::Current => {
@@ -283,39 +373,96 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     Ok(output)
 }
 
-/// Refuse to push into the repository we are pushing from.
-///
-/// A push step proves publication only when `origin` is some other repository.
-/// When `origin` points back at this checkout — the primary checkout a linked
-/// worktree shares its `.git` with, for instance — `ls-remote` echoes the local
-/// branch straight back, and the step would report `reused_current` for a branch
-/// that reached no publication target at all. Failing here keeps a failed push
-/// distinguishable from a successful one even if something outside the pipeline
-/// wrote that remote into the repository's configuration [ORB-12103].
-pub(super) fn ensure_origin_publishes_elsewhere(
-    workspace_path: &Path,
-    branch: &str,
-) -> Result<(), OrbitError> {
-    let url = git_output(workspace_path, &["remote", "get-url", "origin"]).map_err(|error| {
+/// The effective push URLs of `origin`: every destination
+/// `git push -- origin <branch>` would write, after `pushurl`,
+/// `pushInsteadOf` and `insteadOf` resolution. `get-url --push --all`
+/// performs that resolution; reading `remote.origin.url` or probing
+/// `ls-remote origin` observes only the fetch destination, which can be
+/// a different repository [ORB-17671].
+fn effective_push_urls(workspace_path: &Path, branch: &str) -> Result<Vec<String>, OrbitError> {
+    let output = git_output(
+        workspace_path,
+        &["remote", "get-url", "--push", "--all", "origin"],
+    )
+    .map_err(|error| {
         OrbitError::Execution(format!(
             "git_push: workspace '{}' has no usable 'origin' remote to publish '{branch}' to: {error}",
             workspace_path.display()
         ))
     })?;
-    let Some(local_remote) = local_remote_path(workspace_path, &url) else {
-        return Ok(());
+    let mut urls: Vec<String> = Vec::new();
+    for url in output.lines().map(str::trim).filter(|url| !url.is_empty()) {
+        if !urls.iter().any(|seen| seen == url) {
+            urls.push(url.to_string());
+        }
+    }
+    if urls.is_empty() {
+        return Err(OrbitError::Execution(format!(
+            "git_push: workspace '{}' has no usable 'origin' remote to publish '{branch}' to: \
+             no effective push URL",
+            workspace_path.display()
+        )));
+    }
+    Ok(urls)
+}
+
+/// The single effective publication destination, refusing a split
+/// configuration. With several distinct push URLs a lease or a
+/// `reused_current` observation cannot name the one destination the
+/// candidate must reach, so publication is refused rather than reported
+/// from any single destination's state.
+fn single_effective_push_url(workspace_path: &Path, branch: &str) -> Result<String, OrbitError> {
+    let urls = effective_push_urls(workspace_path, branch)?;
+    if urls.len() > 1 {
+        return Err(OrbitError::Execution(format!(
+            "git_push: remote 'origin' has {} distinct effective push URLs, so pushing \
+             '{branch}' would publish to several destinations; refusing to report \
+             publication from any one of them — configure a single effective push URL \
+             for 'origin'",
+            urls.len()
+        )));
+    }
+    match urls.into_iter().next() {
+        Some(url) => Ok(url),
+        None => Err(OrbitError::Execution(format!(
+            "git_push: remote 'origin' has no effective push URL to publish '{branch}' to"
+        ))),
+    }
+}
+
+/// Refuse to push into the repository we are pushing from, and resolve
+/// the single destination publication must reach.
+///
+/// A push step proves publication only when the effective push
+/// destination is some other repository. When it points back at this
+/// checkout — the primary checkout a linked worktree shares its `.git`
+/// with, for instance — `ls-remote` echoes the local branch straight
+/// back, and the step would report `reused_current` for a branch that
+/// reached no publication target at all. Failing here keeps a failed push
+/// distinguishable from a successful one even if something outside the pipeline
+/// wrote that remote into the repository's configuration [ORB-12103].
+/// The check inspects the effective push URLs, not the fetch URL: a
+/// self-pointing `pushurl` or `pushInsteadOf` rewrite is refused even
+/// when the fetch URL names a real remote [ORB-17671].
+pub(super) fn ensure_origin_publishes_elsewhere(
+    workspace_path: &Path,
+    branch: &str,
+) -> Result<String, OrbitError> {
+    let push_url = single_effective_push_url(workspace_path, branch)?;
+    let Some(local_remote) = local_remote_path(workspace_path, &push_url) else {
+        return Ok(push_url);
     };
     let (Some(remote_repository), Some(local_repository)) = (
         repository_identity(&local_remote),
         repository_identity(workspace_path),
     ) else {
-        return Ok(());
+        return Ok(push_url);
     };
     if remote_repository != local_repository {
-        return Ok(());
+        return Ok(push_url);
     }
     Err(OrbitError::Execution(format!(
-        "git_push: remote 'origin' ('{url}') is this same repository ('{}'), so pushing '{branch}' \
+        "git_push: remote 'origin' push URL ('{push_url}') is this same repository ('{}'), so pushing '{branch}' \
          there publishes nothing; point 'origin' at a real publication remote",
         local_repository.display()
     )))
@@ -362,6 +509,7 @@ enum PushDecision {
 
 fn push_decision(
     workspace_path: &Path,
+    push_url: &str,
     branch: &str,
     local_sha: &str,
     remote_sha: Option<&str>,
@@ -373,15 +521,21 @@ fn push_decision(
         return Ok(PushDecision::Current);
     }
 
-    git_success(
-        workspace_path,
-        &[
-            "fetch",
-            "--no-tags",
-            "origin",
-            &format!("refs/heads/{branch}"),
-        ],
-    )?;
+    // Fetch the observed head from the publication destination itself:
+    // the fetch remote may not hold the object `remote_sha` names. Fetch
+    // by the direct target so `insteadOf` is not applied to the resolved
+    // push URL a second time [ORB-17686].
+    let target = direct_remote_target(push_url);
+    verify_direct_remote_target(workspace_path, push_url, &target)?;
+    let mut fetch_args: Vec<String> = target.prefix_args();
+    fetch_args.extend([
+        "fetch".to_string(),
+        "--no-tags".to_string(),
+        target.probe_url.clone(),
+        format!("refs/heads/{branch}"),
+    ]);
+    let fetch_refs: Vec<&str> = fetch_args.iter().map(String::as_str).collect();
+    git_success(workspace_path, &fetch_refs)?;
     if git_command_success(
         workspace_path,
         &["merge-base", "--is-ancestor", remote_sha, local_sha],

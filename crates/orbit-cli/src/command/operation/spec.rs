@@ -44,6 +44,10 @@ pub enum RuntimeNeed {
     ReadOnly,
     /// Inspect host plugins without treating an unregistered cwd as a workspace.
     PluginReadOnly,
+    /// Host-scoped read without treating an unregistered cwd as a workspace
+    /// (workspace listing and inspection). An unregistered checkout reads host
+    /// state from the global root instead of failing or binding the cwd.
+    HostReadOnly,
     Forbidden,
     /// Bind the workspace that owns this task ID rather than the one the cwd
     /// or `--workspace` walk would pick [ORB-10797] [ORB-10961].
@@ -343,6 +347,8 @@ pub(super) fn task_operation(
         | TaskVerb::BlockTriage
         | TaskVerb::ReconcileReview
         | TaskVerb::RetryHandoff
+        | TaskVerb::RecoverClaim
+        | TaskVerb::RevokeHandoff
         | TaskVerb::Reject
         | TaskVerb::Delete => {}
     }
@@ -403,9 +409,21 @@ pub(super) fn dispatch_browser_kit(command: Commands, _context: DispatchContext<
     }
 }
 
+pub(super) fn dispatch_lease_listener_user(
+    command: Commands,
+    context: DispatchContext<'_>,
+) -> CommandOut {
+    match command {
+        Commands::Lease(command) => {
+            command.execute_without_runtime(context.workspace_selector, context.root_override)
+        }
+        _ => dispatch_mismatch("Lease"),
+    }
+}
+
 pub(super) fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Migrate(command) if !command.confirm => {
+        Commands::Migrate(command) if !command.applies() => {
             command.execute_without_runtime(context.root_override, context.workspace_selector)
         }
         Commands::Migrate(command) => command.execute(context.runtime()?),
@@ -421,11 +439,7 @@ pub(super) fn dispatch_update(command: Commands, context: DispatchContext<'_>) -
 }
 
 pub(super) fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
-    use super::super::run::{RunCommand, RunSubcommand};
     match command {
-        Commands::Run(RunCommand {
-            command: RunSubcommand::ShipSweep(args),
-        }) => args.execute_without_runtime(context.root_override),
         Commands::Run(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Run"),
     }
@@ -473,6 +487,12 @@ pub(super) fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> C
             orbit_web::connect(args, context.root_override)?;
             Ok(CommandOutput::Silent)
         }
+        Commands::Web(WebCommand {
+            command: WebSubcommand::Open(args),
+        }) => {
+            orbit_web::open_dashboard(args)?;
+            Ok(CommandOutput::Silent)
+        }
         _ => dispatch_mismatch("Web"),
     }
 }
@@ -487,7 +507,7 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             Some("tool".to_string()),
             Some(args.name.clone()),
             tool_run_actor_role(args),
-            Some(args.pretty),
+            Some(false),
         ),
         ToolSubcommand::List(_) => ("list", None, None, None, "admin".to_string(), None),
         ToolSubcommand::Show(args) => (

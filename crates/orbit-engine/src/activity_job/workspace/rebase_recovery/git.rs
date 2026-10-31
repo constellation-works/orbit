@@ -47,42 +47,65 @@ pub(super) fn validate_failed_step_identity<'a>(
     input: &'a Value,
     prepared: &Value,
     original: &str,
-) -> Option<&'a str> {
-    let activity_name = input.get("activity_name")?.as_str()?;
-    let failed_step_id = input.get("failed_step_id")?.as_str()?;
+) -> Result<&'a str, &'static str> {
+    let activity_name = input
+        .get("activity_name")
+        .and_then(Value::as_str)
+        .ok_or("missing activity_name")?;
+    let failed_step_id = input
+        .get("failed_step_id")
+        .and_then(Value::as_str)
+        .ok_or("missing failed_step_id")?;
     if !matches!(
         (failed_step_id, activity_name),
         ("sync_base", "git_rebase")
             | ("complete_pr", "pr_complete")
             | ("complete_reviewed_pr", "pr_complete")
     ) {
-        return None;
+        return Err("failed_step_id and activity_name do not name a supported rebase step");
     }
-    if activity_name == "pr_complete"
-        && (prepared.get("completion")?.as_str()? != "done"
-            || prepared.get("published_head_sha")?.as_str()? != original
-            || prepared.get("pr_number")?.as_str()?.is_empty())
-    {
-        return None;
+    if activity_name == "pr_complete" {
+        if prepared.get("completion").and_then(Value::as_str) != Some("done") {
+            return Err("pr_complete recovery requires prepared completion == 'done'");
+        }
+        if prepared.get("published_head_sha").and_then(Value::as_str) != Some(original) {
+            return Err("prepared published_head_sha does not match original HEAD");
+        }
+        if !prepared
+            .get("pr_number")
+            .and_then(Value::as_str)
+            .is_some_and(|pr| !pr.is_empty())
+        {
+            return Err("missing prepared pr_number");
+        }
     }
-    Some(failed_step_id)
+    Ok(failed_step_id)
 }
 
-pub(super) fn recovery_conflicting_paths(input: &Value) -> Option<Vec<String>> {
-    let values = input.get("conflicting_paths")?.as_array()?;
+pub(super) fn recovery_conflicting_paths(input: &Value) -> Result<Vec<String>, &'static str> {
+    let values = input
+        .get("conflicting_paths")
+        .and_then(Value::as_array)
+        .ok_or("missing conflicting_paths array")?;
     let mut paths = Vec::with_capacity(values.len());
     for value in values {
-        let path = value.as_str()?;
-        safe_relative_path(path).ok()?;
+        let path = value
+            .as_str()
+            .ok_or("conflicting_paths entry is not a string")?;
+        safe_relative_path(path)
+            .map_err(|_| "conflicting_paths entry is not a safe relative path")?;
         paths.push(path.to_string());
     }
     if paths.is_empty() {
-        return None;
+        return Err("conflicting_paths is empty");
     }
     let original_len = paths.len();
     paths.sort();
     paths.dedup();
-    (paths.len() == original_len).then_some(paths)
+    if paths.len() != original_len {
+        return Err("conflicting_paths contains duplicate entries");
+    }
+    Ok(paths)
 }
 
 pub(super) fn completion_recovery_base_ref(prepared: &Value) -> Option<String> {

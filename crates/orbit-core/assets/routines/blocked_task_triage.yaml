@@ -1,0 +1,55 @@
+# Default blocked-task triage routine. Seeded into `.orbit/routines/` on
+# `orbit init` with the routine name, this host's registered machine id
+# (`owner_machine`) and the workspace's registered base branch resolved at
+# seed time. It is intentionally disabled: enabling scheduled triage is an
+# explicit, versioned workspace decision.
+#
+# Every block already gets one recovery decision: final recovery in the
+# pipeline, or the blocked-task backstop outside it. What that decision
+# escalates, and an undecided block past the backstop's 72-hour limit, waits
+# for a reader. Enabled, this routine finds each such block episode (the
+# task's latest move to `blocked`) that nobody outside Orbit's automation has
+# touched since and the lane has not triaged and, once it has settled for
+# debounce_minutes or waited max_wait_minutes, submits up to batch_size of
+# them that share one stored crew into one `escalation_triage_pipeline` run.
+# A hard-tier triager reads each episode once and records one disposition
+# through `orbit.task.block_triage`: a requeue within the final-recovery
+# requeue bound it shares (2 per 24 hours), a decision proposal, or a named
+# human action. The `blocked_task_triaged` marker it writes takes that episode
+# out of observation; a later block on the same task is a new episode.
+#
+# It replaces the retired `blocked-task-triage` auto-task. `orbit workspace
+# sync` retires a seeded copy of that auto-task and never enables this
+# routine for you.
+#
+# Only this host evaluates the trigger (`owner_machine`). Explicit runs
+# (`orbit run job escalation_triage_pipeline --input 'subject="block"'
+# --input 'task_ids=["<id>"]'`) remain available and do not use this gate.
+# See docs/design/automation-triggers/2_design.md.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Triage blocked tasks whose block episode final recovery escalated, or that
+  stayed undecided past the backstop's limit, once per episode: requeue a
+  mechanical block within the shared final-recovery requeue bound, propose
+  scope options for a decision block, or name the human action. State-
+  triggered: fires when such a block appears and stays quiet otherwise.
+  Disabled by default; set enabled to true in this versioned definition to
+  opt this workspace in.
+enabled: false
+trigger:
+  state:
+    kind: block_escalated
+    owner_machine: __ORBIT_OWNER_MACHINE__
+    branch: __ORBIT_BASE_BRANCH__
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    batch_size: 5
+    retries: 1
+    deadline_minutes: 90
+target: job:escalation_triage_pipeline
+policy:
+  timeout_minutes: 90
+  overlap: forbid
+  retries: {max: 1, backoff_minutes: 5}

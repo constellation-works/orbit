@@ -21,8 +21,14 @@ const SUCCESS_ENVELOPE: &str =
 
 fn fake_agy(dir: &Path, body: &str, argv_path: &Path, stdin_path: &Path) -> PathBuf {
     let program = dir.join("agy");
+    // After each run Orbit reads agy's quota with `--print /usage` through the same
+    // launcher. That query is not a model turn: answer it without recording argv or
+    // stdin, so the run's own invocation is what the assertions read.
     let script = format!(
         r#"#!/bin/sh
+case " $* " in
+  *" /usage "*) exit 1 ;;
+esac
 : > '{argv}'
 for arg in "$@"; do printf '%s\n' "$arg" >> '{argv}'; done
 cat > '{stdin}'
@@ -110,11 +116,13 @@ fn seed_antigravity_executor(runtime: &OrbitRuntime, program: &Path, keep_sandbo
 
 fn spec(timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: Some("gemini-3.8-flash-high".to_string()),
@@ -130,6 +138,7 @@ fn spec(timeout_seconds: u64) -> AgentLoopSpec {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 

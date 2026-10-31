@@ -4,6 +4,7 @@ use crate::OrbitRuntime;
 use crate::runtime::engine::crew::BundleCrews;
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_engine::DispatchError;
 use orbit_types::workflow::JobRun;
 use orbit_types::workflow::automation::members::*;
 use serde_json::Value;
@@ -53,6 +54,33 @@ pub(crate) fn claim(
     }
 
     Ok(Some(active))
+}
+
+/// Refuse a deterministic pilot, finding-verification or escalation-triage
+/// step whose state claim belongs to another run.
+///
+/// The step's input carries the claim at its root or under `prepared`. A step
+/// without a claim passes; one with a live claim passes only when
+/// `owner_run_id`, the run whose reservation the step acts for, is the run the
+/// claim's action is bound to.
+pub(crate) fn require_claim_owner(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+    owner_run_id: Option<&str>,
+) -> Result<(), DispatchError> {
+    let claim_input = input.get("prepared").unwrap_or(input);
+    let active = claim(runtime, claim_input)
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    if let Some(active) = active
+        && (owner_run_id.is_none() || owner_run_id != active.action_id.as_deref())
+    {
+        return Err(DispatchError::action_failed(
+            action,
+            "state claim belongs to another run",
+        ));
+    }
+    Ok(())
 }
 
 /// Whether `run`, starting with `input`, may name tasks whose crews differ.

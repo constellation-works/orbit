@@ -93,6 +93,35 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         self.task_scope.clone()
     }
 
+    /// A routed decision-channel callback runs here, outside the plugin
+    /// sandbox, through the same `orbit tool run` dispatch the child would
+    /// have used. The caller is the routed callback session the dispatch
+    /// resolves; the spawning caller's grants stay out of it, and only its
+    /// worker binding is kept, so a claimed run's plugin is still refused as
+    /// an agent (design `docs/design/human-decision-channel/2_design.md` §1).
+    fn execute_host_routed_callback(&self, tool: &str, input: Value) -> Result<Value, OrbitError> {
+        if !orbit_tools::plugin::is_host_routed_callback_tool(tool) {
+            return Err(OrbitError::PolicyDenied(format!(
+                "'{tool}' is not a host-routed plugin callback"
+            )));
+        }
+        let session = ToolSessionContext {
+            workspace_id: self.session_context.workspace_id.clone(),
+            worker_invocation: self.session_context.worker_invocation.clone(),
+            ..Default::default()
+        };
+        self.runtime
+            .execute_tool_command_dispatch_with_session_context(
+                tool,
+                input,
+                None,
+                None,
+                crate::adapter::command::ToolEntryPoint::Cli,
+                session,
+            )
+            .map(|outcome| outcome.value)
+    }
+
     fn record_unknown_input_fields(
         &self,
         tool_name: &str,

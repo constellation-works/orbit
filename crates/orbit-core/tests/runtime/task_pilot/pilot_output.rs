@@ -6,6 +6,8 @@
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{Task, TaskStatus};
+use orbit_engine::RuntimeHost;
+use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 
 use super::Workspace;
@@ -274,9 +276,50 @@ fn a_ui_finding_adds_the_ui_tag_and_never_removes_one() {
 }
 
 // Related boundary scenarios share the isolated table fixture.
+fn a_run_prepared_before_the_proof_existed_applies_its_result_without_one() {
+    let workspace = Workspace::new();
+    // Applied directly: the fixture's `action` fills in a proof.
+    let apply = |prepared: &Value, task: &Task| {
+        workspace
+            .runtime
+            .run_deterministic(
+                "apply_task_pilot_results",
+                &json!({}),
+                &json!({
+                    "workspace_path": workspace.repo, "prepared": prepared,
+                    "results": [result(&task.id, Some(0))],
+                }),
+                ToolContext::default(),
+            )
+            .unwrap()
+    };
+    // A run prepared for the proof sends a proofless result to repair.
+    let task = workspace.pilot_task("prepared for the proof");
+    let prepared = workspace.prepare_partitioned(&[&task.id], 1);
+    let refused = apply(&prepared, &task);
+    assert_eq!(refused["applied_count"], 0, "{refused}");
+    assert_eq!(refused["repair_count"], 1, "{refused}");
+
+    // A run still in flight from before the upgrade keeps its result.
+    let task = workspace.pilot_task("in flight across the upgrade");
+    let mut legacy = workspace.prepare_partitioned(&[&task.id], 1);
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("inspection_proof_required");
+    let applied = apply(&legacy, &task);
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert_eq!(
+        workspace.runtime.get_task(&task.id).unwrap().context_files,
+        ["file:README.md"]
+    );
+}
+
 crate::scenario_table!(
     host_index_applies_to_a_missing_or_wrong_partition_index_scenarios,
     host_index_applies_to_a_missing_or_wrong_partition_index,
+    a_run_prepared_before_the_proof_existed_applies_its_result_without_one,
     missing_or_scalar_evidence_gaps_are_normalised_to_an_array,
     a_ui_finding_adds_the_ui_tag_and_never_removes_one
 );

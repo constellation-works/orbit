@@ -60,9 +60,8 @@ impl FrictionStore {
     }
 }
 
-/// Shared read entry point so the export workflow pages
-/// through the same bounded query the tool surfaces use.
-pub(crate) fn read_page(
+/// Read a bounded page through the SQL query used by the tool surfaces.
+fn read_page(
     store: &Store,
     workspace_id: &str,
     filter: &FrictionListFilter,

@@ -15,6 +15,8 @@ mod federated_routing;
 mod identity;
 mod listener;
 mod mcp_wire_roundtrip;
+#[cfg(unix)]
+mod oversized_lines;
 mod scripted_destination;
 #[cfg(unix)]
 mod ssh_reuse;

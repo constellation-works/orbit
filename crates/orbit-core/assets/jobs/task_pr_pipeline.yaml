@@ -38,7 +38,11 @@
 # - ORB-14849: with `review.timing = before_landing` captured instead, the pre-push
 #   gate does not apply and the PR opens at once; the `landing_review*` steps
 #   then review the published head while hosted CI runs on it, and
-#   completion merges only the head they settled. Any outcome but an approve
+#   completion merges only the head they settled. When that admission decides
+#   `evidence_received` — the held review's owed evidence arrived for the
+#   unchanged candidate — `landing_review` is skipped and settlement reuses
+#   the held certificate. A fresh `admitted` or `resumed` decision still
+#   starts the reviewer. Any outcome but an approve
 #   leaves the PR open and unmerged and the task in review with the failed
 #   step's typed reason; no outcome closes the PR.
 # - A reviewed PR that conflicts at completion is rebased (conflict recovery
@@ -144,6 +148,7 @@ spec:
 
   steps:
     - id: worktree
+      stage: { id: setup, label: Setup }
       target: activity:worktree_setup
       retry:
         max_attempts: 4
@@ -190,6 +195,7 @@ spec:
         prior_foreign_run: "{{ steps.worktree.output.prior_foreign_run }}"
 
     - id: implement_bundle
+      stage: { id: implement, label: Implement }
       when: "{{ steps.resume_candidate.output.implement }} == true"
       loop:
         items: "{{ input.task_ids }}"
@@ -215,6 +221,7 @@ spec:
               resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
+      stage: { id: validate, label: Validate }
       recovery_activity: step_failure_recovery
       target: activity:git_commit
       default_input:
@@ -297,6 +304,192 @@ spec:
         base_sha: "{{ steps.sync_base.output.base_sha }}"
         base_ref: "{{ steps.sync_base.output.base_ref }}"
 
+    # Visual review (capture of record and checks): for a `verify-mock-ui`
+    # task whose `visual_review.mode` is not `off`, capture the final
+    # candidate in a detached checkout once per mock at the digests frozen
+    # at admission, attach the side-by-side images and the system-written
+    # `visual/capture.json`, record the deterministic checks, and settle the
+    # capture against the head and the frozen mocks (`stale_capture`,
+    # `mock_changed`). Every other delivery reports `applies: false` and
+    # writes nothing. In shadow nothing blocks; only
+    # `visual_review.require_established` holds a capture that is not
+    # established.
+    # It always runs, so the later steps' conditions may read its output;
+    # a `no-diff-expected` skip has no candidate and reports `applies: false`.
+    - id: visual_capture
+      target: activity:visual_capture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+
+    - id: visual_checks
+      when: "{{ steps.visual_capture.output.applies }} == true"
+      target: activity:visual_checks
+      default_input:
+        capture: "{{ steps.visual_capture.output }}"
+
+    # Mock comparison review and in-line verification, in shadow: prepare
+    # assembles each shown mock with its capture under the image budgets
+    # and draws an image-capable reviewer, verifier and escalation crew;
+    # the reviewer answers the eight comparison questions; verify-prepare
+    # drops invalid evidence and partitions the findings (check findings
+    # included) five per verifier invocation; one escalation round
+    # re-verifies low-confidence verdicts. `visual_settle` records the
+    # outcome in `visual/review.json` under purpose `visual_review`.
+    # Shadow only: nothing here is filed, blocks, or reaches the code
+    # reviewer below, whose inputs do not name any visual step.
+    # Preparers always run and return empty collections when capture does not
+    # apply. Conditions may only read outputs whose producer always runs;
+    # empty fan-outs establish the collected aliases without invoking agents.
+    - id: visual_review_prepare
+      target: activity:visual_review_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_capture.output }}"
+
+    - id: visual_review_empty
+      when: "{{ steps.visual_review_prepare.output.review_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_reviewer
+          target: activity:visual_review
+      fan_in:
+        join: { mode: all }
+        collect: visual_review_results
+        errors: visual_review_errors
+
+    - id: visual_reviewers
+      when: "{{ steps.visual_review_prepare.output.review_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_review_prepare.output.reviews }}"
+        max_workers: 3
+        worker:
+          id: visual_reviewer
+          target: activity:visual_review
+          default_input:
+            task_id: "{{ item.task_id }}"
+            candidate_sha: "{{ item.candidate_sha }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            shown: "{{ item.shown }}"
+            not_shown: "{{ item.not_shown }}"
+            max_findings: "{{ item.max_findings }}"
+            task: "{{ item.task }}"
+            deviations: "{{ item.deviations }}"
+            check_findings: "{{ item.check_findings }}"
+            design_rules: "{{ item.design_rules }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_review_results
+        errors: visual_review_errors
+
+    - id: visual_verify_prepare
+      target: activity:visual_verify_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        prepared: "{{ steps.visual_review_prepare.output }}"
+        review_results: "{{ steps.visual_review_results.output }}"
+
+    - id: visual_verify_empty
+      when: "{{ steps.visual_verify_prepare.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_verifier
+          target: activity:visual_verify
+      fan_in:
+        join: { mode: all }
+        collect: visual_verify_results
+        errors: visual_verify_errors
+
+    - id: visual_verifiers
+      when: "{{ steps.visual_verify_prepare.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_verify_prepare.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: visual_verifier
+          target: activity:visual_verify
+          default_input:
+            task_id: "{{ item.task_id }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: "{{ item.escalation }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            findings: "{{ item.findings }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_verify_results
+        errors: visual_verify_errors
+
+    - id: visual_verify_escalations
+      target: activity:visual_verify_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        prepared: "{{ steps.visual_verify_prepare.output }}"
+        verify_results: "{{ steps.visual_verify_results.output }}"
+        round: escalation
+
+    - id: visual_verify_escalation_empty
+      when: "{{ steps.visual_verify_escalations.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_escalation_verifier
+          target: activity:visual_verify
+      fan_in:
+        join: { mode: all }
+        collect: visual_escalation_results
+        errors: visual_escalation_errors
+
+    - id: visual_escalation_verifiers
+      when: "{{ steps.visual_verify_escalations.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_verify_escalations.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: visual_escalation_verifier
+          target: activity:visual_verify
+          default_input:
+            task_id: "{{ item.task_id }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: "{{ item.escalation }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            findings: "{{ item.findings }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_escalation_results
+        errors: visual_escalation_errors
+
+    - id: visual_settle
+      when: "{{ steps.visual_capture.output.applies }} == true"
+      target: activity:visual_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_capture.output }}"
+        checks: "{{ steps.visual_checks.output }}"
+        verified: "{{ steps.visual_verify_prepare.output }}"
+        verify_results: "{{ steps.visual_verify_results.output }}"
+        escalation_prepared: "{{ steps.visual_verify_escalations.output }}"
+        escalation_results: "{{ steps.visual_escalation_results.output }}"
+
     # ORB-11333: the before-PR review gate sits after the final planned base
     # synchronization and before push/PR creation. `review_gate_admit` and
     # `review_gate_settle` always run so later steps can read their output;
@@ -319,6 +512,7 @@ spec:
     # partial work resets this bound.
     # None of these outcomes opens a PR.
     - id: review_gate_admit
+      stage: { id: review, label: Review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -388,6 +582,7 @@ spec:
         ownership_base_sha: "{{ steps.review_gate_settle.output.implementation_head_sha }}"
 
     - id: push
+      stage: { id: publish, label: Publish }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:git_push
@@ -443,8 +638,10 @@ spec:
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         pr_url: "{{ steps.pr_open.output.pr_url }}"
 
+    # A verified finding-invalid report already rejected its task at
+    # `commit`, so nothing is promoted for it.
     - id: promote_no_diff
-      when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} == true && {{ steps.commit.output.decision }} != verified_finding_invalid"
       recovery_activity: step_failure_recovery
       target: activity:pr_promote
       default_input:
@@ -468,6 +665,7 @@ spec:
     # settle error keeps the PR open and unmerged and the task in review with
     # that step's typed reason.
     - id: landing_review_gate_admit
+      stage: { id: landing_review, label: Review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -485,8 +683,10 @@ spec:
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
         before_landing: true
 
+    # Same exclusion as `review`: an owed hold whose evidence arrived settles
+    # on the held certificate and must not start another reviewer.
     - id: landing_review
-      when: "{{ steps.landing_review_gate_admit.output.applies }} == true"
+      when: "{{ steps.landing_review_gate_admit.output.applies }} == true && {{ steps.landing_review_gate_admit.output.decision }} != evidence_received"
       retry:
         max_attempts: 2
         initial_backoff_ms: 5000
@@ -545,7 +745,24 @@ spec:
         lease_remote_sha: "{{ steps.push.output.local_sha }}"
         pr_number: "{{ steps.pr_open.output.pr_number }}"
 
+    # Visual review §1: in `visual_review.mode = "live"`, settle the code
+    # reviewer's resolutions of the confirmed visual findings before the
+    # candidate lands. A candidate a review commit changed is recaptured and
+    # its checks rerun; a finding at or above `visual_review.block_at` left
+    # unfixed, still failing its check, or disputed without the operator
+    # accepting the dispute, or the final candidate lacks complete evidence
+    # for each budgeted mock, ends the run held
+    # (`delivery_visual_review_unresolved`), the PR open and unmerged.
+    - id: visual_recapture
+      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.commit.output.skipped_no_diff_expected }} != true"
+      target: activity:visual_recapture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+
     - id: complete_pr
+      stage: { id: merge, label: Merge }
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true || {{ input.auto_fix }} == true && {{ steps.commit.output.skipped_no_diff_expected }} != true"
       # A DIRTY PR is repaired only after pr_complete reuses git_rebase to
       # prove real unmerged entries. Protection, review, check, auth, stale
@@ -578,6 +795,10 @@ spec:
         # ORB-14849: set only when the before-landing review settled; it then
         # is the head to merge, and the published head after a reviewer fix.
         landing_reviewed_head_sha: "{{ steps.landing_review_gate_settle.output.reviewed_head_sha }}"
+        # Selective before-landing review: the head the landing gate's
+        # selection receipt evaluated, or empty when no selective policy
+        # was captured. Completion refuses a live head it does not pin.
+        selective_selection_head_sha: "{{ steps.landing_review_gate_settle.output.selective_selection_head_sha }}"
         re_review_on_conflict: true
         base: "{{ steps.sync_base.output.base }}"
         base_sync: "{{ input.base_sync }}"
@@ -589,6 +810,7 @@ spec:
     # `re_review_gate_admit` always runs, reads the run's recorded
     # `complete_pr` checkpoint itself, and its `applies` gates the rest.
     - id: re_review_gate_admit
+      stage: { id: re_review, label: Re-review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -677,6 +899,14 @@ spec:
     # re-review. A conflict here rebases and recovers exactly like
     # `complete_pr` and asks for one more re-review round below, instead of
     # stopping an accepted candidate as review_gate_stale.
+    - id: visual_recapture_re_review
+      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.re_review_gate_admit.output.applies }} == true"
+      target: activity:visual_recapture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+
     - id: complete_reviewed_pr
       when: "{{ steps.re_review_gate_admit.output.applies }} == true"
       recovery_activity: pr_conflict_recovery
@@ -783,6 +1013,14 @@ spec:
         rewrite_head_before: "{{ steps.complete_reviewed_pr.output.rebased.head_sha_before }}"
         expected_remote_sha: "{{ steps.complete_reviewed_pr.output.rebased.remote_sha_before }}"
 
+    - id: visual_recapture_re_review_2
+      when: "{{ steps.visual_capture.output.applies }} == true && {{ steps.re_review_gate_admit_2.output.applies }} == true"
+      target: activity:visual_recapture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+
     - id: complete_reviewed_pr_2
       when: "{{ steps.re_review_gate_admit_2.output.applies }} == true"
       target: activity:pr_complete
@@ -804,9 +1042,11 @@ spec:
     # A no-diff bundle delivered nothing to merge; its validation is the
     # delivery, so completion needs no PR. Verified no-diff and already-landed
     # runs take this route with their full evidence checkpoint; they create no
-    # new code delivery and do not acquire the side-effect-only task tag.
+    # new code delivery and do not acquire the side-effect-only task tag. A
+    # verified finding-invalid run already rejected its task at `commit`.
     - id: complete_no_diff
-      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true"
+      stage: { id: publish, label: Publish }
+      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true && {{ steps.commit.output.decision }} != verified_finding_invalid"
       recovery_activity: step_failure_recovery
       target: activity:pr_complete
       default_input:
@@ -815,3 +1055,136 @@ spec:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         no_diff_expected: true
         already_landed_checkpoint: "{{ steps.commit.output }}"
+
+    # Visual review §11.3, §12: after a live delivery lands, file what its
+    # visual review left unresolved as proposed `visual-review` follow-ups,
+    # and name the landed tasks a visual review experiment enrolled. It
+    # always runs, so the measure steps' conditions may read its output;
+    # a task that did not land (`done`) files nothing.
+    - id: visual_landed
+      target: activity:visual_landed
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        base: "{{ input.base_branch }}"
+
+    # The post-landing comparison (`pass: measure`): the landed head of each
+    # enrolled task, in both arms, captured and compared with its mocks under
+    # `visual/measure/` and recorded with purpose `visual_measure`. Its
+    # workers (`visual_measure_reviewer`, `visual_measure_verifier`) are
+    # excluded from the experiment's cost metric. One verification round, no
+    # escalation; nothing here blocks or is filed.
+    - id: visual_measure_capture
+      target: activity:visual_capture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ steps.visual_landed.output.measure_task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        pass: measure
+
+    - id: visual_measure_checks
+      when: "{{ steps.visual_measure_capture.output.applies }} == true"
+      target: activity:visual_checks
+      default_input:
+        capture: "{{ steps.visual_measure_capture.output }}"
+
+    - id: visual_measure_review_prepare
+      target: activity:visual_review_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_measure_capture.output }}"
+
+    - id: visual_measure_review_empty
+      when: "{{ steps.visual_measure_review_prepare.output.review_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_measure_reviewer
+          target: activity:visual_review
+      fan_in:
+        join: { mode: all }
+        collect: visual_measure_review_results
+        errors: visual_measure_review_errors
+
+    - id: visual_measure_reviewers
+      when: "{{ steps.visual_measure_review_prepare.output.review_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_measure_review_prepare.output.reviews }}"
+        max_workers: 3
+        worker:
+          id: visual_measure_reviewer
+          target: activity:visual_review
+          default_input:
+            task_id: "{{ item.task_id }}"
+            candidate_sha: "{{ item.candidate_sha }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            shown: "{{ item.shown }}"
+            not_shown: "{{ item.not_shown }}"
+            max_findings: "{{ item.max_findings }}"
+            task: "{{ item.task }}"
+            deviations: "{{ item.deviations }}"
+            check_findings: "{{ item.check_findings }}"
+            design_rules: "{{ item.design_rules }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_measure_review_results
+        errors: visual_measure_review_errors
+
+    - id: visual_measure_verify_prepare
+      target: activity:visual_verify_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        prepared: "{{ steps.visual_measure_review_prepare.output }}"
+        review_results: "{{ steps.visual_measure_review_results.output }}"
+
+    - id: visual_measure_verify_empty
+      when: "{{ steps.visual_measure_verify_prepare.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_measure_verifier
+          target: activity:visual_verify
+      fan_in:
+        join: { mode: all }
+        collect: visual_measure_verify_results
+        errors: visual_measure_verify_errors
+
+    - id: visual_measure_verifiers
+      when: "{{ steps.visual_measure_verify_prepare.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_measure_verify_prepare.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: visual_measure_verifier
+          target: activity:visual_verify
+          default_input:
+            task_id: "{{ item.task_id }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: "{{ item.escalation }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            findings: "{{ item.findings }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_measure_verify_results
+        errors: visual_measure_verify_errors
+
+    - id: visual_measure_settle
+      when: "{{ steps.visual_measure_capture.output.applies }} == true"
+      target: activity:visual_settle
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_measure_capture.output }}"
+        checks: "{{ steps.visual_measure_checks.output }}"
+        verified: "{{ steps.visual_measure_verify_prepare.output }}"
+        verify_results: "{{ steps.visual_measure_verify_results.output }}"

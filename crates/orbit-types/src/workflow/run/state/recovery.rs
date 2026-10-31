@@ -21,10 +21,17 @@ pub struct FailureActivityCheckpoint {
 }
 
 /// One weighted member of the pool an activity crew draw ran on.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ActivityCrewPoolMember {
     pub name: String,
+    /// Configured weight before usage-pressure scaling.
     pub weight: u32,
+    /// Raw weekly usage pressure; absent on static and older draws.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure: Option<f64>,
+    /// Weight after pressure scaling and ticket rounding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_weight: Option<f64>,
 }
 
 /// A crew an activity drew from a configured pool, frozen for the run.
@@ -32,7 +39,7 @@ pub struct ActivityCrewPoolMember {
 /// An activity whose crew comes from a weighted pool (its `crew_config_key`)
 /// draws once; every later dispatch of that key in the run, and every resume
 /// seeded from it, reuses this record instead of rerolling.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ActivityCrewDraw {
     /// Canonical crew name the draw selected.
     pub crew: String,

@@ -30,7 +30,7 @@ relation in the same task update. Preserve all existing relations and append
 `{"type":"covered_by","target":"<covering task id>"}` or
 `{"type":"covered_by","target":"github-pr:https://github.com/OWNER/REPO/pull/NUMBER"}`.
 `github-pr:NUMBER` uses the checkout's GitHub repository. This is durable
-operator coverage of the exact failure key: later sweeps report `covered`
+operator coverage of the evidenced cause: later sweeps report `covered`
 with the archived owner and cover, and create no pilot candidate. A compiler
 error's key includes the checkout, so the hold also follows the same complete
 diagnostic set (paths and messages, ignoring line and column) to later
@@ -43,11 +43,22 @@ releases the key. After a merged cover's commit is in the failing checkout,
 the sweep files a new repair and names that cover as a fix that did not hold;
 older checkouts stay covered while waiting for the fix.
 
-A plain archive or rejection without `covered_by` suppresses the exact key
-(and, for compiler errors, the same diagnostic set at later checkouts) for
-`ci_failure.operator_suppression_hours` (default 6) from the operator's
-status decision. Its report entry is `withheld`, reason `operator_archived`,
-with the owner and expiry. After expiry a current failure can file again.
+A plain archive or rejection without `covered_by` suppresses an equivalent
+evidenced cause (and, for compiler errors, the same diagnostic set at later
+checkouts) for `ci_failure.operator_suppression_hours` (default 6) from the
+recorded status decision. A historical job/step key alone does not establish
+equivalence: a different retained diagnostic can file a new repair. When the
+cause cannot be established, `archive_identity_unavailable` holds filing
+within the same window; a finding with a cover stays held for reconciliation
+without attributing the uncertain cause to that cover.
+Such entries name only a `candidate_owner`, with no confirmed `owner` or
+`cover`; a hold for cover reconciliation has no expiry.
+The report entry is `withheld`, with the owner, expiry and `archive_actor`.
+Its reason is `operator_archived` for a human status decision,
+`automation_archived` for automation (including task-pilot's automatic
+`verified_no_diff` archival), or `archive_provenance_unavailable` when no
+status actor was retained. Later metadata edits do not change that actor or
+restart the window. After expiry a current failure can file again.
 Matching normalized failing-test signatures across jobs share one task with
 all job names and source identities; different signatures remain separate.
 Read `file.withheld` and its matching audit entries alongside
@@ -186,6 +197,26 @@ same files does not refuse it. History records it as `external_merge_settled`, w
 landing note naming the PR and merge commit
 ([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)).
 
+If a follower's handoff was refused before its PR was recorded, and an operator
+rebased and merged that PR, recover the stopped claim to `blocked` first. Then,
+in the owning checkout, use one audited settlement command:
+
+```bash
+orbit task settle-merged <task-id> --recovered-claim <claim-id> --pull-request <number> --published-head <full-original-commit>
+```
+
+The original head is the follower's published candidate before the rebase. It is
+an operator attestation when the refused handoff left no owner-held candidate;
+existing candidate evidence must agree. The owner verifies the PR's delivery
+branch, task identity and delivery author, its merged head and merge commit,
+and the original admission's landing branch. Missing or expired receipts, later
+claims, live runs, dispatched landing attempts, unresolved merge intents and owed
+post-deploy criteria refuse settlement. History records `operator-rescued`, the
+operator-reported original head and the forge's merged head and merge commit.
+The task reaches `done` without force and the claim stays `revoked`. The follower
+closes its pending settlement on the next delivery, logs that once and stops
+retrying; the obsolete PR head is not observed again.
+
 When the work landed some other way (a commit, or a PR that is not the task's
 delivery PR), close the task rather than rerunning it. First confirm that no
 run is live on it and that the merged commit meets its acceptance criteria.
@@ -223,6 +254,13 @@ can be a repository merge-method or auto-merge setting mismatch even when
 there are no rebase conflicts. A failure-handoff PR is preserved work, not
 proof that it is safe to merge or that the task is done.
 
+For a failed hosted check, follow
+[hosted-check diagnosis](run-debugging.md#hosted-check-failures-and-inherited-red-bases)
+before treating the candidate as damaged or the run as stuck. Owner landing
+classifies the failure and may wait for inherited base recovery without an
+agent repair. Inspect its recorded wait, deadline and stop evidence before
+choosing a recovery path; a red check alone grants no retry or merge authority.
+
 Check the candidate head/base, mergeability, checks, and repository settings.
 Use an allowed merge method through the supported recovery path. Change a
 repository setting only when the user's authorization covers that change;
@@ -251,9 +289,25 @@ automatic fixes and explicit generations share the PR repair budget. Generic
 resume still cannot replay an admitted source-repair attempt.
 
 In addition to cancelled publications and failed publications with an applied
-requeue, inspection supports two conclusively stopped failed owner shapes
+requeue, inspection supports these conclusively stopped failed owner shapes
 after final recovery escalated:
 
+- **The pipeline published its PR and the failure hook kept it.** Select the
+  original publishing run explicitly, including when newer attempts failed at
+  candidate adoption without producing source. Its kept-publication receipt
+  must bind the unchanged task specification, and its original successful host
+  publication chain, repository, branch, PR head and remote lease must agree.
+  Inspection returns `binding.superseded` for every stopped completion
+  retry and empty successor. Completion retries must preserve the original
+  checkpoint prefix, deadlines and recovery evidence without mutation or
+  repair provenance. Submit the inspected current `policy_digest` and explicit
+  `unmet_acceptance` evidence with the exact binding, key and diagnosis. This
+  admits source repair even with red hosted checks and expired completion;
+  it does not extend historical deadlines or inherit merge/auto-fix authority.
+  Current policy and complete stopped lineage are checked before source
+  effects. Dirty worktrees, active or ambiguous lineage and changed heads or
+  specifications refuse. Green requeue remains the route for carrying the
+  unchanged candidate without authorizing implementation.
 - **An admitted source repair pushed before `pr_open` failed.** Its original
   system reservation and unique run link, successful branch adoption, host
   commit, prepare, synchronization, review/publication chain and push must
@@ -275,7 +329,7 @@ after final recovery escalated:
   exact commit objects and the unchanged remote branch lease permit
   reconstruction. A local branch present at another head still refuses.
 
-Neither route treats publication as validation. The new worktree integrates
+None of these routes treats publication as validation. The new worktree integrates
 the exact retained candidate onto the current remote base, preserves its PR
 and branch under the exact lease, and requires fresh complete host gates and
 normal configured review. A handoff repair was not certified by the old

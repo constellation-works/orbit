@@ -15,6 +15,10 @@
 //! A `verified_no_diff` assessment of a task not tagged `no-diff-expected`
 //! holds it as `pilot_verified_no_diff`, ahead of the readiness gaps its
 //! empty selectors leave; the apply step then closes it when it qualifies.
+//! A `finding_invalid` assessment holds it as `finding_invalid` ahead of
+//! every other finding; the apply step then rejects it.
+
+use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
@@ -23,15 +27,21 @@ use orbit_types::task::{
     TaskDecision, TaskHistoryEntry, TaskStatus, readiness_gaps,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::legacy_decisions;
-use crate::application::task::{PILOT_VERIFIED_NO_DIFF, UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff};
+use crate::application::task::{
+    AdmissionClosure, PILOT_VERIFIED_NO_DIFF, PromotionDecision, UNVERIFIED_REVIEW_FINDING,
+    VerifiedNoDiff,
+};
 
 use super::apply::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
-use super::promotion::{PromotionFindings, auto_approval_opted_out, promotion_findings};
+use super::promotion::{
+    PromotionFindings, auto_approval_opted_out, promotion_findings, promotion_task_ids,
+};
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
 const PILOT_JOB: &str = "task_pilot_pipeline";
@@ -150,10 +160,24 @@ impl DrainAuthority {
     }
 }
 
+/// A drain admission record, with approval and closure appended in persisted order.
+#[derive(Serialize)]
+pub(super) struct DrainAdmissionDecision {
+    pub(super) task_id: String,
+    pub(super) decision: PromotionDecision,
+    pub(super) classification: String,
+    pub(super) drain_run_id: String,
+    pub(super) evidence: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approved: Option<bool>,
+    #[serde(flatten)]
+    pub(super) closure: AdmissionClosure,
+}
+
 /// Decide one task under drain authority. Pilot output that is malformed
 /// fails the task; every well-formed finding becomes a classified hold.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn assess(
+pub(super) fn assess_drain_admission(
     action: &str,
     task_id: &str,
     snapshot: &PreparedTaskSnapshot,
@@ -162,7 +186,9 @@ pub(super) fn assess(
     selectors: &[String],
     complexity: TaskComplexity,
     authority: &DrainAuthority,
-) -> Result<Value, DispatchError> {
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Result<Box<DrainAdmissionDecision>, DispatchError> {
     let disposition = assessment
         .get("disposition")
         .and_then(Value::as_str)
@@ -171,9 +197,12 @@ pub(super) fn assess(
         duplicate_of,
         already_landed,
         warnings,
-    } = promotion_findings(action, task_id, assessment)?;
+    } = promotion_findings(action, task_id, assessment, dependencies, is_done)?;
     let release_action = assessment
         .get("release_action_required")
+        .filter(|finding| !finding.is_null());
+    let finding_invalid = assessment
+        .get(super::FINDING_INVALID)
         .filter(|finding| !finding.is_null());
     let no_diff = snapshot.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
     let verified_no_diff = (!no_diff)
@@ -182,60 +211,95 @@ pub(super) fn assess(
 
     let (decision, classification, evidence) = if current.status != TaskStatus::Proposed {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             "not_proposed",
             json!(format!("task is {}", current.status)),
         )
+    } else if let Some(finding) = finding_invalid {
+        // Apply rejects the task once the pilot write lands; never approve it.
+        (
+            PromotionDecision::Withhold,
+            super::FINDING_INVALID,
+            finding.clone(),
+        )
     } else if auto_approval_opted_out(&current.tags) {
-        ("withhold", NO_AUTO_APPROVE_TAG, Value::Null)
+        (
+            PromotionDecision::Withhold,
+            NO_AUTO_APPROVE_TAG,
+            Value::Null,
+        )
     } else if let Some(finding) = &verified_no_diff {
-        ("withhold", PILOT_VERIFIED_NO_DIFF, finding.to_json())
+        (
+            PromotionDecision::Withhold,
+            PILOT_VERIFIED_NO_DIFF,
+            finding.to_json(),
+        )
     } else if let Some(reason) =
         approval_disqualification(&snapshot.tags, &snapshot.context_files, snapshot.complexity)
     {
-        ("withhold", reason, Value::Null)
+        (PromotionDecision::Withhold, reason, Value::Null)
     } else if !already_landed.is_null() {
-        ("withhold", "already_landed", already_landed.clone())
+        (
+            PromotionDecision::Withhold,
+            "already_landed",
+            already_landed.clone(),
+        )
     } else if !duplicate_of.is_null() {
-        ("withhold", "duplicate", duplicate_of.clone())
+        (
+            PromotionDecision::Withhold,
+            "duplicate",
+            duplicate_of.clone(),
+        )
     } else if let Some(finding) = release_action {
-        ("withhold", "release_action_required", finding.clone())
+        (
+            PromotionDecision::Withhold,
+            "release_action_required",
+            finding.clone(),
+        )
     } else if !warnings.is_empty() {
-        ("withhold", "warnings", json!(warnings))
+        (PromotionDecision::Withhold, "warnings", json!(warnings))
     } else if !no_diff && (disposition != "selectors" || selectors.is_empty()) {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             "no_actionable_selectors",
             assessment.get("evidence").cloned().unwrap_or(Value::Null),
         )
     } else if !no_diff && !complexity.is_assessed() {
-        ("withhold", "unassessed_complexity", Value::Null)
+        (
+            PromotionDecision::Withhold,
+            "unassessed_complexity",
+            Value::Null,
+        )
     } else {
         (
-            "promote",
+            PromotionDecision::Promote,
             "verified_ready",
             json!(
                 "pilot validated the task with no duplicate, already-landed, conflict, or warning finding"
             ),
         )
     };
-    Ok(json!({
-        "task_id": task_id,
-        "decision": decision,
-        "classification": classification,
-        "drain_run_id": authority.run_id,
-        "evidence": evidence,
+    Ok(Box::new(DrainAdmissionDecision {
+        task_id: task_id.to_string(),
+        decision,
+        classification: classification.to_string(),
+        drain_run_id: authority.run_id.clone(),
+        evidence,
+        approved: None,
+        closure: Default::default(),
     }))
 }
 
 /// The typed decision a hold records on the pilot's own history entry.
-pub(super) fn hold_decision(admission: &Value) -> Option<TaskDecision> {
-    (admission["decision"] == "withhold")
-        .then(|| admission["classification"].as_str())
-        .flatten()
-        .map(|classification| TaskDecision::DrainApprovalHeld {
-            classification: classification.to_string(),
-        })
+pub(super) fn drain_admission_hold_decision(
+    admission: &DrainAdmissionDecision,
+) -> Option<TaskDecision> {
+    match admission.decision {
+        PromotionDecision::Withhold => Some(TaskDecision::DrainApprovalHeld {
+            classification: admission.classification.clone(),
+        }),
+        PromotionDecision::Promote => None,
+    }
 }
 
 /// What the drain's approve step did with a promoted task.
@@ -257,7 +321,9 @@ pub(super) enum Approval {
 /// before the check or waits behind the approval. A task tagged
 /// `no-auto-approve` since it was assessed is held, as is one whose
 /// pilot-assessed material changed after the pilot write: the next drain pass
-/// pilots it again.
+/// pilots it again. Named prerequisites without stored edges must still be
+/// done under their own locks; an unlocked earlier completion read cannot
+/// authorize approval.
 pub(super) fn approve(
     runtime: &OrbitRuntime,
     validated: &ValidatedTask,
@@ -266,43 +332,92 @@ pub(super) fn approve(
     authority_run_id: &str,
 ) -> Result<Approval, OrbitError> {
     let task_id = validated.task_id.as_str();
-    let mut lock_ids = vec![task_id.to_string()];
-    lock_ids.extend(runtime.get_task(task_id)?.dependencies());
-    lock_ids.sort();
-    lock_ids.dedup();
-    #[cfg(test)]
-    approval_hook::before_lock(runtime, task_id);
-    let mut approval = None;
-    with_task_locks(runtime, task_id, &lock_ids, 0, &mut || {
-        let task = runtime.get_task(task_id)?;
-        approval = Some(if task.status != TaskStatus::Proposed {
-            Approval::NotProposed
-        } else if auto_approval_opted_out(&task.tags) {
-            Approval::Held {
-                classification: NO_AUTO_APPROVE_TAG,
-                evidence: Value::Null,
+    for attempt in 0..4 {
+        let mut lock_ids = vec![task_id.to_string()];
+        lock_ids.extend(runtime.get_task(task_id)?.dependencies());
+        let named = promotion_task_ids(&validated.assessment);
+        // A prerequisite that was done at the pilot write has no stored edge.
+        // Lock those named local tasks too before checking completion again.
+        for id in &named {
+            if runtime.stores().tasks().get_task(id)?.is_some() {
+                lock_ids.push(id.clone());
             }
-        } else if let Some(hold) = runtime.unverified_finding_hold(&task)? {
-            Approval::Held {
-                classification: UNVERIFIED_REVIEW_FINDING,
-                evidence: json!(hold.detail()),
+        }
+        lock_ids.sort();
+        lock_ids.dedup();
+        #[cfg(test)]
+        approval_hook::before_lock(runtime, task_id);
+        let mut approval = None;
+        let mut entered = false;
+        let result = with_task_locks(runtime, task_id, &lock_ids, 0, &mut || {
+            entered = true;
+            let task = runtime.get_task(task_id)?;
+            let mut done = BTreeSet::new();
+            for id in &named {
+                // A task absent during discovery is held conservatively without
+                // reading a newly appeared task outside the sorted lock set.
+                if lock_ids.contains(id)
+                    && runtime
+                        .stores()
+                        .tasks()
+                        .get_task(id)?
+                        .is_some_and(|target| target.status == TaskStatus::Done)
+                {
+                    done.insert(id.clone());
+                }
             }
-        } else if let Some((reason, detail)) =
-            assessed_material_drift(runtime, &task, snapshot, validated, policy)
-        {
-            Approval::Held {
-                classification: "changed_since_pilot",
-                evidence: json!({ "reason": reason, "detail": detail }),
-            }
-        } else {
-            runtime.approve_task(task_id, Some(approval_note(authority_run_id)), None)?;
-            Approval::Approved
+            let warnings = promotion_findings(
+                "apply_task_pilot_results",
+                task_id,
+                &validated.assessment,
+                &task.dependencies(),
+                &|id| done.contains(id),
+            )
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?
+            .warnings;
+            approval = Some(if task.status != TaskStatus::Proposed {
+                Approval::NotProposed
+            } else if auto_approval_opted_out(&task.tags) {
+                Approval::Held {
+                    classification: NO_AUTO_APPROVE_TAG,
+                    evidence: Value::Null,
+                }
+            } else if let Some(hold) = runtime.unverified_finding_hold(&task)? {
+                Approval::Held {
+                    classification: UNVERIFIED_REVIEW_FINDING,
+                    evidence: json!(hold.detail()),
+                }
+            } else if let Some((reason, detail)) =
+                assessed_material_drift(runtime, &task, snapshot, validated, policy)
+            {
+                Approval::Held {
+                    classification: "changed_since_pilot",
+                    evidence: json!({ "reason": reason, "detail": detail }),
+                }
+            } else if !warnings.is_empty() {
+                Approval::Held {
+                    classification: "warnings",
+                    evidence: json!(warnings),
+                }
+            } else {
+                runtime.approve_task(task_id, Some(approval_note(authority_run_id)), None)?;
+                Approval::Approved
+            });
+            Ok(())
         });
-        Ok(())
-    })?;
-    approval.ok_or_else(|| {
-        OrbitError::Execution("drain approval did not run under the task lock".to_string())
-    })
+        if !entered && matches!(&result, Err(OrbitError::NotFound { .. })) && attempt < 3 {
+            // A named prerequisite vanished before its lock. Rebuild the sorted
+            // set; absence now holds the finding without taking an absent lock.
+            continue;
+        }
+        result?;
+        return approval.ok_or_else(|| {
+            OrbitError::Execution("drain approval did not run under the task lock".to_string())
+        });
+    }
+    Err(OrbitError::Execution(
+        "drain approval lock discovery did not settle".to_string(),
+    ))
 }
 
 /// A test seam just before the drain's approval takes its locks, standing in

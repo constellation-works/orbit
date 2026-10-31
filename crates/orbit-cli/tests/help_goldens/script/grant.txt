@@ -1,0 +1,33 @@
+Grant one script at its current manifest and entry digests
+
+Usage: orbit script grant [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          Script name
+
+Options:
+      --network <NETWORK>
+          Network the grant allows (default: what the manifest requests)
+
+      --read-root <READ_ROOTS>
+          Extra absolute read root to grant (repeatable)
+
+      --write-root <WRITE_ROOTS>
+          Extra absolute write root to grant (repeatable)
+
+      --env-pass <ENV_PASS>
+          Extra environment variable name to pass (repeatable)
+
+      --follower
+          Grant for a pull follower host instead of the workspace owner
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

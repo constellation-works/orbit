@@ -20,7 +20,7 @@ static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::n
 /// Builds to `default()` cover Authorization / x-api-key / URL key params /
 /// Bearer / raw header lines, high-confidence provider credentials, and
 /// structurally recognizable SSH fingerprints, public-key comments, and
-/// connection hosts. Use [`argv_redactor`] or [`PatternRedactor::with_argv_secrets`]
+/// connection hosts. Use [`argv_redactor`]
 /// to also catch short bare `sk-…` tokens — needed when scrubbing subprocess
 /// argv where a provider key sometimes ends up mis-configured.
 ///
@@ -46,12 +46,102 @@ impl PatternRedactor {
                 r#""authorization":"[REDACTED_AUTH]""#,
             ),
             (
-                Regex::new(r#"(?i)"x-api-key"\s*:\s*"[^"]*""#).expect("valid regex"),
+                Regex::new(r#"(?i)"x-api-key"\s*:\s*"(?:\\[^\r\n]|[^"\\\r\n])*""#)
+                    .expect("valid regex"),
                 r#""x-api-key":"[REDACTED_AUTH]""#,
             ),
             (
-                Regex::new(r#"(?i)"api[_-]?key"\s*:\s*"[^"]*""#).expect("valid regex"),
+                Regex::new(r#"(?i)"api[_-]?key"\s*:\s*"(?:\\[^\r\n]|[^"\\\r\n])*""#)
+                    .expect("valid regex"),
                 r#""api_key":"[REDACTED_AUTH]""#,
+            ),
+            // Pretty-printed JSON API-key properties allow JSON whitespace
+            // (including line breaks) around the colon. Keep this separate
+            // from general assignments, whose horizontal-only separators
+            // prevent an empty assignment from consuming the next line.
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])("(?:[a-z0-9]+[_-])*api[_-]?key"[ \t\r\n]*:[ \t\r\n]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                )
+                .expect("valid regex"),
+                "$1$2[REDACTED_AUTH]$3",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])("(?:(?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key)))"[ \t\r\n]*:[ \t\r\n]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                )
+                .expect("valid regex"),
+                "$1$2[REDACTED_AUTH]$3",
+            ),
+            // Same-line API-key assignments (`key=value` / `key: value`),
+            // wherever they appear on the line, not only at line start.
+            // The key must end in an `api key` segment at a separator,
+            // camel-case or all-caps `API` boundary (mirroring the log
+            // window classifier), so `capiKey` and `api_keyboard` stay
+            // readable. An empty value has nothing to mask. Separator
+            // whitespace is horizontal-only so an empty assignment never
+            // consumes a value from the following line.
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?[ \t]*[:=][ \t]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${4}",
+            ),
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?[ \t]*[:=][ \t]*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${4}",
+            ),
+            // Literal single-quoted values ending in one backslash: the
+            // escape-aware entry above consumes the closing quote as an
+            // escape, so this ordered fallback (no quote in the value body,
+            // final backslash before the terminator) masks them instead.
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?[ \t]*[:=][ \t]*')(?:[^'\r\n]*\\)(')"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${4}",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${3}",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${3}",
+            ),
+            // Camel-case counterpart of the literal trailing-backslash
+            // fallback above.
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*')(?:[^'\r\n]*\\)(')"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${3}",
+            ),
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?[ \t]*[:=][ \t]*)(?:\[REDACTED[A-Z_]+\]|[^\s"',;\]\)}]+)"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*)(?:\[REDACTED[A-Z_]+\]|[^\s"',;\]\)}]+)"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]",
             ),
             (
                 Regex::new(r#"(?i)bearer\s+[A-Za-z0-9._\-+/=]+"#).expect("valid regex"),
@@ -188,17 +278,13 @@ impl PatternRedactor {
                 Regex::new(r"xox[baprs]-[A-Za-z0-9\-]{10,}").expect("valid regex"),
                 "[REDACTED_SECRET]",
             ),
+            // Orbit lease listener bearer tokens (`orbit-auth`).
+            (
+                Regex::new(r"orbl_[A-Za-z0-9]{32,}").expect("valid regex"),
+                "[REDACTED_SECRET]",
+            ),
         ];
         Self { patterns }
-    }
-
-    /// HTTP defaults plus a bare `sk-…` token pattern suitable for scrubbing
-    /// CLI argv where a provider key occasionally ends up as a flag value.
-    ///
-    /// Clones the process-cached argv redactor; patterns are compiled once.
-    /// Prefer [`argv_redactor`] when an owned clone is not needed.
-    pub fn with_argv_secrets() -> Self {
-        argv_redactor().clone()
     }
 
     fn compile_argv_secrets() -> Self {
@@ -283,6 +369,7 @@ fn high_confidence_single_token_patterns() -> &'static [Regex] {
                 .expect("valid regex"),
                 Regex::new(r"^ghp_[A-Za-z0-9]{36}$").expect("valid regex"),
                 Regex::new(r"^xox[baprs]-[A-Za-z0-9\-]{10,}$").expect("valid regex"),
+                Regex::new(r"^orbl_[A-Za-z0-9]{32,}$").expect("valid regex"),
             ]
         })
         .as_slice()

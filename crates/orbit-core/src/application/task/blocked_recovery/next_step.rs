@@ -1,6 +1,6 @@
 //! The next step for a task a failed run left `blocked`.
 //!
-//! `blocked` is a dead end for automation: the ship sweep and the auto drain
+//! `blocked` is a dead end for automation: the auto drain and `orbit run ship`
 //! skip it until an operator acts. The history note names the failed run but
 //! not what to do about it, so the task readout states the command.
 
@@ -9,6 +9,7 @@ use orbit_types::workflow::JobRunState;
 use serde::Serialize;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskJobPort;
 
 use super::readout::{blocking_run_id, current_block, is_escalation};
 
@@ -54,7 +55,7 @@ impl OrbitRuntime {
             .or_else(|| task.job_run_id.clone())?;
         let resumable = self.task_run_is_local(task)
             && self
-                .show_job_run_observed(&run_id)
+                .observed_job_run(&run_id)
                 .is_ok_and(|run| is_resumable(run.state));
         Some(BlockedNextStep {
             resume_command: resumable.then(|| format!("orbit job resume {run_id}")),

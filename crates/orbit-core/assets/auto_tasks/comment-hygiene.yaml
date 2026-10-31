@@ -1,0 +1,268 @@
+schemaVersion: 1
+name: comment-hygiene
+description: Daily rolling check of code comments against the code they describe
+enabled: false
+schedule:
+  cron: 45 6 * * *
+template:
+  title: Check the oldest code comments for staleness
+  description: |
+    Check a small batch of source files for stale or low-value comments and
+    correct them with a comment-only diff. A batch whose comments are already
+    accurate is a successful no-diff run with validated no-diff evidence.
+
+    ## The standard
+
+    Judge every comment against this standard. It is stated generically so it
+    applies in any language:
+
+    - Comments say why; the code says what. A comment that restates the code
+      adds noise, not information.
+    - Doc comments state the contract: what a caller may assume and must
+      uphold, not how the implementation happens to work today.
+    - A module or file header states the unit's responsibility in one or two
+      lines, not its contents list.
+    - A guard, workaround or surprising branch may cite the incident or
+      constraint behind it; that is the comment most worth keeping accurate.
+    - No history narration: no "previously", "now", "new", "changed to" or
+      diary of edits. Version control already keeps that record, and narration
+      goes stale first.
+    - No commented-out code. Delete it; version control keeps it.
+    - No TODO, FIXME or similar marker without an owner: a person, a task or a
+      tracking reference that can actually be followed up.
+    - Escape hatches state their reason: an unsafe block, a lint exception,
+      a suppressed check, an `expect`-style assertion or the equivalent in the
+      file's language says why it is safe or why the exception earned its place.
+    - A stale comment is a bug: one that contradicts the code misleads every
+      later reader and outweighs having no comment at all.
+    - Keep density low. Never add a comment for its own sake, to show a file
+      was visited, or to reach a quota; deleting a restating comment is a fix.
+
+    Fix in this priority order: comments that contradict the code first, then
+    history narration, then comments that restate the code, then the rest of
+    the standard. Preserve the author's voice where a comment is kept.
+
+    A repository may supply its own sharper standard through a
+    `comment-hygiene` tag instruction (`[workflow.tag_instructions.comment-hygiene]`
+    in its Orbit workflow configuration). When the run carries such an
+    instruction, follow it where it sharpens or overrides the generic standard
+    above, and name it in the execution summary. It never loosens the
+    comment-only diff rule below.
+
+    ## Select a batch (preparation, before admission)
+
+    This task is minted as `proposed` without `context_files`, so it is not
+    a backlog drain candidate and cannot hold the whole tree as an
+    unknown-footprint task. Batch selection is pre-admission preparation:
+    the task pilot (or an operator preparing the task by hand) follows the
+    steps in this section, persists exactly the selected `file:` selectors
+    as the task's `context_files`, and only then is the task approved to
+    `backlog` for admission. That preparation write happens before any
+    execution claim exists, so it is never the claimed write the claim
+    safeguard refuses, and the effective footprint is established before
+    any edit. Without a pilot or operator preparation the instance simply
+    waits in `proposed`; it does not stall unrelated backlog work. The
+    executing run does not re-select a wider batch: it checks the files
+    its prepared `context_files` name (see "Use the prepared footprint").
+
+    1. List tracked source files with `git ls-files`. Exclude generated,
+       vendored, fixture and test-data files, generated trees and indexes,
+       archives, and every additional exclusion the repository's own guidance
+       names (its agent guide, contribution guide, linter or formatter
+       configuration, or generated-file markers in the files themselves).
+       Check each candidate against those exclusions before selecting it. Keep
+       paths relative to the repository root. Do not assume any language,
+       layout or file extension set beyond what this repository contains.
+    2. Build the carried attempt state. List the newest completed instances with
+       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["comment-hygiene"],"limit":60,"fields":["id"],"model":"<agent-family>"}'`.
+       For each candidate, newest first, discover its artifacts before fetching
+       any ledger: list the metadata-only artifacts projection with
+       `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
+       and fetch the ledger with
+       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"comment-hygiene-ledger.json","model":"<agent-family>"}'`
+       only when that listing names `comment-hygiene-ledger.json`. Skip a task whose
+       listing has no ledger without calling `orbit.task.artifact.get` for it,
+       and ignore its prose summary; never order by execution-summary text. A
+       `schema_version` 2 ledger carries `state`, a cumulative map from each
+       path to its two most recent attempt rows, newest first. It already
+       covers every older ledger, so stop at the first listed one you can read and
+       start from its `state`. Layer the `files` rows of each
+       `schema_version` 1 ledger fetched before it on top (all of them when no
+       version 2 ledger exists). For each path keep only the two rows with the
+       newest `attempted_on` (ties: the newer task). Drop paths that step 1 no
+       longer lists. The history window is a read bound, not a retention rule:
+       an attempt survives in `state` after its task leaves the window. If no
+       ledger could be read at all — no completed instance, the artifact tools
+       failed, or this run's tool scope refuses a predecessor's artifacts —
+       say so explicitly in the execution summary and the ledger `notes`; do
+       not fall back silently, and do not substitute prose summaries.
+    3. Drop unchanged files. A candidate whose most recent carried row is
+       `clean` or `fixed` and that no commit has touched since that row's
+       `checked_through` commit is not a candidate: `git log <checked_through>..HEAD -- <path>`
+       is empty. A comment mostly goes stale when its own file changes, so an
+       unchanged file is not re-read. When `checked_through` cannot be
+       resolved, treat the file as changed and say so in the summary.
+    4. Skip files other work already owns. List open and in-progress tasks with
+       `orbit tool run orbit.task.list --input '{"status":["backlog","proposed","in-progress","review","blocked"],"limit":10000,"fields":["id","context_files"],"model":"<agent-family>"}'`
+       and exclude every candidate a listed task's `context_files` footprint
+       covers (an exact `file:` selector, or a `dir:` selector containing it).
+       An excluded file is not selected and gets no ledger row; name the files
+       skipped this way, with the holding task, in the assessment rationale.
+    5. Hold repeat skips. A candidate whose two most recent carried rows
+       both have outcome `skipped` or `partial` is not selected. List it in the
+       assessment rationale as needing its own task (for example range-by-range
+       checking of an oversized file) with both reasons. The executing run
+       files that task from the carried state, after the ledger is attached
+       (see "Escalate repeat skips"), because preparation holds no task-write
+       grant.
+    6. Order the rest: files changed since their last check first, oldest
+       `attempted_on` first; then never-checked files, oldest git date first
+       (the date part of `git log -1 --format=%cI -- <path>`). Break ties by
+       relative path. Report missing git history rather than treating it as a
+       real date. Take at most six files and about 1,500 lines in total
+       (`wc -l`): add files in order and stop before the line budget is
+       exceeded, unless that would leave the batch empty. A file over 800
+       lines is taken alone, or as recorded line ranges that together stay
+       within the line budget; it is not `clean` until every range of it has
+       been checked. If no candidates remain, explain why in the execution
+       summary and finish without a diff.
+
+    The selected `file:` selectors, in selection order, are the footprint the
+    preparation returns as `context_files_after`. Include every selected file,
+    even one that may end `clean`: the executing run reads each of them and
+    may edit any of them, so an omitted file would be unlocked while checked.
+
+    ## Use the prepared footprint
+
+    Admission already established this task's footprint: preparation set
+    `context_files` to exactly the selected `file:` selectors before the
+    task reached `backlog`, before any execution claim. Do not widen or
+    replace it during the run — in particular, do not depend on an ordinary
+    `orbit.task.update` scope write (a protecting claim refuses it) or on
+    returning `context_files_added` at handoff (that is after editing, so
+    it cannot establish locks). In claimed mode the same rule is simpler:
+    the selectors travelled with the task from its owner-side preparation,
+    so no scope write is needed or available.
+
+    Before editing anything, read the prepared selectors back with
+    `orbit tool run orbit.task.show --input '{"id":"<this task ID>","field":"context_files","model":"<agent-family>"}'`
+    (in claimed mode, read them from the injected task) and quote them in
+    the execution summary as evidence of the batch you were admitted for.
+    Those files, in that order, are the selected batch for every later
+    step: the ledger `files` rows, the outcomes and the line budget. You
+    may drop a prepared file from the checked batch — recording it as
+    `skipped` with a reason, for example that another task now owns it or
+    it is unchanged since its last `clean`/`fixed` check — because editing
+    a subset of the admitted footprint is safe; never add a file the
+    footprint does not name. A file outside the footprint is a finding for
+    a task, not an edit. If the read-back shows no selectors, the task was
+    admitted without preparation (for example an explicit single-slot
+    selection): edit nothing, attach a ledger with an empty `files` list
+    and a `notes` entry saying the batch was not prepared before
+    admission, and finish as a validated no-diff run.
+
+    ## Check and record
+
+    Read each selected file in full — a comment can only be judged against the
+    code around it — or, for a file over 800 lines, read each recorded range
+    together with the context its comments describe. Correct comments that
+    fail the standard, in the priority order above. Give every selected file
+    exactly one outcome:
+
+    - `clean`: fully checked (every range, for a ranged file), no change needed.
+    - `fixed`: fully checked, and comments were corrected.
+    - `partial`: some ranges or comments checked, others left unchecked, with
+      the unchecked ranges recorded.
+    - `skipped`: not checked (for example no range fit this run), with a reason.
+
+    ## Comment-only diffs
+
+    Every change stays inside comments and doc comments: everything outside
+    them stays byte-identical, including code, string literals, annotations
+    with semantics, and whitespace outside a comment. Before handoff, confirm
+    it: inspect `git diff` hunk by hunk and verify every changed line lies
+    inside a comment or doc comment, and run the repository's normal
+    validation for the changed files (its formatter, linter and tests for the
+    touched area, per its own guidance). Where the file's language tooling can
+    strip comments or print a canonical form, prefer comparing the stripped
+    or canonical form before and after; identical output is the proof. Record
+    the method and its result in the execution summary. If a fix would need a
+    non-comment change, do not make it here.
+
+    A stale comment that reveals a real code defect is filed, not fixed:
+    search first with
+    `orbit tool run orbit.search --input '{"query":"<distinctive symptom or path>","kind":"task","all":true,"model":"<agent-family>"}'`,
+    and when no open task covers it file at most two such defects per run with
+    `orbit tool run orbit.task.add --input '{"title":"<defect>","description":"<the stale comment, the code it contradicts, and file:line evidence>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","type":"bug","tags":["comment-hygiene"],"context_files":["file:<path>"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high|critical>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Name every filed defect task in the execution summary.
+
+    ## Attach the ledger
+
+    Write `.orbit/tmp/comment-hygiene-ledger.json` and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/comment-hygiene-ledger.json","path":"comment-hygiene-ledger.json","model":"<agent-family>"}'`.
+    Its shape is `{"schema_version":2,"run_date":"YYYY-MM-DD","head":"<full HEAD commit SHA>","notes":"<optional, for example that no prior ledger was readable>","files":[{"path":"<repo-relative path>","attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<required unless clean or fixed>","checked_through":"<full commit SHA this check covers>","lines":123,"ranges_checked":[[1,800]],"ranges_total":[[1,1200]]}],"state":{"<repo-relative path>":[{"attempted_on":"YYYY-MM-DD","outcome":"clean|fixed|partial|skipped","reason":"<as above>","checked_through":"<full commit SHA>","ranges_checked":[[1,800]],"ranges_total":[[1,1200]]}]}}`.
+    `checked_through` is the HEAD commit the check was made against (the
+    ledger `head`), recorded on every row so the next run can drop unchanged
+    files. `ranges_checked` and `ranges_total` appear only for a file checked
+    by ranges, as inclusive 1-based line intervals; a ranged file is `clean`
+    or `fixed` only when their union covers the whole file. Include one
+    `files` row per selected file, in selection order, and attach the ledger
+    even when every file was skipped. `attempted_on` is today's date for
+    every selected file regardless of outcome: it is what moves a skipped
+    file to the back of the queue. Files held back by the repeat-skip rule or
+    another task's footprint are not selected and get no `files` row.
+    `state` is the step 2 carried state after this run: for each selected
+    file, put its new row first and keep only the two newest rows for that
+    path; carry every other path's rows unchanged. Write it in full every
+    run, so the newest ledger alone preserves each file's latest attempt and
+    repeat-skip history however many runs have passed.
+
+    The execution summary describes the batch for humans: the selected paths
+    in order with their line counts, each path's outcome and any ranges,
+    changes and verification evidence (including the comment-only
+    confirmation), files skipped for another task's footprint or held back
+    for a dedicated task, defect tasks filed, the prepared `context_files`
+    selectors read back before editing, and whether prior ledgers were
+    readable. State explicitly when the batch was clean. Do not manufacture
+    an edit to mark a clean run complete; when no file required changes,
+    follow the workspace's validated no-diff evidence requirements (attach
+    `no-diff.json` and captured validation logs).
+    ## Escalate repeat skips
+
+    After the ledger is attached, file a dedicated task for each path in the
+    new `state` whose two newest rows both have outcome `skipped` or `partial`.
+    First search `orbit tool run orbit.search --input '{"query":"<the path>","kind":"task","all":true,"model":"<agent-family>"}'`
+    and skip the path when an open task already names it, then
+    `orbit tool run orbit.task.add --input '{"title":"Check comments in <path> range by range","description":"<why it was skipped, with the ledger reasons>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","type":"chore","tags":["comment-hygiene","comment-hygiene-escalation"],"context_files":["file:<path>"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"low","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Name every filed task in the execution summary. A later `clean` or `fixed`
+    row for the path ends the escalation.
+  acceptance_criteria:
+  - At most six files and about 1,500 lines were selected, ordered changed-since-last-check first (oldest check first) then never-checked (oldest git date first), ties by path; files unchanged since a `clean`/`fixed` check and files in an open or in-progress task's footprint were not selected, and a missing or unreadable ledger is stated explicitly.
+  - Every selected file has an outcome of `clean`, `fixed`, `partial` or `skipped`; a file over 800 lines was taken alone or as recorded ranges and is not `clean` until every range is checked; a `skipped` or `partial` file gives a reason.
+  - A file whose two most recent ledger outcomes are `skipped` or `partial` was not selected and is reported as needing a dedicated task.
+  - The diff changes only comments and doc comments — everything outside them is byte-identical — confirmed before handoff by the method the execution summary names, and real defects revealed by stale comments were filed as deduplicated tasks (at most two, `spawned_from` this task) instead of being fixed in place.
+  - This task was prepared before admission — its `context_files` were set to exactly the selected `file:` selectors while it was still `proposed`, before any execution claim — and the run read them back before editing, edited only files they name, and quotes them in the execution summary; an unprepared run (no selectors at read-back) edited nothing and finished no-diff.
+  - A versioned `comment-hygiene-ledger.json` artifact records one row per selected file (outcome, date and `checked_through` commit) and carries each path's two latest attempts forward in `state`, and the execution summary records the batch, checks, changes and limits, including clean no-diff batches with validated no-diff evidence.
+  task_type: chore
+  tags:
+  - comment-hygiene
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  # No context_files and proposed on purpose: the batch is known only after
+  # selection, so the instance waits in proposed — never a backlog
+  # whole-tree holder — until pre-admission preparation (task pilot or
+  # operator) persists the selected file: selectors and it is approved to
+  # backlog. The executing run never writes its own scope.
+  priority: low
+  complexity: low
+  status: proposed
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-09-24T00:00:00Z
+updated_by: system
+updated_at: 2026-09-24T00:00:00Z

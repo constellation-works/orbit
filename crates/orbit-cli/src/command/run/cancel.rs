@@ -2,15 +2,14 @@
 
 use clap::Args;
 use orbit_core::OrbitRuntime;
-use orbit_core::application::job::JobRunCancelOutcome;
-use serde_json::json;
+use orbit_core::application::job::{JobRunCancelOutcome, JobRunCancelResultProfile};
 
 use crate::command::{CommandOut, Execute, Payload, require_confirmation};
 
 #[derive(Args)]
 #[command(
     about = "Cancel a job run, or report its existing terminal outcome",
-    after_help = "Stops a pending or running run, releases its task reservations and marks it `cancelled`;\na finished run reports `already_terminal`. A cancelled task leaf returns its task to the\nbacklog unless `--block`. A pull drain cancels gracefully, waiting for launched leaves\nunless `--force`; `--force` also stops a local drain's child runs. Exits 1 if a stop\ncannot be confirmed. Details: docs/runbooks/stuck-job-runs.md.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason \"needs review\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
+    after_help = "Stops a pending or running run, releases its task reservations and marks it `cancelled`;\na finished run reports `already_terminal`. A cancelled task leaf returns its task to the\nbacklog unless `--block`. A pull drain cancels gracefully, waiting for launched leaves\nunless `--force`; `--force` also stops a local drain's child runs. Exits 1 if a stop\ncannot be confirmed.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason \"needs review\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
     /// Job run ID to cancel
@@ -45,20 +44,7 @@ impl Execute for RunCancelArgs {
             self.force,
             self.block,
         )?;
-        let doc = json!({
-            "run_id": result.run_id,
-            "outcome": result.outcome,
-            "previous_state": result.previous_state,
-            "final_state": result.final_state,
-            "signal_attempted": result.signal_attempted,
-            "signal_outcome": result.signal_outcome,
-            "provider_processes_stopped": result.provider_processes_stopped,
-            "pull_settlements": super::support::pull_settlements_json(&result.pull_settlements),
-            "waiting_leaves": result.waiting_leaves,
-            "forced_runs": result.forced_runs,
-            "unstopped_leaves": result.unstopped_leaves,
-            "unstopped_children": result.unstopped_children,
-        });
+        let doc = result.to_json(JobRunCancelResultProfile::Cli);
         let mut lines = Vec::new();
         if result.outcome == JobRunCancelOutcome::Cancelling {
             lines.push(format!(

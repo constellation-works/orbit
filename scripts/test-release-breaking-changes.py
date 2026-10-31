@@ -1,0 +1,1539 @@
+#!/usr/bin/env python3
+"""Exercise release-breaking-changes.py over MCP snapshots and fixture repositories.
+
+CLI tests build a throwaway Git repository with miniature copies of the
+surfaces the detector reads, commit fixture diffs under `[ORB-N]` subjects and
+run the script's CLI over the tagged range. Task tags and execution summaries
+come from a stub `orbit` binary that serves a JSON fixture.
+"""
+
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+from unittest import mock
+
+import self_test_hang
+from release_schema_oracle import INSTANCES, bounded_schema_pairs, schema_accepts_instance
+
+SCRIPT = Path(__file__).resolve().parent / "release-breaking-changes.py"
+
+SCHEMA = "crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs"
+LAYOUT = "crates/orbit-store/src/workflow/layout/registry.rs"
+GOLDENS = "crates/orbit-cli/tests/help_goldens"
+MCP = "crates/orbit-cli/tests/snapshots/mcp_tools_list.json"
+TYPES = "crates/orbit-types/src/task/artifacts.rs"
+KEYS = "crates/orbit-config/src/registry/keys.rs"
+ACTIVITY = "crates/orbit-core/assets/activities/sweep.yaml"
+
+ROOT_HELP = """\
+orbit <VERSION>
+
+Usage: orbit [OPTIONS] <COMMAND>
+
+Knowledge:
+  task        Create, update, and manage tasks
+  search      Search tasks and frictions
+
+Options:
+      --format <MODE>
+          Output format
+
+          Possible values:
+          - auto:   Decide from the sink
+          - json:   A single JSON document
+
+  -h, --help
+          Print help
+"""
+
+TASK_HELP = """\
+Create, update, and manage tasks
+
+Usage: orbit task [OPTIONS] <COMMAND>
+
+Commands:
+  show  Show a task by ID
+  list  List tasks
+
+Options:
+  -h, --help
+          Print help
+"""
+
+SHOW_HELP = """\
+Show a task by ID
+
+Usage: orbit task show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Task ID
+
+Options:
+      --view <VIEW>
+          Projection
+
+          [possible values: full, compact]
+
+      --pretty
+          Indent the JSON
+
+      --format <MODE>
+          Output format
+
+          [possible values: auto, json]
+
+  -h, --help
+          Print help
+"""
+
+MCP_TOOLS = [
+    {
+        "name": "orbit_task_show",
+        "description": "Show a task.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Task ID"},
+                "view": {"type": "string", "enum": ["full", "compact"]},
+                "fields": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "orbit_task_list",
+        "description": "List tasks.",
+        "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer"}}},
+    },
+]
+
+TYPES_RS = """\
+use serde::{Deserialize, Serialize};
+
+/// The persisted task envelope.
+/// Older binaries refuse unknown fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskEnvelopeV2 {
+    pub id: String,
+    /// Tags; see [`crate::task::Task::tags`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RelationTarget {
+    Task { id: String },
+    Commit {
+        sha: String,
+    },
+}
+
+/// A display row, never persisted with deny_unknown_fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRow {
+    pub id: String,
+}
+"""
+
+KEYS_RS = """\
+pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
+    (
+        "operation.review_minutes",
+        "translated to review.minutes",
+    ),
+    ("review.before_pr", REVIEW_TIMING_NOTE),
+];
+"""
+
+FAKE_ORBIT = """\
+#!/usr/bin/env python3
+import json, os, sys
+tasks = json.load(open(os.environ["FAKE_ORBIT_TASKS"]))
+args = sys.argv[1:]
+if args[:2] != ["task", "show"] or "--json" not in args:
+    sys.exit(2)
+fields = args[args.index("--fields") + 1].split(",")
+task = tasks.get(args[2])
+if task is None:
+    print(f"task {args[2]} not found", file=sys.stderr)
+    sys.exit(1)
+print(json.dumps({key: task.get(key) for key in fields}))
+"""
+
+
+class FixtureRepo:
+    def __init__(self, root):
+        self.root = Path(root)
+        self.root.mkdir()
+        self.env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                        GIT_AUTHOR_NAME="fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
+                        GIT_COMMITTER_NAME="fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid")
+        self.git("init", "-q", "-b", "agent-main")
+        self.write(SCHEMA, "pub const SUPPORTED_SCHEMA_VERSION: u32 = 67;\n")
+        self.write(LAYOUT, "pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;\n")
+        self.write(f"{GOLDENS}/root.txt", ROOT_HELP)
+        self.write(f"{GOLDENS}/task.txt", TASK_HELP)
+        self.write(f"{GOLDENS}/task/show.txt", SHOW_HELP)
+        self.write_mcp(MCP_TOOLS)
+        self.write(TYPES, TYPES_RS)
+        self.write(KEYS, KEYS_RS)
+        self.write(ACTIVITY, "id: sweep\n")
+        self.commit("chore: prepare v0.35.0 release [ORB-1]")
+        self.git("tag", "v0.35.0")
+
+    def git(self, *args):
+        result = subprocess.run(["git", "-C", str(self.root), *args], env=self.env,
+                                capture_output=True, text=True,
+                                timeout=self_test_hang.HANG_CEILING_SECONDS)
+        if result.returncode != 0:
+            raise AssertionError(f"git {args}: {result.stderr}")
+        return result.stdout
+
+    def write(self, path, text):
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+
+    def read(self, path):
+        return (self.root / path).read_text()
+
+    def replace(self, path, old, new):
+        text = self.read(path)
+        if old not in text:
+            raise AssertionError(f"{old!r} not in {path}")
+        self.write(path, text.replace(old, new, 1))
+
+    def write_mcp(self, tools):
+        self.write(MCP, json.dumps(tools, indent=2) + "\n")
+
+    def mcp(self):
+        return json.loads(self.read(MCP))
+
+    def remove(self, path):
+        self.git("rm", "-q", path)
+
+    def commit(self, subject):
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", subject)
+
+
+class ReleaseBreakingChangesTest(unittest.TestCase):
+    def setUp(self):
+        scratch = SCRIPT.parent.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.tmp = tempfile.TemporaryDirectory(prefix="release-breaking-", dir=scratch)
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = FixtureRepo(Path(self.tmp.name) / "repo")
+        self.orbit = Path(self.tmp.name) / "orbit"
+        self.orbit.write_text(FAKE_ORBIT)
+        self.orbit.chmod(0o755)
+        self.tasks = Path(self.tmp.name) / "tasks.json"
+        self.tasks.write_text("{}")
+
+    def survey(self, *extra, tasks=None):
+        args = [sys.executable, str(SCRIPT), "--repo", str(self.repo.root), *extra]
+        env = dict(self.repo.env)
+        if tasks is None:
+            args.append("--offline")
+        else:
+            self.tasks.write_text(json.dumps(tasks))
+            env["FAKE_ORBIT_TASKS"] = str(self.tasks)
+            args += ["--orbit-bin", str(self.orbit)]
+        result = subprocess.run(args, env=env, capture_output=True, text=True,
+                                timeout=self_test_hang.HANG_CEILING_SECONDS)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def report(self, *extra, tasks=None):
+        return json.loads(self.survey("--json", *extra, tasks=tasks))
+
+    def signals(self, report):
+        return {(s["task"], s["signal"], s["detail"]) for s in report["signals"]}
+
+    def test_mcp_schema_bounded_soundness_oracle(self):
+        # One real CLI survey batches independent tools so the bounded search
+        # adds no subprocess per pair. The validator shares no detector code.
+        before_tools, after_tools, witnesses = [], [], {}
+        for index, (before, after) in enumerate(bounded_schema_pairs()):
+            rejected = [value for value in INSTANCES
+                        if schema_accepts_instance(before, value)
+                        and not schema_accepts_instance(after, value)]
+            for surface in ("inputSchema", "outputSchema"):
+                name = f"oracle_{index}_{surface}"
+                before_tools.append({"name": name, surface: before})
+                after_tools.append({"name": name, surface: after})
+                if rejected:
+                    witnesses[name] = (before, after, rejected[0])
+        self.repo.write_mcp(before_tools)
+        self.repo.commit("chore: prepare bounded schema oracle [ORB-90]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        self.repo.write_mcp(after_tools)
+        self.repo.commit("chore: survey bounded schema oracle [ORB-91]")
+        report = self.report()
+        signaled = {signal["detail"].split("`", 2)[1] for signal in report["signals"]
+                    if signal["signal"] == "mcp-schema"}
+        missed = {name: case for name, case in witnesses.items() if name not in signaled}
+        self.assertEqual(len(missed), 0, f"{len(missed)} unsound schema pairs; "
+                         f"first counterexamples (old, new, instance): {list(missed.items())[:10]}")
+
+    def test_schema_bump_and_deny_unknown_field_decide_minor(self):
+        # The v0.35.0..v0.36.0 shape: a SQLite migration and a new optional
+        # field on the persisted task envelope, next to an additive MCP field.
+        self.repo.replace(SCHEMA, "= 67;", "= 68;")
+        self.repo.commit("feat: Count-based windows [ORB-19199] (#6539)")
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n"
+                          "    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n"
+                          "    pub not_before: Option<String>,\n")
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["not_before"] = {"type": "string"}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Scheduled tasks, core: a `not_before` task field [ORB-19214] (#6544)")
+        self.repo.write("docs/notes.md", "notes\n")
+        self.repo.commit("docs: notes [ORB-19215] (#6545)")
+        self.repo.git("tag", "v0.36.0")
+
+        report = self.report("--range", "v0.35.0..v0.36.0")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+        self.assertEqual(self.signals(report), {
+            ("ORB-19199", "schema-version", "SUPPORTED_SCHEMA_VERSION 67 → 68"),
+            ("ORB-19214", "persisted-field",
+             "field `not_before` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+        })
+        self.assertEqual(report["detected_untagged"], ["ORB-19199", "ORB-19214"])
+        self.assertEqual(report["task_source"], "commit-subjects")
+        text = self.survey("--range", "v0.35.0..v0.36.0")
+        self.assertIn("Bump: minor → 0.36.0", text)
+        self.assertIn("ORB-19214 [detected, untagged]", text)
+
+    def test_unconditionally_skipped_fields_do_not_decide_minor(self):
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n"
+                          "    #[serde(skip)]\n"
+                          "    pub local_cache: Option<String>,\n"
+                          "    #[serde(skip_serializing)]\n"
+                          "    pub transient_state: Option<String>,\n")
+        self.repo.commit("feat: Add local task state [ORB-52] (#1)")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_same_line_skipped_fields_do_not_decide_minor(self):
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n"
+                          '    #[doc = "local only"] #[serde(skip)]\n'
+                          "    pub local_cache: Option<String>,\n"
+                          '    #[doc = "transient only"] #[serde(skip_serializing)]\n'
+                          "    pub transient_state: Option<String>,\n")
+        self.repo.commit("feat: Add local task state on shared lines [ORB-52] (#1)")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_quoted_serde_examples_do_not_hide_persisted_fields(self):
+        additions = (
+            '    #[doc = "Persisted field; unlike #[serde(skip)], it is on disk."]\n'
+            "    pub documented_skip: Option<String>,\n"
+            '    #[doc = "Persisted field; unlike #[serde(skip_serializing)], it is on disk."]\n'
+            "    pub documented_skip_serializing: Option<String>,\n"
+            '    #[serde(rename = "#[serde(skip)]")]\n'
+            "    pub renamed_example: Option<String>,\n"
+        )
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n" + additions)
+        self.repo.commit("feat: Add persisted task envelope fields [ORB-2]")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+        self.assertEqual(self.signals(report), {
+            ("ORB-2", "persisted-field",
+             "field `documented_skip` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+            ("ORB-2", "persisted-field",
+             "field `documented_skip_serializing` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+            ("ORB-2", "persisted-field",
+             "field `renamed_example` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+        })
+
+    def test_rustfmt_normalized_quoted_serde_examples_decide_minor(self):
+        additions = (
+            '    #[doc = "Persisted field; unlike #[serde(skip)], it is on disk."]\n'
+            "    pub documented_skip: Option<String>,\n"
+            '    #[doc = "Persisted field; unlike #[serde(skip_serializing)], it is on disk."]\n'
+            "    pub documented_skip_serializing: Option<String>,\n"
+        )
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n" + additions)
+        source = self.repo.root / TYPES
+        formatted = subprocess.run(
+            ["rustfmt", "--edition", "2021", str(source)], capture_output=True,
+            text=True, timeout=self_test_hang.HANG_CEILING_SECONDS)
+        self.assertEqual(formatted.returncode, 0, formatted.stderr)
+        self.repo.commit("feat: Add documented persisted fields [ORB-3]")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+        self.assertEqual(self.signals(report), {
+            ("ORB-3", "persisted-field",
+             "field `documented_skip` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+            ("ORB-3", "persisted-field",
+             "field `documented_skip_serializing` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+        })
+
+    def test_additive_changes_decide_patch(self):
+        # New optional field on a type without deny_unknown_fields.
+        self.repo.replace(TYPES, "pub struct TaskRow {\n    pub id: String,\n",
+                          "pub struct TaskRow {\n    pub id: String,\n    pub title: Option<String>,\n")
+        # A new deny_unknown_fields type is new surface, not a changed record.
+        self.repo.write(TYPES, self.repo.read(TYPES) + textwrap.dedent("""\
+
+            #[serde(deny_unknown_fields)]
+            pub struct Schedule {
+                pub at: String,
+            }
+            """))
+        self.repo.commit("feat: Optional title on rows [ORB-20] (#1)")
+        # MCP: description-only edits and a new optional property.
+        tools = self.repo.mcp()
+        tools[0]["description"] = "Show one task by ID."
+        tools[0]["inputSchema"]["properties"]["id"]["description"] = "The task's ID"
+        tools[1]["inputSchema"]["properties"]["status"] = {"type": "string"}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Filter task list by status [ORB-21] (#2)")
+        # A new command, a new flag and a new possible value.
+        self.repo.replace(f"{GOLDENS}/task.txt", "  list  List tasks\n",
+                          "  list  List tasks\n  lint  Lint tasks\n")
+        self.repo.write(f"{GOLDENS}/task/lint.txt",
+                        "Lint tasks\n\nUsage: orbit task lint [OPTIONS]\n\nOptions:\n"
+                        "  -h, --help\n          Print help\n")
+        self.repo.replace(f"{GOLDENS}/task/show.txt", "full, compact]", "full, compact, ids]")
+        self.repo.replace(f"{GOLDENS}/task/show.txt", "      --pretty\n",
+                          "      --wide\n          Wide rows\n\n      --pretty\n")
+        self.repo.commit("feat: orbit task lint [ORB-22] (#3)")
+        # A new seeded asset and a removed (not added) deprecated key are additive.
+        self.repo.write("crates/orbit-core/assets/jobs/new_pipeline.yaml", "id: new\n")
+        self.repo.replace(KEYS, '    ("review.before_pr", REVIEW_TIMING_NOTE),\n', "")
+        self.repo.commit("feat: New pipeline [ORB-23] (#4)")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+        self.assertEqual(report["changelog_breaking"], [])
+
+    def test_new_properties_on_open_mcp_schema(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: Open input schema [ORB-80]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"] = {"properties": {"a": {}, "b": True,
+                                                   "c": {"description": "free"},
+                                                   "d": {"properties": {"x": {}}}}}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Describe open properties [ORB-81]")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+        for child in ({"type": "string"}, False,
+                      {"properties": {"nested": {"required": ["x"]}}}):
+            with self.subTest(child=child):
+                self.repo.git("reset", "--hard", "v0.35.0")
+                tools[0]["inputSchema"] = {"properties": {"a": child}}
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Constrain property [ORB-82]")
+                report = self.report()
+                self.assertIn(("ORB-82", "mcp-schema",
+                               "`orbit_task_show` `inputSchema` properties constraint added"),
+                              self.signals(report))
+                self.assertEqual(report["bump"], "minor")
+
+    def test_required_children_of_new_optional_mcp_object_decide_patch(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["options"] = {
+            "type": "object",
+            "properties": {"mode": {"type": "string"}},
+            "required": ["mode"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add optional task options [ORB-49] (#1)")
+
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_required_field_added_to_existing_mcp_object_decides_minor(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["options"] = {
+            "type": "object",
+            "properties": {"mode": {"type": "string"}},
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add optional task options [ORB-50] (#1)")
+
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["options"]["required"] = ["mode"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require option mode [ORB-51] (#2)")
+
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-51", "mcp-schema",
+             "`orbit_task_show` property `inputSchema.options.mode` newly required"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_allof_required_on_existing_mcp_object_decides_minor(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"] = [{"required": ["view"]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require view via allOf [ORB-52] (#1)")
+
+        report = self.report()
+        self.assertEqual([(s["task"], s["signal"]) for s in report["signals"]],
+                         [("ORB-52", "mcp-schema")])
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_front_inserted_anyof_alternative_is_additive(self):
+        # An inserted anyOf branch only admits input: {"view", "fields"} still
+        # matches, so the decision stays patch.
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema.pop("anyOf", None)
+        schema.pop("oneOf", None)
+        schema["anyOf"] = [{"required": ["view"]}, {"required": ["mode"]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add anyOf alternatives [ORB-58] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["anyOf"].insert(0, {"required": ["fields"]})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Insert anyOf alternative at front [ORB-59] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_front_inserted_overlapping_oneof_alternative_decides_minor(self):
+        # oneOf demands exactly one match: {"view", "fields"} matched only
+        # required(view) before, and matches required(fields) too after, so
+        # the front insertion rejects formerly valid input (ORB-19558).
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema.pop("anyOf", None)
+        schema.pop("oneOf", None)
+        schema["oneOf"] = [{"required": ["view"]}, {"required": ["mode"]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add oneOf alternatives [ORB-58] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["oneOf"].insert(0, {"required": ["fields"]})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Insert oneOf alternative at front [ORB-59] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-59", "mcp-schema",
+             "`orbit_task_show` `inputSchema{oneOf0}` oneOf alternative "
+             "overlaps an existing alternative"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_closing_additional_properties_decides_minor_and_reopening_is_additive(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["additionalProperties"] = True
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare open object fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["additionalProperties"] = False
+        self.repo.write_mcp(tools)
+        self.repo.commit("fix: Close MCP object [ORB-65]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` `inputSchema` additionalProperties closed"),
+        })
+
+        self.repo.git("tag", "-f", "v0.35.0")
+        del schema["additionalProperties"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reopen MCP object [ORB-66]")
+        report = self.report()
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["signals"], [])
+
+    def test_removing_type_inside_oneof_decides_minor_with_additive_controls(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"oneOf": [{"type": "string"}, {"type": "integer"}]}
+        tools[0]["outputSchema"] = {"type": "string"}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare oneOf type fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        # Integer 1 matched only the integer branch before; now it matches both.
+        del tools[0]["inputSchema"]["oneOf"][0]["type"]
+        del tools[0]["outputSchema"]["type"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax MCP types [ORB-65]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` `inputSchema{oneOf0}` type constraint removed "
+             "inside oneOf alternative"),
+        })
+
+        tools[0]["inputSchema"]["oneOf"][0] = {"type": "string"}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: restore disjoint alternatives [ORB-66]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["oneOf"].insert(0, {"type": "boolean"})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add disjoint alternative [ORB-67]")
+        report = self.report()
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["signals"], [])
+
+    def test_oneof_branch_relaxations_decide_minor_but_root_relaxations_stay_patch(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "view": {"type": "string"},
+                "mode": {"type": "string"},
+                "fields": {"type": "array"},
+            },
+            "required": ["id", "view"],
+        }
+        tools[0]["outputSchema"] = {"type": "string", "enum": ["a"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add root schema controls [ORB-60] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"]["required"] = ["id"]
+        tools[0]["outputSchema"]["enum"].append("b")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax root schemas [ORB-61] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "view": {"type": "string"},
+                "mode": {"type": "string"},
+                "fields": {"type": "array"},
+            },
+            "required": ["id"],
+            "oneOf": [
+                {"required": ["view", "mode"]},
+                {"required": ["fields"]},
+            ],
+        }
+        tools[0]["outputSchema"] = {
+            "oneOf": [
+                {
+                    "properties": {"kind": {"enum": ["a"]}},
+                    "required": ["kind"],
+                },
+                {"required": ["fields"]},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add oneOf schema controls [ORB-62] (#3)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"]["oneOf"][0]["required"] = ["view"]
+        tools[0]["outputSchema"]["oneOf"][0]["properties"]["kind"]["enum"].append("b")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax oneOf branch schemas [ORB-63] (#4)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-63", "mcp-schema",
+             "`orbit_task_show` property `inputSchema{oneOf0}.mode` "
+             "no longer required inside oneOf alternative"),
+            ("ORB-63", "mcp-schema",
+             "`orbit_task_show` `outputSchema{oneOf0}.kind` "
+             "enum value \"b\" added inside oneOf alternative"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removing_enum_keyword_inside_oneof_decides_minor(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "oneOf": [
+                {
+                    "properties": {"kind": {"enum": ["a"]}},
+                    "required": ["kind"],
+                },
+                {"required": ["fields"]},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare oneOf enum fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        # {"kind":"b","fields":[]} matches only the second branch before
+        # this edit, then both branches after it, so oneOf rejects it.
+        del tools[0]["inputSchema"]["oneOf"][0]["properties"]["kind"]["enum"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove enum constraint [ORB-65]")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` `inputSchema{oneOf0}.kind` enum constraint removed "
+             "inside oneOf alternative"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removing_properties_keyword_inside_oneof_decides_minor(self):
+        # Deleting the whole map makes {kind: b} match both branches.
+        # Reverse the alternatives too, so surviving branch identity matters.
+        for surface in ("inputSchema", "outputSchema"):
+            with self.subTest(surface=surface):
+                tools = self.repo.mcp()
+                tools[0][surface] = {"type": "object", "oneOf": [
+                    {"type": "object", "required": ["kind"],
+                     "properties": {"kind": {"enum": ["a"]}}},
+                    {"type": "object", "required": ["kind"],
+                     "properties": {"kind": {"enum": ["b"]}}}]}
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: prepare properties fixture [ORB-64]")
+                self.repo.git("tag", "-f", "v0.35.0")
+                del tools[0][surface]["oneOf"][0]["properties"]
+                tools[0][surface]["oneOf"].reverse()
+                self.repo.write_mcp(tools)
+                self.repo.commit("fix: remove branch properties [ORB-65]")
+                report = self.report("--offline", "--range", "v0.35.0..HEAD")
+                self.assertEqual(report["bump"], "minor", report)
+                self.assertTrue(any(kind == "mcp-schema" and "properties" in detail
+                                    for _, kind, detail in self.signals(report)), report)
+
+    def test_removing_root_properties_keyword_stays_additive(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"type": "object", "properties": {
+            "kind": {"enum": ["a"]}}, "required": ["kind"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare root properties fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        del tools[0]["inputSchema"]["properties"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("fix: relax root properties [ORB-65]")
+        report = self.report("--offline", "--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_removing_root_enum_constraint_stays_additive(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"type": "object"}
+        tools[0]["outputSchema"] = {"type": "string", "enum": ["a"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare root enum fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        del tools[0]["outputSchema"]["enum"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove root enum constraint [ORB-65]")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_oneof_overlap_check_respects_json_schema_instance_semantics(self):
+        cases = (
+            (
+                "integer is a number",
+                {"type": "object", "properties": {"value": {"type": "integer"}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"type": "number"}},
+                 "required": ["value"]},
+            ),
+            (
+                "const matching an integer type still overlaps",
+                {"type": "object", "properties": {"value": {"type": "integer"}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"const": 42}},
+                 "required": ["value"]},
+            ),
+            (
+                "integral numeric const matches an existing number type",
+                {"type": "object", "properties": {"value": {"const": 42.0}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"type": "number"}},
+                 "required": ["value"]},
+            ),
+            (
+                "JSON numeric enum values compare mathematically",
+                {"type": "object", "properties": {"value": {"enum": [1]}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"enum": [1.0]}},
+                 "required": ["value"]},
+            ),
+            (
+                "JSON numeric const values compare mathematically",
+                {"type": "object", "properties": {"value": {"const": 1}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"const": 1.0}},
+                 "required": ["value"]},
+            ),
+            (
+                "optional conflicting property can be omitted",
+                {"type": "object", "properties": {"value": {"type": "string"}}},
+                {"type": "object", "properties": {"value": {"type": "number"}}},
+            ),
+            (
+                "object keywords do not constrain scalar instances",
+                {"properties": {}, "additionalProperties": False},
+                {"required": ["value"]},
+            ),
+            (
+                "patternProperties can admit a required property",
+                {"type": "object", "properties": {},
+                 "patternProperties": {"^value$": {"type": "string"}},
+                 "additionalProperties": False},
+                {"type": "object", "required": ["value"]},
+            ),
+        )
+        for label, old_branch, inserted_branch in cases:
+            with self.subTest(label=label):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema["oneOf"] = [old_branch]
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Add oneOf branch [ORB-72] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                schema["oneOf"].append(inserted_branch)
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Add overlapping oneOf branch [ORB-73] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-73", "mcp-schema",
+                     "`orbit_task_show` `inputSchema{oneOf1}` oneOf alternative "
+                     "overlaps an existing alternative"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_disjoint_inserted_oneof_alternative_is_additive(self):
+        # The new branch requires mode=compact while the old one requires
+        # mode=full: no instance matches both, so every formerly valid input
+        # still matches exactly one branch.
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema.pop("anyOf", None)
+        schema.pop("oneOf", None)
+        schema["oneOf"] = [{
+            "type": "object",
+            "properties": {"mode": {"type": "string", "enum": ["full"]}},
+            "required": ["mode"],
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add oneOf alternative [ORB-66] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["oneOf"].append({
+            "type": "object",
+            "properties": {"mode": {"type": "string", "enum": ["compact"]}},
+            "required": ["mode"],
+        })
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Append disjoint oneOf alternative [ORB-67] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_type_disjoint_const_oneof_alternative_is_additive(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema.pop("anyOf", None)
+        schema.pop("oneOf", None)
+        schema["type"] = "object"
+        schema["properties"] = {"value": {"oneOf": [{"type": "string"}]}}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add string oneOf branch [ORB-72] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["properties"]["value"]["oneOf"].append({"const": 42})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Append const oneOf branch [ORB-73] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        with self.subTest(orientation="new const beside existing string"):
+            self.assertEqual(
+                (report["bump"], report["next_version"], self.signals(report)),
+                ("patch", "0.35.1", set()),
+            )
+
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["properties"]["value"]["oneOf"] = [{"const": 42}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Set const oneOf baseline [ORB-74] (#3)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["properties"]["value"]["oneOf"].insert(0, {"type": "string"})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Insert string oneOf branch [ORB-75] (#4)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        with self.subTest(orientation="new string beside existing const"):
+            self.assertEqual(
+                (report["bump"], report["next_version"], self.signals(report)),
+                ("patch", "0.35.1", set()),
+            )
+
+    def test_removed_input_mcp_alternative_decides_minor(self):
+        # Removing the branch that accepted mode-only requests rejects those
+        # requests afterwards, for both keywords (ORB-19558).
+        for keyword in ("anyOf", "oneOf"):
+            with self.subTest(keyword=keyword):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema[keyword] = [
+                    {"properties": {"view": {"type": "string"}}, "required": ["view"]},
+                    {"properties": {"mode": {"type": "string"}}, "required": ["mode"]},
+                ]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Add {keyword} alternatives [ORB-68] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema[keyword][1]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove {keyword} mode alternative [ORB-69] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-69", "mcp-schema",
+                     f"`orbit_task_show` `inputSchema{{{keyword}1}}` {keyword} "
+                     "alternative removed"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removing_entire_input_mcp_applicator_is_additive(self):
+        # Both formerly accepted {id, view} inputs remain accepted; deleting
+        # the constraint also admits {id}-only inputs.
+        for keyword in ("anyOf", "oneOf"):
+            with self.subTest(keyword=keyword):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema[keyword] = [{"required": ["view"]}]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Require view through {keyword} [ORB-76] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema[keyword]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove whole {keyword} constraint [ORB-77] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(report["signals"], [])
+                self.assertEqual(report["bump"], "patch")
+                self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_removing_whole_applicator_with_surviving_sibling_is_additive(self):
+        # Deleting a whole keyword relaxes the schema when the sibling keyword
+        # still constrains the same location (ORB-19578).
+        for keep, delete in (("anyOf", "oneOf"), ("oneOf", "anyOf")):
+            with self.subTest(keep=keep, delete=delete):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema["anyOf"] = [{"required": ["view"]}]
+                schema["oneOf"] = [{"required": ["mode"]}]
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Add co-located applicators [ORB-82] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema[delete]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove whole {delete} with {keep} surviving [ORB-83] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(report["signals"], [])
+                self.assertEqual(report["bump"], "patch")
+                self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_relaxing_branch_inside_outer_oneof_decides_minor(self):
+        # Widening one outer oneOf branch can steal the unique match from
+        # the other branch: {id, view, fields} matched only the second
+        # branch before the inner oneOf is removed (and {id, mode, fields}
+        # likewise for the inner anyOf), and matches both afterwards.
+        for delete in ("oneOf", "anyOf"):
+            with self.subTest(delete=delete):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema["properties"]["mode"] = {"type": "string"}
+                schema["oneOf"] = [
+                    {"anyOf": [{"required": ["view"]}],
+                     "oneOf": [{"required": ["mode"]}]},
+                    {"required": ["fields"]},
+                ]
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Add outer oneOf applicators [ORB-84] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema["oneOf"][0][delete]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove inner {delete} under outer oneOf [ORB-85] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-85", "mcp-schema",
+                     f"`orbit_task_show` `inputSchema{{oneOf0}}{{{delete}0}}` "
+                     f"{delete} alternative removed"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removing_only_inner_applicator_inside_outer_oneof_decides_minor(self):
+        # The relaxed branch accepts everything afterwards, so an input
+        # matching only the sibling outer branch now matches both.
+        for delete in ("oneOf", "anyOf"):
+            with self.subTest(delete=delete):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema["properties"]["mode"] = {"type": "string"}
+                schema["oneOf"] = [
+                    {delete: [{"required": ["mode"]}]},
+                    {"required": ["fields"]},
+                ]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Add sole inner {delete} under outer oneOf [ORB-86] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema["oneOf"][0][delete]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove sole inner {delete} under outer oneOf [ORB-87] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-87", "mcp-schema",
+                     f"`orbit_task_show` `inputSchema{{oneOf0}}{{{delete}0}}` "
+                     f"{delete} alternative removed"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_relaxing_output_branch_inside_outer_oneof_decides_minor(self):
+        # Output contracts share the comparison, so the same relaxation
+        # under an outer oneOf is reported there too.
+        tools = self.repo.mcp()
+        tools[0]["outputSchema"] = {
+            "type": "object",
+            "properties": {
+                "view": {"type": "string"},
+                "mode": {"type": "string"},
+                "fields": {"type": "array", "items": {"type": "string"}},
+            },
+            "oneOf": [
+                {"anyOf": [{"required": ["view"]}],
+                 "oneOf": [{"required": ["mode"]}]},
+                {"required": ["fields"]},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add outer output oneOf applicators [ORB-88] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        del tools[0]["outputSchema"]["oneOf"][0]["oneOf"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove inner output oneOf under outer oneOf [ORB-89] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-89", "mcp-schema",
+             "`orbit_task_show` `outputSchema{oneOf0}{oneOf0}` oneOf "
+             "alternative removed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removing_nested_input_mcp_applicator_is_additive(self):
+        tools = self.repo.mcp()
+        options = {
+            "type": "object",
+            "properties": {"view": {"type": "string"}},
+            "anyOf": [{"required": ["view"]}],
+        }
+        tools[0]["inputSchema"]["properties"]["options"] = options
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add nested anyOf constraint [ORB-78] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        del options["anyOf"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove nested anyOf constraint [ORB-79] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_replacing_input_mcp_applicator_still_reports_removed_branches(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["properties"]["mode"] = {"type": "string"}
+        schema["anyOf"] = [{"required": ["view"]}, {"required": ["mode"]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add anyOf input constraints [ORB-80] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["oneOf"] = schema.pop("anyOf")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Replace anyOf with oneOf [ORB-81] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-81", "mcp-schema",
+             "`orbit_task_show` `inputSchema{anyOf0}` anyOf alternative removed"),
+            ("ORB-81", "mcp-schema",
+             "`orbit_task_show` `inputSchema{anyOf1}` anyOf alternative removed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removed_output_mcp_alternative_decides_minor(self):
+        # Output contracts get the same removal signal as input contracts.
+        for keyword in ("anyOf", "oneOf"):
+            with self.subTest(keyword=keyword):
+                tools = self.repo.mcp()
+                tools[0]["outputSchema"] = {
+                    "type": "object",
+                    "properties": {"ok": {"type": "string"}},
+                    keyword: [
+                        {"properties": {"view": {"type": "string"}},
+                         "required": ["view"]},
+                        {"properties": {"mode": {"type": "string"}},
+                         "required": ["mode"]},
+                    ],
+                }
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Add output {keyword} alternatives [ORB-70] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del tools[0]["outputSchema"][keyword][0]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove output {keyword} view alternative [ORB-71] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-71", "mcp-schema",
+                     f"`orbit_task_show` `outputSchema{{{keyword}0}}` {keyword} "
+                     "alternative removed"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_existing_mcp_alternative_tightening_decides_minor(self):
+        for keyword in ("anyOf", "oneOf"):
+            with self.subTest(keyword=keyword):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema["properties"]["mode"] = {"type": "string"}
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema[keyword] = [{"required": ["view"]}, {"required": ["mode"]}]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Add {keyword} alternatives [ORB-55] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                schema[keyword].append({"required": ["fields"]})
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Append {keyword} alternative [ORB-56] (#2)")
+
+                additive = self.report()
+                if keyword == "anyOf":
+                    self.assertEqual(additive["signals"], [])
+                    self.assertEqual(additive["bump"], "patch")
+                    self.assertEqual(additive["next_version"], "0.35.1")
+                else:
+                    # oneOf demands exactly one match, so the appended
+                    # required(fields) branch steals the single match from
+                    # {"view", "fields"} inputs (ORB-19558).
+                    self.assertEqual(self.signals(additive), {
+                        ("ORB-56", "mcp-schema",
+                         "`orbit_task_show` `inputSchema{oneOf2}` oneOf alternative "
+                         "overlaps an existing alternative"),
+                    })
+                    self.assertEqual(additive["bump"], "minor")
+                    self.assertEqual(additive["next_version"], "0.36.0")
+
+                schema[keyword][0]["required"].append("mode")
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Tighten {keyword} alternative [ORB-57] (#3)")
+
+                report = self.report()
+                expected = {
+                    ("ORB-57", "mcp-schema",
+                     f"`orbit_task_show` property `inputSchema{{{keyword}0}}.mode` newly required"),
+                }
+                if keyword == "oneOf":
+                    expected.add(
+                        ("ORB-56", "mcp-schema",
+                         "`orbit_task_show` `inputSchema{oneOf2}` oneOf alternative "
+                         "overlaps an existing alternative"))
+                self.assertEqual(self.signals(report), expected)
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_edited_mcp_alternative_removals_are_reported(self):
+        # Each edited branch keeps no required name and changes its shape, so
+        # exact, required-name and same-shape pairing all miss it. The property
+        # names it still shares with its old branch pair them.
+        cases = (
+            (
+                # Optional `c` removed from the edited branch.
+                {"properties": {"b": {"type": "string"}, "c": {"type": "string"}}},
+                {"properties": {"b": {"type": "string"}}},
+                ["property `inputSchema{anyOf1}.c` removed or renamed"],
+            ),
+            (
+                # Required `b` removed and `c` made required in the edited branch.
+                {"properties": {"b": {"type": "string"}, "c": {"type": "string"}},
+                 "required": ["b"]},
+                {"properties": {"c": {"type": "string"}}, "required": ["c"]},
+                ["property `inputSchema{anyOf1}.b` removed or renamed",
+                 "property `inputSchema{anyOf1}.c` newly required"],
+            ),
+        )
+        for keyword in ("anyOf", "oneOf"):
+            for old_branch, new_branch, details in cases:
+                with self.subTest(keyword=keyword, details=details):
+                    tools = self.repo.mcp()
+                    schema = tools[0]["inputSchema"]
+                    schema.pop("anyOf", None)
+                    schema.pop("oneOf", None)
+                    schema[keyword] = [{"properties": {"a": {"type": "string"}}}, old_branch]
+                    self.repo.write_mcp(tools)
+                    self.repo.commit(f"feat: Add {keyword} alternatives [ORB-60] (#1)")
+                    self.repo.git("tag", "-f", "v0.35.0")
+
+                    schema[keyword][1] = new_branch
+                    self.repo.write_mcp(tools)
+                    self.repo.commit(f"feat: Edit {keyword} alternative [ORB-61] (#2)")
+
+                    report = self.report()
+                    # Details are written for anyOf; oneOf paths differ only by keyword.
+                    self.assertEqual(self.signals(report), {
+                        ("ORB-61", "mcp-schema",
+                         f"`orbit_task_show` {detail.replace('anyOf', keyword)}")
+                        for detail in details
+                    })
+                    self.assertEqual(report["bump"], "minor")
+                    self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_zero_shared_edited_mcp_alternative_changes_are_reported(self):
+        detect_mcp_changes = runpy.run_path(str(SCRIPT))["detect_mcp_changes"]
+        cases = (
+            (
+                {"properties": {"b": {"type": "string"}, "c": {"type": "string"}}},
+                {"properties": {"x": {"type": "string"}}},
+                [("b", "removed or renamed"), ("c", "removed or renamed")],
+            ),
+            (
+                {"properties": {"b": {"type": "string"}}, "required": ["b"]},
+                {"properties": {"x": {"type": "string"}}, "required": ["x"]},
+                [("b", "removed or renamed"), ("x", "newly required")],
+            ),
+        )
+        unchanged = {"properties": {"a": {"type": "string"}}}
+        for keyword in ("anyOf", "oneOf"):
+            for old_branch, new_branch, changes in cases:
+                for reordered in (False, True):
+                    with self.subTest(keyword=keyword, changes=changes, reordered=reordered):
+                        before = [unchanged, old_branch]
+                        after = [new_branch, unchanged] if reordered else [unchanged, new_branch]
+                        git = mock.Mock()
+                        git.show.side_effect = [
+                            json.dumps([{"name": "orbit_task_show",
+                                         "inputSchema": {keyword: branches}}])
+                            for branches in (before, after)
+                        ]
+
+                        signals = detect_mcp_changes(git, "before", "after", [MCP])
+                        self.assertEqual(signals, [
+                            {"signal": "mcp-schema", "file": MCP,
+                             "detail": f"`orbit_task_show` property "
+                                       f"`inputSchema{{{keyword}1}}.{prop}` {change}"}
+                            for prop, change in changes
+                        ])
+
+    def test_reordered_edited_mcp_alternative_removal_is_reported(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["anyOf"] = [{"properties": {"a": {"type": "string"}}},
+                           {"properties": {"b": {"type": "string"}, "c": {"type": "string"}}}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add anyOf alternatives [ORB-62] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        # The edited branch moves ahead of the unchanged one. Its old and new
+        # positions differ, so each branch's path must be translated on its own.
+        schema["anyOf"] = [{"properties": {"b": {"type": "string"}}},
+                           {"properties": {"a": {"type": "string"}}}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder and edit anyOf alternatives [ORB-63] (#2)")
+
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-63", "mcp-schema",
+             "`orbit_task_show` property `inputSchema{anyOf1}.c` removed or renamed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_reordered_tightened_mcp_alternative_reports_required_property(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["anyOf"] = [{"properties": {"a": {"type": "string"}}},
+                           {"properties": {"b": {"type": "string"},
+                                            "c": {"type": "string"}}}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add anyOf alternatives [ORB-64] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["anyOf"] = [
+            {"properties": {"b": {"type": "string"}, "c": {"type": "string"}},
+             "required": ["c"]},
+            {"properties": {"a": {"type": "string"}}},
+        ]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder and tighten anyOf alternative [ORB-65] (#2)")
+
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` property `inputSchema{anyOf1}.c` newly required"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_existing_boolean_schema_property_gaining_required_child_decides_minor(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["options"] = True
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add task options [ORB-53] (#1)")
+
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["options"] = {
+            "type": "object",
+            "properties": {"mode": {"type": "string"}},
+            "required": ["mode"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require option mode [ORB-54] (#2)")
+
+        report = self.report()
+        mcp = {(s["task"], s["signal"]) for s in report["signals"]}
+        self.assertIn(("ORB-54", "mcp-schema"), mcp)
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_false_boolean_schema_property_gaining_required_child_decides_patch(self):
+        # `false` accepts nothing, so relaxing it to an object that requires
+        # a child only admits input (ORB-19333 recorded both booleans).
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["extra"] = False
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add extra guard [ORB-60] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["extra"] = {
+            "type": "object",
+            "properties": {"m": {"type": "string"}},
+            "required": ["m"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax extra guard [ORB-61] (#2)")
+
+        # Start the report after the tightening so it covers only the relaxation.
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_false_additional_properties_gaining_required_child_decides_patch(self):
+        # As above: no request with extra properties was valid under
+        # `false`, so requiring a child of the relaxed object is additive.
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["additionalProperties"] = False
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Forbid extra properties [ORB-62] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["additionalProperties"] = {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "required": ["x"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax extra properties [ORB-63] (#2)")
+
+        # Start the report after forbidding extra properties, leaving only the relaxation.
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_tag_forces_minor_and_breaking_notes_draft_bullets(self):
+        self.repo.write("docs/ship.md", "ship\n")
+        self.repo.commit("feat: Retire ship-sweep [ORB-30] (#1)")
+        self.repo.replace(LAYOUT, "= 3;", "= 4;")
+        self.repo.commit("feat: Move run logs [ORB-31] (#2)")
+        self.repo.write("docs/other.md", "other\n")
+        self.repo.commit("fix: Unrelated [ORB-32] (#3)")
+        tasks = {
+            "ORB-30": {"title": "Retire ship-sweep", "tags": ["release", "breaking-change"],
+                       "execution_summary": "## Summary\n\nDone.\n\nBreaking: orbit run ship-sweep "
+                                            "removed → use orbit run auto drains or orbit run ship\n"},
+            "ORB-31": {"title": "Move run logs", "tags": [], "execution_summary": "No note."},
+            "ORB-32": {"title": "Unrelated", "tags": [],
+                       "execution_summary": "Not breaking: nothing to migrate."},
+        }
+
+        report = self.report("--range", "v0.35.0..HEAD", tasks=tasks)
+        self.assertEqual(report["task_source"], "orbit")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["tagged_without_signal"], ["ORB-30"])
+        self.assertEqual(report["detected_untagged"], ["ORB-31"])
+        self.assertEqual(report["changelog_breaking"][0],
+                         "- **Retire ship-sweep**: orbit run ship-sweep removed → use orbit run "
+                         "auto drains or orbit run ship ([ORB-30])")
+        placeholder = report["changelog_breaking"][1]
+        self.assertTrue(placeholder.startswith("- **Move run logs**: TODO: ORB-31 has no "
+                                               "`Breaking:` note"), placeholder)
+        self.assertTrue(placeholder.endswith("([ORB-31])"), placeholder)
+        self.assertEqual(len(report["changelog_breaking"]), 2)
+
+        # The tag alone decides minor when nothing is detected.
+        only_tag = self.report("--range", "v0.35.0..HEAD~2", tasks=tasks)
+        self.assertEqual((only_tag["bump"], only_tag["signals"]), ("minor", []))
+
+        # Unknown to Orbit, a task falls back to its commit subject.
+        fallback = self.report("--range", "v0.35.0..HEAD", tasks={})
+        self.assertEqual(fallback["task_source"], "commit-subjects")
+        self.assertEqual(fallback["detected_untagged"], ["ORB-31"])
+
+    def test_each_mechanical_signal(self):
+        # A subcommand's copy of a global option moves to the condensed
+        # Global options list: the option still exists at the program root.
+        self.repo.replace(f"{GOLDENS}/task/show.txt",
+                          "      --format <MODE>\n          Output format\n\n"
+                          "          [possible values: auto, json]\n\n", "")
+        self.repo.write(f"{GOLDENS}/task/show.txt", self.repo.read(f"{GOLDENS}/task/show.txt")
+                        + "\nGlobal options (see 'orbit --help' for descriptions):\n"
+                          "  --format <MODE>\n")
+        self.repo.commit("feat: condense global options [ORB-39] (#0)")
+        self.repo.replace(LAYOUT, "= 3;", "= 4;")
+        self.repo.commit("feat: layout [ORB-40] (#1)")
+        self.repo.replace(f"{GOLDENS}/task.txt", "  list  List tasks\n", "")
+        self.repo.commit("feat: drop task list [ORB-41] (#2)")
+        self.repo.replace(f"{GOLDENS}/task/show.txt", "      --pretty\n          Indent the JSON\n\n", "")
+        self.repo.commit("feat: drop --pretty [ORB-42] (#3)")
+        self.repo.replace(f"{GOLDENS}/task/show.txt", "full, compact]", "full]")
+        self.repo.replace(f"{GOLDENS}/root.txt", "          - json:   A single JSON document\n", "")
+        self.repo.commit("feat: drop values [ORB-43] (#4)")
+        tools = self.repo.mcp()
+        del tools[1]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: drop tool [ORB-44] (#5)")
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        del schema["properties"]["fields"]
+        schema["properties"]["view"]["enum"] = ["full"]
+        schema["properties"]["id"]["type"] = "integer"
+        schema["properties"]["limit"] = {"type": "integer"}
+        schema["required"] = ["id", "limit"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: reshape task show [ORB-45] (#6)")
+        self.repo.replace(TYPES, "    Task { id: String },", "    Task { id: String, workspace: String },")
+        self.repo.replace(TYPES, "        sha: String,\n", "        sha: String,\n        repo: String,\n")
+        self.repo.commit("feat: relation targets [ORB-46] (#7)")
+        self.repo.replace(KEYS, "];", '    ("workflow.old_key", "translated"),\n];')
+        self.repo.commit("feat: retire a key [ORB-47] (#8)")
+        self.repo.remove(ACTIVITY)
+        self.repo.commit("feat: retire sweep [ORB-48] (#9)")
+
+        report = self.report()  # default range: the last vX.Y.Z tag..HEAD
+        self.assertEqual(report["range"], "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-40", "layout-version", "SUPPORTED_LAYOUT_VERSION 3 → 4"),
+            ("ORB-41", "cli-help", "command `orbit task list` removed"),
+            ("ORB-42", "cli-help", "flag `orbit task show --pretty` removed"),
+            ("ORB-43", "cli-help", "possible value `compact` of `orbit task show --view` removed"),
+            ("ORB-43", "cli-help", "possible value `json` of `orbit --format` removed"),
+            ("ORB-44", "mcp-schema", "tool `orbit_task_list` removed"),
+            ("ORB-45", "mcp-schema",
+             "`orbit_task_show` property `inputSchema.fields` removed or renamed"),
+            ("ORB-45", "mcp-schema", "`orbit_task_show` `inputSchema.id` type \"string\" → \"integer\""),
+            ("ORB-45", "mcp-schema", "`orbit_task_show` `inputSchema.view` enum value \"compact\" removed"),
+            ("ORB-45", "mcp-schema", "`orbit_task_show` property `inputSchema.limit` newly required"),
+            ("ORB-46", "persisted-field",
+             "field `Task.workspace` added to deny_unknown_fields type `RelationTarget`"),
+            ("ORB-46", "persisted-field",
+             "field `Commit.repo` added to deny_unknown_fields type `RelationTarget`"),
+            ("ORB-47", "deprecated-key", "`workflow.old_key` added to DEPRECATED_CONFIG_KEYS"),
+            ("ORB-48", "seeded-asset", "seeded asset removed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+
+
+if __name__ == "__main__":
+    unittest.main()

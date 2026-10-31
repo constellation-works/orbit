@@ -676,14 +676,33 @@ fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
         )
         .expect("bind the run");
 
-    // A live run requires an explicit operator override; its PRs still stay open.
-    fx.runtime
+    // Force does not authenticate an unbound publication. Refuse atomically,
+    // then exercise the live-PR closure guard through the explicit discard.
+    let operator = fx
+        .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    let before = fx.runtime.get_task(&task_id).unwrap();
+    let history = fx.runtime.get_task_history(&task_id).unwrap();
+    operator
         .force_update_task_with_identity(
             &task_id,
             orbit_core::application::task::TaskUpdateParams {
                 status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect_err("force cannot bypass publication authentication");
+    assert_eq!(fx.runtime.get_task(&task_id).unwrap(), before);
+    assert_eq!(fx.runtime.get_task_history(&task_id).unwrap(), history);
+    operator
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                discard_candidate: true,
                 ..Default::default()
             },
             None,
@@ -758,14 +777,33 @@ fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
         "resume leaves the task bound to the terminal source"
     );
 
-    // A live run requires an explicit operator override; its PRs still stay open.
-    fx.runtime
+    // Force does not authenticate an unbound publication. Refuse atomically,
+    // then exercise the live-PR closure guard through the explicit discard.
+    let operator = fx
+        .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    let before = fx.runtime.get_task(&task_id).unwrap();
+    let history = fx.runtime.get_task_history(&task_id).unwrap();
+    operator
         .force_update_task_with_identity(
             &task_id,
             orbit_core::application::task::TaskUpdateParams {
                 status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect_err("force cannot bypass publication authentication");
+    assert_eq!(fx.runtime.get_task(&task_id).unwrap(), before);
+    assert_eq!(fx.runtime.get_task_history(&task_id).unwrap(), history);
+    operator
+        .force_update_task_with_identity(
+            &task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                discard_candidate: true,
                 ..Default::default()
             },
             None,
@@ -829,4 +867,92 @@ fn leaving_a_terminal_status_or_unshelving_closes_nothing() {
     fx.record_prs(&shelved, &[40]);
     fx.update(json!({ "id": shelved, "status": "backlog", "model": "codex" }));
     assert!(fx.forge.still_open().contains(&40));
+}
+
+/// A body published from a repository template that has no task placeholder
+/// still closes on a terminal decision, because of the generated identity
+/// comment. A human author, another branch, a body with no task token and a
+/// longer lookalike id stay open.
+#[test]
+fn a_template_body_without_a_task_placeholder_still_closes_on_terminal() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Fix the widget");
+    let other = fx.add_task("Unrelated task");
+    let identity = format!("<!-- orbit-delivery-task: {task_id} -->");
+    let body = format!("## Summary\n\nFix the widget\n\n{identity}");
+    fx.forge
+        .open_pr(11, &format!("orbit/{task_id}-0123abcd"), &body, BOT);
+    fx.forge
+        .open_pr(20, &format!("orbit/{task_id}-aaaaaaaa"), &body, "alice");
+    fx.forge
+        .open_pr(21, &format!("orbit/{other}-cccccccc"), &body, BOT);
+    fx.forge.open_pr(
+        22,
+        &format!("orbit/{task_id}-dddddddd"),
+        "## Summary\n\nFix the widget",
+        BOT,
+    );
+    fx.forge.open_pr(
+        23,
+        &format!("orbit/{task_id}-eeeeeeee"),
+        &format!("## Summary\n\nFix the widget\n\n<!-- orbit-delivery-task: {task_id}0 -->"),
+        BOT,
+    );
+    fx.forge
+        .open_pr(24, &format!("orbit/{task_id}0-ffffffff"), &body, BOT);
+    fx.record_prs(&task_id, &[11]);
+    fx.move_to_review(&task_id);
+
+    fx.runtime
+        .reject_task(&task_id, "superseded by a redesign".to_string(), None)
+        .expect("reject the task");
+
+    assert_eq!(fx.forge.closed_numbers(), vec![11]);
+    assert!(
+        fx.forge.comment_for(11).contains("rejected"),
+        "the comment names the terminal state"
+    );
+    assert_eq!(
+        fx.forge.still_open(),
+        vec![20, 21, 22, 23, 24],
+        "author, branch and whole-token checks still hold"
+    );
+}
+
+crate::scenario_table!(
+    sibling_delivery_contract,
+    landing_does_not_close_a_sibling_delivery_named_in_an_external_ref
+);
+
+fn landing_does_not_close_a_sibling_delivery_named_in_an_external_ref() {
+    let fx = Fixture::with_config(Some(
+        "[branch]\nname_template = 'feature/{{ext.jira}}-{{task_id}}-{{hash}}'\n",
+    ));
+    let sibling = fx.add_task("Landing task");
+    let owner = fx.add_task("Still delivering");
+    let body = format!("Delivers {owner}; follows {sibling}.");
+    fx.forge.open_pr(
+        11,
+        &format!("feature/X-{sibling}-{sibling}-0123abcd"),
+        &body,
+        BOT,
+    );
+    fx.forge.open_pr(
+        12,
+        &format!("feature/X-{sibling}-{owner}-0123abcd"),
+        &body,
+        BOT,
+    );
+    fx.record_prs(&sibling, &[11, 13]);
+    fx.move_to_review(&sibling);
+    fx.update(json!({
+        "id": sibling, "status": "done", "model": "codex",
+        "note": "delivered by pull request #13 merged as 0123456789abcdef0123456789abcdef01234567"
+    }));
+    assert_eq!(fx.forge.closed_numbers(), vec![11]);
+    assert_eq!(fx.forge.still_open(), vec![12]);
+    assert_eq!(
+        fx.runtime.get_task(&owner).unwrap().status,
+        TaskStatus::Backlog
+    );
 }

@@ -1,0 +1,11 @@
+schemaVersion: 2
+kind: Job
+metadata:
+  name: task_publication_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  steps:
+    - id: publish
+      target: activity:task_publication

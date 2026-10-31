@@ -32,7 +32,8 @@ pub const PR_AUTO_FIX_CHECK_REPAIR_MARKER: &str = "pr_auto_fix_check_repair";
 /// through the ordinary activity-crew draw.
 pub const PR_AUTO_FIX_CREWS_KEY: &str = "workflow.purpose_crews.auto_fix";
 
-/// What blocks the pull request's merge.
+/// What blocks the pull request's merge, or the before-landing review that
+/// advanced its published head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrAutoFixBlocker {
@@ -40,6 +41,8 @@ pub enum PrAutoFixBlocker {
     FailedChecks,
     /// The branch conflicts with its base.
     Conflict,
+    /// A before-landing review committed and published a fix on the PR branch.
+    LandingReview,
 }
 
 impl PrAutoFixBlocker {
@@ -48,6 +51,7 @@ impl PrAutoFixBlocker {
         match self {
             Self::FailedChecks => "failed_checks",
             Self::Conflict => "conflict",
+            Self::LandingReview => "landing_review",
         }
     }
 }

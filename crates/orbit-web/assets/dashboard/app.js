@@ -1,29 +1,40 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
+import { initLocks, paintLocks } from './js/locks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgentsRole, wireAgentControls } from './js/agents.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
-import { initLogTail, fitLogPanelToViewport, placeDock, setDockMode } from './js/log-tail.js';
+import { initLogTail, fitLogPanelToViewport, setDockMode, setDockRouteShown } from './js/log-tail.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
+import { fetchAndRenderForecast, placeholdForecastAggregate } from './js/forecast.js';
+import {
+  fetchAndRenderExperiments, placeholdExperimentsAggregate, setExperimentId, experimentsRoute,
+} from './js/experiments.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { drainHolderCounts, fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, setDrainLocks, startFleetIndicatorRefresh } from './js/operations.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
-import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
+import { onTaskRuntimeChange, runStartedAt, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
+import { taskState } from './js/task-shared.js';
+import { primeTaskDetail, taskDetailSnapshot } from './js/task-data.js';
+import { primeTaskRuns, taskRunsTabActive } from './js/task-detail.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
-import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
+import { applyPushedHostResources, fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
+import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } from './js/change-stream.js';
+import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/polling.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
+import { fetchAndRenderLeaseLandings, fetchAndRenderLeases } from './js/leases.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
@@ -97,6 +108,7 @@ let searchQuery = "";
 let cancelTaskLookup = () => {};
 let activeStatuses = new Set(DEFAULT_ACTIVE_STATUSES);
 let lastTasks = [];
+let elapsedTaskRefreshTimer = null;
 // Paging metadata from task-list envelopes drives the visible range and
 // Previous/Next availability.
 let lastTasksMeta = null;
@@ -124,6 +136,15 @@ let activeKnowledgeSubtab = "frictions";
 let activeOperationsSubtab = "routines";
 let refreshSequence = 0;
 let lastCleanRefresh = null;
+// The Tasks page paints its rows, running runs, locks and drain phase live.
+// The reads it shows but which rarely change (crews, the Health summary, the
+// doctor and routine peeks, the backlog forecast) run when the page is
+// entered, on Refresh, after a scope change, and otherwise on this cadence.
+const TASKS_SLOW_READS_INTERVAL_MS = 5 * 60_000;
+let tasksSlowReads = { at: 0, scope: null };
+let lastRefreshTab = null;
+// The workspace visit whose crew options are cached, so a tick reuses them.
+let crewsRevision = null;
 let activeFrictionId = null;
 let frictionSearchQuery = "";
 let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
@@ -131,6 +152,7 @@ let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
 // Health strip state
 let lastSummary = null;
 let jobsInFlightSequence = 0;
+let runningRunsSequence = 0;
 
 // ORB-00030: workspaces the dashboard is serving. Empty/one entry => single
 // mode (no selector). More than one => global mode (selector shown).
@@ -158,12 +180,53 @@ function taskContext() {
     getSearchQuery: () => searchQuery,
     setSearchQuery: (value) => { searchQuery = value; },
     getActiveStatuses: () => activeStatuses,
-    setActiveStatuses: (statuses) => { activeStatuses = statuses; },
+    setActiveStatuses: (statuses) => {
+      activeStatuses = statuses;
+      syncElapsedTaskRefresh();
+    },
     statusOrder: STATUS_ORDER,
     defaultActiveStatuses: DEFAULT_ACTIVE_STATUSES,
     fmtAbsTime,
     refreshDashboard,
   };
+}
+
+// Run-row elapsed labels change at each run's minute boundary. Repaint from
+// the task and run caches so a quiet live stream needs no extra API reads.
+function syncElapsedTaskRefresh({ repaint = false } = {}) {
+  if (elapsedTaskRefreshTimer !== null) {
+    clearTimeout(elapsedTaskRefreshTimer);
+    elapsedTaskRefreshTimer = null;
+  }
+  if (activeTab !== "tasks" || isAggregateView() || !changeStreamLive()
+    || document.hidden || !activeStatuses.has("in-progress")) return;
+
+  const now = Date.now();
+  const nextBoundary = lastTasks.reduce((earliest, task) => {
+    if (!task || task.status !== "in-progress") return earliest;
+    const started = runStartedAt(task.job_run_id);
+    if (!Number.isFinite(started)) return earliest;
+    const elapsed = now - started;
+    const boundary = elapsed < 0
+      ? started
+      : started + (Math.floor(elapsed / 60_000) + 1) * 60_000;
+    return Math.min(earliest, boundary);
+  }, Infinity);
+  if (!Number.isFinite(nextBoundary)) return;
+
+  if (repaint) renderTasks(lastTasks, taskContext());
+  elapsedTaskRefreshTimer = setTimeout(() => {
+    elapsedTaskRefreshTimer = null;
+    if (activeTab === "tasks" && !document.hidden && changeStreamLive()) {
+      renderTasks(lastTasks, taskContext());
+    }
+    syncElapsedTaskRefresh();
+  }, Math.max(1, nextBoundary - Date.now() + 1));
+}
+
+function renderTaskList(tasks, context) {
+  renderTasks(tasks, context);
+  syncElapsedTaskRefresh();
 }
 
 function auditContext() {
@@ -216,7 +279,11 @@ function routerContext() {
   return {
     // getters/setters for router-owned state (kept in app.js per extraction contract)
     getTab: () => activeTab,
-    setTab: (v) => { activeTab = v; },
+    setTab: (v) => {
+      activeTab = v;
+      reschedulePolling();
+      syncElapsedTaskRefresh({ repaint: v === "tasks" });
+    },
     getJobsSubtab: () => activeJobsSubtab,
     setJobsSubtab: (v) => { activeJobsSubtab = v; },
     getDiagSubtab: () => activeDiagSubtab,
@@ -264,12 +331,17 @@ function routerContext() {
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
     fetchResources: () => fetchAndRenderResources().catch((e) => console.error("Failed to fetch resource profiles", e)),
+    fetchForecast: () => fetchAndRenderForecast().catch((e) => console.error("Failed to fetch the backlog forecast", e)),
+    // The experiment on screen is owned by experiments.js, which renders it.
+    fetchExperiments: () => fetchAndRenderExperiments().catch((e) => console.error("Failed to fetch experiments", e)),
+    setExperimentId,
+    experimentsRoute: () => experimentsRoute(),
     fetchAgents: () => fetchAndRenderAgents().catch((e) => console.error("Failed to fetch the agent scorecard", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
     setDrainView: (mode) => setDockMode(mode),
-    placeDock,
+    setDockRouteShown,
 
     // Events and Codebase pass-throughs (re-exported here for router;
     // imported at top of this file)
@@ -388,143 +460,14 @@ let lastLocks = null;
 
 function renderLocksPanel(payload) {
   // The In progress rows count each task's locked files from the same read,
-  // and the Drain summary and wait rows read it too.
+  // and the dock renders the same locks read.
   setTaskLocks(payload);
-  setDrainLocks(payload);
   lastLocks = { payload, workspace: getWorkspace() };
   paintLocksPanel(payload);
 }
 
 function paintLocksPanel(payload) {
-  const body = $("locks-body");
-  const count = $("locks-count");
-  if (!body || !count) return;
-  const byTask = Array.isArray(payload && payload.by_task) ? payload.by_task : [];
-  const byReservation = Array.isArray(payload && payload.by_reservation) ? payload.by_reservation : [];
-  const totalLocked = Number.isFinite(Number(payload && payload.total_locked))
-    ? Number(payload.total_locked)
-    : 0;
-  const totalTasks = Number.isFinite(Number(payload && payload.total_tasks))
-    ? Number(payload.total_tasks)
-    : byTask.length;
-  count.textContent = `${totalLocked} ${totalLocked === 1 ? "file" : "files"} · ${totalTasks} ${totalTasks === 1 ? "task" : "tasks"}`;
-
-  if (byTask.length === 0 && byReservation.length === 0) {
-    const empty = el("div", { class: "locks-empty", text: "No files currently locked." });
-    empty.dataset.key = "locks-empty";
-    empty.dataset.hash = "locks-empty";
-    syncNodes(body, [empty]);
-    return;
-  }
-
-  // One row per task: who holds the locks, its status, how many paths and how
-  // many waiting tasks it holds back, then its title and run. The paths fold
-  // away and stay open across refreshes once opened, so a dozen tasks never
-  // bury the card in file paths. The task link sits outside the disclosure
-  // (a link cannot live in a summary); an invisible copy of the id keeps its
-  // place in the row, and the link is laid over it.
-  const blocking = drainHolderCounts();
-  const nodes = byTask.map((task) => {
-    const taskId = String(task.id || "");
-    const files = Array.isArray(task.context_files) ? task.context_files : [];
-    const blocks = blocking.get(taskId) || 0;
-    const title = typeof task.title === "string" ? task.title.trim() : "";
-    const group = el("div", { class: "lock-task-group" });
-    group.dataset.key = `lock-task-${taskId}`;
-    group.dataset.hash = JSON.stringify([task, blocks]);
-    const details = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-details" });
-
-    const idButton = el("a", {
-      class: "lock-task-id mono",
-      text: taskId,
-      title: title ? `Open ${taskId}: ${title}` : `Open ${taskId} in the task list`,
-    });
-    // Locks live on Drain, so opening a task must navigate to Tasks too.
-    bindTaskLink(idButton, taskId);
-
-    const header = el("summary", { class: "lock-task-header" }, [
-      el("span", { class: "lock-task-id-space mono", text: taskId, "aria-hidden": "true" }),
-      statusPill(task.status || "unknown"),
-      el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
-      blocks > 0 ? el("span", {
-        class: "lock-blocks",
-        text: `blocks ${blocks}`,
-        title: `${blocks} waiting ${blocks === 1 ? "task waits" : "tasks wait"} on ${taskId}`,
-      }) : null,
-    ]);
-    const job = task.job_run_id ? el("span", {
-      class: "lock-job mono",
-      text: shortRunId(task.job_run_id),
-      title: `job_run=${task.job_run_id}`,
-    }) : null;
-    if (title || job) {
-      header.appendChild(el("span", { class: "lock-task-meta" }, [
-        title ? el("span", { class: "lock-task-title", text: title, title }) : null,
-        job,
-      ]));
-    }
-    details.appendChild(header);
-
-    const list = el("div", { class: "lock-file-list" });
-    for (const path of files) {
-      list.appendChild(el("div", {
-        class: "lock-file-row mono",
-        text: String(path),
-        title: String(path),
-      }));
-    }
-    details.appendChild(list);
-    group.appendChild(details);
-    group.appendChild(idButton);
-    return group;
-  });
-  for (const reservation of byReservation) {
-    const key = `lock-reservation-${reservation.reservation_id}`;
-    const files = Array.isArray(reservation.files) ? reservation.files : [];
-    const taskIds = Array.isArray(reservation.task_ids) ? reservation.task_ids : [];
-    const group = el("div", { class: "lock-task-group lock-reservation-group" });
-    group.dataset.key = key;
-    group.dataset.hash = JSON.stringify(reservation);
-    const details = detailsPanel(key, { class: "lock-task-details" });
-    const holders = el("span", { class: "lock-reservation-holders" });
-    for (const taskId of taskIds) {
-      const link = el("a", { class: "mono", text: String(taskId) });
-      bindTaskLink(link, String(taskId));
-      holders.appendChild(link);
-    }
-    if (!taskIds.length) holders.appendChild(el("span", { text: "Manual reservation" }));
-    const header = el("summary", { class: "lock-task-header" }, [
-      el("span", {
-        class: "lock-reservation-label",
-        text: "Reservation",
-        title: reservation.expires_at ? `Expires ${reservation.expires_at}` : "Reserved lock surface",
-      }),
-      el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
-      el("span", { class: "lock-task-meta" }, [
-        holders,
-        reservation.owner_run_id ? el("span", {
-          class: "lock-job mono",
-          text: shortRunId(reservation.owner_run_id),
-          title: `job_run=${reservation.owner_run_id}`,
-        }) : null,
-      ]),
-    ]);
-    details.appendChild(header);
-    const list = el("div", { class: "lock-file-list" });
-    for (const file of files) list.appendChild(el("div", { class: "lock-file-row mono", text: String(file), title: String(file) }));
-    details.appendChild(list);
-    group.appendChild(details);
-    nodes.push(group);
-  }
-  syncNodes(body, nodes);
-}
-
-// `jrun-20260925-0324-c9` reads as `…0324-c9`: the date is today's more often
-// than not, and the tail is what tells two runs apart.
-function shortRunId(runId) {
-  const text = String(runId || "");
-  const match = /^jrun-\d{8}-(.+)$/.exec(text);
-  return match ? `…${match[1]}` : text;
+  paintLocks(payload);
 }
 
 function knowledgeStatusPill(status) {
@@ -537,23 +480,6 @@ function knowledgeTagWrap(nodes) {
   return el("span", { class: "knowledge-tags" }, values.length > 0
     ? values
     : [el("span", { class: "knowledge-tag dim", text: "-" })]);
-}
-
-function detailMetaRows(entries) {
-  const rows = entries
-    .filter(([, value]) => value != null && value !== "")
-    .map(([label, value]) => el("div", { class: "meta-row" }, [
-      el("span", { class: "k", text: label }),
-      el("span", { class: "v", text: String(value) }),
-    ]));
-  return el("div", { class: "meta-list" }, rows);
-}
-
-function detailGroup(title, content) {
-  return el("div", { class: "knowledge-side-group" }, [
-    el("h4", { class: "section-title", text: title }),
-    content || el("div", { class: "empty", text: "-" }),
-  ]);
 }
 
 function markdownPanel(body, fallbackClass) {
@@ -706,12 +632,6 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
   }
   if (count) count.textContent = friction.status || "open";
 
-  const controls = el("div", { class: "friction-controls" });
-  const controlGrid = el("div", { class: "friction-control-grid" });
-  controlGrid.appendChild(buildFrictionStatusControl(friction, detail));
-  controlGrid.appendChild(buildFrictionTagPicker(friction, detail));
-  controls.appendChild(controlGrid);
-
   const actions = el("div", { class: "actions" });
   const resolve = el("button", {
     class: "knowledge-btn primary",
@@ -723,44 +643,39 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
   resolve.addEventListener("click", () => resolveFriction(friction, resolve, detail));
   actions.appendChild(resolve);
 
+  // One card in the task detail's property-row style: each fact once, then
+  // the two triage controls. The head keeps only the title and status pill.
+  const factRow = (label, value) => el("div", { class: "property-row fact" }, [
+    el("span", { class: "label", text: label }),
+    value,
+  ]);
+  const textValue = (text, mono) => el("span", { class: mono ? "value mono" : "value", text });
+  const rows = [factRow("ID", textValue(friction.id, true))];
+  if (friction.model) rows.push(factRow("Model", textValue(friction.model)));
+  rows.push(factRow("Reported", textValue(fmtAbsTime(friction.created_at))));
+  if (friction.resolved_at) rows.push(factRow("Resolved", textValue(fmtAbsTime(friction.resolved_at))));
+  if (friction.during_task) {
+    const link = buildKnowledgeValueList([friction.during_task], { taskLinks: true });
+    link.classList.add("value");
+    rows.push(factRow("During task", link));
+  }
+  rows.push(buildFrictionStatusControl(friction, detail));
+  rows.push(buildFrictionTagPicker(friction, detail));
+
   const body = el("div", { class: "knowledge-detail-body" }, [
+    el("aside", { class: "knowledge-side" }, [
+      el("div", { class: "task-delivery-card friction-meta-card" }, rows),
+    ]),
     el("div", { class: "knowledge-body" }, [
       markdownPanel(friction.body || friction.title, "friction-detail-body"),
     ]),
-    el("aside", { class: "knowledge-side" }, [
-      detailGroup("Metadata", detailMetaRows([
-        ["id", friction.id],
-        ["status", friction.status || "open"],
-        ["model", friction.model],
-        ["reported", fmtAbsTime(friction.created_at)],
-        ["resolved", friction.resolved_at ? fmtAbsTime(friction.resolved_at) : "—"],
-      ])),
-      detailGroup("Triage", controls),
-      detailGroup("Tags", knowledgeTagWrap(frictionTagNodes(friction.tags))),
-      friction.during_task ? detailGroup("During task", buildKnowledgeValueList([friction.during_task], { taskLinks: true })) : null,
-    ].filter(Boolean)),
   ]);
 
   syncNodes(detail, [
     el("div", { class: "knowledge-detail-head" }, [
-      el("div", { class: "crumb" }, [
-        el("span", { class: "id", text: friction.id }),
-        el("span", { text: "·" }),
-        el("span", { text: "friction event" }),
-        el("span", { text: "·" }),
-        el("span", { text: friction.status || "open" }),
-      ]),
+      el("div", { class: "crumb" }, [el("span", { text: "friction event" })]),
       el("h2", { text: friction.title || friction.id }),
-      el("div", { class: "sub" }, [
-        knowledgeStatusPill(friction.status || "open"),
-        friction.model ? el("span", { text: `reported by ${friction.model}` }) : null,
-        el("span", { class: "dot", text: "·" }),
-        el("span", { text: fmtAbsTime(friction.created_at) }),
-        ...(friction.during_task ? [
-          el("span", { class: "dot", text: "·" }),
-          el("span", { text: `during ${friction.during_task}` }),
-        ] : []),
-      ]),
+      el("div", { class: "sub" }, [knowledgeStatusPill(friction.status || "open")]),
       actions,
     ]),
     body,
@@ -768,8 +683,6 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
 }
 
 function buildFrictionStatusControl(friction, detail) {
-  const wrap = el("label", { class: "friction-control" });
-  wrap.appendChild(el("span", { class: "friction-control-label", text: "status" }));
   const select = el("select", { class: "action status-update", title: `Status for ${friction.id}` });
   for (const status of FRICTION_STATUSES) {
     const option = el("option", { text: status });
@@ -780,14 +693,13 @@ function buildFrictionStatusControl(friction, detail) {
   select.addEventListener("change", () => {
     patchFriction(friction, { status: select.value }, select, detail);
   });
-  wrap.appendChild(select);
-  return wrap;
+  return el("label", { class: "property-row triage" }, [
+    el("span", { class: "label", text: "Status" }),
+    select,
+  ]);
 }
 
 function buildFrictionTagPicker(friction, detail) {
-  const wrap = el("div", { class: "friction-control friction-tag-picker" }, [
-    el("span", { class: "friction-control-label", text: "tags" }),
-  ]);
   const options = Array.isArray(lastFrictionPayload.tags) ? lastFrictionPayload.tags : [];
   const selected = new Set(Array.isArray(friction.tags) ? friction.tags : []);
   const grid = el("div", { class: "friction-tag-options" });
@@ -816,8 +728,10 @@ function buildFrictionTagPicker(friction, detail) {
     ]);
     grid.appendChild(label);
   }
-  wrap.appendChild(grid);
-  return wrap;
+  return el("div", { class: "property-row triage friction-tag-picker" }, [
+    el("span", { class: "label", text: "Tags" }),
+    grid,
+  ]);
 }
 
 async function patchFriction(friction, patch, control, detail) {
@@ -958,7 +872,10 @@ function wireTaskIdResolver() {
       wrap.classList.remove("pending");
     }
     const err = $("task-lookup-status");
-    if (err) err.textContent = "";
+    if (err) {
+      err.textContent = "";
+      delete err.dataset.kind;
+    }
   }
 
   function showLookupStatus(kind, msg) {
@@ -968,8 +885,13 @@ function wireTaskIdResolver() {
       wrap.classList.toggle("error", kind === "error");
       wrap.classList.toggle("pending", kind === "pending");
     }
+    // The feedback sits in the Tasks message area, newest first.
     const err = $("task-lookup-status");
-    if (err) err.textContent = msg;
+    if (err) {
+      if (err.textContent !== msg) raiseMessageSlot(err);
+      err.textContent = msg;
+      err.dataset.kind = kind;
+    }
   }
 
   function taskDetailPath(id, workspaceId) {
@@ -1046,7 +968,7 @@ function wireTaskIdResolver() {
       lastTasks[listedAt] = task;
       openVisibleTask(task.id, ctx);
     } else {
-      renderTasks(lastTasks, ctx);
+      renderTaskList(lastTasks, ctx);
     }
     input.value = "";
     clearLookupStatus();
@@ -1231,7 +1153,7 @@ function resetTaskPagination() {
   taskScrollResetPending = true;
 }
 
-function tasksListPath(base = "/api/tasks") {
+function tasksListPath(base = "/api/tasks", detailId = null, includeRuns = false) {
   const sp = new URLSearchParams();
   if (activeStatuses.size > 0 && activeStatuses.size < STATUS_ORDER.length) {
     sp.set("status", STATUS_ORDER.filter((s) => activeStatuses.has(s)).join(","));
@@ -1241,6 +1163,8 @@ function tasksListPath(base = "/api/tasks") {
   if (searchQuery) sp.set("q", searchQuery);
   if (taskPilotWarningsFilter()) sp.set("pilot", "warnings");
   if (taskPageCursor) sp.set("cursor", taskPageCursor);
+  if (detailId) sp.set("detail", detailId);
+  if (includeRuns) sp.set("detail_runs", "true");
   const qs = sp.toString();
   return qs ? `${base}?${qs}` : base;
 }
@@ -1260,15 +1184,22 @@ function navigateTaskPage(direction) {
   }
   taskPageError = null;
   taskScrollResetPending = true;
-  fetchAndRenderTasks().catch((error) => console.error("Failed to navigate task pages", error));
+  fetchAndRenderTasks({ includeCrews: false }).catch((error) => console.error("Failed to navigate task pages", error));
 }
 
-function fetchAndRenderTasks() {
+function fetchAndRenderTasks({ includeCrews = true } = {}) {
   // In global mode with the aggregate ("All workspaces") view selected, pull
   // every workspace's tasks; otherwise the single/selected workspace's tasks
   // (the workspace query param is applied by fetchJson).
   const aggregate = isAggregateView();
-  const path = tasksListPath(aggregate ? "/api/tasks/all" : "/api/tasks");
+  const detailId = !aggregate && !taskState.pinnedExternalTask ? taskState.selectedTaskId : null;
+  const detailSnapshot = taskDetailSnapshot(detailId);
+  const includeRuns = Boolean(detailId && taskRunsTabActive());
+  const base = aggregate ? "/api/tasks/all" : "/api/tasks";
+  const path = tasksListPath(base, detailId, includeRuns);
+  // The panel's scope is the list it shows. The bundled detail of the selected
+  // task is left out, so opening a task does not reset and rebuild the list.
+  const scope = tasksListPath(base);
   const sequence = ++taskFetchSequence;
   taskPageLoading = true;
   taskPageError = null;
@@ -1280,13 +1211,29 @@ function fetchAndRenderTasks() {
   // previously-selected concrete workspace so the fallback is consistent (a
   // stale, still-enabled crew <select> would PATCH with no workspace).
   if (aggregate) cacheCrewPayload({ crews: [] });
-  return requestPanel("tasks-body", path, () => Promise.all([
+  // Crew options change with configuration, not with tasks: a refresh that
+  // does not ask for them reuses this workspace visit's cached options.
+  const revision = getWorkspaceRevision();
+  const fetchCrews = !aggregate && (includeCrews || crewsRevision !== revision);
+  return requestPanel("tasks-body", scope, () => Promise.all([
     fetchJson(path),
-    aggregate ? Promise.resolve({ crews: [] }) : fetchJson("/api/crews"),
+    fetchCrews ? fetchJson("/api/crews") : Promise.resolve(null),
   ]), ([payload, crews]) => {
-    cacheCrewPayload(crews);
+    if (crews) {
+      cacheCrewPayload(crews);
+      crewsRevision = revision;
+    }
     // Both task-list endpoints answer `{ items, total, limit, truncated }`.
     const tasks = listItems(payload);
+    const refreshedDetail = payload && payload.detail;
+    const selectedTaskSummary = includeRuns ? tasks.find((task) => task.id === detailId) : null;
+    if (refreshedDetail && typeof refreshedDetail.id === "string") {
+      const summary = tasks.find((task) => task.id === refreshedDetail.id);
+      if (summary) primeTaskDetail(summary, refreshedDetail, detailSnapshot);
+    }
+    if (includeRuns && (payload?.detail_runs || payload?.detail_runs_error)) {
+      primeTaskRuns(detailId, payload.detail_runs || { error: payload.detail_runs_error }, selectedTaskSummary);
+    }
     lastTasks = tasks;
     lastTasksMeta = payload && !Array.isArray(payload)
       ? {
@@ -1297,7 +1244,7 @@ function fetchAndRenderTasks() {
           next_cursor: payload.next_cursor || null,
         }
       : null;
-    renderTasks(tasks, taskContext());
+    renderTaskList(tasks, taskContext());
     if (taskScrollResetPending) {
       const body = $("tasks-body");
       if (body) body.scrollTop = 0;
@@ -1394,7 +1341,12 @@ async function initWorkspaceSelector() {
 }
 
 function buildWorkspaceSelector() {
-  const select = el("select", { class: "workspace-select", title: "Workspace" });
+  // ORB-17652: the select's only name source was its `title`, which assistive
+  // tech does not reliably expose. An `aria-label` names it in the
+  // accessibility tree at every width with no visual change to the rail
+  // (a visible label would reflow the compact phone layout), matching the
+  // host picker's programmatic "Host" name.
+  const select = el("select", { class: "workspace-select", title: "Workspace", "aria-label": "Workspace" });
   select.id = "workspace-select";
 
   const allOption = el("option", { text: "All workspaces" });
@@ -1446,24 +1398,65 @@ function persistWorkspaceToUrl(id) {
   persistScopeToUrl();
 }
 
-function activeRefreshJobs() {
+// Whether this refresh makes the Tasks page's slow reads: always off the Tasks
+// page, and on it when the page was just entered, on an explicit Refresh,
+// after a host or workspace change, or once the slow cadence has elapsed.
+function tasksSlowReadsDue(explicit) {
+  const entered = lastRefreshTab !== activeTab;
+  lastRefreshTab = activeTab;
+  if (activeTab !== "tasks") return true;
+  const scope = `${getHostRevision()}:${getWorkspaceRevision()}`;
+  const due = explicit || entered || tasksSlowReads.scope !== scope
+    || Date.now() - tasksSlowReads.at >= TASKS_SLOW_READS_INTERVAL_MS;
+  if (due) tasksSlowReads = { at: Date.now(), scope };
+  return due;
+}
+
+// The Locks held panel shows while the dock is on its Drain or Locks view and
+// no task pane has replaced the dock.
+function locksPanelShown() {
+  const panel = $("locks-panel");
+  if (!panel || typeof panel.getClientRects !== "function") return true;
+  return panel.getClientRects().length > 0;
+}
+
+// The open backlog or proposed task whose full readiness entry the drain
+// read adds beside the workspace list.
+function drainDetailTaskId() {
+  const selectedTask = activeTab === "tasks" && !isAggregateView() && !taskState.pinnedExternalTask
+    ? lastTasks.find((task) => task.id === taskState.selectedTaskId)
+    : null;
+  return ["proposed", "backlog"].includes(selectedTask?.status) ? selectedTask.id : null;
+}
+
+// In progress and Blocked rows show their locked-file counts, and the dock
+// beside the list holds the Locks held panel; read locks while either shows.
+function taskLocksShown() {
+  return activeStatuses.has("in-progress") || activeStatuses.has("blocked") || locksPanelShown();
+}
+
+function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // ORB-00039: in the aggregate "All workspaces" view there is no concrete
   // workspace to scope per-workspace endpoints to, so skip every per-workspace
   // fetch (they'd 400) and render placeholders for the panels they feed. Only
   // the cross-workspace aggregate task list (/api/tasks/all) is fetched.
   const aggregate = isAggregateView();
+  const slowReads = tasksSlowReadsDue(explicit);
 
-  // The health strip is global; refresh on every tick alongside the active tab.
+  // The health strip is global; refresh on every tick alongside the active tab,
+  // except that the Tasks page reads it on its slow cadence (tasksSlowReadsDue).
   // The per-workspace summary (/api/audit/summary) is replaced by a placeholder
   // instead of fetched in aggregate mode. Host chips start on this tick too,
   // but a stalled /api/host/resources must not leave the status line on
   // "fetching…" or postpone the next poll. The call has its own 30s abort.
-  void fetchAndRenderHostResources().catch(error => console.error(error));
+  // The chips also read every 5 s on their own (initHostResources), so the
+  // Tasks page's tick leaves them to that.
+  if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources().catch(error => console.error(error));
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
-  void peekDoctor().catch(error => console.error(error));
+  if (slowReads) void peekDoctor().catch(error => console.error(error));
   // Routines and Jobs already read this status in their active-panel request.
-  if (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate) {
+  if (slowReads && (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate)) {
     void peekRoutineFailures().catch(error => console.error(error));
   }
   const jobs = [];
@@ -1474,26 +1467,22 @@ function activeRefreshJobs() {
   };
   if (aggregate) {
     renderAggregatePlaceholders();
-  } else {
+  } else if (slowReads) {
     add("Health summary", fetchAndRenderSummary());
   }
-  add("Jobs in flight", fetchJobsInFlight());
+  const includeRunningRuns = activeTab === "tasks" && !aggregate && activeStatuses.has("in-progress");
+  const activeRunsPath = `${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=active&limit=1${includeRunningRuns ? "&include_running=true" : ""}`;
+  const activeRunsRequest = fetchJson(activeRunsPath);
+  add("Jobs in flight", fetchJobsInFlight(activeRunsRequest));
   // Keep the chrome indicator current on every page.
-  add("Drain", fetchAndRenderAutoDrainPane());
+  add("Drain", fetchAndRenderAutoDrainPane({ detailTaskId: drainDetailTaskId(), forecast: slowReads }));
 
   if (activeTab === "tasks") {
-    add("Tasks", fetchAndRenderTasks());
-    // Task rows show their locked-file counts, and the dock beside them holds
-    // the Locks held panel.
-    if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
+    add("Tasks", fetchAndRenderTasks({ includeCrews: slowReads }));
+    if (!aggregate && !document.hidden && taskLocksShown()) add("Locked files", fetchAndRenderTaskLocks());
     // When each running task's run started, for the In progress rows' elapsed
     // time. Only while that group can show.
-    if (!aggregate && activeStatuses.has("in-progress")) add("Running runs", fetchRunningRuns());
-    return jobs;
-  }
-
-  if (activeTab === "drain") {
-    if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
+    if (includeRunningRuns) add("Running runs", fetchRunningRuns(activeRunsRequest));
     return jobs;
   }
 
@@ -1510,15 +1499,32 @@ function activeRefreshJobs() {
       add("Analytics › Codebase", fetchAndRenderCodebase());
       return jobs;
     }
+    if (activeAnalyticsSubtab === "agents") {
+      if (aggregate) placeholdAgentsAggregate();
+      else add(`Analytics › Agents › ${getAgentsRole()}`, fetchAndRenderAgents());
+      return jobs;
+    }
     if (aggregate) {
       placeholdScoreboardAggregate();
       placeholdMetricsAggregate();
       placeholdResourcesAggregate();
+      placeholdForecastAggregate();
+      placeholdExperimentsAggregate();
       return jobs;
     }
     if (activeAnalyticsSubtab === "resources") {
       // This host's delivery resource profiles for the selected workspace.
       add("Analytics › Resources", fetchAndRenderResources());
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "forecast") {
+      // Backlog forecast quantiles, arrivals and calibration for the workspace.
+      add("Analytics › Forecast", fetchAndRenderForecast());
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "experiments") {
+      // The experiment list with enrollment, or one experiment's readout.
+      add("Analytics › Experiments", fetchAndRenderExperiments());
       return jobs;
     }
     if (activeAnalyticsSubtab === "cost") {
@@ -1530,14 +1536,6 @@ function activeRefreshJobs() {
     }
     // ORB-15746: trends follow the shared window like Cost.
     add("Analytics › Metrics", fetchAndRenderMetrics());
-    return jobs;
-  }
-
-  if (activeTab === "agents") {
-    // The scorecards follow the shared window; one cached scan serves every
-    // role, window and row. The aggregate view has no workspace to rank.
-    if (aggregate) placeholdAgentsAggregate();
-    else add(`Agents › ${getAgentsRole()}`, fetchAndRenderAgents());
     return jobs;
   }
 
@@ -1553,6 +1551,14 @@ function activeRefreshJobs() {
 
   if (activeTab === "operations") {
     add(subpanel("operations-subtabs", activeOperationsSubtab), fetchAndRenderOperations());
+    return jobs;
+  }
+
+  if (activeTab === "leases") {
+    // Path leases by path and the recent landing notices, each its own panel
+    // so a refused notice read (a replica checkout) leaves the leases shown.
+    add("Leases", fetchAndRenderLeases());
+    add("Leases › Landings", fetchAndRenderLeaseLandings());
     return jobs;
   }
 
@@ -1644,21 +1650,23 @@ function fetchAndRenderRuns() {
   }, "runs-count");
 }
 
-function fetchJobsInFlight() {
+function fetchJobsInFlight(request) {
   const sequence = ++jobsInFlightSequence;
   const revision = getWorkspaceRevision();
-  const aggregate = isAggregateView();
-  return fetchJson(`${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=active&limit=1`).then((payload) => {
+  return request.then((payload) => {
     if (revision !== getWorkspaceRevision() || sequence !== jobsInFlightSequence) return;
     const count = Number.isFinite(payload.total) ? payload.total : listItems(payload).length;
     setRailCount("rail-count-jobs", count, false, "Pending and running job runs, not tasks. One task is several pipeline runs. Independent of the History window and filters.", formatJobsRailCount);
   });
 }
 
-function fetchRunningRuns() {
+function fetchRunningRuns(request) {
   const revision = getWorkspaceRevision();
-  return fetchJson("/api/job-runs?state=running&limit=100").then((payload) => {
-    if (revision === getWorkspaceRevision()) setRunningRuns(payload);
+  const sequence = ++runningRunsSequence;
+  return request.then((payload) => {
+    if (revision === getWorkspaceRevision() && sequence === runningRunsSequence) {
+      setRunningRuns({ items: Array.isArray(payload?.running_items) ? payload.running_items : [] });
+    }
   });
 }
 
@@ -1667,6 +1675,55 @@ function fetchAndRenderTaskLocks() {
   return requestPanel("locks-body", "locks", () => fetchJson("/api/tasks/locks"), renderLocksPanel, "locks-count").catch(error => {
     if (visit.isCurrent()) setTaskLocks(null);
     throw error;
+  });
+}
+
+// Change notices [change-stream.js]. While the stream is live the Tasks page
+// polls only on its safety net: each panel below refetches on the notice kinds
+// it shows, quietly, as a poll would. Other pages keep their 30 s poll; the
+// in-flight count, drain chip and host chips follow notices on every page.
+function wireChangeStream() {
+  setStreamCoverage(() => activeTab === "tasks" && !isAggregateView() && changeStreamLive());
+  onChangeStreamLive((live) => {
+    reschedulePolling();
+    syncElapsedTaskRefresh({ repaint: live });
+  });
+  onChange(["resync", "reconnect"], () => refreshDashboardNow());
+  onChange(["host.resources"], (notices) => applyPushedHostResources(notices[notices.length - 1].resources));
+  const quietly = (label, start) => {
+    void Promise.resolve(runPanelPoll(true, start)).catch(error => console.error(`${label} refresh failed`, error));
+  };
+  // A task notice redraws the list only when that task is on it or would be;
+  // keyed rendering then replaces only the changed row.
+  onChange(["task"], (notices) => {
+    if (activeTab !== "tasks" || isAggregateView() || document.hidden) return;
+    const shown = notices.some(({ id, status }) => !status || activeStatuses.has(status)
+      || id === taskState.selectedTaskId || lastTasks.some((task) => task.id === id));
+    if (shown) quietly("Tasks", () => fetchAndRenderTasks({ includeCrews: false }));
+  });
+  onChange(["locks"], () => {
+    if (activeTab !== "tasks" || isAggregateView() || document.hidden || !taskLocksShown()) return;
+    quietly("Locked files", fetchAndRenderTaskLocks);
+  });
+  onChange(["run"], () => {
+    if (isAggregateView() || document.hidden) return;
+    const includeRunningRuns = activeTab === "tasks" && activeStatuses.has("in-progress");
+    const request = fetchJson(`/api/job-runs?state=active&limit=1${includeRunningRuns ? "&include_running=true" : ""}`);
+    quietly("Jobs in flight", () => fetchJobsInFlight(request));
+    if (includeRunningRuns) quietly("Running runs", () => fetchRunningRuns(request));
+  });
+  // Readiness depends on tasks and locks as well as runs and drain phase:
+  // removing a dependency or finishing a filtered-out dependency leaves run
+  // state and drain phase unchanged, so the task/lock notice is the only
+  // invalidation. Refresh it on those notices too, in the same batch, with
+  // the same scoped read (detail task, no forecast) as the run/drain path.
+  // Task/lock notices only feed the visible Tasks view; run/drain notices
+  // feed the chip and readiness on every page.
+  onChange(["task", "locks", "run", "drain"], (notices) => {
+    if (isAggregateView() || document.hidden) return;
+    const hasRunDrain = notices.some((notice) => notice.kind === "run" || notice.kind === "drain");
+    if (!hasRunDrain && activeTab !== "tasks") return;
+    quietly("Drain", () => fetchAndRenderAutoDrainPane({ detailTaskId: drainDetailTaskId(), forecast: false }));
   });
 }
 
@@ -1757,7 +1814,7 @@ function fetchAndRenderSummary() {
   // Tools follows Analytics' shared window, independently of an Events
   // drill-down's cutoff. The summary endpoint requires a bounded window.
   const toolsOpen = activeTab === "analytics" && activeAnalyticsSubtab === "reliability" && activeReliabilityView === "tools";
-  const since = (toolsOpen ? (getWindow() === "all" ? "24h" : getWindow()) : effectiveAuditWindow()) || "24h";
+  const since = (toolsOpen ? toolsWindowFor().window : effectiveAuditWindow()) || "24h";
   return requestPanel("audit-summary-body", since, () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
     lastSummary = data;
     renderSummaryCounts(data);
@@ -1831,10 +1888,24 @@ function formatJobsRailCount(n) {
   return `${formatBigInt(n)} ${n === 1 ? "run" : "runs"}`;
 }
 
-// The connection line names the destination the way the rail does, not by its
-// route: the connection line uses the destination label.
+// The connection line's visible success text is only the refresh time; the
+// destination stays in its title and accessible name. Panel names still use
+// the destination label the way the rail does, not the route.
 function refreshLabel() {
   return destinationLabel(activeTab);
+}
+
+// The success line shows only the clock so the time is never clipped in the
+// fixed-width rail; the destination rides in the title and accessible name
+// on #meta-text (role="group" in index.html, never role="status" so a poll
+// does not announce). Error lines keep their wording and carry the full
+// text in the title for their ellipsis.
+function setMetaText(visible, full) {
+  const meta = $("meta-text");
+  meta.textContent = visible;
+  const accessible = full ?? visible;
+  meta.title = accessible;
+  meta.setAttribute("aria-label", accessible);
 }
 
 // Chrome retains values when a panel fails. Mark the whole snapshot until a
@@ -1907,14 +1978,16 @@ setHostSwitchHandler(selectHost);
 
 function showHostUnavailable(now) {
   $("conn-status").className = "status-dot red";
-  $("meta-text").textContent = `host unavailable · ${formatClock(now)}`;
+  setMetaText(`host unavailable · ${formatClock(now)}`);
   markRefreshStale(true);
 }
 
-async function refreshDashboard() {
+// `poll` marks the visible tab's 30 s tick, whose re-reads of loaded panels are
+// quiet; `explicit` marks the Refresh button, which also makes the slow reads.
+async function refreshDashboard({ poll = false, explicit = false } = {}) {
   const sequence = ++refreshSequence;
   const host = getHost();
-  $("meta-text").textContent = "fetching…";
+  setMetaText("fetching…");
   $("conn-status").className = "status-dot orange";
   if (host || workspacesWanted || workspaceRebuild) {
     const ready = await ensureHostScope();
@@ -1926,7 +1999,7 @@ async function refreshDashboard() {
   }
   const revision = getWorkspaceRevision();
   // Refresh stays available so a slow request never locks navigation or retry.
-  const jobs = activeRefreshJobs();
+  const jobs = runPanelPoll(poll, () => activeRefreshJobs({ poll, explicit }));
   const results = await Promise.allSettled(jobs.map(job => job.request));
   if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
   const errors = results.flatMap((result, index) => result.status === "rejected"
@@ -1948,8 +2021,13 @@ async function refreshDashboard() {
   markRefreshStale(errors.length > 0);
   $("conn-status").className = `status-dot ${offline ? "red" : errors.length ? "orange" : "green"}`;
   const panels = [...new Set(errors.map(({ panel }) => panel))].join(", ");
-  const label = offline ? `offline · ${panels}` : errors.length ? `panel update failed: ${panels}` : `refreshed ${refreshLabel()}`;
-  $("meta-text").textContent = `${label} · ${formatClock(now)}`;
+  const clock = formatClock(now);
+  if (offline || errors.length) {
+    const label = offline ? `offline · ${panels}` : `panel update failed: ${panels}`;
+    setMetaText(`${label} · ${clock}`);
+  } else {
+    setMetaText(clock, `Refreshed ${refreshLabel()} at ${clock}`);
+  }
   if (activeTab === "tasks") fitLogPanelToViewport();
   return errors.length === 0;
 }
@@ -1961,6 +2039,7 @@ onWorkspaceChange(() => {
   markRefreshStale(false);
   resetTaskPagination();
   taskFetchSequence += 1;
+  runningRunsSequence += 1;
   lastTasks = [];
   lastTasksMeta = null;
   cacheCrewPayload({ crews: [] });
@@ -1983,13 +2062,13 @@ const tasksContext = taskContext();
 // The drain readiness snapshot arrives apart from the task list; repaint the
 // rows when it changes what they say about a backlog task's wait.
 onDrainReadinessChange(() => {
-  if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+  if (activeTab === "tasks") renderTaskList(lastTasks, taskContext());
   // Each lock row counts the waiting tasks it holds back.
   if (lastLocks && lastLocks.workspace && lastLocks.workspace === getWorkspace()) paintLocksPanel(lastLocks.payload);
 });
 // Run start times and file locks arrive apart from the task list too.
 onTaskRuntimeChange(() => {
-  if (activeTab === "tasks") renderTasks(lastTasks, taskContext());
+  if (activeTab === "tasks") renderTaskList(lastTasks, taskContext());
 });
 buildChips(tasksContext);
 wireSearch(tasksContext);
@@ -2027,11 +2106,14 @@ function wireClockControls() {
   syncClockControls();
 }
 
-$("refresh-btn").addEventListener("click", refreshDashboard);
+$("refresh-btn").addEventListener("click", () => refreshDashboard({ explicit: true }));
 wireClockControls();
 initHostResources();
+wireChangeStream();
 wireReliabilityWindowSelector();
+wireWindowSelector("tools-window-selector", { windows: TOOLS_WINDOWS });
 wireDoctorPanel();
+initLocks();
 setScopeChangeListener(() => {
   persistScopeToUrl();
   syncWindowSelectors();
@@ -2052,7 +2134,7 @@ function selectFleetScope(host, workspace) {
   if (workspace) rememberWorkspace();
   persistScopeToUrl();
   if (!changed) buildWorkspaceSelector();
-  sAT("drain", { refresh: false });
+  sAT("tasks?dock=drain", { refresh: false });
   refreshDashboard();
 }
 
@@ -2072,6 +2154,9 @@ workspacesWanted = true;
 await ensureHostScope();
 persistScopeToUrl();
 syncWindowSelectors();
+// Opened once the scope is resolved, so a workspace named in the URL does not
+// open a stream that its logical ID then replaces.
+startChangeStream();
 // Warm the shared fleet snapshot alongside the router's first poll so a slow
 // host cannot delay the selected view. Both reuse the same in-flight read;
 // warmup paints the indicator when the snapshot arrives.
@@ -2079,7 +2164,7 @@ void startFleetIndicatorRefresh().catch(error => console.error(error));
 iT();
 
 initLogTail();
-// The status bar opens the full tail on Drain.
+// The status bar opens the full tail in the Tasks dock.
 document.getElementById("log-statusbar-open")?.addEventListener("click", () => {
-  sAT("drain/log");
+  sAT("tasks?dock=log");
 });

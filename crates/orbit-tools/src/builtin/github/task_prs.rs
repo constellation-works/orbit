@@ -13,9 +13,9 @@ const OPEN_PR_FIELDS: &str = "number,headRefName,body,author";
 /// Upper bound on open PRs read per lookup. `gh` paginates up to it.
 const OPEN_PR_LIMIT: &str = "500";
 
-/// What a merged PR adds to the match fields: the branch it merged into and
-/// the commit it merged as.
-const MERGE_FIELDS: &str = "baseRefName,mergeCommit";
+/// What a merged PR adds: the branch it merged into, its merge commit and
+/// the head it merged from, including an operator's rebase.
+const MERGE_FIELDS: &str = "baseRefName,mergeCommit,headRefOid";
 
 /// How many of the most recently merged PRs one lookup reads. A delivery
 /// merged further back is settled through its own number instead.
@@ -69,6 +69,27 @@ pub fn view_pull_request(number: u64) -> ExecRequest {
             number.to_string(),
             "--json".into(),
             format!("state,{OPEN_PR_FIELDS},{MERGE_FIELDS}"),
+        ],
+        None,
+        TIMEOUT_DEFAULT_MS,
+    )
+}
+
+/// The newest PR for a branch, including closed and
+/// merged PRs so squash landings and an unmerged PR both override ancestry.
+pub fn bound_branch_pull_request(branch: &str) -> ExecRequest {
+    super::gh_exec_request(
+        vec![
+            "pr".into(),
+            "list".into(),
+            "--state".into(),
+            "all".into(),
+            "--head".into(),
+            branch.into(),
+            "--limit".into(),
+            "1".into(),
+            "--json".into(),
+            "number,state,baseRefName".into(),
         ],
         None,
         TIMEOUT_DEFAULT_MS,

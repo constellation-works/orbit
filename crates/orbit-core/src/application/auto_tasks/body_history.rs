@@ -104,8 +104,9 @@ pub(super) fn historical_overrides(
         let mut defaults = version.settings.clone();
         // Schedules are settings, but historical branch placeholders still
         // need the same rendering as a currently bundled definition.
-        if let Some(orbit_types::workflow::AutoTaskSchedule::Deliveries { deliveries_landed }) =
-            defaults.schedule.as_mut()
+        if let Some(orbit_types::workflow::AutoTaskSchedule::Deliveries {
+            deliveries_landed, ..
+        }) = defaults.schedule.as_mut()
             && deliveries_landed.branch == BASE_BRANCH_PLACEHOLDER
         {
             deliveries_landed.branch = base_branch.to_string();

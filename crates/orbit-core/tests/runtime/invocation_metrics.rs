@@ -13,6 +13,7 @@ use super::dispatch_admission::isolated;
 fn record(runtime: &OrbitRuntime, task_ids: &[String], scale: u64) {
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: "fixture-run".to_string(),
             account: None,
             activity_id: "fixture".to_string(),

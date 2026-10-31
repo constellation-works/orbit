@@ -1,0 +1,52 @@
+Edit a draft experiment's definition
+
+Usage: orbit experiment update [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          The experiment's id or name
+
+Options:
+      --name <NAME>
+          A new name, unique in this workspace
+
+      --hypothesis <HYPOTHESIS>
+          What the treatment arms are expected to change, and why
+
+      --arms <ARMS>
+          The arms as a JSON array of {name, control, weight, overlay}
+
+      --population <POPULATION>
+          Which tasks to enroll, as a JSON object (complexity, task_type, tags_include, tags_exclude, origin)
+
+      --primary-metric <PRIMARY_METRIC>
+          The metric the verdict is read on
+
+      --guardrails <GUARDRAILS>
+          Guardrail metrics and thresholds, as a JSON object
+
+      --min-sample <MIN_SAMPLE>
+          Tasks every arm needs before a verdict
+
+      --max-days <MAX_DAYS>
+          Days after start at which a verdict is given
+
+      --mode <MODE>
+          Whether overlays are applied
+
+          Possible values:
+          - shadow: Assign and record arms but apply no overlay
+          - live:   Start and resume are supported; overlays apply on matching dispatches. Skill replacement supports Claude on Unix only
+
+      --reason <REASON>
+          Why, recorded on the event
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

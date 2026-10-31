@@ -1,6 +1,6 @@
 //! Revisions, the fetched branch head and remote observation.
 
-use orbit_automation::{AutomationError, delivery::digest};
+use orbit_automation::{AutomationError, DeferredReason, delivery::digest};
 use orbit_common::fs::git::{
     GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, git_fetch_lock_target,
     should_retry_git_ref_cas,
@@ -9,7 +9,7 @@ use orbit_common::fs::{file_lock::FileLockOptions, io::with_exclusive_file_lock_
 use orbit_types::workflow::automation::*;
 use std::{path::Path, time::Duration};
 
-use super::{SOURCE_DEADLINE, SOURCE_FETCH_FAILED, Source};
+use super::{SOURCE_DEADLINE, Source};
 
 impl<'a> Source<'a> {
     pub(crate) fn revision(&self, spec: &str) -> Result<SourceRevision, AutomationError> {
@@ -97,7 +97,7 @@ impl<'a> Source<'a> {
     /// When `origin` is configured, the pass fetches that one branch into
     /// `refs/remotes/origin/<branch>` and resolves the fetched object. The
     /// worktree, index and local branch stay untouched. A failed fetch defers
-    /// as [`SOURCE_FETCH_FAILED`] and does not fall back to the local ref.
+    /// as [`DeferredReason::SourceFetchFailed`] and does not fall back to the local ref.
     /// With no remote, the head is `refs/heads/<branch>`. A read-only source
     /// resolves the existing remote-tracking ref without fetching.
     pub(crate) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
@@ -171,7 +171,7 @@ impl<'a> Source<'a> {
         SOURCE_DEADLINE
             .checked_sub(self.elapsed())
             .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| AutomationError::Deferred("source_deadline".into()))
+            .ok_or_else(|| AutomationError::Deferred(DeferredReason::SourceDeadline))
     }
 
     fn fetch_origin_branch_locked(&self, spec: &str) -> Result<(), FetchLockError> {
@@ -182,14 +182,14 @@ impl<'a> Source<'a> {
             "origin",
             spec,
         ];
-        let mut last_error = AutomationError::Deferred(SOURCE_FETCH_FAILED.into());
+        let mut last_error = AutomationError::Deferred(DeferredReason::SourceFetchFailed(None));
         for attempt in 0..GIT_FETCH_CAS_ATTEMPTS {
             let budget = self.remaining_budget().map_err(FetchLockError::Deferred)?;
             match self.command_with("git", &args, &[("GIT_TERMINAL_PROMPT", "0")], None, budget) {
                 Ok(_) => return Ok(()),
                 Err(error) => {
                     let text = match &error {
-                        AutomationError::Deferred(reason) => reason.clone(),
+                        AutomationError::Deferred(reason) => reason.to_string(),
                         other => other.to_string(),
                     };
                     let retry = should_retry_git_ref_cas(attempt, &text);
@@ -271,7 +271,7 @@ impl<'a> Source<'a> {
         let behind = self
             .git(&["rev-list", "--first-parent", "--count", &range])?
             .parse::<u64>()
-            .map_err(|_| AutomationError::Deferred("source_count_invalid".into()))?;
+            .map_err(|_| AutomationError::Deferred(DeferredReason::SourceCountInvalid))?;
         let oldest_unobserved_epoch = if behind == 0 {
             None
         } else {
@@ -381,8 +381,8 @@ impl From<std::io::Error> for FetchLockError {
     }
 }
 
-fn is_evidence_unavailable(reason: &str) -> bool {
-    reason.starts_with("evidence_unavailable:")
+fn is_evidence_unavailable(reason: &DeferredReason) -> bool {
+    matches!(reason, DeferredReason::EvidenceUnavailable(_))
 }
 
 #[cfg(test)]
@@ -419,22 +419,17 @@ pub(super) fn source_deadline_forced(source: &Source<'_>) -> bool {
 
 fn fetch_failure(detail: &str) -> AutomationError {
     let detail = detail.trim();
-    if detail.is_empty() || detail == SOURCE_FETCH_FAILED {
-        return AutomationError::Deferred(SOURCE_FETCH_FAILED.into());
-    }
-    if let Some(rest) = detail.strip_prefix("source_fetch_failed:") {
-        let rest = rest.trim();
-        if rest.is_empty() {
-            return AutomationError::Deferred(SOURCE_FETCH_FAILED.into());
-        }
-        return AutomationError::Deferred(format!("{SOURCE_FETCH_FAILED}: {rest}"));
-    }
-    AutomationError::Deferred(format!("{SOURCE_FETCH_FAILED}: {detail}"))
+    AutomationError::Deferred(DeferredReason::SourceFetchFailed(
+        (!detail.is_empty()).then(|| detail.to_owned()),
+    ))
 }
 
 fn fetch_failure_from(error: AutomationError) -> AutomationError {
     match error {
-        AutomationError::Deferred(reason) => fetch_failure(&reason),
+        AutomationError::Deferred(reason @ DeferredReason::SourceFetchFailed(_)) => {
+            AutomationError::Deferred(reason)
+        }
+        AutomationError::Deferred(reason) => fetch_failure(&reason.to_string()),
         other => fetch_failure(&other.to_string()),
     }
 }

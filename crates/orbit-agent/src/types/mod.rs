@@ -2,6 +2,7 @@ mod request;
 mod response;
 
 pub use request::{AgentOperation, AgentRequest};
+pub(crate) use response::request_usage;
 pub use response::{AgentInvocationSpec, AgentResponseStatus};
 pub use response::{DeclaredResponseFailure, ParsedStdout};
 pub use response::{

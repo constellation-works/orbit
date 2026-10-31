@@ -9,6 +9,29 @@ impl OrbitRuntime {
         task: Task,
         explicit: bool,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
+        self.observe_publication_checkpoints(source, task, explicit, false)
+    }
+
+    /// [`Self::observe_published_source`] for an operator requeue of the
+    /// escalation `source`'s final recovery recorded. The requeue
+    /// authenticates the run's completion-failure receipt first and records
+    /// the `requeued` decision that supersedes the escalation, so the next
+    /// run's adoption passes the guard this skips.
+    pub(super) fn observe_escalated_publication(
+        &self,
+        source: JobRun,
+        task: Task,
+    ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
+        self.observe_publication_checkpoints(source, task, false, true)
+    }
+
+    fn observe_publication_checkpoints(
+        &self,
+        source: JobRun,
+        task: Task,
+        explicit: bool,
+        escalation_requeue: bool,
+    ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
         let source_id = source.run_id.as_str();
         let task_id = task.id.as_str();
         let state = self
@@ -20,13 +43,22 @@ impl OrbitRuntime {
         let definition = self.source_repair_definition(&source)?;
         let job = &definition;
         let checkpoint = |id: &str, action: &str| authenticated_checkpoint(job, &state, id, action);
+        let inline = explicit
+            && source.state == JobRunState::Failed
+            && inline_publication::kept_inline_publication(&state);
         if explicit
             && state.failure_activity_checkpoint.is_some()
             && source.state == JobRunState::Failed
         {
-            return self.observe_handoff_publication(source, task, state, definition);
+            if inline {
+                inline_publication::authenticate_kept_inline_receipt(&source, &task, &state, job)?;
+            } else {
+                return self.observe_handoff_publication(source, task, state, definition);
+            }
         }
-        if source.state == JobRunState::Failed
+        if !escalation_requeue
+            && !inline
+            && source.state == JobRunState::Failed
             && matches!(
                 self.recorded_final_recovery(task_id, source_id)?,
                 Some(crate::application::task::FinalRecoveryOutcome::Escalated { .. })
@@ -231,6 +263,20 @@ impl OrbitRuntime {
             prior.repository != binding.2.repository || prior.remote_url != binding.2.remote_url
         }) {
             return Err(refuse("checkpoint PR repository identity disagrees"));
+        }
+        if inline {
+            let receipt = &state
+                .failure_activity_checkpoint
+                .as_ref()
+                .ok_or_else(|| refuse("kept publication receipt missing"))?
+                .output;
+            if field(receipt, "pr_number")? != binding.2.pull_request
+                || field(receipt, "pr_url")? != binding.2.pull_request_url
+            {
+                return Err(refuse(
+                    "kept publication receipt contradicts original PR proof",
+                ));
+            }
         }
         Ok(binding)
     }

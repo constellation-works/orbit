@@ -2,7 +2,13 @@
 use super::fixture::{Fixture, git};
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::{RuntimeHost, execute_deterministic_action};
-use orbit_types::workflow::{JobRunState, SourceRepairBinding};
+use orbit_types::{
+    task::{
+        PublicationProofValue, PublicationSettlingDecision, PublicationSettlingObservation,
+        TaskDecision, TaskHistoryEntry,
+    },
+    workflow::{JobRunState, SourceRepairBinding},
+};
 use serde_json::{Value, json};
 use std::{collections::HashMap, io::Write, path::PathBuf};
 
@@ -140,6 +146,12 @@ fn same_pr_publication_retains_each_refused_observation() {
             records.len(),
             count,
             "each read survives handoff comment deduplication"
+        );
+        assert!(
+            !serde_json::to_string(records.last().unwrap())
+                .unwrap()
+                .contains("private-password"),
+            "typed history and diagnostic notes never retain URL credentials"
         );
         let note = records.last().unwrap().note.as_deref().unwrap();
         assert!(note.len() < 32768, "bounded provider evidence");
@@ -375,6 +387,19 @@ impl Publication {
             .collect()
     }
 
+    fn last_evidence(&self) -> Value {
+        let history = self.f.runtime.get_task_history(&self.f.task).unwrap();
+        let entry = history
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.event == "source_repair_publication_observed"
+                    || entry.event == "source_repair_publication_refused"
+            })
+            .unwrap();
+        serde_json::from_str(entry.note.as_deref().unwrap()).unwrap()
+    }
+
     fn unchanged(&self, state: &orbit_types::workflow::PipelineState) {
         assert_eq!(
             self.f.runtime.read_run_state(&self.id).unwrap().unwrap(),
@@ -406,9 +431,25 @@ fn authenticated_previous_head_metadata_settles_without_republication() {
         let converged = p.current.clone();
         let waits = std::rc::Rc::new(std::cell::Cell::new(0));
         let waited = waits.clone();
+        let runtime = p.f.runtime.clone();
+        let task = p.f.task.clone();
         let opened = orbit_engine::test_support::with_vcs_retry_wait(
             move |duration| {
                 assert_eq!(duration.as_secs(), 5);
+                let history = runtime.get_task_history(&task).unwrap();
+                assert!(
+                    matches!(
+                        &history.last().unwrap().decision,
+                        Some(TaskDecision::SourceRepairPublication(
+                            PublicationSettlingObservation {
+                                reserved_delay_seconds: 5,
+                                decision: PublicationSettlingDecision::Waiting,
+                                ..
+                            }
+                        ))
+                    ),
+                    "the durable reservation precedes the wait"
+                );
                 waited.set(waited.get() + 1);
                 if waited.get() == stale_reads {
                     std::fs::write(&answer, converged.to_string()).unwrap();
@@ -461,6 +502,15 @@ fn publication_lag_refuses_unconfirmed_proof_and_unknown_heads() {
         "previous",
         "unleased",
         "unknown_outcome",
+        "hostile_outcome",
+        "truncated_outcome",
+        "array_outcome",
+        "object_outcome",
+        "invalid_oid_outcome",
+        "truncated_oid_outcome",
+        "numeric_outcome",
+        "null_outcome",
+        "bool_outcome",
         "unknown_head",
         "foreign_head",
         "padded_previous",
@@ -489,12 +539,45 @@ fn publication_lag_refuses_unconfirmed_proof_and_unknown_heads() {
             "job" => {
                 state.job_id = "foreign".into();
             }
-            "previous" | "unleased" | "unknown_outcome" => {
+            "previous"
+            | "unleased"
+            | "unknown_outcome"
+            | "hostile_outcome"
+            | "truncated_outcome"
+            | "array_outcome"
+            | "object_outcome"
+            | "invalid_oid_outcome"
+            | "truncated_oid_outcome"
+            | "numeric_outcome"
+            | "null_outcome"
+            | "bool_outcome" => {
                 match case {
                     "previous" => {
                         state.pipeline["push"]["remote_sha_before"] = json!("a".repeat(40))
                     }
                     "unleased" => state.pipeline["push"]["force_with_lease"] = json!(false),
+                    "hostile_outcome" => {
+                        state.pipeline["push"]["decision"] =
+                            json!("https://user:private-password@example.com/?token=secret")
+                    }
+                    "truncated_outcome" => {
+                        state.pipeline["push"]["decision"] = json!("é".repeat(2000))
+                    }
+                    "array_outcome" => {
+                        state.pipeline["push"]["decision"] = json!(["private-password"])
+                    }
+                    "object_outcome" => {
+                        state.pipeline["push"]["decision"] = json!({"private-password":"discarded"})
+                    }
+                    "invalid_oid_outcome" => {
+                        state.pipeline["push"]["decision"] = json!({"oid":false})
+                    }
+                    "truncated_oid_outcome" => {
+                        state.pipeline["push"]["decision"] = json!({"oid":"é".repeat(2000)})
+                    }
+                    "numeric_outcome" => state.pipeline["push"]["decision"] = json!(17),
+                    "null_outcome" => state.pipeline["push"]["decision"] = Value::Null,
+                    "bool_outcome" => state.pipeline["push"]["decision"] = json!(false),
                     _ => state.pipeline["push"]["decision"] = json!("unknown"),
                 }
                 state.step_outputs.insert(4, state.pipeline["push"].clone());
@@ -525,6 +608,26 @@ fn publication_lag_refuses_unconfirmed_proof_and_unknown_heads() {
         let last = evidence.last().unwrap();
         assert_eq!(last["settling"]["decision"], "refused", "{case}");
         assert_eq!(last["settling"]["rereads"], 0, "{case}");
+        let history = p.f.runtime.get_task_history(&p.f.task).unwrap();
+        let entry = history
+            .iter()
+            .rev()
+            .find(|entry| entry.event == "source_repair_publication_refused")
+            .unwrap();
+        let Some(TaskDecision::SourceRepairPublication(observation)) = &entry.decision else {
+            panic!("typed observation: {case}");
+        };
+        assert_eq!(
+            serde_json::to_value(&observation.successful_push).unwrap(),
+            last["successful_push"],
+            "typed proof retains the diagnostic representation: {case}"
+        );
+        assert!(
+            !serde_json::to_string(entry)
+                .unwrap()
+                .contains("private-password"),
+            "hostile checkpoint evidence is bounded/redacted in the entire record: {case}"
+        );
         if matches!(
             case,
             "missing" | "failed" | "copied" | "head" | "branch" | "run" | "job"
@@ -735,11 +838,187 @@ fn publication_lag_budget_survives_repeated_action_calls() {
     p.unchanged(&p.state);
 }
 
+// Replay through pr_open and the real history transport. This is the original
+// persisted note shape, not a serialization of the new observation type.
+fn publication_history_replays_legacy_notes_and_typed_decisions() {
+    for typed in [false, true] {
+        let p = Publication::new();
+        let push = &p.state.pipeline["push"];
+        let proof = json!({"step_index":4,"checkpoint":"push",
+            "checkpoint_sha256":sha256_hex(push.to_string().as_bytes()),
+            "branch":p.f.branch,"local_sha":p.candidate,
+            "remote_sha_before":push["remote_sha_before"],
+            "force_with_lease":push["force_with_lease"],"decision":push["decision"]});
+        let note = json!({"schema_version":1,"run_id":p.id,"published_head":p.candidate,
+            "successful_push":proof,"settling":{"reserved_delay_seconds":5,"decision":"waiting"}});
+        let append = |entry| {
+            p.f.runtime
+                .apply_task_automation_update(
+                    &p.f.task,
+                    orbit_engine::TaskAutomationUpdate {
+                        append_history: vec![entry],
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+        };
+        // Foreign runs do not require reservation data to be valid here.
+        append(
+            serde_json::from_value::<TaskHistoryEntry>(json!({"at":chrono::Utc::now(),
+            "by":"system","event":"source_repair_publication_observed",
+            "note":json!({"run_id":"foreign"}).to_string()}))
+            .unwrap(),
+        );
+        for _ in 0..3 {
+            let mut old_entry = json!({"at":chrono::Utc::now(),"by":"system",
+                "event":"source_repair_publication_observed","note":note.to_string()});
+            if typed {
+                old_entry["decision"] = json!({"kind":"source_repair_publication",
+                    "run_id":p.id,"published_head":p.candidate,"successful_push":proof,
+                    "reserved_delay_seconds":5,"decision":"waiting"});
+                old_entry["note"] = json!("Unrelated human diagnostic text, not JSON.");
+            }
+            append(serde_json::from_value::<TaskHistoryEntry>(old_entry).unwrap());
+        }
+        orbit_engine::test_support::with_vcs_retry_wait(
+            |_| panic!("replayed reservations exhaust the cumulative budget"),
+            || {
+                p.open().unwrap_err();
+            },
+        );
+        let history = p.f.runtime.get_task_history(&p.f.task).unwrap();
+        let refused = history.last().unwrap();
+        let evidence: Value = serde_json::from_str(refused.note.as_deref().unwrap()).unwrap();
+        assert_eq!(evidence["settling"]["refusal_reason"], "budget_exhausted");
+        assert_eq!(evidence["settling"]["rereads"], 3);
+        assert_eq!(evidence["settling"]["waited_seconds"], 15);
+        assert!(matches!(
+            &refused.decision,
+            Some(TaskDecision::SourceRepairPublication(
+                PublicationSettlingObservation {
+                    decision: PublicationSettlingDecision::Refused,
+                    ..
+                }
+            ))
+        ));
+        // Settling clears the pending proof but preserves the settled-head guard.
+        std::fs::write(&p.f.answer, p.current.to_string()).unwrap();
+        assert_eq!(p.open().unwrap()["pr_reused"], true);
+        std::fs::write(&p.f.answer, p.old.to_string()).unwrap();
+        orbit_engine::test_support::with_vcs_retry_wait(
+            |_| panic!("a settled head cannot restart waiting"),
+            || {
+                p.open().unwrap_err();
+            },
+        );
+        assert_eq!(
+            p.last_evidence()["settling"]["refusal_reason"],
+            "head_regressed"
+        );
+        p.unchanged(&p.state);
+    }
+}
+
+fn publication_history_refuses_unreadable_reservations_without_note_fallback() {
+    for case in [
+        "missing",
+        "malformed",
+        "head",
+        "mismatched",
+        "proof_changed",
+    ] {
+        let p = Publication::new();
+        let push = &p.state.pipeline["push"];
+        let mut note = json!({"run_id":p.id,"published_head":p.candidate,
+            "settling":{"reserved_delay_seconds":15,"decision":"waiting"}});
+        let decision = match case {
+            "missing" => {
+                note["settling"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("reserved_delay_seconds");
+                None
+            }
+            "malformed" => {
+                note["settling"]["reserved_delay_seconds"] = json!("15");
+                None
+            }
+            "head" => {
+                note.as_object_mut().unwrap().remove("published_head");
+                None
+            }
+            "mismatched" => Some(TaskDecision::DrainApprovalHeld {
+                classification: "unrelated".into(),
+            }),
+            "proof_changed" => Some(TaskDecision::SourceRepairPublication(
+                PublicationSettlingObservation {
+                    run_id: PublicationProofValue::Text(p.id.clone()),
+                    published_head: PublicationProofValue::Text(p.candidate.clone()),
+                    successful_push: Some(
+                        serde_json::from_value(json!({"step_index":4,"checkpoint":"push",
+                    "checkpoint_sha256":sha256_hex(push.to_string().as_bytes()),
+                    "branch":"changed projected branch", "local_sha":p.candidate,
+                    "remote_sha_before":push["remote_sha_before"],
+                    "force_with_lease":push["force_with_lease"],"decision":push["decision"]}))
+                        .unwrap(),
+                    ),
+                    reserved_delay_seconds: 5,
+                    decision: PublicationSettlingDecision::Waiting,
+                },
+            )),
+            _ => unreachable!(),
+        };
+        p.f.runtime
+            .apply_task_automation_update(
+                &p.f.task,
+                orbit_engine::TaskAutomationUpdate {
+                    append_history: vec![TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".into(),
+                        event: "source_repair_publication_observed".into(),
+                        note: Some(note.to_string()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let calls = std::fs::read_to_string(p.f._root.path().join("gh-calls")).unwrap_or_default();
+        orbit_engine::test_support::with_vcs_retry_wait(
+            move |_| panic!("unreadable or changed history must never wait: {case}"),
+            || {
+                p.open().unwrap_err();
+            },
+        );
+        if case == "proof_changed" {
+            assert!(
+                p.last_evidence()["mismatches"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|m| m["field"] == "successful_push")
+            );
+        } else {
+            assert_eq!(
+                std::fs::read_to_string(p.f._root.path().join("gh-calls")).unwrap_or_default(),
+                calls,
+                "unreadable reservation refuses before a provider read: {case}"
+            );
+        }
+        p.unchanged(&p.state);
+    }
+}
+
 crate::scenario_table!(
     same_pr_publication_scenarios,
     same_pr_publication_retains_each_refused_observation,
     authenticated_previous_head_metadata_settles_without_republication,
     publication_lag_refuses_unconfirmed_proof_and_unknown_heads,
     publication_lag_rechecks_identity_authority_and_remote_on_convergence,
-    publication_lag_budget_survives_repeated_action_calls
+    publication_lag_budget_survives_repeated_action_calls,
+    publication_history_replays_legacy_notes_and_typed_decisions,
+    publication_history_refuses_unreadable_reservations_without_note_fallback
 );

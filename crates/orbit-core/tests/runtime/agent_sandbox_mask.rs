@@ -1,10 +1,14 @@
-//! The agent sandbox hides clock credentials under the configured global root
-//! and Linux SSH masters under `~/.orbit`, even when those roots differ.
+//! The agent sandbox hides clock credentials and the decision-channel key
+//! store under the configured global root, and Linux SSH masters under
+//! `~/.orbit`, even when those roots differ.
 //!
 //! The clock tick hands a workspace only the `clock.env` names its
 //! `execution.env.pass` admits, so the file itself must stay out of every
-//! sandboxed agent's reach. The compiled plans are pinned by the sandbox
-//! goldens; this checks the resolution through the public runtime API.
+//! sandboxed agent's reach. The decision-channel store mirrors every
+//! channel's token key, so it is masked whole, including a registration
+//! written after the agent started [ORB-19338]. The compiled plans are pinned
+//! by the sandbox goldens; this checks the resolution through the public
+//! runtime API.
 
 use orbit_core::OrbitRuntime;
 use orbit_engine::RuntimeHost;
@@ -27,6 +31,31 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
             std::fs::read(sibling).expect("unmasked sibling"),
             b"visible"
         );
+        // The host registers a channel once this agent is running, then
+        // releases it on stdin.
+        let mut released = String::new();
+        std::io::stdin()
+            .read_line(&mut released)
+            .expect("wait for the host's registration");
+        assert_eq!(released, "registered\n");
+        let global = std::path::PathBuf::from(
+            std::env::var_os("ORBIT_AGENT_MASK_GLOBAL").expect("global root"),
+        );
+        assert!(
+            orbit_core::runtime::plugin::sandbox_mask::decision_channel_store_masked(&global),
+            "a nested orbit sees the decision-channel store as masked"
+        );
+        let store = global.join("state/decision-channels");
+        let names: Vec<_> = std::fs::read_dir(&store)
+            .expect("the sentinel stands in for the store")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(
+            names,
+            vec![std::ffi::OsString::from(".orbit-brokered")],
+            "neither the registration nor a staged write is visible"
+        );
+        assert!(std::fs::read(store.join("channels.json")).is_err());
         return;
     }
     if std::env::var_os(CHILD).is_none() {
@@ -73,10 +102,12 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
             .expect("copy confined probe");
         probe_binary
     };
-    let clock_env = global
-        .canonicalize()
-        .expect("canonical global root")
-        .join(orbit_common::security::operator_env::CLOCK_ENV_FILE_NAME);
+    let canonical_global = global.canonicalize().expect("canonical global root");
+    let clock_env =
+        canonical_global.join(orbit_common::security::operator_env::CLOCK_ENV_FILE_NAME);
+    let decision_store = canonical_global.join("state/decision-channels");
+    #[cfg(target_os = "linux")]
+    let mut registrations = 0;
     let sandbox = if cfg!(target_os = "linux") {
         ExecutorSandboxKind::LinuxBwrap
     } else {
@@ -98,6 +129,17 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
                 mask.files,
                 vec![clock_env.clone()],
                 "{provider} ({fs_profile:?}) must mask clock.env under the configured global root"
+            );
+            assert!(
+                mask.targets.contains(&decision_store),
+                "{provider} ({fs_profile:?}) must mask the decision-channel store under the \
+                 configured global root: {:?}",
+                mask.targets
+            );
+            assert!(
+                decision_store.is_dir(),
+                "the host creates the store before launch, so a later registration lands under \
+                 the mask"
             );
 
             #[cfg(target_os = "linux")]
@@ -137,8 +179,12 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
                     };
                     assert!(resolved.managed_worktree, "fixture must resolve as managed");
                     let mut profile = resolved.fs_profile.clone();
-                    // Even an explicit grant cannot reopen the master.
+                    // Even an explicit grant cannot reopen the master or the
+                    // decision-channel store.
                     profile.modify.push(format!("{}/**", sockets.display()));
+                    profile
+                        .modify
+                        .push(format!("{}/**", decision_store.display()));
                     prepare_linux_bwrap_write_grants(&profile, &worktree)
                         .expect("prepare managed write anchors");
                     let authority = resolved
@@ -164,7 +210,7 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
                     )
                     .expect("compile agent plan");
                     let guard = plan.take_post_run_guard();
-                    let output = orbit_exec::spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
+                    let mut child = orbit_exec::spawn_under_linux_bwrap(LinuxBwrapSpawnRequest {
                         plan: &plan,
                         env: &[
                             (
@@ -179,15 +225,42 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
                                 "ORBIT_AGENT_MASK_SIBLING".to_string(),
                                 sibling.display().to_string(),
                             ),
+                            (
+                                "ORBIT_AGENT_MASK_GLOBAL".to_string(),
+                                canonical_global.display().to_string(),
+                            ),
                         ],
                         cwd: Some(&worktree),
-                        stdin: Stdio::null(),
+                        stdin: Stdio::piped(),
                         stdout: Stdio::piped(),
                         stderr: Stdio::piped(),
                     })
-                    .expect("spawn confined socket client")
-                    .wait_with_output()
-                    .expect("wait");
+                    .expect("spawn confined socket client");
+                    // Register through the operator path while the agent
+                    // runs: the store and its staged write land on the host.
+                    registrations += 1;
+                    runtime
+                        .register_decision_channel(
+                            &format!("mask-{registrations}"),
+                            "human:operator",
+                            "decision-mail",
+                            vec!["ops@example.com".to_string()],
+                        )
+                        .expect("register a channel after launch");
+                    assert!(
+                        std::fs::read_to_string(decision_store.join("channels.json"))
+                            .expect("host store")
+                            .contains("key_hex"),
+                        "the host store holds the key the agent must not read"
+                    );
+                    {
+                        use std::io::Write;
+                        let mut stdin = child.stdin.take().expect("child stdin");
+                        stdin
+                            .write_all(b"registered\n")
+                            .expect("release the confined child");
+                    }
+                    let output = child.wait_with_output().expect("wait");
                     if let Some(guard) = guard {
                         guard
                             .verify(None)
@@ -208,10 +281,25 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
 
             #[cfg(target_os = "macos")]
             {
-                let mut sbpl =
-                    orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, provider)
-                        .expect("compile profile");
+                // An explicit grant on the store does not reopen it: the mask
+                // is appended after every allow.
+                let mut profile = resolved.fs_profile.clone();
+                profile
+                    .modify
+                    .push(format!("{}/**", decision_store.display()));
+                let mut sbpl = orbit_exec::compile_macos_sandbox_profile(&profile, provider)
+                    .expect("compile profile");
+                orbit_exec::append_macos_subpath_mask(&mut sbpl, &mask.targets);
                 orbit_exec::append_macos_file_mask(&mut sbpl, &mask.files);
+                let store = orbit_exec::physical_with_missing_tail(&decision_store);
+                let store_deny = format!(
+                    "(deny file-read* file-write* (subpath \"{}\"))",
+                    store.display()
+                );
+                assert!(
+                    sbpl.lines().any(|line| line == store_deny),
+                    "{provider} profile must deny the decision-channel store:\n{sbpl}"
+                );
                 let physical = orbit_exec::physical_with_missing_tail(&clock_env);
                 let deny = format!(
                     "(deny file-read* file-write* (literal \"{}\"))",
@@ -234,6 +322,8 @@ fn seed_executor(runtime: &OrbitRuntime, provider: &str, sandbox: ExecutorSandbo
             executor_type: ExecutorType::DirectAgent,
             command: Some(provider.to_string()),
             args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,

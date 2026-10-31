@@ -9,7 +9,13 @@
 //! before any pilot ran are the baseline the F1 lift is measured from. The
 //! observed tier ranks the window's assessed tasks by total implementation
 //! cost and cuts the ranking in the proportions the pilots assigned, so
-//! calibration measures ordering, not absolute cost. Cost is never a term.
+//! calibration measures ordering, not absolute cost. Only placed tasks
+//! support calibration; missing tiers or prices are not misses. Cost is
+//! never a term.
+//!
+//! The warning terms grade every assessment, held or clean, by how it
+//! settled ([`super::pilot_warnings`]), rated per 100 settled assessments
+//! rather than per assessed task.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,16 +26,26 @@ use orbit_types::task::TaskComplexity;
 use serde_json::{Value, json};
 
 use super::RoleSpec;
+use super::pilot_warnings::{self, CONFIRMED, DISMISSED, MISSED, SETTLED_UNIT, WarningRow};
 use crate::application::agents::AgentFacts;
 use crate::application::agents::attribution::row_key;
 use crate::application::agents::facts::TaskFacts;
-use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
+use crate::application::agents::score::{
+    Denominator, Occurrence, RowInput, Stat, Tally, Term, number,
+};
 use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "assessed tasks",
     terms: TERMS,
+    term_units: &[
+        ("tier_calibration", "placed tasks"),
+        (CONFIRMED, SETTLED_UNIT),
+        (DISMISSED, SETTLED_UNIT),
+        (MISSED, SETTLED_UNIT),
+    ],
     rows: Some(rows),
+    header: Some(pilot_warnings::header),
 };
 
 const TERMS: &[Term] = &[
@@ -44,8 +60,29 @@ const TERMS: &[Term] = &[
         key: "tier_calibration",
         label: "Tier calibration",
         weight: 0.25,
-        definition: "Tasks whose assessed complexity matches their observed tier, so per 100 tasks the percent on the tier.",
+        definition: "Placed tasks whose assessed complexity matches their observed tier, per 100 placed tasks. Tasks without a tier or a priced implementation are unmeasured; below the requested minimum placement support this term is provisional and not scored.",
         group: "credit",
+    },
+    Term {
+        key: CONFIRMED,
+        label: "Confirmed warnings",
+        weight: 3.0,
+        definition: "Held assessments proved right: before approval someone other than the pilot edited the description or acceptance criteria, or the task was rejected or archived; or an unedited approval's delivery then blocked or was rejected.",
+        group: "credit",
+    },
+    Term {
+        key: DISMISSED,
+        label: "Dismissed warnings",
+        weight: -1.0,
+        definition: "Held assessments overridden as harmless: approved with no field edit by anyone other than the pilot, then done with no block.",
+        group: "problem",
+    },
+    Term {
+        key: MISSED,
+        label: "Missed scope blocks",
+        weight: -3.0,
+        definition: "Clean assessments whose task was promoted, then blocked on a decision blocked-task triage proposed. Reads 0 while no triage record is in the window; the payload's sources say so.",
+        group: "problem",
     },
     Term {
         key: "costly_misses",
@@ -439,7 +476,7 @@ fn observed_tiers<'a>(
 
 /// One row per pilot crew and model over the assessments written in the
 /// window.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+fn rows(facts: &AgentFacts, since: DateTime<Utc>, min_support: usize) -> Vec<RowInput<'_>> {
     let tasks: BTreeMap<&str, &TaskFacts> = facts
         .tasks
         .iter()
@@ -463,8 +500,23 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
     for (graded, task) in assessed {
         work.entry(graded.key()).or_default().push((graded, task));
     }
+    let mut warnings = pilot_warnings::rows(facts, since);
+    for key in warnings.keys() {
+        work.entry(key.clone()).or_default();
+    }
     work.into_iter()
-        .map(|(row, assessed)| row_input(facts, row, &assessed, &tiers, &present))
+        .map(|(row, assessed)| {
+            let warnings = warnings.remove(&row).unwrap_or_default();
+            row_input(
+                facts,
+                row,
+                &assessed,
+                &tiers,
+                &present,
+                warnings,
+                min_support,
+            )
+        })
         .collect()
 }
 
@@ -474,8 +526,12 @@ fn row_input<'a>(
     assessed: &[(&'a Graded, &'a TaskFacts)],
     tiers: &BTreeMap<&str, (usize, usize)>,
     present: &[usize],
+    warnings: WarningRow<'a>,
+    min_support: usize,
 ) -> RowInput<'a> {
-    let mut tallies: BTreeMap<&'static str, Tally<'a>> = BTreeMap::new();
+    let mut denominators = warnings.denominators();
+    let warning_stats = warnings.stats();
+    let mut tallies: BTreeMap<&'static str, Tally<'a>> = warnings.tallies;
     let mut pilot = Score::default();
     let mut author = Score::default();
     let mut matrix = vec![vec![0usize; TIERS.len()]; TIERS.len()];
@@ -574,6 +630,13 @@ fn row_input<'a>(
         .map(|(graded, _)| graded.pilot.declared)
         .sum();
     let placed: usize = matrix.iter().flatten().sum();
+    denominators.insert(
+        "tier_calibration",
+        Denominator {
+            units: placed,
+            min_support,
+        },
+    );
     let mut on_tier = 0;
     let mut too_easy = 0;
     let mut too_hard = 0;
@@ -609,7 +672,11 @@ fn row_input<'a>(
         runs_without_model,
         provisional: None,
         tallies,
-        stats: vec![
+        expected: None,
+        reviewed_units: None,
+        unjudged: false,
+        denominators,
+        stats: [
             stat(
                 "recall_percent",
                 "Recall (%)",
@@ -662,7 +729,10 @@ fn row_input<'a>(
                 median.map(number).unwrap_or(Value::Null),
             ),
             stat("tier_matrix", "Assessed against observed tier", tier_matrix),
-        ],
+        ]
+        .into_iter()
+        .chain(warning_stats)
+        .collect(),
     }
 }
 

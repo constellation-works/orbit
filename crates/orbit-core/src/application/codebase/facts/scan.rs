@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::StoreRetentionBackend;
 use orbit_types::task::{
-    NO_DIFF_EXPECTED_TAG, RegressionRiskMarks, Task, TaskHistoryEntry, TaskRelationType, TaskStatus,
+    RegressionRiskMarks, Task, TaskHistoryEntry, TaskRelationType, TaskStatus, is_no_diff_expected,
 };
 
 use super::super::regression::{PendingLink, RegressionLink};
@@ -72,7 +72,7 @@ impl TaskFacts {
             landed: None,
             delivery_at: done_at,
             pilot: None,
-            no_diff: task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
+            no_diff: is_no_diff_expected(&task.tags),
             id: task.id.to_string(),
             title: task.title.clone(),
             crew: task.crew.clone().or_else(|| task.implemented_by.clone()),
@@ -114,8 +114,9 @@ pub(in crate::application::codebase) struct LockDenial {
     pub(in crate::application::codebase) task_ids: Vec<String>,
     /// The files the request conflicted on.
     pub(in crate::application::codebase) files: Vec<Anchor>,
-    /// Each conflicting file and a task holding it: the task whose context
-    /// lock held it, or each task the holding reservation named.
+    /// Each conflicting file and a holder of it: the task whose context lock
+    /// held it, each task the holding reservation named, or the hard lease
+    /// by its id.
     pub(in crate::application::codebase) holders: Vec<(Anchor, String)>,
 }
 
@@ -148,6 +149,20 @@ pub(in crate::application::codebase) fn scan(
     let mut stored = super::super::stored::StoredFacts::load(runtime);
     let mut facts = Vec::with_capacity(tasks.len());
     let mut landed_scan = include_landed.then(|| super::super::landed::Scanner::new(runtime));
+    let notice_bases: std::collections::BTreeSet<_> = if include_landed {
+        runtime
+            .stores()
+            .task_reservations()
+            .inspect_active_leases(
+                &runtime.paths().orbit_dir.to_string_lossy(),
+                Some(&runtime.workspace_id()?),
+            )?
+            .into_iter()
+            .filter_map(|lease| lease.base_branch)
+            .collect()
+    } else {
+        Default::default()
+    };
     for task in tasks {
         let id = task.id.to_string();
         let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
@@ -192,7 +207,32 @@ pub(in crate::application::codebase) fn scan(
                     paths: entry.facts.landed_paths.clone()?,
                 })
             });
-        let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+        if let (Some(landed), Some(scanner)) = (&landed, &landed_scan) {
+            for base in &notice_bases {
+                if scanner.base_contains(base, &landed.commit) {
+                    runtime.sqlite_store()?.record_landed_lease_notices(
+                        &orbit_store::contracts::LeaseLandedNoticeParams {
+                            workspace_id: runtime.workspace_id()?,
+                            workspace_orbit_dir: runtime
+                                .paths()
+                                .orbit_dir
+                                .to_string_lossy()
+                                .into_owned(),
+                            commit: landed.commit.clone(),
+                            task_id: id.clone(),
+                            base_branch: base.clone(),
+                            landed_at: landed.at.to_rfc3339(),
+                            paths: landed
+                                .paths
+                                .iter()
+                                .map(|path| format!("file:{path}"))
+                                .collect(),
+                        },
+                    )?;
+                }
+            }
+        }
+        let no_diff = is_no_diff_expected(&task.tags);
         let pilot = (landed.is_some() && !no_diff)
             .then(|| {
                 // A delivery-observed landing has no receipt, so its pilot
@@ -284,34 +324,54 @@ pub(in crate::application::codebase) fn scan(
     })
 }
 
-/// The facts the regression-risk marks read, and nothing else: every task's
-/// footprint and incoming `regression_from` links, with history read only
-/// for a done task that may have become done since `since`. A task updated
-/// before then became done before then too, so its update time stands in.
+/// How `scan_regressions` treats a per-task history read failure for a done
+/// task that may have become done since `since`.
+///
+/// `Strict` propagates the read error so the caller fails closed (prompt
+/// marks become unavailable). `ExcludeUnreadable` warns and yields
+/// `done_at: None`, so the unreadable task is excluded from the window
+/// without substituting `updated_at` or an empty history. Global metadata
+/// and protocol errors still fail under either policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::application::codebase) enum HistoryCompleteness {
+    Strict,
+    ExcludeUnreadable,
+}
+
+/// The facts the regression-risk marks and the riskiness model read, and
+/// nothing else: every task's footprint and incoming `regression_from`
+/// links, with history read only for a done task that may have become done
+/// since `since`. A task updated before then became done before then too, so
+/// its update time stands in.
 pub(in crate::application::codebase) fn scan_regressions(
     runtime: &OrbitRuntime,
     since: DateTime<Utc>,
+    completeness: HistoryCompleteness,
 ) -> Result<CodebaseFacts, OrbitError> {
     let computed_at = Utc::now();
     let tasks = runtime.list_task_metadata()?;
     let pending_links = pending_links(&tasks);
-    let mut facts: Vec<TaskFacts> = tasks
-        .iter()
-        .map(|task| {
-            let done_at = (task.status == TaskStatus::Done).then(|| {
-                if task.updated_at < since {
-                    return task.updated_at;
-                }
-                let id = task.id.to_string();
-                let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
-                    tracing::warn!(task_id = %id, %error, "regression risk: task history unreadable");
-                    Vec::new()
-                });
-                entered(&history, TaskStatus::Done).unwrap_or(task.updated_at)
-            });
-            TaskFacts::from_envelope(task, done_at)
-        })
-        .collect();
+    let mut facts: Vec<TaskFacts> = Vec::with_capacity(tasks.len());
+    for task in &tasks {
+        let done_at = if task.status != TaskStatus::Done {
+            None
+        } else if task.updated_at < since {
+            Some(task.updated_at)
+        } else {
+            // A failed history read cannot certify a time-window count.
+            match runtime.get_task_history(&task.id) {
+                Ok(history) => Some(entered(&history, TaskStatus::Done).unwrap_or(task.updated_at)),
+                Err(error) => match completeness {
+                    HistoryCompleteness::Strict => return Err(error),
+                    HistoryCompleteness::ExcludeUnreadable => {
+                        tracing::warn!(task_id = %task.id, %error, "riskiness: task history unreadable; excluding task from window");
+                        None
+                    }
+                },
+            }
+        };
+        facts.push(TaskFacts::from_envelope(task, done_at));
+    }
     attach_regressions(&mut facts, pending_links);
     Ok(CodebaseFacts {
         computed_at,
@@ -340,7 +400,7 @@ fn pending_links(tasks: &[Task]) -> Vec<PendingLink> {
                 pending.push(PendingLink::new(
                     relation.target.to_string(),
                     task,
-                    relation.regression,
+                    relation.regression.clone(),
                 ));
             }
         }

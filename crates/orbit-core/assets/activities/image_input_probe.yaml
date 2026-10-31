@@ -1,0 +1,77 @@
+# The image-input canary run outside a delivery, behind `orbit agents
+# vision-probe`. One crew per run.
+#
+# The engine admits the run against the crew's executor `spec.image_input`
+# and its `vision` setting before any session starts, renders a fresh canary
+# PNG with a random code into the run's scratch directory, and delivers it
+# the way the executor declares (`native_read` or `attach_args`). A result
+# that does not return the code fails as `image_not_seen`.
+#
+# The response envelope is required because the canary code is this
+# activity's only product: no task, git or review artifact can show that a
+# model saw an image. It is the one place visual review reads agent output
+# as truth, and it proves delivery only.
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: image_input_probe
+spec:
+  type: agent_loop
+  # Read-only: the probe reads one staged image and writes nothing.
+  fsProfile: reviewer
+  require_completion_envelope: true
+  require_response_envelope: true
+  description: >
+    Image-input canary probe for one crew. The agent reads the staged canary
+    image and returns the code it shows. Changes no file and no Orbit record.
+  input_schema_json:
+    type: object
+    required: [workspace_path, crew, image_input]
+    properties:
+      workspace_path:
+        type: string
+      crew:
+        type: string
+      image_input:
+        type: object
+        properties:
+          images:
+            type: array
+            items:
+              type: string
+  output_schema_json:
+    type: object
+    required: [canary]
+    properties:
+      canary:
+        type: [string, "null"]
+  instruction: |
+    You are checking whether you can see images. Follow the image input
+    section below: look at the canary image and read the code it shows.
+
+    Do not read, search or change any other file, run no other command, and
+    call no Orbit tool.
+
+    Return exactly one Orbit response envelope:
+    {"schemaVersion":1,"status":"success","result":{"canary":"<the code>"},"error":null}
+  tool_disallow_list:
+    - orbit.agent.invoke
+    - orbit.auto_task.add
+    - orbit.auto_task.mint
+    - orbit.auto_task.update
+    - orbit.command.exec
+    - orbit.pipeline.invoke
+    - orbit.routine.control
+    - orbit.workflow.auto
+    - orbit.workflow.run.resume
+    - orbit.workflow.ship
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.put
+    - orbit.task.reconcile_review
+    - orbit.friction.add
+    - orbit.friction.update
+    # The probe runs no program.
+    - proc.spawn
+  on_denial: terminate
+  wall_clock_timeout_seconds: 600

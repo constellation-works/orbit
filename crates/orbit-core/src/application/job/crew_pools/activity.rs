@@ -11,15 +11,13 @@ use orbit_types::workflow::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::distributed::HostProviderHold;
+use crate::application::contracts::{CrewCandidate, HostProviderHold};
+use crate::application::job::JobDrainPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::run_input::non_empty;
 
-use super::draw::{
-    activity_crew_draw, complexity_crews_key, permitted_candidates, sole_candidate, weighted_draw,
-};
+use super::draw::{complexity_crews_key, permitted_candidates, sole_candidate};
 use super::purpose::activity_fallback_tier;
-use super::types::CrewCandidate;
 
 impl OrbitRuntime {
     /// The crew a `final_recovery` activity runs as: one draw from
@@ -41,8 +39,9 @@ impl OrbitRuntime {
         self.frozen_activity_crew(input, FINAL_RECOVERY_CREWS_KEY, &mut |allowlist| {
             let candidates = self.final_recovery_candidates()?;
             let candidates = permitted_candidates(candidates, source, allowlist)?;
-            let selected = weighted_draw(&candidates, source, random)?;
-            Ok(activity_crew_draw(selected, source, &candidates))
+            Ok(self
+                .draw_crew_pool(candidates, source, random)?
+                .into_activity_draw())
         })
     }
 
@@ -63,7 +62,7 @@ impl OrbitRuntime {
     /// frozen record's source says so.
     ///
     /// [ORB-15792] An activity that inspects pinned source natively (the task
-    /// pilot) draws only crews whose provider has that surface, through
+    /// pilot) draws only crews that [`Self::can_inspect`], through
     /// [`Self::inspection_activity_candidates`], and its source names the
     /// filter. Any other activity draws from the whole pool.
     pub(crate) fn complexity_pool_activity_crew(
@@ -80,14 +79,15 @@ impl OrbitRuntime {
         let holds = if self.frozen_activity_draw(input, &key)?.is_some() {
             Vec::new()
         } else {
-            self.standing_host_provider_holds(now)
+            self.host_provider_holds(now)
         };
         self.frozen_activity_crew(input, &key, &mut |allowlist| {
             let (candidates, source) =
                 self.activity_draw_candidates(complexity, inspection, allowlist, now)?;
             let (candidates, source) = skip_held_candidates(candidates, source, &holds, now);
-            let selected = weighted_draw(&candidates, &source, random)?;
-            Ok(activity_crew_draw(selected, &source, &candidates))
+            Ok(self
+                .draw_crew_pool(candidates, &source, random)?
+                .into_activity_draw())
         })
     }
 
@@ -130,14 +130,15 @@ impl OrbitRuntime {
         let holds = if frozen {
             Vec::new()
         } else {
-            self.standing_host_provider_holds(now)
+            self.host_provider_holds(now)
         };
         self.frozen_activity_crew(input, key, &mut |allowlist| {
             let (candidates, source) =
                 self.purpose_draw_candidates(purpose, tier, inspection, allowlist, now)?;
             let (candidates, source) = skip_held_candidates(candidates, source, &holds, now);
-            let selected = weighted_draw(&candidates, &source, random)?;
-            Ok(activity_crew_draw(selected, &source, &candidates))
+            Ok(self
+                .draw_crew_pool(candidates, &source, random)?
+                .into_activity_draw())
         })
     }
 
@@ -330,7 +331,7 @@ impl OrbitRuntime {
     /// configuration problem itself. A pool that still has a crew the hold
     /// does not cover returns `None`, and the draw skips the held crews.
     pub(crate) fn task_pilot_provider_withhold(&self, now: DateTime<Utc>) -> Option<String> {
-        let holds = self.standing_host_provider_holds(now);
+        let holds = self.host_provider_holds(now);
         if holds.is_empty() {
             return None;
         }

@@ -9,8 +9,9 @@ spec:
     Fails the Run with a structured error if any bundle
     exceeds `max_bundle_size`, contains a duplicate task_id across
     bundles, or references an id not present in the input `known_task_ids`
-    set. Pass-through on success so the fan_out can consume the same
-    `bundles` shape without unwrapping a wrapper object — prevents a
+    set. An empty `known_task_ids` set admits no task, so only an empty
+    bundle plan passes. Pass-through on success so the fan_out can consume
+    the same `bundles` shape without unwrapping a wrapper object — prevents a
     misgrouped backlog from silently dispatching.
   input_schema_json:
     type: object

@@ -1,20 +1,18 @@
-// Observe › Agents: one scorecard per agent role, ranked by crew and model.
-// Reads GET /api/agents/<role>/scorecard for the ranking and its terms,
+// Analytics › Agents: one scorecard per agent role, ranked by crew and model.
+// Reads GET /api/agents/<role>/scorecard for the ranking and its terms, and
 // GET /api/agents/attribution for the strip of who each problem counts
-// against, and GET /api/agents/<role>/detail for the tasks behind the
-// selected row's biggest penalty. The server keeps one scan per workspace,
-// so a role, window or row change only slices it.
+// against. The server keeps one scan per workspace, so a role or window
+// change only slices it.
 //
 // One renderer serves every role: the strip, the ranking, the detail column
 // and the "How the score works" disclosure. A role's own panel comes from its
 // module in ROLE_PANELS (js/agents-<role>.js); a role without one shows none.
 // A panel may also add a banner under the strip and tags beside a row's name.
 // A role whose scorecard is not computed yet shows an empty state with its
-// terms. Pure vanilla JS, no build step; every node is built with `el()`.
+// terms. Pure vanilla JS, no build step; HTML uses `el()`, charts use inline SVG.
 
-import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, bindTaskLink, formatDateTime } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
-import { implementersPanel } from './agents-implementers.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
 
@@ -36,7 +34,6 @@ const ROLE_LABELS = {
 // paragraphs "How the score works" adds for the role.
 const ROLE_PANELS = {
   orchestrators: orchestratorsPanel,
-  implementers: implementersPanel,
   reviewers: reviewersPanel,
   pilots: pilotsPanel,
 };
@@ -56,8 +53,6 @@ const NOT_SCORED_REASONS = {
 const MIN_SUPPORT = 10;
 // The smoothing constant K of the shared score (`agents/score.rs`).
 const SMOOTHING = 30;
-const PENALTY_TASKS_SHOWN = 6;
-
 const BODY_ID = "agents-body";
 const COUNT_ID = "agents-count";
 const META_ID = "agents-meta";
@@ -67,13 +62,10 @@ let role = AGENT_ROLES[0];
 let requestScope = null;
 let scorecard = null;
 let attribution = null;
+let implementerMatrix = null;
+let implementerTier = "";
 // The selected row of each role, as `rowKey(row)`.
 const selected = new Map();
-// The selected row's detail: its cache key, the payload once it arrived, and
-// a failure to show in place.
-let detail = null;
-let detailRequest = 0;
-const detailCache = new Map();
 let countsRequest = 0;
 // "How the score works" stays as the reader left it across polls and roles.
 let howOpen = false;
@@ -98,11 +90,6 @@ function attributionPath(selectedWindow) {
   return `/api/agents/attribution?window=${encodeURIComponent(selectedWindow)}`;
 }
 
-function detailPath(forRole, selectedWindow, row) {
-  return `/api/agents/${forRole}/detail?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}`
-    + `&crew=${encodeURIComponent(row.crew)}&model=${encodeURIComponent(row.model)}`;
-}
-
 function rowKey(row) {
   return `${row.crew}\0${row.model}`;
 }
@@ -110,9 +97,7 @@ function rowKey(row) {
 function resetView() {
   scorecard = null;
   attribution = null;
-  detail = null;
-  detailRequest += 1;
-  detailCache.clear();
+  implementerMatrix = null;
   const meta = $(META_ID);
   if (meta) meta.textContent = "";
   const title = $(TITLE_ID);
@@ -133,9 +118,37 @@ onWorkspaceChange(() => {
   resetView();
 });
 
-/// Wire the shared window selector on the Agents panel.
+// Scorecards default to a count of recent delivery attempts, so a quiet month
+// still ranks the crews that did the work. A calendar tab hands the panel back
+// to the shared window; the count itself never becomes that window.
+const AGENT_COUNT_WINDOWS = ["last500", "last1000"];
+const AGENT_SHARED_WINDOWS = ["7d", "30d"];
+let countWindow = "last500";
+
+function agentWindow() {
+  if (countWindow) return countWindow;
+  const selected = getWindow();
+  return AGENT_SHARED_WINDOWS.includes(selected) ? selected : "last500";
+}
+
+function setCountWindow(next) {
+  if (next === countWindow) return false;
+  countWindow = next;
+  const selector = $("agents-window-selector");
+  if (selector) selector.dataset.panelWindow = next || "";
+  return true;
+}
+
+/// Wire the Agents window selector: its count tabs are the panel's own, its
+/// calendar tabs the shared window.
 export function wireAgentControls() {
-  wireWindowSelector("agents-window-selector", { allowAll: true });
+  const selector = $("agents-window-selector");
+  if (selector) selector.dataset.panelWindow = countWindow || "";
+  wireWindowSelector("agents-window-selector", {
+    allowAll: true,
+    panelWindows: AGENT_COUNT_WINDOWS,
+    onPanelWindow: setCountWindow,
+  });
 }
 
 export function fetchAndRenderAgents() {
@@ -144,7 +157,7 @@ export function fetchAndRenderAgents() {
     return Promise.resolve();
   }
   const activeRole = role;
-  const selectedWindow = getWindow();
+  const selectedWindow = agentWindow();
   const revision = getWorkspaceRevision();
   const path = scorecardPath(activeRole, selectedWindow);
   const scope = `${revision}\0${path}`;
@@ -153,8 +166,10 @@ export function fetchAndRenderAgents() {
     resetView();
   }
   refreshRoleCounts(activeRole, selectedWindow, revision);
-  const current = () => role === activeRole && getWorkspaceRevision() === revision && getWindow() === selectedWindow;
-  return requestPanel(BODY_ID, path, () => Promise.all([fetchJson(path), fetchJson(attributionPath(selectedWindow))]), ([payload, strip]) => {
+  const current = () => role === activeRole && getWorkspaceRevision() === revision && agentWindow() === selectedWindow;
+  return requestPanel(BODY_ID, path, () => Promise.all([fetchJson(path), fetchJson(attributionPath(selectedWindow)),
+    activeRole === "implementers" ? fetchJson(`/api/agents/implementers/by-type?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}`).catch(() => null) : null,
+  ]), ([payload, strip, matrix]) => {
     if (!current()) return;
     if (!payload || payload.role !== activeRole || payload.requested_window !== selectedWindow) {
       console.error(`agent scorecard for ${payload && payload.role} ${payload && payload.requested_window} rejected under ${activeRole} ${selectedWindow}`);
@@ -162,6 +177,8 @@ export function fetchAndRenderAgents() {
     }
     scorecard = payload;
     attribution = strip;
+    implementerMatrix = matrix?.requested_window === selectedWindow && Array.isArray(matrix.cells) ? matrix : null;
+    if (!implementerMatrix) implementerTier = "";
     setRoleCount(activeRole, payload);
     syncSelection();
     render();
@@ -198,12 +215,32 @@ function setRoleCount(forRole, payload) {
   }
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const ranked = rows.filter((row) => row.rank != null).length;
-  node.textContent = String(ranked);
-  node.title = `${plural(ranked, "ranked row")}; ${rows.length - ranked} below ${payload.min_support} ${payload.unit}`;
+  node.textContent = `${ranked} ranked`;
+  const unjudged = rows.filter((row) => row.unjudged).length;
+  node.title = `${plural(ranked, "ranked row")}; ${rows.length - ranked - unjudged} below ${payload.min_support} ${payload.unit}`
+    + (unjudged ? `; ${unjudged} unjudged` : "");
 }
 
 function rows() {
-  return Array.isArray(scorecard && scorecard.rows) ? scorecard.rows : [];
+  const all = Array.isArray(scorecard && scorecard.rows) ? scorecard.rows : [];
+  if (role !== "implementers" || !implementerTier || !implementerMatrix) return all;
+  const tiers = new Map();
+  for (const cell of implementerMatrix.cells) {
+    if (cell.tier !== implementerTier) continue;
+    const key = rowKey(cell);
+    const tier = tiers.get(key) || { units: 0, score: cell.crew_mean };
+    tier.units += cell.n;
+    tiers.set(key, tier);
+  }
+  const ranking = all.flatMap((row) => {
+    const tier = tiers.get(rowKey(row));
+    return tier?.units > 0 ? [{ ...row, allTierRow: row, units: tier.units, score: tier.score,
+      below_support: tier.units < scorecard.min_support, rank: null }] : [];
+  });
+  ranking.sort((a, b) => Number(a.below_support) - Number(b.below_support) || b.score - a.score
+    || b.units - a.units || a.crew.localeCompare(b.crew) || a.model.localeCompare(b.model));
+  ranking.forEach((row, index) => { if (!row.below_support) row.rank = index + 1; });
+  return ranking;
 }
 
 function terms() {
@@ -223,45 +260,13 @@ function syncSelection() {
     if (first) selected.set(role, rowKey(first));
     else selected.delete(role);
   }
-  loadDetail();
 }
 
 function selectRow(row) {
   const key = rowKey(row);
   if (selected.get(role) === key) return;
   selected.set(role, key);
-  loadDetail();
   render();
-}
-
-// A row's detail is cached per scan: a poll with the same `computed_at`
-// reuses it, a newer scan reads it again. The previous tasks of the same row
-// stay on screen while the newer ones load.
-function loadDetail() {
-  const row = selectedRow();
-  if (!row || !scorecard || scorecard.status !== "ok") {
-    detail = null;
-    return;
-  }
-  const key = rowKey(row);
-  const cacheKey = `${requestScope}\0${scorecard.computed_at}\0${key}`;
-  if (detail && detail.cacheKey === cacheKey) return;
-  const previous = detail && detail.rowKey === key ? detail.payload : null;
-  const cached = detailCache.get(cacheKey);
-  detail = { cacheKey, rowKey: key, payload: cached || previous, loading: !cached, error: null };
-  if (cached) return;
-  const request = ++detailRequest;
-  const activeRole = role;
-  fetchJson(detailPath(activeRole, getWindow(), row)).then((payload) => {
-    detailCache.set(cacheKey, payload);
-    if (request !== detailRequest || !detail || detail.cacheKey !== cacheKey) return;
-    detail = { ...detail, payload, loading: false };
-    render();
-  }, (error) => {
-    if (request !== detailRequest || !detail || detail.cacheKey !== cacheKey) return;
-    detail = { ...detail, loading: false, error: error.message || String(error) };
-    render();
-  });
 }
 
 function number(value) {
@@ -281,6 +286,38 @@ function statText(value) {
   return String(value ?? "—");
 }
 
+function statValue(row, key) {
+  const entry = (Array.isArray(row.stats) ? row.stats : []).find((each) => each.key === key);
+  return entry ? entry.value : undefined;
+}
+
+// Why an implementer's cost per landed task is unavailable, from its cost
+// coverage over counted attempts. Complete coverage with a priced cost, or
+// a row whose payload carries no cost stat, needs no note: the coverage
+// stats beside it already show the sample. A valid zero cost is a number,
+// so it never reaches this note.
+function costUnavailableNote(row) {
+  if (role !== "implementers") return null;
+  const cost = statValue(row, "cost_per_weighted_landed");
+  if (cost !== null) return null; // priced (including valid zero), or not reported
+  const total = statValue(row, "cost_coverage_attempts");
+  const measured = statValue(row, "cost_measured_attempts");
+  const unpriced = statValue(row, "cost_unpriced_attempts");
+  const missing = statValue(row, "cost_missing_run_attempts");
+  if (![total, measured, unpriced, missing].every((value) => typeof value === "number")) {
+    return "Cost per landed task is unavailable: cost coverage is not reported for this row, so priced and unpriced work cannot be told apart. It is shown only when every counted attempt is priced.";
+  }
+  const reasons = [];
+  if (missing > 0) reasons.push(`${plural(missing, "counted attempt")} ${missing === 1 ? "has" : "have"} no run`);
+  if (unpriced > 0) reasons.push(`${plural(unpriced, "counted attempt")} ${unpriced === 1 ? "has" : "have"} no priced cost`);
+  const landed = row.counts && row.counts.weighted_landed;
+  if (!reasons.length && !(typeof landed === "number" && landed > 0)) reasons.push("there is no landed task to divide by");
+  if (!reasons.length) reasons.push("not every counted attempt is priced");
+  return `Cost per landed task is unavailable because ${reasons.join(" and ")}. `
+    + `Cost coverage: ${measured} measured of ${total} counted attempts. `
+    + "The complete-cohort average is shown only when every counted attempt is priced; it is not averaged over priced attempts alone.";
+}
+
 // A term weight exactly as configured: 0.25 must not read as 0.3.
 function weight(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -294,18 +331,36 @@ function plural(n, one, many = `${one}s`) {
 
 function windowLabel() {
   if (!scorecard) return "";
+  // A count window names how far back its attempts reach.
+  if (scorecard.window_attempts) {
+    return `the last ${scorecard.window_attempts} delivery attempts (since ${formatDateTime(scorecard.since)})`;
+  }
   return scorecard.requested_window === scorecard.window
     ? scorecard.window
     : `${scorecard.window} (${scorecard.requested_window})`;
 }
 
 function roleHref(forRole) {
-  return `#agents/${forRole}?window=${encodeURIComponent(getWindow())}`;
+  return `#analytics/agents/${forRole}?window=${encodeURIComponent(getWindow())}`;
+}
+
+// A term rated per 100 of its own unit (the pilots' warning terms, per 100
+// settled assessments) names that unit; every other term uses the role's.
+function termUnit(term) {
+  return term.unit || scorecard.unit;
+}
+
+// A term below its own minimum support on the row: rated and shown, but
+// left out of the score.
+function provisionalTerm(term, row) {
+  return Array.isArray(row.provisional_terms) && row.provisional_terms.includes(term.key);
 }
 
 function contribution(term, row) {
+  if (provisionalTerm(term, row)) return 0;
   const rate = row.per_100 ? row.per_100[term.key] : null;
-  return typeof rate === "number" ? term.weight * rate : null;
+  const expected = row.expected && typeof row.expected[term.key] === "number" ? row.expected[term.key] * 100 / Math.max(1, row.units) : 0;
+  return typeof rate === "number" ? term.weight * (rate - expected) : null;
 }
 
 function render() {
@@ -315,13 +370,17 @@ function render() {
   const title = $(TITLE_ID);
   if (title) title.textContent = ROLE_LABELS[role];
   const count = $(COUNT_ID);
-  if (count) count.textContent = scorecard.status === "ok" ? String(ranking.length) : "—";
+  if (count) {
+    const ranked = ranking.filter((row) => row.rank != null).length;
+    count.textContent = scorecard.status === "ok" ? `${ranking.length} rows · ${ranked} ranked` : "—";
+  }
   const meta = $(META_ID);
   if (meta) {
     const units = ranking.reduce((sum, row) => sum + (row.units || 0), 0);
     meta.textContent = scorecard.status === "ok"
-      ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(scorecard.fleet_average)}`
-        + ` · rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked`
+      ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
+        + ` · ${role === "implementers" && implementerTier ? `${implementerTier} tier · ` : ""}rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked`
+        + (ranking.some((row) => row.unjudged) ? " · unjudged rows are listed last, without a score" : "")
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
   }
   const panel = ROLE_PANELS[role];
@@ -332,8 +391,10 @@ function render() {
     nodes.push(stateNode("not-computed", `${ROLE_LABELS[role]} are not computed yet`,
       `This role's scorecard is not computed yet, so it ranks no rows. "How the score works" lists the terms it will be scored on.`));
   } else if (!ranking.length) {
-    nodes.push(stateNode("empty", `No ${scorecard.unit} in the ${windowLabel()} window`,
-      "Widen the window to rank this role."));
+    nodes.push(stateNode("empty", scorecard.window_attempts
+      ? `No ${scorecard.unit} in ${windowLabel()}`
+      : `No ${scorecard.unit} in the ${windowLabel()} window`,
+      role === "implementers" && implementerTier ? "Choose another tier or widen the window to find work." : "Widen the window to rank this role."));
   } else {
     nodes.push(rankingNode(ranking));
     const row = selectedRow();
@@ -409,11 +470,37 @@ function stripNode() {
     ]),
     total ? bar : el("p", { class: "agents-strip-none", text: "No problem was recorded in this window." }),
     legend,
+    el("p", { id: "agents-strip-context", class: "agents-strip-reasons", role: "note", text: "Ownership counts include unscored context. Implementers’ escaped regressions do not affect scores." }),
   ];
   if (reasons.length) children.push(el("p", { class: "agents-strip-reasons", text: `Not scored: ${reasons.join(" · ")}.` }));
-  const node = el("section", { class: "agents-strip", "aria-label": "Who each problem counts against" }, children);
+  if (role === "implementers") {
+    const select = el("select", { id: "agents-tier", "aria-label": "Implementer tier" },
+      [["", "All tiers"], ["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Xhard"]]
+        .map(([value, text]) => {
+          const option = el("option", { text });
+          option.value = value;
+          return option;
+        }));
+    select.value = implementerTier;
+    select.disabled = !implementerMatrix;
+    select.addEventListener("change", () => {
+      implementerTier = select.value;
+      syncSelection();
+      render();
+    });
+    const label = el("label", { text: "Rank within" });
+    label.htmlFor = "agents-tier";
+    children.push(el("div", { class: "agents-tier-control" }, [
+      label, select,
+      el("span", { class: "agents-muted", text: !implementerMatrix
+        ? "Tier scores unavailable. Refresh to retry."
+        : implementerTier ? "Tier crew score and support; detail evidence covers all tiers."
+          : "Fleet comparison on each row's tier mix." }),
+    ]));
+  }
+  const node = el("section", { class: "agents-strip", "aria-label": "Who each problem counts against", "aria-describedby": "agents-strip-context" }, children);
   node.dataset.key = "strip";
-  node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, getWindow()]);
+  node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, agentWindow(), implementerTier, Boolean(implementerMatrix)]);
   return node;
 }
 
@@ -447,10 +534,10 @@ function rankingNode(ranking) {
     el("th", { text: "Crew · model" }),
     el("th", { class: "agents-score-col", text: "Score" }),
     el("th", { class: "agents-num", text: "Support", title: `${scorecard.unit} in the window` }),
-    ...terms().map((term) => el("th", {
+    ...(role === "implementers" && implementerTier ? [] : terms()).map((term) => el("th", {
       class: "agents-num",
       text: term.label,
-      title: `${term.label} per 100 ${scorecard.unit} (weight ${weight(term.weight)}): ${term.definition}`,
+      title: `${term.label} per 100 ${termUnit(term)} (weight ${weight(term.weight)}): ${term.definition}`,
     })),
   ]);
   const body = ranking.map((row) => {
@@ -464,31 +551,34 @@ function rankingNode(ranking) {
     }, [
       el("span", { class: "agents-crew", text: row.crew }),
       el("span", { class: "agents-model", text: row.model }),
+      el("span", { class: "agents-model agents-effort", text: effortSummary(row) }),
     ]);
     select.addEventListener("click", () => selectRow(row));
-    const tags = panel && panel.rowTags ? panel.rowTags(row) : [];
+    const tags = [...(row.unjudged ? [unjudgedTag()] : []), ...(panel && panel.rowTags ? panel.rowTags(row) : [])];
     if (tags.length) select.append(el("span", { class: "agents-tags" }, tags));
     const nameCell = el("th", { class: "agents-name" }, [select]);
     nameCell.setAttribute("scope", "row");
     const support = el("td", { class: "agents-num agents-support" }, [el("span", { text: String(row.units) })]);
     if (row.below_support) support.append(el("span", { class: "agents-below", text: `below ${scorecard.min_support}` }));
-    const cells = terms().map((term) => {
+    const cells = (role === "implementers" && implementerTier ? [] : terms()).map((term) => {
+      const provisional = provisionalTerm(term, row);
       const td = el("td", {
-        class: "agents-num",
+        class: provisional ? "agents-num agents-term-provisional" : "agents-num",
         text: number(row.per_100 && row.per_100[term.key]),
-        title: `${term.label}: ${number(row.counts && row.counts[term.key])} (${number(row.per_100 && row.per_100[term.key])} per 100 ${scorecard.unit})`,
+        title: `${term.label}: ${number(row.counts && row.counts[term.key])} (${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)})`
+          + (provisional ? `; provisional, too few ${termUnit(term)} to score` : ""),
       });
       td.dataset.term = term.key;
       return td;
     });
-    const score = el("td", { class: "agents-score-col" }, [
-      scoreBar(row.score, scale),
-      el("span", { class: "agents-score-value", text: number(row.score) }),
-    ]);
+    const score = el("td", { class: "agents-score-col" }, row.unjudged
+      ? [el("span", { class: "agents-score-value agents-unjudged", text: "unjudged" })]
+      : [scoreBar(row.score, scale), el("span", { class: "agents-score-value", text: number(row.score) })]);
     const note = panel && panel.scoreNote ? panel.scoreNote(row) : null;
     if (note) score.append(el("span", { class: "agents-score-note", text: note.text, title: note.detail }));
     const classes = ["agents-row"];
-    if (row.below_support) classes.push("agents-row-below");
+    if (row.below_support || row.unjudged) classes.push("agents-row-below");
+    if (row.unjudged) classes.push("agents-row-unjudged");
     if (isSelected) classes.push("is-selected");
     const tr = el("tr", { class: classes.join(" ") }, [
       el("td", { class: "agents-num agents-rank", text: row.rank == null ? "—" : String(row.rank) }),
@@ -505,39 +595,240 @@ function rankingNode(ranking) {
   // Rank, crew and score lead the table; the evidence columns after them scroll.
   const wrap = el("div", { class: "agents-table-wrap", role: "region", "aria-label": `${ROLE_LABELS[role]} ranking` }, [table]);
   wrap.tabIndex = 0;
+  wrap.addEventListener("keydown", (event) => {
+    if (event.target !== wrap || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+    const step = Math.max(40, Math.floor(wrap.clientWidth * 0.8));
+    const maximum = wrap.scrollWidth - wrap.clientWidth;
+    const next = Math.max(0, Math.min(maximum, wrap.scrollLeft + (event.key === "ArrowRight" ? step : -step)));
+    if (next === wrap.scrollLeft) return;
+    wrap.scrollLeft = next;
+    event.preventDefault();
+  });
   const node = el("section", { class: "agents-ranking", "aria-label": "Ranking" }, [wrap]);
   node.dataset.key = "ranking";
-  node.dataset.hash = JSON.stringify([role, scorecard.rows, scorecard.terms, selectedKey]);
+  node.dataset.hash = JSON.stringify([role, ranking, scorecard.terms, selectedKey, implementerTier]);
   return node;
+}
+
+// The tag beside an unjudged row's name: none of its units is judged yet,
+// so it has no score or rank.
+function unjudgedTag() {
+  const tag = el("span", {
+    class: "agents-tag agents-tag-unjudged",
+    text: "unjudged",
+    title: "No unit of this row is judged yet, so it has no score or rank and stays out of the fleet average.",
+  });
+  tag.dataset.tag = "unjudged";
+  return tag;
 }
 
 // How the row's score came from its raw score: smoothing only pulls a row
 // above the fleet average down.
 function rawText(row) {
+  if (row.unjudged) return "Not judged yet: no unit of this row has an outcome, so it has no score or rank and stays out of the fleet average.";
   const average = scorecard.fleet_average;
   return typeof average === "number" && row.raw > average
     ? `raw ${number(row.raw)}, pulled down toward the fleet average ${number(average)} over ${plural(row.units, "unit")}`
     : `raw ${number(row.raw)}, not above the fleet average ${number(average)}, so not pulled`;
 }
 
-function detailNode(row) {
+// Terms whose rate needs a settled review behind the row (implementers).
+const REVIEW_RATE_TERMS = new Set(["first_pass_accepts", "review_rejects", "reviewer_repairs"]);
+// Reviewed deliveries behind a row, when the payload carries them:
+// `reviewed_units` (implementers), else a term's own units. `null` when
+// the payload carries no reviewed denominator at all.
+function reviewedUnits(each) {
+  if (typeof each.reviewed_units === "number") return each.reviewed_units;
+  return null;
+}
+
+// The radar is a percentile view of rates: outward is better, the fleet
+// median always sits on the middle ring, and each vertex discloses its
+// term weight and signed contribution versus that median.
+function radarNode(row) {
+  const axes = terms().map((term) => ({ ...term }));
+  // Only count-valued context with a clear better direction may extend a
+  // short role. Never turn hours, currency, percentages or matrices into axes.
+  for (const key of ["unclassified", "dropped_initiative", "unknown_origin", "rework_infrastructure", "rework_no_cause", "regressions_unclassified"]) {
+    if (axes.length >= 5) break;
+    const stat = (row.stats || []).find((entry) => entry.key === key);
+    if (stat && Number.isFinite(stat.value) && !axes.some((axis) => axis.key === key)) {
+      axes.push({ key, label: stat.label.replace(/ \(not scored\)$/, ""), weight: -1, unscored: true });
+    }
+  }
+  const below = (each) => each.below_support || each.unjudged || each.units < scorecard.min_support;
+  const count = (axis, each) => axis.unscored
+    ? (each.stats || []).find((stat) => stat.key === axis.key)?.value
+    : each.counts && each.counts[axis.key];
+  const units = (axis, each) => each.term_units?.[axis.key] ?? each.units;
+  const rate = (axis, each) => axis.unscored
+    ? (each.units > 0 && Number.isFinite(count(axis, each)) ? count(axis, each) * 100 / each.units : null)
+    : each.per_100 && each.per_100[axis.key];
+  const gap = (axis, each) => {
+    if (each.unjudged) return "not judged yet";
+    if (below(each)) return "too little evidence to compare";
+    if (REVIEW_RATE_TERMS.has(axis.key) && reviewedUnits(each) === 0) return "no reviewed deliveries";
+    if (provisionalTerm(axis, each) || (axis.key === "missed_regressions" && each.provisional > 0)) return "provisional";
+    if (axis.key === "missed_scope_blocks" && scorecard.sources?.missed_scope_blocks?.available === false) return "unmeasured";
+    if (!(units(axis, each) > 0)) return "no units";
+    if (axis.unit && units(axis, each) < (scorecard.warning_min_support ?? scorecard.min_support)) return "below term support";
+    return Number.isFinite(rate(axis, each)) ? null : "no rate";
+  };
+  const fleet = (scorecard.rows || []).filter((each) => each.rank != null && !below(each));
+  const values = axes.map((axis) => {
+    const rates = fleet.filter((each) => !gap(axis, each)).map((each) => rate(axis, each)).sort((a, b) => a - b);
+    const middle = Math.floor(rates.length / 2);
+    const median = rates.length ? (rates[middle] + rates[Math.floor((rates.length - 1) / 2)]) / 2 : null;
+    // Percentile in the supported fleet, median anchored at 0.5: an
+    // outlier only occupies the outer percentile steps, so it cannot
+    // stretch a span and squeeze every normal crew toward one end.
+    const scale = (value) => {
+      if (!Number.isFinite(value) || !rates.length) return null;
+      if (value === median) return 0.5;
+      const under = rates.filter((each) => each < value).length;
+      const equal = rates.filter((each) => each === value).length;
+      const percentile = (under + equal / 2) / rates.length;
+      return axis.weight < 0 ? 1 - percentile : percentile;
+    };
+    const reason = gap(axis, row) || (!rates.length ? "no supported fleet comparison" : null);
+    const ownRate = rate(axis, row);
+    // Signed contribution versus the fleet median: weight × (rate −
+    // median). Positive helps the score relative to the median, negative
+    // hurts it, whichever direction the axis points.
+    const contributionVsMedian = !axis.unscored && !reason && Number.isFinite(ownRate) && median != null
+      ? axis.weight * (ownRate - median)
+      : null;
+    return { axis, median, reason, own: reason ? null : scale(ownRate), fleet: rates.length ? 0.5 : null, contributionVsMedian };
+  });
+  const svg = (tag, attrs = {}, text) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, String(value));
+    if (text != null) node.textContent = text;
+    return node;
+  };
+  const point = (index, value) => {
+    const angle = -Math.PI / 2 + index * 2 * Math.PI / axes.length;
+    return [150 + Math.cos(angle) * 104 * value, 130 + Math.sin(angle) * 104 * value];
+  };
+  const plot = svg("svg", { viewBox: "0 0 300 260", role: "group", "aria-label": `Agent profile for ${row.crew} · ${row.model} versus ranked fleet median; outward is better` });
+  for (const level of [0.25, 0.5, 0.75, 1]) {
+    plot.append(svg("polygon", { points: axes.map((_, i) => point(i, level).join(",")).join(" "), class: "agents-radar-grid" }));
+  }
+  values.forEach(({ axis }, i) => {
+    const [x, y] = point(i, 1);
+    plot.append(svg("line", { x1: 150, y1: 130, x2: x, y2: y, class: `agents-radar-spoke${axis.unscored ? " is-unscored" : ""}` }));
+  });
+  for (const series of ["fleet", "own"]) {
+    const points = values.map((value, i) => value[series] == null ? null : point(i, value[series]));
+    if (points.every(Boolean)) {
+      plot.append(svg("polygon", { points: points.map((p) => p.join(",")).join(" "), class: `agents-radar-${series}` }));
+    } else {
+      // Never close or fill across absent evidence, including the wraparound.
+      points.forEach((p, i) => {
+        const next = points[(i + 1) % points.length];
+        if (p && next) plot.append(svg("line", { x1: p[0], y1: p[1], x2: next[0], y2: next[1], class: `agents-radar-${series}` }));
+      });
+    }
+    points.forEach((p) => {
+      if (p) plot.append(svg("circle", { cx: p[0], cy: p[1], r: 3, class: `agents-radar-${series}` }));
+    });
+  }
+  const tooltip = el("p", { id: "agents-radar-tooltip", class: "agents-radar-tooltip", role: "status", text: "Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values." });
+  const tableBody = el("tbody");
+  const heading = (text, scope) => {
+    const node = el("th", { text });
+    node.setAttribute("scope", scope);
+    return node;
+  };
+  const labels = el("ol", { class: "agents-radar-axes" });
+  values.forEach(({ axis, median, own, reason, contributionVsMedian }, i) => {
+    const label = `${axis.label}${axis.weight < 0 ? " (fewer is better)" : " (more is better)"}${axis.unscored ? " · unscored" : ""}`;
+    const ownText = reason ? "—" : `${number(rate(axis, row))} per 100 ${termUnit(axis)}`;
+    const fleetText = median == null ? "unavailable" : `${number(median)} per 100 ${termUnit(axis)}`;
+    const weightText = axis.unscored ? "unscored" : weight(axis.weight);
+    const contributionText = axis.unscored ? "unscored" : contributionVsMedian == null ? "—" : signed(contributionVsMedian);
+    const evidence = `${number(count(axis, row))} raw; ${number(units(axis, row))} ${termUnit(axis)}`;
+    const info = `${label}: agent ${ownText}; fleet median ${fleetText}; weight ${weightText}; contribution vs fleet median ${contributionText}; ${evidence}${reason ? `; gap: ${reason}` : ""}.`;
+    const [x, y] = point(i, own ?? 1);
+    const vertex = svg("g", { tabindex: 0, role: "button", "aria-label": info, "aria-describedby": "agents-radar-tooltip", class: `agents-radar-vertex${reason ? " is-gap" : ""}` });
+    vertex.dataset.term = axis.key;
+    vertex.append(svg("circle", { cx: x, cy: y, r: 12, class: "agents-radar-hit" }));
+    vertex.append(svg("circle", { cx: x, cy: y, r: 4, class: "agents-radar-marker" }));
+    // At the centre, several genuine zero-radius values can coincide. The
+    // numbered endpoint is another hover target for each of those vertices.
+    const [lx, ly] = point(i, 1.16);
+    vertex.append(svg("text", { x: lx, y: ly, "text-anchor": "middle", "dominant-baseline": "central", class: "agents-radar-label" }, String(i + 1)));
+    vertex.append(svg("title", {}, info));
+    const disclose = () => { tooltip.textContent = info; };
+    for (const event of ["mouseenter", "focus", "click"]) vertex.addEventListener(event, disclose);
+    plot.append(vertex);
+    labels.append(el("li", { class: axis.unscored ? "is-unscored" : "", text: label }));
+    const tableRow = el("tr", {}, [
+      heading(label, "row"),
+      ...[ownText, fleetText, weightText, contributionText, evidence, reason || "supported"].map((text) => el("td", { text })),
+    ]);
+    tableRow.dataset.term = axis.key;
+    tableBody.append(tableRow);
+  });
+  // A table ignores overflow and its nowrap columns set a minimum width, so
+  // the offscreen profile sits in a 1px scroll container. Its columns stay in
+  // the accessibility tree and out of the Analytics pane's scroll range.
+  const table = el("table", {}, [
+    el("caption", { text: `Agent profile: ${row.crew} · ${row.model}; ranked fleet in ${windowLabel()}` }),
+    el("thead", {}, [el("tr", {}, ["Axis", "Agent rate", "Fleet median rate", "Weight", "Contribution vs fleet median", "Raw count and units", "Evidence"].map((text) => heading(text, "col")))]),
+    tableBody,
+  ]);
+  const profile = el("div", { class: "visually-hidden" }, [table]);
+  return el("section", { class: `agents-radar${below(row) ? " is-muted" : ""}`, "aria-label": "Agent profile" }, [
+    el("h4", { text: "Agent profile" }),
+    el("p", { class: "agents-muted", text: "Outward is better · each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis." }),
+    ...(below(row) ? [el("p", { class: "agents-radar-note", text: row.unjudged ? "Nothing to compare: no unit of this row is judged yet." : "Too little evidence to compare: below minimum support." })] : []),
+    plot,
+    el("p", { class: "agents-radar-legend" }, [el("span", { class: "agents-radar-own-key", text: "Selected agent" }), el("span", { class: "agents-radar-fleet-key", text: "Fleet median" })]),
+    labels, tooltip, profile,
+  ]);
+}
+
+function detailNode(rankedRow) {
+  const row = rankedRow.allTierRow || rankedRow;
+  const tierView = Boolean(rankedRow.allTierRow);
   const panel = ROLE_PANELS[role];
   const scoreNote = panel && panel.scoreNote ? panel.scoreNote(row) : null;
   const termList = terms();
   const contributions = termList.map((term) => ({ term, value: contribution(term, row) }));
   const largest = Math.max(1e-9, ...contributions.map((entry) => Math.abs(entry.value || 0)));
   const breakdown = el("ul", { class: "agents-breakdown" });
+  if (typeof row.score_base === "number") {
+    breakdown.append(el("li", {}, [
+      el("span", { class: "agents-term-label", text: "Fleet reference" }),
+      el("span"), el("span"),
+      el("span", { class: "agents-term-value", text: signed(row.score_base) }),
+    ]));
+  }
   for (const { term, value } of contributions) {
     const width = (Math.abs(value || 0) * 50) / largest;
     const fill = el("span", {
       class: (value || 0) < 0 ? "agents-bar-fill negative" : "agents-bar-fill",
       style: (value || 0) < 0 ? { left: `${50 - width}%`, width: `${width}%` } : { left: "50%", width: `${width}%` },
     });
+    const label = el("span", { class: "agents-term-label", text: term.label });
+    if (row.expected && typeof row.expected[term.key] === "number") {
+      label.append(el("small", { class: "agents-term-context", text: `${number(row.counts[term.key])} actual · ${number(row.expected[term.key])} expected` }));
+    }
+    const ownUnits = row.term_units && typeof row.term_units[term.key] === "number" ? row.term_units[term.key] : null;
+    if (ownUnits != null) {
+      const provisional = provisionalTerm(term, row);
+      const context = el("small", {
+        class: provisional ? "agents-term-context agents-term-provisional" : "agents-term-context",
+        text: `${number(row.counts && row.counts[term.key])} of ${plural(ownUnits, termUnit(term).replace(/s$/, ""), termUnit(term))}${provisional ? " · provisional, not scored" : ""}`,
+      });
+      label.append(context);
+    }
     const item = el("li", {}, [
-      el("span", { class: "agents-term-label", text: term.label }),
+      label,
       el("span", { class: "agents-term-weight", text: `× ${weight(term.weight)}`, title: "weight" }),
       el("span", { class: "agents-bar agents-bar-centered", "aria-hidden": "true" }, [fill, el("span", { class: "agents-bar-zero", style: { left: "50%" } })]),
-      el("span", { class: "agents-term-value", text: signed(value), title: `${number(row.counts && row.counts[term.key])} counted, ${number(row.per_100 && row.per_100[term.key])} per 100 ${scorecard.unit}` }),
+      el("span", { class: "agents-term-value", text: signed(value), title: `${number(row.counts && row.counts[term.key])} counted, ${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)}` }),
     ]);
     item.dataset.term = term.key;
     breakdown.append(item);
@@ -549,97 +840,46 @@ function detailNode(row) {
   };
   stat(`${scorecard.unit[0].toUpperCase()}${scorecard.unit.slice(1)}`, String(row.units));
   for (const entry of Array.isArray(row.stats) ? row.stats : []) {
-    // Structured stats (tier comparisons, the tier matrix) render in the role panel.
+    // Structured stats render in the role panel (the pilots' tier matrix); a
+    // role without one skips them.
     if (entry.value !== null && typeof entry.value === "object") continue;
     stat(entry.label, statText(entry.value));
   }
   if (row.runs_without_model) stat("Runs with no model", String(row.runs_without_model));
   if (row.provisional != null) stat("Provisional", String(row.provisional));
+  const costNote = costUnavailableNote(row);
 
   const children = [
     el("header", { class: "agents-detail-head" }, [
-      el("span", { class: "agents-detail-rank", text: row.rank == null ? `below ${scorecard.min_support}` : `#${row.rank}` }),
+      el("span", { class: "agents-detail-rank", text: rankedRow.unjudged ? "unjudged" : rankedRow.rank == null ? `below ${scorecard.min_support}` : `#${rankedRow.rank}` }),
       el("h3", { text: row.crew }),
       el("span", { class: "agents-model", text: row.model }),
+      el("span", { class: "agents-model agents-effort", text: effortSummary(row) }),
     ]),
     el("div", { class: "agents-detail-score" }, [
-      el("strong", { text: number(row.score) }),
-      el("span", { text: "score" }),
+      el("strong", { text: number(rankedRow.score) }),
+      el("span", { text: rankedRow.unjudged ? "no score until a unit is judged" : tierView ? `${implementerTier} tier crew score` : "score" }),
     ]),
-    el("p", { class: "agents-detail-raw", text: rawText(row) }),
+    ...(tierView ? [el("p", { class: "agents-detail-note", text: `${rankedRow.units} tasks in this tier. Tier crew scores use two-sided shrinkage toward 100 with 30 tasks of reference evidence. All tiers score: ${number(row.score)}. The profile, breakdown and unscored context below cover all tiers.` })] : []),
+    el("p", { class: "agents-detail-raw", text: `${tierView ? "All tiers: " : ""}${rawText(row)}` }),
     ...(scoreNote ? [el("p", { class: "agents-detail-note", text: scoreNote.detail })] : []),
-    el("h4", { text: "Score breakdown" }),
+    radarNode(row),
+    el("h4", { text: tierView ? "All tiers score breakdown" : "Score breakdown" }),
     breakdown,
-    penaltyNode(row, contributions),
-    el("h4", { text: "Shown, not scored" }),
+    el("h4", { text: tierView ? "Shown, not scored · all tiers" : "Shown, not scored" }),
     stats,
+    ...(costNote ? [el("p", { class: "agents-detail-note agents-cost-note", text: costNote })] : []),
   ];
   const node = el("aside", { class: "agents-detail", "aria-label": `Detail for ${row.crew} · ${row.model}` }, children);
   node.id = "agents-detail";
   node.dataset.key = "detail";
-  node.dataset.hash = JSON.stringify([role, row, scorecard.terms, scorecard.fleet_average, detail && [detail.payload, detail.loading, detail.error]]);
+  node.dataset.hash = JSON.stringify([role, rankedRow, implementerTier, scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average]);
   return node;
 }
 
-// The tasks behind the row's largest negative term, from its detail.
-function penaltyNode(row, contributions) {
-  let worst = null;
-  for (const entry of contributions) {
-    if ((entry.value || 0) < 0 && (!worst || entry.value < worst.value)) worst = entry;
-  }
-  const section = el("section", { class: "agents-penalty" });
-  if (!worst) {
-    section.append(el("h4", { text: "Biggest penalty" }));
-    section.append(el("p", { class: "agents-muted", text: "No penalty in this window." }));
-    return section;
-  }
-  section.append(el("h4", { text: `Biggest penalty: ${worst.term.label}` }));
-  section.dataset.term = worst.term.key;
-  const term = detail && detail.payload && Array.isArray(detail.payload.terms)
-    ? detail.payload.terms.find((entry) => entry.key === worst.term.key)
-    : null;
-  if (detail && detail.error) {
-    section.append(el("p", { class: "agents-error", role: "alert", text: `Unable to load the tasks: ${detail.error}` }));
-    return section;
-  }
-  if (!term) {
-    section.append(el("p", { class: "agents-muted", role: "status", text: "Loading the tasks…" }));
-    return section;
-  }
-  const tasks = Array.isArray(term.tasks) ? term.tasks : [];
-  section.append(el("p", { class: "agents-muted", text: `${number(term.count)} counted from ${plural(tasks.length, "task")}, ${signed(worst.value)} to the score` }));
-  const list = el("ul", { class: "agents-tasks" });
-  for (const task of tasks.slice(0, PENALTY_TASKS_SHOWN)) list.append(taskItem(task));
-  section.append(list);
-  if (tasks.length > PENALTY_TASKS_SHOWN) {
-    section.append(el("p", { class: "agents-muted", text: `and ${plural(tasks.length - PENALTY_TASKS_SHOWN, "more task")}` }));
-  }
-  return section;
-}
-
-function taskItem(task) {
-  const link = bindTaskLink(el("a", { class: "agents-task-id", text: task.task_id }), task.task_id);
-  const head = el("div", { class: "agents-task-head" }, [
-    link,
-    el("span", { class: "agents-task-title", text: task.title || "" }),
-    el("span", { class: "agents-task-meta", text: task.status || "" }),
-  ]);
-  if (typeof task.count === "number" && Math.abs(task.count) !== 1) head.append(el("span", { class: "agents-task-meta", text: `×${number(task.count)}` }));
-  const item = el("li", { class: "agents-task" }, [head]);
-  item.dataset.taskId = task.task_id;
-  const occurrences = Array.isArray(task.occurrences) ? task.occurrences : [];
-  if (occurrences.length) {
-    const list = el("ul", { class: "agents-occurrences" });
-    for (const occurrence of occurrences) {
-      list.append(el("li", {}, [
-        el("time", { text: formatDateTime(occurrence.at) }),
-        el("span", { text: occurrence.detail || "" }),
-      ]));
-    }
-    item.append(list);
-  }
-  return item;
-}
+// The roles whose terms weigh regressions or findings by severity.
+const SEVERITY_ROLES = new Set(["reviewers"]);
+const SEVERITY_HOW = "Regressions and findings count by severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one escaped or missed regression costs twice its weight, from −16 for critical to −0.5 for nit. A review-job finding counts once finding verification CONFIRMS it, at the severity the verifier rated, or, with no verification verdict, once its task lands, at the highest severity rated on its own regression links, else low; a review gate finding counts at the reviewer's own. A regression link counts at its recorded severity, which verification replaces when it confirms the finding that filed it, and a link stored without one counts as medium.";
 
 function howNode() {
   const list = el("dl", { class: "agents-how-terms" });
@@ -655,9 +895,15 @@ function howNode() {
   const details = el("details", { class: "agents-how" }, [
     el("summary", { text: "How the score works" }),
     list,
-    el("p", { text: `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
+    el("p", { text: role === "implementers"
+      ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit} for every term. Expected counts use the fleet's rates on the row's tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere here.`
+      : `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
+    ...(role === "implementers" ? [el("p", { text: "Escaped regressions are shown, not scored: diff size dominates regression risk, and linking is still sparse. Counts use severity weights: critical 8, high 4, medium 2, low 1, nit 0.25. Regression residual is severity-weighted actual minus expected, using fleet rates within the same tier and expected-size bucket. Expected size is the fleet median landed lines changed for the task's tier and type, never its own diff. Buckets double in size (under 2 lines, 2–4, 4–8, and so on); missing medians share an unknown-size bucket in their tier, without pooling tiers. The residual stays unscored until linking matures." }),
+      el("p", { text: "Diff economy is the median landed-task ratio of lines changed to the fleet median for that tier and type. Above 1 means larger diffs for comparable work. Missing data or a zero reference median is unavailable. It is shown, not scored; normalizing regressions by a crew's own diff would reward bloat. All tiers keeps the tier-mix score. A selected tier ranks its crew scores from the cell matrix, pulled toward 100 with 30 tasks of reference evidence, and hides rows without work in that tier. Detail evidence remains for all tiers." })] : []),
+    ...ownUnitText(),
     el("p", { class: "agents-formula", text: `score = min(raw, (${unit} × raw + ${SMOOTHING} × fleet average) ÷ (${unit} + ${SMOOTHING}))` }),
     el("p", { text: `A row above the fleet average, the mean raw score weighted by ${unit}, is pulled down toward it, the more the less work backs it; a row below keeps its raw score. So a small row never rises on the fleet's evidence, and at an equal raw score the row with more ${unit} ranks higher. Rows with fewer than ${scorecard.min_support} ${unit} are greyed, unranked and listed last. Every problem counts against one role only, and cost and time are shown, never scored.` }),
+    ...(SEVERITY_ROLES.has(role) ? [el("p", { text: SEVERITY_HOW })] : []),
     ...(panel && Array.isArray(panel.how) ? panel.how.map((text) => el("p", { text })) : []),
   ]);
   details.open = howOpen;
@@ -665,6 +911,18 @@ function howNode() {
   details.dataset.key = "how";
   details.dataset.hash = JSON.stringify([role, scorecard.terms, unit, scorecard.min_support]);
   return details;
+}
+
+// Terms rated per 100 of their own unit, grouped by that unit.
+function ownUnitText() {
+  const byUnit = new Map();
+  for (const term of terms()) {
+    if (!term.unit) continue;
+    byUnit.set(term.unit, [...(byUnit.get(term.unit) || []), term.label]);
+  }
+  return [...byUnit].map(([unit, labels]) => el("p", {
+    text: `${labels.join(", ")} ${labels.length === 1 ? "is" : "are"} rated per 100 ${unit} instead. On a row with too few ${unit} ${labels.length === 1 ? "it is" : "they are"} provisional: shown in italics and left out of the score.`,
+  }));
 }
 
 function rolePanelNode(panel) {
@@ -675,4 +933,9 @@ function rolePanelNode(panel) {
   node.dataset.key = "panel";
   node.dataset.hash = JSON.stringify([role, scorecard.rows]);
   return node;
+}
+
+function effortSummary(row) {
+  return `Effort: ${(row.effort_breakdown || [{ reasoning_effort: "unknown" }]).map(item =>
+    `${item.reasoning_effort === null ? "provider default" : item.reasoning_effort || "unknown"}${item.invocations == null ? "" : ` (${item.invocations} invocations, ${item.tasks} tasks)`}`).join("; ")}`;
 }

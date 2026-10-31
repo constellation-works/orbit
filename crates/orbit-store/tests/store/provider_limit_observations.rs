@@ -142,6 +142,7 @@ fn an_existing_store_gains_the_provider_limit_table_additively() {
     drop(Store::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
     // Recreate schema v39, with a row the older binary wrote.
+    crate::support::drop_replayed_migration_tables(&conn).unwrap();
     conn.execute_batch(
         "DROP TABLE provider_limit_observations;
         DROP INDEX idx_v2_audit_events_ws_event_type_ts;
@@ -195,6 +196,7 @@ fn a_v40_table_gains_the_reading_columns_additively() {
     drop(Store::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
     // Recreate schema v40, with a row the older binary wrote.
+    crate::support::drop_replayed_migration_tables(&conn).unwrap();
     conn.execute_batch(
         "ALTER TABLE provider_limit_observations DROP COLUMN used_percent;
         ALTER TABLE provider_limit_observations DROP COLUMN window_minutes;
@@ -239,6 +241,7 @@ fn crew_account_readings_are_kept_apart_from_the_default_login() {
     drop(Store::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
     // Recreate schema v55, with a row the older binary wrote.
+    crate::support::drop_replayed_migration_tables(&conn).unwrap();
     conn.execute_batch(
         "DROP TABLE provider_account_limit_observations;
         ALTER TABLE invocations DROP COLUMN account;

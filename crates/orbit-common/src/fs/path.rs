@@ -2,8 +2,6 @@ use std::path::{Path, PathBuf};
 
 use crate::OrbitError;
 
-use super::selector::overlaps;
-
 /// Worker-facing scratch directory under a checkout: `<root>/.orbit/tmp`.
 ///
 /// Gitignored with the rest of `.orbit/`, inside `workspace_root` so
@@ -61,13 +59,4 @@ pub fn home_dir() -> Result<PathBuf, OrbitError> {
         })
         .ok_or_else(|| OrbitError::WorkspaceError("cannot determine home directory".to_string()))?;
     Ok(PathBuf::from(home))
-}
-
-/// Returns true when two task context scopes overlap on the same filesystem
-/// anchor or on an ancestor/descendant boundary.
-///
-/// This helper accepts both legacy raw paths and canonical selector strings
-/// and delegates to the shared selector overlap semantics.
-pub fn workspace_relative_paths_overlap(left: &str, right: &str) -> bool {
-    overlaps(left, right)
 }

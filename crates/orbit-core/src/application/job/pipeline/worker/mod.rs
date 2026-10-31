@@ -38,7 +38,6 @@ pub(super) mod scope;
 mod start;
 pub(super) mod supervisor;
 mod usage;
-mod usage_tree;
 
 #[cfg(test)]
 mod tests;

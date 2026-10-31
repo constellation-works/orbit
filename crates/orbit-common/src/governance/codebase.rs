@@ -160,19 +160,19 @@ const REGRESSION_FILTER: &[ParamSpec] = &[
 const MODEL: &[ParamSpec] = &[mcp_only(
     "model",
     ParamType::String,
-    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
+    "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
 )];
 
 const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Analytics,
     cli_path: &["analytics"],
     tool_name: "orbit.codebase.analytics",
-    tool_description: "Rank the workspace's repository paths by how often tasks that declared them regressed, widened their footprint onto them, were blocked by a run failure or were rejected after a run, plus lock contention and paths reserved together. Every ranking is a rate over distinct tasks with its numerator and denominator; `overlap` lists the paths found in several rankings. `regressions` also breaks its regression_from links down by nature, escape, fix layer and detector, cross-tabs nature x escape and escape x layer, and rates the regressed tasks' crews and complexities; nature, escape, layer and detected_by filter it. The same payload the dashboard's Codebase view reads.",
+    tool_description: "Rank repository paths across codebase risk measures. Use `orbit_codebase_show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
     cli_about: "Show the codebase rankings and the paths several share",
     cli_help: CliHelp {
         long_about: None,
         after_help: Some(
-            "\"Touched\" means a task's declared footprint, not the landed diff.\nFollow a ranked path to its tasks with `orbit codebase show <path>`.",
+            "\"Touched\" means a task's declared footprint, not the landed diff. Regressions count\nagainst the paths their links record as sites, not the whole footprint.\nFollow a ranked path to its tasks with `orbit codebase show <path>`.",
         ),
         flag_order: &[],
         constraints: &[],
@@ -197,7 +197,7 @@ const SHOW: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.codebase.show",
-    tool_description: "One repository path's standing in every codebase ranking: rate, numerator, denominator, place in the ranking, and the task IDs behind each numerator (refused requesters for lock contention, reserving requesters for each coupled pair). Each regressed task lists its regression_from links with nature, escape, layer and detected_by; the same filters as `orbit.codebase.analytics` narrow them. Use it to follow a rate from `orbit.codebase.analytics` to its tasks.",
+    tool_description: "Inspect one repository path across codebase rankings and follow counts to tasks and sites. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for ranking, attribution, filters and response fields.",
     cli_about: "Show one path's rankings and the tasks behind each count",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

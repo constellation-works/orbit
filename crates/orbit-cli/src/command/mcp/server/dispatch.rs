@@ -7,6 +7,7 @@ use orbit_cmd::task_owner::WorkspaceIdentity;
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
 use orbit_mcp::McpHost;
 use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
 use serde_json::Value;
@@ -114,6 +115,22 @@ impl McpHost for ServerMcpHost {
         input: Value,
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        // Decided before the input moves into the call. The federated mux's
+        // in-process destination reaches Core through this method too.
+        let list_policy =
+            TaskListResultPolicy::for_call(name, &input, TaskListResultProfile::Default);
+        self.call_public_tool(name, input, context)
+            .map(|value| list_policy.finalize(value))
+    }
+}
+
+impl ServerMcpHost {
+    fn call_public_tool(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
         if let Some(canonical) = orbit_mcp::internal_drain_name(name) {
             return self.refuse_internal_drain(canonical, input, context);
         }
@@ -123,7 +140,7 @@ impl McpHost for ServerMcpHost {
         if name == orbit_mcp::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL {
             return self.call_global_tool(name, input, context);
         }
-        let definition = match self.definition(name) {
+        let definition = match self.definition(name, &context) {
             Ok(definition) => definition,
             Err(error) => return self.audit_global_failure(name, input, context, error),
         };

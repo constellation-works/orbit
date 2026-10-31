@@ -3,9 +3,11 @@ summary: "Activity / Job — Overview"
 type: design
 title: "Activity / Job — Overview"
 owner: codex
-last_updated: 2026-10-06
-last_validated: 2026-10-19
+last_updated: 2026-10-30
+last_validated: 2026-10-30
 status: Draft
+stage: shipped
+next: "Review proposed auto-task targets and durable CEL waiting; no implementation authorized"
 feature: activity-job
 doc_role: overview
 tags: ["activity-job"]
@@ -14,6 +16,12 @@ tags: ["activity-job"]
 # Activity / Job — Overview
 
 Activity / Job is Orbit's execution substrate. Activities describe runnable units; jobs compose them sequentially, in parallel, across collections, or through bounded loops. Orbit's product story is moving toward goals, graphs, sessions, and locks, but this layer remains the runtime underneath. [2_design.md](./2_design.md) is the current contract; [3_vision.md](./3_vision.md) captures open questions.
+
+**Proposed extension.** [Auto-task steps and durable waiting](./specs/auto-task-step.md)
+would let an existing job bind or mint named auto-tasks and wait for accepted
+completion using CEL. A condition-triggered routine starts the job. This is not
+part of the shipped scope: no separate auto-sequence definition or lifecycle is
+introduced, and existing job ordering and `when` skip semantics stay unchanged.
 
 > **Release scope.** Orbit executes agent activities through the CLI agent path only. The `backend: http | cli | auto` selector and the engine-driven HTTP agent loop were removed in [ORB-10801]; see [specs/backend-resolution.md](./specs/backend-resolution.md) for the migration.
 
@@ -67,7 +75,7 @@ Name resolution arrived in [T20260418-2019]; `run-v2` entrypoints in [T20260418-
 
 ### 2.4 Provider is the only agent runtime choice
 
-For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `cursor`, `pi`, `antigravity`, `opencode`, or `muse`. Orbit's CLI entry point uses the registered direct-agent executors for the supported provider lanes; `openai_compat` and providers without a supported executor fail structurally instead of falling back.
+For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `antigravity`, or `muse` (plus the retired `cursor`, `pi` and `opencode` ids, which only deserialise from persisted records). Orbit's CLI entry point uses the registered direct-agent executors for the supported provider lanes; `openai_compat` and providers without a supported executor fail structurally instead of falling back.
 
 ### 2.5 Audit, policy, and seeded assets make the runtime inspectable
 
@@ -96,7 +104,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | v2 job step grammar | `crates/orbit-types/src/workflow/activity_job/job_v2.rs` | [T20260418-2018] |
 | Job kinds (`workflow`, `subroutine`) | `crates/orbit-types/src/workflow/activity_job/job_v2.rs` | [T20260419-0339] |
 | Target-ref resolution | `crates/orbit-engine/src/activity_job/catalog.rs` | [T20260418-2019] |
-| v2 job run entrypoint and runtime host boundary | `crates/orbit-core/src/application/job/exec.rs`, `crates/orbit-engine/src/context/hosts/runtime_host.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs` | [T20260418-2143], [T20260418-2210] |
+| v2 job run entrypoint and runtime host boundary | `crates/orbit-core/src/application/job/exec.rs`, `crates/orbit-engine/src/context/hosts/runtime_host/mod.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs` | [T20260418-2143], [T20260418-2210] |
 | Retired-declaration rejection | `crates/orbit-types/src/workflow/activity_job/activity_v2.rs`, `crates/orbit-types/src/workflow/activity_job/retired.rs` | [ORB-10801] |
 | v2 DAG executor | `crates/orbit-engine/src/activity_job/job_executor/` | [T20260418-2018], [T20260509-2] |
 | V2 audit envelope and disk sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002] |

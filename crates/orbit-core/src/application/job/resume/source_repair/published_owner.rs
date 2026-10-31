@@ -52,6 +52,17 @@ fn parse_preserved(entry: &TaskHistoryEntry) -> Result<PreservedPublication, Orb
         .map_err(|e| refuse(e.to_string()))
 }
 
+/// Refuse unless `source` is a conclusively stopped failed delivery.
+pub(super) fn require_stopped_failed_requeue_source(source: &JobRun) -> Result<(), OrbitError> {
+    let stopped = run_owner_liveness(source) == RunOwnerLiveness::Stopped;
+    if source.state != JobRunState::Failed || source.finished_at.is_none() || !stopped {
+        return Err(refuse(
+            "the task's run is not a conclusively stopped failed delivery",
+        ));
+    }
+    Ok(())
+}
+
 impl OrbitRuntime {
     /// Called under the final-recovery task lock; stored atomically with its decision.
     pub(crate) fn published_owner_requeue_record(
@@ -128,15 +139,22 @@ impl OrbitRuntime {
                     .then(|| parse_preserved(e).ok())
                     .flatten()
                     .filter(|record| record.source_run_id == source_id)
+                    .map(|record| (e.at, record))
             });
-        let (Some(record), None) = (records.next(), records.next()) else {
+        let (Some((preserved_at, record)), None) = (records.next(), records.next()) else {
             return Ok(None);
         };
         // The record digests the task as stored; a caller's copy may carry
-        // admission's resolved crew.
+        // admission's resolved crew. Admission's later system crew redraws
+        // leave the preserved identity intact [ORB-18560].
         if record.schema_version != 1
             || record.failure_handoff
-            || record.task_digest != task_digest(&self.get_task(&task.id)?)?
+            || !super::adoption::task_matches_before_crew_redraws(
+                &self.get_task(&task.id)?,
+                &entries,
+                preserved_at,
+                &record.task_digest,
+            )?
             || entries.iter().any(|e| {
                 e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
             })
@@ -166,49 +184,16 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
-        if !self.task_run_is_local(task) {
-            return Err(refuse(
-                "the task's failure handoff belongs to another machine",
-            ));
-        }
-        let source_id = task
-            .job_run_id
-            .as_deref()
-            .ok_or_else(|| refuse("the task has no run whose failure handoff it could resume"))?;
-        let source = self
-            .get_job_run_backend(source_id)?
-            .ok_or_else(|| refuse("the task's run is missing"))?;
-        self.owner_source_identity(&source, task)?;
+        let (source_id, source) = self.stopped_failed_requeue_source(
+            task,
+            "the task's failure handoff belongs to another machine",
+            "the task has no run whose failure handoff it could resume",
+        )?;
         let entries = self.get_task_history(&task.id)?;
-        if source.state != JobRunState::Failed
-            || source.finished_at.is_none()
-            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
-        {
-            return Err(refuse(
-                "the task's run is not a conclusively stopped failed delivery",
-            ));
-        }
-        if entries.iter().any(|e| {
-            e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
-        }) {
-            return Err(refuse("an operator discarded this run's candidate"));
-        }
-        // The same newest-execution rule the adopting run applies: nothing
-        // newer may stand between the task and this publication.
-        let newest = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some("task_pr_pipeline".into()),
-            task_id: Some(task.id.clone()),
-            limit: Some(1),
-            include_steps: false,
-            ..Default::default()
-        })?;
-        if newest.first().is_none_or(|run| run.run_id != source_id) {
-            return Err(refuse(
-                "newer execution makes publication association ambiguous",
-            ));
-        }
+        require_stopped_failed_requeue_source(&source)?;
+        self.require_current_requeue_source(task, &source, &source_id, &entries)?;
         let state = self
-            .read_run_state(source_id)?
+            .read_run_state(&source_id)?
             .ok_or_else(|| refuse("source checkpoints missing"))?;
         if state.failure_activity_checkpoint.is_none() {
             return Err(refuse("the run published no failure-handoff PR"));
@@ -218,7 +203,7 @@ impl OrbitRuntime {
             self.observe_handoff_publication(source, task.clone(), state, definition)?;
         let record = PreservedPublication {
             schema_version: 1,
-            source_run_id: source_id.into(),
+            source_run_id: source_id,
             task_digest: task_digest(task)?,
             failure_handoff: true,
         };
@@ -230,32 +215,40 @@ impl OrbitRuntime {
     /// per source run, so the same record already on record binds the
     /// publication and nothing is appended (`None`). A different record for
     /// that run would be a second one, which admission refuses, so it is
-    /// refused here before anything is written.
+    /// refused here before anything is written. Read the whole preservation
+    /// history: an identical first record cannot hide a duplicate, malformed
+    /// or untrusted record that the next admission would refuse.
     pub(crate) fn preservation_to_append(
         &self,
         task: &Task,
         entry: TaskHistoryEntry,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         let record = parse_preserved(&entry)?;
+        let mut matching = None;
         for existing in self
             .get_task_history(&task.id)?
             .iter()
             .filter(|e| e.event == PRESERVED)
         {
+            if existing.by != "system" {
+                return Err(refuse("untrusted publication preservation"));
+            }
             let existing = parse_preserved(existing)?;
             if existing.source_run_id != record.source_run_id {
                 continue;
             }
-            return if existing == record {
-                Ok(None)
-            } else {
-                Err(refuse(format!(
-                    "a different publication of run `{}` is already preserved on the task",
-                    record.source_run_id
-                )))
-            };
+            if matching.replace(existing).is_some() {
+                return Err(refuse("published candidate lacks a unique requeue binding"));
+            }
         }
-        Ok(Some(entry))
+        match matching {
+            Some(existing) if existing == record => Ok(None),
+            Some(_) => Err(refuse(format!(
+                "a different publication of run `{}` is already preserved on the task",
+                record.source_run_id
+            ))),
+            None => Ok(Some(entry)),
+        }
     }
 
     /// Whether `task`, last delivered by an owner PR run, has a pull request
@@ -287,6 +280,56 @@ impl OrbitRuntime {
                 .get_task_history(&task.id)?
                 .iter()
                 .any(|entry| entry.event == PRESERVED))
+    }
+
+    /// Resolve `task`'s bound run, using the caller's nonlocal/missing messages.
+    pub(super) fn stopped_failed_requeue_source(
+        &self,
+        task: &Task,
+        nonlocal: &'static str,
+        missing_binding: &'static str,
+    ) -> Result<(String, JobRun), OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Err(refuse(nonlocal));
+        }
+        let source_id = task
+            .job_run_id
+            .as_deref()
+            .ok_or_else(|| refuse(missing_binding))?;
+        let source = self
+            .get_job_run_backend(source_id)?
+            .ok_or_else(|| refuse("the task's run is missing"))?;
+        self.owner_source_identity(&source, task)?;
+        Ok((source_id.to_string(), source))
+    }
+
+    /// Refuse on a discard at/after `source` creation or a newer run.
+    /// `entries` is already-read history, preserving each path's read timing.
+    pub(super) fn require_current_requeue_source(
+        &self,
+        task: &Task,
+        source: &JobRun,
+        source_id: &str,
+        entries: &[TaskHistoryEntry],
+    ) -> Result<(), OrbitError> {
+        if entries.iter().any(|e| {
+            e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
+        }) {
+            return Err(refuse("an operator discarded this run's candidate"));
+        }
+        let newest = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            job_id: Some("task_pr_pipeline".into()),
+            task_id: Some(task.id.clone()),
+            limit: Some(1),
+            include_steps: false,
+            ..Default::default()
+        })?;
+        if newest.first().is_none_or(|run| run.run_id != source_id) {
+            return Err(refuse(
+                "newer execution makes publication association ambiguous",
+            ));
+        }
+        Ok(())
     }
 
     pub(super) fn owner_source_identity(
@@ -355,7 +398,7 @@ impl OrbitRuntime {
                 if e.by != "system" {
                     return Err(refuse("untrusted publication preservation"));
                 }
-                parse_preserved(e)
+                parse_preserved(e).map(|record| (e.at, record))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let predecessor = || -> Result<String, OrbitError> {
@@ -406,7 +449,7 @@ impl OrbitRuntime {
         });
         let matching = records
             .iter()
-            .filter(|r| r.source_run_id == source_id)
+            .filter(|(_, r)| r.source_run_id == source_id)
             .collect::<Vec<_>>();
         // An operator discarded this run's candidate and no requeue kept its
         // publication: the next run implements fresh, which the generic
@@ -465,8 +508,13 @@ impl OrbitRuntime {
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
             || self.recorded_final_recovery(task_id, source_id)?
                 != Some(crate::application::task::FinalRecoveryOutcome::Requeued)
-            || matching[0].schema_version != 1
-            || matching[0].task_digest != task_digest(&task)?
+            || matching[0].1.schema_version != 1
+            || !super::adoption::task_matches_before_crew_redraws(
+                &task,
+                &entries,
+                matching[0].0,
+                &matching[0].1.task_digest,
+            )?
             || entries.iter().any(|e| {
                 e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
             })
@@ -475,7 +523,7 @@ impl OrbitRuntime {
                 "published source is live, discarded, changed, or lacks an applied requeue",
             ));
         }
-        if matching[0].failure_handoff {
+        if matching[0].1.failure_handoff {
             let state = self
                 .read_run_state(source_id)?
                 .ok_or_else(|| refuse("source checkpoints missing"))?;
@@ -542,12 +590,13 @@ impl OrbitRuntime {
             // adopted candidate changed (an auto-fix repair the task did not
             // declare); only those system widenings are set aside.
             || (active
-                && super::adoption::admitted_task_digest(
+                && !super::adoption::admitted_task_matches(
                     &task,
                     &self.get_task_history(&task.id)?,
                     run_id,
                     run.created_at,
-                )? != binding.task_digest)
+                    &binding.task_digest,
+                )?)
             || output["phase"] != "candidate_resume"
             || !matches!(
                 output["outcome"].as_str(),
@@ -572,9 +621,7 @@ impl OrbitRuntime {
             .ok_or_else(|| refuse("source checkpoints disappeared"))?;
         let definition = self.source_repair_definition(&source)?;
         if binding.workspace_id != self.workspace_id()?
-            || digest(
-                &json!({"run":source,"steps":source.steps,"checkpoints":source_state,"definition":definition}),
-            )? != binding.source_digest
+            || run_evidence_digest(&source, &source_state, &definition)? != binding.source_digest
         {
             return Err(refuse("immutable published source changed"));
         }

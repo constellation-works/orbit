@@ -12,8 +12,9 @@ use orbit_types::task::SKIP_REVIEW_TAG;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
-    ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision, ReviewGateRefusal,
-    ReviewGateReviewer, ReviewManifest, ReviewReservation, ReviewerIdentity,
+    ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision, ReviewGateNotApplicable,
+    ReviewGateRefusal, ReviewGateReviewer, ReviewManifest, ReviewReservation, ReviewTiming,
+    ReviewerIdentity, SelectiveBeforeLandingMode, SelectiveReviewReceipt,
 };
 use serde_json::{Value, json};
 
@@ -27,7 +28,7 @@ use crate::OrbitRuntime;
 use crate::application::job::crew_pools::seeded_crew_ticket;
 use crate::application::review::crew::{pool_source, pre_landing_review_crew_unset};
 use crate::application::task::light_delivery::{
-    carries, light_delivery_decision, record_light_delivery,
+    carries, light_delivery_decision, record_light_delivery, review_skip_decisions,
 };
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
@@ -36,6 +37,7 @@ use super::host_gates::{HOST_VALIDATION_STEP_INPUT, recorded_host_gates};
 use super::judgement::write_artifact;
 use super::owed::{defers_linux_codeql, owed_evidence, owed_hold_received, split_owner_owed};
 use super::release::release_abandoned;
+use super::selective::{SelectiveGateDecision, selective_gate_decision};
 
 /// Admit a reviewer for the committed, base-synchronized candidate.
 ///
@@ -49,8 +51,80 @@ pub(crate) fn review_gate_admit(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let output = admission_output(runtime, action, input)?;
+    if let ReviewGateAdmissionOutput::NotApplicable(not_applicable) = &output
+        && run_never_reviews(&not_applicable.reason)
+    {
+        refuse_unreviewed_mutation_proposals(runtime, action, input, &not_applicable.reason)?;
+    }
     serde_json::to_value(&output).map_err(|error| {
         DispatchError::action_failed(action, format!("serialize review admission: {error}"))
+    })
+}
+
+/// Whether a gate that does not apply for `reason` leaves the run with no
+/// review at all. The others mean another layer of this run reviews.
+fn run_never_reviews(reason: &str) -> bool {
+    matches!(
+        reason,
+        "review_admission_missing"
+            | "review_before_pr_off"
+            | "review_before_landing_off"
+            | "review_policy_after_landing"
+            | "no_diff_exemption"
+            | SELECTIVE_NOT_REQUIRED_REASON
+            | SELECTIVE_OBSERVE_REASON
+            | SKIP_REVIEW_REASON
+    )
+}
+
+/// The landing gate evaluated the captured selective policy and no
+/// predicate selected this candidate.
+const SELECTIVE_NOT_REQUIRED_REASON: &str = "selective_review_not_required";
+/// The landing gate recorded a selective observation; observation never
+/// invokes a reviewer or changes the actual enforced mode.
+const SELECTIVE_OBSERVE_REASON: &str = "selective_review_observe";
+
+/// [granted-tools §4] A mutation proposal applies only after the review
+/// that approves the diff, so a run that reviews nothing cannot deliver a
+/// task carrying one: refuse, naming the proposals, rather than land a diff
+/// whose proposed change silently never happens.
+fn refuse_unreviewed_mutation_proposals(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+    reason: &str,
+) -> Result<(), DispatchError> {
+    if runtime.worker_invocation().is_some() {
+        return Ok(());
+    }
+    let task_ids = input
+        .get("completed_task_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    let mut unapplied = Vec::new();
+    for task_id in task_ids {
+        let proposals = runtime
+            .unapplied_mutation_proposals(task_id)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+        unapplied.extend(
+            proposals
+                .into_iter()
+                .map(|proposal| format!("{task_id}:{}", proposal.artifact)),
+        );
+    }
+    if unapplied.is_empty() {
+        return Ok(());
+    }
+    Err(DispatchError::DeterministicActionRefused {
+        action: action.to_string(),
+        message: format!(
+            "mutation_proposals_unreviewed: this run reviews nothing ({reason}), but unapplied \
+             mutation proposals apply only after a review approves them: {}; deliver the task \
+             through a run whose review gate applies",
+            unapplied.join(", ")
+        ),
     })
 }
 
@@ -98,7 +172,7 @@ fn admission_output(
         }
         return Ok(not_applicable("review_admission_missing", None));
     };
-    if rebase.is_some() && !admission.gates_merge() {
+    if rebase.is_some() && !admission.gates_merge() && !admission.selective_enforced() {
         return Err(refused(
             "review_gate_stale: completion rebased a reviewed head but the run's review \
              admission no longer gates the merge"
@@ -116,25 +190,84 @@ fn admission_output(
         .get("before_landing")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let applies = if rebase.is_some() || preflight {
+    // Selective before-landing review is its own captured layer beside a
+    // `none` timing: the landing step evaluates it, the pre-push step
+    // defers to it, and a budget preflight must not wave an enforce-mode
+    // lineage through unchecked.
+    let selective_policy = admission.selective_policy().cloned();
+    let mut selective_receipt: Option<SelectiveReviewReceipt> = None;
+    let applies = if rebase.is_some() {
+        admission.gates_merge() || admission.selective_enforced()
+    } else if preflight {
         admission.gates_merge()
+            || selective_policy
+                .as_ref()
+                .is_some_and(|policy| policy.mode == SelectiveBeforeLandingMode::Enforce)
     } else if landing_step {
         admission.gates_landing()
     } else {
         admission.gates_pr()
     };
-    if !applies {
-        use orbit_types::workflow::ReviewTiming;
-        let reason = match admission.timing {
-            ReviewTiming::None if landing_step => "review_before_landing_off",
-            ReviewTiming::None => "review_before_pr_off",
-            // The other layer reviews this run.
-            ReviewTiming::BeforePr => "reviewed_before_pr",
-            ReviewTiming::BeforeLanding => "review_before_landing",
-            // A run captured under the retired `after-landing` policy value.
-            ReviewTiming::AfterLanding => "review_policy_after_landing",
-        };
-        return Ok(not_applicable(reason, Some(&admission)));
+    if !applies || (landing_step && !preflight && selective_policy.is_some()) {
+        if landing_step
+            && !preflight
+            && let Some(policy) = &selective_policy
+        {
+            policy
+                .validate()
+                .map_err(|error| refused(format!("selective_policy_invalid: {error}")))?;
+            if input
+                .get("skipped_no_diff_expected")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                return Ok(not_applicable("no_diff_exemption", Some(&admission)));
+            }
+            if input.get("mode").and_then(Value::as_str) == Some("local") {
+                return Err(refused(
+                    "selective_review_local_route_refused: this run captured selective \
+                     before-landing review but delivers locally, which opens no pull \
+                     request to select at; ship through the PR route or set \
+                     review.selective_before_landing.mode = off"
+                        .to_string(),
+                ));
+            }
+            let context = GateContext::load(runtime, input, Some(admission.clone()))
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+            match selective_gate_decision(runtime, &context, policy).map_err(refused_or_failed)? {
+                SelectiveGateDecision::NotRequired(receipt) if !applies => {
+                    let reason = if receipt.mode == SelectiveBeforeLandingMode::Observe {
+                        SELECTIVE_OBSERVE_REASON
+                    } else {
+                        SELECTIVE_NOT_REQUIRED_REASON
+                    };
+                    return Ok(ReviewGateAdmissionOutput::NotApplicable(
+                        ReviewGateNotApplicable::with_selective_receipt(
+                            reason,
+                            Some(&admission),
+                            receipt,
+                        ),
+                    ));
+                }
+                SelectiveGateDecision::Required(receipt)
+                | SelectiveGateDecision::NotRequired(receipt) => {
+                    selective_receipt = Some(receipt);
+                }
+            }
+        }
+        if !applies && selective_receipt.is_none() {
+            let reason = match admission.timing {
+                ReviewTiming::None if landing_step => "review_before_landing_off",
+                ReviewTiming::None if selective_policy.is_some() => "review_before_landing",
+                ReviewTiming::None => "review_before_pr_off",
+                // The other layer reviews this run.
+                ReviewTiming::BeforePr => "reviewed_before_pr",
+                ReviewTiming::BeforeLanding => "review_before_landing",
+                // A run captured under the retired `after-landing` policy value.
+                ReviewTiming::AfterLanding => "review_policy_after_landing",
+            };
+            return Ok(not_applicable(reason, Some(&admission)));
+        }
     }
     if input
         .get("skipped_no_diff_expected")
@@ -145,7 +278,7 @@ fn admission_output(
         // nothing that could later count as code coverage.
         return Ok(not_applicable("no_diff_exemption", Some(&admission)));
     }
-    if input.get("mode").and_then(Value::as_str) == Some("local") {
+    if selective_receipt.is_none() && input.get("mode").and_then(Value::as_str) == Some("local") {
         // A review layer before landing on a local-only route is refused
         // rather than reinterpreted; a pipeline may learn its route late.
         let (code, setting) = if admission.gates_landing() {
@@ -166,15 +299,49 @@ fn admission_output(
     }
     let context = GateContext::load(runtime, &admit_input, Some(admission.clone()))
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    // A completion rebase under selective enforcement re-evaluates the new
+    // base/head; a lineage already selected stays selected.
+    if rebase.is_some()
+        && selective_receipt.is_none()
+        && admission.timing == ReviewTiming::None
+        && let Some(policy) = &selective_policy
+    {
+        match selective_gate_decision(runtime, &context, policy).map_err(refused_or_failed)? {
+            SelectiveGateDecision::Required(receipt) => selective_receipt = Some(receipt),
+            SelectiveGateDecision::NotRequired(receipt) => {
+                return Ok(ReviewGateAdmissionOutput::NotApplicable(
+                    ReviewGateNotApplicable::with_selective_receipt(
+                        SELECTIVE_NOT_REQUIRED_REASON,
+                        Some(&admission),
+                        receipt,
+                    ),
+                ));
+            }
+        }
+    }
     // [ORB-16855] A candidate whose tasks all carry `skip-review` and that
     // changes only `workflow.light_delivery_paths` is published and landed
     // gated only by the hosted checks. The budget preflight runs before any
     // candidate exists, so it keeps its normal decision.
+    // A positive enforced selective decision overrides skip-review and
+    // custom review-skip tags, even inside the light-delivery paths.
     if !preflight
+        && !selective_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.requires_review())
         && light_review_skipped(runtime, &context)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
     {
-        return Ok(not_applicable(SKIP_REVIEW_REASON, Some(&admission)));
+        return Ok(match selective_receipt {
+            Some(receipt) => ReviewGateAdmissionOutput::NotApplicable(
+                ReviewGateNotApplicable::with_selective_receipt(
+                    SKIP_REVIEW_REASON,
+                    Some(&admission),
+                    receipt,
+                ),
+            ),
+            None => not_applicable(SKIP_REVIEW_REASON, Some(&admission)),
+        });
     }
     let mut awaiting_evidence = false;
     let outcome = awaiting_external_evidence(runtime, &context).and_then(|awaiting| {
@@ -193,7 +360,27 @@ fn admission_output(
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|step| !step.is_empty());
-            admit(runtime, &context, &admission, rebase.as_ref(), host_step)
+            // A selectively required review is a before-landing review:
+            // the reviewer, manifest and settlement see that timing,
+            // while the run's captured admission keeps `none` plus the
+            // selective policy that selected it.
+            let effective = match &selective_receipt {
+                Some(receipt) if receipt.requires_review() && !admission.gates_landing() => {
+                    let mut effective = admission.clone();
+                    effective.timing = ReviewTiming::BeforeLanding;
+                    effective.timing_source = "selective_before_landing".to_string();
+                    effective
+                }
+                _ => admission.clone(),
+            };
+            admit(
+                runtime,
+                &context,
+                &effective,
+                rebase.as_ref(),
+                host_step,
+                selective_receipt.clone().map(Box::new),
+            )
         }
     });
     let audit_args = json!({
@@ -238,10 +425,19 @@ const SKIP_REVIEW_REASON: &str = "skip_review_light_delivery";
 /// record the decision in each task's history, and say whether review is
 /// skipped. A run none of whose tasks carry the tag judges nothing.
 fn light_review_skipped(runtime: &OrbitRuntime, context: &GateContext) -> Result<bool, OrbitError> {
-    if !context
-        .tasks
-        .iter()
-        .any(|task| carries(task, SKIP_REVIEW_TAG))
+    let gates = runtime.host_validation_gates();
+    let any_mapped = context.tasks.iter().any(|task| {
+        task.tags.iter().any(|tag| {
+            gates
+                .review_skip_tags()
+                .contains_key(&tag.trim().to_lowercase())
+        })
+    });
+    if !any_mapped
+        && !context
+            .tasks
+            .iter()
+            .any(|task| carries(task, SKIP_REVIEW_TAG))
     {
         return Ok(false);
     }
@@ -249,19 +445,29 @@ fn light_review_skipped(runtime: &OrbitRuntime, context: &GateContext) -> Result
     let head = candidate_identity(&context.workspace_path, &base)?
         .head
         .commit;
-    let Some(decision) = light_delivery_decision(
+    let mut skipped = false;
+    if let Some(decision) = light_delivery_decision(
         runtime,
         &context.workspace_path,
         &base,
         &head,
         &context.tasks,
         SKIP_REVIEW_TAG,
-    )?
-    else {
-        return Ok(false);
-    };
-    record_light_delivery(runtime, &context.task_ids, &decision)?;
-    Ok(decision.applies())
+    )? {
+        skipped |= decision.applies();
+        record_light_delivery(runtime, &context.task_ids, &decision)?;
+    }
+    for decision in review_skip_decisions(
+        runtime,
+        &context.workspace_path,
+        &base,
+        &head,
+        &context.tasks,
+    )? {
+        skipped |= decision.applies();
+        record_light_delivery(runtime, &context.task_ids, &decision)?;
+    }
+    Ok(skipped)
 }
 
 /// Whether a task's held candidate is still waiting for named external
@@ -349,6 +555,7 @@ fn admit(
     admission: &ReviewAdmission,
     rebase: Option<&CompletionRebase>,
     host_step: Option<&str>,
+    selective_receipt: Option<Box<SelectiveReviewReceipt>>,
 ) -> Result<ReviewGateAdmissionOutput, OrbitError> {
     let required_validation_commands = admission
         .required_validation_commands
@@ -382,11 +589,7 @@ fn admit(
     };
     let reviewer = match &received {
         Some((_, certificate)) => held_reviewer(&certificate.reviewer),
-        None => {
-            let (crew, source) =
-                resolve_reviewer_crew(runtime, admission, context, &candidate.head.commit)?;
-            admitted_reviewer(&crew, source)
-        }
+        None => resolve_reviewer_crew(runtime, admission, context, &candidate.head.commit)?,
     };
     // [ORB-15630] Linux CodeQL a macOS host cannot run, whose rule names the
     // pull request's hosted check that runs it [ORB-15677], is owed to the
@@ -469,7 +672,23 @@ fn admit(
         &context.task_ids[0],
         &candidate.head,
     )?);
+    // [granted-tools §4] Every unapplied proposal goes in front of this
+    // reviewer, bound to the bytes read here; settlement applies only these.
+    // A claimed leaf reads none: a granted task runs only on its owner, and
+    // claimed-worker evidence cannot carry a proposal.
+    let mut mutation_proposals = Vec::new();
+    for task_id in context.task_ids.iter().filter(|_| !context.claimed) {
+        mutation_proposals.extend(runtime.unapplied_mutation_proposals(task_id)?);
+    }
+    // [visual-review §1] A live visual review's confirmed findings go in
+    // front of this reviewer, which resolves each in its report.
+    let mut visual_findings = Vec::new();
+    for task_id in &context.task_ids {
+        visual_findings.extend(runtime.visual_findings_for_review(task_id)?);
+    }
     let manifest = ReviewManifest {
+        mutation_proposals,
+        visual_findings,
         satisfied_external_evidence,
         evidence_carried: carry.carried().cloned(),
         owed_external_evidence,
@@ -545,6 +764,7 @@ fn admit(
             budget: ledger.budget,
             remaining: manifest.remaining,
             started_at: attempt.started_at,
+            selective_receipt,
         },
     )))
 }
@@ -562,7 +782,7 @@ fn resolve_reviewer_crew(
     admission: &ReviewAdmission,
     context: &GateContext,
     head: &str,
-) -> Result<(Crew, String), OrbitError> {
+) -> Result<ReviewGateReviewer, OrbitError> {
     let run = runtime.get_job_run_backend(&context.run_id)?;
     let run_input = run.and_then(|run| run.input).unwrap_or(Value::Null);
     let allowlist = runtime.crew_allowlist_from_input(&run_input)?;
@@ -609,12 +829,14 @@ fn resolve_reviewer_crew(
                     .map(str::to_string),
             )
             .collect();
-        let crew = runtime.draw_review_crew(
+        let draw = runtime.draw_review_crew(
             permitted,
             &implementers,
             &mut seeded_crew_ticket(format!("review:{}:{head}", context.run_id)),
         )?;
-        return Ok((crew, pool_source(&admission.crew_source)));
+        let mut reviewer = admitted_reviewer(&draw.crew, pool_source(&admission.crew_source));
+        reviewer.eligible_pool = draw.eligible_pool;
+        return Ok(reviewer);
     }
     let name = admission.crew.as_deref().ok_or_else(|| {
         OrbitError::CapabilityDenied(format!(
@@ -639,7 +861,7 @@ fn resolve_reviewer_crew(
             ))
         },
     )?;
-    Ok((crew, admission.crew_source.clone()))
+    Ok(admitted_reviewer(&crew, admission.crew_source.clone()))
 }
 
 fn admitted_reviewer(crew: &Crew, source: String) -> ReviewGateReviewer {
@@ -649,6 +871,7 @@ fn admitted_reviewer(crew: &Crew, source: String) -> ReviewGateReviewer {
         provider: crew.assignment.provider.clone(),
         model: crew.assignment.model.clone(),
         reasoning_effort: crew.assignment.effort.map(|effort| effort.to_string()),
+        eligible_pool: Vec::new(),
     }
 }
 
@@ -660,6 +883,7 @@ fn held_reviewer(reviewer: &ReviewerIdentity) -> ReviewGateReviewer {
         provider: reviewer.provider.clone(),
         model: reviewer.model.clone(),
         reasoning_effort: reviewer.reasoning_effort.clone(),
+        eligible_pool: Vec::new(),
     }
 }
 

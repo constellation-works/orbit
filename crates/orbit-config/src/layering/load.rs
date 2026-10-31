@@ -8,14 +8,15 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::aliases::translate_deprecated_keys;
-use crate::crew_pools::reject_unpoolable_crew_names_in_document;
+use crate::crew_pools::{TYPE_COMPLEXITY_CREWS_KEY, reject_unpoolable_crew_names_in_document};
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
 };
 use crate::registry::{
-    CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX, read_optional, resolve_percent,
+    CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX, LEASE_INTAKE_PEER_USER_KEY,
+    LEASE_LISTENER_KEY_PREFIX, read_optional, resolve_percent,
 };
 use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
 
@@ -105,6 +106,7 @@ pub(crate) fn resolve_workspace_file_document(
     let mut workspace = parse_config_document(workspace_path, raw)?;
     reject_workspace_machine_table(&workspace.value, workspace_path)?;
     reject_workspace_crew_env(&workspace.value, workspace_path)?;
+    reject_workspace_lease_intake(&workspace.value, workspace_path)?;
     let mut global = parse_config_document(global_path, global_raw)?;
     translate_layers(Some(&mut global), Some(&mut workspace))?;
     for document in [&global, &workspace] {
@@ -194,6 +196,7 @@ fn load_layered_resolved_with_staged(
     if let Some(workspace_document) = &workspace {
         reject_workspace_machine_table(&workspace_document.value, &workspace_document.path)?;
         reject_workspace_crew_env(&workspace_document.value, &workspace_document.path)?;
+        reject_workspace_lease_intake(&workspace_document.value, &workspace_document.path)?;
     }
 
     // Missing files still admit an empty document: environment defaults and
@@ -209,7 +212,12 @@ fn load_layered_resolved_with_staged(
         // replaces the global table rather than merging its members.
         // Dynamically named crews are intentionally excluded:
         // their fields layer recursively so one crew field can be overridden.
+        // `workflow.type_complexity_crews` also layers recursively: each
+        // `<type>.<tier>` pool is one setting, as each complexity pool is.
         for descriptor in CONFIG_KEY_REGISTRY {
+            if descriptor.key == TYPE_COMPLEXITY_CREWS_KEY {
+                continue;
+            }
             if let Some(value) = value_at_path(&workspace_document.value, descriptor.key) {
                 set_value_at_path(&mut merged, descriptor.key, value.clone());
             }
@@ -257,6 +265,11 @@ fn load_layered_resolved_with_staged(
         .clone()
         .unwrap_or_default();
     resolved.plugin_enablement = plugin_enablement;
+    crate::visual_review::warn_live_without_review_layer(
+        &resolved.visual_review,
+        &resolved.operation,
+        config_path,
+    );
     Ok(LoadedResolvedConfig {
         resolved,
         global,
@@ -306,6 +319,42 @@ fn resolve_operation_layers(
     Ok(policy)
 }
 
+/// Remove from a global document being copied into a new workspace file every
+/// key the workspace layer refuses: `[machine]`, each `[crews.<name>] env`,
+/// `lease.intake.peer_user` and `[lease.listener]`. It pairs with the three
+/// `reject_workspace_*` checks below and reads the same key definitions, so a
+/// seeded file always passes them.
+pub(crate) fn strip_workspace_refused_keys(document: &mut toml_edit::DocumentMut) {
+    document.remove("assistance");
+    document.remove(GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.'));
+    if let Some(crews) = document
+        .get_mut("crews")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        for (_, crew) in crews.iter_mut() {
+            if let Some(crew) = crew.as_table_like_mut() {
+                crew.remove("env");
+            }
+        }
+    }
+    let listener = LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.');
+    for key in [LEASE_INTAKE_PEER_USER_KEY, listener] {
+        let Some((parent, leaf)) = key.rsplit_once('.') else {
+            document.remove(key);
+            continue;
+        };
+        let mut table = Some(document.as_table_mut() as &mut dyn toml_edit::TableLike);
+        for segment in parent.split('.') {
+            table = table
+                .and_then(|table| table.get_mut(segment))
+                .and_then(toml_edit::Item::as_table_like_mut);
+        }
+        if let Some(table) = table {
+            table.remove(leaf);
+        }
+    }
+}
+
 /// Refuse `[crews.<name>] env` in a workspace `config.toml`, naming the crew.
 ///
 /// A crew's `env` copies host variables (credentials, typically) into its
@@ -334,6 +383,36 @@ pub(crate) fn reject_workspace_crew_env(
     )))
 }
 
+/// Refuse `lease.intake.peer_user` and `lease.listener.*` in a workspace
+/// `config.toml`.
+///
+/// The first names the OS user Orbit Web accepts lease operations from, so a
+/// checkout must not be able to choose it; the second belongs to the lease
+/// listener user's own Orbit home. Only the global file may set either.
+pub(crate) fn reject_workspace_lease_intake(
+    document: &toml::Value,
+    path: &Path,
+) -> Result<(), OrbitError> {
+    if value_at_path(document, LEASE_INTAKE_PEER_USER_KEY).is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "{LEASE_INTAKE_PEER_USER_KEY} is not a workspace setting: remove it from '{}'. It \
+             names the OS user allowed on Orbit Web's lease intake socket, so it is read only \
+             from the global config.toml; `orbit config set --global \
+             {LEASE_INTAKE_PEER_USER_KEY} <user>` edits it",
+            redact_home_dir(&path.display().to_string())
+        )));
+    }
+    let listener = LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.');
+    if value_at_path(document, listener).is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "[{listener}] is not a workspace setting: remove it from '{}'. The lease listener \
+             reads its settings only from the listener user's global config.toml",
+            redact_home_dir(&path.display().to_string())
+        )));
+    }
+    Ok(())
+}
+
 /// Refuse a `[machine]` table in a workspace `config.toml`.
 ///
 /// Machine identity is a per-user, per-machine fact: exactly the kind of value
@@ -344,6 +423,9 @@ pub(crate) fn reject_workspace_machine_table(
     document: &toml::Value,
     path: &Path,
 ) -> Result<(), OrbitError> {
+    if document.get("assistance").is_some() {
+        return Err(OrbitError::InvalidInput("[assistance] is host-only: remove it from the workspace config.toml; only the global config.toml may grant outbound evidence, credentials and budgets".into()));
+    }
     let table = GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.');
     if value_at_path(document, table).is_none() {
         return Ok(());

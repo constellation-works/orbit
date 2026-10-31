@@ -9,7 +9,7 @@
 //! A task that still owes a criterion after deploy stays in `review`.
 
 use orbit_common::OrbitError;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskActivityUpdate};
@@ -42,10 +42,17 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
     task_ids: &[String],
     authorization: &str,
 ) -> Result<Value, OrbitError> {
-    let mut completed_task_ids = Vec::new();
+    // Validate the whole batch before mutating any task: a refusal for a
+    // later task must not leave earlier tasks already completed behind a
+    // failed result [ORB-17622].
     let mut skipped_task_ids = Vec::new();
     let mut owed_task_ids = Vec::new();
+    let mut planned: Vec<Task> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for task_id in task_ids {
+        if !seen.insert(task_id.clone()) {
+            continue;
+        }
         let task = host.get_task(task_id)?;
         match task.status {
             TaskStatus::Done => {
@@ -66,9 +73,13 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
             owed_task_ids.push(task_id.clone());
             continue;
         }
+        planned.push(task);
+    }
 
+    let mut completed_task_ids = Vec::new();
+    for task in &planned {
         host.update_task_from_activity(
-            task_id,
+            &task.id,
             TaskActivityUpdate {
                 status: TaskStatus::Done,
                 expected_status: task.status,
@@ -78,11 +89,11 @@ pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
                 comment: None,
                 note: Some(authorization.to_string()),
                 agent: None,
-                model: super::super::vcs::ship_done_attribution(&task),
+                model: super::super::vcs::ship_done_attribution(task),
                 calling_run_id: Some(run_id.to_string()),
             },
         )?;
-        completed_task_ids.push(task_id.clone());
+        completed_task_ids.push(task.id.clone());
     }
 
     Ok(json!({

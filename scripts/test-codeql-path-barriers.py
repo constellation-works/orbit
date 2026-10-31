@@ -39,6 +39,9 @@ CASES = [
     ("nested_return", "io::Result<Option<PathBuf>>", "Ok(Some(path.to_path_buf()))",
      "if let Some(path) = admitted(Path::new(&input))? { std::fs::read(path)?; }",
      "ReturnValue", False),
+    # Its model is added below under the re-export path, which matches no call.
+    ("reexport_stale", "io::Result<PathBuf>", "Ok(path.to_path_buf())",
+     "let path = admitted(Path::new(&input))?; std::fs::read(path)?;", None, True),
 ]
 
 
@@ -63,15 +66,23 @@ def main() -> None:
         'dataExtensions:\n  - barriers.yaml\n', encoding="utf-8")
     rows = []
     for name, return_type, value, extraction, model, _ in CASES:
+        # Orbit's validators live in private submodules, so each model names the
+        # defining module rather than the file that re-exports it.
         (fixture / f"src/{name}.rs").write_text(
-            'use std::path::{Path, PathBuf};\nuse std::io;\n'
-            f'fn admitted(path: &Path) -> {return_type} {{ {value} }}\n'
+            'use std::io;\nuse std::path::{Path, PathBuf};\n'
+            'mod defining {\n    use super::*;\n'
+            f'    pub(super) fn admitted(path: &Path) -> {return_type} {{ {value} }}\n}}\n'
+            'use defining::admitted;\n'
             'pub(crate) fn exercise() -> io::Result<()> {\n'
             '    let input = crate::tainted_input();\n'
             f'    {extraction}\n    Ok(())\n}}\n', encoding="utf-8")
         if model:
-            rows.append(f'      - ["orbit_barrier_probe::{name}::admitted", '
+            rows.append(f'      - ["orbit_barrier_probe::{name}::defining::admitted", '
                         f'"{model}", "path-injection", "manual"]')
+    # Re-exporting the validator defines no new canonical path, so this row
+    # matches no call and the reexport_stale flow must still alert.
+    rows.append('      - ["orbit_barrier_probe::reexport_stale::admitted", '
+                '"ReturnValue", "path-injection", "manual"]')
     (fixture / "src/main.rs").write_text(
         ''.join(f'mod {case[0]};\n' for case in CASES)
         + 'fn tainted_input() -> String {\n'

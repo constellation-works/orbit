@@ -3,20 +3,51 @@
 //! task's selection is frozen in its run input. Descendant pipelines inherit
 //! the same task choice; a task created without a crew before assignment moved
 //! to creation time, a stale pool assignment after rerating, or a default
-//! fallback for an empty pool, is routed through the current pools at admission,
-//! which reads the record and never writes it.
+//! fallback for an empty pool, is routed through the current pools at
+//! admission. Whatever crew admission chooses is written back to the task
+//! ([`write_back`], ORB-19416), so `task.crew` names the crew of its latest
+//! delivery. One older write is an
+//! auto-task task whose explicit crew is provider-limited [ORB-17638]:
+//! admission durably reassigns that task to its complexity pool and records
+//! a warning comment on it. The other is `workflow.crew_selection =
+//! "usage_pressure"` [ORB-17770]: creation, re-rate and admission draws weigh
+//! each member by its crew's weekly usage pressure, and admission draws a
+//! system-chosen crew again from its whole pool, persisting a changed crew
+//! under the task's existing automatic source. Activity, review, verifier and
+//! explorer pools use the same helper through `draw_crew_pool`, after their
+//! existing membership filters, and carry each member's draw provenance.
+//! `workflow.crew_performance` multiplies the creation, re-rate and
+//! admission draws by each crew's performance factor from the persisted
+//! snapshot through the same seam; it never re-draws an assigned crew by
+//! itself, and activity draws take no performance factor. `shadow_absolute`
+//! and `shadow_comparative` compute and record that factor with
+//! `applied: false` and leave the tickets on the weights the draw would
+//! use with the mode off; pressure still applies.
+//! `workflow.type_complexity_crews` gives a task type its own pool per tier
+//! ([`task_type`]), drawn wherever the complexity pool would be, behind an
+//! explicit crew and a purpose pool, under the same filters and weights.
 
 mod activity;
 mod admission;
 mod candidates;
 mod draw;
 mod purpose;
+#[cfg(feature = "test-support")]
+mod selection_checkpoint;
+mod task_type;
 mod types;
+mod write_back;
 
-pub(crate) use admission::strip_auto_crew_admission;
-pub(crate) use draw::{
-    complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
-    weighted_draw,
+pub(crate) use admission::{
+    AdmissionTaskWrites, crew_admission_task_id, strip_auto_crew_admission,
 };
-pub(crate) use purpose::{PURPOSE_SOURCE_PREFIX, automatic_crew_source};
-pub(crate) use types::{CapturedCrewPools, CreationCrewAssignment, CrewCandidate, InspectionPool};
+pub(crate) use draw::{
+    INSPECTION_CREW_UNAVAILABLE, complexity_crews_key, complexity_of_crews_key, random_crew_ticket,
+    seeded_crew_ticket,
+};
+#[cfg(feature = "test-support")]
+pub use selection_checkpoint::with_crew_selection_checkpoint;
+pub(crate) use types::CapturedCrewPools;
+#[cfg(feature = "test-support")]
+pub use write_back::with_crew_backfill_checkpoint;
+pub use write_back::{TaskCrewBackfill, TaskCrewChange};

@@ -5,7 +5,7 @@ use crate::OrbitRuntime;
 use crate::runtime::run_input::recorded_task_ids;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
-    AutomationError,
+    AutomationError, DeferredReason,
     delivery::{
         ActionOutcome, digest, evidence,
         evidence::{EvidenceFacts, MIN_RATIONALE_CHARS},
@@ -43,7 +43,7 @@ pub(super) fn mint(
         "\n\nFrozen automation input (inspect these exact revisions):\n```json\n{frozen_input}\n```\nSubmit versioned coverage evidence as {COVERAGE_ARTIFACT} with orbit.task.artifact.put. Examination, including findings, must be complete before setting examination_complete=true. Task completion alone does not certify coverage."
     ));
     params.description.push_str(&format!(
-        "\n\nGive every frozen delivery one delivery_examinations entry. Its examined_paths and skipped_paths (each with a reason) must together be exactly the paths `git diff --name-only --no-renames <before.commit> <after.commit>` lists for that delivery. Its verdict is \"clean\" or {{\"findings\": [\"<finding task ID>\", ...]}}, and its rationale (at least {MIN_RATIONALE_CHARS} characters, different for each delivery) says why the verdict holds for that change. Persist an execution summary of what you examined: a review whose agent records none leaves its batch owed."
+        "\n\nGive every frozen delivery one delivery_examinations entry. Its examined_paths is an array of path strings, and its skipped_paths is an array of {{\"path\": ..., \"reason\": ...}} objects. Together they must be exactly the paths `git diff --name-only --no-renames <before.commit> <after.commit>` lists for that delivery. Its verdict is \"clean\" or {{\"findings\": [\"<finding task ID>\", ...]}}, and its rationale (at least {MIN_RATIONALE_CHARS} characters, different for each delivery) says why the verdict holds for that change. Persist an execution summary of what you examined: a review whose agent records none leaves its batch owed."
     ));
     params.description.push_str(&format!(
         "\n\nEvidence template (replace action_id with this task ID and fill actual checks/findings):\n```json\n{evidence_template}\n```"
@@ -284,7 +284,7 @@ pub(super) fn job_outcome(
                 != expected.get(key)
         })
     {
-        return Err(AutomationError::Deferred("job_input_mismatch".into()));
+        return Err(AutomationError::Deferred(DeferredReason::JobInputMismatch));
     }
 
     // The most recent step carrying evidence wins.

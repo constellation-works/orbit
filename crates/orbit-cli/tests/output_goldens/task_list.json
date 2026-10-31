@@ -13,6 +13,7 @@
     "execution_summary": "",
     "context_files": [],
     "created_by": "claude",
+    "created_by_model": null,
     "planned_by": null,
     "implemented_by": null,
     "status": "proposed",
@@ -44,6 +45,7 @@
         }
       ]
     },
+    "not_before": null,
     "pilot_warnings": []
   },
   {
@@ -60,6 +62,7 @@
     "execution_summary": "",
     "context_files": [],
     "created_by": "claude",
+    "created_by_model": null,
     "planned_by": null,
     "implemented_by": null,
     "status": "proposed",
@@ -91,6 +94,7 @@
         }
       ]
     },
+    "not_before": null,
     "pilot_warnings": []
   },
   {
@@ -107,6 +111,7 @@
     "execution_summary": "",
     "context_files": [],
     "created_by": "claude",
+    "created_by_model": null,
     "planned_by": null,
     "implemented_by": null,
     "status": "proposed",
@@ -138,6 +143,7 @@
         }
       ]
     },
+    "not_before": null,
     "pilot_warnings": []
   }
 ]

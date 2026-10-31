@@ -78,7 +78,7 @@ async fn successful_clock_change_with_failed_follow_up_read_is_audited_and_unkno
         ))
         .expect("request");
 
-    let response = router()
+    let response = router(state.clone())
         .with_state(state)
         .oneshot(request)
         .await
@@ -177,7 +177,7 @@ async fn routine_health_clock_token_for_each_status_combination() {
             .header(header::HOST, "localhost:7878")
             .body(Body::empty())
             .expect("request");
-        let response = router()
+        let response = router(state.clone())
             .with_state(state)
             .oneshot(request)
             .await

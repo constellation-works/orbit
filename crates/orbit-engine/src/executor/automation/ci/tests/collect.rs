@@ -1,7 +1,8 @@
 use serde_json::{Value, json};
 
-use super::super::collect::{collect, collect_for_sweep};
+use super::super::collect::{collect, collect_at, collect_for_sweep};
 use super::super::history::RetryableHistory;
+use super::super::query::LogScope;
 use super::support::{FakeQueries, HEAD, input, run};
 
 fn full_page(count: u64) -> Vec<Value> {
@@ -71,6 +72,66 @@ fn zero_listing_bounds_are_raised_to_one_so_the_sweep_can_complete() {
     assert_eq!(evidence["truncation"]["max_runs"], json!(1));
     assert_eq!(evidence["truncation"]["max_pull_requests"], json!(1));
     assert_eq!(evidence["outcome_hint"], json!("no_current_failure"));
+}
+
+#[test]
+fn checkout_evidence_uses_all_scope_and_each_log_read_uses_the_requested_bound() {
+    const RUN_ID: u64 = 88_004;
+    const JOB_ID: u64 = 88_005;
+    const LOG_MAX_BYTES: usize = 128;
+
+    let failed_log = format!("compile failed\n{}", "x".repeat(512));
+    let all_log = format!(
+        "HEAD is now at {HEAD} workflow checkout\n{}",
+        "x".repeat(512)
+    );
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![run(
+            RUN_ID,
+            "CI",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:10:00Z",
+        )]])
+        .with_failed_jobs(
+            RUN_ID,
+            json!([{
+                "job_id": JOB_ID,
+                "name": "check",
+                "status": "completed",
+                "conclusion": "failure",
+                "failed_steps": [{"name": "compile", "conclusion": "failure"}],
+            }]),
+        )
+        .with_scoped_log(JOB_ID, LogScope::Failed, &failed_log)
+        .with_scoped_log(JOB_ID, LogScope::All, &all_log);
+    let mut input = input();
+    input["log_max_bytes"] = json!(LOG_MAX_BYTES);
+
+    let evidence = collect(&queries, &input, &mut RetryableHistory::default()).expect("collect");
+
+    let failure = &evidence["current_failures"][0];
+    assert_eq!(failure["run_id"], json!(RUN_ID));
+    assert_eq!(failure["log_total_bytes"], json!(failed_log.len()));
+    assert!(
+        failure["log_returned_bytes"]
+            .as_u64()
+            .expect("returned byte count")
+            <= LOG_MAX_BYTES as u64,
+        "the failed-scope excerpt must honor log_max_bytes"
+    );
+    assert_eq!(failure["checkout_evidence_scope"], json!("all"));
+    assert_eq!(failure["actual_checkout_shas"], json!([HEAD]));
+    assert_eq!(
+        *queries.log_reads.lock().expect("log reads"),
+        [
+            (RUN_ID.to_string(), JOB_ID, LogScope::Failed, LOG_MAX_BYTES),
+            (RUN_ID.to_string(), JOB_ID, LogScope::All, LOG_MAX_BYTES),
+        ],
+        "checkout recovery must read Failed then All for the same run and job"
+    );
 }
 
 const PR_BRANCH: &str = "orbit/ORB-14260-6bfc1a2d";
@@ -181,6 +242,40 @@ fn error_operations(evidence: &Value, key: &str) -> Vec<String> {
     operations.sort_unstable();
     operations.dedup();
     operations
+}
+
+#[test]
+fn repository_and_run_view_query_failures_are_retryable() {
+    let repo_view_error = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_repo_view_error("repository details unavailable");
+    let run_list_error = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_repository_runs_error("workflow runs unavailable");
+    let run_view_error = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![run(
+            42,
+            "CI",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:10:00Z",
+        )]])
+        .with_run_view_error(42, "run details unavailable");
+
+    for (operation, queries) in [
+        ("repo_view", repo_view_error),
+        ("run_list", run_list_error),
+        ("run_view", run_view_error),
+    ] {
+        let evidence = collect(&queries, &input(), &mut RetryableHistory::default())
+            .expect("collect partial evidence");
+        assert!(
+            error_operations(&evidence, "retryable_errors").contains(&operation.to_string()),
+            "{operation} failures must be included in retryable_errors"
+        );
+    }
 }
 
 #[test]
@@ -331,4 +426,302 @@ fn unavailable_collection_breaks_a_consecutive_error_streak() {
     let after_gap = history.observe(vec![error], "scheduled-4");
     assert_eq!(after_gap.retryable.len(), 1);
     assert!(after_gap.persistent.is_empty());
+}
+
+#[test]
+fn query_errors_in_snapshot_notes_are_redacted_without_losing_operation_context() {
+    // Synthetic credential; no host credentials or GitHub processes are used.
+    let token = format!("ghp_{}", "A".repeat(36));
+    let error = format!("query failed: {token}");
+    let candidate = || {
+        let mut red = run(
+            50,
+            "CI",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:10:00Z",
+        );
+        red["head_branch"] = json!("candidate");
+        FakeQueries::authenticated()
+            .with_head("topic", HEAD)
+            .with_head("candidate", HEAD)
+            .with_runs(vec![vec![red]])
+    };
+    const PREVIOUS: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SUCCESSOR: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let pending = || {
+        let mut red = run(
+            200,
+            "CI",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:10:00Z",
+        );
+        red["updated_at"] = json!("2026-10-07T02:45:00Z");
+        FakeQueries::authenticated()
+            .with_head("topic", SUCCESSOR)
+            .with_ancestor(HEAD, SUCCESSOR)
+            .with_ancestor(PREVIOUS, HEAD)
+            .with_runs(vec![vec![
+                run(
+                    201,
+                    "CI",
+                    SUCCESSOR,
+                    "in_progress",
+                    None,
+                    "2026-10-07T02:50:00Z",
+                ),
+                red,
+                run(
+                    199,
+                    "CI",
+                    PREVIOUS,
+                    "completed",
+                    Some("failure"),
+                    "2026-10-07T01:10:00Z",
+                ),
+            ]])
+            .with_failed_jobs(
+                200,
+                json!([{
+                    "job_id": 2000, "name": "check", "conclusion": "failure",
+                    "failed_steps": [{"name": "compile"}],
+                }]),
+            )
+            .with_failed_jobs(
+                199,
+                json!([{
+                    "job_id": 1990, "name": "check", "conclusion": "failure",
+                    "failed_steps": [{"name": "compile"}],
+                }]),
+            )
+    };
+    let cases = [
+        (
+            "closed PR list",
+            candidate().with_closed_pull_requests_error(&error),
+            "closed pull requests could not be listed",
+        ),
+        (
+            "closed PR head",
+            candidate()
+                .with_closed_pull_requests_error("listing unavailable")
+                .with_closed_pull_request_branch_error("candidate", &error),
+            "closed pull requests for candidate branch 'candidate' could not be listed",
+        ),
+        (
+            "open PR head",
+            candidate()
+                .with_pull_request("CLOSED", 17, "candidate", HEAD)
+                .with_open_pull_request_branch_error("candidate", &error),
+            "open pull requests for candidate branch 'candidate' could not be listed",
+        ),
+        (
+            "remote head",
+            candidate().with_head_error("candidate", &error),
+            "branch 'candidate' could not be checked against origin",
+        ),
+        (
+            "successor ancestry",
+            pending().with_ancestry_error(HEAD, SUCCESSOR, &error),
+            "run 200 could not be compared with in-flight run 201",
+        ),
+        (
+            "previous ancestry",
+            pending().with_ancestry_error(PREVIOUS, HEAD, &error),
+            "run 200 could not be compared with its previous completed run 199",
+        ),
+        (
+            "run view",
+            pending().with_run_view_error(200, &error),
+            "run view 200 could not be read to compare run 200",
+        ),
+        (
+            "job log",
+            pending().with_run_log_error(2000, &error),
+            "failed-step log of job 2000 in run 200 could not be read",
+        ),
+    ];
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-07T02:55:00Z")
+        .expect("fixture time")
+        .with_timezone(&chrono::Utc);
+    let mut leaked = Vec::new();
+    for (case, queries, operation) in cases {
+        let evidence = collect_at(
+            &queries,
+            &input(),
+            &mut RetryableHistory::default(),
+            "redaction-regression",
+            now,
+        )
+        .expect("collect partial evidence");
+        let notes = evidence["truncation"]["notes"].as_array().expect("notes");
+        assert!(
+            notes
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|note| note.contains(operation) && note.contains("query failed:")),
+            "{case}: the note must identify the failed operation and retain its safe error detail"
+        );
+        if notes
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|note| note.contains(&token))
+        {
+            leaked.push(case);
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "CI notes exposed credentials for {leaked:?}"
+    );
+}
+
+fn failed_job(job_id: u64) -> Value {
+    json!([{
+        "job_id": job_id,
+        "name": "check",
+        "status": "completed",
+        "conclusion": "failure",
+        "failed_steps": [{"name": "compile", "conclusion": "failure"}],
+    }])
+}
+
+/// A log that proves checkout identity without needing a follow-up read.
+fn checkout_log() -> String {
+    format!("HEAD is now at {HEAD} workflow checkout\nrun output\n")
+}
+
+fn budget_errors_for(evidence: &Value, run_id: u64) -> Vec<Value> {
+    evidence["retryable_errors"]
+        .as_array()
+        .expect("retryable errors")
+        .iter()
+        .filter(|error| {
+            error["operation"] == json!("investigation_budget") && error["run_id"] == json!(run_id)
+        })
+        .cloned()
+        .collect()
+}
+
+fn budget_of_one() -> Value {
+    let mut input = input();
+    input["max_investigated_runs"] = json!(1);
+    input
+}
+
+#[test]
+fn over_budget_in_flight_candidate_yields_an_investigation_budget_error() {
+    const COMPLETED_RUN: u64 = 101;
+    const IN_FLIGHT_RUN: u64 = 102;
+    const JOB_ID: u64 = 9_101;
+    // The completed failure is newer, so it keeps the single investigation
+    // slot and the in-flight mixed-state candidate overflows the budget.
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![
+            run(
+                COMPLETED_RUN,
+                "ci-a",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-10-07T02:20:00Z",
+            ),
+            run(
+                IN_FLIGHT_RUN,
+                "ci-b",
+                HEAD,
+                "in_progress",
+                None,
+                "2026-10-07T02:10:00Z",
+            ),
+        ]])
+        .with_failed_jobs(COMPLETED_RUN, failed_job(JOB_ID))
+        .with_log(JOB_ID, &checkout_log());
+
+    let evidence =
+        collect(&queries, &budget_of_one(), &mut RetryableHistory::default()).expect("collect");
+
+    assert_eq!(
+        sorted_run_ids(&evidence, "current_failures"),
+        [COMPLETED_RUN]
+    );
+    assert!(
+        sorted_run_ids(&evidence, "in_flight").contains(&IN_FLIGHT_RUN),
+        "the overflowed run is still listed as in-flight"
+    );
+    // The unexpanded in-flight summary carries no failed jobs, so it cannot
+    // survive the actionable-failure filter; the budget error is what marks
+    // the gap instead of silence.
+    for key in ["current_failures", "branch_failures", "deferred"] {
+        assert!(
+            !sorted_run_ids(&evidence, key).contains(&IN_FLIGHT_RUN),
+            "{key} must not silently absorb the uninvestigated in-flight run"
+        );
+    }
+    let budget = budget_errors_for(&evidence, IN_FLIGHT_RUN);
+    assert_eq!(
+        budget.len(),
+        1,
+        "the overflowed in-flight run needs one budget error"
+    );
+    assert_eq!(budget[0]["stage"], json!("investigation"));
+    assert_eq!(budget[0]["retryable"], json!(true));
+    assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
+}
+
+#[test]
+fn over_budget_completed_failure_keeps_its_investigation_budget_error() {
+    const COMPLETED_RUN: u64 = 101;
+    const IN_FLIGHT_RUN: u64 = 102;
+    const JOB_ID: u64 = 9_102;
+    // The in-flight run is newer here, so the completed failure is the one
+    // that overflows the single investigation slot.
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![
+            run(
+                IN_FLIGHT_RUN,
+                "ci-b",
+                HEAD,
+                "in_progress",
+                None,
+                "2026-10-07T02:20:00Z",
+            ),
+            run(
+                COMPLETED_RUN,
+                "ci-a",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-10-07T02:10:00Z",
+            ),
+        ]])
+        .with_failed_jobs(IN_FLIGHT_RUN, failed_job(JOB_ID))
+        .with_log(JOB_ID, &checkout_log());
+
+    let evidence =
+        collect(&queries, &budget_of_one(), &mut RetryableHistory::default()).expect("collect");
+
+    let budget = budget_errors_for(&evidence, COMPLETED_RUN);
+    assert_eq!(
+        budget.len(),
+        1,
+        "the overflowed completed failure keeps its budget error"
+    );
+    assert_eq!(
+        budget[0]["message"],
+        json!("current failure was not investigated because max_investigated_runs was exhausted")
+    );
+    let uninvestigated = evidence["current_failures"]
+        .as_array()
+        .expect("current failures")
+        .iter()
+        .find(|failure| failure["run_id"] == json!(COMPLETED_RUN))
+        .expect("the overflowed completed failure stays represented");
+    assert_eq!(uninvestigated["investigated"], json!(false));
+    assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
 }

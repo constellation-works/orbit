@@ -1,36 +1,40 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-19
-last_validated: 2026-10-19
+last_updated: 2026-10-30
+last_validated: 2026-10-26
 status: Accepted
 feature: review-gate
 doc_role: design
 type: design
-summary: Shipped review contract — captured timing, the before-PR gate whose reviewer fixes its findings as a second commit, the before-landing review of the open PR, what validation records establish, lineage budgets, managed completion, delivery coverage, surfaces, and rollback.
+summary: Shipped review contract (before_pr deprecated but honoured; off/before_landing recommended) and a proposed selective before-landing extension using configurable candidate-risk thresholds and path rules, with captured policy, exact-head enforcement, lineage budgets and delivery coverage.
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation.rs", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle/**"]
 related_features: [automation-triggers, activity-job, auditability]
-related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849]
+related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-13989, ORB-13992, ORB-14192, ORB-14849, ORB-20087, ORB-20099]
 ---
 
 # Review Gate — Design [ORB-11333]
 
-This file describes what shipped. A preference edit grants no authority and
-changes no schedule; a verdict grants no merge permission.
+This file describes what shipped, except §3.3, which is a proposed extension
+and is not an available configuration surface yet. A preference edit grants
+no authority and changes no schedule; a verdict grants no merge permission.
+§1.1 records the shipped staged deprecation of before-PR review [ORB-20099];
+§3.3 stays proposed (tracked by ORB-20087) and is not implemented by that
+deprecation.
 
 ## 1. Preferences: three timings [ORB-13992] [ORB-14849]
 
-Automatic review runs at up to three timings. Before-PR review and
-before-landing review are the two values of the `config.toml` key
-`review.timing` besides `off`; after-landing review is the
+Automatic review runs at up to three timings. Before-PR review (deprecated but
+honoured) and before-landing review are the two values of the `config.toml`
+key `review.timing` besides `off`; after-landing review is the
 `delivery-code-review` auto-task's own `enabled` flag. Config preferences
 resolve **built-in → global → workspace**, each with its winning layer
 recorded. Unknown keys and out-of-range values fail config load.
 
 | Key | Values (default) |
 | --- | --- |
-| `review.timing` | `off`, `before_pr` or `before_landing` (`off`) |
+| `review.timing` | `off` or `before_landing` (recommended), or deprecated `before_pr` (`off`) |
 | `review.before_landing_hosts` | machine ids (`[]` by default; entries are `hm_…`; owner policy for claimed leaves) |
 | `review.minutes` | 1..=1440 (30): wall-clock limit for one candidate's review |
 | `workflow.purpose_crews.review` | crew name or weighted pool |
@@ -103,6 +107,138 @@ warned about by name and ignored. The resolved-policy version is 5; the
 review-admission contract remains version 1 and refuses unsupported contract
 versions. A snapshot captured before the retirement still carries
 `reviewer_starts` or `repair_cycles`; it reads and the values are ignored.
+
+### 1.1 Staged deprecation of before-PR review [ORB-20099] (shipped)
+
+**Shipped.** Daniel's 2026-10-29 direction is to deprecate the `before_pr`
+review mode first, before selective before-landing review ([ORB-20087]).
+[ORB-20099] delivers this prerequisite as a warning-and-migration stage, and
+[ORB-20087] consumes it. The old boolean `review.before_pr` was already
+deprecated; this stage also deprecates the mode selected by
+`review.timing = "before_pr"` or `--review before-pr`. Its effective behavior
+stays before-PR: `before_pr` is deprecated but fully honoured, with bounded
+warnings naming the deciding key or request and its source.
+
+For new use, recommend `review.timing = "before_landing"` or an explicit
+`--review before-landing`. The PR opens first and review overlaps hosted CI;
+the existing exact-reviewed-head merge rule and budgets still apply. Keep
+`off` as the default and after-landing review independent. Do not enable
+selective review in this stage; §3.3 stays proposed.
+
+#### Configuration, requests and diagnostics
+
+- New templates, normal examples, recommended choices and ordinary operator
+  guidance use `off` or `before_landing`. Mark the before-PR choice deprecated
+  in configuration/CLI/tool metadata and any existing-value display; do not
+  present it as a peer recommendation for new setups.
+- Compatibility readers and explicit legacy requests continue accepting
+  `before_pr` and `before-pr` during this stage, including the older boolean
+  and `operation.review_policy` spellings that resolve to it. Their resolved
+  behavior stays before-PR. Emit an actionable warning naming the deciding
+  key or run request, its physical config layer/source when applicable, and
+  the before-landing replacement. Warnings belong in existing diagnostic
+  channels and structured metadata, never as extra stdout that corrupts a
+  CLI JSON or MCP response. Bound repeated warnings per load/request.
+- Distinguish read compatibility from recommended choices without making
+  command help, registered schemas and actual parsing contradict each other.
+  A client that still sends the old value gets the same audited operation
+  and the deprecation diagnostic; do not silently reinterpret its request.
+- `orbit config show`, doctor and review diagnostics retain their existing
+  fields and show the legacy mode's actual effective value, provenance and
+  warning. Deprecation alone is not an unhealthy review gate and must not
+  make doctor fail; genuine missing crews, conflicting layers or unsupported
+  local routes retain their existing errors.
+- Ordinary saves, alias normalization, init/refresh of user-authored config
+  and `doctor --fix-retired-config-keys` must not migrate the review timing
+  as a side effect. Keep a legacy policy's canonical `before_pr` spelling
+  while merely normalizing its syntax; that preserves its semantics and
+  readability by long-lived older clients.
+
+#### Explicit migration in `config.toml`
+
+An operator intentionally changes the deciding physical configuration layer
+using the existing audited config writer. For example, replace:
+
+```toml
+[review]
+timing = "before_pr"
+```
+
+with:
+
+```toml
+[review]
+timing = "before_landing"
+```
+
+The existing `orbit config set review.timing before_landing` is the normal
+workspace migration. Inspect the effective source first and use the existing
+scope/selector mechanism for a global or another workspace's setting. Show
+the before/after timing and source; preserve review minutes, crews,
+validation requirements, host evidence, overrides and unrelated settings.
+A workspace override must not be mistaken for a migration of the global
+setting it masks. No bulk cross-host rewrite or live migration is authorized
+by filing or implementing the deprecation task.
+
+This deliberately changes when new runs publish their PR; it is an operator
+policy decision, not an equivalence-preserving alias rewrite. It affects only
+future independent admissions. Do not turn any legacy `before_pr` into
+`off`, change required checks or infer merge authority during migration.
+
+#### Preserve admitted work and review evidence
+
+An existing delivery run, drain, parent-authorized child, claim, resume,
+recovery or source-repair continuation keeps its captured timing, reviewer
+contract and consumed lineage budget. A child of an old before-PR admission
+still inherits before-PR review even after configuration migration. A
+before-PR review already admitted still finishes before publication, and
+completion/re-review still enforces the heads and evidence that its captured
+contract requires. Rejected, timed-out and evidence-held work remains in its
+existing recovery state; the warning cannot waive or restart its review.
+
+Retain `ReviewTiming::BeforePr`, its serialized spelling and all required
+historical execution/settlement handlers. Existing admission snapshots,
+policy digests, claim/handoff receipts, manifests, certificates, findings,
+validation records, preserved reviewer repairs and consumption/accounting
+records remain readable and unchanged. A before-PR certificate is never
+renamed into a before-landing certificate. Existing exact-tree and clean
+rebase coverage rules continue using the evidence's actual timing and
+identity; migration creates neither a certificate nor new coverage.
+
+Preserve owner/follower and long-lived CLI/MCP behavior through a mixed-build
+deployment. Do not bump persisted versions solely to add warnings, rewrite
+old snapshots or make new readers emit data that old active clients silently
+misread. Any unavoidable incompatible schema change must negotiate or
+refuse before state is changed. Filing this task does not authorize an
+upgrade, release or changing host configuration.
+
+#### Verification, ordering and later removal
+
+The prerequisite is complete when supported compatibility inputs retain
+their review semantics with visible deprecation diagnostics, new guidance
+points to before-landing, an explicit scoped config migration is documented,
+and public-path fixtures/manual QA establish preservation of existing runs
+and evidence. Include old/new config layering, canonical/alias/boolean/run
+request forms, JSON/MCP diagnostics, unrelated config writes, fresh versus
+inherited admission after migration, interrupted review and held recovery,
+mixed owner/follower builds, certificate/coverage readback, and rollback.
+Use existing fixtures and repository test-admission rules; unavailable live
+validation remains a named limitation, not a pass or a reason to erase state.
+
+Then [ORB-20087] implements selective rules solely for the before-landing
+gate, with the deprecated before-PR compatibility behavior fenced off rather
+than extended. Its operator must migrate any effective legacy before-PR
+policy before enabling selective mode. The selective implementation does
+not need a before-PR trigger mode, symbol trigger or a new migration framework.
+
+Removing the accepted configuration/request value or legacy execution
+branches is later, separately scoped work. It needs an explicit compatibility
+window and a read-only inventory of active/resumable runs and retained
+historical evidence; elapsed time alone is not proof that deleting handlers
+is safe. Refuse future unsupported input with a migration remedy rather
+than silently dropping review. Never delete old evidence to make removal
+possible. No release date or internal-handler deletion is required for this
+deprecation task or for [ORB-20087].
 
 ## 2. Captured timing
 
@@ -389,6 +525,214 @@ PR stays open and unmerged while the owner supplies the named checks. Other
 non-approving leaf reviews fail with the PR open and unmerged; their failure
 settlement blocks the task on the owner.
 
+### 3.3 Selective before-landing review [ORB-20087]
+
+**Shipped (default off).** ORB-20087 implements this section behind `review.selective_before_landing` (`off` by default); shipping enables no live policy — observe/enforce adoption is a later explicit operator decision. The text below is the shipped contract. Daniel's 2026-10-29 direction is to restore
+before-landing review selectively using configurable regression-risk and path
+rules; [ORB-20087] tracks implementation. Symbol-history triggers are
+deferred. This extends this gate; it does not add another reviewer, merge
+permission or a second review framework.
+The staged before-PR deprecation in §1.1 has shipped and is the prerequisite
+for this work. Legacy before-PR inputs and captured runs remain compatibility
+obligations, not a new selective timing option.
+It gates managed landing, not execution of GitHub Actions on an unreviewed
+PR; it does not replace protected environments or the separate credential
+isolation required before disabling Copilot workflow-run approval.
+
+#### Configuration in `config.toml`
+
+The following is the workspace configuration an operator may adopt:
+
+```toml
+[review]
+timing = "off"  # No unconditional before-PR/before-landing layer.
+minutes = 30   # Existing budget, reused by selected reviews.
+
+[review.selective_before_landing]
+mode = "observe"             # "off" (default), "observe", or "enforce".
+risk_threshold = 0.40         # Select when estimated probability is > 0.40.
+paths = [".github/workflows/**"]
+unknown_risk = "review"       # "review" (default) or explicitly "skip".
+
+# Existing reviewer configuration, needed before mode = "enforce":
+[workflow.purpose_crews]
+pre_landing_review = ["sol"]  # Example only; use the configured reviewer pool.
+```
+
+After observing selection volume, an operator may change only `mode` to
+`"enforce"` for future runs. `"observe"` records what would require review
+without starting a reviewer or changing the existing delivery decision.
+`"off"` preserves today's behavior and performs no selective risk scan.
+
+| Key | Default and validation |
+| --- | --- |
+| `review.selective_before_landing.mode` | `"off"`; only `off`, `observe`, `enforce` are accepted. |
+| `review.selective_before_landing.risk_threshold` | Unset: disable the risk predicate. If set, a finite probability in `[0, 1]`; comparison is strictly `risk > threshold`, so exactly `0.40` does not exceed `0.40`. |
+| `review.selective_before_landing.paths` | `[]`: disable the path predicate. An array of valid, positive, repository-relative glob patterns. `*` does not cross `/`; `**` can. Reject empty, absolute, parent-traversing, negated or malformed patterns. |
+| `review.selective_before_landing.unknown_risk` | `"review"`; only `review` or `skip`. Applies only when the configured risk predicate has no usable estimate, never to an unreadable path diff. |
+
+At least one predicate must be configured in `observe` or `enforce` mode.
+A path-only policy omits `risk_threshold` and does not build a risk model;
+a risk-only policy omits `paths`. These preferences use the existing
+built-in → global → workspace precedence and expose the winning source for
+each field. A workspace `paths = []` replaces, rather than appends to, the
+lower-layer list. Malformed or contradictory configuration fails load.
+
+The path in the example is relative to Orbit's repository root. The
+Constellation checkout prefix `codebases/orbit/` is not part of the pattern.
+Sensitive paths are workspace policy, never hard-coded in generic Orbit core.
+
+#### Selection and precedence
+
+Predicates combine with **OR**: a path match, any usable task estimate above
+the risk threshold, or the configured unknown-risk fallback requires one
+before-landing review in `enforce` mode. Record every matching reason, not
+just the first one.
+
+- Non-off selective mode requires `review.timing = "off"`. Combining it with
+  unconditional `before_landing` fails configuration rather than creating
+  two layers. An effective deprecated `before_pr` policy also refuses the
+  combination, naming the explicit §1.1 migration; it is never auto-converted.
+- Existing `review.before_landing_hosts` matches remain unconditional for
+  their claims. Other executors use the selective policy. Observe mode does
+  not suppress a review already required by a host match.
+- An explicit run `--review` can still strengthen the policy. An explicit
+  before-landing request always reviews. A deprecated before-PR request is
+  incompatible with active selective before-landing enforcement and is
+  refused before dispatch; it cannot relocate or evade a mandatory rule.
+- A positive enforced selective decision overrides `skip-review` and custom
+  review-skip tags, even inside `workflow.light_delivery_paths`. A negative
+  selective decision grants no exemption from any other required layer.
+  Checked no-diff deliveries keep their existing no-diff exemption.
+- Enforce mode requires a resolvable pre-landing reviewer pool and PR-route
+  execution capability before dispatch, even though no diff exists yet.
+  Local-only delivery is refused, never silently unreviewed. Observe mode
+  requires no reviewer pool but supports PR-route observation only; report
+  local-only configuration as unsupported rather than inventing a landing
+  point there.
+
+#### Inputs: actual candidate, not declared selectors
+
+Evaluate after final base synchronization at the open PR's pinned head,
+before the landing review is admitted. Use the actual complete base/head
+diff, never `context_files`, labels, a model's recommendation, the task's
+declared risk or the current checkout's changed configuration.
+
+Path evaluation examines both old and new names, including deleted, renamed,
+binary, symlink, mode-only and gitlink entries. Normalize Git paths without
+following candidate symlinks. A rename away from a protected path still
+matches; disabling rename detection must produce the equivalent delete/add
+answer. Missing objects, an invalid path or a truncated/unreadable diff is
+`selection_unavailable`: enforce mode holds completion with the concrete
+reason, even if `unknown_risk = "skip"`. Observe records the gap without
+changing delivery. Bound work and retain explicit gap/count metadata rather
+than treating an incomplete scan as a non-match.
+
+Risk uses the existing task-riskiness estimator's `diff_lines` basis and
+version, with insertions plus deletions from the pinned candidate. Capture
+the owner-derived fitted model, history window/cutoff, support and evidence
+identity for the delivery, and reuse it for revised heads; unrelated later
+history must not change a retry's answer. Do not refit a new risk model or
+add symbolic history, crew or coverage inputs for this feature. Missing or
+insufficient history, incomplete measurements or an unusable fit is unknown,
+not zero; a declared-file fallback is not an actual-diff estimate here.
+
+For a delivery containing several tasks, use each task's attributable
+candidate diff and select if any usable probability exceeds the threshold.
+Do not sum probabilities or assign the combined diff to every task while
+calling it a calibrated task probability. Where shared/partial attribution
+cannot yield those task units, record unknown risk and apply its configured
+fallback. Path matching always covers the entire delivery. The displayed
+percentage estimates a historical recorded-regression outcome; it is not a
+claim that this particular patch has a known probability of being wrong.
+
+#### Durable decision and exact-head enforcement
+
+Capture the selective policy and its provenance in the owner-resolved
+immutable review admission. Children and resumes inherit it. Candidate
+configuration edits and ordinary agent run input cannot supply or weaken
+it. The captured possibility of selection is distinct from an evaluated
+`not_required`: `timing = none` alone is no longer proof that an enforce-mode
+run can merge. Pending or absent selection evidence holds completion.
+
+System code persists a versioned selection receipt containing:
+
+- Workspace, run/lineage and task units; policy digest/source; mode and
+  predicate configuration; base/head commits and trees; evaluator version.
+- Risk basis, measured sizes, model/history identity and support, each
+  usable probability or unknown reason; matching paths and patterns with
+  bounded summaries and complete reproducible input identities.
+- `required`, `not_required` or `unavailable`; all reasons, unknown fallback,
+  and any stronger host/run policy. Observe additionally records the
+  would-require result separately from actual enforced review mode.
+
+The receipt is host-authored evidence, not an agent response envelope or an
+editable task artifact. Surface its bounded explanation through existing
+run/task review diagnostics and captured admission views. A skip records a
+typed disposition, never a passed review certificate. After-landing coverage
+still requires an actual accepted review; observing or skipping creates none.
+
+On a positive decision, reuse §3.2's reviewer, crew resolution, budget,
+two-commit repair, validation, verdict and failure/hold behavior. Review runs
+alongside hosted CI. Resuming an identical base/head/policy/model reuses the
+decision and retained review evidence; it does not invoke another reviewer
+merely to re-evaluate a predicate.
+
+Before managed completion, the owner verifies the live PR head against the
+selection receipt and, when required, the settled reviewed head. An external
+push, auto-fix or rebase invalidates a negative decision and must be
+re-evaluated on the new base/head. Once enforcement has selected review in
+a delivery lineage, subsequent revisions cannot downgrade that obligation
+by shrinking the patch or moving a protected path; the existing candidate
+and re-review rules determine fresh evidence requirements. Reviewer fixes
+remain under the existing settlement contract, not a recursive extra review
+of the reviewer's own repairs. Preserve prior receipts and consumed budget.
+
+#### Owner/follower compatibility
+
+The owner captures policy and risk-model evidence in a versioned claim
+contract. A selective-capable PR leaf evaluates the real candidate and runs
+any required review where it owns the worktree, as §3.2 does today. The owner
+verifies the receipt's policy/model and actual Git identities and predicate
+result before accepting a claimed handoff or landing it. Unavailable Git or
+attribution evidence holds it; an agent's claimed non-match is insufficient.
+
+Require an explicit selective-review capability from executors before
+admitting enforce-mode work. Older executors must refuse the contract, not
+drop the policy into today's `before_landing = false` path. Preserve existing
+snapshots and handoffs with the new policy absent as today's off behavior;
+new semantics require version negotiation, not reinterpretation of old
+`none` dispositions. Cover all local-owner, claimed-leaf, recovery, source
+repair and completion/re-review paths that consume captured review state.
+Long-lived clients must remain compatible or receive an actionable refusal
+before any live migration, consistent with Orbit's upgrade contract.
+
+#### Verification and rollout
+
+The implementation must provide reproducible boundary evidence for config
+round trips/invalid values, OR combinations, the exact threshold boundary,
+path-only/risk-only/no-rule cases, missing risk, complete-diff failures,
+deletion/rename/binary changes, skip-tag precedence, owner/follower parity,
+unsupported peers, resume reuse, changed-head rejection/re-evaluation and
+unchanged legacy runs. Use existing public-path fixtures and targeted manual
+QA; add regression tests only where repository test-admission rules permit.
+
+Start with `observe` to measure the fraction of candidate deliveries each
+predicate and their union would select, unknown/unsupported cases, and scan
+latency. Report before-landing review costs from comparable existing runs or
+as unknown; observation does not spend reviewer calls to manufacture costs
+or prove a reduction in regressions. A later explicit operator decision can
+enable `enforce`; shipping this feature changes no live setting. Report actual
+enforced review modes to existing accounting/forecast consumers separately
+from would-review observations. Rollback to `off` affects future admissions
+only and preserves active obligations and historical evidence.
+
+Symbol-based triggers, percentages of changes in regression-prone symbols,
+new symbol-risk models and their predictive validation remain future work
+under [symbol-risk-index](../symbol-risk-index/1_scope.md#ship-gates). This
+implementation must neither expose a dormant symbol-trigger key nor depend
+on the unshipped symbol-history gates.
+
 ## 4. What the validation records establish [ORB-11528] [ORB-11545]
 
 An honest reviewer records more than the checks that had to pass, so each
@@ -400,8 +744,10 @@ spent. It also requires every command in the immutable owner snapshot to be
 present as `required` and `passed`, or to be a valid superseded record with
 a passing required check of the same effective identity anywhere in the report.
 A record's effective
-identity is its non-empty, trimmed `check`, falling back to its normalized
-command. Explicit identities take precedence even when command text matches.
+identity is its non-empty `check`, normalized the same way as a command
+(whitespace collapsed, leading `NAME=value` words dropped), falling back to its
+normalized command. Explicit identities take precedence even when command text
+matches.
 Without a shared record id, a superseded `cargo test -p x` attempt with
 `check: "unit"` is therefore not replaced by a required pass of the identical
 command that omits `check`: their effective identities are `unit` and
@@ -432,7 +778,7 @@ invalid regardless of identity.
 | `required` (default) | A check the final candidate must pass | `passed`; `failed`, `denied`, and `not_run` all block |
 | `expected_failure` | A negative control — the superseded assertion, the pre-fix reproduction | `failed`; any other outcome contradicts the claim |
 | `excluded` | An action outside the authorized scope, deliberately not performed | `not_run` or `denied`; actually running it contradicts the exclusion |
-| `superseded` | A diagnostic attempt a required check on the final candidate replaced | a record anywhere in the report that is `required` and `passed` and has the same effective identity: its non-empty, trimmed `check`, otherwise its `command` with whitespace and leading `NAME=value` assignments normalized. An explicit identity can match another record's normalized command. Different effective identities, or a same-identity check that did not pass, are not a replacement |
+| `superseded` | A diagnostic attempt a required check on the final candidate replaced | a record anywhere in the report that is `required` and `passed` and has the same effective identity: its non-empty `check`, normalized as its `command` is (whitespace collapsed, leading `NAME=value` assignments dropped), otherwise its `command` normalized the same way. An explicit identity can match another record's normalized command. Different effective identities, or a same-identity check that did not pass, are not a replacement |
 | `diagnostic` [ORB-14192] | A nonrequired observation of the final candidate, such as a workspace-wide suite beyond the task's checks | `passed` or `failed` as observed (`not_run`/`denied` contradict it: an action never taken is `excluded`). A failed diagnostic lists `sources`, every one outside the candidate's scope, and shares no check with a required pass. A failed check the owner trusts — a captured `workflow.required_validation_commands` or `review.baseline_commands` entry, by the host-command identity rule — is never a diagnostic [ORB-14684]. It supplies no coverage and creates no requirement |
 
 Required passes describe the final candidate, so replacement does not depend on
@@ -918,7 +1264,15 @@ The run first admits every command against its kind's allowlist:
 - `host_sandbox_test` [ORB-14334]: the same grammar as a claimed leaf's
   settlement below, an exact owner-required command or
   `cargo test -p <crate> --test <target> [<filter>]` using only
-  `[A-Za-z0-9._/:@+=-]` and spaces.
+  `[A-Za-z0-9._/:@+=-]` and spaces. A single `--` may immediately precede
+  the one filter; it normalizes to the same command as the plain filter.
+
+A claimed before-landing review on a known non-Linux host records
+reviewer-named Linux `host_sandbox_test` requirements as `owed_evidence`,
+even without a matching workspace rule. Settlement adds any missing required
+records as `not_run`, so a broader run's covered deferrals hold for the owner
+and the received owed evidence can settle the held review. Failed required
+checks and open findings still block.
 
 One command outside its allowlist refuses the whole hold with a typed reason
 (`command_not_allowed`, `shell_metacharacter`, `argument_not_allowed`) before
@@ -935,6 +1289,20 @@ the results above as `system`, with `os` for a test; anything else attaches
 only the log, and the hold stays with a typed reason (`self_skipped`,
 `no_tests_ran`, `test_failed`, `sandbox_unavailable`, …). Every attempt is
 audited as `review.evidence_fulfilment` and commented on the task.
+
+[ORB-18660] Results in a complete CodeQL run (`findings_reported`) are the one
+refusal no later evidence on the same tree can clear, so they do not wait
+under the hold. When every refusal of the run is that one, the run also
+attaches `review-evidence-findings.json` as `system`: each result's check,
+rule, message, file, line and first data flow, redacted and bounded, since
+the SARIF is removed with the run's checkout. It then requeues the task to
+`backlog` with `review_evidence_findings`, guarded like receipt (the hold is
+still persisted and current). The next run's `candidate_resume` resumes the
+held candidate for its implementer, `resumed_repaired` with trigger `review`,
+whose output is the findings; a claimed leaf's implementer reads them in the
+task's comments. This is not a reviewer's rework loop: a review's own
+findings still settle as its verdict, and the repaired candidate gets a fresh
+review that needs CodeQL on its new tree again.
 The owner already runs its required validation on foreign heads under the
 same host trust and with no sandbox, so the fulfilment is no new trust in the
 candidate's own script or tests. Details are in the
@@ -951,8 +1319,10 @@ otherwise be an evidence-only hold, including a broader run whose every
 deferred test a requirement covers (above), it runs each requirement whose
 `os` is this host's and that no accepted result already satisfies. The command must be
 either an exact owner-required validation command or
-`cargo test -p <crate> --test <target> [<filter>]`. That form takes no other
-option, and the command may use only `[A-Za-z0-9._/:@+=-]` and spaces. A
+`cargo test -p <crate> --test <target> [<filter>]`, with an optional single
+`--` immediately before the one filter. A bare separator, extra arguments
+and test-harness options are refused, and the command may use only
+`[A-Za-z0-9._/:@+=-]` and spaces. A
 command that fails these checks, or names another OS, is refused with a typed
 reason (`shell_metacharacter`, `command_not_allowed`, `argument_not_allowed`,
 `os_mismatch`) and never runs. An admitted command first has its candidate
@@ -1279,6 +1649,44 @@ Reset decisions are retained atomically in the lineage ledger alongside the norm
 `review-manifest.json`, `review-report.json`, and `review-gate.json` are the
 durable evidence.
 
+### 8.1 Screenshot evidence in the pull request body [ORB-18351]
+
+A UI change's reviewer on the forge sees attached screenshots in the body
+that `pr_open` writes. `pr.screenshot_section` (`auto` for `ui`-tagged tasks,
+`always`, `off`) turns on an optional `## Screenshots` section built from the
+task's `screenshots/<view>-<theme>-<width>[-before|-after].<ext>` artifacts
+([CONFIG.md](../../CONFIG.md#delivery-templates-pr-commit-and-branch)).
+When no screenshots are publishable, the section contains
+`No screenshots attached.` and is never a missing required section; the
+configured missing section policy does not draft or refuse the PR for it.
+Task-artifact evidence for actual UI changes remains governed by the workspace
+guide.
+Task artifacts are not reachable from the forge, so before rendering,
+`pr_open` writes exactly those images as one tree and publishes it through
+the private `push.evidence_ref` operation to the task's permanent ref
+`refs/orbit/evidence/<task-id>`, outside `refs/heads`. The operation reuses
+the tip when its tree is unchanged (a retried or resumed `pr_open`) and
+otherwise chains one commit onto the tip without force, so every commit an
+earlier body linked stays reachable. Image links pin the commit sha, never
+the ref name. No step deletes the ref: candidate-ref, automation-pin and
+rescue-ref cleanup do not reach `refs/orbit/evidence/`.
+
+**Forge check (2026-10-25).** The design depended on GitHub serving
+`blob/<sha>/<path>?raw=true` for a commit reachable only from a ref outside
+`refs/heads`, with an append-only, never-merged `orbit-evidence` branch as
+the fallback. GitHub serves it, so the fallback is not used. Evidence:
+commit `7900ae80aaf5561550332097c2b0ca5b9df8b271` of
+constellation-works/orbit, which Orbit pushed to
+`refs/orbit/candidates/ORB-18099/jrun-20261025-1451-c1` and which no other
+advertised ref (heads, tags or `refs/pull/*`, 6,423 in all) names.
+`https://github.com/constellation-works/orbit/blob/7900ae80aaf5561550332097c2b0ca5b9df8b271/docs/CONFIG.md?raw=true`
+answered `302` to `/raw/<sha>/docs/CONFIG.md`, then `200` from
+`raw.githubusercontent.com`, with bytes whose SHA-256 equals that commit's
+blob and differs from its parent's. The check was read-only: the sandbox
+that ran it held no push credentials, so it used a ref Orbit's own delivery
+had pushed rather than a new probe. An evidence ref is the same kind of
+non-branch ref on the same repository.
+
 ## 9. Compatibility and rollback
 
 Existing runs without a `review` snapshot behave exactly as before. The
@@ -1344,6 +1752,8 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 
 ## Task References
 
+- [ORB-20099] — shipped staged before-PR deprecation (§1.1), preserving legacy input semantics, admitted runs and review evidence; prerequisite to [ORB-20087].
+- [ORB-20087] — proposed configurable risk/path before-landing selection (§3.3), including observation, exact-head receipts and owner/follower compatibility; symbol triggers deferred.
 - [ORB-11333] — implements independent review policy, the before-PR gate, lineage budgets, and delivery coverage.
 - [ORB-11528] — adds validation-record roles to the certificate contract.
 - [ORB-11545] — tightens what a superseded validation record may claim.
@@ -1357,6 +1767,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
 - [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
 - [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
+- [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
 - [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 - [ORB-15328] — settlement attributes a failed check to the base by replaying only its failing tests there, or reading a full result cached for that base, and reserves a quarter of the review budget for that replay, naming a candidate rerun cut at the reserve.
@@ -1364,3 +1775,39 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - [ORB-15546] — settlement applies required validation's known-red rule to a confirmed red-base claim: a candidate failing only tests the base fails too settles accept, its record still failed, with the certificate's `known_red` as the evidence coverage reads.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+
+
+### Selective contract compatibility and model capture
+
+Selective delivery authority is protected by breaking workspace layout migration
+4, `selective-review-contracts`. It rewrites no task, run or certificate. New
+binaries continue to honor legacy admissions with no selective policy; older
+clients must refuse the newer workspace generation instead of discarding the
+new contract fields. Use the guarded updater and upgrade long-lived clients
+before admitting selective work; do not bypass a live-client generation hold.
+
+Owner-local admissions freeze the existing diff-lines model (including an
+explicit unavailable/no-fit identity) in the immutable policy digest. A later
+candidate or receipt cannot replace or refit it. Claimed execution currently
+freezes `owner-risk-model/unknown`: probes do not durably authenticate a fitted
+snapshot, so follower-local coefficients are never accepted. The captured
+`unknown_risk` rule decides this case (default: review). Calibrated follower
+risk estimates remain unavailable until a durable owner snapshot seam exists;
+path predicates continue to use the complete owner-verifiable diff.
+
+A fitted identity embeds its fit window and the history it was fitted on, so
+it can differ across captures as time or history changes. An
+unavailable/no-fit identity carries no timestamps and may repeat for the
+same configuration, and fitted captures in the same second with unchanged
+evidence can also match. Upgrade resume
+and completion observation therefore judge a captured selective policy changed
+only when an operator predicate (`mode`, `risk_threshold`, `paths`,
+`unknown_risk`) differs from today's. The frozen identity, the digest derived
+from it and the provenance map are ignored in that comparison; the run keeps
+its captured policy, and the gate still applies it.
+
+Selection receipts retain their original candidate identity across trusted
+reviewer repairs. Only a passed host settlement can advance the completion pin
+to the certificate's final candidate; claimed acceptance verifies that the
+certificate's reviewed candidate is the original selection and its final
+candidate is the handed-off head. External pushes and rebases remain stale.

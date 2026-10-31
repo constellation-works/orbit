@@ -62,12 +62,32 @@ impl ServerMcpHost {
         }
     }
 
-    pub(super) fn definition(&self, name: &str) -> Result<McpToolDefinition, OrbitError> {
+    pub(super) fn definition(
+        &self,
+        name: &str,
+        context: &ToolSessionContext,
+    ) -> Result<McpToolDefinition, OrbitError> {
         self.advertised_definitions()?
             .iter()
             .find(|definition| definition.schema.name == name)
             .cloned()
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))
+            .ok_or_else(|| {
+                let definitions = self.advertised_definitions().unwrap_or_default();
+                let hidden = self.hidden_tool_names(context);
+                orbit_core::adapter::command::tool_suggestions::unknown_tool_error(
+                    name,
+                    definitions
+                        .iter()
+                        .filter(|definition| {
+                            definition.schema.builtin && !hidden.contains(&definition.schema.name)
+                        })
+                        .map(|definition| definition.schema.name.as_str()),
+                    &orbit_core::adapter::command::tool_suggestion_context(
+                        ToolEntryPoint::Mcp,
+                        context.clone(),
+                    ),
+                )
+            })
     }
 
     /// Reuse the validated combined surface while the plugin snapshot is unchanged.

@@ -8,6 +8,23 @@ spec:
   args:
     - exec
     - --json
+  # Appended to pinned-source inspection runs (task pilot, finding
+  # verification, escalation triage): turn the native shell on even when a
+  # user config disables it. The reviewer sandbox stays authoritative.
+  inspection_args:
+    - --config
+    - features.shell_tool=true
+    - --config
+    - features.unified_exec=true
+  # `codex exec --image <FILE>` attaches each staged image to the initial
+  # prompt. Declared because the canary probe (`orbit agents vision-probe`)
+  # passed on this lane; the probe also reports models that misread it, which
+  # a crew opts out with `vision = false`.
+  image_input:
+    mode: attach_args
+    formats: [png, jpeg, webp]
+    max_images: 40
+    attach_args: ["--image", "{path}"]
   stdout_format: envelope
   sandbox: macos-sandbox-exec
   model_flag: "--model"

@@ -14,8 +14,9 @@
 //!
 //! The tag taxonomy stays a small YAML file under `files_root` — moving record
 //! persistence does not require moving configuration. `files_root` is also the
-//! legacy tree [`import`] reads once per workspace; afterwards it is read-only
-//! rollback evidence and no file edit can affect a live read.
+//! legacy tree [`import_workspace_frictions`](crate::workflow::friction::import_workspace_frictions)
+//! reads once per workspace; afterwards it is read-only rollback evidence and
+//! no file edit can affect a live read.
 
 use std::path::PathBuf;
 
@@ -32,7 +33,6 @@ pub use crate::contracts::{
     FrictionAddParams, FrictionListFilter, FrictionRehomeOutcome, FrictionRehomeParams,
     FrictionUpdateParams, StoredFrictionRecord,
 };
-pub(crate) use store::read_page;
 
 /// Live friction store for one logical workspace.
 ///

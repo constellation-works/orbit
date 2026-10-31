@@ -13,10 +13,12 @@
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
 //! - `window_extension` — lengthening a live drain's window.
 //! - `drain_cancel` — graceful and forced cancellation of a drain with in-flight leaves.
+//! - `queued_cancel` — cancelling a run only while it is still queued, refusing one that started.
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
 //! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
-//! - `root_cause` — typed root causes of cascaded failures, and folding a listing by incident.
+//! - `root_cause` — typed root causes of cascaded failures, folding a listing by incident, and the
+//!   run-failure observation query run views share.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
@@ -28,13 +30,13 @@ mod completion_audit;
 mod conflict;
 mod deferral;
 mod delivery;
-mod delivery_execution;
 mod display_steps;
 mod drain_cancel;
 mod interrupted_review;
 mod owner;
 mod projection;
 mod query;
+mod queued_cancel;
 mod reconcile;
 mod root_cause;
 mod step_recovery;
@@ -65,10 +67,13 @@ pub use projection::{
     ActivityInvocationEvidence, JobRunListStates, job_run_task_ids, job_run_to_json,
     job_run_to_json_with_activity_provenance, run_error_step,
 };
-pub use root_cause::{RunIncident, fold_run_incidents};
+pub use root_cause::{
+    RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
+    RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents,
+};
 pub use types::{
-    JobRunCancelOutcome, JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild,
-    UnstoppedLeaf,
+    JobRunCancelOutcome, JobRunCancelResult, JobRunCancelResultProfile, JobRunListParams,
+    JobRunOrder, UnstoppedChild, UnstoppedLeaf,
 };
 pub use window_extension::{
     DrainWindowExtensionChange, DrainWindowExtensionOutcome, DrainWindowExtensionRequest,

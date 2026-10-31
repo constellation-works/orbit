@@ -126,3 +126,65 @@ pub(super) fn validated_tree(
         .get(run_id)
         .cloned())
 }
+
+pub(super) fn unlocked_path_validation(
+    runtime: &OrbitRuntime,
+) -> orbit_engine::UnlockedPathValidation {
+    let settings = runtime.context.settings();
+    orbit_engine::UnlockedPathValidation {
+        paths: settings.unlocked_context_paths().patterns().to_vec(),
+        commands: settings.unlocked_path_validation_commands().to_vec(),
+    }
+}
+
+pub(super) fn generated_paths(runtime: &OrbitRuntime) -> Vec<orbit_engine::GeneratedPath> {
+    runtime
+        .context
+        .settings()
+        .generated_paths()
+        .iter()
+        .map(|(path, command)| orbit_engine::GeneratedPath {
+            path: path.clone(),
+            command: command.clone(),
+        })
+        .collect()
+}
+
+pub(super) fn agent_stall_window(runtime: &OrbitRuntime) -> Option<std::time::Duration> {
+    let minutes = runtime.context.agent_stall_minutes();
+    (minutes > 0).then(|| std::time::Duration::from_secs(u64::from(minutes) * 60))
+}
+
+pub(super) fn admit_owed_criteria(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    run_id: &str,
+    owed: &[orbit_types::workflow::OwedCriterion],
+) -> Result<(), OrbitError> {
+    OrbitRuntime::admit_owed_criteria(runtime, task_id, run_id, owed)
+}
+
+pub(super) fn outstanding_owed_criteria(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    run_id: Option<&str>,
+) -> Result<Vec<usize>, OrbitError> {
+    OrbitRuntime::outstanding_owed_criteria(runtime, task_id, run_id)
+}
+
+pub(super) fn required_validation_commands(runtime: &OrbitRuntime) -> Vec<String> {
+    runtime
+        .host_validation_gates()
+        .gates
+        .required_validation_commands
+}
+
+pub(super) fn review_baseline_commands(runtime: &OrbitRuntime) -> Vec<String> {
+    runtime.host_validation_gates().gates.baseline_commands
+}
+
+pub(super) fn validation_gates(
+    runtime: &OrbitRuntime,
+) -> orbit_types::workflow::HostValidationGates {
+    runtime.host_validation_gates()
+}

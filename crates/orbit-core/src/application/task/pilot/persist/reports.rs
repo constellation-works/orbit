@@ -8,7 +8,8 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::automation::members::SUPERSEDED_BY_SOURCE;
+use crate::application::contracts::SUPERSEDED_BY_SOURCE;
+use crate::application::task::TaskAutomationPort;
 
 use super::super::apply::admission::PreparedTaskSnapshot;
 use super::apply_task::{CONTEXT_CREATION_CHANGED, CONTEXT_CREATION_CHANGED_DETAIL};
@@ -106,10 +107,9 @@ pub(in super::super) fn superseded_task(
         runtime.context_creation_state(&current)?.identity() != snapshot.context_creation_identity;
     if edited {
         let material_drift = if let Some((_, revision)) = &snapshot.material {
-            let fresh = crate::application::automation::preparation::fingerprints(
-                runtime, &current, revision, policy,
-            )
-            .map_err(orbit_automation::automation_error_to_orbit)?;
+            let fresh = runtime
+                .task_pilot_fingerprints(&current, revision, policy)
+                .map_err(orbit_automation::automation_error_to_orbit)?;
             snapshot
                 .status_neutral_fingerprint
                 .as_ref()

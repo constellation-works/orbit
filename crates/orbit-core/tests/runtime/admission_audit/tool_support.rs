@@ -6,11 +6,12 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::TaskCreateParams;
 use orbit_tools::ToolContext;
 use orbit_types::policy::Role;
-use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;
 use tempfile::tempdir_in;
 
+use crate::task_params_test_support::task_create_params;
 use orbit_core::OrbitRuntime;
 
 /// Run a tool with an explicit operator session context.
@@ -89,39 +90,12 @@ fn create_task_with_crew(
 ) -> Task {
     crate::admission_audit::store_support::tasks(runtime)
         .create_task(TaskCreateParams {
-            actor: "test".to_string(),
-            parent_id: None,
-            title: title.to_string(),
-            description: description.to_string(),
-            acceptance_criteria: Vec::new(),
-            dependencies: Vec::new(),
-            relations: Vec::new(),
-            tags: Vec::new(),
-            required_tools: Vec::new(),
-            plan: String::new(),
-            execution_summary: String::new(),
             context_files: context_files
                 .iter()
                 .map(|path| (*path).to_string())
                 .collect(),
-            repo_root: None,
-            created_by: Some("test".to_string()),
-            planned_by: None,
-            implemented_by: None,
-            status,
-            priority: TaskPriority::Medium,
-            complexity: None,
-            task_type: TaskType::Chore,
-            external_refs: Vec::new(),
-            source_task_id: None,
             crew: crew.map(ToString::to_string),
-            crew_source: None,
-            orchestrator: None,
-            orchestrator_model: None,
-            orchestrator_model_source: None,
-            origin: None,
-            comments: Vec::new(),
-            context_creation: Vec::new(),
+            ..task_create_params(title, description, status)
         })
         .expect("create task")
 }

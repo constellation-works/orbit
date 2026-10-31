@@ -30,7 +30,9 @@ pub struct SourceRepairBinding {
     pub head_sha: String,
     pub base_sha: String,
     pub base_branch: String,
-    /// A stopped replacement attempt explicitly retained by this recovery.
+    /// The inspected task binding and its complete stopped execution chain.
+    /// For kept inline publications this includes completion-only retries;
+    /// the binding can still name the publisher when no replacement set it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded: Option<SourceRepairSuccessor>,
     /// The original run whose worktree checkpoints a generic-resume source
@@ -49,12 +51,12 @@ pub struct SourceRepairOwner {
     pub digest: String,
 }
 
-/// Exact newer binding acknowledged when recovering an older publication.
+/// Task binding and stopped execution evidence acknowledged by source repair.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceRepairSuccessor {
     pub run_id: String,
-    /// Digest of the entire stopped execution and its checkpoints.
+    /// Digest of the complete stopped execution chain and its checkpoints.
     pub digest: String,
 }
 
@@ -66,11 +68,13 @@ pub struct SourceRepairAdmission {
     pub binding: SourceRepairBinding,
     /// Explicit remaining source work and observed failure identities.
     pub diagnosis: String,
-    /// Operator evidence that the successful publication did not meet acceptance.
+    /// Operator evidence that the successful or kept inline publication did
+    /// not meet acceptance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unmet_acceptance: Option<String>,
     /// Current execution policy and operator identity observed before submission.
-    /// Required for successful-publication rework; absent on older repairs.
+    /// Required for successful or kept inline publication rework; absent on
+    /// older repairs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_digest: Option<String>,
     pub authorized_by: String,
@@ -91,4 +95,65 @@ pub fn source_repair_reservations(
         .filter(|entry| entry.event == SOURCE_REPAIR_RESERVED)
         .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap_or_default()))
         .collect()
+}
+
+/// Fresh authorization of an unbound reservation after correcting its plan.
+/// The original reservation and its budget charge remain immutable.
+pub const SOURCE_REPAIR_RECONCILED: &str = "source_repair_reconciled";
+
+/// Append-only proof of the original consent and the separately authorized plan.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRepairReconciliation {
+    pub reservation: SourceRepairAdmission,
+    pub authorization: SourceRepairAdmission,
+}
+
+/// Resolve each reservation's sole effective authorization without changing its
+/// charge. Refuse malformed, forged, divergent or duplicate reconciliation.
+pub fn source_repair_authorizations(
+    history: &[crate::task::TaskHistoryEntry],
+) -> Result<Vec<SourceRepairAdmission>, serde_json::Error> {
+    use serde::de::Error;
+    let invalid = || serde_json::Error::custom("inconsistent source repair authorization history");
+    let mut effective = source_repair_reservations(history)?;
+    let mut keys = std::collections::BTreeSet::new();
+    for entry in history.iter().filter(|e| e.event == SOURCE_REPAIR_RESERVED) {
+        if entry.by != "system" {
+            return Err(invalid());
+        }
+    }
+    for record in &effective {
+        if !keys.insert(record.request_key.clone()) {
+            return Err(invalid());
+        }
+    }
+    let mut reconciled = std::collections::BTreeSet::new();
+    for entry in history
+        .iter()
+        .filter(|e| e.event == SOURCE_REPAIR_RECONCILED)
+    {
+        let record: SourceRepairReconciliation =
+            serde_json::from_str(entry.note.as_deref().unwrap_or_default())?;
+        let Some(original) = effective
+            .iter_mut()
+            .find(|r| r.request_key == record.reservation.request_key)
+        else {
+            return Err(invalid());
+        };
+        let mut unchanged = record.authorization.clone();
+        unchanged.binding.task_digest = record.reservation.binding.task_digest.clone();
+        unchanged.authorized_at = record.reservation.authorized_at;
+        unchanged.review.captured_at = record.reservation.review.captured_at;
+        if entry.by != "system"
+            || !reconciled.insert(original.request_key.clone())
+            || serde_json::to_value(&record.reservation)? != serde_json::to_value(&*original)?
+            || serde_json::to_value(&unchanged)? != serde_json::to_value(&record.reservation)?
+            || record.authorization.authorized_at < original.authorized_at
+        {
+            return Err(invalid());
+        }
+        *original = record.authorization;
+    }
+    Ok(effective)
 }

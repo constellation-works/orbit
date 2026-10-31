@@ -12,8 +12,10 @@ spec:
     candidate's one review against its lineage ledger, pins base and head
     commits and trees, resolves the separately configured review crew inside
     the run's persisted crew allowlist, and writes the immutable reviewer manifest as a
-    task artifact. Reports `applies: false` when the step's review timing was
-    off at capture, and for checked no-diff exemptions.
+    task artifact, naming the tasks' unapplied mutation proposals. Reports
+    `applies: false` when the step's review timing was off at capture, and for
+    checked no-diff exemptions; a run that reviews nothing is refused instead
+    while its tasks carry an unapplied mutation proposal.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids, workspace_path]

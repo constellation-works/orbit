@@ -77,14 +77,14 @@ impl TaskStoreBackend for TaskV2Store {
         }
     }
 
-    fn mutate_execution_claim(
+    fn mutate_execution_claim_outcome(
         &self,
         context: Option<&crate::contracts::ClaimInvocation>,
         mutation_id: &str,
         mutation: &crate::contracts::ClaimMutation,
-    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+    ) -> Result<crate::contracts::ClaimMutationOutcome, OrbitError> {
         self.claim_boundary()?
-            .mutate_execution_claim(context, mutation_id, mutation)
+            .mutate_execution_claim_outcome(context, mutation_id, mutation)
     }
     fn verify_worker_claim(
         &self,
@@ -125,10 +125,23 @@ impl TaskStoreBackend for TaskV2Store {
             None => Ok(Vec::new()),
         }
     }
+    fn recorded_executor_census(
+        &self,
+    ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.recorded_executor_census(),
+            None => Ok(Vec::new()),
+        }
+    }
     fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.inspect_execution_claims()
+    }
+    fn inspect_admission_receipt_storage(
+        &self,
+    ) -> Result<crate::contracts::AdmissionReceiptStorage, OrbitError> {
+        self.claim_boundary()?.inspect_admission_receipt_storage()
     }
     fn resolve_execution_claims(
         &self,
@@ -226,6 +239,13 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
         self.in_boundary(|| self.task_candidate_keys(filter, limit))
     }
+    fn observe_task_candidate_keys(
+        &self,
+        filter: &crate::contracts::TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
+        self.observe_task_candidate_keys(filter, limit)
+    }
     fn query_task_rows(
         &self,
         filter: &crate::contracts::TaskListFilter,
@@ -266,6 +286,16 @@ impl TaskStoreBackend for TaskV2Store {
         targets: &BTreeSet<String>,
     ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
         self.in_boundary(|| TaskV2Store::task_status_index_for(self, workspace_id, targets))
+    }
+
+    fn task_change_stamps(&self) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        TaskV2Store::task_change_stamps(self)
+    }
+
+    fn task_metadata_scan_stamps(
+        &self,
+    ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError> {
+        TaskV2Store::task_change_stamps(self)
     }
 
     fn task_ids_with_tag(
@@ -512,6 +542,10 @@ impl ExecutorDefStoreBackend for ExecutorDefFileStore {
 
     fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
         self.upsert_executor_def(def)
+    }
+
+    fn delete_executor_def(&self, name: &str) -> Result<bool, OrbitError> {
+        self.delete_executor_def(name)
     }
 }
 

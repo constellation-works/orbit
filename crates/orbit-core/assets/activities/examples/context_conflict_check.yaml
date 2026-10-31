@@ -5,8 +5,9 @@ metadata:
 spec:
   type: deterministic
   description: >
-    Check whether a bundle's context files conflict with in-flight task locks or
-    active task reservation records without claiming any files.
+    Check whether a bundle's context files conflict with in-flight task locks,
+    active task reservation records or hard path leases without claiming any
+    files.
   input_schema_json:
     type: object
     required: [task_ids]
@@ -31,7 +32,7 @@ spec:
               type: string
             held_by:
               type: string
-              enum: [task, reservation]
+              enum: [task, reservation, lease]
             held_by_id:
               type: string
   action: context_conflict_check

@@ -109,6 +109,33 @@ impl SourceSnapshot {
         }))
     }
 
+    /// The tree id of the pinned revision. An inspection result proves it
+    /// read the pinned source by reporting this value as `observed_tree`
+    /// (`git rev-parse HEAD^{tree}` in its checkout): the envelope carries
+    /// the commit id, which a blind result could echo back, but never the
+    /// tree id, which only reading the commit object yields. Never include
+    /// the expected tree id in agent-visible output (a repair attempt reads
+    /// the validation errors and could echo it).
+    pub(crate) fn tree_id(&self, action: &str, workspace: &Path) -> Result<String, DispatchError> {
+        tree_of(workspace, &self.source_revision)
+            .map_err(|error| {
+                DispatchError::action_failed(
+                    action,
+                    format!("git rev-parse failed in '{}': {error}", workspace.display()),
+                )
+            })?
+            .map_err(|stderr| {
+                DispatchError::action_failed(
+                    action,
+                    format!(
+                        "prepared source revision {} ({}) has no readable tree in this \
+                         repository: {stderr}",
+                        self.source_revision, self.source_ref,
+                    ),
+                )
+            })
+    }
+
     pub(crate) fn ensure_commit(
         &self,
         action: &str,
@@ -188,6 +215,49 @@ impl SourceSnapshot {
         Ok(Some(output.stdout.lines().count()))
     }
 
+    /// Text of the blob at repository-relative `path` at the pinned revision.
+    ///
+    /// `None` when the path is not a safe repository-relative blob path or no
+    /// blob is there. A `:` is rejected so the `revision:path` spec cannot
+    /// be split into a different object. Oversized or binary blobs are an
+    /// error: a cfg-gate check must not treat them as missing.
+    pub(crate) fn file_text(
+        &self,
+        action: &str,
+        workspace: &Path,
+        path: &str,
+    ) -> Result<Option<String>, DispatchError> {
+        if git_tree_path(Path::new(path)).as_deref() != Some(path) || path.contains(':') {
+            return Ok(None);
+        }
+        if self.path_kind(action, workspace, Path::new(path))? != GitPathKind::Blob {
+            return Ok(None);
+        }
+        let output = git(
+            action,
+            workspace,
+            &[
+                "cat-file",
+                "blob",
+                &format!("{}:{path}", self.source_revision),
+            ],
+        )?;
+        if !output.success {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("read {path} at the pinned source: {}", output.stderr.trim()),
+            ));
+        }
+        const MAX_BYTES: usize = 2_000_000;
+        if output.stdout.len() > MAX_BYTES || output.stdout.contains('\0') {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("read {path} at the pinned source: file is not a source text file"),
+            ));
+        }
+        Ok(Some(output.stdout))
+    }
+
     pub(crate) fn path_kind(
         &self,
         action: &str,
@@ -241,6 +311,124 @@ impl SourceSnapshot {
             _ => GitPathKind::Other,
         })
     }
+}
+
+/// The prepared-checkpoint key that marks a run admitted under the
+/// observed-revision proof contract. Its results must carry the proof.
+/// A checkpoint without it was prepared before the proof existed: its
+/// results are checked only when they report one, so the upgrade keeps the
+/// verdicts of runs already in flight rather than dropping them.
+pub(crate) const INSPECTION_PROOF_KEY: &str = "inspection_proof_required";
+
+/// Whether `prepared` was admitted under the proof contract.
+pub(crate) fn inspection_proof_required(prepared: &Value) -> bool {
+    prepared.get(INSPECTION_PROOF_KEY).and_then(Value::as_bool) == Some(true)
+}
+
+/// Why an inspection result's observed-revision proof does not establish
+/// that it read the pinned source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InspectionProofError {
+    missing: bool,
+    message: String,
+}
+
+impl InspectionProofError {
+    /// The stable reason code. `inspection_proof_missing`: the result
+    /// reported no complete proof, the mark of a crew whose native tools
+    /// never ran (a misconfigured executor). `inspection_revision_mismatch`:
+    /// it reported a pair that is not the pinned revision's, the mark of a
+    /// wrong checkout.
+    pub(crate) fn reason(&self) -> &'static str {
+        if self.missing {
+            "inspection_proof_missing"
+        } else {
+            "inspection_revision_mismatch"
+        }
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for InspectionProofError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// Check an inspection result's observed-revision proof, or `None` when it
+/// establishes that the result read the pinned source. `observed_revision`
+/// is the `HEAD` the result reports from its checkout; `observed_tree` is
+/// that checkout's `HEAD^{tree}`, checked against the tree of the pinned
+/// `source_revision` recomputed host-side. Hex case is normalised, as Git
+/// prints lowercase. With `required` false (a checkpoint prepared before
+/// the proof existed, see [`INSPECTION_PROOF_KEY`]) a result that reports
+/// neither value passes unchecked. The expected tree is never named in the
+/// message: the pilot repair loop feeds these errors back to the agent,
+/// which must re-derive the tree from its checkout, not echo it.
+pub(crate) fn inspection_proof_error(
+    required: bool,
+    observed_revision: Option<&str>,
+    observed_tree: Option<&str>,
+    source_revision: &str,
+    source_tree: &str,
+) -> Option<InspectionProofError> {
+    let reported = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase)
+    };
+    let observed_revision = reported(observed_revision);
+    let observed_tree = reported(observed_tree);
+    if !required && observed_revision.is_none() && observed_tree.is_none() {
+        return None;
+    }
+    let (Some(observed_revision), Some(observed_tree)) = (observed_revision, observed_tree) else {
+        return Some(InspectionProofError {
+            missing: true,
+            message: "inspection proof missing: report observed_revision (`git rev-parse HEAD`) \
+                      and observed_tree (`git rev-parse 'HEAD^{tree}'`) from the inspection \
+                      checkout"
+                .to_string(),
+        });
+    };
+    if observed_revision != source_revision.to_ascii_lowercase() {
+        return Some(InspectionProofError {
+            missing: false,
+            message: format!(
+                "inspection proof mismatch: observed_revision {observed_revision} differs from \
+                 the pinned source_revision {source_revision}"
+            ),
+        });
+    }
+    if observed_tree != source_tree.to_ascii_lowercase() {
+        return Some(InspectionProofError {
+            missing: false,
+            message: "inspection proof mismatch: observed_tree is not the tree of the pinned \
+                      source_revision; report `git rev-parse 'HEAD^{tree}'` from the inspection \
+                      checkout"
+                .to_string(),
+        });
+    }
+    None
+}
+
+/// The tree id of the commit `revision` in `workspace`: `Ok(Err(stderr))`
+/// when Git has no readable tree for it.
+pub(crate) fn tree_of(
+    workspace: &Path,
+    revision: &str,
+) -> Result<Result<String, String>, OrbitError> {
+    let spec = format!("{revision}^{{tree}}");
+    let output = run_git(workspace, &["rev-parse", "--verify", &spec])?;
+    let tree = output.stdout.trim();
+    if !output.success || !is_commit_id(tree) {
+        return Ok(Err(output.stderr.trim().to_string()));
+    }
+    Ok(Ok(tree.to_string()))
 }
 
 pub(crate) fn resolve_source_snapshot(
@@ -459,7 +647,8 @@ fn git_tree_path(anchor: &Path) -> Option<String> {
     }
 }
 
-fn is_commit_id(value: &str) -> bool {
+/// Whether `value` is a full SHA-1 or SHA-256 commit id, in either hex case.
+pub(crate) fn is_commit_id(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 

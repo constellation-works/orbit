@@ -1,0 +1,212 @@
+# In-line verification of visual findings (visual-review design §11.2):
+# a different image-capable crew than the reviewer's and the
+# implementer's judges each finding in a batch of at most five, using the
+# finding-verification verdict schema extended with image-region evidence
+# locations. The engine stages a fresh canary first; a result that does
+# not return its code fails as `image_not_seen`.
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_verify
+spec:
+  type: agent_loop
+  # Read-only: the verifier inspects staged images and the candidate.
+  fsProfile: reviewer
+  require_completion_envelope: true
+  require_response_envelope: true
+  description: >
+    Verify one batch of at most five visual findings (comparison and
+    check findings alike) for one delivery. Returns CONFIRMED or REJECTED
+    with a confidence per finding, image-region or `path:line` evidence,
+    and for CONFIRMED a severity, which may differ from the reviewer's
+    and is the one recorded (`severity_source: verified`). A declared
+    deviation a finding touches is rejected when its basis does not hold.
+    Writes nothing; `visual_settle` validates and records the verdicts in
+    `visual/review.json`, shadow only.
+  tool_disallow_list:
+    - orbit.agent.invoke
+    - orbit.auto_task.add
+    - orbit.auto_task.mint
+    - orbit.auto_task.update
+    - orbit.command.exec
+    - orbit.pipeline.invoke
+    - orbit.workflow.run.resume
+    - orbit.workflow.ship
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.put
+    - orbit.task.reconcile_review
+    - orbit.friction.add
+    - orbit.friction.update
+  proc_disallowed_programs:
+    - sudo
+    - su
+    - doas
+    - pkexec
+    - ssh
+    - scp
+    - sftp
+    - rsync
+    - nc
+    - ncat
+    - netcat
+    - socat
+    - systemctl
+    - loginctl
+    - shutdown
+    - reboot
+    - mount
+    - umount
+    - chroot
+    - nsenter
+    - unshare
+    - docker
+    - podman
+  on_denial: terminate
+  input_schema_json:
+    type: object
+    required: [task_id, workspace_path, crew, partition_index, findings, image_input]
+    properties:
+      task_id:
+        type: string
+      workspace_path:
+        type: string
+      crew:
+        type: string
+      partition_index:
+        type: number
+      escalation:
+        type: boolean
+      image_input:
+        type: object
+        properties:
+          images:
+            type: array
+            items:
+              type: string
+      staged_images:
+        type: array
+        items:
+          type: object
+      findings:
+        type: array
+        maxItems: 5
+        items:
+          type: object
+      catalog:
+        type: object
+  output_schema_json:
+    type: object
+    properties:
+      task_id:
+        type: string
+      partition_index:
+        type: number
+      canary:
+        type: [string, "null"]
+      verdicts:
+        type: array
+        items:
+          type: object
+          properties:
+            finding_id:
+              type: string
+            verdict:
+              type: string
+              enum: [CONFIRMED, REJECTED]
+            confidence:
+              type: string
+              enum: [high, medium, low]
+            severity:
+              type: string
+              enum: [critical, high, medium, low, nit]
+            evidence:
+              type: array
+              items:
+                type: object
+                properties:
+                  location:
+                    type: string
+                  note:
+                    type: string
+            reasoning:
+              type: string
+            deviation_rejected:
+              type: boolean
+            rejection:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  enum: [premise_wrong, already_fixed, unreachable, duplicate]
+                fixed_at:
+                  type: string
+                duplicate_of:
+                  type: string
+                detail:
+                  type: string
+      summary:
+        type: string
+  instruction: |
+    You are Orbit's visual finding verifier for one batch of at most five
+    findings from a `verify-mock-ui` delivery's comparison review and its
+    deterministic checks. Decide from the images (and, for a cited cause,
+    the candidate code) whether each finding is real; do not fix it or
+    judge whether it is worth fixing. You did not write these findings
+    and you do not see the reviewer's other findings.
+
+    First look at the images: follow the image input section below. The
+    first image is a canary showing a six-character code; return it
+    exactly as `canary`. The images after it correspond in order to
+    `staged_images`, each naming its task artifact. `catalog` gives each
+    citable image's pixel size.
+
+    Judge under the precedence rule: the task's acceptance criteria win;
+    then the app's design rules; then the mock for elements, arrangement,
+    hierarchy, component kind and static copy — never for data values,
+    dynamic text, text lengths or pixel-exact spacing. A difference that
+    is only data, or that follows the design rules where the mock does
+    not, is not a defect.
+
+    Each finding in `findings` may carry `deviations`: declared
+    departures from its mock, each with a basis (`acceptance_criteria`,
+    `design_rules`, `operator`, `data` or `infeasible`). When a deviation
+    covers the finding and its basis holds, REJECT the finding as
+    `premise_wrong` naming the deviation. When its basis does not hold —
+    the cited rule, criterion or comment does not say what the deviation
+    claims, or the departure goes beyond it — CONFIRM the finding and set
+    `deviation_rejected: true`: rejecting the deviation turns it back
+    into a finding.
+
+    Return `CONFIRMED` only when the capture actually differs from the
+    mock as claimed (or the check's measurement is real). Cite at least
+    one evidence location and rate `severity` yourself on the shared
+    scale (critical, high, medium, low, nit); your rating replaces the
+    reviewer's and is the one recorded and scored, so neither inflate nor
+    deflate it. Otherwise return `REJECTED` with `rejection.reason`:
+    `premise_wrong` (the images do not differ as claimed, the difference
+    is data, or a declared deviation holds), `already_fixed` with
+    `fixed_at`, `unreachable`, or `duplicate` with `duplicate_of`, and
+    explain in `rejection.detail`.
+
+    Each evidence item is {"location": "...", "note": "..."} where the
+    location is either an image region in this delivery,
+    "<image>#<x>,<y>,<w>,<h>" with the image named as in `staged_images`
+    and the box inside it, or a "<path>:<line>" in the candidate. An
+    image outside this delivery, a region outside its image, or a line
+    past its file's end invalidates the verdict.
+
+    Set `confidence` honestly: `high` when the images settle it, `medium`
+    when a reasonable reading could differ, `low` when you could not tell.
+    A low-confidence verdict is re-verified once by a stronger crew, and
+    decides nothing on its own. Always give `reasoning`.
+    `escalation: true` means another verifier's verdict was low
+    confidence: judge the finding afresh.
+
+    Return exactly one Orbit response envelope:
+    {"schemaVersion":1,"status":"success","result":{"task_id":"<input
+    task_id>","partition_index":<input partition_index>,"canary":"<the
+    code>","verdicts":[{"finding_id":"...","verdict":"...","confidence":
+    "...","evidence":[...],"reasoning":"...", ...}],"summary":"<one
+    paragraph>"},"error":null}
+  wall_clock_timeout_seconds: 1800

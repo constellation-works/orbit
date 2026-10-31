@@ -10,7 +10,7 @@ mod scan;
 pub(crate) use filter::{Filters, LevelFilter};
 pub(crate) use render::{RenderedLogEvent, format_message_html, render_log_event_for_web};
 pub(crate) use scan::{
-    parse_matching_event, read_recent_matching_events_across_segments, read_recent_rendered_tail,
+    parse_matching_event, read_recent_matching_events_across_segments, read_recent_matching_tail,
     resolve_log_path,
 };
 
@@ -21,3 +21,24 @@ pub(crate) const MAX_LOG_RECORD_BYTES: usize = 1 << 20;
 
 #[cfg(test)]
 mod tests;
+
+/// Stable identity for an open log file; never derived from the path after a scan.
+pub(crate) fn log_file_generation(metadata: &std::fs::Metadata) -> std::io::Result<String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(format!("{:x}-{:x}", metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let created = metadata
+            .created()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(std::io::Error::other)?;
+        Ok(format!(
+            "{:x}-{:x}",
+            created.as_secs(),
+            created.subsec_nanos()
+        ))
+    }
+}

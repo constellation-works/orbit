@@ -1,5 +1,6 @@
 """Command-boundary regressions for selection, execution and retained QA bytes."""
 
+import copy
 import hashlib
 import json
 import os
@@ -23,7 +24,7 @@ qa.__file__ = str(repo / "scripts/test-qa-full-sweep.py")
 qa.validate_inventory = lambda *_: ([], {"cli": []})
 qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,
                                 "status": [], "diff_sha256": "fixture"}
-if json.loads((repo / "mode.json").read_text()) != "builtin-skip":
+if not json.loads((repo / "mode.json").read_text()).startswith("builtin-"):
     qa.run_builtins = lambda *_: ([], None)
 qa.platform.system = lambda: "Darwin"
 qa.inspect_browser_capability = lambda *_: ({"command": ["probe"], "exit_code": 0,
@@ -39,6 +40,16 @@ from pathlib import Path
 mode = json.loads(Path("mode.json").read_text())
 if "metadata" in sys.argv:
     print(json.dumps({"packages": [{"name": "fixture", "targets": [{"name": "boundary", "kind": ["test"]}]}]}))
+elif "build" in sys.argv:
+    import shutil
+    target = Path(sys.argv[sys.argv.index("--target-dir") + 1]) / "debug/orbit"
+    if mode != "build-failed":
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2("bin/orbit", target)
+    print("fixture candidate build stdout")
+    print("fixture candidate build stderr", file=sys.stderr)
+    if mode in ("build-failed", "build-failed-with-binary"):
+        raise SystemExit(42)
 elif "--list" in sys.argv:
     print(("unrelated" if mode == "stale" else "boundary::contracts") + ": test")
 elif mode.startswith("native-"):
@@ -119,12 +130,86 @@ if mode == "seatbelt":
 '''
 
 
+# A fixture child that outlives its test can write into the harness scratch
+# tree while TemporaryDirectory cleanup removes it (observed OSError 66,
+# Directory not empty, from host-resource-pressure.json). The hook below
+# plants those exact leftovers at cleanup time and, unless the harness
+# ignores cleanup errors, raises the observed OSError like the real race.
+RACY_CLEANUP_HOOK = '''
+import os as _os
+if _os.environ.get("QA_SWEEP_RACY_CLEANUP") == "1":
+    _RealTemporaryDirectory = qa.tempfile.TemporaryDirectory
+    class _RacyCleanupTemporaryDirectory(_RealTemporaryDirectory):
+        def cleanup(self):
+            name = getattr(self, "name", None)
+            if name and _os.path.basename(name).startswith("orbit-qa-full-"):
+                self._finalizer.detach()
+                leaf = Path(name) / "tmp/.tmpRACY/home/.orbit/cache/host-resource-pressure.json"
+                leaf.parent.mkdir(parents=True, exist_ok=True)
+                leaf.write_text('{"pressure": 1}')
+                leaf.with_name(leaf.name + ".lock").write_text("lock")
+                if not getattr(self, "_ignore_cleanup_errors", False):
+                    raise OSError(66, "Directory not empty")
+                return
+            super().cleanup()
+    qa.tempfile.TemporaryDirectory = _RacyCleanupTemporaryDirectory
+'''
+
+
+def scratch_cleanup_race_self_test(harness, scratch):
+    """A cleanup failure in the harness scratch dir must not lose the report."""
+    with tempfile.TemporaryDirectory(prefix="qa-scratch-cleanup-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        for directory in ["bin", "scripts", ".orbit/tmp"]:
+            (repo / directory).mkdir(parents=True, exist_ok=True)
+        driver = repo / "driver.py"
+        driver.write_text(DRIVER.replace("qa.main()", RACY_CLEANUP_HOOK + "qa.main()", 1))
+        cargo = repo / "bin/cargo"
+        cargo.write_text(f"#!{sys.executable}\n" + CARGO)
+        cargo.chmod(0o755)
+        orbit = repo / "bin/orbit"
+        orbit.write_text(f"#!{sys.executable}\nprint('fixture orbit')\n")
+        orbit.chmod(0o755)
+        git = repo / "bin/git"
+        git.write_text(f"#!{sys.executable}\nprint('" + "a" * 40 + "')\n")
+        git.chmod(0o755)
+        (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
+        command = ["cargo", "test", "-p", "fixture", "--test", "boundary", "boundary::", "--", "--show-output"]
+        rust = {"id": "rust", "required": True, "capability": "local", "kind": "cargo-test",
+                "command": command, "assertions": ["original-boundary"],
+                "required_tests": ["boundary::contracts"], "required_rows": ["original_boundary"]}
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": [rust]}))
+        (repo / "mode.json").write_text(json.dumps("complete"))
+        child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--run-commands"],
+                               cwd=repo,
+                               env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}",
+                                    "QA_SWEEP_RACY_CLEANUP": "1"},
+                               capture_output=True, text=True, timeout=60)
+        report_path = repo / ".orbit/tmp/report.json"
+        if not report_path.is_file():
+            raise AssertionError(f"scratch cleanup failure lost the report: {child.stdout}\n{child.stderr}")
+        report = json.loads(report_path.read_text())
+        cleanup = report.get("scratch_cleanup", {})
+        expected = "tmp/.tmpRACY/home/.orbit/cache/host-resource-pressure.json"
+        if expected not in cleanup.get("leftover_paths", []):
+            raise AssertionError(f"report omits scratch leftovers: {cleanup}")
+        if not cleanup.get("warning"):
+            raise AssertionError(f"report records no scratch cleanup warning: {cleanup}")
+        result = next(item for item in report["results"] if item["scenario"] == "rust")
+        if child.returncode != 0 or report["decision"] != "PASS" or result["outcome"] != "PASS":
+            raise AssertionError(f"scratch cleanup warning failed a passing sweep: {child.returncode} {report['decision']} {result}")
+
+
 def self_test():
     harness = Path(os.environ.get("QA_SWEEP_HARNESS_UNDER_TEST", Path(__file__).with_name("test-qa-full-sweep.py"))).resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
+    candidate_build_report_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
+    scratch_cleanup_race_self_test(harness, scratch)
+    builtin_refusal_self_test(harness, scratch)
+    builtin_refusal_self_test(harness, scratch, wire=True)
     with tempfile.TemporaryDirectory(prefix="qa-evidence-regression-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
@@ -163,7 +248,7 @@ def self_test():
                   "command": ["./scripts/check-ci-macos.sh"],
                   "assertions": ["macos-required-workflow-is-current", "macos-check-ran-on-matching-revision"]}
         browsers = [{"id": name, "required": True, "capability": "browser", "kind": "command",
-                     "command": [sys.executable, str(browser), name, "{evidence_dir}"], "assertions": [name]}
+                     "command": [sys.executable, str(browser), name, "{evidence_dir}", "{playwright_module}"], "assertions": [name]}
                     for name in ["first", "second"]]
 
         def sweep(scenarios, mode, extra=()):
@@ -240,7 +325,7 @@ def self_test():
         assert row(report, "macos-platform")["outcome"] == "NOT_RUN" and not row(report, "macos-platform")["assertions"], report
         builtin = {"id": "isolated-cli-lifecycle", "required": True, "kind": "builtin", "capability": "local",
                    "assertions": ["global-init-persists-isolated-root"]}
-        report = sweep([builtin], "builtin-skip")
+        report = sweep([builtin], "builtin-skip", ["--build-candidate"])
         builtin_row = row(report, "isolated-cli-lifecycle")
         assert builtin_row["outcome"] == "FAIL" and builtin_row["exit_code"] == 1, report
         assert builtin_row["missing_capabilities"] and report["decision"] == "INCOMPLETE", builtin_row
@@ -273,7 +358,7 @@ def self_test():
         command = ["cargo", "test", "--no-fail-fast", "-p", "orbit-common", "--test", "test_env", "--locked"]
         for mode in ["success", "multiple-success", "nocapture", "directory-target", "outer-failure", "early-target-failure", "nonzero", "missing-target",
                      "wrong-target", "extra-target", "zero", "incomplete-rows", "child-only",
-                     "ambiguous", "truncated", "seatbelt", "ps", "unstable", "wrong-revision"]:
+                     "ambiguous", "truncated", "seatbelt", "ps", "unstable", "wrong-revision", "missing-status"]:
             execution = {"stdout": actual["stdout"], "stderr": actual["stderr"], "exit_code": 0,
                          "executed_command": [*command, "--", "--show-output"]}
             if mode == "outer-failure":
@@ -326,6 +411,9 @@ def self_test():
                 execution["source_stable"] = False
             elif mode == "wrong-revision":
                 execution["source_revision"] = "c" * 40
+            elif mode == "missing-status":
+                execution["exit_code"] = None
+                execution["outcome"] = "FAIL"
             (repo / "transcript.json").write_text(json.dumps(execution))
             # Run the public recorder first; feed its actual retained command
             # bytes to the public platform import, which shares emitter rules.
@@ -342,6 +430,8 @@ def self_test():
             for key in ["output_truncated", "source_stable", "source_revision"]:
                 if key in execution:
                     recorded[key] = execution[key]
+            if mode == "missing-status":
+                recorded.update(exit_code=None, outcome="FAIL")
             (repo / "transcript.json").write_text(json.dumps(recorded))
             report = sweep([native], f"native-{mode}")
             assert (report["decision"] == "PASS") == (mode in ["success", "multiple-success", "nocapture", "directory-target"]), (mode, report)
@@ -460,6 +550,70 @@ def self_test():
             for item in result["retained_evidence"]["files"]:
                 path = Path(result["retained_evidence"]["directory"]) / item["path"]
                 assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"], result
+        # Re-import the unchanged producer report with browser execution disabled.
+        # Keep the declared local provenance row: it is emitted even when the
+        # external fixture binary has no source-build attestation.
+        provenance = {"id": "source-binary-provenance", "required": False,
+                      "capability": "local", "kind": "builtin", "assertions": []}
+        report = sweep([*browsers, provenance], "complete", browser_args)
+        imported_path = repo / ".orbit/tmp/reimport.json"
+        def reimport(body, scenarios):
+            imported_path.write_text(json.dumps(body))
+            return sweep([*scenarios, provenance], "complete",
+                         ["--platform-evidence", str(imported_path)])
+
+        replay = reimport(report, browsers)
+        assert replay["decision"] == "PASS", replay
+        assert all(row(replay, name).get("imported_from") for name in ["first", "second"]), replay
+        for mode in ["candidate", "row-candidate", "unknown", "command", "module-command", "directory-command", "assertions",
+                     "missing-manifest", "empty-manifest", "missing-bytes", "tampered-bytes"]:
+            altered = copy.deepcopy(report)
+            result = row(altered, "first")
+            if mode == "candidate":
+                altered["candidate"]["id"] = "stale-candidate"
+            elif mode == "row-candidate":
+                result["candidate_id"] = "stale-candidate"
+            elif mode == "unknown":
+                altered["results"].append({**result, "scenario": "undeclared-behavior"})
+            elif mode == "command":
+                result["command"][2] = "different-behavior"
+            elif mode == "module-command":
+                result["command"][-1] = "different-browser-module"
+            elif mode == "directory-command":
+                result["command"][-2] = "different-evidence-directory"
+            elif mode == "assertions":
+                result["assertions"] = ["different-guarantee"]
+            elif mode == "missing-manifest":
+                result.pop("retained_evidence")
+            elif mode == "empty-manifest":
+                result["retained_evidence"]["files"] = []
+            else:
+                retained = result["retained_evidence"]
+                target = Path(retained["directory"]) / retained["files"][0]["path"]
+                original = target.read_bytes()
+                if mode == "missing-bytes":
+                    target.unlink()
+                else:
+                    target.write_text("tampered retained bytes")
+            replay = reimport(altered, browsers)
+            assert replay["decision"] == "INCOMPLETE", (mode, replay)
+            assert not any(item["outcome"] == "PASS" and item["scenario"] == "first"
+                           for item in replay["results"]), (mode, replay)
+            if mode in ["missing-bytes", "tampered-bytes"]:
+                target.write_bytes(original)
+        # Native schema-v2 rows retain the schema-v1 provenance validation.
+        native_report = sweep([native, provenance], "hosted-complete")
+        replay = reimport(native_report, [native])
+        assert replay["decision"] == "PASS" and row(replay, "macos-platform")["imported_from"], replay
+        for mode in ["wrong-command", "missing-provenance"]:
+            altered = copy.deepcopy(native_report)
+            result = row(altered, "macos-platform")
+            if mode == "wrong-command":
+                result["command"] = ["./wrong-command"]
+            else:
+                result["native_evidence"]["producer"]["run_id"] = ""
+            replay = reimport(altered, [native])
+            assert replay["decision"] == "INCOMPLETE", (mode, replay)
         for mode in ["overwrite", "missing"]:
             report = sweep(browsers, mode, browser_args)
             assert report["decision"] == "INCOMPLETE" and row(report, "first")["retained_evidence_error"], report
@@ -467,6 +621,280 @@ def self_test():
         assert all(row(report, name)["outcome"] == "NOT_RUN" for name in ["first", "second"]), report
         # Repeated invocations also retain earlier report bytes.
         assert all(Path(directory).is_dir() for directory in directories), directories
+
+
+
+def builtin_refusal_self_test(harness, scratch, wire=False, cases=None):
+    """Public main rejects incomplete refusals and fabricated wire/index evidence."""
+    with tempfile.TemporaryDirectory(prefix="qa-builtin-refusal-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        for directory in ["bin", "scripts", ".orbit/tmp"]:
+            (repo / directory).mkdir(parents=True, exist_ok=True)
+        driver = repo / "driver.py"
+        hook = """
+from unittest import mock
+real_run = qa.run
+mode = json.loads((repo / "mode.json").read_text())
+def injected_run(argv, **kwargs):
+    refusal = (("task" in argv and "show" in argv and "--workspace" in argv
+                and Path(argv[argv.index("--workspace") + 1]).name == "other-workspace")
+               or ("config" in argv and "set" in argv
+                   and any(value in argv for value in ["not-a-real-mode", "hm_forged", "ZZ",
+                                                       "workspace-scoped", "invalid/name"])))
+    if refusal:
+        if mode == "builtin-timeout":
+            return real_run(argv, **{**kwargs, "timeout": 0})
+        if mode == "builtin-lost-result":
+            with mock.patch.object(qa, "_PROCESS_SUPERVISOR",
+                                   "import os, sys; os.close(int(sys.argv[1]))"):
+                return real_run(argv, **kwargs)
+        if mode == "builtin-unverified-cleanup":
+            with mock.patch("os.killpg", side_effect=PermissionError("fixture cleanup refusal")):
+                return real_run(argv, **kwargs)
+    return real_run(argv, **kwargs)
+qa.run = injected_run
+"""
+        driver.write_text(DRIVER.replace("qa.main()", hook + "\nqa.main()", 1))
+        cargo = repo / "bin/cargo"
+        cargo.write_text(f"#!{sys.executable}\n" + CARGO)
+        cargo.chmod(0o755)
+        git = repo / "bin/git"
+        git.write_text(f"#!{sys.executable}\nprint('" + "a" * 40 + "')\n")
+        git.chmod(0o755)
+        orbit = repo / "bin/orbit"
+        orbit.write_text(f"#!{sys.executable}\n" + r"""
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+mode = json.loads(Path(os.environ["QA_REFUSAL_REPO"]).joinpath("mode.json").read_text())
+root = Path(args[args.index("--root") + 1]) if "--root" in args else Path.home() / ".orbit"
+work = Path(args[args.index("--workspace") + 1]) if "--workspace" in args else Path.cwd()
+refusal = (("task" in args and "show" in args and work.name == "other-workspace")
+           or ("config" in args and "set" in args and any(value in args for value in
+               ["not-a-real-mode", "hm_forged", "ZZ", "workspace-scoped", "invalid/name"])))
+if refusal:
+    print("fixture refusal", file=sys.stderr)
+    raise SystemExit(0 if mode == "builtin-zero" else 7)
+body = {}
+if args[:2] == ["mcp", "serve"]:
+    [json.loads(line) for line in sys.stdin if line.strip()]  # Consume the request stream.
+    task = {"id": "QAF-1", "title": "QA behavioral fixture", "acceptance_criteria": ["fixture round trip"]}
+    responses = {
+        1: {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}, "resources": {}}},
+        2: {"tools": [{"name": "orbit_task_show"}]},
+        3: {"structuredContent": {"workspaces": [{"name": "qa-primary"}]}},
+        4: {"structuredContent": task},
+        5: {"isError": True, "structuredContent": {"code": "not_found", "message": "Task QAF-1 not found"}},
+    }
+    envelopes = {key: {"jsonrpc": "2.0", "id": key, "result": value} for key, value in responses.items()}
+    case = mode.removeprefix("builtin-wire-")
+    if case == "missing-init":
+        del envelopes[1]
+    elif case in ("init-error", "task-rpc-error", "cross-rpc-refusal"):
+        key = 1 if case == "init-error" else 4 if case == "task-rpc-error" else 5
+        envelopes[key] = {"jsonrpc": "2.0", "id": key, "error": {"code": -32602, "message": "QAF-1 refused"}}
+    elif case == "task-error":
+        responses[4].update(responses[5])
+    elif case == "task-missing":
+        responses[4] = {"content": [{"type": "text", "text": "QAF-1"}]}
+        envelopes[4]["result"] = responses[4]
+    elif case in ("wrong-id", "wrong-title", "wrong-criteria"):
+        task[{"wrong-id": "id", "wrong-title": "title", "wrong-criteria": "acceptance_criteria"}[case]] = "wrong QAF-1"
+    elif case == "bad-version":
+        responses[1]["protocolVersion"] = "1900-01-01"
+    elif case == "missing-capabilities":
+        del responses[1]["capabilities"]
+    elif case == "bad-capabilities":
+        responses[1]["capabilities"] = {"tools": None}
+    elif case == "bad-jsonrpc":
+        envelopes[1]["jsonrpc"] = "1.0"
+    elif case == "task-bad-jsonrpc":
+        envelopes[4]["jsonrpc"] = "1.0"
+    elif case == "duplicate-init":
+        print(json.dumps(envelopes[1]))
+    elif case == "cross-success":
+        responses[5].pop("isError")
+    elif case == "wrong-init-id":
+        envelopes[1]["id"] = 99
+    elif case == "both-result-error":
+        envelopes[1]["error"] = {"code": -32603, "message": "failed"}
+    for value in envelopes.values():
+        print(json.dumps(value))
+    raise SystemExit(0)
+if "search" in args and "reindex" in args:
+    case = mode.removeprefix("builtin-wire-")
+    body = {"chunks": 3, "tasks": 1}
+    if case == "empty-reindex": body = {}
+    elif case == "unrelated-reindex": body = {"unrelated": 1}
+    elif case == "zero-reindex": body = {"chunks": 0, "tasks": 0}
+    elif case == "boolean-reindex": body = {"chunks": True, "tasks": True}
+    elif case == "string-reindex": body = {"chunks": "3", "tasks": "1"}
+    elif case == "empty-stdout": raise SystemExit(0)
+    print(json.dumps(body))
+    raise SystemExit(0)
+if "init" in args and "workspace" not in args:
+    if root.name == "migration-root" and not mode.startswith("builtin-wire-"):
+        raise SystemExit(1)  # Stop after all shared refusal callers under test.
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "config.toml").write_text("identity")
+    (root / "workspaces.json").write_text("registry")
+elif "workspace" in args and "show" in args:
+    body = {"checkout": {"repo_root": str(work)}}
+elif "task" in args:
+    if "artifact" in args and "get" in args:
+        print("qa evidence payload")
+        raise SystemExit(0)
+    body = {"id": "QAF-1", "title": "QA behavioral fixture", "acceptance_criteria": ["fixture round trip"]}
+    if "list" in args:
+        body = [body]
+elif "config" in args:
+    if "set" in args and "workflow.base_branch" in args:
+        path = work / ".orbit/config.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("base_branch = 'qa-candidate'")
+    elif "get" in args:
+        body = {"key": "workflow.base_branch", "value": "qa-candidate", "scope": "workspace",
+                "path": str(work / ".orbit/config.toml")}
+    elif "set" in args and "qa-renamed" in args:
+        (root / "renamed").write_text("renamed")
+    elif "show" in args:
+        body = {"settings": {"machine.id": "hm_fixture", "machine.task_prefix": "QAF",
+                             "machine.name": "qa-renamed" if (root / "renamed").exists() else "qa-machine"}}
+elif "search" in args:
+    body = {"id": "QAF-1", "title": "QA behavioral fixture"}
+elif "friction" in args:
+    body = {"description": "qa isolated friction marker"}
+elif "log" in args:
+    if "orbit.qa.absent" not in args:
+        print(Path(args[args.index("--path") + 1]).read_text().splitlines()[-1])
+    raise SystemExit(0)
+print(json.dumps(body))
+""")
+        orbit.write_text(orbit.read_text().replace('os.environ["QA_REFUSAL_REPO"]', repr(str(repo))))
+        orbit.chmod(0o755)
+        (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
+        inventory = json.loads(harness.with_name("qa-full-sweep-inventory.json").read_text())
+        names = ({"mcp-wire-boundary"} if wire else
+                 {"workspace-boundary", "config-transaction", "machine-identity-transaction"})
+        scenarios = [item for item in inventory["scenarios"] if item["id"] in names]
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": scenarios}))
+        if wire:
+            # Keep unrelated built-ins out of the inventory while executing the
+            # real main -> run_builtins -> finalizer -> scenario decision path.
+            search = next(item for item in inventory["scenarios"] if item["id"] == "search-observability-boundary")
+            scenarios.append(search)
+            (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": scenarios}))
+        modes = (["wire-" + case for case in [
+            "valid", "cross-rpc-refusal", "task-error", "task-rpc-error", "task-missing",
+            "wrong-id", "wrong-title", "wrong-criteria", "missing-init", "init-error",
+            "bad-version", "missing-capabilities", "bad-capabilities", "bad-jsonrpc",
+            "task-bad-jsonrpc", "duplicate-init", "wrong-init-id", "both-result-error",
+            "cross-success", "empty-reindex", "unrelated-reindex", "zero-reindex",
+            "boolean-reindex", "string-reindex", "empty-stdout"]] if wire else
+            ["complete", "timeout", "lost-result", "unverified-cleanup", "zero"])
+        for mode in (modes if cases is None else ["wire-" + case for case in cases]):
+            (repo / "mode.json").write_text(json.dumps("builtin-" + mode))
+            child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--build-candidate"],
+                                   cwd=repo, env={**os.environ,
+                                                 "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
+                                   capture_output=True, text=True, timeout=60)
+            assert child.returncode == 0, (mode, child.stdout, child.stderr)
+            report = json.loads((repo / ".orbit/tmp/report.json").read_text())
+            if wire:
+                case = mode.removeprefix("wire-")
+                reindex_bad = case in {"empty-reindex", "unrelated-reindex", "zero-reindex", "boolean-reindex", "string-reindex", "empty-stdout"}
+                mcp_good = case in {"valid", "cross-rpc-refusal"} or reindex_bad
+                mcp = next(item for item in report["results"] if item["scenario"] == "mcp-wire-boundary")
+                search = next(item for item in report["results"] if item["scenario"] == "search-observability-boundary"
+                              and "reindex" in item.get("command", []))
+                assert (mcp["outcome"] == "PASS") == mcp_good, (case, mcp)
+                assert bool(mcp["assertions"]) == mcp_good, (case, mcp)
+                assert (search["outcome"] == "PASS") != reindex_bad, (case, search)
+                assert bool(search["assertions"]) != reindex_bad, (case, search)
+                assert (report["decision"] == "PASS") == (case in {"valid", "cross-rpc-refusal"}), (case, report)
+                print("builtin-wire: " + case + " passed", flush=True)
+                continue
+            refusals = [item for item in report["results"] if "fixture refusal" in item.get("stderr", "")
+                        or item.get("exit_code") is None and item["scenario"] in names]
+            assert len(refusals) == 6, (mode, report)
+            assert (report["decision"] == "PASS") == (mode == "complete"), (mode, report)
+            for result in refusals:
+                assert result["outcome"] == ("PASS" if mode == "complete" else "FAIL"), (mode, result)
+                assert bool(result["assertions"]) == (mode == "complete"), (mode, result)
+                assert result["exit_code"] == (7 if mode == "complete" else 0 if mode == "zero" else None), (mode, result)
+            positives = [item for item in report["results"] if item["scenario"] in names and item not in refusals]
+            assert positives and all(item["outcome"] == "PASS" and item["assertions"] for item in positives), (mode, positives)
+
+def candidate_build_report_self_test(harness, scratch):
+    """Failed builds and unavailable binaries retain reports without running built-ins."""
+    with tempfile.TemporaryDirectory(prefix="qa-candidate-build-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        for directory in ["bin", "scripts", ".orbit/tmp"]:
+            (repo / directory).mkdir(parents=True, exist_ok=True)
+        driver = repo / "driver.py"
+        driver.write_text(DRIVER.replace("qa.main()", '''
+def builtins(*args):
+    (repo / "builtin-invoked").write_text("ran")
+    return ([{"scenario": "fixture-builtin", "outcome": "PASS",
+              "assertions": ["fixture-builtins-ran"], "candidate_id": "fixture-candidate"}], None)
+qa.run_builtins = builtins
+qa.main()
+''', 1))
+        cargo = repo / "bin/cargo"
+        cargo.write_text(f"#!{sys.executable}\n" + CARGO)
+        cargo.chmod(0o755)
+        orbit = repo / "bin/orbit"
+        orbit.write_text(f"#!{sys.executable}\nprint('fixture orbit')\n")
+        orbit.chmod(0o755)
+        (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
+        assertions = ["binary-built-from-current-source", "source-stable-through-build", "binary-hash-recorded"]
+        inventory = {"scenarios": [
+            {"id": "source-binary-provenance", "kind": "builtin", "capability": "local",
+             "required": True, "assertions": assertions},
+            {"id": "fixture-builtin", "kind": "builtin", "capability": "local",
+             "required": True, "assertions": ["fixture-builtins-ran"]},
+        ]}
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps(inventory))
+        for mode, options in [
+            ("build-failed", ["--build-candidate"]),
+            ("build-failed-with-binary", ["--build-candidate"]),
+            ("external-missing", ["--orbit-bin", str(repo / "missing-orbit")]),
+            ("external-unverified", []),
+            ("complete", ["--build-candidate"]),
+        ]:
+            (repo / "mode.json").write_text(json.dumps(mode))
+            # Distinct outputs ensure an earlier report cannot hide a crash.
+            output = repo / f".orbit/tmp/{mode}.json"
+            child = subprocess.run(
+                [sys.executable, str(driver), str(harness), str(repo), "--output", str(output), *options],
+                cwd=repo, env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}",
+                               "TMPDIR": str(repo / ".orbit/tmp")},
+                capture_output=True, text=True, timeout=60)
+            assert output.is_file(), (mode, child.returncode, child.stdout, child.stderr)
+            report = json.loads(output.read_text())
+            assert child.returncode == 0, (mode, child.stderr)
+            provenance = next(row for row in report["results"] if row["scenario"] == "source-binary-provenance")
+            builtin = next(row for row in report["results"] if row["scenario"] == "fixture-builtin")
+            if mode == "complete":
+                assert report["decision"] == "PASS" and provenance["outcome"] == "PASS", report
+                assert provenance["assertions"] == assertions, provenance
+                assert report["binary"]["sha256"] == hashlib.sha256(orbit.read_bytes()).hexdigest(), report
+                assert report["binary"]["version"] == "fixture orbit", report
+                assert builtin["outcome"] == "PASS" and (repo / "builtin-invoked").is_file(), report
+            else:
+                assert report["decision"] == "INCOMPLETE" and provenance["outcome"] == "FAIL", report
+                assert not provenance["assertions"], provenance
+                assert builtin["outcome"] == "NOT_RUN" and not (repo / "builtin-invoked").exists(), report
+                if mode.startswith("build-failed"):
+                    command = provenance["command"]
+                    assert command[:-1] == ["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit", "--target-dir"], command
+                    assert command[-1].endswith("/candidate-target"), command
+                    assert provenance["exit_code"] == 42, provenance
+                    assert provenance["stdout"] == "fixture candidate build stdout\n", provenance
+                    assert provenance["stderr"].startswith("fixture candidate build stderr\n"), provenance
+                    assert report["binary"]["sha256"] is None, report
+                elif mode == "external-missing":
+                    assert provenance["exit_code"] == 127 and report["binary"]["sha256"] is None, report
 
 
 def retired_cases_orphan_proof_self_test(harness, scratch):
@@ -571,7 +999,7 @@ def retired_cases_orphan_proof_self_test(harness, scratch):
 
 
 def native_recorder_prefix_self_test(harness, scratch):
-    """Wrapper delimiters must not consume Cargo's separator or libtest options."""
+    """Exercise recorder arguments, shell status and retained execution evidence."""
     with tempfile.TemporaryDirectory(prefix="qa-native-prefix-", dir=scratch) as tmp:
         repo = Path(tmp)
         (repo / "Cargo.toml").write_text(
@@ -617,3 +1045,60 @@ def native_recorder_prefix_self_test(harness, scratch):
             assert "test selected ... ok" in recorded["stdout"], (name, recorded)
             assert "selected test diagnostics" in recorded["stdout"], (name, recorded)
             assert "test result: ok. 1 passed; 0 failed;" in recorded["stdout"], (name, recorded)
+
+        driver = repo / "status-driver.py"
+        driver.write_text('''
+import importlib.util, sys
+from unittest import mock
+spec = importlib.util.spec_from_file_location("qa", sys.argv[1])
+qa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qa)
+mode = sys.argv[2]
+real_run = qa.run
+def injected_run(*args, **kwargs):
+    if mode == "timeout":
+        kwargs["timeout"] = 0
+    if mode == "lost-result":
+        # Close the result pipe without a status; no command child is started.
+        with mock.patch.object(qa, "_PROCESS_SUPERVISOR",
+                               "import os, sys; os.close(int(sys.argv[1]))"):
+            return real_run(*args, **kwargs)
+    if mode == "unverified-cleanup":
+        # Closing the owner pipe still lets the supervisor sweep and join its
+        # group. The caller cannot verify its own sweep and must retain FAIL.
+        with mock.patch("os.killpg", side_effect=PermissionError("fixture cleanup refusal")):
+            return real_run(*args, **kwargs)
+    return real_run(*args, **kwargs)
+qa.run = injected_run
+sys.argv = [sys.argv[1], *sys.argv[3:]]
+qa.main()
+''')
+        for mode, code, expected_status in [
+            ("numeric-zero", 0, 0), ("numeric-seven", 7, 7), ("numeric-127", 127, 127),
+            ("timeout", 0, 1), ("lost-result", 0, 1), ("unverified-cleanup", 0, 1),
+        ]:
+            print(f"native recorder status regression: {mode}", flush=True)
+            command = [sys.executable, "-c",
+                       "import sys; print('retained stdout'); print('retained stderr', file=sys.stderr); "
+                       f"raise SystemExit({code})", "cargo", "test"]
+            records = repo / mode
+            child = subprocess.run(
+                [sys.executable, str(driver), str(harness), mode, "--repo-root", str(repo),
+                 "--native-execution-dir", str(records), "--record-native-command", *command],
+                cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+            recorded = json.loads(next(records.glob("*.json")).read_text())
+            assert child.returncode == expected_status, (mode, child.returncode, recorded)
+            expected_code = code if mode.startswith("numeric-") else None
+            assert recorded["exit_code"] == expected_code, (mode, recorded)
+            assert recorded["outcome"] == ("PASS" if expected_code == 0 else "FAIL"), (mode, recorded)
+            assert child.stdout == recorded["stdout"] and child.stderr == recorded["stderr"], (mode, recorded)
+            assert recorded["command"] == command, (mode, recorded)
+            if mode.startswith("numeric-") or mode == "unverified-cleanup":
+                assert recorded["stdout"] == "retained stdout\n", (mode, recorded)
+                assert recorded["stderr"].startswith("retained stderr\n"), (mode, recorded)
+            if mode == "timeout":
+                assert "timeout after 0s" in recorded["stderr"], recorded
+            elif mode == "lost-result":
+                assert "supervisor exited without a command result" in recorded["stderr"], recorded
+            elif mode == "unverified-cleanup":
+                assert not recorded["cleanup_verified"] and "fixture cleanup refusal" in recorded["stderr"], recorded

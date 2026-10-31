@@ -55,7 +55,7 @@ pub fn spawn_under_linux_bwrap(request: LinuxBwrapSpawnRequest<'_>) -> Result<Ch
     // Only the host or bundled path is ever executed, and the bundled one is
     // ownership-checked here rather than at probe time so a binary replaced
     // since the probe is refused before it runs.
-    let wrapper = trusted_wrapper(&plan.wrapper)?;
+    let wrapper = verified_bwrap_path(&plan.wrapper)?;
     let mut command = Command::new(&wrapper);
     command
         // `env` is the complete child environment the caller composed from the

@@ -13,6 +13,7 @@
 //! that whole sequence inside [`ConfigStore::with_write_lock`], so concurrent
 //! edits of one file serialize instead of refusing each other.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -27,8 +28,9 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::layering::{
-    reject_workspace_crew_env, reject_workspace_machine_table, resolve_workspace_file_document,
-    validate_staged_global_document, validate_staged_workspace_document,
+    reject_workspace_crew_env, reject_workspace_lease_intake, reject_workspace_machine_table,
+    resolve_workspace_file_document, strip_workspace_refused_keys, validate_staged_global_document,
+    validate_staged_workspace_document,
 };
 use crate::operation::OperationLayerSource;
 use crate::persistence::PersistenceConfig;
@@ -179,10 +181,11 @@ impl ConfigStore {
             Self::from_content(ConfigScope::Workspace, path, &content, existing.opened)?;
         store.global_config_path = Some(global_config_path.to_path_buf());
         if mode == WorkspaceInitMode::SeedFromGlobal {
-            // `[machine]` belongs to this host and is rejected in workspace
-            // configs. Remove it from the parsed document so all other
-            // global settings and their formatting/comments survive seeding.
-            store.doc.remove("machine");
+            // Global-only keys (`[machine]`, crew env, lease intake and
+            // listener) are rejected in workspace configs. Remove them from
+            // the parsed document so all other global settings and their
+            // formatting/comments survive seeding.
+            strip_workspace_refused_keys(&mut store.doc);
         }
         if let Some(toggles) = toggles {
             store.doc.insert(PLUGIN_ENABLEMENT_TABLE, toggles);
@@ -221,6 +224,14 @@ impl ConfigStore {
         &self.path
     }
 
+    /// The exact bytes this store was opened from (empty when absent).
+    ///
+    /// These are the bytes the no-follow config opener returned, so callers
+    /// needing the raw document reuse this instead of rereading the path.
+    pub fn raw_text(&self) -> &str {
+        &self.opened
+    }
+
     /// Whether the file backing this store exists on disk.
     pub fn exists_on_disk(&self) -> bool {
         self.path.exists()
@@ -239,6 +250,29 @@ impl ConfigStore {
             item = next;
         }
         !matches!(item, toml_edit::Item::None)
+    }
+
+    /// Seed an absent key with an inline explanation, preserving existing values.
+    pub(crate) fn seed_missing_value(
+        &mut self,
+        key: &str,
+        raw_value: &str,
+        comment: &str,
+    ) -> Result<bool, OrbitError> {
+        if self.is_key_set(key) {
+            return Ok(false);
+        }
+        self.set_value(key, raw_value)?;
+        let mut item = self.doc.as_item_mut();
+        for segment in key.split('.') {
+            item = item.get_mut(segment).ok_or_else(|| {
+                OrbitError::InvalidInput(format!("seeded config key '{key}' is missing"))
+            })?;
+        }
+        if let Some(value) = item.as_value_mut() {
+            value.decor_mut().set_suffix(format!(" # {comment}"));
+        }
+        Ok(true)
     }
 
     /// Names of the `[crews.<name>]` tables this document defines, sorted.
@@ -293,6 +327,32 @@ impl ConfigStore {
         }
     }
 
+    /// The effective `[plugins.<ns>]` sections of this staged document
+    /// layered over the global config at `global_root`, as a runtime load
+    /// would resolve them. Lets a caller that stages a workspace edit in
+    /// memory validate plugin-owned sections against the staged values
+    /// before anything is written.
+    pub fn plugin_sections_with_global(
+        &self,
+        global_root: &Path,
+    ) -> Result<BTreeMap<String, JsonValue>, OrbitError> {
+        match self.scope {
+            ConfigScope::Global => Ok(self.resolved()?.plugins),
+            ConfigScope::Workspace => {
+                let workspace_root = self.path.parent().ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "workspace config path has no parent directory".to_string(),
+                    )
+                })?;
+                let roots = ConfigRoots::new(global_root, workspace_root);
+                Ok(
+                    validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())?
+                        .plugins,
+                )
+            }
+        }
+    }
+
     fn resolved(&self) -> Result<ResolvedConfig, OrbitError> {
         // Persistence paths are derived from the two data roots, not from
         // the config document, and are irrelevant to key validation here.
@@ -323,13 +383,15 @@ impl ConfigStore {
         Ok(crew_field_value(&resolved, key)?.unwrap_or(JsonValue::Null))
     }
 
-    /// Set `key` to the TOML-literal-or-string parse of `raw_value`,
-    /// mutating the in-memory document only. Callers must call
+    /// Set `key` to the TOML-literal-or-string parse of `raw_value` in memory,
+    /// checking a fixed registry key's raw type before staging the edit.
+    /// Callers must call
     /// [`Self::validate`] and then [`Self::save`] afterward — `set_value`
     /// never touches disk.
     pub fn set_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
         registry::admit_settable_config_key(key)?;
         self.reject_global_only_key(key)?;
+        ConfigSnapshot::validate_supplied_value(key, &parse_value_literal(raw_value))?;
         self.set_document_value(key, raw_value)
     }
 
@@ -386,7 +448,7 @@ impl ConfigStore {
             // number, array, or inline table.
             self.set_document_value(key, &toml_edit::Value::from(value).to_string())?;
         }
-        let staged = self.doc.to_string().parse::<toml::Value>().map_err(|err| {
+        let staged: toml::Value = toml::from_str(&self.doc.to_string()).map_err(|err| {
             OrbitError::InvalidInput(format!("staged machine identity is not valid TOML: {err}"))
         })?;
         for (key, value) in fields {
@@ -609,7 +671,7 @@ impl ConfigStore {
     /// scope-free admission pipeline cannot see which file it is resolving,
     /// so the store — which does — states the rule.
     fn reject_workspace_machine_table(&self) -> Result<(), OrbitError> {
-        let document = self.doc.to_string().parse::<toml::Value>().map_err(|err| {
+        let document: toml::Value = toml::from_str(&self.doc.to_string()).map_err(|err| {
             OrbitError::InvalidInput(format!(
                 "invalid TOML in '{}': {err}",
                 redact_home_dir(&self.path.display().to_string())
@@ -618,7 +680,8 @@ impl ConfigStore {
         match self.scope {
             ConfigScope::Workspace => {
                 reject_workspace_machine_table(&document, &self.path)?;
-                reject_workspace_crew_env(&document, &self.path)
+                reject_workspace_crew_env(&document, &self.path)?;
+                reject_workspace_lease_intake(&document, &self.path)
             }
             ConfigScope::Global => reject_global_plugin_enablement(&document, &self.path),
         }
@@ -706,6 +769,29 @@ impl ConfigStore {
     /// an older version. Run the open-to-save sequence inside
     /// [`Self::with_write_lock`] to wait for such a writer instead.
     pub fn save(&mut self) -> Result<(), OrbitError> {
+        // Every writer (CLI, doctor, migration, or unrelated edit) uses the
+        // spelling older running clients admit. Keep canonical values and
+        // comments untouched; only normalize aliases with the same meaning.
+        // [ORB-20099] Alias normalization preserves the resolved timing and
+        // its source: it never migrates `before_pr` to `before_landing` or
+        // `off`, and never materializes a masked global timing into another
+        // layer. Only an explicit `orbit config set review.timing
+        // before_landing` changes the timing.
+        if let Some(value) = self
+            .doc
+            .get_mut("review")
+            .and_then(Item::as_table_like_mut)
+            .and_then(|table| table.get_mut("timing"))
+            .and_then(Item::as_value_mut)
+            && let Some(raw) = value.as_str()
+        {
+            let timing = crate::operation::ReviewTimingSetting::parse_in_file(raw, &self.path)?;
+            if raw != timing.as_str() {
+                let mut canonical = toml_edit::Value::from(timing.as_str());
+                *canonical.decor_mut() = value.decor().clone();
+                *value = canonical;
+            }
+        }
         let content = self.doc.to_string();
         Self::with_write_lock(&self.path, || {
             if read_optional(&self.path)? != self.opened {
@@ -765,6 +851,7 @@ fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonV
         "tags" => serde_json::json!(crew.tags),
         "enabled" => serde_json::json!(crew.enabled),
         "env" => serde_json::json!(crew.env),
+        "vision" => serde_json::json!(crew.vision),
         _ => JsonValue::Null,
     }))
 }
@@ -894,11 +981,10 @@ pub(crate) fn validated_config_store_path(path: &Path) -> Result<Option<PathBuf>
 /// falling back to a plain string if it doesn't parse as one. No `--type`
 /// flag: this is the entire type-inference rule for `orbit config set`.
 ///
-/// `toml_edit::Value` (like `toml::Value`) has no public "parse a bare
-/// value" entry point — both crates' string parsers expect a full
-/// `key = value` document, so `"10000".parse::<toml_edit::Value>()` is not
-/// a thing. Instead, wrap `raw` as the value of a throwaway key in a
-/// synthetic one-line document, parse *that*, and pull the value back out.
+/// Wrap `raw` as the value of a throwaway key in a synthetic one-line
+/// document, parse *that*, and pull the value back out. Parsing in
+/// document position keeps the value's decor as written, rather than the
+/// cleared decor a bare-value parse returns.
 /// Any extra keys `raw` might smuggle in (e.g. `1\nother = "x"`) are parsed
 /// but never read, so this can't be used to inject unrelated keys — worst
 /// case a crafted `raw` just fails to parse and falls back to a string.

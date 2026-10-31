@@ -133,6 +133,8 @@ fn envelope(
 ) -> TaskEnvelopeV2 {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskEnvelopeV2 {
+        granted_tools: Vec::new(),
+        requires_labels: Vec::new(),
         job_run_machine: None,
         schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
         id: task_id.to_string(),
@@ -148,7 +150,9 @@ fn envelope(
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
+        created_by_model: None,
         origin: None,
+        rule_fingerprint: None,
         relations,
         tags,
         required_tools: Vec::new(),
@@ -159,5 +163,6 @@ fn envelope(
         implemented_by: None,
         created_at: now,
         updated_at: now,
+        not_before: None,
     }
 }

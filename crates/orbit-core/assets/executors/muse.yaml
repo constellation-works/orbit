@@ -43,13 +43,17 @@ spec:
     # repository content Orbit does not vouch for, so its Muse skills and rules
     # stay unloaded and agent delegation stays off. The envelope directs the
     # agent to read the workspace's AGENTS.md itself.
+  # `muse exec --image <PATH>` attaches each staged image. Declared because
+  # the canary probe (`orbit agents vision-probe`) passed on this lane. Only
+  # PNG, the canary's format, has passing evidence.
+  image_input:
+    mode: attach_args
+    formats: [png]
+    max_images: 40
+    attach_args: ["--image", "{path}"]
   stdout_format: envelope
   sandbox: macos-sandbox-exec
-  # Muse Code ships macOS and Windows builds. Orbit admits it only on macOS:
-  # native Windows is not an Orbit runtime (ORB-13857), and spawning the
-  # native Windows Muse binary from Orbit-in-WSL2 is unverified. Adding
-  # Windows later is this one line, once that launch is verified.
-  host_os:
-    - macos
+  # Muse runs on macOS and Linux, so it carries no OS restriction: the
+  # sandbox marker above is translated per host at seed time.
   model_flag: "--model"
   env: {}

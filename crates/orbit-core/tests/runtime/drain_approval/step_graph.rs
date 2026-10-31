@@ -6,8 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use orbit_core::{CompletionPolicy, DrainAdmissionsStopRequest};
-use orbit_types::workflow::JobRunTrigger;
+use orbit_core::DrainAdmissionsStopRequest;
 
 use super::*;
 
@@ -168,43 +167,22 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
 
     let drain = workspace
         .runtime
-        .submit_workspace_auto_run_with_mode(
-            Some(3600),
-            Some(1),
-            CompletionPolicy::Review,
-            &[],
-            &Default::default(),
+        .submit_pipeline_run(
+            "workspace_auto_pipeline",
+            json!({
+                "for_seconds": 3600,
+                "max_active_leaf_runs": 1,
+                "completion": "review",
+                "approve_proposed": true,
+                "auto_concurrency": "enforce",
+                "poll_sleep_seconds": 0,
+                "idle_sleep_seconds": 600,
+            }),
             None,
-            None,
-            JobRunTrigger::cli(),
-            false,
-            true,
-            false,
-            Some(orbit_types::workflow::AutoConcurrencyMode::Enforce),
             None,
         )
         .unwrap()
         .run_id;
-    // This outcome fixture polls without waiting; the unchanged long idle
-    // trap still detects selecting idle sleep while a pilot is live. The
-    // final join retains its real 3600-second bound and native polling.
-    let store = workspace.runtime.sqlite_store().unwrap();
-    let workspace_id = workspace.runtime.workspace_id().unwrap();
-    store
-        .with_transaction(|tx| {
-            let changed = tx
-                .connection()
-                .execute(
-                    "UPDATE job_runs SET input_json = json_set(input_json, \
-                     '$.poll_sleep_seconds', 0, '$.idle_sleep_seconds', 600) \
-                     WHERE workspace_id = ?1 AND run_id = ?2",
-                    [workspace_id.as_str(), drain.as_str()],
-                )
-                .unwrap();
-            assert_eq!(changed, 1);
-            Ok(())
-        })
-        .unwrap();
     let executor = {
         let runtime = workspace.runtime.clone();
         let drain = drain.clone();
@@ -213,6 +191,20 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
 
     // The first pass starts the pilot, and admission does not wait for it.
     let pilot = workspace.claimed_pilot(&drain, 0);
+    let initial_input = workspace
+        .runtime
+        .read_run_state(&drain)
+        .unwrap()
+        .unwrap()
+        .initial_input;
+    assert_eq!(
+        initial_input["poll_sleep_seconds"], 0,
+        "the shipped worker uses the timing submitted with the drain"
+    );
+    assert_eq!(
+        initial_input["idle_sleep_seconds"], 600,
+        "the shipped worker uses the timing submitted with the drain"
+    );
     let eligible_leaf = workspace.wait_for(&drain, "the eligible task's leaf", || {
         workspace.leaf_for(&drain, &eligible)
     });

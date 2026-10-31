@@ -261,6 +261,10 @@ pub struct PluginToolSpec {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub execution_kind: PluginExecutionKind,
+    /// Request agent-session access to an append-only or proposal-only
+    /// mutating tool. Requires the operator's `agent_tools` consent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_callable: bool,
     #[serde(default)]
     pub mcp_scope: PluginMcpScope,
     /// JSON Schema object, or `{ $ref: <path inside the plugin root> }`.

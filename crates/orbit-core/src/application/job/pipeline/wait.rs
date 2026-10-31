@@ -2,6 +2,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 
+use serde::Deserialize;
+
 use super::*;
 
 const PIPELINE_WAIT_DEFAULT_TIMEOUT_SECONDS: u64 = 3600;
@@ -140,15 +142,17 @@ pub(super) fn sleep_until_worker_exit(exits_seen: u64, duration: Duration) {
     );
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineWaitResult {
     pub results: Vec<PipelineWaitEntry>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineWaitEntry {
     pub run_id: String,
-    pub status: String,
+    /// An entry written without a status reads as `unknown`.
+    #[serde(default)]
+    pub status: PipelineWaitStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -159,23 +163,132 @@ pub struct PipelineWaitEntry {
     pub error: Option<String>,
 }
 
-/// Wait-envelope success token. Canonical spelling is `JobRunState::Success`
-/// (`success`); `succeeded` is accepted so in-flight synthetic skip results
-/// and older wait JSON keep matching [ORB-12255].
-pub fn pipeline_wait_status_is_success(status: &str) -> bool {
-    matches!(status, "success" | "succeeded")
+/// The status of one run in a pipeline wait answer.
+///
+/// Every [`JobRunState`], plus the wait's `timeout` projection onto a run its
+/// deadline left active and the readings a waiting parent records itself:
+/// `unknown` for an entry without a status and `unobserved` for a wait that
+/// failed outright. Each variant serializes to its own spelling, so a parsed
+/// answer reserializes unchanged. Any other text stays in [`Self::Other`] as
+/// written: a persisted entry is never coerced into a known status.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PipelineWaitStatus {
+    Pending,
+    Running,
+    Success,
+    /// Legacy spelling of [`Self::Success`], still read from synthetic skip
+    /// results and older wait JSON [ORB-12255].
+    Succeeded,
+    Failed,
+    Timeout,
+    Skipped,
+    Retrying,
+    Cancelled,
+    Interrupted,
+    Held,
+    #[default]
+    Unknown,
+    Unobserved,
+    Other(String),
 }
 
-/// A child that ended `held` awaiting named evidence or a forge. It is settled
-/// but neither a success nor a failure [ORB-14748].
-pub fn pipeline_wait_status_is_held(status: &str) -> bool {
-    status == "held"
+impl PipelineWaitStatus {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Success => "success",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Timeout => "timeout",
+            Self::Skipped => "skipped",
+            Self::Retrying => "retrying",
+            Self::Cancelled => "cancelled",
+            Self::Interrupted => "interrupted",
+            Self::Held => "held",
+            Self::Unknown => "unknown",
+            Self::Unobserved => "unobserved",
+            Self::Other(status) => status,
+        }
+    }
+
+    /// The run succeeded, in either spelling.
+    pub fn is_success(&self) -> bool {
+        matches!(self, Self::Success | Self::Succeeded)
+    }
+
+    /// A child that ended `held` awaiting named evidence or a forge. It is
+    /// settled but neither a success nor a failure [ORB-14748].
+    pub fn is_held(&self) -> bool {
+        matches!(self, Self::Held)
+    }
+
+    /// The wait has a final answer for this run.
+    pub fn is_settled(&self) -> bool {
+        self.is_success()
+            || self.is_held()
+            || matches!(
+                self,
+                Self::Failed | Self::Timeout | Self::Cancelled | Self::Interrupted
+            )
+    }
 }
 
-pub fn pipeline_wait_status_is_settled(status: &str) -> bool {
-    pipeline_wait_status_is_success(status)
-        || pipeline_wait_status_is_held(status)
-        || matches!(status, "failed" | "timeout" | "cancelled" | "interrupted")
+impl From<&str> for PipelineWaitStatus {
+    fn from(status: &str) -> Self {
+        match status {
+            "pending" => Self::Pending,
+            "running" => Self::Running,
+            "success" => Self::Success,
+            "succeeded" => Self::Succeeded,
+            "failed" => Self::Failed,
+            "timeout" => Self::Timeout,
+            "skipped" => Self::Skipped,
+            "retrying" => Self::Retrying,
+            "cancelled" => Self::Cancelled,
+            "interrupted" => Self::Interrupted,
+            "held" => Self::Held,
+            "unknown" => Self::Unknown,
+            "unobserved" => Self::Unobserved,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+impl From<JobRunState> for PipelineWaitStatus {
+    fn from(state: JobRunState) -> Self {
+        match state {
+            JobRunState::Pending => Self::Pending,
+            JobRunState::Running => Self::Running,
+            JobRunState::Success => Self::Success,
+            JobRunState::Failed => Self::Failed,
+            JobRunState::Timeout => Self::Timeout,
+            JobRunState::Skipped => Self::Skipped,
+            JobRunState::Retrying => Self::Retrying,
+            JobRunState::Cancelled => Self::Cancelled,
+            JobRunState::Interrupted => Self::Interrupted,
+            JobRunState::Held => Self::Held,
+        }
+    }
+}
+
+impl std::fmt::Display for PipelineWaitStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for PipelineWaitStatus {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for PipelineWaitStatus {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let status = String::deserialize(deserializer)?;
+        Ok(Self::from(status.as_str()))
+    }
 }
 
 impl OrbitRuntime {
@@ -226,10 +339,7 @@ impl OrbitRuntime {
             // rows without repeating per-run owner probes.
             self.reconcile_stale_job_runs(None)?;
             let snapshot = self.collect_pipeline_wait_entries(run_ids, false)?;
-            if snapshot
-                .iter()
-                .all(|entry| pipeline_wait_status_is_settled(&entry.status))
-            {
+            if snapshot.iter().all(|entry| entry.status.is_settled()) {
                 let result = PipelineWaitResult { results: snapshot };
                 self.record_pipeline_wait_finished(actor, &result)?;
                 return Ok(result);
@@ -273,7 +383,7 @@ impl OrbitRuntime {
                     Ok(None) => {
                         return Ok(PipelineWaitEntry {
                             run_id: run_id.clone(),
-                            status: "failed".to_string(),
+                            status: PipelineWaitStatus::Failed,
                             finished_at: None,
                             duration_ms: None,
                             pipeline: None,
@@ -288,9 +398,9 @@ impl OrbitRuntime {
                 // its own terminal evidence even when the deadline has passed.
                 let wait_incomplete = timeout_incomplete && !run.state.is_terminal();
                 let status = if wait_incomplete {
-                    "timeout".to_string()
+                    PipelineWaitStatus::Timeout
                 } else {
-                    run.state.to_string()
+                    run.state.into()
                 };
                 let pipeline = if wait_incomplete {
                     None
@@ -341,11 +451,11 @@ impl OrbitRuntime {
         let mut cancelled = 0usize;
         let mut timeout = 0usize;
         for entry in &result.results {
-            match entry.status.as_str() {
-                status if pipeline_wait_status_is_success(status) => succeeded += 1,
-                "failed" => failed += 1,
-                "cancelled" => cancelled += 1,
-                "timeout" => timeout += 1,
+            match entry.status {
+                PipelineWaitStatus::Success | PipelineWaitStatus::Succeeded => succeeded += 1,
+                PipelineWaitStatus::Failed => failed += 1,
+                PipelineWaitStatus::Cancelled => cancelled += 1,
+                PipelineWaitStatus::Timeout => timeout += 1,
                 _ => {}
             }
         }

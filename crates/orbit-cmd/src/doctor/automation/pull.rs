@@ -13,7 +13,7 @@ pub(in crate::doctor) fn doctor_check_pull_protocol(
     const CHECK: &str = "pull-protocol";
     let inspect = || -> Result<Option<String>, OrbitError> {
         let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
-            job_id: Some(orbit_core::application::distributed::PULL_DRAIN_JOB.to_string()),
+            job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
             limit: Some(1),
             ..Default::default()
         })?;
@@ -60,7 +60,7 @@ pub(in crate::doctor) fn doctor_check_pull_gates(runtime: &OrbitRuntime) -> Work
     const CHECK: &str = "pull-gates";
     let inspect = || -> Result<Option<Option<String>>, OrbitError> {
         let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
-            job_id: Some(orbit_core::application::distributed::PULL_DRAIN_JOB.to_string()),
+            job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
             limit: Some(1),
             ..Default::default()
         })?;

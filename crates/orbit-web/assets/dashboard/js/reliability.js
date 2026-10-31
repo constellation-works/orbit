@@ -181,6 +181,52 @@ function renderSummary(payload) {
   }
 }
 
+// ORB-19694 — bounded attribution tables. The failure-by-job card reached
+// 33 rendered rows (1,285.5px) and each workspace-scoped card reached 13
+// rows (505.5px), stretching the view to 3,191px in an 810px region. The
+// initial view now shows the top slice and reveals the rest on demand, so
+// the other summaries stay reachable without traversing low-value rows.
+// Every row stays inspectable via Show all; ordering and rates are untouched.
+const REL_VISIBLE_ROWS = 10;
+const expandedRelCards = new Set();
+let lastReliabilityPayload = null;
+
+function toggleRelCard(cardKey) {
+  if (expandedRelCards.has(cardKey)) expandedRelCards.delete(cardKey);
+  else expandedRelCards.add(cardKey);
+  if (lastReliabilityPayload) {
+    renderBreakdown(lastReliabilityPayload);
+    renderActivities(lastReliabilityPayload);
+  }
+}
+
+/// Shared presentation contract for the three attribution tables: the
+/// initial render shows the first `REL_VISIBLE_ROWS` rows in the caller's
+/// order and a Show-all toggle reveals the rest. Rates and ordering are the
+/// caller's; this helper only bounds the presentation.
+function boundedRelTable({ title, columns, rows, keyFn, cardKey, unit, sortNote }) {
+  if (rows.length <= REL_VISIBLE_ROWS) {
+    return card(title, tableFrom(columns, rows, keyFn), cardKey);
+  }
+  const expanded = expandedRelCards.has(cardKey);
+  const visible = expanded ? rows : rows.slice(0, REL_VISIBLE_ROWS);
+  const table = tableFrom(columns, visible, keyFn);
+  const metaText = expanded
+    ? `Showing all ${rows.length} ${unit}${sortNote ? ` · ${sortNote}` : ""}`
+    : `Showing top ${visible.length} of ${rows.length} ${unit}${sortNote ? ` · ${sortNote}` : ""}`;
+  const meta = el("span", { class: "rel-table-meta", text: metaText });
+  const toggle = el("button", {
+    class: "mx-link-btn",
+    type: "button",
+    text: expanded ? `Show top ${REL_VISIBLE_ROWS}` : `Show all ${rows.length} ${unit}`,
+    "aria-expanded": String(expanded),
+  });
+  toggle.addEventListener("click", () => toggleRelCard(cardKey));
+  const footer = el("div", { class: "rel-table-footer" }, [meta, toggle]);
+  const wrap = el("div", { class: "rel-table-wrap" }, [table, footer]);
+  return card(title, wrap, cardKey);
+}
+
 function tableFrom(columns, rows, keyFn) {
   const table = el("table", { class: "scoreboard-table rel-table" });
   const thead = el("thead");
@@ -241,8 +287,9 @@ function renderBreakdown(payload) {
     rate: (ws.job_runs || {}).failure_rate,
   }));
   cards.push(
-    card("Failure rate by workspace", tableFrom(
-      [
+    boundedRelTable({
+      title: "Failure rate by workspace",
+      columns: [
         { label: "workspace", render: (r) => r.label },
         { label: "runs", num: true, render: (r) => String(num(r.counts.total)) },
         { label: "settled", num: true, render: (r) => String(num(r.counts.succeeded) + num(r.counts.failed)) },
@@ -250,9 +297,12 @@ function renderBreakdown(payload) {
         { label: "rolled up", num: true, render: (r) => String(num(r.counts.cascaded)) },
         { label: "failure rate", num: true, render: (r) => rateCell(r.rate) },
       ],
-      wsRows,
-      (r) => `ws-${r.key}`,
-    ), "rel-card-workspaces"),
+      rows: wsRows,
+      keyFn: (r) => `ws-${r.key}`,
+      cardKey: "rel-card-workspaces",
+      unit: "workspaces",
+      sortNote: "report order",
+    }),
   );
 
   // Jobs are flattened across workspaces and tagged, so the worst job leads
@@ -271,9 +321,10 @@ function renderBreakdown(payload) {
   }
   jobRows.sort((a, b) => num(b.counts.failed) - num(a.counts.failed) || num(b.counts.total) - num(a.counts.total));
   cards.push(
-    card("Failure rate by job", jobRows.length
-      ? tableFrom(
-          [
+    jobRows.length
+      ? boundedRelTable({
+          title: "Failure rate by job",
+          columns: [
             { label: "job", render: (r) => r.job_id },
             { label: "workspace", render: (r) => r.workspace },
             { label: "runs", num: true, render: (r) => String(num(r.counts.total)) },
@@ -281,11 +332,13 @@ function renderBreakdown(payload) {
             { label: "rolled up", num: true, render: (r) => String(num(r.counts.cascaded)) },
             { label: "failure rate", num: true, render: (r) => rateCell(r.rate) },
           ],
-          jobRows,
-          (r) => `job-${r.key}`,
-        )
-      : emptyState("No job runs in this window."),
-      "rel-card-jobs"),
+          rows: jobRows,
+          keyFn: (r) => `job-${r.key}`,
+          cardKey: "rel-card-jobs",
+          unit: "jobs",
+          sortNote: "sorted by failures",
+        })
+      : card("Failure rate by job", emptyState("No job runs in this window."), "rel-card-jobs"),
   );
 
   syncNodes(host, cards);
@@ -401,8 +454,9 @@ function renderActivities(payload) {
   }
 
   syncNodes(host, [
-    card("Invocations by activity and discovered role", tableFrom(
-      [
+    boundedRelTable({
+      title: "Invocations by activity and discovered role",
+      columns: [
         { label: "activity", render: (r) => r.activity_id },
         { label: "role", render: (r) => el("span", { class: `rel-role rel-role-${r.role}`, text: r.role }) },
         { label: "workspace", render: (r) => r.workspace },
@@ -410,8 +464,11 @@ function renderActivities(payload) {
         { label: "runs touched", num: true, render: (r) => String(r.job_run_count) },
       ],
       rows,
-      (r) => `act-${r.key}`,
-    ), "rel-card-activities"),
+      keyFn: (r) => `act-${r.key}`,
+      cardKey: "rel-card-activities",
+      unit: "activities",
+      sortNote: "sorted by invocations",
+    }),
   ]);
 }
 
@@ -451,6 +508,7 @@ function renderReliability(payload) {
     const total = num(((payload.totals || {}).job_runs || {}).counts?.total);
     count.textContent = `${total} runs / ${(payload.window || {}).label || ""}`;
   }
+  lastReliabilityPayload = payload;
   renderSummary(payload);
   renderOverTime(payload);
   renderBreakdown(payload);
@@ -473,6 +531,7 @@ const RELIABILITY_TEXT = [
 ];
 
 function retireReliabilityReport() {
+  lastReliabilityPayload = null;
   for (const id of RELIABILITY_REPORT) {
     const node = $(id);
     if (node) syncNodes(node, []);

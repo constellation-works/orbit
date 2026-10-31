@@ -1,7 +1,7 @@
 //! Provider configuration and activity instructions at the engine boundary.
 
 use orbit_engine::DispatchError;
-use orbit_types::workflow::TagInstruction;
+use orbit_types::workflow::{ExperimentActivityOverlay, TagInstruction};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -54,4 +54,30 @@ pub(super) fn tag_instructions_for_activity(
             }
         },
     )
+}
+
+pub(super) fn experiment_overlays_for_activity(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    activity_name: &str,
+    input: &Value,
+) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
+    OrbitRuntime::experiment_overlays_for_activity(runtime, run_id, activity_name, input).map_err(
+        |failure| match failure {
+            TagInstructionFailure::Store(error) => DispatchError::CliInvocationFailed(format!(
+                "load experiment overlays for `{activity_name}` (run {run_id}): {error}"
+            )),
+            // The same capture or files refuse identically on every attempt.
+            TagInstructionFailure::Refused(error) => {
+                DispatchError::CliInvocationPermanent(error.to_string())
+            }
+        },
+    )
+}
+
+pub(super) fn actor_model_identity(runtime: &OrbitRuntime) -> Option<String> {
+    matches!(runtime.actor().kind, crate::context::ActorKind::Agent)
+        .then(|| runtime.actor_label().trim())
+        .filter(|label| !label.is_empty())
+        .map(ToOwned::to_owned)
 }

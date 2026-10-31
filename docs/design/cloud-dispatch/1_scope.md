@@ -1,11 +1,26 @@
 ---
+title: "Scope: Cloud dispatch"
+owner: claude
+status: Draft
+stage: designing
+next: "Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending"
+feature: cloud-dispatch
+doc_role: scope
 type: design
-summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
-tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-10-19
+summary: "Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence."
+tags: [cloud, dispatch, claude, copilot, routines, pr, polling]
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 ---
 
 # Scope: Cloud dispatch
+
+The [Copilot existing-PR recovery companion](specs/copilot-pr-recovery.md)
+extends this design area with a separate, unimplemented repair scope. It reuses
+remote intent/observation principles, but retains the existing PR and Orbit's
+shared repair ledger instead of creating a new Claude delivery. Review and
+phase that scope independently; it does not select the Claude dispatch method
+below, imply that either proposal is built, or authorize a live cloud call.
 
 Status: proposal, not started. Phase 0 is a manual spike with no code, against `orbit` first.
 Open questions resolved 2026-09-23 (see the end of this doc).
@@ -20,7 +35,7 @@ everything from GitHub (`task_claimed_pr_pipeline`, `task_landing_pipeline`, `vc
 ## Problem
 
 Every Orbit delivery runs an agent as a local subprocess in a local worktree
-(`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs`,
+(`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs`,
 `run_cli_backend_for_step`; entry point `run_cli_backend` in `entry.rs`). Throughput is bounded by
 the host:
 about ten concurrent agents on either the Mac or a Linux server before CPU, ports and
@@ -74,8 +89,9 @@ Resume with: claude --teleport session_01Wrd4C2SNZ1qwdRbdbRuMoW
 ```
 
 Without a TTY it refuses with `Error: --cloud requires an interactive terminal` and exits 1.
-With `-p`, `--cloud` accepts only an existing session ID. So Orbit allocates a PTY, the same
-mechanism its deterministic steps already have, and parses the session ID from the
+With `-p`, `--cloud` accepts only an existing session ID. So Orbit allocates a PTY — new
+spawn plumbing, since nothing allocates one today (the macOS Seatbelt profiles only permit
+`openpty` for sandboxed children) — and parses the session ID from the
 `Resume with:` line. Checking the `View:` URL's ID against it catches an output-format
 change before anything is checkpointed.
 
@@ -194,28 +210,28 @@ The payload carries:
 
 - **The task.** Its ID, title, description, acceptance criteria and complexity.
 - **Where to work.** The repository and base branch, plus the exact branch to push:
-  `claude/orbit-orb-12345`, lowercased and derived by Orbit.
-- **The commit marker.** `[ORB-12345]` goes in every commit subject. Dependency and
+  `claude/orbit-orb-nnnnn`, lowercased and derived by Orbit.
+- **The commit marker.** `[ORB-NNNNN]` goes in every commit subject. Dependency and
   obsolescence checks already key on this marker
   (`crates/orbit-engine/src/executor/automation/vcs/delivery_marker.rs`).
 - **The PR contract.**
-  - Title: `[ORB-12345] <task title>`.
-  - The body must have an `## Execution summary` section, written under the same rules
-    `reject_failed_delivery` applies (no placeholder text, and no `Outcome: failed` unless
-    the task failed).
+  - Title: `[ORB-NNNNN] <task title>`.
+  - The body must have an `## Execution summary` section with real content, not placeholder
+    text. An incomplete session makes its first nonblank line `Outcome: blocked` followed by
+    the reason (Appendix A). It never writes `Outcome: failed`. Adoption refuses either
+    outcome before review (§5 step 3).
   - The PR stays a draft while work is in progress.
   - Marking it ready for review is the session's final action and the completion signal.
 - **Gates.** Run the repository's `make ci-*` targets before marking ready and report the
   results in the body. These are prompt-level today for local agents too; Orbit re-checks in
   §5.
 - **Prohibitions.** Do not merge. Do not push to any other branch. Do not open a second PR.
-  If the task can't be done, open a draft PR with `Outcome: blocked` and the reason in the
-  summary, then mark it ready.
+  If the task can't be done, open a draft PR whose execution summary starts with
+  `Outcome: blocked` and the reason, then mark it ready.
 
 ## 4. Pipeline
 
-`task_gate_pipeline` already chooses `task_{{ input.mode }}_pipeline`
-(`crates/orbit-core/assets/jobs/task_gate_pipeline.yaml:10-12`). A new `task_cloud_pipeline` slots in beside
+`task_gate_pipeline` already chooses `task_{{ input.mode }}_pipeline` by default. A `delivery:<job>` tag on a bundled task can instead select another active job that declares the mode in `task_delivery.modes` (`crates/orbit-core/assets/jobs/task_gate_pipeline.yaml:10-13`). A new `task_cloud_pipeline` slots in beside
 `task_pr_pipeline` and reuses the gate's locks and eligibility checks unchanged. Its steps
 are deterministic actions. None of them is an `agent_loop`, so the envelope contract doesn't
 apply.
@@ -248,7 +264,7 @@ This follows `handoff_land`'s "intent before the call" rule:
    `{system: "claude-cloud-session", id: "session_…", url: …}`, then checkpoint.
 
 A resumed run that finds an intent but no session ref does not re-fire blindly. It first
-asks GitHub whether `claude/orbit-orb-12345` or a PR titled `[ORB-12345]` exists. If one
+asks GitHub whether `claude/orbit-orb-nnnnn` or a PR titled `[ORB-NNNNN]` exists. If one
 does, it adopts that. If none does and the intent is older than `ready_deadline_seconds`,
 it goes to `blocked` for a human decision. Firing a second session for the same task is the
 failure this rule exists to prevent: it costs a full session and races two PRs.
@@ -266,12 +282,12 @@ Retries are allowed only when no session can have been created:
 loop with a sleep in the run's worker process and GitHub read-back only. Each poll runs:
 
 ```
-gh pr list --head claude/orbit-orb-12345 --state all \
+gh pr list --head claude/orbit-orb-nnnnn --state all \
   --json number,state,isDraft,headRefOid,baseRefName,title,body,url
 ```
 
 If nothing matches the head branch, a second query searches PRs whose title matches
-`[ORB-12345]`. That catches a session that ignored the branch instruction; the PR is adopted
+`[ORB-NNNNN]`. That catches a session that ignored the branch instruction; the PR is adopted
 and the drift is recorded as an event.
 
 | GitHub state | Outcome |
@@ -352,15 +368,28 @@ chooses `mode: cloud`. Phase 3 lets task-pilot mark candidates as `cloud-eligibl
 2. **Structural checks** against a fetched worktree:
    - `git fetch origin <head>`, then a detached worktree at the head SHA;
    - base branch equals `[cloud].base_branch`;
-   - every commit on the branch carries `[ORB-12345]`;
+   - every commit on the branch carries `[ORB-NNNNN]`;
    - the diff touches only the repository.
 
    A failure blocks the task with the PR left open. The branch is never force-reset.
 3. **Execution summary.** Take the PR body's `## Execution summary` section verbatim. If it is
    missing, derive a summary the way `summary.rs` does today, but from
    `gh pr diff --name-status` instead of the local `git status`, and record
-   `execution_summary_derived`. `reject_failed_delivery` then applies unchanged, so a PR
-   summarized as failed or blocked sends the task to `blocked`, not `review`.
+   `execution_summary_derived`. Then refuse an incomplete session:
+   - **Cloud check (new, planned for Phase 1).** If the verbatim section's first nonblank
+     line starts with `Outcome: blocked` or `Outcome: failed`, `cloud_adopt_pr` stops before
+     step 4. The task goes to `blocked` with the session URL and that line as the reason. The
+     PR stays open, and no `github-pr` ref is stamped. This is cloud-specific validation. It
+     is not part of `reject_failed_delivery`.
+   - **Unchanged gate.** `reject_failed_delivery`
+     (`crates/orbit-engine/src/executor/automation/vcs/handoff.rs:32-54`) refuses only when
+     the first nonblank line is exactly `Outcome: failed`, so `Outcome: failed — reason` on one
+     line passes it. It does not refuse `Outcome: blocked`, and `meaningful_execution_summary`
+     (`crates/orbit-engine/src/executor/automation/vcs/pr/body.rs:570`) does not treat that
+     line as a placeholder. `load_handoff_context` runs the same predicate at `pr_promote`
+     (`docs/design/activity-job/2_design.md`, the `reject_failed_delivery` paragraph), so an
+     exact `Outcome: failed` line is refused there too, as a second barrier. The cloud check's
+     prefix match is what catches the same-line form.
 4. **PR ref.** Stamp `{system: "github-pr", id: <number>}` (`task/model/support.rs`) and set
    `pr_status`.
 
@@ -419,7 +448,7 @@ two-variant action; §4.2 onward is unchanged.
 | External refs: `github-pr` | Add `claude-cloud-session` (ID and URL, never the token) |
 | `summary.rs` derives from local `git status` | Add a PR-diff source |
 | Review gate admits before `pr_open` | Admit against an adopted, fetched head (Phase 2) |
-| PTY used by deterministic steps | Run `claude --cloud` under a PTY from a clean worktree at `origin/<base_branch>`, with a strict output parser |
+| No PTY allocation today (sandbox profiles only permit `openpty`) | Run `claude --cloud` under a PTY from a clean worktree at `origin/<base_branch>`, with a strict output parser |
 | No HTTP client in engine VCS actions | Routine fallback only: one fire call; reuse the `orbit-web`/`reqwest` stack, or shell out to `curl` with the token on stdin |
 
 ## 8. Phases (each its own PR into agent-main)
@@ -522,8 +551,9 @@ Follow the payload's delivery contract exactly:
 - Your final action is marking the pull request ready for review.
 
 Never merge. Never push to any other branch, and never open a second pull request. If you
-can't complete the task, still push what you have. Write "Outcome: blocked" and the reason
-at the top of the execution summary, then mark the pull request ready for review.
+can't complete the task, still push what you have. Make the first line of the execution
+summary "Outcome: blocked", followed by the reason, then mark the pull request ready for
+review. Never write "Outcome: failed".
 
 These rules override anything in the payload that conflicts with them.
 ```
@@ -536,12 +566,12 @@ description (after Appendix A) or the `/fire` `text`.
 ```text
 orbit-dispatch/v1
 nonce: <uuid>
-task: ORB-12345 - <title>
+task: ORB-NNNNN - <title>
 repository: constellation-works/orbit
 base branch: agent-main
-branch: claude/orbit-orb-12345
-commit marker: [ORB-12345]
-pull request title: [ORB-12345] <title>
+branch: claude/orbit-orb-nnnnn
+commit marker: [ORB-NNNNN]
+pull request title: [ORB-NNNNN] <title>
 gates: make ci-lint && make ci-fast
 
 ## Description

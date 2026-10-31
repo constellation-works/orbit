@@ -288,7 +288,7 @@ fn trigger_recording_preserves_a_competing_checkpoint_and_drain_controls() {
         .connection()
         .lock()
         .unwrap()
-        .busy_handler(None)
+        .busy_handler(None::<fn(i32) -> bool>)
         .unwrap();
 
     expected.trigger = Some(JobRunTrigger::cli());
@@ -512,4 +512,98 @@ fn failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic() {
         .run_job_v2_from_yaml(&job_path, input)
         .expect_err("seed failure must fail the foreground run");
     assert_terminalized("foreground", error);
+}
+
+/// [ORB-19485] A redrawn keyed resubmission never rewrites its task's crew
+/// before it is refused (unit admission criterion 3: a fail-closed invariant
+/// the public boundary reaches only through automation claims). A delivery
+/// pipeline resolves an automation key only when the stored input matches
+/// exactly, and admission stamps fresh timestamps into that input, so the
+/// resubmission is refused as a changed key. The refusal must leave the task
+/// as its admitted run left it.
+#[test]
+fn a_redrawn_keyed_resubmission_is_refused_without_rewriting_the_task_crew() {
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_redrawn_keyed_resubmission_is_refused_without_rewriting_the_task_crew,
+    )) {
+        return;
+    }
+    use orbit_types::task::TaskComplexity;
+    use orbit_types::workflow::JobRunTrigger;
+    use serde_json::json;
+
+    use crate::application::task::TaskAddParams;
+
+    let root = tempfile::tempdir().expect("create tempdir");
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).expect("create global root");
+    std::fs::create_dir_all(&workspace).expect("create workspace root");
+    let crews = "[crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n\
+                 [crews.luna]\nprovider = \"codex\"\nmodel = \"luna-model\"\n";
+    let write_pool = |pool: &str| {
+        std::fs::write(
+            workspace.join("config.toml"),
+            format!("[workflow]\ndefault_crew = \"sol\"\n{pool}\n{crews}"),
+        )
+        .expect("write crew config");
+    };
+    let jobs_dir = global.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create job catalog");
+    std::fs::write(
+        jobs_dir.join("task_local_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_local_pipeline\nspec:\n  state: enabled\n  steps: []\n",
+    )
+    .expect("write delivery job");
+    crate::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+
+    write_pool("medium_complexity_crews = [\"luna\"]");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Keyed delivery crew fixture".into(),
+            complexity: TaskComplexity::Medium,
+            status: Some(orbit_types::task::TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("add task")
+        .id;
+    let keyed = |runtime: &OrbitRuntime| {
+        runtime.submit_automation_pipeline_run(
+            "task_local_pipeline",
+            json!({ "task_id": task }),
+            "delivery-key",
+            JobRunTrigger::cli(),
+        )
+    };
+    let crew_of = |runtime: &OrbitRuntime| {
+        let task = runtime.get_task(&task).expect("read task");
+        (task.crew, task.crew_source)
+    };
+    let assigned = |runtime: &OrbitRuntime| {
+        runtime
+            .get_task_history(&task)
+            .expect("read task history")
+            .iter()
+            .filter(|entry| entry.event == "crew_assigned")
+            .count()
+    };
+
+    keyed(&runtime).expect("admit keyed delivery");
+    assert_eq!(
+        crew_of(&runtime),
+        (Some("luna".into()), Some("pool:medium".into()))
+    );
+    let assigned_before = assigned(&runtime);
+
+    // The pool now draws sol, which the admitted run did not record.
+    write_pool("medium_complexity_crews = [\"sol\"]");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+    let error = keyed(&runtime).expect_err("a redrawn resubmission is refused");
+    assert!(error.to_string().contains("key input changed"), "{error}");
+    assert_eq!(
+        crew_of(&runtime),
+        (Some("luna".into()), Some("pool:medium".into()))
+    );
+    assert_eq!(assigned(&runtime), assigned_before);
 }

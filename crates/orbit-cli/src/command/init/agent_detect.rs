@@ -71,20 +71,6 @@ pub struct DetectedAgents {
     /// command *suggester*, not an agent, and Orbit never dispatches to it.
     /// [ORB-10946]
     pub copilot_cli: bool,
-    /// Cursor's supported local headless agent binary. The Cursor editor/plugin
-    /// control surface is separate and is not evidence that this executable is
-    /// installed. [ORB-10945]
-    pub cursor_cli: bool,
-    /// The Pi coding agent CLI (npm `@earendil-works/pi-coding-agent`), whose
-    /// binary is `pi`. Pi's own `--provider` names the model vendor behind a
-    /// run, so a detected `pi` is evidence of the Pi execution lane only, never
-    /// of an Anthropic/OpenAI/Google lane. [ORB-11296]
-    pub pi_cli: bool,
-    /// The OpenCode CLI, whose binary is `opencode`. OpenCode's own
-    /// `--model provider/model` names the model vendor behind a run, so a
-    /// detected `opencode` is evidence of the OpenCode execution lane only,
-    /// never of an Anthropic/OpenAI/Google lane. [ORB-11295]
-    pub opencode_cli: bool,
     /// Muse Code, Meta's terminal coding agent, whose launcher is `muse`.
     /// A detected `muse` is evidence of the Muse execution lane only; the
     /// model it runs is a separate crew choice. [ORB-16577]
@@ -101,9 +87,6 @@ pub fn detect() -> DetectedAgents {
         antigravity_cli: binary_on_path("agy"),
         grok_cli: binary_on_path("grok"),
         copilot_cli: binary_on_path("copilot"),
-        cursor_cli: binary_on_path("cursor-agent"),
-        pi_cli: binary_on_path("pi"),
-        opencode_cli: binary_on_path("opencode"),
         muse_cli: binary_on_path("muse"),
         ollama_cli: binary_on_path("ollama"),
     }
@@ -132,15 +115,6 @@ pub fn available_crew_families(detected: &DetectedAgents) -> Vec<&'static str> {
     }
     if detected.copilot_cli {
         families.push("copilot");
-    }
-    if detected.cursor_cli {
-        families.push("cursor");
-    }
-    if detected.pi_cli {
-        families.push("pi");
-    }
-    if detected.opencode_cli {
-        families.push("opencode");
     }
     if detected.muse_cli {
         families.push("muse");

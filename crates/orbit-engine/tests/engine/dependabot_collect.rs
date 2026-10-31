@@ -20,7 +20,16 @@ use serde_json::json;
 
 const CHILD_ENV: &str = "ORBIT_DEPENDABOT_COLLECT_CHILD";
 const LOG_ENV: &str = "ORBIT_FAKE_GH_LOG";
+const MARKER_ENV: &str = "ORBIT_FAKE_GH_MARKER";
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
+
+/// A credential-shaped marker the fake `gh` prints to stderr. Built at
+/// runtime so no secret-shaped literal sits in source; the name is
+/// deliberately free of `SECRET`/`TOKEN`/etc. so env-value scrubbing cannot
+/// hide a pattern-redaction gap.
+fn credential_shaped_marker() -> String {
+    format!("ghp_{}", "E".repeat(36))
+}
 
 const FAKE_GH: &str = r#"#!/bin/sh
 set -eu
@@ -38,6 +47,14 @@ case "$1" in
     if [ "${2:-}" != view ]; then
       echo "fake gh: unsupported call: $*" >&2
       exit 2
+    fi
+    if [ "${ORBIT_DEPENDABOT_COLLECT_CHILD:-}" = "repo_view_failure_degrades_without_losing_alert_families" ]; then
+      echo "transient repo view failure" >&2
+      exit 1
+    fi
+    if [ "${ORBIT_DEPENDABOT_COLLECT_CHILD:-}" = "repo_view_credential_shaped_stderr_is_redacted" ]; then
+      echo "gh: authentication failed with token ${ORBIT_FAKE_GH_MARKER:?}" >&2
+      exit 1
     fi
     for arg in "$@"; do
       if [ "$arg" = "--repo" ]; then
@@ -135,6 +152,180 @@ fn explicit_repository_reaches_alert_queries() {
     }
 }
 
+#[test]
+fn zero_alert_limit_clamps_to_one_and_empty_responses_are_fully_collected() {
+    const TEST: &str = "zero_alert_limit_clamps_to_one_and_empty_responses_are_fully_collected";
+    if std::env::var(CHILD_ENV).as_deref() != Ok(TEST) {
+        spawn_isolated(TEST);
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("repo root");
+    let host = RootHost {
+        root: root.path().to_string_lossy().into_owned(),
+    };
+    let outcome = execute_deterministic_action(
+        &host,
+        "collect_dependabot_alerts",
+        &json!({}),
+        &json!({"repo": "acme/orbit", "max_alerts": 0}),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect("zero alert limit should be clamped before building the query");
+
+    let snapshot = &outcome["dependabot_snapshot"];
+    assert_eq!(snapshot["collection_status"], "fully_collected");
+    assert_eq!(snapshot["collected"], true);
+    assert_eq!(snapshot["truncation"]["alerts_limit"], 1);
+    assert_eq!(snapshot["truncation"]["alerts_at_cap"], false);
+    assert_eq!(snapshot["open_alerts"], json!([]));
+    assert_eq!(
+        snapshot["code_scanning"]["collection_status"],
+        "fully_collected"
+    );
+    assert_eq!(
+        snapshot["secret_scanning"]["collection_status"],
+        "fully_collected"
+    );
+
+    let calls =
+        fs::read_to_string(std::env::var(LOG_ENV).expect("fake gh log")).expect("read gh calls");
+    assert!(
+        calls.lines().any(|line| {
+            line.contains("repos/acme/orbit/dependabot/alerts") && line.contains("per_page=1")
+        }),
+        "the Dependabot request must use the minimum page size of one: {calls}"
+    );
+}
+
+#[test]
+fn repo_view_failure_degrades_without_losing_alert_families() {
+    const TEST: &str = "repo_view_failure_degrades_without_losing_alert_families";
+    if std::env::var(CHILD_ENV).as_deref() != Ok(TEST) {
+        spawn_isolated(TEST);
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("repo root");
+    let host = RootHost {
+        root: root.path().to_string_lossy().into_owned(),
+    };
+    let outcome = execute_deterministic_action(
+        &host,
+        "collect_dependabot_alerts",
+        &json!({}),
+        &json!({"repo": "acme/orbit"}),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect("repo view failure should not abort alert collection");
+
+    let snapshot = &outcome["dependabot_snapshot"];
+    assert_eq!(snapshot["repository"], json!({}));
+    assert_eq!(snapshot["collected"], true);
+    assert_eq!(snapshot["collection_status"], "partially_collected");
+    for family in ["code_scanning", "secret_scanning"] {
+        assert_eq!(snapshot[family]["collected"], true, "{family} family");
+        assert_eq!(
+            snapshot[family]["collection_status"], "fully_collected",
+            "{family} family"
+        );
+    }
+    assert!(snapshot["query_errors"].as_array().is_some_and(|errors| {
+        errors.iter().any(|error| {
+            error["query"] == "repo_view"
+                && error["retryable"] == true
+                && error["error"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("transient repo view failure"))
+        })
+    }));
+
+    let calls =
+        fs::read_to_string(std::env::var(LOG_ENV).expect("fake gh log")).expect("read gh calls");
+    let lines: Vec<&str> = calls.lines().collect();
+    for endpoint in [
+        "repos/acme/orbit/dependabot/alerts",
+        "repos/acme/orbit/code-scanning/alerts",
+        "repos/acme/orbit/secret-scanning/alerts",
+    ] {
+        assert!(
+            lines.iter().any(|line| line.contains(endpoint)),
+            "collection must query {endpoint} after repo view failure: {lines:?}"
+        );
+    }
+    assert!(
+        lines.iter().any(|line| line.starts_with("pr list")),
+        "collection must query Dependabot pull requests after repo view failure: {lines:?}"
+    );
+}
+
+#[test]
+fn repo_view_credential_shaped_stderr_is_redacted() {
+    const TEST: &str = "repo_view_credential_shaped_stderr_is_redacted";
+    if std::env::var(CHILD_ENV).as_deref() != Ok(TEST) {
+        spawn_isolated(TEST);
+        return;
+    }
+
+    let marker = credential_shaped_marker();
+    let root = tempfile::tempdir().expect("repo root");
+    let host = RootHost {
+        root: root.path().to_string_lossy().into_owned(),
+    };
+    let outcome = execute_deterministic_action(
+        &host,
+        "collect_dependabot_alerts",
+        &json!({}),
+        &json!({"repo": "acme/orbit"}),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect("repo view failure should not abort alert collection");
+
+    let snapshot = &outcome["dependabot_snapshot"];
+    assert_eq!(snapshot["repository"], json!({}));
+    assert_eq!(snapshot["collected"], true);
+    assert_eq!(snapshot["collection_status"], "partially_collected");
+    for family in ["code_scanning", "secret_scanning"] {
+        assert_eq!(snapshot[family]["collected"], true, "{family} family");
+        assert_eq!(
+            snapshot[family]["collection_status"], "fully_collected",
+            "{family} family"
+        );
+    }
+    let errors = snapshot["query_errors"]
+        .as_array()
+        .expect("repo view failure must be reported");
+    let message = errors
+        .iter()
+        .find(|error| error["query"] == "repo_view")
+        .and_then(|error| error["error"].as_str())
+        .expect("repo_view query error");
+    assert!(
+        !message.contains(&marker),
+        "credential-shaped gh stderr must not survive the sweep boundary: {message}"
+    );
+    assert!(
+        message.contains("[REDACTED_SECRET]"),
+        "the marker must be visibly scrubbed rather than silently absent: {message}"
+    );
+    assert!(
+        message.contains("gh repo view"),
+        "the failed operation must stay named after redaction: {message}"
+    );
+
+    let encoded = serde_json::to_string(&outcome).expect("encode outcome");
+    assert!(
+        !encoded.contains(&marker),
+        "the marker must not appear anywhere in the outcome"
+    );
+}
+
 fn spawn_isolated(test: &str) {
     let sandbox = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("sandbox");
     let bin = sandbox.path().join("bin");
@@ -169,6 +360,7 @@ fn spawn_isolated(test: &str) {
         .env_remove("GITHUB_ENTERPRISE_TOKEN")
         .env(CHILD_ENV, test)
         .env(LOG_ENV, &log)
+        .env(MARKER_ENV, credential_shaped_marker())
         .env("PATH", std::env::join_paths(path).expect("PATH"))
         .env("HOME", sandbox.path())
         .env("TMPDIR", sandbox.path());

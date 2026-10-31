@@ -1,11 +1,19 @@
 //! Implementers: the crew and model of the implementation runs that did the
-//! work. Costs and tier comparisons are context only, never score terms.
+//! work. Escaped regressions and diff context are unscored. Every scored term is compared with the fleet on the same tier mix;
+//! recorded cost and duration remain unscored context. Work admitted as
+//! `no-diff-expected` (reviews, audits, sweeps) is not implementation and
+//! counts nowhere here: no units, credit, charges or fleet expectation.
+//! The tag is judged as of each attempt's start, so retagging a task after
+//! work began cannot move that attempt out of scoring, and an untagged
+//! task that ends with no diff still counts in full.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
+
+use orbit_config::{CrewPerformanceType, classify_task_type};
 
 use super::RoleSpec;
 use crate::application::agents::attribution::{Charge, Credit, Owner, row_key};
@@ -16,15 +24,17 @@ use crate::application::agents::{AgentFacts, AgentRole};
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "implemented tasks",
     terms: TERMS,
+    term_units: &[],
     rows: Some(rows),
+    header: None,
 };
 
 const TERMS: &[Term] = &[
     Term {
         key: "weighted_landed",
-        label: "Weighted landed",
+        label: "Landed",
         weight: 1.0,
-        definition: "Landed tasks whose final implementation run is the row's, weighted by complexity: low 1, medium 2, hard 4, xhard 8, unassessed or unset 1.",
+        definition: "Landed tasks whose final implementation run is the row's, one point each, whatever their complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and are left out of every implementer count.",
         group: "credit",
     },
     Term {
@@ -32,6 +42,13 @@ const TERMS: &[Term] = &[
         label: "First-pass accepts",
         weight: 1.0,
         definition: "Reviewed tasks whose first review verdict on the row's candidate was accept.",
+        group: "credit",
+    },
+    Term {
+        key: "mocks_matched",
+        label: "Mocks matched",
+        weight: 0.25,
+        definition: "verify-mock-ui mocks the comparison review (purpose visual_review) showed on the row's first candidate with no finding its in-line verifier CONFIRMED at medium or above, 0.25 each: how well the implementer's self-check worked.",
         group: "credit",
     },
     Term {
@@ -55,14 +72,9 @@ const TERMS: &[Term] = &[
         definition: "Repeat runs, [BLOCKED] or unmerged PRs, and operator requeues with cause crew, charged to the run that ended the attempt. Review verdicts are not counted again here.",
         group: "problem",
     },
-    Term {
-        key: "escaped_regressions",
-        label: "Escaped regressions",
-        weight: -2.0,
-        definition: "Regressions with escape no_test against tasks whose final implementation run is the row's.",
-        group: "problem",
-    },
 ];
+
+mod context;
 
 type Key = (String, String);
 
@@ -77,26 +89,34 @@ fn tier(task: &TaskFacts) -> &'static str {
     task.complexity.map_or("unassessed", |tier| tier.as_str())
 }
 
-/// One task per row, however many attempts that row started in the window.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+/// Whether an attempt counts as implementation in the window: it started
+/// in the window and the task was not `no-diff-expected` work when the
+/// attempt was admitted. The one filter the headline rows, the fleet
+/// expectations and the by-type cells all share.
+fn counted(attempt: &Attempt, since: DateTime<Utc>) -> bool {
+    attempt.start >= since && !attempt.no_diff()
+}
+
+/// Each row's counted tasks: one task per row, however many counted
+/// attempts that row started in the window.
+fn work_by_row(facts: &AgentFacts, since: DateTime<Utc>) -> BTreeMap<Key, Vec<&TaskFacts>> {
     let mut work: BTreeMap<Key, Vec<&TaskFacts>> = BTreeMap::new();
-    let mut fleet: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
     for task in &facts.tasks {
         let keys: BTreeSet<_> = task
             .attempts
             .iter()
-            .filter(|a| a.start >= since)
+            .filter(|a| counted(a, since))
             .map(key)
             .collect();
         for row in keys {
-            if let Some(review) = first_review(task, &row, since) {
-                let counts = fleet.entry(tier(task)).or_default();
-                counts.0 += 1;
-                counts.1 += usize::from(needs_changes(review.verdict));
-            }
             work.entry(row).or_default().push(task);
         }
     }
+    work
+}
+
+fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<RowInput<'_>> {
+    let work = work_by_row(facts, since);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {
@@ -105,9 +125,71 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
     for credit in &facts.credits {
         credits.entry(&credit.task_id).or_default().push(credit);
     }
-    work.into_iter()
-        .map(|(row, tasks)| row_input(facts, since, row, &tasks, &fleet, &charges, &credits))
-        .collect()
+    let mut rows: Vec<_> = work
+        .iter()
+        .map(|(row, tasks)| row_input(facts, since, row.clone(), tasks, &charges, &credits))
+        .collect();
+    context::append_diff_context(facts, since, &work, &mut rows);
+    let mut fleet: BTreeMap<&str, Fleet> = BTreeMap::new();
+    for tasks in work.values() {
+        for task in tasks {
+            fleet.entry(tier(task)).or_default().units += 1;
+        }
+    }
+    for row in &rows {
+        for (term, tally) in &row.tallies {
+            for (task, count) in tally.task_counts() {
+                *fleet
+                    .entry(tier(task))
+                    .or_default()
+                    .counts
+                    .entry(term)
+                    .or_default() += count;
+            }
+        }
+    }
+    // Sparse tiers join the largest tier (lexical first on a tie). This
+    // bounds their reference by a supported pool and conserves fleet totals.
+    let largest = fleet
+        .iter()
+        .max_by(|(left, a), (right, b)| a.units.cmp(&b.units).then_with(|| right.cmp(left)))
+        .map(|(tier, _)| *tier);
+    if let Some(largest) = largest {
+        let pool_key = |tier: &'static str| {
+            if fleet[tier].units < MIN_TIER_TASKS {
+                largest
+            } else {
+                tier
+            }
+        };
+        let mut pools: BTreeMap<&str, Fleet> = BTreeMap::new();
+        for (&tier, stats) in &fleet {
+            let pool = pools.entry(pool_key(tier)).or_default();
+            pool.units += stats.units;
+            for (&term, &count) in &stats.counts {
+                *pool.counts.entry(term).or_default() += count;
+            }
+        }
+        for (row, tasks) in rows.iter_mut().zip(work.values()) {
+            row.expected = Some(
+                TERMS
+                    .iter()
+                    .map(|term| {
+                        let expected = tasks
+                            .iter()
+                            .map(|task| {
+                                let pool = &pools[pool_key(tier(task))];
+                                pool.counts.get(term.key).copied().unwrap_or(0.0)
+                                    / pool.units as f64
+                            })
+                            .sum();
+                        (term.key, expected)
+                    })
+                    .collect(),
+            );
+        }
+    }
+    rows
 }
 
 /// A later accept cannot erase an earlier reject of this row's candidate.
@@ -115,84 +197,78 @@ fn first_review<'a>(task: &'a TaskFacts, row: &Key, since: DateTime<Utc>) -> Opt
     task.reviews.iter().find(|review| {
         task.attempt_at(review.at).is_some_and(|index| {
             let attempt = &task.attempts[index];
-            attempt.start >= since && key(attempt) == *row
+            counted(attempt, since) && key(attempt) == *row
         })
     })
 }
 
-fn needs_changes(verdict: ReviewVerdict) -> bool {
-    matches!(
-        verdict,
-        ReviewVerdict::Reject | ReviewVerdict::AcceptWithFixes
-    )
+/// Minimum fleet row-task observations before a tier has its own rate.
+const MIN_TIER_TASKS: usize = 30;
+
+#[derive(Default)]
+struct Fleet {
+    units: usize,
+    counts: BTreeMap<&'static str, f64>,
 }
 
-fn row_input<'a>(
-    facts: &AgentFacts,
-    since: DateTime<Utc>,
-    row: Key,
+/// The scored term tallies of one row (or one cell's task subset).
+fn compute_tallies<'a>(
+    row: &Key,
     tasks: &[&'a TaskFacts],
-    fleet: &BTreeMap<&str, (usize, usize)>,
     charges: &BTreeMap<&str, Vec<&Charge>>,
     credits: &BTreeMap<&str, Vec<&Credit>>,
-) -> RowInput<'a> {
+    since: DateTime<Utc>,
+) -> BTreeMap<&'static str, Tally<'a>> {
     let mut tallies: BTreeMap<&'static str, Tally<'a>> = BTreeMap::new();
-    let mut tiers: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new();
-    let mut durations = Vec::new();
-    let mut run_ids = BTreeSet::new();
-    let mut missing_runs = false;
-    let mut runs_without_model = 0;
-    let mut weighted = 0.0;
     for &task in tasks {
-        let counts = tiers.entry(tier(task)).or_default();
-        counts.0 += 1;
-        for attempt in task
-            .attempts
-            .iter()
-            .filter(|a| a.start >= since && key(a) == row)
+        if let Some(review) = first_review(task, row, since)
+            && review.verdict == ReviewVerdict::Accept
         {
-            runs_without_model += usize::from(attempt.runner.model.is_none());
-            if let Some(end) = attempt.end {
-                durations.push((end - attempt.start).num_milliseconds().max(0) as f64 / 1000.0);
-            }
-            match attempt.runner.run_id.as_deref() {
-                Some(id) => {
-                    run_ids.insert(id);
-                }
-                None => missing_runs = true,
-            }
+            tallies.entry("first_pass_accepts").or_default().add(
+                task,
+                1.0,
+                Some(Occurrence {
+                    at: review.at,
+                    detail: "first review accepted the candidate".into(),
+                    run_id: task
+                        .attempt_at(review.at)
+                        .and_then(|index| task.attempts[index].runner.run_id.clone()),
+                }),
+            );
         }
-        if let Some(review) = first_review(task, &row, since) {
-            counts.1 += 1;
-            counts.2 += usize::from(needs_changes(review.verdict));
-            if review.verdict == ReviewVerdict::Accept {
-                tallies.entry("first_pass_accepts").or_default().add(
-                    task,
-                    1.0,
-                    Some(Occurrence {
-                        at: review.at,
-                        detail: "first review accepted the candidate".into(),
-                        run_id: task
-                            .attempt_at(review.at)
-                            .and_then(|index| task.attempts[index].runner.run_id.clone()),
-                    }),
-                );
-            }
+        if let Some(visual) = &task.visual_review
+            && visual.mocks_matched > 0
+            && task.attempt_at(visual.at).is_some_and(|index| {
+                let attempt = &task.attempts[index];
+                counted(attempt, since) && key(attempt) == *row
+            })
+        {
+            tallies.entry("mocks_matched").or_default().add(
+                task,
+                visual.mocks_matched as f64,
+                Some(Occurrence {
+                    at: visual.at,
+                    detail: format!(
+                        "{} mock(s) matched on the first candidate",
+                        visual.mocks_matched
+                    ),
+                    run_id: None,
+                }),
+            );
         }
-        for credit in credits
+        if credits
             .get(task.id.as_str())
             .into_iter()
             .flatten()
-            .filter(|credit| {
+            .any(|credit| {
                 credit.anchor >= since
-                    && row_key(credit.crew.as_deref(), credit.model.as_deref()) == row
+                    && row_key(credit.crew.as_deref(), credit.model.as_deref()) == *row
             })
         {
-            weighted += credit.weight as f64;
             tallies
                 .entry("weighted_landed")
                 .or_default()
-                .add(task, credit.weight as f64, None);
+                .add(task, 1.0, None);
         }
         for charge in charges
             .get(task.id.as_str())
@@ -201,7 +277,7 @@ fn row_input<'a>(
             .filter(|charge| {
                 charge.anchor >= since
                     && charge.owner == Owner::Role(AgentRole::Implementers)
-                    && row_key(charge.crew.as_deref(), charge.model.as_deref()) == row
+                    && row_key(charge.crew.as_deref(), charge.model.as_deref()) == *row
             })
         {
             let term = match charge.problem {
@@ -213,13 +289,75 @@ fn row_input<'a>(
             };
             tallies.entry(term).or_default().add(
                 task,
-                1.0,
+                charge.severity_weight(),
                 Some(Occurrence {
                     at: charge.at,
                     detail: charge.detail.clone(),
                     run_id: charge.run_id.clone(),
                 }),
             );
+        }
+    }
+    tallies
+}
+
+fn row_input<'a>(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    row: Key,
+    tasks: &[&'a TaskFacts],
+    charges: &BTreeMap<&str, Vec<&Charge>>,
+    credits: &BTreeMap<&str, Vec<&Credit>>,
+) -> RowInput<'a> {
+    let tallies = compute_tallies(&row, tasks, charges, credits, since);
+    // Reviewed tasks of this row: the denominator review-derived rates
+    // need to tell a measured zero from no review at all. Display only;
+    // it never enters `denominators`, so scores are unchanged.
+    let reviewed_units = tasks
+        .iter()
+        .filter(|task| first_review(task, &row, since).is_some())
+        .count();
+    let landed = tallies.get("weighted_landed").map_or(0.0, Tally::count);
+    let mut tiers: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut durations = Vec::new();
+    let mut run_ids = BTreeSet::new();
+    let mut missing_runs = false;
+    let mut runs_without_model = 0;
+    // Cost coverage over the same counted attempts the cost calculation
+    // walks, attempt by attempt rather than by distinct run: a run shared
+    // by two attempts covers both, and one attempt without a priced run
+    // suppresses the complete-cohort average below. Display only; it
+    // never enters tallies, denominators or scores.
+    let mut cost_attempts = 0usize;
+    let mut cost_measured_attempts = 0usize;
+    let mut cost_unpriced_attempts = 0usize;
+    let mut cost_missing_run_attempts = 0usize;
+    for &task in tasks {
+        *tiers.entry(tier(task)).or_default() += 1;
+        for attempt in task
+            .attempts
+            .iter()
+            .filter(|a| counted(a, since) && key(a) == row)
+        {
+            runs_without_model += usize::from(attempt.runner.model.is_none());
+            if let Some(end) = attempt.end {
+                durations.push((end - attempt.start).num_milliseconds().max(0) as f64 / 1000.0);
+            }
+            cost_attempts += 1;
+            match attempt.runner.run_id.as_deref() {
+                Some(id) => {
+                    run_ids.insert(id);
+                    if facts.run_costs.get(id).copied().flatten().is_some() {
+                        cost_measured_attempts += 1;
+                    } else {
+                        cost_unpriced_attempts += 1;
+                    }
+                }
+                None => {
+                    missing_runs = true;
+                    cost_missing_run_attempts += 1;
+                }
+            }
         }
     }
     let cost = if missing_runs || run_ids.is_empty() {
@@ -241,31 +379,51 @@ fn row_input<'a>(
         let middle = durations.len() / 2;
         Some((durations[middle] + durations[(durations.len() - 1) / 2]) / 2.0)
     };
-    let tier_rows: Vec<Value> = tiers
-        .iter()
-        .map(|(tier, (tasks, reviewed, changes))| {
-            let (fleet_reviewed, fleet_changes) = fleet.get(tier).copied().unwrap_or_default();
-            json!({
-                "tier": tier, "tasks": tasks, "first_reviews": reviewed, "needing_changes": changes,
-                "needing_changes_percent": percent(*changes, *reviewed),
-                "fleet_needing_changes_percent": percent(fleet_changes, fleet_reviewed),
-            })
-        })
-        .collect();
     RowInput {
+        denominators: BTreeMap::new(),
+        reviewed_units: Some(reviewed_units),
+        unjudged: false,
         crew: row.0,
         model: row.1,
         units: tasks.len(),
         runs_without_model,
         provisional: None,
         tallies,
+        expected: None,
         stats: vec![
             stat(
                 "cost_per_weighted_landed",
-                "Cost per weighted landed task (USD)",
-                cost.filter(|_| weighted > 0.0)
-                    .map(|cost| json!(cost / weighted))
+                "Cost per landed task (USD)",
+                cost.filter(|_| landed > 0.0)
+                    .map(|cost| json!(cost / landed))
                     .unwrap_or(Value::Null),
+            ),
+            stat(
+                "cost_coverage",
+                "Cost coverage (counted attempts)",
+                json!(format!(
+                    "{cost_measured_attempts} measured · {cost_unpriced_attempts} unpriced · {cost_missing_run_attempts} missing run of {cost_attempts} counted attempts"
+                )),
+            ),
+            stat(
+                "cost_coverage_attempts",
+                "Cost coverage denominator (counted attempts)",
+                json!(cost_attempts),
+            ),
+            stat(
+                "cost_measured_attempts",
+                "Cost measured attempts",
+                json!(cost_measured_attempts),
+            ),
+            stat(
+                "cost_unpriced_attempts",
+                "Cost unpriced attempts",
+                json!(cost_unpriced_attempts),
+            ),
+            stat(
+                "cost_missing_run_attempts",
+                "Cost missing-run attempts",
+                json!(cost_missing_run_attempts),
             ),
             stat(
                 "median_run_seconds",
@@ -278,24 +436,261 @@ fn row_input<'a>(
                 json!(
                     tiers
                         .iter()
-                        .map(|(tier, counts)| format!("{tier}: {}", counts.0))
+                        .map(|(tier, counts)| format!("{tier}: {counts}"))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
             ),
-            stat("tier_comparison", "First reviews by tier", json!(tier_rows)),
         ],
-    }
-}
-
-fn percent(changes: usize, reviewed: usize) -> Value {
-    if reviewed == 0 {
-        Value::Null
-    } else {
-        number(changes as f64 * 100.0 / reviewed as f64)
     }
 }
 
 fn stat(key: &'static str, label: &'static str, value: Value) -> Stat {
     Stat { key, label, value }
+}
+
+/// The tags in force when a task's counted work was admitted (its earliest
+/// counted attempt in the window), so a tag added after an attempt started
+/// cannot reclassify work already scored.
+fn admitted_tags(task: &TaskFacts, since: DateTime<Utc>) -> &[String] {
+    task.attempts
+        .iter()
+        .filter(|a| counted(a, since))
+        .min_by_key(|a| a.start)
+        .map_or(&task.tags, |a| &a.tags)
+}
+
+/// The currently configured type of a task, classified as the by-type
+/// cells classify it.
+fn configured_type(
+    task: &TaskFacts,
+    since: DateTime<Utc>,
+    types: &[CrewPerformanceType],
+) -> String {
+    classify_task_type(types, admitted_tags(task, since), &task.context_files).to_string()
+}
+
+/// The path a context-file selector names, without its prefix. `module:`
+/// and `command:` selectors name no path.
+fn selector_path(selector: &str) -> Option<&str> {
+    if let Some(path) = selector.strip_prefix("file:") {
+        Some(path)
+    } else if let Some(path) = selector.strip_prefix("dir:") {
+        Some(path)
+    } else if let Some(remainder) = selector.strip_prefix("symbol:") {
+        let (path, _) = remainder.split_once('#')?;
+        if path.is_empty() { None } else { Some(path) }
+    } else if selector.starts_with("module:") || selector.starts_with("command:") {
+        None
+    } else {
+        Some(selector)
+    }
+}
+
+/// The top-level path prefixes of a task's context-file selectors: the
+/// first path component of each named path, deduplicated and sorted.
+fn path_prefixes(task: &TaskFacts) -> Vec<String> {
+    let mut prefixes = BTreeSet::new();
+    for selector in &task.context_files {
+        if let Some(path) = selector_path(selector)
+            && let Some(first) = path.split('/').find(|part| !part.is_empty())
+        {
+            prefixes.insert(first.to_string());
+        }
+    }
+    prefixes.into_iter().collect()
+}
+
+/// One row per implemented task and the row (crew, model) that worked it:
+/// the task's configured type, its tags as admitted, its context-file
+/// selectors and top-level path prefixes, and its per-term counts under
+/// that row. Summed per `(crew, model, tier, type)`, the counts reproduce
+/// the by-type cells' `n` and, through [`raw_against`] with the same fleet
+/// references, their `raw` values. Read-only: it only slices the scan the
+/// scorecard already made.
+pub(super) fn per_task_rows(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    types: &[CrewPerformanceType],
+) -> Vec<Value> {
+    let work = work_by_row(facts, since);
+    let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
+    let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
+    for charge in &facts.charges {
+        charges.entry(&charge.task_id).or_default().push(charge);
+    }
+    for credit in &facts.credits {
+        credits.entry(&credit.task_id).or_default().push(credit);
+    }
+    let mut rows = Vec::new();
+    for (row, tasks) in &work {
+        for &task in tasks {
+            let tallies = compute_tallies(row, &[task], &charges, &credits, since);
+            let counts: serde_json::Map<String, Value> = TERMS
+                .iter()
+                .map(|term| {
+                    (
+                        term.key.to_string(),
+                        number(tallies.get(term.key).map_or(0.0, Tally::count)),
+                    )
+                })
+                .collect();
+            rows.push(json!({
+                "task_id": task.id,
+                "crew": row.0,
+                "model": row.1,
+                "tier": tier(task),
+                "type": configured_type(task, since, types),
+                "tags": admitted_tags(task, since),
+                "context_files": task.context_files,
+                "path_prefixes": path_prefixes(task),
+                "counts": counts,
+            }));
+        }
+    }
+    rows.sort_by(|left, right| {
+        left["crew"]
+            .as_str()
+            .cmp(&right["crew"].as_str())
+            .then(left["model"].as_str().cmp(&right["model"].as_str()))
+            .then(left["tier"].as_str().cmp(&right["tier"].as_str()))
+            .then(left["type"].as_str().cmp(&right["type"].as_str()))
+            .then(left["task_id"].as_str().cmp(&right["task_id"].as_str()))
+    });
+    rows
+}
+
+/// Shrinkage strength of the by-type matrix, at both levels.
+const CELL_SHRINKAGE: f64 = 30.0;
+
+/// The raw score of one task subset against `fleet` rates: 100 plus the
+/// weighted actual-minus-expected rates. `None` for an empty subset.
+fn raw_against(
+    tallies: &BTreeMap<&'static str, Tally<'_>>,
+    tasks: &[&TaskFacts],
+    fleet: &Fleet,
+) -> Option<f64> {
+    if tasks.is_empty() || fleet.units == 0 {
+        return None;
+    }
+    let n = tasks.len() as f64;
+    let mut raw = 100.0;
+    for term in TERMS {
+        let actual = tallies.get(term.key).map_or(0.0, Tally::count);
+        let rate = fleet.counts.get(term.key).copied().unwrap_or(0.0) / fleet.units as f64;
+        raw += term.weight * (actual - rate * n) * 100.0 / n;
+    }
+    Some(raw)
+}
+
+/// One cell of the `(crew, model, tier, type)` matrix per row, tier and type
+/// (configured types in order, then `other`), including empty cells. Raw
+/// cell scores take their fleet expectation from the same `(tier, type)`
+/// fleet cell, falling back to the tier's rates under 30 fleet observations;
+/// the two-sided two-level shrinkage of the crew-performance scope then
+/// pulls each cell toward its crew's tier mean and that mean toward 100.
+pub(super) fn by_type_cells(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    types: &[CrewPerformanceType],
+) -> Vec<Value> {
+    let work = work_by_row(facts, since);
+    let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
+    let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
+    for charge in &facts.charges {
+        charges.entry(&charge.task_id).or_default().push(charge);
+    }
+    for credit in &facts.credits {
+        credits.entry(&credit.task_id).or_default().push(credit);
+    }
+    // Classify by the tags in force when the counted work was admitted
+    // (the earliest counted attempt in the window), so a tag added after
+    // an attempt started cannot retype work already scored.
+    let task_type = |task: &TaskFacts| configured_type(task, since, types);
+    let mut fleet_tier: BTreeMap<&str, Fleet> = BTreeMap::new();
+    let mut fleet_cell: BTreeMap<(&str, String), Fleet> = BTreeMap::new();
+    for tasks in work.values() {
+        for task in tasks {
+            fleet_tier.entry(tier(task)).or_default().units += 1;
+            fleet_cell
+                .entry((tier(task), task_type(task)))
+                .or_default()
+                .units += 1;
+        }
+    }
+    for (row, tasks) in &work {
+        let tallies = compute_tallies(row, tasks, &charges, &credits, since);
+        for (&term, tally) in &tallies {
+            for (task, count) in tally.task_counts() {
+                *fleet_tier
+                    .entry(tier(task))
+                    .or_default()
+                    .counts
+                    .entry(term)
+                    .or_default() += count;
+                *fleet_cell
+                    .entry((tier(task), task_type(task)))
+                    .or_default()
+                    .counts
+                    .entry(term)
+                    .or_default() += count;
+            }
+        }
+    }
+    let mut type_names: Vec<String> = types.iter().map(|entry| entry.name.clone()).collect();
+    type_names.push(orbit_config::OTHER_TYPE.to_string());
+    let mut cells = Vec::new();
+    for (row, tasks) in &work {
+        // The crew's evidence and raw score per tier, for the crew mean.
+        let mut tier_tasks: BTreeMap<&str, Vec<&TaskFacts>> = BTreeMap::new();
+        let mut cell_tasks: BTreeMap<(&str, String), Vec<&TaskFacts>> = BTreeMap::new();
+        for task in tasks {
+            tier_tasks.entry(tier(task)).or_default().push(task);
+            cell_tasks
+                .entry((tier(task), task_type(task)))
+                .or_default()
+                .push(task);
+        }
+        for tier_name in fleet_tier.keys() {
+            let tier_subset: Vec<&TaskFacts> =
+                tier_tasks.get(tier_name).cloned().unwrap_or_default();
+            let n_tier = tier_subset.len();
+            let tier_tallies = compute_tallies(row, &tier_subset, &charges, &credits, since);
+            let raw_tier = raw_against(&tier_tallies, &tier_subset, &fleet_tier[tier_name]);
+            let crew_mean = raw_tier.map_or(100.0, |raw| {
+                (n_tier as f64 * raw + CELL_SHRINKAGE * 100.0) / (n_tier as f64 + CELL_SHRINKAGE)
+            });
+            for type_name in &type_names {
+                let subset: Vec<&TaskFacts> = cell_tasks
+                    .get(&(*tier_name, type_name.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                let n = subset.len();
+                let empty_fleet = Fleet::default();
+                let cell_fleet = fleet_cell
+                    .get(&(*tier_name, type_name.clone()))
+                    .unwrap_or(&empty_fleet);
+                let reference = if cell_fleet.units >= MIN_TIER_TASKS {
+                    cell_fleet
+                } else {
+                    &fleet_tier[tier_name]
+                };
+                let cell_tallies = compute_tallies(row, &subset, &charges, &credits, since);
+                let raw = raw_against(&cell_tallies, &subset, reference).unwrap_or(crew_mean);
+                let score =
+                    (n as f64 * raw + CELL_SHRINKAGE * crew_mean) / (n as f64 + CELL_SHRINKAGE);
+                cells.push(json!({
+                    "crew": row.0,
+                    "model": row.1,
+                    "tier": tier_name,
+                    "type": type_name,
+                    "n": n,
+                    "raw": number(raw),
+                    "crew_mean": number(crew_mean),
+                    "score": number(score),
+                }));
+            }
+        }
+    }
+    cells
 }

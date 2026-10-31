@@ -1,0 +1,15 @@
+# Non-interactive crew-performance snapshot refresh, run hourly by the
+# seeded `crew_performance_refresh` routine. While
+# `workflow.crew_performance` is `off` the step skips the scan and writes
+# no snapshot (the routine still records a job run each hour).
+schemaVersion: 2
+kind: Job
+metadata:
+  name: crew_performance_refresh_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  steps:
+    - id: refresh
+      target: activity:crew_performance_refresh

@@ -37,16 +37,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_engine::ci_run_event::is_branch_event;
-use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id};
+use orbit_types::task::{
+    CiFailureIdentity, TaskArtifact, TaskComplexity, TaskDecision, TaskPriority, TaskStatus,
+    TaskType, is_valid_orb_task_id,
+};
+use orbit_types::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
-    DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
+    DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
-use crate::application::sweep_filing::{bounded_error, bounded_u64};
-use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use crate::application::sweep_filing::{bounded_error, bounded_u64, digest, display};
+use crate::application::task::{CiSweepFilingEvidence, TaskAddParams, TaskUpdateParams};
 
 use super::branch_observation::{note_branch_retention, retain_branch_observations};
 use super::cancellation::{
@@ -61,6 +68,7 @@ use super::evidence::{
 };
 use super::fields::value_string;
 use super::grouping::cluster_failures;
+use super::identity::CiTaskIdentities;
 use super::landed_repair::LandedRepairs;
 use super::repair_assessment;
 use super::runner_os;
@@ -79,8 +87,6 @@ const OUTCOME_DEFERRED: &str = "deferred";
 /// Snapshot schema this step knows how to read.
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
 
-/// Provenance tag: every task this step files carries it.
-pub(crate) const CI_FAILURE_TAG: &str = "ci-failure-sweep";
 /// Prefix of the dedupe tag, completed by the failure key.
 pub(crate) use orbit_types::task::CI_FAILURE_KEY_TAG_PREFIX;
 /// Title prefix on every task this step files, so a sweep-filed task is
@@ -285,7 +291,15 @@ where
     let mut branch_observations = Vec::new();
     let mut excluded_branch_failures = Vec::new();
     for failure in branch_failures {
-        let Some(owner) = task_branch_owner(&failure) else {
+        let Some(owner) = task_branch_owner(
+            &runtime
+                .context
+                .settings()
+                .pr_settings()
+                .conventions
+                .branch_name,
+            &failure,
+        ) else {
             excluded_branch_failures.push(failure);
             continue;
         };
@@ -445,10 +459,11 @@ where
     // task list is hydrated at most once per filing and each open task's
     // comments are read at most once, however many clusters the run has.
     let lookup = SnapshotDuplicateLookup::new(lookup);
+    let identities = CiTaskIdentities::new(runtime);
     let mut operator_covers = super::operator_cover::OperatorCovers::new(runtime)?;
     let operator_assessments = clusters
         .iter()
-        .map(|cluster| operator_covers.assess(cluster, &lookup))
+        .map(|cluster| operator_covers.assess(cluster, &lookup, &identities))
         .collect::<Result<Vec<_>, _>>()?;
     let mut assessor = repair_assessment::Assessor::new(runtime);
     let mut repair_assessments = Vec::new();
@@ -459,18 +474,21 @@ where
             if operator.withheld.is_some() {
                 return Ok(None);
             }
-            let mut existing = cluster.find_covering_task(&lookup).map_err(|error| {
-                retryable_pipeline_error(
-                    "dedupe_lookup",
-                    &audit,
-                    vec![single_retryable_error(
-                        "registration",
-                        "find_covering_task",
-                        json!({"failure_key": cluster.failure_key}),
-                        &bounded_error(&error.to_string()),
-                    )],
-                )
-            })?;
+            let mut existing =
+                cluster
+                    .find_covering_task(&lookup, &identities)
+                    .map_err(|error| {
+                        retryable_pipeline_error(
+                            "dedupe_lookup",
+                            &audit,
+                            vec![single_retryable_error(
+                                "registration",
+                                "find_covering_task",
+                                json!({"failure_key": cluster.failure_key}),
+                                &bounded_error(&error.to_string()),
+                            )],
+                        )
+                    })?;
             // Only the disproven cover (or its owner) loses coverage. A
             // later completed repair remains a valid duplicate owner.
             if existing.as_ref().is_some_and(|matched| {
@@ -492,7 +510,7 @@ where
             }
             Ok(assessment.owner.map(|task_id| DuplicateTaskMatch {
                 task_id,
-                match_kind: "covered_by_repair",
+                match_kind: DuplicateMatchKind::CoveredByRepair,
                 evidence: assessment.evidence,
             }))
         })
@@ -507,18 +525,20 @@ where
             if duplicate_match.is_some() || operator.withheld.is_some() {
                 return Ok(None);
             }
-            landed_repairs.find(cluster, &lookup).map_err(|error| {
-                retryable_pipeline_error(
-                    "dedupe_lookup",
-                    &audit,
-                    vec![single_retryable_error(
-                        "registration",
-                        "find_landed_repair",
-                        json!({"failure_key": cluster.failure_key}),
-                        &bounded_error(&error.to_string()),
-                    )],
-                )
-            })
+            landed_repairs
+                .find(cluster, &lookup, &identities)
+                .map_err(|error| {
+                    retryable_pipeline_error(
+                        "dedupe_lookup",
+                        &audit,
+                        vec![single_retryable_error(
+                            "registration",
+                            "find_landed_repair",
+                            json!({"failure_key": cluster.failure_key}),
+                            &bounded_error(&error.to_string()),
+                        )],
+                    )
+                })
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;
     let duplicate_tasks = duplicate_matches
@@ -560,7 +580,7 @@ where
             let task_id = filed_compiler_sets.get(&identity)?.clone();
             Some(DuplicateTaskMatch {
                 task_id,
-                match_kind: "open_compiler_diagnostics",
+                match_kind: DuplicateMatchKind::OpenCompilerDiagnostics,
                 evidence: json!({
                     "fingerprint": "ci_open_compiler_diagnostics",
                     "matched_fields": [{"field": "compiler_diagnostic_set", "value": identity}],
@@ -573,10 +593,10 @@ where
             evidence,
         }) = duplicate_match
         {
-            if match_kind == "covered_by_repair" {
+            if match_kind == DuplicateMatchKind::CoveredByRepair {
                 repair_assessment::retain(runtime, &task_id, &evidence)?;
             }
-            if match_kind == "open_compiler_diagnostics" {
+            if match_kind == DuplicateMatchKind::OpenCompilerDiagnostics {
                 retain_compiler_observations(runtime, &task_id, cluster)?;
             }
             if let Some(existing) = duplicate_task {
@@ -597,7 +617,7 @@ where
                 "workflow": cluster.workflow,
                 "match_kind": match_kind,
                 "match_evidence": evidence,
-                "sources": cluster.filing_entry(&task_id)["sources"],
+                "sources": cluster.filing_entry(&task_id).sources,
             }));
             continue;
         }
@@ -611,11 +631,11 @@ where
                 "cluster_key": cluster.cluster_key,
                 "task_id": filed
                     .iter()
-                    .find(|entry: &&Value| entry["failure_key"] == json!(cluster.failure_key))
-                    .and_then(|entry| entry["task_id"].as_str())
+                    .find(|entry: &&CiSweepFilingEvidence| entry.failure_key == cluster.failure_key)
+                    .map(|entry| entry.task_id.as_str())
                     .unwrap_or_default(),
                 "workflow": cluster.workflow,
-                "match_kind": "exact_key",
+                "match_kind": DuplicateMatchKind::ExactKey,
                 "match_evidence": {
                     "fingerprint": "same_sweep_key",
                     "matched_fields": [{
@@ -658,6 +678,18 @@ where
             }
         }
         let task_id = add_task(TaskAddParams {
+            creation_decision: Some(TaskDecision::CiFailureIdentity(CiFailureIdentity {
+                failure_key: cluster.failure_key.clone(),
+                compiler_cause_digest: cluster
+                    .compiler_cause
+                    .as_ref()
+                    .map(|cause| digest(&[cause])),
+                open_compiler_set: cluster.open_compiler_identity(),
+                signature: (!cluster.signature_is_step_fallback)
+                    .then(|| display(&cluster.signature).to_string()),
+                tested_commit: cluster.tested_commit.clone(),
+                sources: cluster.sources.clone(),
+            })),
             title: cluster.title(),
             description,
             acceptance_criteria: cluster.acceptance_criteria(),
@@ -697,10 +729,10 @@ where
             filed_compiler_sets.insert(identity, task_id.clone());
         }
         let mut filing = cluster.filing_entry(&task_id);
-        filing["runner_os"] = json!(runners);
-        filing["os_tags"] = json!(os_tags);
+        filing.runner_os = Some(json!(runners));
+        filing.os_tags = Some(os_tags);
         if !operator.failed_covers.is_empty() {
-            filing["failed_covers"] = json!(operator.failed_covers);
+            filing.failed_covers = Some(json!(operator.failed_covers));
         }
         pilot_candidate_ids.insert(task_id);
         pilot_candidates.push(filing.clone());
@@ -765,39 +797,74 @@ fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
         })
 }
 
-fn task_branch_owner(failure: &Value) -> Option<String> {
-    let branch = failure["head_branch"].as_str()?.strip_prefix("orbit/")?;
-    let mut parts = branch.splitn(3, '-');
-    let owner = format!("{}-{}", parts.next()?, parts.next()?);
-    is_valid_orb_task_id(&owner).then_some(owner)
+/// The task a failing run's head branch belongs to, read through the
+/// workspace's branch template (`orbit/<TASK-ID>-…` by default).
+fn task_branch_owner(branch_template: &ConventionTemplate, failure: &Value) -> Option<String> {
+    let branch = failure["head_branch"].as_str()?;
+    branch_template.branch_task_id(branch, DEFAULT_BRANCH_PREFIX, &is_valid_orb_task_id)
 }
 
-/// Re-read comments on each append so retries and repeated sources within one
-/// snapshot retain one comment per observation without mutating the exact tag.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct CiCompilerObservation {
+    run_id: String,
+    run_url: String,
+    checkout: String,
+    failure_key: String,
+}
+
+/// Retain a typed receipt with each comment, backfilling legacy comments.
 fn retain_compiler_observations(
     runtime: &OrbitRuntime,
     owner: &str,
     cluster: &FailureCluster,
 ) -> Result<(), OrbitError> {
     for run in &cluster.runs {
+        let observation = CiCompilerObservation {
+            run_id: value_string(run, "run_id"),
+            run_url: value_string(run, "url"),
+            checkout: cluster.tested_commit.clone(),
+            failure_key: cluster.failure_key.clone(),
+        };
+        let content = serde_json::to_string(&observation)
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        let path = format!(
+            "ci-compiler-observations/{}.json",
+            sha256_hex(content.as_bytes())
+        );
         let message = format!(
             "CI compiler observation: run `{}` {}; checkout `{}`; exact failure key `{CI_FAILURE_KEY_TAG_PREFIX}{}`.",
-            value_string(run, "run_id"),
-            value_string(run, "url"),
-            cluster.tested_commit,
-            cluster.failure_key,
+            observation.run_id, observation.run_url, observation.checkout, observation.failure_key,
         );
-        if runtime
+        let already_commented = runtime
             .get_task_comments(owner)?
             .iter()
-            .any(|comment| comment.message == message)
-        {
+            .any(|comment| comment.message == message);
+        if let Some(artifact) = runtime.get_task_artifact(owner, &path)? {
+            let stored: CiCompilerObservation = serde_json::from_slice(&artifact.content)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            if stored != observation {
+                return Err(OrbitError::InvalidInput(
+                    "compiler observation receipt does not match its identity".into(),
+                ));
+            }
+            // The receipt and the comment are separate writes, so a stored
+            // receipt does not prove the comment landed: append it if missing.
+            if !already_commented {
+                runtime.update_task(
+                    owner,
+                    TaskUpdateParams {
+                        comment: Some(message),
+                        ..Default::default()
+                    },
+                )?;
+            }
             continue;
         }
         runtime.update_task(
             owner,
             TaskUpdateParams {
-                comment: Some(message),
+                comment: (!already_commented).then_some(message),
+                upsert_artifacts: vec![TaskArtifact::from_text(path, content)],
                 ..Default::default()
             },
         )?;

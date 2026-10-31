@@ -3,20 +3,23 @@ use orbit_cmd::registry_runtime::{
     RegisteredRuntimeFactory, global_root_for, workspace_runtime_binding,
 };
 use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
+use orbit_core::application::codebase::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
+use orbit_core::application::job::TaskCrewBackfill;
+use orbit_core::composition::WorkspaceAuthorityAdoption;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
 
 // ORB-10012: source provenance for the versioned migration surface.
-/// `orbit migrate` — versioned `.orbit/` upgrade surface.
+/// Inspect or apply pending `.orbit/` workspace upgrades.
 ///
-/// Both migration ledgers auto-apply on workspace open (the SQLite schema
-/// ledger inside `Store::open`, the workspace-layout registry in the runtime
-/// pre-flight), so the apply path simply opens the runtime and reports what
-/// happened. The default and `--dry-run` inspect *without* opening a runtime,
-/// which is the only way to list pending migrations instead of silently
-/// applying them. `--confirm` selects the apply path.
+/// By default, this command lists pending upgrades without applying them.
+/// `--dry-run` explicitly requests the same inspection, while `--confirm`
+/// applies the pending upgrades. Orbit also applies required workspace
+/// upgrades automatically when it opens a workspace. `--adopt-authority`
+/// records which generation authority protects a workspace that has
+/// recorded none, without applying anything.
 #[derive(Args)]
 #[command(about = "Apply or inspect pending .orbit layout and store schema migrations")]
 pub struct MigrateCommand {
@@ -24,8 +27,29 @@ pub struct MigrateCommand {
     #[arg(long, conflicts_with = "dry_run")]
     pub confirm: bool,
     /// Explicitly request the default non-destructive inspection mode
-    #[arg(long, conflicts_with = "confirm")]
+    #[arg(long, conflicts_with_all = ["confirm", "backfill_diff_stats", "backfill_task_crews"])]
     pub dry_run: bool,
+    /// Apply pending migrations, then record diff stats for done tasks that landed before they were recorded
+    #[arg(long)]
+    pub backfill_diff_stats: bool,
+    /// Most done tasks one diff-stats backfill records (1-5000)
+    #[arg(
+        long,
+        requires = "backfill_diff_stats",
+        default_value_t = DIFF_STATS_BACKFILL_DEFAULT_LIMIT,
+        value_name = "N"
+    )]
+    pub limit: usize,
+    /// Apply pending migrations, then set each task's crew to the crew its latest delivery selected (latest local delivery run or claimed-leaf settlement), where they differ
+    #[arg(long, conflicts_with = "backfill_diff_stats")]
+    pub backfill_task_crews: bool,
+    /// Record the generation authority this command runs under (its home directory, --root or ORBIT_ROOT; PATH must name it) as the one protecting a workspace that has recorded none. Stop every orbit process using the workspace first; nothing is migrated
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = ["confirm", "dry_run", "backfill_diff_stats", "backfill_task_crews"]
+    )]
+    pub adopt_authority: Option<std::path::PathBuf>,
 }
 
 impl MigrateCommand {
@@ -66,6 +90,13 @@ impl MigrateCommand {
                 (global_root, resolved.shared_root)
             }
         };
+        if let Some(claimed) = self.adopt_authority.as_deref() {
+            return adoption_payload(&RegisteredRuntimeFactory::adopt_workspace_authority(
+                &global_root,
+                &orbit_dir,
+                claimed,
+            )?);
+        }
         let status = migrate_dry_run_at(&global_root, &orbit_dir)?;
 
         // `--dry-run` exits nonzero when there is anything pending, and a
@@ -94,13 +125,93 @@ impl MigrateCommand {
     }
 }
 
+impl MigrateCommand {
+    /// Whether this invocation opens the runtime, which applies pending
+    /// migrations: `--confirm`, or a backfill that needs the current schema.
+    pub fn applies(&self) -> bool {
+        self.confirm || self.backfill_diff_stats || self.backfill_task_crews
+    }
+}
+
 impl Execute for MigrateCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        if self.backfill_diff_stats {
+            return backfill_payload(&runtime.backfill_landed_diff_stats(self.limit)?);
+        }
+        if self.backfill_task_crews {
+            return task_crew_backfill_payload(&runtime.backfill_admitted_task_crews()?);
+        }
         // Apply path: opening the runtime (before this command ran) already
         // applied everything pending; report the outcome.
         let status = runtime.migrate_status()?;
         status_payload(&status, false)
     }
+}
+
+fn adoption_payload(adoption: &WorkspaceAuthorityAdoption) -> CommandOut {
+    let doc = json!({
+        "workspace_authority": {
+            "orbit_dir": adoption.orbit_dir.to_string_lossy(),
+            "authority": adoption.authority.to_string_lossy(),
+            "evidence": adoption.evidence.as_str(),
+            "recorded": adoption.recorded,
+            "layout_version": adoption.layout_version,
+            "fenced": adoption
+                .fenced
+                .iter()
+                .map(|authority| authority.to_string_lossy())
+                .collect::<Vec<_>>(),
+        }
+    });
+    let text = if adoption.recorded {
+        format!(
+            "workspace {} now records generation authority {} (evidence: {}); its pending \
+             layout migrations apply under that authority once its clients quiesce",
+            adoption.orbit_dir.display(),
+            adoption.authority.display(),
+            adoption.evidence.as_str()
+        )
+    } else {
+        format!(
+            "workspace {} already records generation authority {}; nothing changed",
+            adoption.orbit_dir.display(),
+            adoption.authority.display()
+        )
+    };
+    Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
+}
+
+fn backfill_payload(report: &DiffStatsBackfill) -> CommandOut {
+    let doc = json!({ "diff_stats_backfill": report });
+    let mut text = format!(
+        "diff stats backfill: {} recorded, {} skipped as unresolvable (landed commit not in this \
+         checkout), {} without a landing, {} examined",
+        report.recorded, report.unresolvable, report.no_landing, report.examined
+    );
+    if report.remaining > 0 {
+        text.push_str(&format!(
+            "\n{} done tasks left past --limit {}; run it again to continue",
+            report.remaining, report.limit
+        ));
+    }
+    Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
+}
+
+fn task_crew_backfill_payload(report: &TaskCrewBackfill) -> CommandOut {
+    let doc = json!({ "task_crew_backfill": report });
+    let mut text = format!(
+        "task crew backfill in workspace {}: {} changed of {} tasks with a delivery crew selection",
+        report.workspace, report.changed, report.examined
+    );
+    for change in &report.tasks {
+        text.push_str(&format!(
+            "\n  {}: {} -> {}",
+            change.task_id,
+            change.from.as_deref().unwrap_or("(none)"),
+            change.to
+        ));
+    }
+    Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
 }
 
 fn status_payload(status: &MigrateStatus, dry_run: bool) -> CommandOut {

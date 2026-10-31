@@ -10,6 +10,9 @@ use super::{CliArgKind, CliBinding};
 pub enum ParamType {
     /// A single string value.
     String,
+    /// A string preserved exactly by the CLI, including whitespace and empty
+    /// values. Handlers must read it with `OperationInput::optional_raw_string`.
+    RawString,
     /// A path string, preserved byte-for-byte by the CLI argument projection.
     Path,
     /// A string, or an array of strings; comma-separated strings are accepted.
@@ -73,7 +76,7 @@ impl ParamType {
     /// The `ToolParam::param_type` token for this parameter type.
     pub fn as_tool_param_type(self) -> &'static str {
         match self {
-            ParamType::String | ParamType::Path => "string",
+            ParamType::String | ParamType::RawString | ParamType::Path => "string",
             ParamType::StringList | ParamType::EnumList(_) => "string_list",
             ParamType::Integer => "integer",
             ParamType::UnsignedInteger => "u64",

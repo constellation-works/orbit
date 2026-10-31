@@ -365,11 +365,13 @@ fn kept_off_cause(reason: &str) -> &str {
         "context_lock_conflict" => "footprint holds",
         "dependency_not_done" | "unmet_dependency" => "unmet dependencies",
         "host_os_mismatch" => "for another OS",
+        "host_labels_missing" => "needing a host with other capability labels",
         "browser_kit_missing" => "needing a host with the browser kit",
         "native_os_required" => "needing native evidence from another OS",
         "unverified_review_finding" => "review findings awaiting verification",
         "crew_unavailable" => "needing a crew this host cannot run",
         "owner_hold" => "held on the owner",
+        "scheduled" => "scheduled for later",
         "invalid_candidate" => "invalid",
         other => other,
     }
@@ -482,8 +484,8 @@ fn waiting_line(
     let reason = waiting_reason(task.reason.as_deref().unwrap_or(default_reason));
     let mut line = format!("Task {}: {}", task.task_id, reason);
     line.push_str(&formatter.blockers(&json!({"reason": reason, "blocked_by": task.blocked_by})));
-    // A host-OS wait names the host it waits for, a browser-kit wait the
-    // install command, and a native-OS requirement the tag to add. A local-route review hold names the
+    // A host-OS wait names the host it waits for, a scheduled task its time,
+    // a browser-kit wait the install command, and a native-OS requirement the tag to add. A local-route review hold names the
     // remedy. A verified-no-diff hold names the pilot's evidence and the
     // commits it cites, and an unverified review finding the verification
     // job to run. Other details (long repair instructions) stay in `--json`.
@@ -491,12 +493,14 @@ fn waiting_line(
         task.reason.as_deref(),
         Some(
             "host_os_mismatch"
+                | "host_labels_missing"
                 | "browser_kit_missing"
                 | "native_os_required"
                 | "local_route_before_pr"
                 | "local_route_before_landing"
                 | "crew_unavailable"
                 | "owner_hold"
+                | "scheduled"
                 | "invalid_candidate"
                 | "pilot_verified_no_diff"
                 | "unverified_review_finding"

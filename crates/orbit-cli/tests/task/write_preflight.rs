@@ -36,6 +36,62 @@ fn tool(fixture: &Fixture, name: &str, input: Value) -> Value {
     fixture.json(&["tool", "run", name, "--input", &input.to_string()])
 }
 
+fn assert_missing_task_refusal(error: &Value, code: &str, missing_id: &str) {
+    assert_eq!(error["code"], code, "{error}");
+    let message = error["error"].as_str().expect("CLI error message");
+    assert!(message.contains(missing_id), "{message}");
+    assert!(message.contains("not found"), "{message}");
+    assert!(message.contains("Check the ID"), "{message}");
+    assert!(message.contains("create the task first"), "{message}");
+    assert!(message.contains("remove the relation"), "{message}");
+    assert!(!message.contains("relation target"), "{message}");
+    assert!(!message.contains("coordination registry"), "{message}");
+}
+
+fn cli_error(fixture: &Fixture, args: &[&str]) -> Value {
+    let output = fixture.command(args).assert().code(1).get_output().clone();
+    assert!(output.stdout.is_empty(), "unexpected stdout: {output:?}");
+    serde_json::from_slice(&output.stderr).expect("CLI refusal JSON")
+}
+
+fn missing_task_dependencies_return_actionable_not_found_refusals() {
+    let fixture = Fixture::new();
+    let source = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .expect("fixture task id")
+        .to_owned();
+    let missing_id = "AQ-99999";
+
+    let add = cli_error(
+        &fixture,
+        &[
+            "task",
+            "add",
+            "--title",
+            "Missing dependency",
+            "--complexity",
+            "low",
+            "--dependencies",
+            missing_id,
+            "--json",
+        ],
+    );
+    assert_missing_task_refusal(&add, "task_not_found", missing_id);
+
+    let update = cli_error(
+        &fixture,
+        &[
+            "task",
+            "update",
+            &source,
+            "--dependencies",
+            missing_id,
+            "--json",
+        ],
+    );
+    assert_missing_task_refusal(&update, "task_not_found", missing_id);
+}
+
 /// A proposed twin tagged `no-diff-expected`: it owes no selectors, so its add
 /// is clean. An untagged chore would warn, as the missing-context check does.
 fn add_proposed(fixture: &Fixture, title: &str) -> String {
@@ -113,6 +169,11 @@ fn add_warnings_match_on_cli_and_tool() {
     assert_names(&cli_warnings, "EXT-1", &cli);
     assert_names(&cli_warnings, "EXT-2", &cli);
     assert_names(&cli_warnings, "context_files", &cli);
+}
+
+#[test]
+fn missing_task_dependencies_return_actionable_not_found_refusals_on_cli() {
+    missing_task_dependencies_return_actionable_not_found_refusals();
 }
 
 fn update_and_approval_warnings_match_on_cli_and_tool() {
@@ -204,6 +265,65 @@ fn missing_context_warning_follows_readiness_on_cli_and_tool() {
         assert!(blocking, "readiness blocks the task: {shown}");
     }
     assert_eq!(warnings(&via_tool), warnings(&cli), "{via_tool}");
+
+    // Promotion still warns once, but subsequent comments leave readiness
+    // unchanged and must not repeat its advisory warning on either surface.
+    for (document, via_tool) in [(&cli, false), (&via_tool, true)] {
+        let id = document["id"].as_str().expect("task id");
+        let promoted = if via_tool {
+            tool(
+                &fixture,
+                "orbit.task.update",
+                json!({"id": id, "status": "backlog"}),
+            )
+        } else {
+            fixture.json(&["task", "update", id, "--status", "backlog", "--json"])
+        };
+        assert_eq!(warnings(&promoted).len(), 1, "{promoted}");
+        let readiness = &promoted["readiness"];
+        assert_eq!(readiness["ready"], json!(true), "{promoted}");
+        assert_eq!(
+            readiness["gaps"][0]["code"],
+            json!("missing_context_files"),
+            "{promoted}"
+        );
+        assert_eq!(
+            readiness["gaps"][0]["severity"],
+            json!("advisory"),
+            "{promoted}"
+        );
+        assert_eq!(
+            warnings(&promoted)[0],
+            format!(
+                "{} Fix: {}.",
+                readiness["gaps"][0]["message"].as_str().unwrap(),
+                readiness["gaps"][0]["fix"].as_str().unwrap()
+            ),
+            "{promoted}"
+        );
+        assert!(
+            !warnings(&promoted)[0].contains("before promoting"),
+            "backlog guidance must apply after promotion: {promoted}"
+        );
+        for comment in ["First comment", "Second comment"] {
+            let updated = if via_tool {
+                tool(
+                    &fixture,
+                    "orbit.task.update",
+                    json!({"id": id, "comment": comment}),
+                )
+            } else {
+                fixture.json(&["task", "update", id, "--comment", comment, "--json"])
+            };
+            assert!(warnings(&updated).is_empty(), "{updated}");
+            assert_eq!(&updated["readiness"], readiness, "{updated}");
+        }
+        fixture
+            .command(&["task", "update", id, "--comment", "Plain output comment"])
+            .assert()
+            .success()
+            .stderr(predicates::str::is_empty());
+    }
 
     // A non-chore type keeps the warning.
     let feature = fixture.json(&[

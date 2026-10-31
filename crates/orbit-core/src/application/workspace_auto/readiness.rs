@@ -4,6 +4,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
+use orbit_types::workflow::{JobRun, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -11,7 +12,7 @@ use crate::application::admission::auto_admission::{
     AdmissionHolders, DeferralReason, select_admissions,
 };
 use crate::application::admission::backlog_exclusion::{
-    BacklogTaskExclusionReason, backlog_snapshot, sort_tasks_for_automatic_dispatch,
+    BacklogTaskExclusionReason, backlog_snapshot_observed, sort_tasks_for_automatic_dispatch,
 };
 use crate::application::admission::claim_holders::ClaimHolders;
 use crate::application::admission::cpu_light::{
@@ -27,9 +28,10 @@ use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 use super::approvals::readiness_approvals;
 use super::classify::{DEFAULT_CANDIDATE_POOL, candidate_pool_limit};
 use super::drains::{
-    DEFAULT_MAX_ACTIVE_LEAF_RUNS, DRAIN_JOB_NAME, LEAF_JOB_NAME, live_pull_drain,
+    ActiveDrain, DRAIN_JOB_NAME, LEAF_JOB_NAME, drain_ceiling, live_pull_drain,
     read_live_leaf_runs, shared_leaf_occupancy, workspace_drains,
 };
+use super::readiness_hosts::{self, FollowerEvidence};
 
 const MAX_READINESS_LIMIT: usize = 500;
 
@@ -64,95 +66,22 @@ pub fn explain_workspace_auto_readiness(
     // drain still wins when both are live.
     let (active_drain, queued_drains) = workspace_drains(runtime)?;
     let pull_drain = live_pull_drain(runtime)?;
-    let recent_drain = if active_drain.is_none() {
-        runtime
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some(DRAIN_JOB_NAME.to_string()),
-                terminal_only: true,
-                limit: Some(1),
-                include_steps: false,
-                ..JobRunQuery::default()
-            })?
-            .into_iter()
-            .next()
-    } else {
-        None
-    };
+    let DrainProgress {
+        recent_drain,
+        status_state,
+        ends_at,
+        admitted_workers,
+        running_admitted_workers,
+        phase: drain_phase,
+    } = drain_progress(runtime, active_drain.as_ref())?;
     let status_run_id = active_drain
         .as_ref()
         .map(|drain| drain.run_id.as_str())
         .or_else(|| recent_drain.as_ref().map(|run| run.run_id.as_str()));
-    let status_state = status_run_id
-        .map(|run_id| runtime.stores().jobs().read_run_state(run_id))
-        .transpose()?
-        .flatten();
-    // The open-window checkpoint is the actual server-stamped deadline, not
-    // the submission time plus a browser's chosen duration, unless an
-    // operator has since extended it [ORB-15383].
-    let ends_at = status_state
-        .as_ref()
-        .and_then(drain_deadline)
-        .map(|deadline| deadline.to_rfc3339_opts(SecondsFormat::Secs, true));
-    let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
-        let mut running = 0;
-        let workers = state
-            .child_dispatches
-            .iter()
-            .filter(|dispatch| dispatch.job_name == LEAF_JOB_NAME);
-        let mut admitted = 0;
-        for dispatch in workers {
-            admitted += 1;
-            if runtime
-                .stores()
-                .jobs()
-                .get_job_run(&dispatch.child_run_id)?
-                .is_some_and(|child| !child.state.is_terminal())
-            {
-                running += 1;
-            }
-        }
-        (admitted, running)
-    } else {
-        (0, 0)
+    let (max_active_leaf_runs, limit_source) = match max_active_leaf_runs {
+        Some(requested) => (u64::from(requested), "requested"),
+        None => drain_ceiling(active_drain.as_ref(), pull_drain.as_ref()),
     };
-    let window_open = ends_at
-        .as_deref()
-        .and_then(|deadline| DateTime::parse_from_rfc3339(deadline).ok())
-        .is_none_or(|deadline| deadline > Utc::now());
-    let drain_phase = if active_drain
-        .as_ref()
-        .is_some_and(|drain| !drain.admissions_stopped())
-        && window_open
-    {
-        "draining"
-    } else if running_admitted_workers > 0 {
-        "winding_down"
-    } else {
-        "idle"
-    };
-    let (max_active_leaf_runs, limit_source) =
-        match (max_active_leaf_runs, &active_drain, &pull_drain) {
-            (Some(requested), _, _) => (u64::from(requested), "requested"),
-            (None, Some(drain), _) => (
-                u64::from(drain.effective_max_active_leaf_runs()),
-                if drain.limit.is_some() {
-                    "run_control"
-                } else {
-                    "run_input"
-                },
-            ),
-            (None, None, Some(drain)) => (
-                u64::from(drain.effective_max_active_leaf_runs()),
-                if drain.limit.is_some() {
-                    "pull_run_control"
-                } else {
-                    "pull_run_input"
-                },
-            ),
-            (None, None, None) => (DEFAULT_MAX_ACTIVE_LEAF_RUNS, "default"),
-        };
 
     // Validated here, before any snapshot work, so a typo reads the same way
     // it would on `orbit run auto --allow-crew`.
@@ -183,7 +112,12 @@ pub fn explain_workspace_auto_readiness(
         .map(|drain| orbit_types::workflow::ReviewAdmission::from_run_input(&drain.input))
         .transpose()?
         .flatten();
-    let mut snapshot = backlog_snapshot(
+    // Readiness admits nothing, so its envelope selections are observed
+    // without the commit boundary: they neither queue behind a drain's
+    // exclusive commit sections nor hold the shared boundary against them.
+    // Ancestor and explicit-id loads (`include_tasks` below) still settle a
+    // pending commit before they read.
+    let mut snapshot = backlog_snapshot_observed(
         runtime,
         "explain_workspace_auto_readiness",
         allowlist.as_ref(),
@@ -266,6 +200,7 @@ pub fn explain_workspace_auto_readiness(
         &snapshot.task_lookup,
         workspace_root,
         runtime.unlocked_context_paths(),
+        runtime.footprint_lock_modes(),
     );
     let footprint = FootprintGuard {
         enabled: max_active_leaf_runs > 1,
@@ -342,6 +277,7 @@ pub fn explain_workspace_auto_readiness(
     // Advisory: unreadable executor definitions only drop the OS wait that a
     // dependency wait would otherwise hide.
     let host_os_limits = runtime.executor_host_os_limits().unwrap_or_default();
+    let follower_evidence = FollowerEvidence::read(runtime);
     let mut tasks = selected_ids
         .iter()
         .filter_map(|id| snapshot.task_lookup.get(id))
@@ -400,20 +336,24 @@ pub fn explain_workspace_auto_readiness(
                 // Admission checks dependencies first, so a task that also
                 // waits for another host's OS would show only its dependency.
                 if let Some(wait) = runtime.task_host_os_wait(task, &pools, &host_os_limits) {
-                    object.insert("host_os_wait".to_string(), json!(wait));
+                    object.insert("host_scope".to_string(), json!("local"));
+                    object.insert("host_os_wait".to_string(), json!(format!(
+                        "On this {} host: {wait}", runtime.host_os().map_or("unknown", |os| os.as_str())
+                    )));
+                    object.insert("executor_evidence".to_string(), follower_evidence.task_follower_evidence(task));
                     if let Some(fleet) = runtime.task_host_fleet_note(task) {
                         object.insert("host_fleet".to_string(), json!(fleet));
                     }
+                }
+                if let Some(wait) = runtime.task_host_labels_wait(task) {
+                    object.insert("host_labels_wait".to_string(), json!(wait));
                 }
                 return Value::Object(object.clone());
             }
             if let Some(excluded) = excluded_by_id.get(task.id.as_str()) {
                 match excluded.reason {
-                    BacklogTaskExclusionReason::ActivePilotPreparation => {
-                        object.insert("reason".to_string(), json!("active_pilot_preparation"));
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::PilotDuplicate
+                    BacklogTaskExclusionReason::ActivePilotPreparation
+                    | BacklogTaskExclusionReason::PilotDuplicate
                     | BacklogTaskExclusionReason::PilotAlreadyLanded
                     | BacklogTaskExclusionReason::OperatorValidationHandoff
                     | BacklogTaskExclusionReason::HostOperationalHandoff
@@ -421,9 +361,54 @@ pub fn explain_workspace_auto_readiness(
                     | BacklogTaskExclusionReason::UnverifiedReviewFinding
                     | BacklogTaskExclusionReason::PrForgeRemoteMissing
                     | BacklogTaskExclusionReason::AwaitingFootprint
-                    | BacklogTaskExclusionReason::AwaitingExclusiveSlot => {
+                    | BacklogTaskExclusionReason::AwaitingExclusiveSlot
+                    | BacklogTaskExclusionReason::DeliveryJobUnavailable
+                    // The one exclusion no later drain clears by itself, so
+                    // readiness repeats the repair the drain recorded rather
+                    // than leaving the reason to be interpreted.
+                    | BacklogTaskExclusionReason::InheritedOnlyEpicRoot
+                    // A verified kit on this host, or a host that has
+                    // one, clears it; the detail names the install.
+                    | BacklogTaskExclusionReason::BrowserKitMissing
+                    // Renaming, re-exporting or re-declaring the mock
+                    // clears it; the detail names every failing artifact.
+                    | BacklogTaskExclusionReason::MockValidationFailed
+                    // [ORB-14168] The drain records the same snake_case
+                    // reason. The detail names the deciding layer and the
+                    // remedy the admission refusal already uses.
+                    | BacklogTaskExclusionReason::LocalRouteBeforePr
+                    // [ORB-14849] As above, under its own code.
+                    | BacklogTaskExclusionReason::LocalRouteBeforeLanding
+                    // [ORB-14258] Lifts by itself once the command passes
+                    // on a new base tip; the detail names the base and
+                    // the command.
+                    | BacklogTaskExclusionReason::BaselineRedHold
+                    // [ORB-14266] Lifts by itself at the hold's
+                    // `not_before`; the detail names the run, the
+                    // failure, the excluded crews and the time.
+                    | BacklogTaskExclusionReason::ProviderBackoff
+                    // [ORB-14697] Lifts by itself at the reading's reset;
+                    // the detail names the provider, window, used
+                    // percent, threshold, reset and skipped crews.
+                    | BacklogTaskExclusionReason::ProviderLimit => {
                         object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
+                    }
+                    // Waits, never runnable: lifts by itself on the first
+                    // pass after `not_before`, which the entry names.
+                    BacklogTaskExclusionReason::Scheduled => {
+                        object.insert("reason".to_string(), json!(excluded.reason));
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                        if let Some(not_before) = snapshot
+                            .task_lookup
+                            .get(&excluded.id)
+                            .and_then(|task| task.not_before)
+                        {
+                            object.insert(
+                                "not_before".to_string(),
+                                json!(orbit_types::task::format_not_before(not_before)),
+                            );
+                        }
                     }
                     BacklogTaskExclusionReason::UnassessedComplexity => {
                         object.insert(
@@ -431,29 +416,45 @@ pub fn explain_workspace_auto_readiness(
                             Value::String("task_pilot_preparation_required".to_string()),
                         );
                     }
-                    BacklogTaskExclusionReason::DeliveryJobUnavailable => {
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("delivery_job_unavailable".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::InheritedOnlyEpicRoot => {
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("inherited_only_epic_root".to_string()),
-                        );
-                        // The one exclusion no later drain clears by itself, so
-                        // readiness repeats the repair the drain recorded rather
-                        // than leaving the reason to be interpreted.
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
                     BacklogTaskExclusionReason::HostOsMismatch => {
                         // Retagging, or a host of the named OS, clears it; the
                         // detail names which.
-                        object.insert("reason".to_string(), Value::String("host_os_mismatch".to_string()));
+                        object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("host_os".to_string(), json!(runtime.host_os()));
+                        object.insert("host_scope".to_string(), json!("local"));
+                        object.insert("host_os_wait".to_string(), json!(format!(
+                            "On this {} host: {}", runtime.host_os().map_or("unknown", |os| os.as_str()),
+                            excluded.detail.as_deref().unwrap_or("OS requirement is not satisfied")
+                        )));
+                        let evidence = follower_evidence.task_follower_evidence(task);
+                        let compatible = evidence["status"] == "compatible_recent";
+                        object.insert("executor_evidence".to_string(), evidence);
+                        if compatible {
+                            // Diagnostic only: the local exclusion remains in
+                            // the snapshot and no follower is declared ready.
+                            object.insert("reason".to_string(), json!("follower_admission_pending"));
+                            if !snapshot.published_resumes.contains_key(&task.id) {
+                                let conflicts = readiness_hosts::follower_footprint_conflicts(runtime, task, &holders);
+                                if !conflicts.is_empty() {
+                                    let blocking_ids = conflicts.iter().map(|conflict| conflict.blocking_task_id.as_str()).collect::<BTreeSet<_>>();
+                                    let claims = claim_holders.json_for(blocking_ids.iter().copied());
+                                    let run_ids = blocking_ids.iter()
+                                        .flat_map(|id| claimed_by_task.get(*id).into_iter().flatten().cloned())
+                                        .chain(claims.iter().filter_map(|claim| claim["run_id"].as_str().map(str::to_string)))
+                                        .collect::<BTreeSet<_>>();
+                                    object.insert("reason".to_string(), json!("context_lock_conflict"));
+                                    object.insert("blocking_claims".to_string(), json!(claims));
+                                    object.insert("run_ids".to_string(), json!(run_ids));
+                                    object.insert("conflicts".to_string(), json!(conflicts.iter().map(|conflict| json!({
+                                        "requested_file": conflict.requested_selector,
+                                        "blocking_selector": conflict.blocking_selector,
+                                        "locking_task_id": conflict.blocking_task_id,
+                                        "provenance": conflict.provenance.as_str(),
+                                    })).collect::<Vec<_>>()));
+                                }
+                            }
+                        }
                         // Which registered hosts run the OS it needs, and
                         // whether each is pulling here.
                         let fleet = snapshot
@@ -464,65 +465,25 @@ pub fn explain_workspace_auto_readiness(
                             object.insert("host_fleet".to_string(), json!(fleet));
                         }
                     }
-                    BacklogTaskExclusionReason::BrowserKitMissing => {
-                        // A verified kit on this host, or a host that has
-                        // one, clears it; the detail names the install.
+                    BacklogTaskExclusionReason::HostLabelsMissing => {
+                        // A host carrying the labels clears it: this one once
+                        // `machine.labels` declares them, or a follower that
+                        // does. The detail names the labels this host lacks.
                         object.insert(
                             "reason".to_string(),
-                            Value::String("browser_kit_missing".to_string()),
+                            Value::String("host_labels_missing".to_string()),
                         );
                         object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::LocalRouteBeforePr => {
-                        // [ORB-14168] The drain records the same snake_case
-                        // reason. The detail names the deciding layer and the
-                        // remedy the admission refusal already uses.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("local_route_before_pr".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::LocalRouteBeforeLanding => {
-                        // [ORB-14849] As above, under its own code.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("local_route_before_landing".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::BaselineRedHold => {
-                        // [ORB-14258] Lifts by itself once the command passes
-                        // on a new base tip; the detail names the base and
-                        // the command.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("baseline_red_hold".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::ProviderBackoff => {
-                        // [ORB-14266] Lifts by itself at the hold's
-                        // `not_before`; the detail names the run, the
-                        // failure, the excluded crews and the time.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("provider_backoff".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
-                    }
-                    BacklogTaskExclusionReason::ProviderLimit => {
-                        // [ORB-14697] Lifts by itself at the reading's reset;
-                        // the detail names the provider, window, used
-                        // percent, threshold, reset and skipped crews.
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String("provider_limit".to_string()),
-                        );
-                        object.insert("detail".to_string(), json!(excluded.detail));
+                        if let Some(wait) = snapshot
+                            .task_lookup
+                            .get(&excluded.id)
+                            .and_then(|task| runtime.task_placement_wait(task))
+                        {
+                            object.insert("placement_wait".to_string(), json!(wait));
+                        }
                     }
                     BacklogTaskExclusionReason::CrewNotAllowed => {
-                        object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
+                        object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("crew".to_string(), json!(excluded.crew));
                         object.insert("allowed_crews".to_string(), json!(allowlist.as_ref().map(CrewAllowlist::names)));
                     }
@@ -548,14 +509,7 @@ pub fn explain_workspace_auto_readiness(
                     }
                     BacklogTaskExclusionReason::ContextLockConflict
                     | BacklogTaskExclusionReason::GroupMemberConflict => {
-                        object.insert(
-                            "reason".to_string(),
-                            Value::String(match excluded.reason {
-                                BacklogTaskExclusionReason::ContextLockConflict => "context_lock_conflict",
-                                BacklogTaskExclusionReason::GroupMemberConflict => "group_member_conflict",
-                                _ => unreachable!("lock exclusions are handled above"),
-                            }.to_string()),
-                        );
+                        object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert(
                             "conflicts".to_string(),
                             json!(excluded.conflicts.iter().map(|conflict| json!({
@@ -670,7 +624,12 @@ pub fn explain_workspace_auto_readiness(
             "admit_cpu_percent": settings.admit_cpu_percent,
             "admit_memory_percent": settings.admit_memory_percent,
         });
+        // Titles come from the admission population, which omits terminal
+        // tasks. Statuses also come from the registry projection the snapshot
+        // already holds, so a done task the forecast still names keeps its
+        // current status (`done`, not the backlog population's silence).
         let mut titles = BTreeMap::new();
+        let mut statuses = BTreeMap::new();
         for id in forecast
             .admitted
             .iter()
@@ -680,9 +639,13 @@ pub fn explain_workspace_auto_readiness(
         {
             if let Some(task) = snapshot.task_lookup.get(id) {
                 titles.insert(id.clone(), task.title.clone());
+                statuses.insert(id.clone(), task.status.to_string());
+            } else if let Some(status) = snapshot.status_by_id.get(id) {
+                statuses.insert(id.clone(), status.to_string());
             }
         }
         view["task_titles"] = json!(titles);
+        view["task_statuses"] = json!(statuses);
         // The drain whose passes recorded it, and whether that drain is still
         // live: a finished drain's forecast is history, not this host's load.
         view["drain_run_id"] = json!(status_run_id);
@@ -868,6 +831,11 @@ pub fn explain_workspace_auto_readiness(
         },
         "approvals": approvals,
         "provider_limits": provider_limits.readings,
+        "provider_pressures": provider_limits.providers,
+        "crew_pressures": provider_limits.crew_pressures,
+        // The persisted crew-performance snapshot's age, window and type
+        // list, or the reason a draw would ignore it.
+        "crew_performance": runtime.crew_performance_readiness(),
         "provider_auth_failures": provider_auth_failures,
         "total": total,
         "tasks": tasks,
@@ -912,6 +880,96 @@ pub fn explain_workspace_auto_readiness(
     Ok(payload)
 }
 
+/// The status drain's progress: the most recent finished drain when no local
+/// drain is live, the status drain's pipeline state, its window deadline and
+/// workers, and the phase readiness reports. Readiness and the dashboard's
+/// change stream read the phase from here, so they never disagree.
+pub(super) struct DrainProgress {
+    pub(super) recent_drain: Option<JobRun>,
+    pub(super) status_state: Option<PipelineState>,
+    pub(super) ends_at: Option<String>,
+    pub(super) admitted_workers: usize,
+    pub(super) running_admitted_workers: usize,
+    pub(super) phase: &'static str,
+}
+
+pub(super) fn drain_progress(
+    runtime: &OrbitRuntime,
+    active_drain: Option<&ActiveDrain>,
+) -> Result<DrainProgress, OrbitError> {
+    let recent_drain = if active_drain.is_none() {
+        runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(DRAIN_JOB_NAME.to_string()),
+                terminal_only: true,
+                limit: Some(1),
+                include_steps: false,
+                ..JobRunQuery::default()
+            })?
+            .into_iter()
+            .next()
+    } else {
+        None
+    };
+    let status_run_id = active_drain
+        .map(|drain| drain.run_id.as_str())
+        .or_else(|| recent_drain.as_ref().map(|run| run.run_id.as_str()));
+    let status_state = status_run_id
+        .map(|run_id| runtime.stores().jobs().read_run_state(run_id))
+        .transpose()?
+        .flatten();
+    // The open-window checkpoint is the actual server-stamped deadline, not
+    // the submission time plus a browser's chosen duration, unless an
+    // operator has since extended it [ORB-15383].
+    let ends_at = status_state
+        .as_ref()
+        .and_then(drain_deadline)
+        .map(|deadline| deadline.to_rfc3339_opts(SecondsFormat::Secs, true));
+    let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
+        let mut running = 0;
+        let workers = state
+            .child_dispatches
+            .iter()
+            .filter(|dispatch| dispatch.job_name == LEAF_JOB_NAME);
+        let mut admitted = 0;
+        for dispatch in workers {
+            admitted += 1;
+            if runtime
+                .stores()
+                .jobs()
+                .get_job_run(&dispatch.child_run_id)?
+                .is_some_and(|child| !child.state.is_terminal())
+            {
+                running += 1;
+            }
+        }
+        (admitted, running)
+    } else {
+        (0, 0)
+    };
+    let window_open = ends_at
+        .as_deref()
+        .and_then(|deadline| DateTime::parse_from_rfc3339(deadline).ok())
+        .is_none_or(|deadline| deadline > Utc::now());
+    let phase = if active_drain.is_some_and(|drain| !drain.admissions_stopped()) && window_open {
+        "draining"
+    } else if running_admitted_workers > 0 {
+        "winding_down"
+    } else {
+        "idle"
+    };
+    Ok(DrainProgress {
+        recent_drain,
+        status_state,
+        ends_at,
+        admitted_workers,
+        running_admitted_workers,
+        phase,
+    })
+}
+
 impl OrbitRuntime {
     /// Read-only projection of the current auto-drain admission snapshot.
     pub fn workspace_auto_readiness(
@@ -931,5 +989,12 @@ impl OrbitRuntime {
         snapshot["replica"] = json!(self.replica_owner_machine().is_some());
         snapshot["validation_env_warning"] = json!(self.readiness_validation_env_warning());
         Ok(snapshot)
+    }
+
+    /// The workspace's drain phase as readiness reports it (`draining`,
+    /// `winding_down` or `idle`), without the rest of the readiness snapshot.
+    pub fn workspace_drain_phase(&self) -> Result<&'static str, OrbitError> {
+        let (active_drain, _) = workspace_drains(self)?;
+        Ok(drain_progress(self, active_drain.as_ref())?.phase)
     }
 }

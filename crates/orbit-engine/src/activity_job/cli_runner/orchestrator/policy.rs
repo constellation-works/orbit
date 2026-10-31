@@ -1,12 +1,14 @@
 //! The activity tool and process policy envelope a provider subprocess
-//! receives, including claimed-mode tool denial.
+//! receives, including claimed-mode tool denial and live experiment arms'
+//! tool deltas.
 
 use orbit_common::security::child_env::{
     ACTIVITY_DEADLINE_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
 };
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
-use orbit_types::tool::CLAIMED_MODE_DENIED_TOOLS;
+use orbit_types::tool::{AGENT_CONTRACT_TOOLS, CLAIMED_MODE_DENIED_TOOLS};
 use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, AgentLoopSpec};
+use orbit_types::workflow::{ExperimentActivityOverlay, ExperimentOverlayRecord, tool_allowed};
 use serde_json::Value;
 
 use crate::context::{ResolvedActivityTools, RuntimeHost};
@@ -152,7 +154,8 @@ pub(super) struct ActivityToolGrant {
 }
 
 /// Resolve the activity's tool grant for these tasks, removing
-/// [`CLAIMED_MODE_DENIED_TOOLS`] in claimed mode.
+/// [`CLAIMED_MODE_DENIED_TOOLS`] in claimed mode. The deny list the child
+/// enforces drops the operator-granted names the host lifted.
 pub(super) fn resolve_activity_tool_grant(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,
@@ -162,7 +165,7 @@ pub(super) fn resolve_activity_tool_grant(
 ) -> Result<ActivityToolGrant, DispatchError> {
     let tool_policy = spec.tool_policy_mode();
     let claimed = claimed_mode(host, input);
-    let tool_disallow_list =
+    let mut tool_disallow_list =
         claimed_tool_disallow_list(spec.tool_disallow_list.as_deref(), claimed);
     let mut activity_tools = match tool_disallow_list.as_deref() {
         Some(disallow_list) => {
@@ -170,20 +173,209 @@ pub(super) fn resolve_activity_tool_grant(
         }
         None => host.resolve_activity_tools(task_ids, &spec.tools)?,
     };
-    if claimed {
-        // An allowlisted activity gets the same guard as a deny-listed one.
-        for tools in [
-            &mut activity_tools.requested_tools,
-            &mut activity_tools.effective_tools,
-        ] {
-            tools.retain(|tool| !CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()));
-        }
+    if let Some(disallow_list) = tool_disallow_list.as_mut() {
+        lift_granted_denials(disallow_list, &mut activity_tools, claimed);
+    }
+    if claimed && tool_disallow_list.is_none() {
+        restrict_allowlist(
+            host,
+            &mut activity_tools,
+            activity_name,
+            task_ids,
+            CLAIMED_MODE_DENIED_TOOLS,
+        )?;
     }
     Ok(ActivityToolGrant {
         tool_policy,
         tool_disallow_list,
         activity_tools,
     })
+}
+
+/// Removes the granted names the host lifted from the disallow list the child
+/// enforces, so a call reaches the downstream gates instead of the deny list.
+/// A lift never covers a claimed-mode denial: in claimed mode such a name
+/// leaves the lifted and callable sets and stays denied.
+fn lift_granted_denials(
+    disallow_list: &mut Vec<String>,
+    activity_tools: &mut ResolvedActivityTools,
+    claimed: bool,
+) {
+    if claimed {
+        let claimed_denied = |tool: &String| CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str());
+        let refused = activity_tools
+            .granted_tools
+            .iter()
+            .filter(|tool| claimed_denied(tool))
+            .cloned()
+            .collect::<Vec<_>>();
+        activity_tools
+            .granted_tools
+            .retain(|tool| !claimed_denied(tool));
+        activity_tools
+            .effective_tools
+            .retain(|tool| !refused.contains(tool));
+    }
+    disallow_list.retain(|entry| !activity_tools.granted_tools.contains(entry));
+}
+
+/// Applies live experiment arms' tool deltas after the activity's grant:
+/// first each arm's removals, then its additions. A removal never takes a
+/// task's required or lifted granted tool or an [`AGENT_CONTRACT_TOOLS`]
+/// entry; an addition never overrides the activity's disallow list or the
+/// claimed-mode denial.
+/// Returns what each arm's dispatch actually received.
+pub(super) fn apply_experiment_tool_overlays(
+    host: &dyn RuntimeHost,
+    grant: &mut ActivityToolGrant,
+    overlays: &[ExperimentActivityOverlay],
+    activity_name: &str,
+    input: &Value,
+    task_ids: &[String],
+) -> Result<Vec<ExperimentOverlayRecord>, DispatchError> {
+    let claimed = claimed_mode(host, input);
+    let mut records = Vec::with_capacity(overlays.len());
+    for overlay in overlays {
+        let callable_before = grant.activity_tools.effective_tools.clone();
+        let removals = overlay
+            .tools_remove
+            .iter()
+            .map(String::as_str)
+            .filter(|tool| {
+                !AGENT_CONTRACT_TOOLS.contains(tool)
+                    && !grant
+                        .activity_tools
+                        .requested_tools
+                        .iter()
+                        .chain(&grant.activity_tools.granted_tools)
+                        .any(|required| required == tool)
+            })
+            .collect::<Vec<_>>();
+        match grant.tool_disallow_list.as_mut() {
+            Some(disallow_list) => {
+                for tool in &removals {
+                    if !tool_allowed(tool, disallow_list) {
+                        disallow_list.push((*tool).to_string());
+                    }
+                }
+                grant
+                    .activity_tools
+                    .effective_tools
+                    .retain(|tool| !removals.contains(&tool.as_str()));
+            }
+            None if !removals.is_empty() => restrict_allowlist(
+                host,
+                &mut grant.activity_tools,
+                activity_name,
+                task_ids,
+                &removals,
+            )?,
+            None => {}
+        }
+        let mut added = Vec::new();
+        for tool in &overlay.tools_add {
+            let refused = (claimed && CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()))
+                || grant
+                    .tool_disallow_list
+                    .as_deref()
+                    .is_some_and(|disallow_list| tool_allowed(tool, disallow_list));
+            let effective = &mut grant.activity_tools.effective_tools;
+            if refused {
+                tracing::warn!(
+                    experiment = %overlay.experiment,
+                    arm = %overlay.arm,
+                    tool = %tool,
+                    "experiment arm addition not applied: `{activity_name}` may not call it"
+                );
+                continue;
+            }
+            if !tool_allowed(tool, effective) {
+                effective.retain(|entry| entry != NO_CALLABLE_TOOLS_ENTRY);
+                effective.push(tool.clone());
+            }
+            if !tool_allowed(tool, &callable_before) {
+                added.push(tool.clone());
+            }
+        }
+        let removed = removals
+            .iter()
+            .filter(|tool| {
+                tool_allowed(tool, &callable_before)
+                    && !tool_allowed(tool, &grant.activity_tools.effective_tools)
+            })
+            .map(|tool| (*tool).to_string())
+            .collect::<Vec<_>>();
+        let has_effect = !added.is_empty()
+            || !overlay.skills.is_empty()
+            || !removed.is_empty()
+            || overlay.instruction.is_some()
+            || overlay.suppress_default_instructions;
+        if has_effect {
+            records.push(ExperimentOverlayRecord::received(overlay, added, removed));
+        }
+    }
+    Ok(records)
+}
+
+/// Removes `denied` from an allowlisted activity's grant.
+///
+/// A wildcard entry that covers a denied tool is replaced by the registered
+/// tools it matches, minus the denied ones. An allowlist the removal empties
+/// is stamped [`NO_CALLABLE_TOOLS_ENTRY`], because an empty
+/// `ORBIT_ACTIVITY_TOOLS` is read as unrestricted.
+fn restrict_allowlist(
+    host: &dyn RuntimeHost,
+    activity_tools: &mut ResolvedActivityTools,
+    activity_name: &str,
+    task_ids: &[String],
+    denied: &[&str],
+) -> Result<(), DispatchError> {
+    let is_denied = |tool: &str| denied.contains(&tool);
+    let covers_denied = |entry: &String| {
+        denied
+            .iter()
+            .any(|denied| tool_allowed(denied, std::slice::from_ref(entry)))
+    };
+    let mut registered: Option<Vec<String>> = None;
+    for (callable_set, tools) in [
+        (false, &mut activity_tools.requested_tools),
+        (true, &mut activity_tools.effective_tools),
+    ] {
+        let mut restricted: Vec<String> = Vec::with_capacity(tools.len());
+        for entry in tools.iter() {
+            let expanded: Vec<String> = if !covers_denied(entry) {
+                vec![entry.clone()]
+            } else if is_denied(entry) {
+                Vec::new()
+            } else {
+                if registered.is_none() {
+                    registered = Some(
+                        host.resolve_activity_tool_denials(task_ids, activity_name, &[])?
+                            .effective_tools,
+                    );
+                }
+                registered
+                    .iter()
+                    .flatten()
+                    .filter(|tool| {
+                        !is_denied(tool) && tool_allowed(tool, std::slice::from_ref(entry))
+                    })
+                    .cloned()
+                    .collect()
+            };
+            for tool in expanded {
+                if !restricted.contains(&tool) {
+                    restricted.push(tool);
+                }
+            }
+        }
+        let emptied = restricted.is_empty() && !tools.is_empty();
+        *tools = restricted;
+        if emptied && callable_set {
+            tools.push(NO_CALLABLE_TOOLS_ENTRY.to_string());
+        }
+    }
+    Ok(())
 }
 
 /// This activity's tool and process policy envelope followed by its

@@ -141,6 +141,9 @@ pub(super) struct LogQuery {
     pub(super) level: Option<String>,
     #[serde(default)]
     pub(super) since: Option<String>,
+    /// Opaque generation-bearing snapshot/SSE cursor. Last-Event-ID takes precedence.
+    #[serde(default)]
+    pub(super) cursor: Option<String>,
     /// Byte offset to resume `/log/stream` from. Ignored by `/log` snapshot.
     /// Overridden by `Last-Event-ID` when both are present.
     #[serde(default)]
@@ -235,6 +238,18 @@ pub(super) fn non_empty_string(raw: &str) -> Option<String> {
 
 pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
     match e {
+        orbit_core::OrbitError::DecisionRefused { code, message } => {
+            let status = if code == orbit_common::DecisionRefusalCode::RequestNotFound {
+                StatusCode::NOT_FOUND
+            } else if code.is_retryable() {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else if code.is_policy_denial() {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (status, Json(json!({"error": message, "code": code.as_str()}))).into_response()
+        }
         orbit_core::OrbitError::InvalidInput(msg)
         | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request(msg),
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),
@@ -251,18 +266,25 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Task,
             id,
-        } => not_found(format!("task not found: {id}")),
+            guidance,
+        } => not_found(format!(
+            "task not found: {id}{}",
+            guidance.as_deref().unwrap_or_default()
+        )),
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Friction,
             id,
+            ..
         } => not_found(format!("friction record not found: {id}")),
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Job,
             id,
+            ..
         } => not_found(format!("job not found: {id}")),
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::JobRun,
             id,
+            ..
         } => not_found(format!("run not found: {id}")),
         error @ orbit_core::OrbitError::RemoteArtifactUnavailable { .. } => {
             artifact_conflict(error, "remote_artifact_unavailable")
@@ -281,6 +303,15 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             Json(json!({
                 "error": error.to_string(),
                 "code": "pr_forge_remote_missing",
+            })),
+        )
+            .into_response(),
+        // A scheduled task waits for its time; the dashboard has no override.
+        error @ orbit_core::OrbitError::TaskScheduled { .. } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": error.to_string(),
+                "code": "task_scheduled",
             })),
         )
             .into_response(),
@@ -379,9 +410,9 @@ pub(super) fn bad_request(message: String) -> Response {
 
 /// JSON body that is optional only when it is absent or empty.
 ///
-/// `Option<Json<T>>` turns every extractor rejection into `None` (axum-core
-/// implements `FromRequest for Option<T>` as `T::from_request(..).await.ok()`).
-/// On these routes `T::default()` is a real action: an empty ship selection
+/// `Option<Json<T>>` yields `None` only when the request has no `Content-Type`
+/// and rejects an empty body that does carry one, so it cannot express "empty
+/// body means the default" on its own. On these routes `T::default()` is a real action: an empty ship selection
 /// discovers the whole backlog, and a missing `force` is a graceful cancel.
 /// A zero-length body still becomes [`Default`]. Any non-empty body is parsed
 /// as JSON, and a wrong content type, syntax error, unknown field, or type
@@ -391,7 +422,6 @@ pub(super) struct OptionalJson<T>(
     pub T,
 );
 
-#[axum::async_trait]
 impl<T, S> FromRequest<S> for OptionalJson<T>
 where
     T: DeserializeOwned + Default,

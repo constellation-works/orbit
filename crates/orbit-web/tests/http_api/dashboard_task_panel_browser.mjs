@@ -1,4 +1,4 @@
-// Usage: node dashboard_task_panel_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/task-panel-browser
+// Usage: node dashboard_task_panel_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/task-panel-browser [--save-refresh|--drain-actions]
 // Drives the shipped Tasks view with disposable API data: a row opens its
 // detail in the side pane beside a list that keeps its place, the pane's tabs,
 // width and keyboard, the full-page route and its way back, deep links, row
@@ -9,6 +9,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkTaskPresentation } from './dashboard_task_presentation_browser.mjs';
+import { checkTaskSaveRefresh } from './dashboard_task_save_refresh_browser.mjs';
+import { checkDrainActionReadiness } from './dashboard_drain_action_browser.mjs';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
@@ -18,14 +20,47 @@ fs.mkdirSync(evidence, { recursive: true });
 // Runs in the page before the app: a fixed task list and the reads it makes.
 const fixture = `
 globalThis.EventSource = class { close() {} };
-const statuses = ['proposed', 'proposed', 'review', 'in-progress', 'in-progress', ...Array(25).fill('backlog'), 'done'];
+const drainActions = new URLSearchParams(location.search).has('drain-actions');
+const statuses = drainActions ? [...Array(51).fill('backlog'), 'proposed']
+  : ['proposed', 'proposed', 'review', 'in-progress', 'in-progress', ...Array(25).fill('backlog'), 'done'];
 const tasks = statuses.map((status, index) => ({
   id: 'PANEL-' + (index + 1),
   title: 'Panel fixture task ' + (index + 1) + ': ' + ['Tighten the readiness card', 'Retire the legacy dock route', 'Measure drain admission latency'][index % 3],
   status, priority: 'medium', projection: 'summary', crew: index % 2 ? 'opus' : null,
   job_run_id: status === 'in-progress' ? 'jrun-fixture-' + (index + 1) : null,
+  ...(index === 6 ? { not_before: '2099-02-01T10:00:00Z', scheduled_hold: false } : {}),
+  ...(index === 5 ? { not_before: '2099-02-01T10:00:00Z', scheduled_hold: true } : {}),
+  ...(index === 4 ? { not_before: '2026-10-18T10:00:00Z', started_at: '2026-10-18T12:00:00Z' } : {}),
+  ...(index === 3 ? { riskiness: { state: 'no_footprint' } } : {}),
+  ...(index === 4 ? { riskiness: {
+    estimator_version: 2, state: 'estimated', probability: 0.23, basis: 'declared_files', basis_fallback: null, size: 23,
+    fit: { observations: 1203, regressed: 166, intercept: -2.9, slope: 0.45 },
+    size_band: { tasks: 412, regressed: 61, rate: 61 / 412 }, support_state: 'full',
+    window_days: 30, min_support: 5, observed_through: '2026-10-27T05:00:00Z',
+    workspace: { tasks: 1203, regressed: 166, base_rate: 167 / 1205 },
+    anchors: 23, unsupported_selectors: 0, driving_files: [], adjustment: null,
+  } } : {}),
   status_transitions: [{ status: status === 'backlog' ? 'in-progress' : 'backlog' }],
   comment_count: index === 1 ? 0 : 2, artifact_count: 1,
+  ...(index === 2 ? {
+    relations: [{ type: 'blocked_by', target: 'PANEL-1' }],
+    external_refs: [{ system: 'github-pr', id: '42', url: 'https://github.com/o/r/pull/42' }],
+    delivery_attention: { run_id: 'jrun-delivery-failed', run_state: 'failed', failed_step_id: 'complete_pr', blocker: 'failed_checks', head_sha: 'abc123', attempt: 1, budget: 3, repairing: false, pr_number: '42', as_of: '2026-10-18T12:00:00Z', observed_at: '2026-10-18T12:00:00Z' },
+  } : {}),
+  ...(index === 9 ? {
+    relations: [
+      { type: 'regression_from', target: 'PANEL-1', regression: { nature: 'contract_drift', escape: 'no_test', severity: 'high', severity_source: 'verified' } },
+      { type: 'regression_from', target: 'PANEL-2', regression: { nature: 'broke_existing', escape: 'unclassified', severity: 'low', severity_source: 'filer', sites: ['file:crates/orbit-web/assets/dashboard/js/tasks.js', 'symbol:crates/orbit-web/assets/dashboard/js/tasks.js#relationTargets:function'] } },
+      { type: 'regression_from', target: 'PANEL-3' },
+      { type: 'related_to', target: 'PANEL-4' },
+    ],
+  } : {}),
+  ...(index === 10 ? {
+    relations: [
+      { type: 'regression_from', target: 'PANEL-1', regression: { nature: 'contract_drift', escape: 'no_test' } },
+      { type: 'regression_from', target: 'PANEL-3' },
+    ],
+  } : {}),
 }));
 const sampleComments = [
   { at: '2026-10-18T11:00:00Z', by: 'operator', message: 'Please keep the list still while I read.' },
@@ -45,10 +80,11 @@ const sampleCriteria = [
 ];
 const full = task => ({
   ...task, projection: undefined,
+  status_transitions: task.status_transitions.map(transition => ({ ...transition, required_field: null })),
   description: task.description || '## Why\\n\\nOperators compare tasks side by side. ' + task.title + ' needs a **clear** spec.\\n\\n- keep the list still\\n- show the detail beside it',
   acceptance_criteria: task.acceptance_criteria || ['The list keeps its scroll position', 'The panel opens beside the list'],
   plan: '1. Read the code\\n2. Change it', complexity: 'medium', type: 'feature', tags: ['dashboard', 'ui'],
-  created_by: 'operator', created_at: '2026-10-18T10:00:00Z', updated_at: '2026-10-18T12:00:00Z',
+  created_by: task.created_by === undefined ? 'operator' : task.created_by, created_at: '2026-10-18T10:00:00Z', updated_at: '2026-10-18T12:00:00Z',
   history: Array.from({ length: 6 }, (_, i) => ({ at: '2026-10-18T1' + i + ':00:00Z', by: 'operator', event: 'updated', note: 'edit ' + (i + 1) })),
   comments: task.comments || (task.id === 'PANEL-2' ? [] : sampleComments),
   artifacts: [{ path: 'notes/summary.txt', size: 42, media_type: 'text/plain' }],
@@ -58,6 +94,9 @@ globalThis.panelFixture = {
   holdCommentPost: false, releaseCommentPost: null, failCommentPost: false,
   ships: [], holdShipPost: false, releaseShipPost: null,
   deliveryClaim: false, readiness: [], lifecycle: [],
+  holdTaskList: false, releaseTaskList: null,
+  drainActions: [], drainPhase: 'idle', failAlsoTaskReadiness: false,
+  refuseWith: null,
 };
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
@@ -66,10 +105,39 @@ globalThis.fetch = async (input, options = {}) => {
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   if (api === '/api/workspaces') return json([{ id: 'one', name: 'one', status: 'active', is_default: true }]);
   if (api === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner-id', local: true }] });
-  if (api === '/api/tasks') return json({ items: globalThis.panelFixture.tasks, total: globalThis.panelFixture.tasks.length, limit: 50, truncated: false });
+  if (api === '/api/tasks') {
+    const selected = tasks.find(task => task.id === url.searchParams.get('detail'));
+    // Serialize before the barrier, as a server response computed before PATCH.
+    const response = json({ items: tasks, total: tasks.length, limit: 50, truncated: false, ...(selected ? { detail: full(selected) } : {}) });
+    if (globalThis.panelFixture.holdTaskList) {
+      globalThis.panelFixture.holdTaskList = false;
+      await new Promise(resolve => { globalThis.panelFixture.releaseTaskList = resolve; });
+    }
+    return response;
+  }
   if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
   if (api === '/api/crews') return json({ default_crew: 'opus', crews: [{ name: 'opus' }, { name: 'sol' }] });
-  if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: globalThis.panelFixture.readiness });
+  if (api === '/api/workflows/auto/readiness') {
+    if (globalThis.panelFixture.failAlsoTaskReadiness && url.searchParams.get('also_task')) return json({ error: 'readiness snapshot unavailable' }, 500);
+    if (!drainActions) return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: globalThis.panelFixture.readiness });
+    const readiness = tasks.map(task => ({ task_id: task.id, status: task.status, eligible: false,
+      reason: task.status === 'proposed' ? 'not_backlog' : 'capacity_saturated',
+      detail: 'Readiness after ' + (panelFixture.drainActions.at(-1) || 'initial load'),
+    }));
+    const requested = url.searchParams.get('task');
+    const bounded = readiness.filter(entry => entry.status === 'backlog').slice(0, 50);
+    const also = url.searchParams.get('also_task');
+    return json({ controls_authorized: true,
+      capacity: { drain_phase: panelFixture.drainPhase, drain_run_id: panelFixture.drainPhase === 'draining' ? 'jrun-fixture-drain' : null },
+      tasks: requested ? readiness.filter(entry => entry.task_id === requested) : bounded,
+      detail_tasks: also ? readiness.filter(entry => entry.task_id === also && !bounded.some(item => item.task_id === also)) : [],
+    });
+  }
+  if (drainActions && options.method === 'POST' && ['/api/workflows/auto', '/api/workflows/auto/stop'].includes(api)) {
+    panelFixture.drainActions.push(api.endsWith('/stop') ? 'Stop' : 'Start');
+    panelFixture.drainPhase = api.endsWith('/stop') ? 'idle' : 'draining';
+    return json({ run_id: 'jrun-fixture-drain', state: 'submitted', outcome: 'stopped' });
+  }
   if (api === '/api/distributed/claims') {
     const taskId = url.searchParams.get('task');
     const claims = globalThis.panelFixture.deliveryClaim && ['PANEL-1', 'PANEL-3'].includes(taskId) ? [{
@@ -120,6 +188,7 @@ globalThis.fetch = async (input, options = {}) => {
   }
   const lifecycle = api.match(/^\\/api\\/tasks\\/([^/]+)\\/(reject|archive)$/);
   if (lifecycle && options.method === 'POST') {
+    if (globalThis.panelFixture.refuseWith) return json({ error: globalThis.panelFixture.refuseWith }, 409);
     globalThis.panelFixture.lifecycle.push({ path: api, body: options.body ? JSON.parse(options.body) : null });
     return json({ ok: true });
   }
@@ -128,8 +197,14 @@ globalThis.fetch = async (input, options = {}) => {
     const task = globalThis.panelFixture.tasks.find(item => item.id === decodeURIComponent(detail[1]));
     if (task && options.method === 'PATCH') {
       const body = JSON.parse(options.body);
+      if (body.status === 'done' && globalThis.panelFixture.refuseWith) return json({ error: globalThis.panelFixture.refuseWith }, 409);
       globalThis.panelFixture.patches.push({ id: task.id, body });
       if (Object.hasOwn(body, 'crew')) task.crew = body.crew;
+      if (Object.hasOwn(body, 'not_before')) { task.not_before = body.not_before || null; task.scheduled_hold = Boolean(body.not_before); }
+      if (body.status) {
+        task.status = body.status;
+        task.status_transitions = [{ status: task.status === 'backlog' ? 'in-progress' : 'backlog' }];
+      }
       if (body.acceptance_criteria) task.acceptance_criteria = body.acceptance_criteria;
       if (body.context_files) task.context_files = body.context_files;
     }
@@ -152,10 +227,10 @@ const server = http.createServer((req, res) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({ headless: true });
-const results = {};
+const results = { taskPaneCleanup: [] };
 
-async function openPage({ width = 1440, height = 900, url = '/?workspace=one#tasks', storage = 'ok', context = null, clock = false } = {}) {
-  const owner = context || await browser.newContext({ viewport: { width, height } });
+async function openPage({ width = 1440, height = 900, url = '/?workspace=one#tasks', storage = 'ok', context = null, clock = false, touch = false } = {}) {
+  const owner = context || await browser.newContext({ viewport: { width, height }, hasTouch: touch });
   // A viewer whose storage refuses every read and write still gets a pane.
   if (storage === 'refuses') await owner.addInitScript(() => {
     for (const method of ['getItem', 'setItem', 'removeItem']) {
@@ -191,12 +266,174 @@ const waitShown = async (page, id) => {
   await page.waitForFunction(id => new URLSearchParams(location.hash.split('?')[1] || '').get('open') === id, id);
 };
 
-try {
+async function checkTaskPanel() {
+  // Scheduling lives in the metadata card; editing still sets and clears it.
+  for (const width of [1440, 375]) {
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900, touch: true });
+    const scheduledRow = row(page, 'PANEL-6');
+    assert.match(await scheduledRow.locator('.scheduled-chip').innerText(), /^Scheduled\s/);
+    assert.equal(await row(page, 'PANEL-5').locator('.scheduled-chip').count(), 0, 'Running work has no scheduled hold chip');
+    assert.equal(await row(page, 'PANEL-7').locator('.scheduled-chip').count(), 0, 'An overridden schedule has no hold chip');
+    await scheduledRow.scrollIntoViewIfNeeded();
+    await capture(page, `scheduled-list-dark-${width}.png`);
+    await scheduledRow.locator('.title').click();
+    await waitShown(page, 'PANEL-6');
+    const schedule = pane(page).locator('.task-delivery-card .property-row.schedule');
+    await schedule.waitFor({ state: 'visible' });
+    assert.equal(await schedule.count(), 1, 'Scheduled belongs in the metadata card');
+    assert.equal(await schedule.locator('.label').textContent(), 'Scheduled');
+    assert.equal(await pane(page).locator('.task-schedule, .task-started-at').count(), 0, 'A task that has not started has no Actual start line');
+    const scheduleGeometry = [];
+    const recordScheduleLine = async () => {
+      const boxes = await schedule.locator('.field-editor').evaluate(node => {
+        const value = node.firstElementChild.getBoundingClientRect();
+        const edit = node.querySelector('.field-edit').getBoundingClientRect();
+        return { value: value.toJSON(), edit: edit.toJSON() };
+      });
+      assert.ok(Math.abs(boxes.value.top - boxes.edit.top) <= 2, `Schedule value and Edit share a line: ${JSON.stringify(boxes)}`);
+      scheduleGeometry.push(boxes);
+    };
+    await recordScheduleLine();
+    await schedule.getByRole('button', { name: 'Edit scheduled time for PANEL-6', exact: true }).click();
+    const input = schedule.getByRole('textbox', { name: 'Edit scheduled time for PANEL-6', exact: true });
+    await input.fill('2099-02-02T11:00:00+01:00');
+    await capture(page, `scheduled-editor-dark-${width}.png`);
+    await schedule.getByRole('button', { name: 'save', exact: true }).click();
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches[0].body), { not_before: '2099-02-02T11:00:00+01:00' });
+    await schedule.locator('.field-edit').waitFor({state: 'visible'});
+    await schedule.locator('[data-clock-at]').waitFor({state: 'visible'});
+    await capture(page, `task-detail-scheduled-dark-${width}.png`);
+    await schedule.locator('.field-edit').click();
+    await schedule.locator('input').fill('');
+    await schedule.getByRole('button', { name: 'save', exact: true }).click();
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 2);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches[1].body), { not_before: '' });
+    await schedule.locator('.field-edit').waitFor({state: 'visible'});
+    assert.match(await schedule.innerText(), /not scheduled/);
+    await recordScheduleLine();
+    await capture(page, `task-detail-unscheduled-dark-${width}.png`);
+    assert.equal(await row(page, 'PANEL-6').locator('.scheduled-chip').count(), 0, 'Clearing the schedule removes its hold chip');
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    const worktree = {
+      branch: 'orbit/dashboard-task-detail-layout-with-a-distinctive-branch-suffix',
+      worktree_path: '/home/operator/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261028-0113-c9',
+    };
+    await page.evaluate(worktree => {
+      Object.assign(panelFixture.tasks.find(task => task.id === 'PANEL-5'), {
+        status: 'review', job_run_worktree: worktree,
+        external_refs: [{ system: 'github-pr', id: '42', url: 'https://github.com/o/r/pull/42' }],
+        job_run_stage: { run_state: 'success', stages: ['Setup', 'Implement', 'Validate', 'Review', 'Publish', 'Review', 'Merge', 'Re-review'].map((label, i) => ({ id: String(i), label, state: 'past' })) },
+      });
+    }, worktree);
+    await row(page, 'PANEL-5').locator('.title').click();
+    await waitShown(page, 'PANEL-5');
+    const riskChip = pane(page).locator('.task-chip-risk');
+    const tooltip = pane(page).getByRole('tooltip');
+    assert.equal(await pane(page).locator('.task-risk').count(), 0, 'There is no risk disclosure under the pills');
+    assert.equal(await riskChip.getAttribute('aria-describedby'), await tooltip.getAttribute('id'), 'The pill has an accessible description');
+    assert.equal(await riskChip.getAttribute('title'), null, 'Only the accessible tooltip presents risk detail');
+    const riskLines = (await tooltip.textContent()).split('\n');
+    assert.equal(riskLines[0], 'Regression risk 23% · 23 declared files');
+    assert.equal(riskLines[1], 'Of the 412 recent done tasks this size or larger, 61 regressed (15%)', 'The tooltip retains the calibration evidence');
+    assert.ok(!riskLines.some(line => /crew|Driving files/i.test(line)), `Riskiness attributes no file or crew: ${riskLines}`);
+    await riskChip.hover();
+    assert.equal(await tooltip.evaluate(n => getComputedStyle(n).clipPath), 'none', 'Hover reveals the tooltip');
+    await page.mouse.move(0, 0);
+    await riskChip.focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await riskChip.evaluate(n => n === document.activeElement), true, 'The pill is keyboard reachable');
+    assert.equal(await tooltip.evaluate(n => getComputedStyle(n).clipPath), 'none', 'Keyboard focus reveals the tooltip');
+    await capture(page, `task-risk-tooltip-dark-${width}.png`);
+    await page.keyboard.press('Escape');
+    assert.notEqual(await tooltip.evaluate(n => getComputedStyle(n).clipPath), 'none', 'Escape dismisses the tooltip');
+    assert.equal(await pane(page).isVisible(), true, 'Dismissing the tooltip keeps the task open');
+    await riskChip.blur();
+    // Touch has no hover: tap focuses the same pill and reveals its description.
+    await riskChip.tap();
+    assert.equal(await tooltip.evaluate(n => getComputedStyle(n).clipPath), 'none', 'Tap reveals the tooltip');
+    const tooltipBounds = await tooltip.boundingBox();
+    assert.ok(tooltipBounds.x >= 0 && tooltipBounds.x + tooltipBounds.width <= width, 'The tooltip fits the viewport');
+    await page.keyboard.press('Escape');
+    const started = pane(page).locator('.task-delivery-card .schedule');
+    assert.equal(await pane(page).locator('.task-started-at, .run-branch, .run-worktree').count(), 0, 'The redundant delivery rows are absent');
+    assert.equal(await started.locator('.field-edit').count(), 0, 'Started work has no schedule editor');
+    assert.match(await started.innerText(), /scheduled 2026-10-18 10:00 UTC · started 2026-10-18 12:00 UTC/);
+    assert.equal(await pane(page).locator('.task-delivery-card .run').count(), 1, 'Run stays in the delivery card');
+    assert.equal(await pane(page).locator('.task-delivery-card .pr').count(), 1, 'Pull request stays in the delivery card');
+    await capture(page, `task-pane-dark-${width}-after.png`);
+    const strips = [];
+    for (const steps of [9, 8]) {
+      if (steps === 8) {
+        await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+        await page.evaluate(() => {
+          const task = panelFixture.tasks.find(t => t.id === 'PANEL-5');
+          task.job_run_stage.run_state = 'running';
+          task.job_run_stage.stages[7].state = 'current';
+          task.not_before = null;
+        });
+        await page.locator('#refresh-btn').click();
+        await row(page, 'PANEL-5').locator('.title').click();
+        await waitShown(page, 'PANEL-5');
+        await page.waitForFunction(() => document.querySelectorAll('.task-stage-step').length === 8);
+        assert.match(await started.innerText(), /not scheduled · started 2026-10-18 12:00 UTC/);
+      }
+      const geometry = await pane(page).evaluate(node => {
+        const box = selector => node.querySelector(selector).getBoundingClientRect().toJSON();
+        return { lifecycle: box('.task-lifecycle'), lifecycleFirst: box('.task-lifecycle-bar'),
+          lifecycleLast: box('.task-lifecycle-step:last-child .task-lifecycle-bar'),
+          stage: box('.task-stage'), first: box('.task-stage-bar'),
+          last: box('.task-stage-step:last-child .task-stage-bar'), card: box('.task-delivery-card'),
+          count: node.querySelectorAll('.task-stage-step').length,
+          lifecycleGap: getComputedStyle(node.querySelector('.task-lifecycle')).columnGap,
+          stageGap: getComputedStyle(node.querySelector('.task-stage')).columnGap };
+      });
+      assert.equal(geometry.count, steps);
+      const left = geometry.first.left - geometry.card.left;
+      const right = geometry.card.right - geometry.last.right;
+      assert.ok(Math.abs(left - right) <= 1, `Strip ends match: ${JSON.stringify(geometry)}`);
+      assert.ok(Math.abs(geometry.first.left - geometry.lifecycleFirst.left) <= 1);
+      assert.ok(Math.abs(geometry.last.right - geometry.lifecycleLast.right) <= 1);
+      assert.equal(geometry.stageGap, geometry.lifecycleGap);
+      strips.push({ steps, leftInset: left, rightInset: right, ...geometry });
+      await capture(page, `task-stage-${steps}-dark-${width}.png`);
+    }
+    results.taskPaneCleanup.push({ width, scheduleGeometry, riskLines, tooltipBounds, strips });
+    assert.equal(await pane(page).evaluate(n => n.scrollWidth <= n.clientWidth), true, 'The pane has no horizontal overflow');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'The page has no horizontal scroll');
+    // No run, people, relations or readiness: Scheduled alone retains its card.
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await page.evaluate(() => Object.assign(panelFixture.tasks.find(task => task.id === 'PANEL-4'), { job_run_id: null, created_by: null }));
+    await row(page, 'PANEL-4').locator('.title').click();
+    await waitShown(page, 'PANEL-4');
+    await pane(page).locator('.task-delivery-card .schedule .field-edit').waitFor({ state: 'visible' });
+    assert.equal(await pane(page).locator('.task-delivery-card .property-row').count(), 1, 'Scheduled keeps an otherwise empty metadata card visible');
+    assert.equal(await pane(page).locator('.task-delivery-card .schedule .field-edit').count(), 1);
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
   await checkTaskPresentation({ openPage, row, waitShown, capture, results });
   // Task lifecycle controls follow the active Overview panel; Comment follows
   // the thread in Comments, and neither appears in the other task panels.
   for (const width of [1440, 375]) {
     const { page, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    const noEstimate = row(page, 'PANEL-4').locator('.risk-part');
+    const estimate = row(page, 'PANEL-5').locator('.risk-part');
+    assert.equal(await noEstimate.count(), 0, 'An unestimated task has no risk part in its row');
+    assert.equal(await estimate.textContent(), 'risk 23%', 'An estimated in-progress task retains its risk value');
+    await row(page, 'PANEL-4').scrollIntoViewIfNeeded();
+    await capture(page, `task-risk-row-dark-${width}.png`);
+    await row(page, 'PANEL-4').locator('.title').click();
+    await waitShown(page, 'PANEL-4');
+    const riskDetail = page.locator('#detail-PANEL-4');
+    const riskChip = riskDetail.locator('.task-chip-risk');
+    assert.equal(await riskChip.locator('.risk-value').textContent(), 'No estimate', 'Task detail retains its no-estimate risk chip');
+    assert.match(await riskDetail.getByRole('tooltip').textContent(), /No estimate: The task declares no context files/);
+    assert.equal(await riskDetail.locator('.task-risk').count(), 0, 'An unestimated task has no Regression risk breakdown');
+    await capture(page, `task-detail-unestimated-dark-${width}.png`);
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await pane(page).waitFor({ state: 'hidden' });
     await row(page, 'PANEL-1').locator('.title').click();
     await waitShown(page, 'PANEL-1');
     const detail = pane(page).locator('#detail-PANEL-1');
@@ -206,12 +443,13 @@ try {
       const panel = detail.locator(`#detail-PANEL-1-panel-${name}`);
       if (name === 'overview') {
         const actions = detail.locator('.task-action-footer .lifecycle-actions:visible');
-        assert.deepEqual(await actions.locator('.action').allTextContents(), ['approve', 'reject', 'archive'], 'A proposed task keeps its gated lifecycle actions in Overview');
+        assert.deepEqual(await actions.locator('.action').allTextContents(), ['approve', 'reject', 'run pilot', 'archive'], 'A proposed task keeps its gated lifecycle actions in Overview');
         assert.equal(await panel.locator('.action.comment:visible').count(), 0, 'Comment is absent from Overview');
       } else if (name === 'comments') {
-        assert.equal(await panel.locator('.task-action-row.comment-actions:visible').count(), 1, 'Comments contains its own task-level Comment action row');
-        assert.equal(await panel.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'Comment keeps its accessible name in Comments');
-        assert.equal(await panel.locator('.task-action-row.lifecycle-actions:visible').count(), 0, 'Lifecycle actions are absent from Comments');
+        const footer = detail.locator('.task-action-footer[data-footer-tab="comments"]');
+        assert.equal(await footer.locator('.task-action-row.comment-actions:visible').count(), 1, 'Comments has its own sticky Comment action row');
+        assert.equal(await footer.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'Comment keeps its accessible name in Comments');
+        assert.equal(await detail.locator('.task-action-row.lifecycle-actions:visible').count(), 0, 'Lifecycle actions are absent from Comments');
         await panel.locator('.comment-card').first().waitFor({ state: 'visible' });
       } else {
         assert.equal(await panel.locator('.task-action-row:visible').count(), 0, `${name} has no task-level action row`);
@@ -264,11 +502,47 @@ try {
     results.reviewClaimApprovalGuard = true;
   }
 
+  // ORB-19685: a refused done transition's lifecycle message ran on one line
+  // past the pane edge. The status lever's feedback and a refused action's
+  // error wrap inside the pane, a 60-character unbroken token included.
+  {
+    const refusal = "policy denied: completion requires an operator's post-deploy met record for criteria 4; owed or failed measurements cannot complete (evidence run " + 'jrun20261029x0437c14'.padEnd(60, 'Q') + ')';
+    const bounds = {};
+    for (const width of [1440, 375]) {
+      const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+      await page.evaluate(text => { globalThis.panelFixture.refuseWith = text; }, refusal);
+      await row(page, 'PANEL-1').locator('.title').click();
+      await waitShown(page, 'PANEL-1');
+      const detail = pane(page).locator('#detail-PANEL-1');
+      await detail.locator('.task-levers .task-status-select').selectOption('done');
+      await detail.locator('.task-levers .mutation-feedback.error').waitFor({ state: 'visible' });
+      await detail.getByRole('button', { name: 'archive', exact: true }).click();
+      await detail.locator('.action-error').waitFor({ state: 'visible' });
+      bounds[width] = await page.evaluate(() => {
+        const paneBox = document.getElementById('task-detail-pane').getBoundingClientRect();
+        return Object.fromEntries(['.task-levers .mutation-feedback.error', '.action-error'].map(selector => {
+          const node = document.querySelector(`#detail-PANEL-1 ${selector}`);
+          const box = node.getBoundingClientRect();
+          return [selector, { left: box.left, right: box.right, paneLeft: paneBox.left, paneRight: paneBox.right, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }];
+        }));
+      });
+      for (const [selector, box] of Object.entries(bounds[width])) {
+        assert.ok(box.left >= box.paneLeft - 0.5 && box.right <= box.paneRight + 0.5, `${selector} stays inside the pane at ${width}px: ${JSON.stringify(box)}`);
+        assert.ok(box.scrollWidth <= box.clientWidth + 1, `${selector} wraps its text inside its box at ${width}px: ${JSON.stringify(box)}`);
+      }
+      await capture(page, `task-refusal-wrap-dark-${width}.png`);
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+    fs.writeFileSync(path.join(evidence, 'task-refusal-wrap-result.json'), JSON.stringify(bounds, null, 2));
+    results.longRefusalWrapsInPane = true;
+  }
+
   // Status gating stays attached to the same handlers after the controls move.
   {
     const { page, errors, context } = await openPage();
     for (const [id, expected] of [
-      ['PANEL-3', ['approve', 'reject', 'archive']],
+      ['PANEL-3', ['approve', 'reject', 'fix PR', 'archive']],
       ['PANEL-6', ['ship', 'reject', 'archive']],
     ]) {
       await row(page, id).locator('.title').click();
@@ -310,9 +584,10 @@ try {
     const commentsPanel = detail.locator('#detail-PANEL-2-panel-comments');
     await detail.locator('[role="tab"][data-tab="comments"]').click();
     assert.equal(await commentsPanel.getByText('No comments yet.').isVisible(), true, 'The empty Comments tab explains that there is no thread yet');
-    assert.equal(await commentsPanel.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'An empty thread still offers Comment');
-    await commentsPanel.getByRole('button', { name: 'comment', exact: true }).click();
-    const form = commentsPanel.locator('.comment-form');
+    const commentFooter = detail.locator('.task-action-footer[data-footer-tab="comments"]');
+    assert.equal(await commentFooter.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'An empty thread still offers Comment');
+    await commentFooter.getByRole('button', { name: 'comment', exact: true }).click();
+    const form = commentFooter.locator('.comment-form');
     const draft = 'Keep this unsent comment through tabs and refresh.';
     await form.locator('textarea').fill(draft);
     await detail.locator('[role="tab"][data-tab="overview"]').click();
@@ -343,7 +618,7 @@ try {
     await detail.locator('.comment-card').filter({ hasText: draft }).waitFor({ state: 'visible' });
     assert.equal(await detail.locator('.comment-card').count(), 1, 'Posting refreshes the empty thread with the new comment');
     assert.equal(await detail.locator('.comment-card .comment-by').first().innerText(), 'human', 'The refreshed comment keeps the human author');
-    assert.equal(await commentsPanel.locator('.comment-actions .action.comment:visible').count(), 1, 'The Comment action returns after posting');
+    assert.equal(await detail.locator('.task-action-footer[data-footer-tab="comments"] .comment-actions .action.comment:visible').count(), 1, 'The Comment action returns after posting');
     assert.deepEqual(errors, []);
     await context.close();
     results.emptyCommentDraftRefreshAndPost = true;
@@ -390,12 +665,13 @@ try {
     await contextTab.click();
     const contextPanel = page.locator('#' + await contextTab.getAttribute('aria-controls'));
     assert.equal(await contextPanel.getAttribute('aria-labelledby'), await contextTab.getAttribute('id'));
-    await contextPanel.getByRole('button', { name: 'Edit context files for PANEL-8', exact: true }).click();
+    await page.locator('#detail-PANEL-8 .task-action-footer[data-footer-tab="context_files"]').getByRole('button', { name: 'Edit context files for PANEL-8', exact: true }).click();
     await contextPanel.getByRole('textbox', { name: 'Edit context files for PANEL-8', exact: true }).fill('file:src/main.rs\n dir:docs');
     await contextPanel.getByRole('button', { name: 'save', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#detail-PANEL-8-tab-context_files .detail-tab-count')?.textContent === '2');
     assert.equal(await contextTab.getAttribute('aria-selected'), 'true', 'Saving keeps Context files selected');
-    assert.deepEqual(await contextPanel.locator('.context-selector').allTextContents(), ['file:src/main.rs', 'dir:docs']);
+    assert.deepEqual(await contextPanel.locator('.context-selector').evaluateAll(links => links.map(link => link.getAttribute('title').split(' · ')[0])), ['dir:docs', 'file:src/main.rs'], 'full selector identity remains in the link titles, sorted by path');
+    assert.deepEqual(await contextPanel.locator('.context-selector').allTextContents(), ['dir:docs', 'src/main.rs'], 'file rows render the path and dir rows render the kind-prefixed name');
     assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches.at(-1).body), { context_files: ['file:src/main.rs', 'dir:docs'] }, 'Save patches only selectors');
     await capture(page, 'context-files-dark-1440.png');
     await contextTab.focus();
@@ -989,6 +1265,230 @@ try {
     results.phoneSheet = true;
   }
 
+  // A draft-preserved full-page status change to backlog must not hide a
+  // blocked_by target when the retained detail has no Readiness row: the
+  // drain entry is only deduplicated once its dependency is actually shown.
+  {
+    const { page, errors, context } = await openPage();
+    await row(page, 'PANEL-3').locator('.title').click();
+    await waitShown(page, 'PANEL-3');
+    await page.getByRole('button', { name: 'Open full page' }).click();
+    await page.waitForFunction(() => location.hash === '#tasks/PANEL-3');
+    await page.locator('#task-detail-body #detail-PANEL-3').waitFor({ state: 'visible' });
+    const detail = page.locator('#task-detail-body #detail-PANEL-3');
+    assert.equal(await detail.locator('.readiness-list').count(), 0, 'The review detail starts without a Readiness row');
+    assert.deepEqual(await detail.locator('.task-delivery-relation').allTextContents(), ['PANEL-1'], 'The review detail shows PANEL-1 as its Blocked by link');
+    await detail.locator('[role="tab"][data-tab="comments"]').click();
+    const commentFooter = detail.locator('.task-action-footer[data-footer-tab="comments"]');
+    await commentFooter.getByRole('button', { name: 'comment', exact: true }).click();
+    const form = commentFooter.locator('.comment-form');
+    const draft = 'Unsent draft through the backlog transition.';
+    await form.locator('textarea').fill(draft);
+    await detail.locator('[role="tab"][data-tab="overview"]').click();
+    await page.evaluate(() => {
+      globalThis.panelFixture.readiness = [{
+        task_id: 'PANEL-3', status: 'backlog', eligible: false, reason: 'unmet_dependency',
+        dependencies: [{ task_id: 'PANEL-1', status: 'backlog' }],
+      }];
+    });
+    await detail.locator('.task-status-select').first().selectOption('backlog');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.some(patch => patch.id === 'PANEL-3' && patch.body.status === 'backlog'));
+    await page.waitForFunction(() => globalThis.panelFixture.reads.some(read => read.includes('/api/workflows/auto/readiness?task=PANEL-3')));
+    await page.waitForTimeout(500);
+    const visible = await detail.evaluate(node => ({
+      relations: Array.from(node.querySelectorAll('.task-delivery-relation')).map(button => button.textContent),
+      dependencies: Array.from(node.querySelectorAll('.readiness-dependency a')).map(link => link.textContent),
+      readinessLists: node.querySelectorAll('.readiness-list').length,
+    }));
+    assert.equal(
+      [...visible.relations, ...visible.dependencies].filter(id => id === 'PANEL-1').length, 1,
+      `PANEL-1 stays visible exactly once after the backlog transition: ${JSON.stringify(visible)}`,
+    );
+    await capture(page, 'task-detail-blocked-by-draft-after-dark-1440.png');
+    await page.setViewportSize({ width: 375, height: 812 });
+    await capture(page, 'task-detail-blocked-by-draft-after-dark-375.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await detail.locator('[role="tab"][data-tab="comments"]').click();
+    assert.equal(await form.locator('textarea').inputValue(), draft, 'The backlog transition and readiness response preserve the comment draft');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.draftPreservedBacklogDependency = true;
+  }
+
+  // Regression from keeps each link's own classification beside its id, with
+  // that link's sites under it; a bare link and other relation types stay plain.
+  for (const width of [1440, 375]) {
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    await row(page, 'PANEL-10').scrollIntoViewIfNeeded();
+    await row(page, 'PANEL-10').locator('.title').click();
+    await waitShown(page, 'PANEL-10');
+    const detail = pane(page).locator('#detail-PANEL-10');
+    const regressionRow = detail.locator('.property-row.relation[data-relation="regression_from"]');
+    await regressionRow.waitFor({ state: 'visible' });
+    assert.equal(await regressionRow.locator('.label').textContent(), 'regression from');
+    const entries = regressionRow.locator('.regression-entry');
+    assert.equal(await entries.count(), 3, 'Each regression_from target keeps its own entry');
+    const firstHead = entries.nth(0).locator('.regression-head');
+    assert.match(await firstHead.innerText(), /PANEL-1/, 'The classified link keeps its id');
+    assert.match(await firstHead.innerText(), /contract drift/, 'Nature renders as readable words, not the raw enum');
+    assert.match(await firstHead.innerText(), /escaped: no test/, 'Escape renders beside the id');
+    assert.match(await firstHead.innerText(), /severity: high \(verified\)/, 'Severity renders with who set it when not the filer');
+    assert.equal(await entries.nth(0).locator('.regression-sites').count(), 0, 'A classified link without sites adds no site list');
+    const secondHead = entries.nth(1).locator('.regression-head');
+    assert.match(await secondHead.innerText(), /PANEL-2/);
+    assert.match(await secondHead.innerText(), /broke existing/);
+    assert.match(await secondHead.innerText(), /severity: low\s*$/, 'A filer-rated severity renders alone');
+    assert.match(await secondHead.innerText(), /unclassified/, 'An unclassified escape still reads on the row');
+    const muted = entries.nth(1).locator('.regression-label.regression-unclassified');
+    assert.equal(await muted.count(), 1, 'Unclassified renders muted');
+    assert.equal(await muted.innerText(), 'unclassified');
+    results.taskPaneCleanup.find(result => result.width === width).sites = [];
+    const disclosure = entries.nth(1).locator('details.regression-sites');
+    assert.equal(await disclosure.getAttribute('open'), null, 'Sites start folded');
+    assert.equal(await disclosure.locator('summary').textContent(), '2 sites');
+    await disclosure.locator('summary').focus();
+    await page.keyboard.press('Enter');
+    assert.notEqual(await disclosure.getAttribute('open'), null, 'The dropdown opens by keyboard');
+    const sites = entries.nth(1).locator('.regression-site');
+    assert.equal(await sites.count(), 2, 'Each site lists under its own target');
+    for (const expected of ['file:crates/orbit-web/assets/dashboard/js/tasks.js', 'symbol:crates/orbit-web/assets/dashboard/js/tasks.js#relationTargets:function']) {
+      const site = sites.filter({ hasText: expected });
+      assert.equal(await site.count(), 1, `Site ${expected} renders once`);
+      assert.equal(await site.textContent(), expected, 'The complete selector is preserved');
+      const geometry = await site.evaluate(node => {
+        const style = getComputedStyle(node);
+        return { box: node.getBoundingClientRect().toJSON(), whiteSpace: style.whiteSpace,
+          overflow: style.overflowX, ellipsis: style.textOverflow, direction: style.direction,
+          clientWidth: node.clientWidth, scrollWidth: node.scrollWidth, fontFamily: style.fontFamily };
+      });
+      assert.equal(geometry.whiteSpace, 'normal', 'Full symbols wrap across lines');
+      assert.equal(geometry.overflow, 'visible');
+      assert.equal(geometry.ellipsis, 'clip');
+      assert.equal(geometry.direction, 'ltr');
+      assert.ok(geometry.scrollWidth <= geometry.clientWidth + 1, `Full site stays unclipped: ${JSON.stringify(geometry)}`);
+      assert.match(geometry.fontFamily, /mono/i, 'Sites render monospace');
+      results.taskPaneCleanup.find(result => result.width === width).sites.push({ expected, ...geometry });
+    }
+    const thirdHead = entries.nth(2).locator('.regression-head');
+    assert.equal(await thirdHead.locator('.task-delivery-relation').textContent(), 'PANEL-3', 'A bare link keeps only its id');
+    assert.equal((await thirdHead.innerText()).trim(), 'PANEL-3', 'A link without a regression object adds nothing extra');
+    assert.equal(await entries.nth(2).locator('.regression-label').count(), 0);
+    assert.equal(await entries.nth(2).locator('.regression-sites').count(), 0);
+    const relatedRow = detail.locator('.property-row.relation[data-relation="related_to"]');
+    await relatedRow.waitFor({ state: 'visible' });
+    assert.deepEqual(await relatedRow.locator('.task-delivery-relation').allTextContents(), ['PANEL-4'], 'Other relation types render as before');
+    assert.equal(await relatedRow.locator('.regression-label').count(), 0, 'Other relation types carry no classification');
+    assert.equal(await pane(page).evaluate(n => n.scrollWidth <= n.clientWidth), true, 'The pane has no horizontal overflow');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'The page has no horizontal scroll');
+    await capture(page, `task-detail-regression-sites-dark-${width}.png`);
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await page.evaluate(() => {
+      panelFixture.tasks.find(t => t.id === 'PANEL-10').relations[1].regression.sites = ['symbol:crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs#claims_run:function'];
+    });
+    await page.locator('#refresh-btn').click();
+    await row(page, 'PANEL-10').locator('.title').click();
+    await waitShown(page, 'PANEL-10');
+    await page.waitForFunction(() => document.querySelector('.regression-sites summary')?.textContent === '1 site');
+    const single = pane(page).locator('details.regression-sites');
+    assert.equal(await single.locator('summary').textContent(), '1 site');
+    await single.locator('summary').click();
+    const singleSite = single.locator('.regression-site');
+    assert.equal(await singleSite.textContent(), 'symbol:crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs#claims_run:function');
+    assert.equal(await singleSite.evaluate(n => n.scrollWidth <= n.clientWidth), true, 'A single full symbol also wraps without clipping');
+    await capture(page, `task-detail-regression-single-dark-${width}.png`);
+
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await pane(page).waitFor({ state: 'hidden' });
+    await row(page, 'PANEL-11').scrollIntoViewIfNeeded();
+    await row(page, 'PANEL-11').locator('.title').click();
+    await waitShown(page, 'PANEL-11');
+    const plainDetail = pane(page).locator('#detail-PANEL-11');
+    const plainRow = plainDetail.locator('.property-row.relation[data-relation="regression_from"]');
+    await plainRow.waitFor({ state: 'visible' });
+    assert.equal(await plainRow.locator('.regression-entry').count(), 2, 'Classified and bare links share one row without sites');
+    assert.equal(await plainRow.locator('.regression-sites').count(), 0, 'The row renders cleanly with no sites');
+    assert.match(await plainRow.locator('.regression-entry').nth(0).innerText(), /contract drift/);
+    assert.equal((await plainRow.locator('.regression-entry').nth(1).innerText()).trim(), 'PANEL-3');
+    await capture(page, `task-detail-regression-dark-${width}.png`);
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
+  // Every Regression from id still opens its task.
+  {
+    const { page, errors, context } = await openPage();
+    await row(page, 'PANEL-10').scrollIntoViewIfNeeded();
+    await row(page, 'PANEL-10').locator('.title').click();
+    await waitShown(page, 'PANEL-10');
+    for (const target of ['PANEL-1', 'PANEL-2', 'PANEL-3']) {
+      const detail = pane(page).locator('#detail-PANEL-10');
+      const link = detail.locator(`.property-row.relation[data-relation="regression_from"] .regression-entry .task-delivery-relation`, { hasText: target });
+      await link.click();
+      await waitShown(page, target);
+      assert.equal(await openParam(page), target, `${target} opens from its Regression from id`);
+      await row(page, 'PANEL-10').scrollIntoViewIfNeeded();
+      await row(page, 'PANEL-10').locator('.title').click();
+      await waitShown(page, 'PANEL-10');
+    }
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.regressionFromClassification = true;
+  }
+
+
+}
+
+async function checkDrainReadinessFailureStandIn() {
+  // A failed Drain poll carrying also_task keeps the last snapshot entry:
+  // the detail's Readiness row and the backlog row dot stand in until a
+  // later poll succeeds, instead of dropping to unknown.
+  {
+    const { page, errors, context } = await openPage({ url: '/?workspace=one&drain-actions#tasks', clock: true });
+    const id = 'PANEL-51';
+    await row(page, id).scrollIntoViewIfNeeded();
+    await row(page, id).locator('.title').click();
+    await waitShown(page, id);
+    await page.clock.fastForward(30_000);
+    await page.waitForFunction(id => panelFixture.reads.some(read => new URL(read, location.href).searchParams.get('also_task') === id), id);
+    const detail = pane(page).locator(`#detail-${id} .readiness-list`);
+    await detail.waitFor({ state: 'visible' });
+    await page.waitForFunction(id => document.querySelector(`#detail-${id} .readiness-list`)?.textContent.includes('Readiness after initial load'), id);
+    assert.equal(await row(page, id).locator('.ready-dot:not(.none)').count(), 1, 'The overflow backlog row shows its snapshot readiness dot before the failure');
+    await capture(page, 'drain-readiness-snapshot-before-dark-1440.png');
+
+    const readsBeforeFailure = await page.evaluate(() => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length);
+    await page.evaluate(() => { globalThis.panelFixture.failAlsoTaskReadiness = true; });
+    await page.clock.fastForward(30_000);
+    await page.waitForFunction(before => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length > before, readsBeforeFailure);
+    await page.waitForTimeout(300);
+    assert.match(await detail.innerText(), /Readiness after initial load/, 'A failed also_task read keeps the snapshot entry in the detail Readiness row');
+    assert.doesNotMatch(await detail.innerText(), /Drain readiness unknown/, 'A failed also_task read does not drop the detail to unknown while a snapshot entry stands in');
+    assert.equal(await row(page, id).locator('.ready-dot:not(.none)').count(), 1, 'A failed also_task read keeps the backlog row readiness dot');
+    await capture(page, 'drain-readiness-failed-stand-in-dark-1440.png');
+    await page.setViewportSize({ width: 375, height: 812 });
+    await capture(page, 'drain-readiness-failed-stand-in-dark-375.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const readsBeforeRecovery = await page.evaluate(() => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length);
+    await page.evaluate(() => { globalThis.panelFixture.failAlsoTaskReadiness = false; });
+    await page.clock.fastForward(60_000);
+    await page.waitForFunction(before => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length > before, readsBeforeRecovery);
+    await page.waitForTimeout(300);
+    assert.match(await detail.innerText(), /Readiness after initial load/, 'A successful poll after the failure keeps the snapshot entry in the detail');
+    assert.equal(await row(page, id).locator('.ready-dot:not(.none)').count(), 1, 'A successful poll after the failure keeps the backlog row readiness dot');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.drainReadinessFailureStandIn = true;
+    fs.writeFileSync(path.join(evidence, 'drain-readiness-failure-result.json'), JSON.stringify({ drainReadinessFailureStandIn: true }, null, 2));
+  }
+}
+
+try {
+  if (!process.argv.includes('--save-refresh')) await checkDrainActionReadiness({ openPage, row, pane, waitShown, capture, results, evidence });
+  if (!process.argv.includes('--save-refresh')) await checkDrainReadinessFailureStandIn();
+  if (!process.argv.includes('--drain-actions')) {
+    await checkTaskSaveRefresh({ openPage, row, pane, waitShown, capture, results, evidence });
+    if (!process.argv.includes('--save-refresh')) await checkTaskPanel();
+  }
   fs.writeFileSync(path.join(evidence, 'task-panel-result.json'), JSON.stringify({ passed: true, ...results }, null, 2));
   console.log('Dashboard task panel browser checks passed.');
 } finally {

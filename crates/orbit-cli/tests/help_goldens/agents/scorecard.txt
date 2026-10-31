@@ -8,42 +8,42 @@ Options:
           
           [possible values: orchestrators, implementers, reviewers, pilots]
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --window <WINDOW>
-          Count work in this period ending now
+          Count work in this period, or over the newest delivery attempts
           
           [default: 30d]
-          [possible values: 1h, 24h, 7d, 30d, 90d, all]
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
+          [possible values: 1h, 24h, 7d, 30d, 90d, all, last50, last200, last500, last1000]
 
       --min-support <MIN_SUPPORT>
           Units of work a row needs before it is ranked
           
           [default: 10]
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
+      --by-type
+          Show implementers split by task type within each tier
 
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
+      --shadow
+          Compare recorded draw shares with the shares the recorded factor would have given
 
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
+      --per-task
+          Export one row per implemented task for offline analysis
 
   -h, --help
           Print help (see a summary with '-h')
 
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
 The table shows each row's units, score and term counts; --json carries every rate per 100
 units and the term definitions. Follow a row to its tasks with
 `orbit agents show --role <role> --crew <crew>`.
+
+`--by-type --shadow` (implementers only) replaces the cell matrix with each crew's static,
+drawn and would-be share from recorded draws in the window.
+
+`--per-task` (implementers only) exports one row per implemented task for offline analysis;
+use --json for the machine-readable export.

@@ -7,6 +7,8 @@ use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 fn task(id: &str, title: &str) -> Task {
     let at = "2026-09-21T00:00:00Z".parse().expect("timestamp");
     Task {
+        granted_tools: Vec::new(),
+        requires_labels: Vec::new(),
         id: id.into(),
         title: title.into(),
         description: String::new(),
@@ -33,9 +35,12 @@ fn task(id: &str, title: &str) -> Task {
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
+        created_by_model: None,
         origin: None,
+        rule_fingerprint: None,
         created_at: at,
         updated_at: at,
+        not_before: None,
     }
 }
 

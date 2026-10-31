@@ -50,16 +50,27 @@ struct IdleHost;
 impl NullRuntimeHost for IdleHost {}
 
 fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
+    project_stdout("fixture", b"", false, stalled, timed_out)
+}
+
+fn project_stdout(
+    provider: &str,
+    stdout: &[u8],
+    exit_success: bool,
+    stalled: bool,
+    timed_out: bool,
+) -> crate::DispatchOutcome {
     let spec: AgentLoopSpec = serde_json::from_value(json!({})).expect("empty agent spec");
     let host = IdleHost;
     let input = json!({});
     let redaction = PatternRedactor::http_default();
     project_completion(ProviderExit {
+        agent_execution_id: None,
         host: &host,
         spec: &spec,
         input: &input,
         run_id: "run",
-        provider: "fixture".to_string(),
+        provider: provider.to_string(),
         model: None,
         task_ids: &[],
         worktree_boundary: None,
@@ -71,15 +82,15 @@ fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
         stdin_blob_ref: "stdin".to_string(),
         stdout_blob_ref: "stdout".to_string(),
         stderr_blob_ref: "stderr".to_string(),
-        stdout: CapturedOutput::empty(),
+        stdout: CapturedOutput::from_bytes(stdout),
         stderr: CapturedOutput::empty(),
-        exit_code: None,
+        exit_code: exit_success.then_some(0),
         duration: Duration::from_millis(700),
         timed_out,
         stalled,
         stall_window: Duration::from_secs(30),
         print_timeout: None,
-        codex_home: None,
+        usage_context: Default::default(),
         build_budget_waits: BuildBudgetWaits::default(),
     })
     .expect("project a provider exit")
@@ -111,4 +122,48 @@ fn a_stalled_provider_fails_transient_without_a_wall_clock_timeout() {
             assert!(!error.is_non_retryable());
         }
     }
+}
+
+// A slice stream reader stops at its first parse error, so an undecodable
+// stdout line used to hide the terminal failure frame behind it.
+#[test]
+fn a_terminal_failure_frame_is_classified_after_an_undecodable_stdout_line() {
+    let limit = r#"{"type":"result","is_error":true,"result":"You've hit your usage limit"}"#;
+    let auth =
+        r#"{"type":"result","is_error":true,"api_error_status":401,"result":"Invalid API key"}"#;
+    let refusal =
+        r#"{"type":"result","is_error":false,"stop_reason":"refusal","result":"declined"}"#;
+    let mut failures = Vec::new();
+    for noise in [
+        "",
+        "not json at all",
+        r#"{"type":"assistant","text":"\ud83d"}"#,
+        "{",
+        r#"{"partial":"#,
+    ] {
+        for (frame, expected, marker) in [
+            (limit, "usage limit", "[provider_limit]"),
+            (
+                auth,
+                "authentication failure (HTTP 401)",
+                "[provider_unavailable]",
+            ),
+            (refusal, "declined", "[provider_refusal]"),
+        ] {
+            let multiline = serde_json::to_string_pretty(
+                &serde_json::from_str::<serde_json::Value>(frame).expect("terminal frame"),
+            )
+            .expect("multiline terminal frame");
+            for frame in [frame, multiline.as_str()] {
+                let stdout =
+                    format!("{{\"type\":\"assistant\",\"text\":\"working\"}}\n{noise}\n{frame}\n");
+                let outcome = project_stdout("claude", stdout.as_bytes(), true, false, false);
+                let message = outcome.message.unwrap_or_default();
+                if outcome.success || !message.contains(expected) || !message.contains(marker) {
+                    failures.push(format!("{noise} / {frame}: {message}"));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

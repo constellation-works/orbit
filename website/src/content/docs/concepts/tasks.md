@@ -1,6 +1,6 @@
 ---
 title: Tasks
-description: "How Orbit models durable work: statuses, the two approval gates, transition rules, and acceptance criteria."
+description: "How Orbit models durable work: statuses, the two approval gates, transition rules, acceptance criteria, and task artifacts."
 sidebar:
   order: 2
 ---
@@ -14,9 +14,24 @@ notes, and history. Its bundle lives under
 
 Every task needs an observable outcome. Don't file one as a scratch note.
 
+The dashboard also shows estimated regression riskiness from task size and
+completed-task history. Before a diff exists, size is the declared path
+count; in review or done, a resolvable diff supplies the changed-line count.
+Insufficient history is shown as no estimate.
+
 A task can also declare `required_tools`: Orbit tools its agent needs beyond
 the activity's baseline. They are fixed at creation; see
-[Transition rules](#transition-rules).
+[Transition rules](#transition-rules). An operator can also grant named
+read-safe tools to the implementer through `granted_tools`. A grant can be
+changed while the task is `proposed`, `backlog` or `someday` when no live run,
+protecting claim or preserved worktree remains; after a stopped attempt,
+requeue the task and remove its preserved worktree before changing the grant
+for a new attempt; see [Task tool grants](#task-tool-grants). The implementer
+lifts that tool's deny entry, a mutating tool stays denied, and a non-empty
+grant keeps the task on its owner host.
+
+A task can also name the tasks it waits on and link to related work. See
+[Dependencies and relations](#dependencies-and-relations).
 
 ## Lifecycle
 
@@ -136,6 +151,272 @@ dashboard's status menu, which asks you to confirm first. Both record a
 Friction reports are separate records under `orbit friction`, not task
 statuses.
 
+## Dependencies and relations
+
+A task can wait on other tasks and record how it relates to them. Dependencies are
+the only relation that decides when a task starts. The other kinds record lineage and
+cross-references, and never hold a task back.
+
+Use a dependency when one task must reach `done` before another can start. Use a
+relation to record where follow-up or regression work came from, to link related work,
+or to have a task close a friction when it finishes. Dependencies resolve inside the
+workspace: a task ID that names a task in another workspace counts as missing here.
+
+### Set dependencies from the CLI
+
+`--dependencies` takes task IDs. Repeat the flag or comma-separate the IDs. `task add`
+sets them at creation, and `task update` replaces the whole list:
+
+```bash
+orbit task add --title "Publish the API docs" --complexity low \
+  --dependencies "$API_TASK_ID,$SCHEMA_TASK_ID"
+
+orbit task update "$TASK_ID" --dependencies "$API_TASK_ID,$SCHEMA_TASK_ID"
+orbit task show "$TASK_ID" --fields dependencies,resolved_dependencies
+```
+
+The update replaces the list. To add one dependency, read the current list and send
+every ID you want to keep. An empty string clears the list:
+
+```bash
+orbit task update "$TASK_ID" --dependencies ""
+```
+
+Orbit refuses a task that depends on itself and an edge that closes a dependency cycle;
+the error names the cycle. An ID that names no task is accepted, and the dependency is
+then reported as missing at admission (see [Admission](#admission)).
+
+### Typed relations
+
+The `relations` field is an array of `{type, target}` objects. It is available on
+`orbit.task.add` and `orbit.task.update`, and the CLI has no flag for it. A relation
+points from the task that holds it to its target: a `blocked_by` relation from task A
+to task B means A waits for B.
+
+`relations` replaces the whole list, every kind included, so the replacement must carry
+each relation you want to keep, `blocked_by` among them. Don't send `dependencies` and
+`relations` in the same update. Orbit applies `relations` last, so it overwrites the
+dependency edges. To update only dependencies, use `dependencies` alone.
+
+```json
+{
+  "id": "<task-id>",
+  "relations": [
+    { "type": "blocked_by", "target": "<task-id>" },
+    { "type": "spawned_from", "target": "<task-id>" },
+    { "type": "resolves", "target": "<friction-id>" }
+  ]
+}
+```
+
+Orbit refuses a duplicate `type` and `target` pair, a relation to the task itself, and
+a cycle in `blocked_by` or `child_of`. A `regression` object is accepted only on
+`regression_from`.
+
+The current kinds, each pointing from this task to its target:
+
+- `blocked_by` (task): this task waits for the target to reach `done`. It is the only
+  kind that gates a start. Set it with `--dependencies` or `relations`.
+- `child_of` (task): the target is this task's parent. It organizes work and doesn't gate
+  a start. Set it with `add --parent` or `relations`.
+- `spawned_from` (task): this follow-up was filed from the target. Orbit sets it on
+  follow-up tasks it files. Set it with `relations`.
+- `regression_from` (task): the target introduced the defect this task fixes. Set it with
+  `add --source-task`, `source_task_id` on update, or `relations`.
+- `supersedes` (task): this task replaces the target. Orbit sets it when a sweep
+  consolidates tasks. Set it with `relations`.
+- `related_to` (task): a plain cross-reference. Set it with `relations`.
+- `covered_by` (task ID, or `github-pr:<number>` or `github-pr:<pull request URL>`): the
+  target handles this task's failure. Set it with `relations`.
+- `produces` (task or friction ID): this task produced the target. No shipped workflow
+  writes it. Set it with `relations`.
+- `resolves` (friction ID): reaching `done` closes that friction. Set it with `relations`.
+
+`regression_from` takes an optional `regression` classification: `nature` is one of
+`broke_existing`, `defect_in_new`, `incomplete`, `merge_reintroduced`, `contract_drift`
+or `unclassified`, and `escape` is one of `no_test`, `test_not_selected`,
+`platform_only`, `review_missed`, `spec_ambiguous`, `nondeterministic` or
+`unclassified`. `severity` rates how much the defect matters on the five-level
+scale review findings use — `critical`, `high`, `medium`, `low` or `nit` — and a
+new classified link without one is refused. Every link reads back with
+`severity_source`: `filer` (set by the writer, the default), `verified`
+(finding verification confirmed or adjusted it), `operator` (an operator
+override), `backfill` (a backfill of older links) or `default` (stored before
+severity existed; reads as `medium`). Read a task's relations back with
+`orbit task show "$TASK_ID" --fields relations`.
+
+A regression in delivered work gets a new task with a `regression_from` relation to the
+task that introduced it. The original stays closed, as [Transition rules](#transition-rules)
+explains.
+
+### Admission
+
+A task starts only when every `blocked_by` target is `done`. An archived target counts as
+done if it reached `done` before it was archived. A task whose targets are not yet done
+waits in the backlog. `orbit run readiness <task-id>` explains what it is waiting for.
+
+Some targets can't reach `done` by waiting: a task that does not exist in this workspace,
+an archived task that never completed, or a rejected task. Run admission reports these as
+`task.dependencies.unsatisfiable` instead of waiting. Restore the target, reopen it, or
+remove its ID from `--dependencies`.
+
+Only dispatch holds a task back. A manual `orbit task update --status in-progress` isn't
+checked against the task's dependencies, so unmet dependencies don't refuse it.
+
+A task can also set an optional `not_before` earliest start. While it is in
+the future, dispatchers hold a backlog task as scheduled without changing its
+status. The hold lifts on the first admission pass after that time; approval,
+dependencies and other admission checks still apply. An operator's explicit
+`orbit run ship <id> --ignore-schedule` can start named tasks early and records
+the override in history. See [Scheduled tasks](../scheduling/#scheduled-tasks)
+for setting, clearing and listing schedules.
+
+### Friction resolution
+
+Friction records live under `orbit friction`, outside the task lifecycle. A task closes
+the frictions it names when it reaches `done`:
+
+- A `resolves` relation names a friction, and reaching `done` closes it. Only relations
+  set through the tool can name one. From the CLI, close a friction with
+  `orbit friction resolve <friction-id>`. Friction IDs have the form `FYYYY-MM-NNN`.
+- A task that reaches `done` through a landed pull request also closes the frictions
+  named in its description or acceptance criteria. A manual move to `done` reads only
+  the `resolves` relations, not the text.
+- A friction that is already resolved stays resolved. Updating a task that is already
+  `done` doesn't resolve again.
+- Only frictions in this workspace close. A `resolves` target that lives in another
+  workspace refuses the move to `done`, and the error names the friction and where it
+  lives. Remove that relation, or resolve the friction in its own workspace.
+- A friction ID that matches no record is not refused. Orbit records a dangling-relation
+  event, and the task still reaches `done`.
+
+## Task tool grants
+
+An operator can grant a task a tool that the implementing activity's deny
+list would otherwise exclude. Use a grant when the task needs a reviewed
+operation, not to give an agent operator authority. `required_tools` is a
+separate, immutable list of tools the task needs in its activity baseline;
+it does not override a deny list. See [Agent tool lists](../../reference/activity-job-yaml/#agent-tool-lists).
+
+In an operator session on the owner host, inspect the task and the tool's
+schema first. For example, a grant for a reviewed auto-task update can be set
+before dispatch:
+
+```bash
+orbit tool show orbit.auto_task.update
+orbit task update "$TASK_ID" --granted-tools orbit.auto_task.update
+orbit task show "$TASK_ID"
+```
+
+`orbit task add` also accepts `--granted-tools`. Supply exact canonical,
+registered, enabled, agent-facing names; wildcards, disabled tools and
+operator-only tools are refused. An update replaces the whole grant list;
+`--granted-tools ""` clears it. Only an operator may supply the field, even
+to clear it. Changes are allowed while the task is `proposed`, `backlog` or
+`someday`, with no live run, protecting claim or worktree. A preserved
+candidate's worktree keeps the grant frozen after its run stops; requeue and
+remove that worktree before changing the grant for a new attempt. The write
+that starts a task cannot also change its grant. Task history records changes.
+
+Only `agent_implement` reads grants; reviewers, recovery and other activities
+do not. A grant can lift an exact deny entry only for a tool classified
+read/repeat-safe; a covering wildcard still refuses admission. All tools in
+the shipped implementer's deny list are currently classified mutating, and
+unclassified tools default to mutating. A mutating grant stays denied for
+live calls. Adding the same denied mutation to `required_tools` still
+refuses implementer admission. Grants do not bypass capability, field-level,
+filesystem, process or other runtime checks. A task with any grant runs on
+the owner host; if its required labels or OS exclude that host, it waits
+even if a follower has the right labels.
+
+For a grantable mutation, the implementer attaches a JSON task artifact at
+`mutation-proposals/<name>.json` using `orbit.task.artifact.put`. Its content
+names the granted tool, exact input and a nonempty rationale:
+
+```json
+{"tool": "orbit.auto_task.update", "input": {"name": "<auto-task>", "description": "<updated description>"}, "rationale": "Explain why this change is needed."}
+```
+
+Use the tool schema to choose valid input for the intended change. Orbit
+refuses a proposal unless the task grants a grantable mutation and an agent
+session can make that exact call. It derives an idempotency key from the
+task, tool and input. The review gate presents the proposal alongside the
+diff; after approval the pipeline rechecks and applies the reviewed input,
+then writes a system-owned `mutation-receipts/<key>.json` receipt. An applied
+key is not applied twice; changed input needs a new review. A failed or
+unreviewed proposal stops delivery, and an interrupted pending receipt needs
+operator reconciliation. A task cannot complete with an unapplied proposal.
+If the agent needs the change during its run, arrange an operator action or
+prerequisite task instead.
+
+## File reservations
+
+Orbit locks files for you while tasks run. A task holds the files its selectors
+cover while it is `in-progress` or `review`, and a task that overlaps those
+files waits. These task footprint locks are automatic, and you don't manage them.
+
+Reserve a surface yourself when work runs outside the pipeline and needs the
+same protection: an editor session, a manual migration, a long refactor. A
+reservation is all or nothing. Orbit grants the whole surface or grants nothing,
+and a denial exits 3 and names who holds the overlap.
+
+```bash
+orbit task locks reserve \
+  --task <TASK_ID>
+
+orbit task locks reserve \
+  --file dir:src/billing \
+  --ttl 2h
+
+orbit task locks reserve \
+  --file file:README.md,dir:docs \
+  --ttl 45m --json
+```
+
+- `--task` reserves the task's declared context surface, expanded the way
+  conflict admission expands it.
+- `--file` takes `file:` or `dir:` selectors. Repeat the flag or comma-separate
+  selectors to claim several.
+- `--ttl` takes a duration such as `45m` or `2h`. It defaults to `30m`, and its
+  maximum is `4h`.
+- Selectors stay inside the workspace. Symbol, module and command selectors are
+  refused.
+
+Reserving and releasing need the `operator` or `runner` capability, because a
+reservation blocks other work from its surface until it expires or is released.
+From a plain shell, prefix the command with `ORBIT_OPERATOR=1`.
+
+Reservations expire on their own. The TTL is the safety net if a session dies
+while holding one, so pick a TTL that covers the work. Once it passes, the
+reservation no longer blocks anything. Orbit clears expired reservations
+automatically.
+
+To release a reservation before its TTL, find its ID with
+`orbit task locks list --json` and pass `--confirm`. Release is an operator
+escape hatch for a stale reservation, so use it only when the session that holds
+it is gone.
+
+```bash
+orbit task locks release \
+  <reservation_id> --confirm
+```
+
+To see which files pending tasks collide on, run contention:
+
+```bash
+orbit task locks contention \
+  --limit 25
+```
+
+Contention counts pending backlog tasks only, not running ones. `TASKS` lists
+each selector that pending tasks overlap, and `GROUPS` counts clusters of linked
+tasks. Tasks in different groups never block each other, so the group count is a
+lower bound on how many tasks dispatch can admit at once, not an exact limit. A
+task that declares no selectors locks nothing and is counted apart.
+
+To see which waiting tasks these locks hold back, see
+[Check what will actually start](../../how-to/continuous-delivery/#3-check-what-will-actually-start).
+
 ## Quality bar
 
 A good task states:
@@ -144,6 +425,124 @@ A good task states:
 - where the change should happen
 - how to observe success
 - which files or selectors matter, when known
+
+## Task artifacts
+
+A task artifact is a file stored on the task, outside git, so you or an agent
+can open that evidence later. Use one for a note, a log, a check result, or a
+screenshot. The bytes live in the task bundle under
+`~/.orbit/tasks/workspaces/<workspace>/<task-id>`.
+
+There is no artifact-store setting. If a config file still sets
+`[task] artifact_store`, Orbit refuses to load it until you remove the key.
+Current task artifacts are always enabled.
+
+### Attach, list, and retrieve
+
+Write the file under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`). `put` reads that
+source file and stores a copy under a logical path on the task. Listing names
+comes from `orbit task show`, not from a separate artifact command. `get`
+prints text.
+
+```bash
+mkdir -p .orbit/tmp
+printf 'checked the build\n' > .orbit/tmp/notes.txt
+orbit task artifact put "$TASK_ID" .orbit/tmp/notes.txt --path evidence/notes.txt
+orbit task show "$TASK_ID" --fields artifacts
+orbit task artifact get "$TASK_ID" evidence/notes.txt
+```
+
+The source path and the logical path are not the same thing.
+
+- **Source path.** `<SOURCE_PATH>` is a file on disk. Orbit resolves it against
+  the current directory, not the checkout root, then confines it to the
+  workspace after resolving symlinks. A file outside the checkout, including
+  anything under `/tmp`, is refused. A file that exists only at the checkout
+  root is refused with the absolute path to pass.
+- **Logical path.** `--path` is the name stored on the task, relative to that
+  task's artifacts directory. It defaults to the source file's name. It is not
+  a filesystem path: an absolute path or `..` is rejected. `get` takes this
+  stored name, the same string `orbit task show <ID> --fields artifacts`
+  lists. The field is metadata only: path, media type, size, and who attached
+  the file when that was recorded. It does not include the bytes. There is no
+  list subcommand under `orbit task artifact`, only `put` and `get`.
+
+The media type comes from the file name. An unknown extension is stored as
+`application/octet-stream`.
+
+Attaching a file, and reading it back with `get` or
+`orbit.task.artifact.get`, both refuse more than 1 MiB (1,048,576 bytes). A
+file already stored on the task can still be downloaded from the dashboard
+when it is larger than that.
+
+A logical path that begins with `review-`, in any letter case, is reserved
+for the review gate. The only exception is the schema-checked
+`review-report.json`. Name ordinary evidence something else, such as
+`examination-checks.json`.
+
+`put` and `get` follow the task to the host its ID prefix names when you pass
+no `--workspace`. Pass `--workspace` to read or write a local mirror instead.
+See [Tasks](../../reference/cli/#tasks).
+
+For a short text payload with no file, on this machine:
+
+```bash
+orbit task update "$TASK_ID" --artifact evidence/notes.txt=checked
+```
+
+Repeat `--artifact` for more than one. That flag does not follow the task to
+another host. Write the bytes to a file and use `orbit task artifact put`,
+which does.
+
+### Binary files
+
+`get` prints text. An image or any other payload that is not printable text
+is not printed; the error tells you to save it with `--out`.
+
+```bash
+orbit task artifact put "$TASK_ID" .orbit/tmp/diagram.png --path screenshots/diagram.png
+orbit task artifact get "$TASK_ID" screenshots/diagram.png --out .orbit/tmp/diagram-out.png
+```
+
+`--out` writes the stored bytes to that file. It exists only on the CLI.
+
+### From an agent
+
+The MCP tools are `orbit.task.artifact.put` and `orbit.task.artifact.get`.
+Both run in the connected workspace.
+
+- `orbit.task.artifact.put` takes `id` and `source_path`, and an optional
+  `path` for the logical name. The same confinement, size, and reserved-name
+  rules apply. Pass `model` when you want that agent family recorded on the
+  write.
+- `orbit.task.artifact.get` takes `id` and `path` (the logical path). List
+  names first with `orbit.task.show` and `field` set to `artifacts`. An
+  optional `workspace` argument is a fail-closed filter: a workspace that does
+  not own the task is not found. There is no `out` argument.
+
+Text comes back as UTF-8 in `content` (`encoding` is `utf8`). Everything else
+comes back as base64 in `content_base64` (`encoding` is `base64`). Every read
+includes `media_type`, `size`, and `presentation`: `text`, `image`, or
+`opaque`.
+
+PNG, JPEG, GIF, and WebP are `image` only when the bytes match that type. A
+client that can show images then receives the picture as well as the base64.
+SVG, HTML, and any payload whose bytes do not match its declared type are
+`opaque`. They are never rendered. You can still save them with `--out`, or
+download them from the dashboard.
+
+### Dashboard
+
+Open the task and choose **Artifacts**. With nothing attached, the tab says
+"No artifacts attached." Each row shows the logical path, the media type, and
+the size. Expand a row to preview it.
+
+PNG, JPEG, GIF, and WebP are shown as images, with **Open** and **Download**.
+If the browser cannot decode one, the tab says the image could not be decoded
+and still offers the download. Plain text, CSV, JSON, and YAML are shown as
+text. HTML, SVG, Markdown, and other files are downloads, not rendered pages.
+The tab does not attach files. See
+[Use the Dashboard](../../how-to/dashboard/#tasks).
 
 ## Review layers
 
@@ -168,6 +567,14 @@ same effective state, use `orbit config show` or `orbit doctor`; the first two
 reviews show their time limit, and after-landing shows when its next batch is
 due. After-landing review is independent of the choice between before-PR and
 before-landing review.
+
+For bounded low-risk work, a workspace can map a task tag to skip all three
+agent review layers when every delivered task carries it, every changed path
+is allowed, and its optional guard passes. See
+[Review-skip tags](../../reference/config/#review-skip-tags) for configuration,
+tag authority and the guard contract. These profiles preserve required
+validation and hosted CI; the built-in `skip-review` and `skip-validation`
+tags have separate rules.
 
 ### Adding review to one run
 

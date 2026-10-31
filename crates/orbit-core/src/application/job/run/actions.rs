@@ -17,13 +17,13 @@ use orbit_types::workflow::activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };
 use orbit_types::workflow::{
-    ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState, RunStateUpdate,
-    TaskCancellationPolicy,
+    ChildCancellation, ChildCancellationPolicy, JobRun, JobRunState, PipelineState,
+    RunCancellationProvenance, RunStateUpdate, TaskCancellationPolicy,
 };
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::job::log_best_effort;
+use crate::application::job::{JobPullSettlementPort, log_best_effort};
 
 use super::owner::signal_run_owner_process;
 #[cfg(unix)]
@@ -142,21 +142,19 @@ impl OrbitRuntime {
     /// The settle-only pass a cancellation owes: every pending settlement
     /// when a pull drain was cancelled, the leaf's own when a claimed leaf
     /// was. A run that is neither reads nothing from the owner.
-    fn pull_settlements_after_cancel(
+    pub(super) fn pull_settlements_after_cancel(
         &self,
         run_id: &str,
-    ) -> Vec<crate::application::distributed::PullSettlementEntry> {
+    ) -> Vec<crate::application::contracts::PullSettlementEntry> {
         let is_pull_drain = self
             .get_job_run_backend(run_id)
             .ok()
             .flatten()
-            .is_some_and(|run| run.job_id == crate::application::distributed::PULL_DRAIN_JOB);
+            .is_some_and(|run| run.job_id == crate::application::contracts::PULL_DRAIN_JOB);
         if is_pull_drain {
-            return self.settle_pending_pulls();
+            return self.settle_workspace_pulls();
         }
-        self.deliver_claimed_leaf_settlement(run_id)
-            .into_iter()
-            .collect()
+        self.deliver_leaf_settlement(run_id).into_iter().collect()
     }
 
     pub(super) fn cancel_job_run_cascading<F>(
@@ -211,11 +209,13 @@ impl OrbitRuntime {
             reason,
             request.block_task,
         )?;
+        let provenance = RunCancellationProvenance::new(request.actor, request.source, reason);
         self.persist_task_cancellation_policy(
             &run,
             TaskCancellationPolicy {
                 block: request.block_task,
-                note: cancellation_note(request.actor, reason),
+                note: cancellation_note(&provenance.actor, provenance.reason.as_deref()),
+                provenance: Some(provenance),
             },
         )?;
         let signal_attempted = run.state == JobRunState::Running && run.pid.is_some();
@@ -509,7 +509,7 @@ impl OrbitRuntime {
         )
     }
 
-    fn persist_task_cancellation_policy(
+    pub(super) fn persist_task_cancellation_policy(
         &self,
         run: &JobRun,
         policy: TaskCancellationPolicy,
@@ -695,7 +695,7 @@ impl OrbitRuntime {
     /// Cascading is best effort. A child that already terminalized, or that
     /// refuses cancellation, is recorded as such and never blocks the parent's
     /// own cancellation from completing.
-    fn settle_child_dispatches_on_cancel(
+    pub(super) fn settle_child_dispatches_on_cancel(
         &self,
         run: &JobRun,
         request: CancellationRequest<'_>,

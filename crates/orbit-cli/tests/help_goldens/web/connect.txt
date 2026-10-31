@@ -10,9 +10,6 @@ Options:
       --port <PORT>
           Local port for the tunnel. Defaults to 7878, falling back to an ephemeral port if 7878 is already in use
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --remote-port <REMOTE_PORT>
           Port the remote `orbit web serve` listens on (remote loopback)
           
@@ -30,21 +27,11 @@ Options:
       --no-operator
           Spawn the remote dashboard without operator capability. Operations controls stay read-only. The default is to pass `--operator` because the SSH login is the operator act
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --format <MODE>
+  --json
+  --header

@@ -25,18 +25,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
-use orbit_types::identity::Crew;
 use orbit_types::workflow::{
     JobRun, JobRunState, PipelineState, ProviderFailureClass, failed_account, failed_provider,
-    provider_account_label,
 };
 
-use super::PULL_DRAIN_JOB;
-use super::auth_failures::{SCAN_LIMIT, canonical_provider, clearing_at, host_of, run_at};
+use super::auth_failures::{SCAN_LIMIT, clearing_at, host_of, run_at};
 use crate::OrbitRuntime;
+use crate::application::contracts::{HostProviderHold, PULL_DRAIN_JOB, canonical_provider};
 use crate::runtime::task::provider_hold::base_backoff;
 
 /// One hour of run recency: finish time, else start time, else creation time.
@@ -44,51 +42,6 @@ use crate::runtime::task::provider_hold::base_backoff;
 /// time keeps recent failures and clearing successes regardless of how long
 /// their pipelines ran or waited before starting.
 const LOOKBACK: Duration = Duration::hours(1);
-
-/// One standing unavailable or capacity hold on this host.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HostProviderHold {
-    pub(crate) class: ProviderFailureClass,
-    /// Canonical provider (`claude`, `codex`).
-    pub(crate) provider: String,
-    /// The crew account that failed, when the failure named one; `None` is
-    /// the provider's default login.
-    pub(crate) account: Option<String>,
-    /// `None` covers every crew of `provider` on `account`. A capacity hold
-    /// names the run's crew when that crew's provider is the one that failed.
-    pub(crate) crew: Option<String>,
-    pub(crate) not_before: DateTime<Utc>,
-    pub(crate) run_id: String,
-}
-
-impl HostProviderHold {
-    /// Whether `crew` is excluded at `now`.
-    pub(crate) fn covers(&self, crew: &Crew, now: DateTime<Utc>) -> bool {
-        if now >= self.not_before {
-            return false;
-        }
-        if canonical_provider(&crew.assignment.provider) != self.provider {
-            return false;
-        }
-        match self.crew.as_deref() {
-            Some(name) => name == crew.name,
-            None => crew.account() == self.account.as_deref(),
-        }
-    }
-
-    /// `provider_unavailable <subject> until <time> (<run>)`. The subject is
-    /// the crew when the hold names one, otherwise the provider account.
-    pub(crate) fn detail(&self) -> String {
-        let account = provider_account_label(&self.provider, self.account.as_deref());
-        let subject = self.crew.as_deref().unwrap_or(account.as_str());
-        let until = self.not_before.to_rfc3339_opts(SecondsFormat::Secs, true);
-        format!(
-            "{} {subject} until {until} ({})",
-            self.class.as_str(),
-            self.run_id
-        )
-    }
-}
 
 #[derive(Clone)]
 struct OpenFailure {
@@ -127,10 +80,19 @@ impl OrbitRuntime {
         let since = now - LOOKBACK;
         let fallback = self.fallback_host();
         let aliases = self.host_aliases(&fallback);
-        let failures = self
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&hold_query(JobRunState::Failed, since, true))?
+        let mut stopped_runs = self.stores().jobs().list_job_runs_filtered(&hold_query(
+            JobRunState::Failed,
+            since,
+            true,
+        ))?;
+        // Capacity runs now end held. Keep reading failed runs too, both for
+        // unavailability and for capacity recorded by older executors.
+        stopped_runs.extend(self.stores().jobs().list_job_runs_filtered(&hold_query(
+            JobRunState::Held,
+            since,
+            true,
+        ))?);
+        let failures = stopped_runs
             .into_iter()
             .filter(|run| on_this_host(run, &aliases, &fallback))
             .filter_map(|run| {

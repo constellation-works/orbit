@@ -1,0 +1,128 @@
+//! What task writes and the crew pools agree on about a crew draw: the
+//! candidates a draw weighs, the assignment and provenance a task records,
+//! and the provenance prefixes and markers that classify it.
+
+use orbit_types::identity::Crew;
+use orbit_types::task::TaskComplexity;
+use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
+
+/// Prefix of the provenance a task records when its crew was drawn from its
+/// purpose's pool, as `purpose:<purpose>`.
+pub(crate) const PURPOSE_SOURCE_PREFIX: &str = "purpose:";
+
+/// Prefix of the provenance a task records when its crew was drawn from its
+/// type's pool, as `type:<type>/<tier>`
+/// (`workflow.type_complexity_crews.<type>.<tier>`).
+pub(crate) const TYPE_SOURCE_PREFIX: &str = "type:";
+
+/// The provenance a draw from `task_type`'s pool at `tier` records.
+pub(crate) fn type_crew_source(task_type: &str, tier: TaskComplexity) -> String {
+    format!("{TYPE_SOURCE_PREFIX}{task_type}/{tier}")
+}
+
+/// The type and tier a `type:<type>/<tier>` source names, or `None` for any
+/// other source.
+pub(crate) fn parse_type_crew_source(source: &str) -> Option<(&str, TaskComplexity)> {
+    let (task_type, tier) = source.strip_prefix(TYPE_SOURCE_PREFIX)?.rsplit_once('/')?;
+    let tier = tier.parse::<TaskComplexity>().ok()?;
+    (!task_type.is_empty() && tier.is_assessed()).then_some((task_type, tier))
+}
+
+/// Prefix of the provenance admission writes back when an experiment arm's
+/// crew overlay chose the crew that runs, as `experiment:<id>/<arm>`.
+pub(crate) const EXPERIMENT_SOURCE_PREFIX: &str = "experiment:";
+
+/// Prefix of the provenance admission writes back when it ran a task on a
+/// crew other than the one recorded, as `redraw:<reason>`: a provider hold
+/// or limit, a pool draw, an explicit run crew, or a claimed leaf's own draw.
+pub(crate) const REDRAW_SOURCE_PREFIX: &str = "redraw:";
+
+/// The provenance the one-time backfill records on a task whose crew it set
+/// from the task's latest delivery run.
+pub(crate) const BACKFILL_CREW_SOURCE: &str = "backfill:admission";
+
+/// The provenance an experiment arm's crew overlay writes back.
+pub(crate) fn experiment_crew_source(experiment: &str, arm: &str) -> String {
+    format!("{EXPERIMENT_SOURCE_PREFIX}{experiment}/{arm}")
+}
+
+/// Prefix of the task comment that records a provider-limit reassignment of
+/// an auto-task's explicit crew [ORB-17638].
+pub(crate) const PROVIDER_LIMIT_REASSIGNMENT_PREFIX: &str = "Provider-limit reassignment:";
+
+/// Whether `tags` mark a task minted by an auto-task (`auto-task:<name>`).
+pub(crate) fn auto_task_minted(tags: &[String]) -> bool {
+    tags.iter().any(|tag| {
+        tag.strip_prefix("auto-task:")
+            .is_some_and(|name| !name.is_empty())
+    })
+}
+
+/// Whether `source` is a system assignment — a purpose pool, a type pool, a
+/// complexity pool, the default, or an admission write-back — rather than an
+/// explicit pin or a legacy crew with no assignment evidence.
+pub(crate) fn automatic_crew_source(source: &str) -> bool {
+    source == "default"
+        || source.starts_with("pool:")
+        || source.starts_with(PURPOSE_SOURCE_PREFIX)
+        || source.starts_with(TYPE_SOURCE_PREFIX)
+        || admission_crew_source(source)
+}
+
+/// Whether `source` records a crew admission wrote back for one delivery
+/// ([`EXPERIMENT_SOURCE_PREFIX`], [`REDRAW_SOURCE_PREFIX`],
+/// [`BACKFILL_CREW_SOURCE`]). Such a crew is the latest delivery's, not a
+/// standing assignment: the next admission draws the task's pool again
+/// instead of keeping it.
+pub(crate) fn admission_crew_source(source: &str) -> bool {
+    source.starts_with(EXPERIMENT_SOURCE_PREFIX)
+        || source.starts_with(REDRAW_SOURCE_PREFIX)
+        || source == BACKFILL_CREW_SOURCE
+}
+
+/// Crew chosen for a task at creation, with the provenance its history entry
+/// records: `explicit`, `purpose:<purpose>`, `type:<type>/<tier>`,
+/// `pool:<complexity>`, or `default` [ORB-12717].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CreationCrewAssignment {
+    pub(crate) crew: String,
+    pub(crate) source: String,
+}
+
+/// One crew a task may be admitted to, with the tickets it holds in the draw.
+/// A crew chosen outside a pool — explicit, `task.crew`, or the default chain —
+/// is the only candidate and holds a single ticket.
+#[derive(Debug, Clone)]
+pub(crate) struct CrewCandidate {
+    pub(crate) crew: Crew,
+    pub(crate) weight: u32,
+}
+
+/// A selected crew and the exact eligible weights used for this draw.
+pub(crate) struct CrewPoolDraw {
+    pub(crate) crew: Crew,
+    pub(crate) source: String,
+    pub(crate) eligible_pool: Vec<ActivityCrewPoolMember>,
+}
+
+impl CrewPoolDraw {
+    pub(crate) fn into_activity_draw(self) -> ActivityCrewDraw {
+        ActivityCrewDraw {
+            crew: self.crew.name,
+            source: self.source,
+            eligible_pool: self.eligible_pool,
+        }
+    }
+}
+
+/// The members of one complexity pool that can inspect pinned source natively
+/// [ORB-15792]: the first tier, from the one asked for upward, whose enabled
+/// pool has such a member with a positive weight.
+pub(crate) struct InspectionPool {
+    /// The tier the members were drawn from.
+    pub(crate) tier: TaskComplexity,
+    pub(crate) candidates: Vec<CrewCandidate>,
+    /// Enabled members passed over, in this tier and the ones below it,
+    /// because their provider has no native inspection surface.
+    pub(crate) skipped: Vec<String>,
+}

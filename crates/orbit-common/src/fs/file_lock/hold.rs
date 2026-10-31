@@ -45,7 +45,7 @@ impl HoldReport {
         }
     }
 
-    pub(super) fn report(&self) {
+    pub(super) fn report(self) {
         let held = self.acquired.elapsed();
         let breakdown = HOLD_STEPS.with(|steps| {
             let mut steps = steps.borrow_mut();
@@ -57,21 +57,89 @@ impl HoldReport {
             }
             breakdown
         });
-        let Some(breakdown) = breakdown else {
-            return;
-        };
+        if let Some(breakdown) = breakdown {
+            HOLD_STEPS.with(|steps| {
+                steps.borrow_mut().reports.push(FinishedHoldReport {
+                    hold: self,
+                    held,
+                    breakdown,
+                });
+            });
+        }
+        emit_released_hold_reports();
+    }
+}
+
+struct FinishedHoldReport {
+    hold: HoldReport,
+    held: Duration,
+    breakdown: HoldBreakdown,
+}
+
+impl FinishedHoldReport {
+    fn emit(self) {
+        let Self {
+            hold,
+            held,
+            breakdown,
+        } = self;
         crate::tracing::warn!(
             target: "orbit.common.fs.file_lock",
-            lock_path = %self.lock_path.display(),
-            label = %self.label,
-            mode = if self.exclusive { "exclusive" } else { "shared" },
+            lock_path = %hold.lock_path.display(),
+            label = %hold.label,
+            mode = if hold.exclusive { "exclusive" } else { "shared" },
             held_ms = duration_millis(held),
-            threshold_ms = duration_millis(self.warn_after),
+            threshold_ms = duration_millis(hold.warn_after),
             slowest_step = %breakdown.slowest,
             slowest_step_ms = duration_millis(breakdown.slowest_time),
             steps = %breakdown.steps,
             "advisory file lock held past its threshold",
         );
+    }
+}
+
+/// Defer release reports until the outermost report scope closes.
+///
+/// The closure and held-path helpers [`crate::fs::io::with_exclusive_file_lock`],
+/// [`crate::fs::io::with_exclusive_file_lock_options`],
+/// [`crate::fs::io::with_exclusive_file_lock_named_options`],
+/// [`crate::fs::io::with_shared_file_lock`],
+/// [`crate::fs::io::with_shared_file_lock_options`] and
+/// [`crate::fs::io::hold_exclusive_file_lock_options`] enter a scope through
+/// `claim_lock_path`. The exact-path direct-lock helper
+/// [`crate::fs::io::acquire_exclusive_file_lock_with_report_scope`] also opens
+/// one and drops its descriptor before the scope. Bare direct acquisition
+/// helpers do not open a report scope themselves. Even a scope without a hold
+/// warning can enclose a reporting lock, so a synchronous tracing subscriber
+/// must not extend those critical sections.
+pub(crate) struct LockReportScope;
+
+impl LockReportScope {
+    pub(crate) fn enter() -> Self {
+        HOLD_STEPS.with(|steps| steps.borrow_mut().scopes += 1);
+        Self
+    }
+}
+
+impl Drop for LockReportScope {
+    fn drop(&mut self) {
+        HOLD_STEPS.with(|steps| steps.borrow_mut().scopes -= 1);
+        emit_released_hold_reports();
+    }
+}
+
+fn emit_released_hold_reports() {
+    let reports = HOLD_STEPS.with(|steps| {
+        let mut steps = steps.borrow_mut();
+        if steps.scopes == 0 && steps.open_holds == 0 {
+            std::mem::take(&mut steps.reports)
+        } else {
+            Vec::new()
+        }
+    });
+    // Leave the thread-local borrow before entering arbitrary subscriber code.
+    for report in reports {
+        report.emit();
     }
 }
 
@@ -83,6 +151,8 @@ thread_local! {
 
 #[derive(Default)]
 struct HoldSteps {
+    scopes: usize,
+    reports: Vec<FinishedHoldReport>,
     /// Reporting holds this thread has open. Steps are recorded only while
     /// one is, and forgotten once the last closes.
     open_holds: usize,
@@ -211,7 +281,10 @@ pub fn hold_step<T>(name: &'static str, op: impl FnOnce() -> T) -> T {
 
 /// Record a wait for `lock_path` as a step of the reporting holds this
 /// thread is inside. Waits too short to matter stay in the enclosing step.
-/// The wait precedes the lock's own hold, so only enclosing holds count it.
+/// The caller opens the lock's own hold before recording the wait, so that
+/// hold's step list gets the wait too. Its breakdown ignores the wait:
+/// `breakdown_since` keeps only steps that started at or after the hold was
+/// acquired, and the wait started before that.
 pub(super) fn record_lock_wait(lock_path: &Path, started: Instant) {
     let waited = started.elapsed();
     if waited < MIN_RECORDED_LOCK_WAIT {

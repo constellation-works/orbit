@@ -12,14 +12,14 @@ use chrono::{DateTime, Local, Utc};
 use orbit_cmd::registry_routines::{routine_status_input_paths, routine_statuses};
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
-    DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_TOGGLE, GovernedOperation,
-    authorize,
+    DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_TOGGLE,
+    DASHBOARD_ROUTINE_TRIGGER, GovernedOperation, authorize,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
     ClockHealth, ClockStatus, FireField, RoutineField, RoutineStatus, RoutineStatusReport,
     RoutineToggleOutcome, RoutineToggleRefusal, set_clock_cadence, set_clock_enabled,
-    toggle_listed_routine,
+    toggle_listed_routine, trigger_options,
 };
 use orbit_core::{AuditEventInsertParams, OrbitRuntime};
 use orbit_types::telemetry::AuditEventStatus;
@@ -529,6 +529,7 @@ pub(super) fn report_json(
         "controls_authorized": authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, operator_session).is_ok(),
         "capabilities": {
             "routine_toggle": action_capability(&DASHBOARD_ROUTINE_TOGGLE, operator_session),
+            "routine_trigger": action_capability(&DASHBOARD_ROUTINE_TRIGGER, operator_session),
             "job_run": action_capability(&DASHBOARD_JOB_RUN, operator_session),
             "clock_service": action_capability(&DASHBOARD_CLOCK_SERVICE, operator_session),
             "clock_cadence": action_capability(&DASHBOARD_CLOCK_CADENCE, operator_session),
@@ -550,6 +551,11 @@ pub(super) fn report_json(
 
 fn status_json(status: &RoutineStatus) -> Value {
     let mut row = status.project(ROUTINE_COLUMNS);
+    // The trigger kinds the edit form may offer without touching the target.
+    row.insert(
+        "trigger_options".into(),
+        json!(trigger_options(&status.routine)),
+    );
     if let Some(automation) = &status.automation {
         row.insert("automation".into(), super::automation::summary(automation));
     }

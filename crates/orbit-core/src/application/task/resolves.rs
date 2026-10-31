@@ -24,6 +24,7 @@ use serde_json::Value;
 
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 const RELATION_RESOLVES: &str = "resolves";
 /// Task history event recording that resolving one `resolves` target failed
@@ -55,6 +56,9 @@ impl OrbitRuntime {
         if task.status != TaskStatus::Done {
             return;
         }
+        // Every writer of a transition into done runs these effects, so the
+        // landing it names records its diff stats here too [ORB-18383].
+        self.record_done_landing_diff_stats(previous_status, task);
         let targets = named_friction_targets(task);
         if targets.is_empty() {
             return;

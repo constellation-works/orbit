@@ -7,9 +7,15 @@ use rusqlite::Connection;
 use crate::contracts::{ForwardCompatibleOpen, StateComponent, evaluate_newer_state};
 
 mod admission_reservations;
+mod agent_execution;
+mod assistance;
 mod audit_events;
+mod backlog_forecasts;
 mod baseline;
+mod condition_triggers;
+mod crew_performance;
 mod executor_census;
+mod experiments;
 mod feature;
 mod feature_ledgers;
 mod friction;
@@ -17,7 +23,9 @@ mod handoff_settlement;
 mod host_registry;
 mod introspect;
 mod invocation;
+mod job_run_tasks;
 mod job_runs;
+mod landed_diff_stats;
 mod learning;
 mod ledger;
 mod operation_mode;
@@ -25,19 +33,29 @@ mod plugins;
 mod resource_minutes;
 mod retention_analytics;
 mod routine;
+mod scripts;
 mod task_commit_journal;
 mod task_reservations;
+mod worker_resource_limits;
 
 // Schema steps, referenced by the ordered `ledger::MIGRATIONS` registry.
 use admission_reservations::apply_admission_reservations;
+use agent_execution::apply_agent_execution_identity;
+use assistance::apply_decision_assistance;
 use audit_events::{
     apply_audit_actor_alias_v2, apply_audit_actor_identity, apply_audit_machine_name_columns,
     apply_audit_plugin_grants, apply_audit_self_reported_actor, apply_audit_tool_call_index,
     apply_invocation_audit_context, apply_trusted_mcp_audit_provenance,
     apply_v2_audit_event_type_ts_index,
 };
+use backlog_forecasts::apply_backlog_forecasts;
 use baseline::apply_baseline_schema;
+use condition_triggers::apply_condition_triggers;
+use crew_performance::apply_crew_performance_snapshot;
 use executor_census::apply_executor_census;
+use experiments::{
+    apply_experiment_admissions, apply_experiments, apply_reopen_legacy_experiment_admissions,
+};
 use feature::apply_feature_schema_ledger;
 use feature_ledgers::apply_absorb_feature_ledgers;
 use friction::{apply_friction_records_schema, apply_friction_rehome_target};
@@ -47,16 +65,19 @@ use host_registry::{
 };
 use introspect::table_exists;
 use invocation::{
-    apply_invocation_provider, apply_invocation_telemetry_columns,
-    apply_invocation_workspace_scope, apply_invocations_ts_index, apply_provider_crew_accounts,
-    apply_provider_crew_outages, apply_provider_limit_observations, apply_provider_limit_readings,
+    apply_invocation_long_prompt_requests, apply_invocation_provider,
+    apply_invocation_telemetry_columns, apply_invocation_workspace_scope,
+    apply_invocations_ts_index, apply_provider_crew_accounts, apply_provider_crew_outages,
+    apply_provider_limit_observations, apply_provider_limit_readings,
 };
+use job_run_tasks::apply_job_run_task_recency;
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
-    apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_lock_wait,
-    apply_job_runs_created_index, apply_job_runs_job_created_and_retry_indexes,
-    apply_job_runs_recency_index,
+    apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_activity_window_index,
+    apply_job_run_step_lock_wait, apply_job_runs_created_index,
+    apply_job_runs_job_created_and_retry_indexes, apply_job_runs_recency_index,
 };
+use landed_diff_stats::apply_landed_diff_stats;
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
 use operation_mode::apply_remove_operation_mode;
 use plugins::{
@@ -65,13 +86,20 @@ use plugins::{
     apply_plugins_and_audit_plugin_provenance,
 };
 use resource_minutes::{
-    apply_admission_forecasts, apply_forecast_attribution, apply_host_resource_minutes,
-    apply_pull_forecast_decisions, apply_run_resource_minutes, apply_worker_cpu_accounting,
+    apply_admission_forecasts, apply_delivery_runs_stamp, apply_forecast_attribution,
+    apply_host_resource_minutes, apply_pull_forecast_decisions, apply_resource_minute_regime,
+    apply_run_resource_minutes, apply_run_resource_minutes_freshness_index,
+    apply_worker_cpu_accounting,
 };
 use retention_analytics::apply_retention_analytics;
 use routine::apply_routine_scheduler_schema;
+use scripts::apply_script_grants;
 use task_commit_journal::apply_task_commit_journal;
-use task_reservations::apply_workspace_claim_scope;
+use task_reservations::{
+    apply_lease_notices, apply_task_reservation_lease_queue, apply_task_reservation_lease_token,
+    apply_task_reservation_leases, apply_workspace_claim_scope,
+};
+use worker_resource_limits::apply_worker_resource_limits;
 
 // The ledger tests reach schema introspection through `super::super::*`.
 #[cfg(test)]

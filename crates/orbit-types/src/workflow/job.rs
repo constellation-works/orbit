@@ -478,6 +478,9 @@ pub struct JobRunTrigger {
     /// [ORB-13016].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consumer: Option<String>,
+    /// The condition fire that admitted a condition-triggered routine run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fire_id: Option<String>,
 }
 
 impl JobRunTrigger {
@@ -487,6 +490,7 @@ impl JobRunTrigger {
             routine: None,
             slot: None,
             consumer: None,
+            fire_id: None,
         }
     }
 
@@ -521,6 +525,21 @@ impl JobRunTrigger {
         Self {
             routine: Some(name.into()),
             consumer: Some(consumer.into()),
+            ..Self::of_kind(JobRunTriggerKind::Routine)
+        }
+    }
+
+    /// A run admitted by a condition routine's fire: its consumer and the
+    /// fire's durable identity.
+    pub fn condition_routine(
+        name: impl Into<String>,
+        consumer: impl Into<String>,
+        fire_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            routine: Some(name.into()),
+            consumer: Some(consumer.into()),
+            fire_id: Some(fire_id.into()),
             ..Self::of_kind(JobRunTriggerKind::Routine)
         }
     }

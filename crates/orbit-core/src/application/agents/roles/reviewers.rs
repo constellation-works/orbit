@@ -7,11 +7,17 @@
 //!
 //! A review younger than the miss lookback is provisional: a `review_missed`
 //! regression filed later still lowers the row that accepted the work.
+//!
+//! A filed finding is judged by finding verification's verdict, else by its
+//! task's outcome: a landed task held, and a task dropped without landing is
+//! neutral, since no typed record says why it was dropped. A row none of
+//! whose units is judged (no gate settlement, and no filed finding with a
+//! verdict or a terminal task) is unjudged: no score, no rank.
 
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_types::task::TaskComplexity;
+use orbit_types::task::{DefectSeverity, TaskComplexity};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
@@ -22,12 +28,14 @@ use crate::application::agents::facts::{
 };
 use crate::application::agents::score::{Occurrence, RowInput, Stat, Tally, Term, number};
 use crate::application::agents::{AgentFacts, AgentRole, Problem};
-use crate::application::task::{FindingSeverity, FindingVerdict};
+use crate::application::task::FindingVerdict;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "settled reviews",
     terms: TERMS,
+    term_units: &[],
     rows: Some(rows),
+    header: None,
 };
 
 /// How long after a review a `review_missed` regression is still expected;
@@ -36,20 +44,12 @@ const MISS_LOOKBACK_DAYS: i64 = 30;
 /// Accept-rate points above peers on the same tiers that tag a row
 /// `accepts often`.
 const ACCEPTS_OFTEN_POINTS: f64 = 10.0;
-/// Severity weights of a finding that held; any other severity weighs 1.
-const SEVERITY_WEIGHTS: &[(&str, f64)] = &[
-    ("critical", 8.0),
-    ("high", 4.0),
-    ("medium", 2.0),
-    ("low", 1.0),
-];
-
 const TERMS: &[Term] = &[
     Term {
         key: "findings_held",
         label: "Findings that held",
         weight: 1.0,
-        definition: "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, and findings a review job filed that finding verification CONFIRMED; each weighted by severity: critical 8, high 4, medium 2, low 1.",
+        definition: "Findings repaired by the reviewer whose fixes passed owner revalidation, open findings on a reject whose next implementation run changed a path the finding cites, findings a review job filed that finding verification CONFIRMED or, with no verification verdict, whose task landed, and mock comparison findings (purpose visual_review) their in-line verifier CONFIRMED; each weighted by severity: critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding scores at the severity verification rated; an unverified landed finding at the highest severity rated on its own regression_from links, else low; a review gate finding at the reviewer's own. A filed finding whose task is still open is not judged yet.",
         group: "credit",
     },
     Term {
@@ -63,7 +63,7 @@ const TERMS: &[Term] = &[
         key: "rejected_findings",
         label: "Rejected findings",
         weight: -1.0,
-        definition: "Findings closed by an authorized decision (Disposed), and findings a review job filed as tasks that finding verification REJECTED.",
+        definition: "Findings closed by an authorized decision (Disposed), findings a review job filed as tasks that finding verification REJECTED, and mock comparison findings (purpose visual_review) their in-line verifier REJECTED. A filed finding whose task was rejected or archived without landing and without a verification verdict costs nothing: task records carry no typed reason that tells a wrong finding from a duplicate, won't-fix or superseded one, so every such drop is neutral.",
         group: "problem",
     },
     Term {
@@ -83,8 +83,8 @@ const TERMS: &[Term] = &[
     Term {
         key: "missed_regressions",
         label: "Missed regressions",
-        weight: -4.0,
-        definition: "Regressions with escape review_missed against tasks the row's review accepted, whenever filed.",
+        weight: -2.0,
+        definition: "Regressions with escape review_missed against tasks the row's review accepted, whenever filed, each weighted by the link's severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one costs -16 to -0.5.",
         group: "problem",
     },
     Term {
@@ -101,14 +101,16 @@ const TERMS: &[Term] = &[
 enum Outcome {
     /// Accepted as implemented, with no `review_missed` regression.
     HeldUp,
-    /// A finding or fix that held, or a review job finding CONFIRMED.
+    /// A finding or fix that held, or a review job finding CONFIRMED or,
+    /// unverified, landed.
     Caught,
-    /// A false reject, or a review job whose verified findings were all
-    /// REJECTED.
+    /// A false reject, or a review job none of whose findings held and at
+    /// least one of which verification REJECTED.
     FalseAlarm,
     /// Accepted work that a `review_missed` regression came back to.
     Missed,
-    /// Not judged yet, incomplete, or fixes that failed revalidation.
+    /// Not judged yet, incomplete, fixes that failed revalidation, or a
+    /// review job whose findings were dropped without a verdict.
     Unresolved,
 }
 
@@ -129,7 +131,7 @@ impl Outcome {
             Outcome::Missed => ("outcome_missed", "Missed a regression"),
             Outcome::Unresolved => (
                 "outcome_unresolved",
-                "Unresolved (not judged yet, incomplete or failed fixes)",
+                "Unresolved (not judged yet, incomplete, failed fixes or findings dropped unverified)",
             ),
         }
     }
@@ -139,6 +141,9 @@ impl Outcome {
 #[derive(Default)]
 struct Row<'a> {
     units: usize,
+    /// Whether any unit has been judged: a gate settlement, a filed finding
+    /// with a verdict or a terminal task, or a charge.
+    judged: bool,
     provisional: usize,
     without_model: usize,
     review_jobs: usize,
@@ -174,7 +179,7 @@ impl<'a> Row<'a> {
 
 /// One row per reviewer crew and model with a review settled, or a review
 /// job attempt started, since `since`.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<RowInput<'_>> {
     let lookback = facts.computed_at - Duration::days(MISS_LOOKBACK_DAYS);
     let by_id: HashMap<&str, &TaskFacts> = facts
         .tasks
@@ -202,6 +207,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
                 .entry(row_key(runner.crew.as_deref(), runner.model.as_deref()))
                 .or_default();
             row.unit(review.at, runner.model.as_deref(), lookback);
+            row.judged = true;
             row.verdicts
                 .push((tier(task.complexity), review.verdict.passed()));
             row.seconds.extend(review.seconds);
@@ -268,29 +274,97 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
             .or_default();
         row.unit(attempt.start, runner.model.as_deref(), lookback);
         row.review_jobs += 1;
-        let (mut confirmed, mut rejected) = (0, 0);
+        let (mut held, mut rejected) = (0, 0);
         for task in findings {
-            match task.filed.as_ref().and_then(|filed| filed.verdict) {
-                Some((FindingVerdict::Confirmed, at, severity)) => {
-                    confirmed += 1;
+            let Some(filed) = task.filed.as_ref() else {
+                continue;
+            };
+            // A verdict wins; without one, the task's outcome judges it.
+            let (weight, at, detail) = match filed.verdict {
+                Some((FindingVerdict::Confirmed, at, severity)) => (
+                    severity_or_low(severity),
+                    at,
+                    format!("finding verification CONFIRMED a finding {filer} filed"),
+                ),
+                Some((FindingVerdict::Rejected, _, _)) => {
+                    // Charged as a rejected finding by attribution.
+                    row.judged = true;
+                    rejected += 1;
+                    continue;
+                }
+                None if task.landed => (
+                    severity_or_low(filed.severity),
+                    task.landed_at.unwrap_or(task.created_at),
+                    format!(
+                        "a finding {filer} filed landed without a verification verdict, at {} severity",
+                        filed.severity.unwrap_or(DefectSeverity::Low).as_str()
+                    ),
+                ),
+                None => {
+                    // Dropped is judged but neutral; open is not judged yet.
+                    row.judged |= task.dropped;
+                    continue;
+                }
+            };
+            row.judged = true;
+            held += 1;
+            row.add(
+                "findings_held",
+                task,
+                weight,
+                Occurrence {
+                    at,
+                    detail,
+                    run_id: runner.run_id.clone(),
+                },
+            );
+        }
+        row.outcome(match (held, rejected) {
+            (1.., _) => Outcome::Caught,
+            (0, 1..) => Outcome::FalseAlarm,
+            _ => Outcome::Unresolved,
+        });
+    }
+
+    // Mock comparison reviews count under purpose `visual_review`
+    // (§11.4): one unit per recorded review, judged by its in-line
+    // verification verdicts.
+    for task in &facts.tasks {
+        let Some(visual) = &task.visual_review else {
+            continue;
+        };
+        if visual.at < since {
+            continue;
+        }
+        let row = rows
+            .entry(row_key(visual.reviewer_crew.as_deref(), None))
+            .or_default();
+        row.unit(visual.at, None, lookback);
+        let (mut held, mut rejected) = (0, 0);
+        for (verdict, severity, title) in &visual.findings {
+            row.judged = true;
+            let occurrence = Occurrence {
+                at: visual.at,
+                detail: format!("visual review (purpose visual_review): {title}"),
+                run_id: None,
+            };
+            match verdict {
+                FindingVerdict::Confirmed => {
+                    held += 1;
+                    row.add("findings_held", task, severity_weight(severity), occurrence);
+                }
+                FindingVerdict::Rejected => {
+                    rejected += 1;
                     row.add(
-                        "findings_held",
+                        "rejected_findings",
                         task,
-                        verified_weight(severity),
-                        Occurrence {
-                            at,
-                            detail: format!(
-                                "finding verification CONFIRMED a finding {filer} filed"
-                            ),
-                            run_id: runner.run_id.clone(),
-                        },
+                        severity_weight(severity),
+                        occurrence,
                     );
                 }
-                Some((FindingVerdict::Rejected, _, _)) => rejected += 1,
-                None => {}
             }
         }
-        row.outcome(match (confirmed, rejected) {
+        row.outcome(match (held, rejected) {
             (1.., _) => Outcome::Caught,
             (0, 1..) => Outcome::FalseAlarm,
             _ => Outcome::Unresolved,
@@ -311,18 +385,20 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
         let Some(task) = by_id.get(charge.task_id.as_str()) else {
             continue;
         };
-        rows.entry(row_key(charge.crew.as_deref(), charge.model.as_deref()))
-            .or_default()
-            .add(
-                key,
-                task,
-                1.0,
-                Occurrence {
-                    at: charge.at,
-                    detail: format!("{}: {}", charge.problem.as_str(), charge.detail),
-                    run_id: charge.run_id.clone(),
-                },
-            );
+        let row = rows
+            .entry(row_key(charge.crew.as_deref(), charge.model.as_deref()))
+            .or_default();
+        row.judged = true;
+        row.add(
+            key,
+            task,
+            charge.severity_weight(),
+            Occurrence {
+                at: charge.at,
+                detail: format!("{}: {}", charge.problem.as_str(), charge.detail),
+                run_id: charge.run_id.clone(),
+            },
+        );
     }
 
     let peers = PeerRates::new(&rows);
@@ -335,12 +411,16 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
         .map(|((key, row), peers)| {
             let stats = stats(&row, peers);
             RowInput {
+                denominators: BTreeMap::new(),
                 crew: key.0,
                 model: key.1,
                 units: row.units,
                 runs_without_model: row.without_model,
                 provisional: Some(row.provisional),
                 tallies: row.tallies,
+                expected: None,
+                reviewed_units: None,
+                unjudged: !row.judged,
                 stats,
             }
         })
@@ -364,20 +444,17 @@ fn held_findings(review: &Review) -> Vec<&Finding> {
     }
 }
 
+/// The weight of a review gate finding's severity; a value off the scale
+/// weighs 1.
 fn severity_weight(severity: &str) -> f64 {
-    SEVERITY_WEIGHTS
-        .iter()
-        .find(|(name, _)| *name == severity)
-        .map_or(1.0, |(_, weight)| *weight)
+    DefectSeverity::parse(severity).map_or(1.0, DefectSeverity::weight)
 }
 
-fn verified_weight(severity: Option<FindingSeverity>) -> f64 {
-    severity_weight(match severity {
-        Some(FindingSeverity::Critical) => "critical",
-        Some(FindingSeverity::High) => "high",
-        Some(FindingSeverity::Medium) => "medium",
-        Some(FindingSeverity::Low) | None => "low",
-    })
+/// The weight of a filed finding that held at its recorded severity: the one
+/// verification rated, else the one rated on its own links; without one it
+/// weighs as `low`.
+fn severity_or_low(severity: Option<DefectSeverity>) -> f64 {
+    severity.unwrap_or(DefectSeverity::Low).weight()
 }
 
 fn tier(complexity: Option<TaskComplexity>) -> &'static str {

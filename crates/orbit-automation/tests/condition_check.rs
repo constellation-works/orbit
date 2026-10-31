@@ -1,0 +1,382 @@
+#![allow(clippy::unwrap_used)]
+
+//! Load-time condition checks and their evaluation, through the public
+//! `check_condition` and `ConditionEvaluator` boundaries.
+
+use std::collections::BTreeMap;
+
+use chrono::Utc;
+use orbit_automation::condition::{
+    BoardFacts, ConditionCarrier, ConditionEvaluator, ConditionFacts, ConditionReads, SelfFacts,
+    Truth, check_condition,
+};
+use orbit_types::workflow::automation::ConditionTrigger;
+
+fn task_condition(when: &str) -> ConditionTrigger {
+    serde_json::from_value(serde_json::json!({"scope": "task", "when": when})).unwrap()
+}
+
+fn workspace_condition(when: &str) -> ConditionTrigger {
+    serde_json::from_value(serde_json::json!({"scope": "workspace", "when": when})).unwrap()
+}
+
+/// Facts for a healthy workspace: an empty eligible queue, no open runs and no
+/// drain running. Like the explain gatherer, it binds only the board fields the
+/// checked condition reads, and `open_runs` and `drain_running` load together.
+fn healthy_board_facts(reads: &ConditionReads) -> ConditionFacts {
+    let mut board = BoardFacts::default();
+    if reads.board.contains("eligible") {
+        board.eligible = Some(0);
+    }
+    if reads.board.contains("open_runs") || reads.board.contains("drain_running") {
+        board.open_runs = Some(0);
+        board.drain_running = Some(false);
+    }
+    ConditionFacts {
+        now: Utc::now(),
+        board,
+        tasks: BTreeMap::new(),
+        self_facts: SelfFacts::default(),
+    }
+}
+
+#[test]
+fn contradictory_status_prefilter_is_refused() {
+    // No status satisfies these conjuncts. Loading them would leave the
+    // prefilter empty, which lists every task as a subject instead of none.
+    for when in [
+        "task.status == 'done' && task.status == 'blocked'",
+        "task.status in [] && 'release' in task.tags",
+    ] {
+        let result = check_condition(&task_condition(when), ConditionCarrier::Routine);
+        assert!(
+            result.is_err(),
+            "accepted a prefilter no task can satisfy: {when}"
+        );
+    }
+}
+
+#[test]
+fn satisfiable_status_prefilters_still_load() {
+    for when in [
+        "task.status == 'done' && task.status in ['done', 'blocked'] && 'release' in task.tags",
+        "'release' in task.tags && task.status != 'done'",
+    ] {
+        let result = check_condition(&task_condition(when), ConditionCarrier::Routine);
+        assert!(result.is_ok(), "refused a satisfiable prefilter: {when}");
+    }
+}
+
+#[test]
+fn board_presence_tests_record_their_field_as_a_read() {
+    for (when, field) in [
+        ("has(board.eligible)", "eligible"),
+        ("has(board.open_runs)", "open_runs"),
+        ("has(board.drain_running)", "drain_running"),
+    ] {
+        let checked = check_condition(&workspace_condition(when), ConditionCarrier::Routine)
+            .unwrap_or_else(|error| panic!("refused {when}: {error}"));
+        assert!(
+            checked.reads.board.contains(field),
+            "{when} did not record board.{field} as a read"
+        );
+    }
+}
+
+#[test]
+fn board_presence_test_matches_direct_read_on_healthy_facts() {
+    // Each direct read is true on healthy facts, so its presence-only form must
+    // be true too. Before the fix the presence form read as false: the field was
+    // never loaded, so `has()` found no fact.
+    for (presence, direct) in [
+        (
+            "has(board.eligible)",
+            "has(board.eligible) && board.eligible.count >= 0",
+        ),
+        (
+            "has(board.open_runs)",
+            "has(board.open_runs) && board.open_runs.count >= 0",
+        ),
+        (
+            "has(board.drain_running)",
+            "has(board.drain_running) && !board.drain_running",
+        ),
+    ] {
+        let direct_condition =
+            check_condition(&workspace_condition(direct), ConditionCarrier::Routine).unwrap();
+        let presence_condition =
+            check_condition(&workspace_condition(presence), ConditionCarrier::Routine).unwrap();
+        let expected = ConditionEvaluator::new(&healthy_board_facts(&direct_condition.reads))
+            .truth(&direct_condition.when, None);
+        let actual = ConditionEvaluator::new(&healthy_board_facts(&presence_condition.reads))
+            .truth(&presence_condition.when, None);
+        assert_eq!(
+            expected,
+            Truth::True,
+            "direct read is not true on healthy facts: {direct}"
+        );
+        assert_eq!(
+            actual, expected,
+            "{presence} differs from its direct-read form on healthy facts"
+        );
+    }
+}
+
+#[test]
+fn board_status_map_reads_require_stored_status_spellings() {
+    for when in [
+        "board.by_status.typo == 0",
+        "board.by_status['typo'] == 0",
+        "has(board.by_status.typo)",
+    ] {
+        let error = match check_condition(&workspace_condition(when), ConditionCarrier::Routine) {
+            Ok(_) => panic!("accepted unknown board status key: {when}"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.clause, "trigger.condition.when",
+            "unknown status key was reported against the wrong clause: {when}"
+        );
+        assert!(
+            error.position.is_some(),
+            "unknown status key had no source position: {when}"
+        );
+        assert!(
+            error.message.contains("unknown task status 'typo'"),
+            "unknown status key had no status-spelling error: {when}: {error}"
+        );
+    }
+
+    for when in [
+        "board.by_status.in_progress == 0",
+        "board.by_status['in_progress'] == 0",
+        "has(board.by_status.in_progress)",
+    ] {
+        check_condition(&workspace_condition(when), ConditionCarrier::Routine)
+            .unwrap_or_else(|error| panic!("refused stored status key in {when}: {error}"));
+    }
+}
+
+#[test]
+fn duration_negation_is_refused_at_load() {
+    // cel 0.15 has no duration negation overload, so the checker must refuse
+    // unary '-' on a duration at load instead of accepting an expression that
+    // can only evaluate to unknown. The `true || ...` form pins the absorbed
+    // case: cel's `||` would return true despite the missing overload.
+    for carrier in [ConditionCarrier::Routine, ConditionCarrier::AutoTask] {
+        for when in [
+            "-duration('1h') < duration('0s')",
+            "true || -duration('1h') < duration('0s')",
+        ] {
+            let error = match check_condition(&workspace_condition(when), carrier) {
+                Ok(_) => panic!("accepted duration negation for {carrier:?}: {when}"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.clause,
+                format!("{}.when", carrier.clause()),
+                "wrong clause for {when}"
+            );
+            assert!(
+                error.position.is_some(),
+                "missing source position for {when}: {error}"
+            );
+            assert!(
+                error.message.contains("cannot negate duration"),
+                "unexpected message for {when}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn supported_negation_still_checks_and_evaluates() {
+    // Numeric negation and signed duration string literals are supported and
+    // must keep loading and evaluating.
+    for carrier in [ConditionCarrier::Routine, ConditionCarrier::AutoTask] {
+        for when in ["-1 < 0", "duration('-1h') < duration('0s')"] {
+            let checked = check_condition(&workspace_condition(when), carrier)
+                .unwrap_or_else(|error| panic!("refused {when} for {carrier:?}: {error}"));
+            let truth = ConditionEvaluator::new(&healthy_board_facts(&checked.reads))
+                .truth(&checked.when, None);
+            assert_eq!(truth, Truth::True, "{when} did not evaluate true");
+        }
+    }
+}
+
+/// A task condition that would match its own template's output is a load
+/// error naming the definition and `schedule.condition.when` (§8). The
+/// template below mints a `backlog` task tagged `release`, which its own
+/// condition matches under both origin shapes.
+#[test]
+fn self_matching_task_condition_is_a_load_error() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition(
+        root.path(),
+        "selfmatch",
+        "task.status == 'backlog' && 'release' in task.tags",
+        &["release"],
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(
+        collection.definitions.is_empty(),
+        "a self-matching definition loaded: {:?}",
+        collection.definitions
+    );
+    assert_eq!(collection.errors.len(), 1, "{:?}", collection.errors);
+    let message = &collection.errors[0].message;
+    assert!(
+        message.contains("selfmatch"),
+        "load error names no definition: {message}"
+    );
+    assert!(
+        message.contains("schedule.condition.when"),
+        "load error names no clause: {message}"
+    );
+}
+
+/// A task condition its own template cannot satisfy still loads unchanged.
+#[test]
+fn non_matching_task_condition_still_loads() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition(
+        root.path(),
+        "calm",
+        "task.status == 'backlog' && 'release' in task.tags",
+        &[],
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "calm");
+}
+
+/// A board read is unknown at load, so a task condition that needs the board
+/// cannot match its own template output and still loads.
+#[test]
+fn board_read_self_match_evaluates_unknown_and_loads() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition(
+        root.path(),
+        "boarded",
+        "task.status == 'backlog' && board.eligible.empty",
+        &[],
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "boarded");
+}
+
+/// An origin-dependent condition is true under only one mint shape, so the
+/// both-shapes rule keeps it loading.
+#[test]
+fn origin_dependent_task_condition_still_loads() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition(
+        root.path(),
+        "originbound",
+        "task.status == 'backlog' && !has(task.origin)",
+        &[],
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "originbound");
+}
+
+/// A template naming the retired `system` crew mints an unassigned task under
+/// the default crew set ([ORB-15663]), so a condition reading the absent crew
+/// matches its own template output and is a load error naming the definition
+/// and `schedule.condition.when`.
+#[test]
+fn retired_system_crew_absent_subject_is_a_load_error() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition_with_crew(
+        root.path(),
+        "retiredabsent",
+        "task.status == 'backlog' && !has(task.crew)",
+        &[],
+        Some("system"),
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(
+        collection.definitions.is_empty(),
+        "a retired-crew self-matching definition loaded: {:?}",
+        collection.definitions
+    );
+    assert_eq!(collection.errors.len(), 1, "{:?}", collection.errors);
+    let message = &collection.errors[0].message;
+    assert!(
+        message.contains("retiredabsent"),
+        "load error names no definition: {message}"
+    );
+    assert!(
+        message.contains("schedule.condition.when"),
+        "load error names no clause: {message}"
+    );
+}
+
+/// A condition that can only match when the minted task carries the retired
+/// name still loads: the mint drops that crew, so `has(task.crew)` is false
+/// on its own template output.
+#[test]
+fn retired_system_crew_equality_still_loads() {
+    let root = tempfile::tempdir().unwrap();
+    write_condition_definition_with_crew(
+        root.path(),
+        "retiredkept",
+        "task.status == 'backlog' && has(task.crew) && task.crew == 'system'",
+        &[],
+        Some("system"),
+    );
+
+    let collection = orbit_automation::auto_tasks::loader::collect_auto_tasks(root.path());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert_eq!(collection.definitions.len(), 1);
+    assert_eq!(collection.definitions[0].definition.name, "retiredkept");
+}
+
+fn write_condition_definition(root: &std::path::Path, name: &str, when: &str, tags: &[&str]) {
+    write_condition_definition_with_crew(root, name, when, tags, None);
+}
+
+fn write_condition_definition_with_crew(
+    root: &std::path::Path,
+    name: &str,
+    when: &str,
+    tags: &[&str],
+    crew: Option<&str>,
+) {
+    use std::fmt::Write as _;
+
+    let dir = orbit_automation::auto_tasks::loader::auto_tasks_dir(root);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut tag_list = String::new();
+    for (index, tag) in tags.iter().enumerate() {
+        if index > 0 {
+            tag_list.push_str(", ");
+        }
+        let _ = write!(tag_list, "'{tag}'");
+    }
+    let tags_yaml = if tags.is_empty() {
+        "  tags: []".to_string()
+    } else {
+        format!("  tags: [{tag_list}]")
+    };
+    let crew_yaml = crew
+        .map(|crew| format!("  crew: {crew}\n"))
+        .unwrap_or_default();
+    std::fs::write(
+        dir.join(format!("{name}.yaml")),
+        format!(
+            "schemaVersion: 1\nname: {name}\nschedule:\n  condition:\n    scope: task\n    when: \"{when}\"\ntemplate:\n  title: Fixture {name}\n{tags_yaml}\n{crew_yaml}"
+        ),
+    )
+    .unwrap();
+}

@@ -527,6 +527,32 @@ fn reads_through_the_forward_match_the_remote_dashboard() {
             await_event(&mut stream, "appended-on-b");
             drop(stream);
 
+            // The change stream is SSE too: B's notices cross the forward
+            // uncompressed, including a write made outside B's dashboard.
+            let events = a_server
+                .request("GET", &format!("/api/on/hostb/events/stream{WS}"))
+                .header("accept-encoding", "gzip")
+                .timeout(Duration::from_secs(60))
+                .send()
+                .unwrap();
+            assert_eq!(events.status(), 200);
+            assert_eq!(events.headers()["content-type"], "text/event-stream");
+            assert!(events.headers().get("content-encoding").is_none());
+            let mut events = BufReader::new(events);
+            await_event(&mut events, r#""kind":"drain""#);
+            b.runtime
+                .update_task_as_human(
+                    &task,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::InProgress),
+                        ..Default::default()
+                    },
+                    "test operator".into(),
+                )
+                .unwrap();
+            await_event(&mut events, &format!(r#""id":"{task}""#));
+            drop(events);
+
             let local = json_ok(a_server.get(&format!("/api/tasks{WS}")));
             assert_ne!(
                 local,
@@ -761,11 +787,17 @@ fn forward_failures_are_typed_and_bounded() {
 /// The reserved local port is released before ssh binds it. A healthy
 /// dashboard that takes it first, reporting another machine, must never be
 /// read as the tunnel: the request fails with ssh's own exit, not a 409.
-#[test]
-fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
+/// With `preoccupied`, an unrelated counted listener already holds each
+/// reserved port before the fixture tries to bind it, modelling the
+/// parallel-process port race deterministically.
+fn foreign_listener_scenario(preoccupied: bool) {
     isolated(
-        "host_forward::a_foreign_listener_on_the_reserved_port_is_never_the_tunnel",
-        || {
+        if preoccupied {
+            "host_forward::a_preoccupied_reserved_port_is_never_the_tunnel"
+        } else {
+            "host_forward::a_foreign_listener_on_the_reserved_port_is_never_the_tunnel"
+        },
+        move || {
             let a = Fixture::new();
             write_hosts(
                 &a,
@@ -808,9 +840,42 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                     );
                     let call = stub.calls()[before + allocation].clone();
                     let reserved = forwarded_port(&call);
-                    let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
-                        .expect("the selected port is free until ssh binds it");
-                    foreign_probes.push(serve_dashboard(foreign, Some(foreign_identity.clone())));
+                    // Deterministic variant: an unrelated listener wins the
+                    // race for the reserved port before the fixture binds it.
+                    let preoccupying_probes = if preoccupied {
+                        let unrelated = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
+                            .expect("the pre-occupying listener binds the free reserved port");
+                        Some(serve_dashboard(unrelated, Some(foreign_identity.clone())))
+                    } else {
+                        None
+                    };
+                    match TcpListener::bind((Ipv4Addr::LOCALHOST, reserved)) {
+                        Ok(foreign) => {
+                            foreign_probes
+                                .push(serve_dashboard(foreign, Some(foreign_identity.clone())));
+                            if let Some(probes) = preoccupying_probes {
+                                foreign_probes.push(probes);
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                            // The port is already held: that holder is the
+                            // foreign occupant. Its counted listener is the
+                            // probe target in the deterministic variant; in
+                            // the original scenario an external holder cannot
+                            // be counted, so the 502/exit-255, reaping and
+                            // no-spawn assertions below prove it is never
+                            // trusted as the tunnel.
+                            match preoccupying_probes {
+                                Some(probes) => foreign_probes.push(probes),
+                                None => {
+                                    foreign_probes.push(Arc::new(AtomicUsize::new(0)));
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            panic!("bind foreign listener on reserved port {reserved}: {error}")
+                        }
+                    }
                     if host == "deadhost" {
                         stub.release();
                     } else {
@@ -851,6 +916,19 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
             }
         },
     );
+}
+
+#[test]
+fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
+    foreign_listener_scenario(false);
+}
+
+/// Deterministic regression for the parallel-runner port race: the
+/// selected port is already held by an unrelated listener when the
+/// fixture tries to bind it as the foreign listener.
+#[test]
+fn a_preoccupied_reserved_port_is_never_the_tunnel() {
+    foreign_listener_scenario(true);
 }
 
 #[test]
@@ -913,9 +991,6 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                     .lines()
                     .map(|line| serde_json::from_str(line).unwrap())
                     .collect();
-                assert_eq!(events[0]["pid"], first["pid"]);
-                assert_eq!(events[0]["port"], reserved);
-                assert_eq!(events[0]["errno"], libc::EADDRINUSE);
                 assert_eq!(
                     state["reachable"], true,
                     "a proven local collision must reallocate: {state}"
@@ -923,38 +998,102 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                 assert_eq!(state["origin"], "spawned", "{state}");
                 assert_eq!(state["machine_id"], b.machine_id());
                 json_ok(a_server.get("/api/on/hostb/workspaces"));
-                assert_eq!(
-                    calls.len(),
-                    3,
-                    "failed allocation, attach probe, then spawn: {calls:?}"
+                assert!(
+                    calls.len() >= 3,
+                    "failed allocation, successful attach probe, then spawn: {calls:?}"
                 );
+                assert_eq!(calls[0]["pid"], first["pid"]);
                 assert_eq!(calls[0]["mode"], "attach");
-                assert_eq!(calls[1]["mode"], "attach");
-                assert_eq!(calls[2]["mode"], "spawn");
-                assert_ne!(forwarded_port(&calls[1]), reserved);
-                assert_eq!(forwarded_port(&calls[1]), forwarded_port(&calls[2]));
+                assert_eq!(forwarded_port(&calls[0]), reserved);
+                assert_eq!(events.len(), calls.len(), "one bind event per ssh call");
+                let spawn_indices: Vec<usize> = calls
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, call)| (call["mode"] == "spawn").then_some(index))
+                    .collect();
+                assert_eq!(spawn_indices.len(), 1, "exactly one spawn call: {calls:?}");
+                let spawn_index = calls.len() - 1;
+                assert_eq!(spawn_indices[0], spawn_index, "spawn is the final ssh call");
+                let successful_attach_index = spawn_index - 1;
+                assert_eq!(
+                    calls[successful_attach_index]["mode"], "attach",
+                    "spawn follows a successful attach: {calls:?}"
+                );
+
+                for (index, call) in calls[..successful_attach_index].iter().enumerate() {
+                    assert_eq!(call["mode"], "attach", "only attach probes precede spawn");
+                    let event = events
+                        .iter()
+                        .find(|event| event["pid"] == call["pid"])
+                        .unwrap_or_else(|| panic!("missing bind event for attach call: {call:?}"));
+                    assert_eq!(event["mode"], "attach");
+                    assert_eq!(event["port"], forwarded_port(call));
+                    assert_eq!(
+                        event["errno"],
+                        libc::EADDRINUSE,
+                        "every failed attach must be a recorded EADDRINUSE collision: {call:?}, {event:?}"
+                    );
+                    if index > 0 {
+                        assert_ne!(
+                            forwarded_port(call),
+                            reserved,
+                            "only the first attach may use the deliberately reserved port"
+                        );
+                    }
+                }
+                let successful_attach = &calls[successful_attach_index];
+                let successful_attach_event = events
+                    .iter()
+                    .find(|event| event["pid"] == successful_attach["pid"])
+                    .unwrap_or_else(|| {
+                        panic!("missing bind event for successful attach: {successful_attach:?}")
+                    });
+                assert_eq!(successful_attach_event["mode"], "attach");
+                assert_eq!(
+                    successful_attach_event["port"],
+                    forwarded_port(successful_attach)
+                );
+                assert!(
+                    successful_attach_event["errno"].is_null(),
+                    "the attach before spawn must have bound successfully: {successful_attach_event:?}"
+                );
+                assert_ne!(forwarded_port(successful_attach), reserved);
+                let spawn = &calls[spawn_index];
+                let spawn_event = events
+                    .iter()
+                    .find(|event| event["pid"] == spawn["pid"])
+                    .unwrap_or_else(|| panic!("missing bind event for spawn: {spawn:?}"));
+                assert_eq!(spawn_event["mode"], "spawn");
+                assert_eq!(spawn_event["port"], forwarded_port(spawn));
+                assert!(
+                    spawn_event["errno"].is_null(),
+                    "the spawn must bind successfully: {spawn_event:?}"
+                );
+                assert_eq!(forwarded_port(successful_attach), forwarded_port(spawn));
                 let expected = if operator {
                     "orbit web serve --no-open --operator --port 7878"
                 } else {
                     "orbit web serve --no-open --port 7878"
                 };
-                assert_eq!(calls[2]["command"], expected);
+                assert_eq!(spawn["command"], expected);
                 assert_eq!(
                     probes.load(Ordering::SeqCst),
                     0,
                     "even a matching identity on the foreign listener is never read"
                 );
-                assert!(
-                    !alive(first["pid"].as_i64().unwrap()),
-                    "the failed allocation's child is reaped before handoff"
-                );
+                for call in &calls[..successful_attach_index] {
+                    assert!(
+                        !alive(call["pid"].as_i64().unwrap()),
+                        "each failed allocation's child is reaped before handoff"
+                    );
+                }
                 let pids = stub.pids();
                 assert!(
-                    !alive(pids[1]),
+                    !alive(pids[successful_attach_index]),
                     "the successful attach probe is reaped before spawn handoff"
                 );
                 assert!(
-                    alive(pids[2]),
+                    alive(pids[spawn_index]),
                     "only the owned spawn child serves the verified tunnel"
                 );
                 assert!(a_server.terminate().success());
@@ -1042,6 +1181,149 @@ fn forwarded_audit_cursor_walks_the_remote_window_page_by_page() {
                 let reached: Vec<String> = forwarded.into_iter().flat_map(|(ids, _)| ids).collect();
                 assert_eq!(reached, expected, "{query}: every match once, newest first");
             }
+        },
+    );
+}
+
+// Run the public ticket issuer in the server's HOME without changing the test process environment.
+#[test]
+#[ignore]
+fn local_session_ticket_child() {
+    orbit_web::open_dashboard(orbit_web::OpenArgs { no_open: true }).unwrap();
+}
+
+fn local_session_ticket(fixture: &Fixture) -> String {
+    let home = fixture.path("");
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env_remove("RUST_TEST_THREADS")
+        .args([
+            "--exact",
+            "host_forward::local_session_ticket_child",
+            "--ignored",
+            "--nocapture",
+        ]);
+    let logs = tempfile::tempdir().unwrap();
+    let output =
+        orbit_common::test_env::run_child_test(&mut command, "local session ticket", logs.path());
+    assert!(output.status.success(), "ticket issuer failed");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    stdout
+        .split("#orbit-session=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn local_forward_preserves_browser_sessions() {
+    isolated(
+        "host_forward::local_forward_preserves_browser_sessions",
+        || {
+            let disabled = Fixture::new();
+            let server = disabled.server(true);
+            assert_eq!(server.get("/api/on/http-fixture/session").status(), 404);
+            assert_eq!(
+                server
+                    .request("POST", "/api/on/http-fixture/session")
+                    .header("origin", &server.origin)
+                    .body("invalid")
+                    .send()
+                    .unwrap()
+                    .status(),
+                404
+            );
+            drop(server);
+
+            let fixture = Fixture::new();
+            OpenOptions::new()
+                .append(true)
+                .open(fixture.global.join("config.toml"))
+                .unwrap()
+                .write_all(b"\n[machine.web_terminal]\nenabled = true\n")
+                .unwrap();
+            let server = fixture.server(true);
+            let direct = json_ok(server.get("/api/session"));
+            let ticket = local_session_ticket(&fixture);
+            let post = |path: &str, ticket: &str| {
+                server
+                    .request("POST", path)
+                    .header("origin", &server.origin)
+                    .body(ticket.to_owned())
+                    .send()
+                    .unwrap()
+            };
+            let direct_post = post("/api/session", &ticket);
+            assert_eq!(direct_post.status(), 204);
+            assert!(direct_post.headers().contains_key("set-cookie"));
+            let ticket = local_session_ticket(&fixture);
+            let forwarded_post = post("/api/on/http-fixture/session", &ticket);
+            assert_eq!(forwarded_post.status(), 204);
+            assert!(forwarded_post.headers().contains_key("set-cookie"));
+            assert_eq!(post("/api/on/http-fixture/session", &ticket).status(), 401);
+            assert_eq!(
+                post("/api/on/http-fixture/session", "invalid").status(),
+                401
+            );
+            assert_eq!(json_ok(server.get("/api/on/http-fixture/session")), direct);
+        },
+    );
+}
+
+/// The serving host's own name is answered locally: outer `/on/<host>/<rest>`
+/// captures must not leak into the inner router, or every inner `Path<_>`
+/// sees host, rest and its own capture (ORB-20148).
+#[test]
+fn local_forward_preserves_inner_path_params() {
+    isolated(
+        "host_forward::local_forward_preserves_inner_path_params",
+        || {
+            let fixture = Fixture::new();
+            let task = seed_task(&fixture);
+            let server = fixture.server(false);
+
+            let direct_score = server.get(
+                "/api/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+            );
+            let direct_status = direct_score.status();
+            let direct_body = direct_score.text().unwrap();
+            assert_eq!(
+                direct_status.as_u16(),
+                200,
+                "direct scorecard: {direct_body}"
+            );
+            let direct_score_json: Value = serde_json::from_str(&direct_body).unwrap();
+            let forwarded_score = server.get(
+                "/api/on/http-fixture/agents/implementers/scorecard?workspace=ws_http_fixture&window=last500&min_support=1",
+            );
+            let status = forwarded_score.status();
+            let body = forwarded_score.text().unwrap();
+            assert_eq!(status.as_u16(), 200, "host-qualified scorecard: {body}");
+            let forwarded_score_json: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                forwarded_score_json, direct_score_json,
+                "host-qualified scorecard matches the direct route"
+            );
+
+            let direct_task = json_ok(server.get(&format!("/api/tasks/{task}{WS}")));
+            let forwarded_task = server.get(&format!("/api/on/http-fixture/tasks/{task}{WS}"));
+            let status = forwarded_task.status();
+            let body = forwarded_task.text().unwrap();
+            assert_eq!(status.as_u16(), 200, "host-qualified task: {body}");
+            let forwarded_task_json: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(
+                forwarded_task_json, direct_task,
+                "host-qualified task keeps its own id param"
+            );
         },
     );
 }

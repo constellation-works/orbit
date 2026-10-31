@@ -119,6 +119,16 @@ fn no_diff_grants_wait_for_persistent_holders_then_hold_no_files() {
         let holder = as_operator(&runtime, "orbit.task.locks.reserve", input);
         assert_eq!(holder["reserved"], true, "{holder}");
         assert_eq!(holder["reserved_files"], json!(["file:shared.txt"]));
+        assert_eq!(
+            holder,
+            json!({
+                "reserved": true,
+                "reservation_id": holder["reservation_id"],
+                "expires_at": holder["expires_at"],
+                "reserved_files": ["file:shared.txt"],
+            }),
+            "ordinary tool grants must omit gate-only defaults"
+        );
         let holder_id = holder["reservation_id"].as_str().unwrap();
         let public_grant = || {
             as_operator(
@@ -127,7 +137,21 @@ fn no_diff_grants_wait_for_persistent_holders_then_hold_no_files() {
                 json!({"task_ids": [review.id], "ttl_seconds": 120}),
             )
         };
-        for refused in [public_grant(), reserve_locks(&runtime, &review.id)] {
+        for (step, refused) in [
+            (false, public_grant()),
+            (true, reserve_locks(&runtime, &review.id)),
+        ] {
+            let mut expected = json!({"reserved": false, "conflicts": [{
+                "file": "file:shared.txt", "held_by": "reservation", "held_by_id": holder_id,
+            }]});
+            if step {
+                expected["waiting_on_deps"] = json!([]);
+                expected["footprint_deferred"] = json!(false);
+            }
+            assert_eq!(
+                refused, expected,
+                "tool and step denials preserve their distinct defaults"
+            );
             assert_eq!(refused["reserved"], false, "{refused}");
             assert!(refused["reservation_id"].is_null(), "{refused}");
             assert!(
@@ -159,7 +183,23 @@ fn no_diff_grants_wait_for_persistent_holders_then_hold_no_files() {
             );
             assert_eq!(release["released"], true, "{release}");
         }
-        for granted in [public_grant(), reserve_locks(&runtime, &review.id)] {
+        for (step, granted) in [
+            (false, public_grant()),
+            (true, reserve_locks(&runtime, &review.id)),
+        ] {
+            let mut expected = json!({
+                "reserved": true, "reservation_id": granted["reservation_id"],
+                "expires_at": granted["expires_at"], "reserved_files": [],
+            });
+            if step {
+                expected["conflicts"] = json!([]);
+                expected["waiting_on_deps"] = json!([]);
+                expected["footprint_deferred"] = json!(false);
+            }
+            assert_eq!(
+                granted, expected,
+                "tool and step grants preserve their distinct defaults"
+            );
             assert_eq!(granted["reserved"], true, "{granted}");
             assert_eq!(granted["reserved_files"], json!([]), "{granted}");
             let id = granted["reservation_id"]

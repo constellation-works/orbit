@@ -7,7 +7,7 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRunState, JobRunStep, JobTargetType};
 use orbit_store::contracts::InvocationInsertParams;
 use orbit_types::task::{TaskComplexity, TaskRelation, TaskRelationType, TaskStatus, TaskType};
-use orbit_types::telemetry::InvocationTrace;
+use orbit_types::telemetry::{InvocationTrace, ToolCallTrace};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
@@ -45,6 +45,7 @@ fn record_run(
     fixture
         .runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: run.into(),
             account: None,
             activity_id: "implement_one".into(),
@@ -760,6 +761,672 @@ fn succeeded_durations_survive_run_gc_and_upgrade_backfill() {
                 all["current"]["all"]["n"], 4,
                 "the non-committing run stays excluded only by succeeded"
             );
+        },
+    );
+}
+
+#[test]
+fn trend_endpoints_refuse_oversized_windows_and_bound_all_history() {
+    isolated(
+        "metrics_trends::trend_endpoints_refuse_oversized_windows_and_bound_all_history",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let old = now - Duration::days(800);
+            // History far older than any ladder window can split into the
+            // bucket ceiling, reachable only through an `all` window.
+            let task = add_task(&fixture, TaskComplexity::Low, TaskStatus::Backlog);
+            record_run(&fixture, "old-run", Some(&task), 10, old, None);
+            outcome(&fixture, "old-run", old, JobRunState::Success, "performed");
+            let closed = add_task(&fixture, TaskComplexity::Low, TaskStatus::Done);
+            close_at(&fixture, &closed, TaskStatus::Done, old);
+            let defect = add_typed(&fixture, TaskType::Bug, &[], None);
+            let index =
+                rusqlite::Connection::open(fixture.global.join("tasks").join("index.sqlite"))
+                    .unwrap();
+            index
+                .execute(
+                    "UPDATE task_bundle_index SET created_at = ?1 WHERE task_id = ?2",
+                    (old.to_rfc3339(), &defect),
+                )
+                .unwrap();
+            drop(index);
+
+            let server = fixture.server(false);
+            for endpoint in ["implement_one", "completions", "defects"] {
+                // A representable cutoff whose previous window is not
+                // representable, and a very old cutoff that would create
+                // over 100,000 weekly buckets: both are client errors,
+                // never a panic surfaced as 500.
+                for query in ["since=5000000000000s", "since=0001-01-01T00:00:00Z"] {
+                    let response = server.get(&format!("/api/diagnostics/{endpoint}?{query}&{WS}"));
+                    let status = response.status().as_u16();
+                    let body: Value = response.json().expect("HTTP JSON body");
+                    assert_eq!(status, 400, "{endpoint} {query}: {body}");
+                    assert!(
+                        body["error"]
+                            .as_str()
+                            .is_some_and(|error| !error.is_empty()),
+                        "{endpoint} {query} returns a structured error: {body}"
+                    );
+                }
+
+                // Ordinary windows keep clock alignment and previous counts.
+                let day =
+                    json_ok(server.get(&format!("/api/diagnostics/{endpoint}?since=24h&{WS}")));
+                assert_eq!(day["window"]["bucket_seconds"], 3600, "{endpoint}");
+                let buckets = day["buckets"].as_array().unwrap();
+                assert_eq!(buckets.len(), 25, "{endpoint}");
+                assert!(day["previous"].is_object(), "{endpoint}");
+
+                // `all` is accepted however old the history is, widened
+                // past the ladder so its bucket count stays bounded.
+                let all =
+                    json_ok(server.get(&format!("/api/diagnostics/{endpoint}?since=all&{WS}")));
+                assert_eq!(all["previous"], Value::Null, "{endpoint}");
+                let buckets = all["buckets"].as_array().unwrap();
+                assert!(
+                    buckets.len() <= 61,
+                    "{endpoint} all window has {} buckets",
+                    buckets.len()
+                );
+            }
+
+            let runs =
+                json_ok(server.get(&format!("/api/diagnostics/implement_one?since=all&{WS}")));
+            assert_eq!(runs["current"]["all"]["n"], 1);
+            let completions =
+                json_ok(server.get(&format!("/api/diagnostics/completions?since=all&{WS}")));
+            assert_eq!(completions["current"]["done"]["total"], 1);
+            let defects = json_ok(server.get(&format!("/api/diagnostics/defects?since=all&{WS}")));
+            assert_eq!(defects["current"]["total"], 1);
+        },
+    );
+}
+
+fn add_crewed_task(fixture: &Fixture, crew: &str) -> String {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: format!("{crew} delivery friction fixture"),
+            description: "delivery friction fixture".into(),
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Done),
+            crew: Some(crew.into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string()
+}
+
+/// The crew picker lists the window's done-task crews whichever families
+/// the request names, and a crew filter still narrows the denominator
+/// [ORB-18424].
+#[test]
+fn delivery_friction_lists_done_crews_for_non_history_families() {
+    isolated(
+        "metrics_trends::delivery_friction_lists_done_crews_for_non_history_families",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            for (crew, at) in [
+                ("haiku", now - Duration::hours(1)),
+                ("haiku", now - Duration::hours(2)),
+                ("sol", now - Duration::hours(3)),
+                ("sol", now - Duration::days(40)),
+            ] {
+                let task = add_crewed_task(&fixture, crew);
+                close_at(&fixture, &task, TaskStatus::Done, at);
+            }
+
+            let server = fixture.server(false);
+            let expected = json!([
+                { "crew": "haiku", "tasks": 2 },
+                { "crew": "sol", "tasks": 1 },
+            ]);
+            for families in [
+                "cost",
+                "tokens",
+                "step_recovery,cost",
+                "final_recovery,merge_conflict",
+            ] {
+                let response = json_ok(server.get(&format!(
+                    "/api/diagnostics/delivery_friction?since=24h&families={families}&{WS}"
+                )));
+                assert_eq!(
+                    response["available_crews"], expected,
+                    "families={families} still offers the window's crews"
+                );
+            }
+
+            let filtered = json_ok(server.get(&format!(
+                "/api/diagnostics/delivery_friction?since=24h&families=cost&crew=sol&{WS}"
+            )));
+            assert_eq!(filtered["available_crews"], expected);
+            assert_eq!(filtered["done"]["total"], 1, "the crew filter narrows done");
+            assert_eq!(filtered["done"]["unfiltered_total"], 3);
+        },
+    );
+}
+
+fn tool_call(seq: u32, name: &str, bytes: u64) -> ToolCallTrace {
+    ToolCallTrace {
+        seq,
+        tool_name: name.to_string(),
+        result_bytes: bytes,
+        ..Default::default()
+    }
+}
+
+/// One implement invocation linked to `task`, stamped at `at`. No job run is
+/// required: the turns read does not filter on a successful candidate.
+fn record_implement(
+    fixture: &Fixture,
+    run: &str,
+    task: &str,
+    activity: &str,
+    agent: &str,
+    at: DateTime<Utc>,
+    calls: Vec<ToolCallTrace>,
+) {
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: run.into(),
+            account: None,
+            activity_id: activity.into(),
+            agent: agent.into(),
+            provider: None,
+            model: None,
+            task_ids: vec![task.to_string()],
+            trace: InvocationTrace {
+                tool_calls: calls,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET ts = ?1
+                     WHERE id = (SELECT MAX(id) FROM invocations WHERE job_run_id = ?2)",
+                    (at.to_rfc3339(), run),
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn add_closed(
+    fixture: &Fixture,
+    complexity: TaskComplexity,
+    status: TaskStatus,
+    tags: &[&str],
+) -> String {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: format!("{complexity:?} {status:?} turns fixture"),
+            description: "turns to first edit fixture".into(),
+            complexity,
+            status: Some(status),
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string()
+}
+
+fn assert_f64(value: &Value, expected: f64) {
+    let got = value
+        .as_f64()
+        .unwrap_or_else(|| panic!("expected {expected}, got {value}"));
+    assert_eq!(got.to_bits(), expected.to_bits(), "{got} != {expected}");
+}
+
+fn assert_fraction(value: &Value, expected: f64) {
+    let got = value
+        .as_f64()
+        .unwrap_or_else(|| panic!("expected fraction {expected}, got {value}"));
+    assert!((got - expected).abs() < 1e-12, "{got} != {expected}");
+}
+
+fn assert_scored(cell: &Value, n: u64, turns: (f64, f64), bytes: (f64, f64), thin: bool) {
+    assert_eq!(cell["n"].as_u64(), Some(n), "{cell}");
+    assert_eq!(cell["thin"].as_bool(), Some(thin), "{cell}");
+    if n == 0 {
+        assert!(cell["mean_turns"].is_null(), "{cell}");
+        assert!(cell["median_turns"].is_null(), "{cell}");
+        assert!(cell["mean_result_bytes"].is_null(), "{cell}");
+        assert!(cell["median_result_bytes"].is_null(), "{cell}");
+    } else {
+        assert_f64(&cell["mean_turns"], turns.0);
+        assert_f64(&cell["median_turns"], turns.1);
+        assert_f64(&cell["mean_result_bytes"], bytes.0);
+        assert_f64(&cell["median_result_bytes"], bytes.1);
+    }
+}
+
+fn assert_excluded(cell: &Value, no_edit: u64, no_invocation: u64) {
+    assert_eq!(cell["excluded_no_edit"].as_u64(), Some(no_edit), "{cell}");
+    assert_eq!(
+        cell["excluded_no_invocation"].as_u64(),
+        Some(no_invocation),
+        "{cell}"
+    );
+}
+
+fn assert_coverage_categories(
+    cell: &Value,
+    empty_trace: u64,
+    no_detectable_edit: u64,
+    no_invocation: u64,
+) {
+    let measured = cell["n"].as_u64().expect("measured task count");
+    let tasks = measured + empty_trace + no_detectable_edit + no_invocation;
+    assert_eq!(
+        cell["excluded_empty_trace"].as_u64(),
+        Some(empty_trace),
+        "{cell}"
+    );
+    assert_eq!(
+        cell["excluded_no_detectable_edit"].as_u64(),
+        Some(no_detectable_edit),
+        "{cell}"
+    );
+    assert_eq!(cell["tasks"].as_u64(), Some(tasks), "{cell}");
+    assert_eq!(
+        cell["excluded_no_edit"].as_u64(),
+        Some(empty_trace + no_detectable_edit),
+        "{cell}"
+    );
+    assert_eq!(
+        cell["excluded_no_invocation"].as_u64(),
+        Some(no_invocation),
+        "{cell}"
+    );
+}
+
+fn series<'a>(body: &'a Value, complexity: &str, cohort: &str) -> &'a Value {
+    body["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["complexity"] == complexity && entry["cohort"] == cohort)
+        .unwrap_or_else(|| panic!("missing {complexity}/{cohort} in {body}"))
+}
+
+fn turns_body(server: &super::support::Server, query: &str) -> Value {
+    json_ok(server.get(&format!("/api/diagnostics/turns_to_edit?{query}&{WS}")))
+}
+
+/// The public turns-to-first-edit readout: seq order, a real zero, shell and
+/// empty traces excluded, the earlier implement activity winning, an
+/// `agent_implement`-only task, tag cohorts, a provider filter, thin buckets,
+/// rejected tasks, and rejected query parameters.
+#[test]
+fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
+    isolated(
+        "metrics_trends::turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let a = add_closed(
+                &fixture,
+                TaskComplexity::Medium,
+                TaskStatus::Done,
+                &["explore-brief"],
+            );
+            let b = add_closed(
+                &fixture,
+                TaskComplexity::Medium,
+                TaskStatus::Done,
+                &["explore-brief"],
+            );
+            let c = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let d = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let e = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let h = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let i = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let j = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let k = add_closed(&fixture, TaskComplexity::Low, TaskStatus::Done, &[]);
+            let n = add_closed(&fixture, TaskComplexity::Low, TaskStatus::Done, &[]);
+            let _l = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let p = add_closed(&fixture, TaskComplexity::XHard, TaskStatus::Done, &[]);
+            let q = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Rejected, &[]);
+
+            // Pin every closed task to the middle of one hourly bucket. The
+            // index dates terminal tasks by wall-clock close time, so tasks
+            // created across an hour boundary would split into two points
+            // and flake the single-point assertion below.
+            let closed_at = {
+                let base = (now - Duration::hours(2)).timestamp();
+                DateTime::from_timestamp(base - base.rem_euclid(3600) + 1800, 0)
+                    .expect("pinned close time is representable")
+            };
+            for task in [&a, &b, &c, &d, &e, &h, &i, &j, &k, &n, &_l, &p] {
+                close_at(&fixture, task, TaskStatus::Done, closed_at);
+            }
+            close_at(&fixture, &q, TaskStatus::Rejected, closed_at);
+
+            // Inserted out of seq order: Read, Grep, then Edit. Turns are 2.
+            record_implement(
+                &fixture,
+                "run-a",
+                &a,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![
+                    tool_call(3, "Edit", 20),
+                    tool_call(1, "Read", 100),
+                    tool_call(2, "Grep", 50),
+                ],
+            );
+            record_implement(
+                &fixture,
+                "run-b",
+                &b,
+                "implement_one",
+                "codex",
+                now - Duration::hours(2),
+                vec![tool_call(1, "command_execution", 80)],
+            );
+            record_implement(
+                &fixture,
+                "run-c",
+                &c,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![],
+            );
+            record_implement(
+                &fixture,
+                "run-d",
+                &d,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Write", 40)],
+            );
+            // The earlier shell invocation wins over a later edit.
+            record_implement(
+                &fixture,
+                "run-e-early",
+                &e,
+                "implement_one",
+                "codex",
+                now - Duration::hours(5),
+                vec![tool_call(1, "command_execution", 12)],
+            );
+            record_implement(
+                &fixture,
+                "run-e-late",
+                &e,
+                "agent_implement",
+                "claude",
+                now - Duration::hours(1),
+                vec![tool_call(1, "Edit", 9)],
+            );
+            for (run, task) in [("run-h", &h), ("run-i", &i)] {
+                record_implement(
+                    &fixture,
+                    run,
+                    task,
+                    "implement_one",
+                    "claude",
+                    now - Duration::hours(2),
+                    vec![
+                        tool_call(1, "Read", 100),
+                        tool_call(2, "Read", 100),
+                        tool_call(3, "Read", 100),
+                        tool_call(4, "Edit", 1),
+                    ],
+                );
+            }
+            record_implement(
+                &fixture,
+                "run-j",
+                &j,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Bash", 30)],
+            );
+            record_implement(
+                &fixture,
+                "run-k",
+                &k,
+                "implement_one",
+                "codex",
+                now - Duration::hours(2),
+                vec![
+                    tool_call(1, "command_execution", 10),
+                    tool_call(2, "apply_patch", 4),
+                ],
+            );
+            record_implement(
+                &fixture,
+                "run-n",
+                &n,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![
+                    tool_call(1, "Read", 4),
+                    tool_call(2, "Read", 6),
+                    tool_call(3, "mcp__filesystem__write_file", 2),
+                ],
+            );
+            record_implement(
+                &fixture,
+                "run-p",
+                &p,
+                "agent_implement",
+                "claude",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Read", 8), tool_call(2, "Edit", 1)],
+            );
+            record_implement(
+                &fixture,
+                "run-q",
+                &q,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Edit", 3)],
+            );
+
+            let server = fixture.server(false);
+            let body = turns_body(&server, "since=24h");
+            assert_eq!(body["window"]["key"], "24h");
+            assert_eq!(body["window"]["bucket_seconds"], 3600);
+            assert_eq!(body["outcome"], "done");
+            assert!(body["provider"].is_null());
+            assert_eq!(body["min_tasks"], 3);
+            assert_eq!(body["truncated"], false);
+            assert_eq!(body["excluded_other_provider"], 0);
+            assert_eq!(
+                body["coverage"]["tasks"].as_u64(),
+                Some(12),
+                "all coverage categories reconcile to the done task cohort"
+            );
+            assert_eq!(body["coverage"]["measured"], 7);
+            assert_eq!(body["coverage"]["empty_trace"], 1);
+            assert_eq!(body["coverage"]["no_detectable_edit"], 3);
+            assert_eq!(body["coverage"]["no_invocation"], 1);
+            assert_fraction(&body["coverage"]["trace_rate"], 10.0 / 11.0);
+            assert_fraction(&body["coverage"]["measured_rate"], 7.0 / 12.0);
+            let names: Vec<_> = body["series"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{}:{}",
+                        entry["complexity"].as_str().unwrap(),
+                        entry["cohort"].as_str().unwrap()
+                    )
+                })
+                .collect();
+            assert_eq!(
+                names,
+                vec!["low:all", "medium:all", "hard:all", "xhard:all"]
+            );
+
+            let medium = series(&body, "medium", "all");
+            // A 2/150, D 0/0, H 3/300, I 3/300. C has an empty trace;
+            // B, E and J have populated traces without a recognized editor. L has no invocation.
+            assert_scored(&medium["total"], 4, (2.0, 2.5), (187.5, 225.0), false);
+            assert_excluded(&medium["total"], 4, 1);
+            assert_coverage_categories(&medium["total"], 1, 3, 1);
+            let scored: Vec<_> = medium["points"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|point| point["n"].as_u64() != Some(0))
+                .collect();
+            assert_eq!(scored.len(), 1, "closed tasks share the current hour");
+            assert_scored(scored[0], 4, (2.0, 2.5), (187.5, 225.0), false);
+
+            let low = series(&body, "low", "all");
+            assert_scored(&low["total"], 2, (1.5, 1.5), (10.0, 10.0), true);
+            assert_excluded(&low["total"], 0, 0);
+            let xhard = series(&body, "xhard", "all");
+            assert_scored(&xhard["total"], 1, (1.0, 1.0), (8.0, 8.0), true);
+            assert_scored(
+                &series(&body, "hard", "all")["total"],
+                0,
+                (0.0, 0.0),
+                (0.0, 0.0),
+                false,
+            );
+            assert_eq!(
+                body["available_tags"],
+                json!([{ "tag": "explore-brief", "tasks": 2 }])
+            );
+            let providers = body["available_providers"].as_array().unwrap();
+            assert_eq!(providers[0]["provider"], "claude");
+            assert_eq!(providers[0]["tasks"], 8);
+            assert_eq!(providers[0]["coverage"]["measured"], 6);
+            assert_eq!(providers[0]["coverage"]["empty_trace"], 1);
+            assert_eq!(providers[0]["coverage"]["no_detectable_edit"], 1);
+            assert_fraction(&providers[0]["coverage"]["trace_rate"], 7.0 / 8.0);
+            assert_fraction(&providers[0]["coverage"]["measured_rate"], 6.0 / 8.0);
+            assert_eq!(providers[1]["provider"], "codex");
+            assert_eq!(providers[1]["tasks"], 3);
+            assert_eq!(providers[1]["coverage"]["measured"], 1);
+            assert_eq!(providers[1]["coverage"]["no_detectable_edit"], 2);
+            assert_fraction(&providers[1]["coverage"]["trace_rate"], 1.0);
+            assert_fraction(&providers[1]["coverage"]["measured_rate"], 1.0 / 3.0);
+
+            let tagged = turns_body(&server, "since=24h&tags=explore-brief");
+            let with = series(&tagged, "medium", "with");
+            assert_scored(&with["total"], 1, (2.0, 2.0), (150.0, 150.0), true);
+            assert_excluded(&with["total"], 1, 0);
+            assert_coverage_categories(&with["total"], 0, 1, 0);
+            let without = series(&tagged, "medium", "without");
+            assert_scored(&without["total"], 3, (2.0, 3.0), (200.0, 300.0), false);
+            assert_excluded(&without["total"], 3, 1);
+            assert_coverage_categories(&without["total"], 1, 2, 1);
+            assert!(
+                tagged["series"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["complexity"] == "medium" && entry["cohort"] == "with")
+            );
+            let order: Vec<_> = tagged["series"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["complexity"] == "medium")
+                .map(|entry| entry["cohort"].as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(order, vec!["with", "without"]);
+
+            let claude = turns_body(&server, "since=24h&provider=claude");
+            assert_eq!(claude["excluded_other_provider"], 3);
+            assert_scored(
+                &series(&claude, "medium", "all")["total"],
+                4,
+                (2.0, 2.5),
+                (187.5, 225.0),
+                false,
+            );
+            assert_excluded(&series(&claude, "medium", "all")["total"], 2, 1);
+            assert_scored(
+                &series(&claude, "low", "all")["total"],
+                1,
+                (2.0, 2.0),
+                (10.0, 10.0),
+                true,
+            );
+            assert_eq!(claude["available_providers"], body["available_providers"]);
+            assert_eq!(claude["coverage"]["tasks"], 9);
+            assert_eq!(claude["coverage"]["measured"], 6);
+            assert_eq!(claude["coverage"]["empty_trace"], 1);
+            assert_eq!(claude["coverage"]["no_detectable_edit"], 1);
+            assert_eq!(claude["coverage"]["no_invocation"], 1);
+
+            let low_only = turns_body(&server, "since=24h&complexity=low");
+            assert_eq!(low_only["coverage"]["tasks"], 2);
+            assert_eq!(low_only["coverage"]["measured"], 2);
+            assert_eq!(low_only["coverage"]["empty_trace"], 0);
+            assert_eq!(low_only["coverage"]["no_detectable_edit"], 0);
+            assert_eq!(low_only["coverage"]["no_invocation"], 0);
+
+            let closed = turns_body(&server, "since=24h&outcome=all");
+            assert_scored(
+                &series(&closed, "medium", "all")["total"],
+                5,
+                (8.0 / 5.0, 2.0),
+                (150.0, 150.0),
+                false,
+            );
+
+            let nobody = turns_body(&server, "since=24h&provider=nobody");
+            assert_eq!(nobody["excluded_other_provider"], 11);
+            assert_scored(
+                &series(&nobody, "medium", "all")["total"],
+                0,
+                (0.0, 0.0),
+                (0.0, 0.0),
+                false,
+            );
+            assert_excluded(&series(&nobody, "medium", "all")["total"], 0, 1);
+            assert_eq!(nobody["coverage"]["tasks"], 1);
+            assert_eq!(
+                nobody["coverage"]["tasks"].as_u64().unwrap()
+                    + nobody["excluded_other_provider"].as_u64().unwrap(),
+                12,
+                "provider exclusion plus the retained no-invocation category reconciles"
+            );
+
+            for query in [
+                "since=24h&outcome=later",
+                "since=24h&complexity=nope",
+                "since=24h&tags=a,b,c,d,e,f,g,h,i",
+            ] {
+                let response = server.get(&format!("/api/diagnostics/turns_to_edit?{query}&{WS}"));
+                assert_eq!(response.status().as_u16(), 400, "{query}");
+                let message = response.text().unwrap();
+                assert!(
+                    message.contains("later")
+                        || message.contains("nope")
+                        || message.contains("too many tags"),
+                    "{query}: {message}"
+                );
+            }
         },
     );
 }

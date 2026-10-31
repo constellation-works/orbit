@@ -6,14 +6,8 @@ Options:
       --for <DURATION>
           How long to keep admitting work, e.g. `30m`, `2h` (default: one pass)
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --concurrency <N>
           Maximum tasks in flight (default 5)
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --auto-concurrency <MODE>
           Forecast admission mode (default: `machine.auto_concurrency.mode`)
@@ -30,11 +24,11 @@ Options:
           Repair failing checks and conflicts on the pull requests this drain opens
 
       --review <LAYER>
-          Add a review layer before landing when workspace policy has none
+          Add a review layer before landing when workspace policy has none. `before-landing` is recommended; `before-pr` is deprecated but still holds PR creation for a reviewer
 
           Possible values:
-          - before-pr:      Hold PR creation for a reviewer, as `review.timing = before_pr` does
-          - before-landing: Review the open PR before it lands, as `review.timing = before_landing` does
+          - before-pr:      Hold PR creation for a reviewer, as `review.timing = before_pr` does. Deprecated: prefer `before-landing`; still honoured as before-PR
+          - before-landing: Review the open PR before it lands, as `review.timing = before_landing` does. Recommended for new `--review` requests
 
       --allow-crew <CREW>
           Start only tasks on these crews (repeatable, comma-separated)
@@ -66,24 +60,15 @@ Options:
       --stop
           Stop admitting new work; running tasks continue
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
 
 Examples:
   orbit run auto

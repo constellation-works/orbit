@@ -9,6 +9,8 @@ use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::RoutineDefinition;
 
+use orbit_automation::routines::loader::ROUTINES_DIR;
+
 use super::materialize::write_confined_routine;
 use super::rewrite_enabled_line;
 use super::seed::{
@@ -55,6 +57,19 @@ pub(crate) fn sync_retires_routine(routines_dir: &Path, path: &Path) -> bool {
         .is_some_and(|existing| shipped_shape_of(stem, &existing) == Some(ShippedShape::Retired))
 }
 
+/// Whether `path` is a catalog file Orbit seeds: a definition named after a
+/// shipped template directly under a `routines/` directory. A local edit to
+/// one is preserved by sync, which then stops refreshing it.
+pub(crate) fn is_seeded_routine_file(path: &Path) -> bool {
+    path.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|dir| dir == ROUTINES_DIR)
+        && path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| DEFAULT_ROUTINE_FILES.iter().any(|(name, _)| *name == stem))
+}
+
 /// Which template family an on-disk managed routine is a lifecycle-only
 /// variant of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,12 +114,22 @@ pub(crate) fn shipped_shape_of(file_stem: &str, existing: &str) -> Option<Shippe
                     .is_some_and(|rendered| template_owned_shape(&rendered) == shape)
             })
     };
+    // An earlier shape of a default since retired is retired with it, so sync
+    // and doctor treat a copy seeded before the last template change the same
+    // as one seeded from the last template.
+    let retired_stem = RETIRED_ROUTINE_FILES
+        .iter()
+        .any(|(stem, _)| *stem == file_stem);
     if matches(DEFAULT_ROUTINE_FILES) {
         Some(ShippedShape::Current)
-    } else if matches(SUPERSEDED_ROUTINE_TEMPLATES) {
-        Some(ShippedShape::Superseded)
     } else if matches(RETIRED_ROUTINE_FILES) {
         Some(ShippedShape::Retired)
+    } else if matches(SUPERSEDED_ROUTINE_TEMPLATES) {
+        Some(if retired_stem {
+            ShippedShape::Retired
+        } else {
+            ShippedShape::Superseded
+        })
     } else {
         None
     }

@@ -39,8 +39,9 @@ impl OrbitRuntime {
     }
 
     /// Read the current effective controller policy, retaining explicit overrides.
+    /// Observation-only: reading policy must not reconcile a stale run.
     pub fn run_auto_concurrency(&self, run_id: &str) -> Result<Value, OrbitError> {
-        let run = self.show_job_run(run_id)?;
+        let run = self.show_job_run_observed(run_id)?;
         let input = run.input.unwrap_or_else(|| json!({}));
         self.auto_concurrency_view(Some(&input))
     }

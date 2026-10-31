@@ -154,6 +154,7 @@ mod branch_observation;
 mod commit;
 mod handoff;
 mod landing;
+mod lease_notices;
 mod lifecycle;
 mod owner_wave;
 mod repair;
@@ -168,5 +169,7 @@ use boundary::{BoundaryDepth, Section};
 pub use admission::admission_refusal;
 #[cfg(feature = "test-support")]
 pub(crate) use boundary::lock_timeout_hook;
+#[cfg(feature = "test-support")]
+pub(crate) use boundary::task_write_hold_hook;
 #[cfg(feature = "test-support")]
 pub(crate) use repair::fallback_hook;

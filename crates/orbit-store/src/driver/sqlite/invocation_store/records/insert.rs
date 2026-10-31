@@ -18,6 +18,7 @@ use crate::{Store, now_string};
 /// `v1_upgrade_and_fresh_database_have_identical_columns` keeps an upgraded
 /// legacy database's columns identical to a fresh one's.
 pub(crate) const INVOCATION_INSERT_COLUMNS: &[&str] = &[
+    "agent_execution_id",
     "ts",
     "workspace_id",
     "job_run_id",
@@ -34,6 +35,7 @@ pub(crate) const INVOCATION_INSERT_COLUMNS: &[&str] = &[
     "tool_call_count",
     "provider_cost_usd",
     "account",
+    "long_prompt_requests_json",
 ];
 
 /// `INSERT INTO invocations(...) VALUES (?1, ...)` rendered from
@@ -56,11 +58,22 @@ impl Store {
     ) -> Result<(), OrbitError> {
         let mut conn = orbit_common::fs::lock_wait::mutex(&self.conn)
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        // `NULL` records that the provider output exposed no per-request usage.
+        let long_prompt_requests_json = params
+            .trace
+            .long_prompt_requests
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|error| {
+                OrbitError::Store(format!("could not encode long-prompt requests: {error}"))
+            })?;
         let tx = conn.transaction().map_err(sqlite_store_error)?;
 
         tx.execute(
             INVOCATION_INSERT_SQL.as_str(),
             params![
+                params.agent_execution_id,
                 now_string(),
                 workspace_id,
                 params.job_run_id,
@@ -77,6 +90,7 @@ impl Store {
                 params.trace.tool_calls.len() as i64,
                 params.trace.provider_cost_usd,
                 params.account,
+                long_prompt_requests_json,
             ],
         )
         .map_err(sqlite_store_error)?;

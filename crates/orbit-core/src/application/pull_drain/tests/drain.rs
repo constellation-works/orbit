@@ -86,6 +86,12 @@ impl PullPeer for Peer {
                 schema_version: 1,
                 gates: None,
                 tag_instructions: None,
+                explore_brief: None,
+                visual_review: None,
+                experiments: Some(orbit_types::workflow::CapturedExperiments {
+                    task_id: "task".into(),
+                    assignments: Vec::new(),
+                }),
                 affinity: None,
                 request: request.clone(),
                 machine_id: destination.execution_machine_id.clone(),
@@ -109,6 +115,7 @@ impl PullPeer for Peer {
                     title: "task".into(),
                     complexity: None,
                     crew: None,
+                    crew_source: None,
                     context_files: vec!["file:src.rs".into()],
                     resume_candidate: self.resume_candidate.borrow().clone(),
                 }),
@@ -117,6 +124,7 @@ impl PullPeer for Peer {
                 crew_unavailable: vec![],
                 os_unavailable: vec![],
                 browser_kit_unavailable: vec![],
+                labels_unavailable: vec![],
                 queue_depth: 0,
                 capacity_unavailable: Vec::new(),
             })
@@ -366,12 +374,14 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             execution_machine_id: "owner".into(),
         },
         AdmissionRequest {
+            labels: Vec::new(),
             request_id: "template".into(),
             caller_version: "1".into(),
             caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: false,
+            selective_review: false,
             run_context: AdmissionRunContext {
                 run_id: parent.run_id,
                 job_name: "workspace_auto_pipeline".into(),

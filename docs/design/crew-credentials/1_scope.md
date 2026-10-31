@@ -1,9 +1,16 @@
 ---
+title: "Scope: per-crew credentials (`crews.<name>.env`)"
+owner: claude
+status: Draft
+stage: shipped
+next: "—"
+feature: crew-credentials
+doc_role: scope
 type: design
 summary: "Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider"
 tags: [crew-credentials, crews, execution-env, provider-limits]
 last_updated: 2026-10-21
-last_validated: 2026-10-21
+last_validated: 2026-10-30
 ---
 
 # Scope: per-crew credentials (`crews.<name>.env`)
@@ -66,9 +73,9 @@ Rules:
 | Concern | File |
 |---|---|
 | Parse, validate, global-only | [`raw.rs`](../../../crates/orbit-config/src/raw.rs), [`Crew`](../../../crates/orbit-types/src/identity/agent_pair.rs) |
-| Overlay on the agent env | [`child_env.rs`](../../../crates/orbit-common/src/security/child_env.rs), `agent_subprocess_environment` in [engine trait](../../../crates/orbit-engine/src/context/hosts/runtime_host.rs) and [core host](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs), [`CrewConfig`](../../../crates/orbit-engine/src/context/hosts/config.rs); also the detached worker snapshot and the auth probe |
+| Overlay on the agent env | [`child_env.rs`](../../../crates/orbit-common/src/security/child_env.rs), `agent_subprocess_environment` in [engine trait](../../../crates/orbit-engine/src/context/hosts/runtime_host/mod.rs) and [core host](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/host.rs), [`CrewConfig`](../../../crates/orbit-engine/src/context/hosts/config.rs); also the detached worker snapshot and the auth probe |
 | macOS Claude credential gate | [`environment.rs`](../../../crates/orbit-engine/src/activity_job/cli_runner/orchestrator/environment.rs) checks the composed crew env |
-| Limits, holds, exclusions | [`provider_hold.rs`](../../../crates/orbit-core/src/runtime/task/provider_hold.rs), [`host_provider_hold.rs`](../../../crates/orbit-core/src/application/distributed/host_provider_hold.rs), [`auth_recovery.rs`](../../../crates/orbit-core/src/application/distributed/auth_recovery.rs), crew window, admission policy |
+| Limits, holds, exclusions | [`provider_hold.rs`](../../../crates/orbit-runtime/src/task/provider_hold.rs), [`host_provider_hold.rs`](../../../crates/orbit-core/src/application/distributed/host_provider_hold.rs), [`auth_recovery.rs`](../../../crates/orbit-core/src/application/distributed/auth_recovery.rs), crew window, admission policy |
 | Surfaces | `config show/get/set`, dashboard Settings, `orbit doctor` (`env-pass`, `claude-worker-token`), run detail credential origin: names only |
 
 ## Phasing

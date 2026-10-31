@@ -11,6 +11,7 @@ use orbit_types::workflow::{
     run_id_minute_stem,
 };
 
+use super::input_keys::parse_input_keys;
 use super::state::write_state_json_conn;
 use crate::contracts::{JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
@@ -22,6 +23,52 @@ pub(super) const STEP_RUN_ID_CHUNK: usize = 500;
 pub(super) const LATEST_JOB_ID_CHUNK: usize = 500;
 
 impl Store {
+    /// Project only the ownership bindings of selected runs, without decoding
+    /// run rows or reading checkpoints/steps. Selection has no age window
+    /// unless the caller supplies one in `query`.
+    pub fn job_run_task_ids_for_workspace(
+        &self,
+        workspace_id: &str,
+        query: &JobRunQuery,
+    ) -> Result<std::collections::BTreeSet<String>, OrbitError> {
+        let (selected, params) = if query.limit.is_some() {
+            job_run_list_sql(workspace_id, query)
+        } else {
+            // Without a run limit the ID set needs no recency sort or other
+            // run columns. Retain exactly the listing surface's predicates.
+            let (filter, params) = job_run_filter_sql(workspace_id, query);
+            (
+                format!("SELECT input_json FROM job_runs WHERE {filter}"),
+                params,
+            )
+        };
+        let sql = format!(
+            "WITH inputs AS (SELECT input_json FROM ({selected})) \
+             SELECT binding.value FROM inputs, json_each(\
+                 CASE WHEN json_type(input_json, '$.task_ids') = 'array' \
+                 THEN json_extract(input_json, '$.task_ids') ELSE '[]' END) AS binding \
+             WHERE binding.type = 'text' \
+             UNION SELECT json_extract(input_json, '$.task_id') FROM inputs \
+             WHERE json_type(input_json, '$.task_id') = 'text'"
+        );
+        let conn = self.read()?;
+        let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(sqlite_store_error)?;
+        let mut ids = std::collections::BTreeSet::new();
+        for row in rows {
+            let id = row.map_err(sqlite_store_error)?;
+            let id = id.trim();
+            if !id.is_empty() {
+                ids.insert(id.to_string());
+            }
+        }
+        Ok(ids)
+    }
+
     pub(super) fn latest_job_runs_for_workspace(
         &self,
         workspace_id: &str,
@@ -144,7 +191,9 @@ impl Store {
         let conn = self.read()?;
         let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
-            .query_map(param_refs.as_slice(), row_to_job_run)
+            .query_map(param_refs.as_slice(), |row| {
+                row_to_job_run_with_input_keys(row, query.input_keys)
+            })
             .map_err(sqlite_store_error)?;
         let mut runs = rows
             .collect::<Result<Vec<_>, _>>()
@@ -363,6 +412,15 @@ pub(super) fn get_job_run_for_workspace_conn(
 }
 
 pub(super) fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
+    row_to_job_run_with_input_keys(row, None)
+}
+
+/// [`row_to_job_run`], hydrating only `input_keys` of the run's input when
+/// set ([`JobRunQuery::input_keys`]).
+fn row_to_job_run_with_input_keys(
+    row: &rusqlite::Row<'_>,
+    input_keys: Option<&[&str]>,
+) -> rusqlite::Result<JobRun> {
     let attempt: i64 = row.get(2)?;
     let state_raw: String = row.get(3)?;
     let scheduled_raw: String = row.get(4)?;
@@ -386,7 +444,12 @@ pub(super) fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun
         created_at: parse_timestamp(&created_raw)?,
         pid: pid.map(|value| value as u32),
         pid_start_time: row.get(10)?,
-        input: parse_optional_json(input_json, "input_json")?,
+        input: match input_keys {
+            Some(keys) => parse_optional_json_with(input_json, "input_json", |raw| {
+                parse_input_keys(raw, keys)
+            })?,
+            None => parse_optional_json(input_json, "input_json")?,
+        },
         retry_source_run_id: row.get(12)?,
         knowledge_metrics: parse_optional_json(knowledge_metrics_json, "knowledge_metrics_json")?,
         resolved_crew: row.get(14)?,
@@ -439,8 +502,39 @@ pub(super) fn job_run_list_sql(
             params,
         );
     }
+    // A bounded recency page for one state must walk that state's recency
+    // index and stop at its limit. Left to the planner, a `created_since`
+    // window instead ranges over `idx_job_runs_workspace_created` and sorts
+    // the whole retained cohort, payloads included, before the limit
+    // applies [ORB-20163]: the store collects no planner statistics, so the
+    // window's selectivity is only a heuristic guess. Pin the index the
+    // multi-state path above already pins, but only when no other filter
+    // could make the walk discard most of the state's history before
+    // filling the page: a per-job, per-task or per-routine page is bounded
+    // far more cheaply by its own index, and a terminal/active set that
+    // contradicts the one state would walk the state to exhaustion.
+    let single_state = match (query.state, query.states.as_slice()) {
+        (Some(_), []) => true,
+        (Some(state), [only]) => state == *only,
+        (None, [_]) => true,
+        _ => false,
+    };
+    let indexed_by = if query.order_by == JobRunOrder::Recency
+        && query.limit.is_some()
+        && single_state
+        && query.job_id.is_none()
+        && query.task_id.is_none()
+        && query.trigger_routine.is_none()
+        && !query.terminal_only
+        && !query.active_only
+    {
+        " INDEXED BY idx_job_runs_ws_state_recency"
+    } else {
+        ""
+    };
     let mut sql = format!(
-        "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
+        "SELECT {JOB_RUN_COLUMNS} FROM job_runs{indexed_by} \
+         WHERE {where_clause} ORDER BY {order_clause}"
     );
     if let Some(limit) = query.limit {
         sql.push_str(&format!(" LIMIT ?{}", params.len() + 1));
@@ -506,6 +600,33 @@ fn job_run_filter_sql(
         params.push(Box::new(task_id.clone()));
     }
     if let Some(routine) = &query.trigger_routine {
+        // Pre-filter on the run's own input before probing `job_run_states`:
+        // parsing each candidate's pipeline state means walking its overflow
+        // chain (hundreds of KB on drain runs) only to read one trigger
+        // field. Every term below only excludes a run whose input proves it
+        // was not admitted for this routine, so the state probe still decides
+        // every kept row: a state or delivery automation run names its
+        // consumer (`<machine>/<workspace>/<kind>/<routine>`) in the input it
+        // was submitted with, and drain-promoted or CI-sweep-filed child runs
+        // carry their authority records in theirs and are never
+        // routine-triggered.
+        let consumer_pattern = format!(
+            "%/{}",
+            routine
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let pattern = params.len() + 1;
+        conditions.push(format!(
+            "(COALESCE(json_extract(input_json, '$.state_automation.consumer') \
+             LIKE ?{pattern} ESCAPE '\\', 1) \
+             AND COALESCE(json_extract(input_json, '$.automation.batch.consumer') \
+             LIKE ?{pattern} ESCAPE '\\', 1) \
+             AND json_type(input_json, '$.drain_promotion') IS NULL \
+             AND json_type(input_json, '$.ci_sweep_filing') IS NULL)"
+        ));
+        params.push(Box::new(consumer_pattern));
         conditions.push(format!(
             "EXISTS (SELECT 1 FROM job_run_states AS trigger_state \
              WHERE trigger_state.workspace_id = job_runs.workspace_id \
@@ -682,8 +803,16 @@ fn parse_optional_json<T: serde::de::DeserializeOwned>(
     raw: Option<String>,
     label: &str,
 ) -> rusqlite::Result<Option<T>> {
+    parse_optional_json_with(raw, label, |raw| serde_json::from_str(raw))
+}
+
+fn parse_optional_json_with<T>(
+    raw: Option<String>,
+    label: &str,
+    parse: impl FnOnce(&str) -> serde_json::Result<T>,
+) -> rusqlite::Result<Option<T>> {
     raw.map(|raw| {
-        serde_json::from_str(&raw).map_err(|e| {
+        parse(&raw).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(
                 raw.len(),
                 rusqlite::types::Type::Text,

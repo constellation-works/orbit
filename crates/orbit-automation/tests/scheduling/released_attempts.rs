@@ -3,6 +3,7 @@
 //! retry or a concurrent evaluator can still claim it [ORB-14164].
 
 use super::*;
+use orbit_automation::DeferredReason;
 
 const CONSUMER: &str = "fixture/released-attempts";
 
@@ -86,7 +87,9 @@ impl MemberHost for PinningHost<'_> {
     fn admit(&self, attempt: &MemberAttempt) -> Result<String, AutomationError> {
         self.pins.borrow_mut().insert(attempt.id.clone());
         if self.admit_fails.get() {
-            return Err(AutomationError::Deferred("fixture_submit_failed".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceIo(
+                std::io::Error::other("fixture_submit_failed").into(),
+            )));
         }
         Ok(format!("run-{}", attempt.attempt))
     }
@@ -252,7 +255,9 @@ fn an_attempt_survives_a_settlement_that_loses_the_generation_race() {
     host.race.set(true);
     assert!(matches!(
         tick(&host, 3),
-        Err(AutomationError::Deferred(reason)) if reason == "concurrent_evaluation"
+        Err(AutomationError::Deferred(
+            DeferredReason::ConcurrentEvaluation
+        ))
     ));
     assert!(host.released.borrow().is_empty());
     assert!(

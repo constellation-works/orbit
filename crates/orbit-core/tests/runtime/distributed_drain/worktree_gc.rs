@@ -212,15 +212,28 @@ fn link_replica_checkout(replica: &Path) -> PathBuf {
     primary.canonicalize().unwrap()
 }
 
-fn gc_report(result: &impl serde::Serialize, leaf: &str) -> Value {
+/// The report for one leaf's worktree (or other expected path).
+///
+/// A single run can produce several reports — its worktree report and,
+/// for example, a `reclaimed` host-validation-target report sharing the
+/// same `run_id` [ORB-17657]. Selecting by `run_id` alone therefore
+/// returns whichever report GC emitted or sorted first, so callers must
+/// name the expected path as well as the run.
+fn gc_report(result: &impl serde::Serialize, leaf: &str, path: &Path) -> Value {
     let result = serde_json::to_value(result).unwrap();
-    result["reports"]
+    let expected = path.to_string_lossy();
+    let matches: Vec<&Value> = result["reports"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|report| report["run_id"] == leaf)
-        .cloned()
-        .unwrap_or_else(|| panic!("no report for {leaf}: {result:#}"))
+        .filter(|report| report["run_id"] == leaf && report["path"] == expected.as_ref())
+        .collect();
+    assert!(
+        matches.len() == 1,
+        "expected exactly one report for {leaf} at {expected}, got {}: {result:#}",
+        matches.len()
+    );
+    matches[0].clone()
 }
 
 /// Delivery must index other runs before filtering its own cleanup [ORB-14533].
@@ -283,7 +296,7 @@ fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
             let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
             let cleanup = &state.pipeline["worktree_cleanup"];
             assert_eq!(
-                gc_report(cleanup, &delivered.run_id)["action"],
+                gc_report(cleanup, &delivered.run_id, &worktree)["action"],
                 "skipped:ambiguous_run_path"
             );
             assert!(worktree.join("retained.rs").exists());
@@ -306,11 +319,14 @@ fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
                 .unwrap();
             for run in [&delivered.run_id, &other.run_id] {
                 assert_eq!(
-                    gc_report(&scheduled, run)["action"],
+                    gc_report(&scheduled, run, &worktree)["action"],
                     "skipped:ambiguous_run_path"
                 );
             }
-            assert_eq!(gc_report(&scheduled, &unrelated_run)["action"], "removed");
+            assert_eq!(
+                gc_report(&scheduled, &unrelated_run, &unrelated_path)["action"],
+                "removed"
+            );
             assert_eq!(git(&pair.follower_repo, &["rev-parse", &branch]), head);
 
             if !running {
@@ -338,7 +354,11 @@ fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
                 let delivered = runtime.run_job_v2_from_yaml(&job, input.clone()).unwrap();
                 assert!(delivered.success, "{delivered:?}");
                 let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
-                let report = gc_report(&state.pipeline["worktree_cleanup"], &delivered.run_id);
+                let report = gc_report(
+                    &state.pipeline["worktree_cleanup"],
+                    &delivered.run_id,
+                    &worktree,
+                );
                 assert_eq!(report["action"], "skipped:ambiguous_run_path");
                 assert_eq!(report["task_status"], "backlog");
                 assert_eq!(git(&pair.follower_repo, &["rev-parse", &branch]), head);
@@ -359,7 +379,11 @@ fn delivery_retains_a_shared_worktree_until_every_mapped_run_is_terminal() {
             assert!(delivered.success, "{delivered:?}");
             let state = runtime.read_run_state(&delivered.run_id).unwrap().unwrap();
             assert_eq!(
-                gc_report(&state.pipeline["worktree_cleanup"], &delivered.run_id)["action"],
+                gc_report(
+                    &state.pipeline["worktree_cleanup"],
+                    &delivered.run_id,
+                    &worktree
+                )["action"],
                 "removed"
             );
             assert!(!worktree.exists());
@@ -419,7 +443,7 @@ fn an_accepted_handoff_gives_back_its_build_output_and_then_its_worktree() {
         .follower
         .gc_worktrees(true, None, None, false, false)
         .unwrap();
-    let report = gc_report(&gc, &leaf);
+    let report = gc_report(&gc, &leaf, &worktree);
     assert_eq!(report["action"], "removed", "{report:#}");
     assert!(
         report["detail"]
@@ -495,9 +519,15 @@ fn a_linked_replica_reclaims_a_settled_leafs_host_validation_output() {
             .cloned()
             .unwrap_or_else(|| panic!("no report for {}: {reports:#}", path.display()))
     };
-    assert_eq!(at(&worktree)["action"], "removed", "{reports:#}");
+    // This leaf yields both a worktree report and a host-target report
+    // under the same run_id; gc_report must select by expected path.
+    assert_eq!(
+        gc_report(&gc, &leaf, &worktree)["action"],
+        "removed",
+        "{reports:#}"
+    );
     assert!(!worktree.exists());
-    let reclaimed = at(&target);
+    let reclaimed = gc_report(&gc, &leaf, &target);
     assert_eq!(reclaimed["action"], "reclaimed", "{reclaimed:#}");
     assert_eq!(reclaimed["run_id"], leaf, "{reclaimed:#}");
     assert!(
@@ -554,7 +584,7 @@ fn a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit() {
         .follower
         .gc_worktrees(true, None, None, false, false)
         .unwrap();
-    let report = gc_report(&gc, &leaf);
+    let report = gc_report(&gc, &leaf, &worktree);
     assert_eq!(
         report["action"], "skipped:task_status_ineligible",
         "{report:#}"
@@ -573,7 +603,7 @@ fn a_released_claim_keeps_its_backlogged_worktree_and_unhanded_commit() {
         .follower
         .gc_worktrees(true, None, None, false, false)
         .unwrap();
-    let report = gc_report(&gc, &leaf);
+    let report = gc_report(&gc, &leaf, &worktree);
     assert_eq!(report["action"], "skipped:owner_unreachable", "{report:#}");
     assert!(worktree.join("unfinished.rs").exists());
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head);
@@ -608,7 +638,7 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    let report = gc_report(&unreachable, &leaf);
+    let report = gc_report(&unreachable, &leaf, &worktree);
     assert_eq!(report["action"], "skipped:owner_unreachable", "{report:#}");
     assert!(
         report["detail"]
@@ -632,7 +662,7 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    let report = gc_report(&owner_error, &leaf);
+    let report = gc_report(&owner_error, &leaf, &worktree);
     assert_eq!(
         report["action"], "skipped:owner_lookup_failed",
         "{report:#}"
@@ -649,7 +679,7 @@ fn an_unsettled_claimed_worktree_asks_its_owner_and_reports_a_transport_failure(
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    let report = gc_report(&answered, &leaf);
+    let report = gc_report(&answered, &leaf, &worktree);
     assert_eq!(
         report["action"], "skipped:task_status_ineligible",
         "{report:#}"
@@ -675,10 +705,10 @@ fn a_replica_collects_a_local_done_task_without_asking_the_owner() {
         .follower
         .gc_worktrees(true, None, None, false, false)
         .unwrap();
-    assert_eq!(gc_report(&gc, &leaf)["action"], "removed");
+    assert_eq!(gc_report(&gc, &leaf, &path)["action"], "removed");
     assert!(!path.exists());
     assert_eq!(
-        gc_report(&gc, &missing_leaf)["action"],
+        gc_report(&gc, &missing_leaf, &missing_path)["action"],
         "skipped:task_unresolved"
     );
     assert!(missing_path.exists(), "a missing local task fails closed");
@@ -695,7 +725,7 @@ fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
     let third = orbit_types::task::format_task_id("THIRD", 1).unwrap();
     let local = local_done_task(&pair);
     let (owner_leaf, owner_path) = terminal_worktree(&pair, &[owner_task]);
-    let (second_owner_leaf, _) = terminal_worktree(&pair, &[owner_task]);
+    let (second_owner_leaf, second_owner_path) = terminal_worktree(&pair, &[owner_task]);
     let (local_leaf, local_path) = terminal_worktree(&pair, &[&local]);
     let (third_leaf, third_path) = terminal_worktree(&pair, &[&third]);
     let selector = pair.destination["selector"].as_str().unwrap();
@@ -705,16 +735,22 @@ fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
         .follower
         .gc_worktrees(true, None, None, false, false)
         .unwrap();
-    for leaf in [&owner_leaf, &second_owner_leaf] {
+    for (leaf, path) in [
+        (&owner_leaf, &owner_path),
+        (&second_owner_leaf, &second_owner_path),
+    ] {
         assert_eq!(
-            gc_report(&outage, leaf)["action"],
+            gc_report(&outage, leaf, path)["action"],
             "skipped:owner_unreachable"
         );
     }
-    assert_eq!(gc_report(&outage, &local_leaf)["action"], "removed");
+    assert_eq!(
+        gc_report(&outage, &local_leaf, &local_path)["action"],
+        "removed"
+    );
     assert!(!local_path.exists());
     assert_eq!(
-        gc_report(&outage, &third_leaf)["action"],
+        gc_report(&outage, &third_leaf, &third_path)["action"],
         "skipped:task_prefix_unroutable"
     );
     assert!(owner_path.exists() && third_path.exists());
@@ -736,9 +772,9 @@ fn replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent() {
             .follower
             .gc_worktrees(true, None, None, false, false)
             .unwrap();
-        assert_eq!(gc_report(&gc, &owner_leaf)["action"], action);
+        assert_eq!(gc_report(&gc, &owner_leaf, &owner_path)["action"], action);
         assert_eq!(
-            gc_report(&gc, &third_leaf)["action"],
+            gc_report(&gc, &third_leaf, &third_path)["action"],
             "skipped:task_prefix_unroutable"
         );
         assert!(owner_path.exists() && third_path.exists());
@@ -772,7 +808,7 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
     mirror_tasks(&pair, &third);
     let unregistered = orbit_types::task::format_task_id("NOONE", 1).unwrap();
     let (owner_leaf, owner_path) = terminal_worktree(&pair, &[owner_task]);
-    let (local_leaf, _) = terminal_worktree(&pair, &[&local]);
+    let (local_leaf, local_path) = terminal_worktree(&pair, &[&local]);
     let (third_leaf, third_path) = terminal_worktree(&pair, &[&third_task]);
     let (unregistered_leaf, unregistered_path) = terminal_worktree(&pair, &[&unregistered]);
 
@@ -781,9 +817,12 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    for leaf in [&third_leaf, &unregistered_leaf] {
+    for (leaf, path) in [
+        (&third_leaf, &third_path),
+        (&unregistered_leaf, &unregistered_path),
+    ] {
         assert_eq!(
-            gc_report(&unknown, leaf)["action"],
+            gc_report(&unknown, leaf, path)["action"],
             "skipped:task_prefix_unroutable"
         );
     }
@@ -799,11 +838,20 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    assert_eq!(gc_report(&routed, &owner_leaf)["task_status"], "backlog");
-    assert_eq!(gc_report(&routed, &local_leaf)["task_status"], "done");
-    assert_eq!(gc_report(&routed, &third_leaf)["task_status"], "backlog");
     assert_eq!(
-        gc_report(&routed, &unregistered_leaf)["action"],
+        gc_report(&routed, &owner_leaf, &owner_path)["task_status"],
+        "backlog"
+    );
+    assert_eq!(
+        gc_report(&routed, &local_leaf, &local_path)["task_status"],
+        "done"
+    );
+    assert_eq!(
+        gc_report(&routed, &third_leaf, &third_path)["task_status"],
+        "backlog"
+    );
+    assert_eq!(
+        gc_report(&routed, &unregistered_leaf, &unregistered_path)["action"],
         "skipped:task_prefix_unroutable"
     );
     let selector = format!("{OWNER}/{}", pair.wire.owner.workspace_id().unwrap());
@@ -826,11 +874,11 @@ fn replica_gc_looks_each_id_up_on_the_host_its_prefix_names() {
         .gc_worktrees(true, None, None, false, false)
         .unwrap();
     assert_eq!(
-        gc_report(&outage, &owner_leaf)["action"],
+        gc_report(&outage, &owner_leaf, &owner_path)["action"],
         "skipped:owner_unreachable"
     );
     assert_eq!(
-        gc_report(&outage, &third_leaf)["task_status"],
+        gc_report(&outage, &third_leaf, &third_path)["task_status"],
         "backlog",
         "one holder's outage does not poison another's lookups"
     );
@@ -909,18 +957,18 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
         .follower
         .gc_worktrees(false, None, None, false, false)
         .unwrap();
-    for (leaf, action) in [
-        (&clean, "would_remove"),
-        (&locked, "skipped:worktree_locked"),
-        (&claimed_leaf, "skipped:claim_live"),
-        (&committed, "skipped:unpublished_commits"),
-        (&backlogged, "skipped:task_status_ineligible"),
+    for (leaf, path, action) in [
+        (&clean, &clean_path, "would_remove"),
+        (&locked, &locked_path, "skipped:worktree_locked"),
+        (&claimed_leaf, &claimed_path, "skipped:claim_live"),
+        (&committed, &committed_path, "skipped:unpublished_commits"),
+        (&backlogged, &backlog_path, "skipped:task_status_ineligible"),
     ] {
-        let report = gc_report(&preview, leaf);
+        let report = gc_report(&preview, leaf, path);
         assert_eq!(report["action"], action, "{report:#}");
     }
     assert!(
-        gc_report(&preview, &locked)["detail"]
+        gc_report(&preview, &locked, &locked_path)["detail"]
             .as_str()
             .is_some_and(|detail| detail.contains("operator hold")),
         "{preview:#?}"
@@ -930,7 +978,7 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
         .follower
         .gc_worktrees(true, None, None, false, false)
         .unwrap();
-    assert_eq!(gc_report(&swept, &clean)["action"], "removed");
+    assert_eq!(gc_report(&swept, &clean, &clean_path)["action"], "removed");
     assert!(!clean_path.exists());
     for (leaf, path) in [
         (&locked, &locked_path),
@@ -939,7 +987,7 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
         (&backlogged, &backlog_path),
     ] {
         assert!(
-            gc_report(&swept, leaf)["action"]
+            gc_report(&swept, leaf, path)["action"]
                 .as_str()
                 .is_some_and(|action| action.starts_with("skipped:")),
             "{swept:#?}"
@@ -972,7 +1020,7 @@ fn a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive() {
         .follower
         .gc_worktrees(true, None, None, false, false)
         .unwrap();
-    let report = gc_report(&published, &committed);
+    let report = gc_report(&published, &committed, &committed_path);
     assert_eq!(report["action"], "removed", "{report:#}");
     assert_eq!(
         report["recovery"]["source"], "published_branch",
@@ -996,10 +1044,54 @@ fn a_parked_age_is_measured_from_the_status_change() {
         .follower
         .gc_worktrees(true, None, Some(24), false, false)
         .unwrap();
-    let report = gc_report(&gc, &leaf);
+    let report = gc_report(&gc, &leaf, &path);
     assert_eq!(report["action"], "skipped:parked_too_recent", "{report:#}");
     assert_eq!(report["task_status"], "someday", "{report:#}");
     assert!(path.exists());
+}
+
+/// [ORB-17657] Regression for the run_id-only lookup: one leaf can yield
+/// both a worktree report and a host-target report under the same
+/// `run_id`, as in
+/// `a_linked_replica_reclaims_a_settled_leafs_host_validation_output`.
+/// `gc_report` must return the worktree report deterministically,
+/// regardless of the order GC emits or sorts the reports into. The old
+/// run_id-only `find` returned the host-target report in the second
+/// order below and the worktree report in the first, so this fails on
+/// the defective helper.
+fn gc_report_selects_the_worktree_report_when_a_leaf_also_has_a_host_target_report() {
+    let leaf = "leaf-dual-report";
+    let worktree = Path::new("/repo/.orbit/state/worktrees/orbit-leaf-dual-report");
+    let target = Path::new("/primary/.orbit/state/host-validation-targets/abc123");
+    let worktree_report = json!({
+        "run_id": leaf,
+        "path": worktree,
+        "action": "removed",
+        "bytes_reclaimed": 0,
+    });
+    let host_target_report = json!({
+        "run_id": leaf,
+        "path": target,
+        "action": "reclaimed",
+        "bytes_reclaimed": 16,
+    });
+    for reports in [
+        vec![worktree_report.clone(), host_target_report.clone()],
+        vec![host_target_report.clone(), worktree_report.clone()],
+    ] {
+        let result = json!({ "reports": reports });
+        let report = gc_report(&result, leaf, worktree);
+        assert_eq!(report["action"], "removed", "{report:#}");
+        assert_eq!(
+            report["path"],
+            worktree.to_string_lossy().as_ref(),
+            "{report:#}"
+        );
+        // The host-target report is still reachable by its own path.
+        let reclaimed = gc_report(&result, leaf, target);
+        assert_eq!(reclaimed["action"], "reclaimed", "{reclaimed:#}");
+        assert_eq!(reclaimed["bytes_reclaimed"], 16, "{reclaimed:#}");
+    }
 }
 
 // Related boundary scenarios share the isolated table fixture.
@@ -1014,5 +1106,6 @@ crate::scenario_table!(
     replica_gc_routes_owner_ids_and_keeps_other_prefixes_independent,
     replica_gc_looks_each_id_up_on_the_host_its_prefix_names,
     a_parked_tasks_failed_worktree_goes_only_when_its_commits_survive,
-    a_parked_age_is_measured_from_the_status_change
+    a_parked_age_is_measured_from_the_status_change,
+    gc_report_selects_the_worktree_report_when_a_leaf_also_has_a_host_target_report
 );

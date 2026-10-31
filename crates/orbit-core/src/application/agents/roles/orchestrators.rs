@@ -25,7 +25,9 @@ use crate::application::agents::{AgentFacts, AgentRole, MODEL_UNKNOWN};
 pub(super) const ROLE: RoleSpec = RoleSpec {
     unit: "owned tasks",
     terms: TERMS,
+    term_units: &[],
     rows: Some(rows),
+    header: None,
 };
 
 const TERMS: &[Term] = &[
@@ -40,7 +42,7 @@ const TERMS: &[Term] = &[
         key: "spec_defects",
         label: "Spec defects",
         weight: -1.0,
-        definition: "Description or criteria edited after the first run started (once per task), agent blocks naming the criteria, final-recovery escalations citing them, and regressions with escape spec_ambiguous.",
+        definition: "Description or criteria edited after the first run started (once per task), agent blocks naming the criteria, final-recovery escalations citing them, regressions with escape spec_ambiguous, and confirmed task-pilot holds on validation-tool, ADR-conflict, surface or utility findings. Pilot holds count at most once per task and add no charge when their confirming event already counts as a spec edit, criteria block or criteria escalation; prerequisite-only holds and unconfirmed warnings add none.",
         group: "problem",
     },
     Term {
@@ -55,7 +57,7 @@ const TERMS: &[Term] = &[
 /// One row per orchestrator and recorded orchestrator model that owns a task
 /// created since `since`; a task without a recorded model counts under
 /// `model unknown`.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+fn rows(facts: &AgentFacts, since: DateTime<Utc>, _min_support: usize) -> Vec<RowInput<'_>> {
     let mut owned: BTreeMap<(&str, &str), Vec<&TaskFacts>> = BTreeMap::new();
     for task in &facts.tasks {
         if let Some(name) = task.orchestrator.as_deref()
@@ -174,12 +176,16 @@ fn row<'a>(
         ),
     ];
     RowInput {
+        denominators: BTreeMap::new(),
         crew: name.to_string(),
         model: model.to_string(),
         units: tasks.len(),
         runs_without_model: 0,
         provisional: None,
         tallies,
+        expected: None,
+        reviewed_units: None,
+        unjudged: false,
         stats,
     }
 }

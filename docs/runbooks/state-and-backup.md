@@ -50,7 +50,8 @@ presence. Path fields live on `WorkspacePaths` in
 | `state/scoreboard/` | retired scoreboard counters left by older Orbit versions; nothing reads or writes them | non-authoritative; safe to delete |
 | `state/job-runs/` | run-definition snapshots (`jrun-*.job.yaml`); new run history lives in SQLite | retain if old run evidence matters |
 | `state/audit/blobs/` | redacted content-addressed blobs referenced by global `v2_audit_events` | preserve with audit history when detailed output matters |
-| `state/logs/`, `state/worktrees/` | workspace-local worker stdio logs and linked worktrees | regenerable |
+| `state/logs/` | workspace-local worker stdio logs | disposable; retain when needed for operational evidence |
+| `state/worktrees/` | linked run worktrees; active or failed runs can retain uncommitted candidates | preserve active worktrees and retained dirty candidates; use [worktree GC](./worktree-reclaim.md#dirty-worktrees-of-settled-tasks) only after its terminal-run and candidate-recovery checks |
 
 ### Global `~/.orbit/`
 
@@ -84,7 +85,10 @@ Another registered workspace keeps its own window. `orbit gc runs --apply` drops
 state for terminal runs past the run window, including those unregistered ids, while
 keeping their run and step rows, and prunes the per-minute run and host resource history
 (`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
-against it (`admission_forecasts`) older than 30 days. `orbit gc journal --apply` deletes
+against it (`admission_forecasts`) older than 30 days, except rows kept at any age by
+count: the newest `max(200, machine.auto_concurrency.profile_window)` deliveries per
+workspace, work class and complexity, the newest 10,000 forecasts, and host minutes
+from the oldest kept forecast onward. `orbit gc journal --apply` deletes
 applied rows of the task commit journal (`task_commit_journal`) older than
 `retention.journal_days` (default 14), for this workspace and unregistered ids. Recovery
 replays only prepared and committed rows, so those, aborted rows and each task's newest
@@ -107,9 +111,10 @@ The cost of each retention setting:
   summaries and commit outcomes stay, so implement_one duration with outcome=succeeded
   still includes committed candidates and excludes runs that did not commit. Upgrade
   backfills outcomes from existing state before pruning. Already-pruned state cannot
-  supply an unknown outcome. Resource minutes and admission forecasts have a separate
-  fixed 30-day window, so older raw samples disappear; auto-concurrency profiles and
-  forecast accuracy keep working within that supported window.
+  supply an unknown outcome. Resource minutes and admission forecasts older than 30
+  days are pruned except rows kept at any age by count, so older raw samples outside
+  those counts disappear; auto-concurrency profiles and forecast accuracy keep working
+  on the rows the counts keep.
 - `retention.journal_days`: older applied transition diagnostics disappear, while
   published task history and recovery inputs stay.
 - `retention.store_warn_bytes`: only controls a doctor warning; it prunes nothing.
@@ -284,8 +289,8 @@ workflow below. No workspace removal is needed for first binding or a repository
 Use the source-remote command when a Git repository moves to a different owner, name, or
 host but remains the same logical Orbit workspace. Do not rerun `workspace init`, edit
 `workspaces.json`, or perform a broad URL replacement: the supported operation changes only
-the logical workspace's registered `git_remote`. Workspace ID, owner identity, task bundles,
-checkout roles, and checkout/path registrations remain unchanged.
+the logical workspace's registered `git_remote` and task-registry source pairing. Workspace ID,
+owner identity, task bundles, checkout roles, and checkout/path registrations remain unchanged.
 
 Inspect the current registration and save the old URL for rollback:
 
@@ -330,11 +335,20 @@ orbit --workspace "$ORBIT_WORKSPACE" workspace show --format json
 orbit --workspace "$ORBIT_WORKSPACE" task list --limit 1 --format json
 ```
 
-If publication was previously configured, use `workspace publication bind` with the captured
-remote, branch, and publication ID after reviewing that they still describe the intended
+If publication was previously configured, use `workspace publication rebind` with the captured
+remote, a new publication ID, and an empty publication branch after reviewing the intended
 dedicated publication repository. This creates a fresh local binding and clears local
 last-success metadata; it does not move, rewrite, or delete snapshots in the publication
 repository. Follow the publication runbook's verification procedure before the next publish.
+
+Pairing comparison normalizes existing raw URLs: SSH and HTTPS URLs for the same
+host/owner/repository are equivalent. A different owner or repository still requires this
+explicit source rebind. To finish a transfer performed with an older Orbit version, repeat
+the rebind using the currently registered URL; it repairs a stale task pairing even when
+the source reports `unchanged`. The workspace registration is saved before the task pairing,
+so repeat the command if the pairing write fails or the process is interrupted. A dry run
+changes neither registration nor pairing. Verify with `workspace publication bind` (or
+`rebind` when replacing lineage) and `workspace publication show --json`.
 
 To roll back, run the same source-remote command with the saved old URL, then restore the
 checkout's `origin`. If a publication binding was already recreated, remove it explicitly
@@ -358,8 +372,10 @@ from the captured settings only after the old source identity is restored.
 
 ### Preserve SQLite consistency
 
-All Orbit DBs run in WAL mode. A plain `cp` of a live `*.db` without its `-wal` and
-`-shm` sidecars can produce a torn copy. Use one of these options, in order of preference:
+All Orbit DBs run in WAL mode, so a committed change can sit in `-wal` until SQLite checkpoints
+it. Copying a live `*.db` is not a safe backup, even with its `-wal` and `-shm` copied too: a
+checkpoint between the copies can leave committed changes out of the copy, and the copy can still
+pass `quick_check`. Use one of these options, in order of preference:
 
 ```sh
 # 1. Cold copy—no Orbit processes running (stop orbit-web and timers first):
@@ -373,11 +389,14 @@ sqlite3 ~/.orbit/orbit.db "VACUUM INTO '/backups/orbit.db'"
 orbit task export --all -o tasks-backup.tar.zst
 ```
 
-Both `VACUUM INTO` and `.backup` produce a checkpointed, sidecar-free file. If you must
-file-copy a live DB, copy `*.db`, `*.db-wal`, and `*.db-shm` together.
+Both `VACUUM INTO` and `.backup` produce a checkpointed, sidecar-free file. Plain file copies
+of DB files (`cp`, `rsync`, or a backup agent) are safe only when no Orbit process is writing, or
+when they come from one atomic filesystem snapshot of the volume that holds `~/.orbit`, taken at a
+single instant. Copying `-wal` and `-shm` beside a live database is not enough.
 
-For a store copy named `~/.orbit/orbit.db.bak-<date>`, keep the corresponding sidecars
-as `orbit.db.bak-<date>-wal` and `orbit.db.bak-<date>-shm` beside it. Deployment GC
+For a store copy named `~/.orbit/orbit.db.bak-<date>` taken from a stopped or atomically
+snapshotted set, keep the corresponding sidecars as `orbit.db.bak-<date>-wal` and
+`orbit.db.bak-<date>-shm` beside it. Deployment GC
 counts these files as one backup for `--keep`, ordered by the newest modification
 time in the set, and keeps or removes them together. It still reports each path and
 its bytes separately. Keep recovery copies outside `~/.orbit` to exclude them from

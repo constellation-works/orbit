@@ -11,12 +11,14 @@
 //! validation PATH leads with a stand-in `cargo` that runs the candidate's
 //! `tests/host/<target>.sh`, so what a run proves is whatever that probe does.
 
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 
 use chrono::Utc;
 use orbit_common::security::release::sha256_hex;
 use orbit_core::TaskStatus;
 use orbit_core::application::review::{EVIDENCE_FULFILMENT_AUDIT, REVIEW_EVIDENCE_FULFILMENT_JOB};
+use orbit_engine::{RuntimeHost, execute_deterministic_action};
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME};
 use orbit_types::telemetry::AuditEventStatus;
@@ -30,6 +32,8 @@ use super::review_continuation::run_review_pipeline;
 use super::review_gate_audit::Fixture;
 
 mod attempts;
+mod bounded_findings;
+mod stale_findings;
 
 const CODEQL: &str = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls";
 const EVIDENCE: &str = "evidence/codeql-rust-linux.json";
@@ -44,10 +48,13 @@ const UNREACHABLE_MIB: u64 = 1 << 40;
 /// These cases model legacy/corrupt stored bytes; operator and agent task
 /// updates must no longer be able to rewrite the gate's authority records.
 fn seed_persisted_hold(fixture: &Fixture, hold: &ReviewEvidenceHold) {
-    let registry =
-        TaskRegistryStore::open(&task_registry_path(&fixture.runtime.global_root())).unwrap();
+    seed_runtime_hold(&fixture.runtime, &fixture.task_id, hold);
+}
+
+fn seed_runtime_hold(runtime: &orbit_core::OrbitRuntime, task_id: &str, hold: &ReviewEvidenceHold) {
+    let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).unwrap();
     let bundle = registry
-        .canonical_task_bundle_path(&fixture.runtime.workspace_id().unwrap(), &fixture.task_id)
+        .canonical_task_bundle_path(&runtime.workspace_id().unwrap(), task_id)
         .unwrap();
     let manifest_path = bundle
         .join("artifacts")
@@ -74,7 +81,7 @@ enum Stub {
     Clean,
     /// The real script's refusal of an extraction that skipped analysis.
     Incomplete,
-    /// Complete analysis with one result.
+    /// Complete analysis with two results: one with a data flow, one without.
     Findings,
 }
 
@@ -89,7 +96,16 @@ echo "codeql-rust-local: analysis completed; inspect rule and affected locations
 exit 1"#
         }
         Stub::Findings => {
-            r#"printf '{"runs":[{"results":[{"ruleId":"rust/cleartext-logging"}]}]}' >"$run_dir/results.sarif"
+            r#"cat >"$run_dir/results.sarif" <<'SARIF'
+{"runs":[{"results":[
+ {"ruleId":"rust/cleartext-logging","message":{"text":"This logs sensitive data."},
+  "locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/lease.rs"},"region":{"startLine":42}}}],
+  "codeFlows":[{"threadFlows":[{"locations":[
+   {"location":{"physicalLocation":{"artifactLocation":{"uri":"src/token.rs"},"region":{"startLine":7}},"message":{"text":"token"}}},
+   {"location":{"physicalLocation":{"artifactLocation":{"uri":"src/lease.rs"},"region":{"startLine":42}},"message":{"text":"info!(...)"}}}]}]}]},
+ {"ruleId":"rust/hard-coded-cryptographic-value","message":{"text":"A hard-coded key."},
+  "locations":[{"physicalLocation":{"artifactLocation":{"uri":"src/key.rs"},"region":{"startLine":3}}}]}]}]}
+SARIF
 echo "codeql-rust-local: analysis completed; inspect rule and affected locations in $run_dir/results.sarif""#
         }
     };
@@ -421,7 +437,6 @@ fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() 
     let unadmitted = "scripts/codeql-rust-local.sh codeql/rust-queries:x;touch owned";
     for (stub, command, reason, ran) in [
         (Stub::Incomplete, CODEQL, "analysis_incomplete", true),
-        (Stub::Findings, CODEQL, "findings_reported", true),
         (Stub::Clean, unadmitted, "command_not_allowed", false),
     ] {
         let (fixture, hold) = held(stub, command);
@@ -447,6 +462,168 @@ fn an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason() 
         assert!(
             again.dispatched.is_empty(),
             "{reason} needs a new decision, not another run: {again:?}"
+        );
+    }
+}
+
+/// [ORB-18660] A CodeQL run that reports results is no evidence, but it is a
+/// verdict on the candidate: the run attaches each result's rule, location
+/// and data flow and queues the task to repair the kept candidate from them,
+/// instead of leaving it under a hold that only an operator would notice.
+fn a_codeql_finding_is_attached_and_routes_the_kept_candidate_to_repair() {
+    let probe = orbit_exec::probe_bwrap();
+    if !probe.available {
+        orbit_exec::report_bwrap_deferral(
+            "a_codeql_finding_is_attached_and_routes_the_kept_candidate_to_repair",
+            &probe.detail,
+        );
+        return;
+    }
+    let (mut fixture, hold) = held(Stub::Findings, CODEQL);
+    configure_job(&fixture, 1, None);
+    let (run_id, output) = fulfil_once(&fixture);
+    assert_eq!(output["fulfilled"], false, "{output}");
+    assert_eq!(output["reason"], "findings_reported", "{output}");
+    assert_eq!(output["retryable"], false, "{output}");
+    assert_eq!(
+        output["requeued"], true,
+        "ORB-18660: findings route the held candidate to repair: {output}"
+    );
+    assert!(
+        artifact(&fixture, EVIDENCE).is_none(),
+        "nothing is accepted"
+    );
+    let log = artifact(&fixture, EVIDENCE_LOG).expect("the run's log is attached");
+    assert_eq!(log["reason"], "findings_reported");
+    assert_eq!(log["sarif"]["results"], 2, "{log}");
+    assert_eq!(log["findings_artifact"], "review-evidence-findings.json");
+
+    let findings = artifact(&fixture, "review-evidence-findings.json")
+        .expect("ORB-18660: the SARIF's results outlive the fulfilment's checkout");
+    assert_eq!(findings["hold_run_id"], hold.run_id.as_str());
+    assert_eq!(findings["run_id"], run_id.as_str());
+    assert_eq!(
+        findings["candidate"]["commit"],
+        hold.candidate.commit.as_str()
+    );
+    let located = findings["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| {
+            (
+                result["check"].as_str().unwrap(),
+                result["rule"].as_str().unwrap(),
+                result["file"].as_str().unwrap(),
+                result["line"].as_u64().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        located,
+        [
+            (
+                "Rust CodeQL (Linux)",
+                "rust/cleartext-logging",
+                "src/lease.rs",
+                42
+            ),
+            (
+                "Rust CodeQL (Linux)",
+                "rust/hard-coded-cryptographic-value",
+                "src/key.rs",
+                3
+            ),
+        ],
+        "{findings}"
+    );
+    assert_eq!(
+        findings["results"][0]["code_flow"],
+        json!([
+            {"file": "src/token.rs", "line": 7, "message": "token"},
+            {"file": "src/lease.rs", "line": 42, "message": "info!(...)"},
+        ]),
+        "the data flow runs from source to sink"
+    );
+
+    let task = fixture.runtime.get_task(&fixture.task_id).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog, "the hold no longer waits");
+    assert_eq!(latest_decision(&fixture), "review_evidence_findings");
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    assert!(
+        comments
+            .last()
+            .is_some_and(|comment| comment.message.contains("src/lease.rs:42")),
+        "the task's comments name each finding: {:?}",
+        comments.last()
+    );
+    let rows = audit_rows(&fixture);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, AuditEventStatus::Failure);
+    assert_eq!(rows[0].1["requeued"], true);
+    let again = fixture
+        .runtime
+        .run_review_evidence_fulfilment_tick(Utc::now())
+        .unwrap();
+    assert!(again.dispatched.is_empty(), "{again:?}");
+
+    // The task's next run resumes the held candidate for its implementer,
+    // with the findings as the repair's output.
+    let next = fixture
+        .runtime
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            fixture.runtime.show_job_run(&hold.run_id).unwrap().input,
+            None,
+        )
+        .unwrap();
+    fixture
+        .runtime
+        .apply_task_automation_update(
+            &fixture.task_id,
+            orbit_engine::TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(next.run_id.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    fixture.input["job_run_id"] = json!(next.run_id);
+    git(&fixture, &["checkout", "--quiet", "--detach", "main"]);
+    let base_sha = git(&fixture, &["rev-parse", "HEAD"]);
+    let resumed = execute_deterministic_action(
+        &fixture.runtime,
+        "candidate_resume",
+        &json!({}),
+        &json!({
+            "job_run_id": next.run_id,
+            "task_ids": [fixture.task_id],
+            "workspace_path": fixture.input["workspace_path"],
+            "base_sha": base_sha,
+            "prior_job_run_id": hold.run_id,
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["implement"], true, "the implementer repairs it");
+    assert_eq!(resumed["source_sha"], hold.candidate.commit.as_str());
+    assert_eq!(resumed["repair"]["trigger"], "review", "{resumed}");
+    let repair = resumed["repair"]["output"].as_str().unwrap();
+    for named in [
+        "rust/cleartext-logging",
+        "src/lease.rs:42",
+        "src/token.rs:7",
+        "rust/hard-coded-cryptographic-value",
+        "src/key.rs:3",
+    ] {
+        assert!(
+            repair.contains(named),
+            "{named} reaches the implementer: {repair}"
         );
     }
 }
@@ -585,7 +762,7 @@ fn fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_time
     );
 }
 
-const HOST_TEST: &str = "cargo test -p orbit-exec --test probe";
+const HOST_TEST: &str = "cargo test -p orbit-exec --test probe -- probe";
 const HOST_EVIDENCE: &str = "evidence/host-sandbox-probe.json";
 const HOST_EVIDENCE_LOG: &str = "evidence/host-sandbox-probe.log.json";
 /// What a sandbox-gated test prints inside an agent lane.
@@ -674,6 +851,30 @@ fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_revi
             .unwrap();
         assert!(deferred.dispatched.is_empty(), "{deferred:?}");
         assert!(deferred.skipped.is_some(), "{deferred:?}");
+        // Command admission precedes the host gate. Exercise the actual
+        // owner pipeline even here: `-- probe` must reach that gate rather
+        // than being refused as an argument, without running a host test.
+        let run = fixture
+            .runtime
+            .submit_pipeline_run(
+                REVIEW_EVIDENCE_FULFILMENT_JOB,
+                json!({
+                    "task_id": fixture.task_id,
+                    "hold_key": format!("{}:{}", hold.attempt_id, hold.candidate.commit),
+                }),
+                None,
+                Some("system"),
+            )
+            .unwrap();
+        execute(&fixture, &run.run_id);
+        let output = fixture
+            .runtime
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .pipeline["fulfil"]
+            .clone();
+        assert_eq!(output["reason"], "sandbox_unavailable", "{output}");
         assert_held_without(&fixture, HOST_EVIDENCE, "sandbox unavailable");
         return;
     }
@@ -692,7 +893,10 @@ fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_revi
     assert_eq!(evidence.outcome, ValidationOutcome::Passed);
     assert_eq!(evidence.log_artifact, HOST_EVIDENCE_LOG);
     let log = artifact(&fixture, HOST_EVIDENCE_LOG).expect("log attached");
-    assert_eq!(log["host_command"], format!("{HOST_TEST} -- --nocapture"));
+    assert_eq!(
+        log["host_command"],
+        "cargo test -p orbit-exec --test probe probe -- --nocapture"
+    );
     assert_eq!(log["tests_passed"], 1);
     assert!(
         log["output"]
@@ -820,6 +1024,7 @@ crate::scenario_table!(
     a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review_scenarios,
     a_held_codeql_check_runs_at_the_held_commit_and_its_result_requeues_review,
     an_incomplete_failed_or_unadmitted_run_leaves_the_hold_with_a_typed_reason,
+    a_codeql_finding_is_attached_and_routes_the_kept_candidate_to_repair,
     owner_fulfilment_refuses_reserved_aliases_in_a_persisted_hold_without_overwriting_review,
     fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times,
     a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review,

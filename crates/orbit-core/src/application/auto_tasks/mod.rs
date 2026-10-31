@@ -18,7 +18,11 @@
 //! - `change_probe` — the `skip_if_unchanged` precondition's evidence. The
 //!   `skip_unless_blocked_candidates` precondition reads the blocked-task
 //!   triage's candidate rule (`application::task::triage_candidacy`).
-//! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
+//! - `retired` — shipped defaults a routine replaced, kept as provenance so
+//!   `orbit workspace sync` retires their seeded copies.
+//! - [`crud`] — the shared add/list/show/update/mint domain surface.
+//! - [`toggle`] — the one toggle command; the tool, the checked operator
+//!   control and the dashboard are its profiles.
 //! - [`listing`] — whether each listed definition fires here, and when: the
 //!   one decision every list surface renders.
 //! - [`delete`] — audited delete, and restore of a deleted shipped default.
@@ -33,11 +37,13 @@ pub mod crud;
 pub mod delete;
 pub mod listing;
 mod read;
+pub(crate) mod retired;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;
 pub mod settings;
 pub mod state;
+pub mod toggle;
 
 pub use crud::{AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams};
 pub use delete::{AutoTaskDeleteParams, AutoTaskDeleteReport};
@@ -53,30 +59,73 @@ pub use scheduler::{
 };
 pub use settings::{AutoTaskBody, AutoTaskLayering};
 pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
+pub use toggle::{AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile};
 
 /// Default definitions embedded in the Orbit binary and materialized into a
 /// workspace on initialization. Defaults are deliberately inert: users must
 /// explicitly mint one or enable it through the existing auto-task surface.
+/// A default a later release dropped moves to
+/// [`retired::RETIRED_AUTO_TASK_FILES`].
 pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
+    (
+        "agent-guidance-audit",
+        include_str!("../../../assets/auto_tasks/agent-guidance-audit.yaml"),
+    ),
+    (
+        "auto-task-yield-review",
+        include_str!("../../../assets/auto_tasks/auto-task-yield-review.yaml"),
+    ),
+    (
+        "architecture-audit",
+        include_str!("../../../assets/auto_tasks/architecture-audit.yaml"),
+    ),
     (
         "backlog-hygiene",
         include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
     ),
     (
-        "blocked-task-triage",
-        include_str!("../../../assets/auto_tasks/blocked-task-triage.yaml"),
+        "ci-budget-watch",
+        include_str!("../../../assets/auto_tasks/ci-budget-watch.yaml"),
+    ),
+    (
+        "code-health-sweep",
+        include_str!("../../../assets/auto_tasks/code-health-sweep.yaml"),
+    ),
+    (
+        "crew-ladder-review",
+        include_str!("../../../assets/auto_tasks/crew-ladder-review.yaml"),
     ),
     (
         "delivery-code-review",
         include_str!("../../../assets/auto_tasks/delivery-code-review.yaml"),
     ),
     (
+        "dependency-freshness",
+        include_str!("../../../assets/auto_tasks/dependency-freshness.yaml"),
+    ),
+    (
         "code-review",
         include_str!("../../../assets/auto_tasks/code-review.yaml"),
     ),
     (
+        "comment-hygiene",
+        include_str!("../../../assets/auto_tasks/comment-hygiene.yaml"),
+    ),
+    (
+        "design-sync",
+        include_str!("../../../assets/auto_tasks/design-sync.yaml"),
+    ),
+    (
         "doc-duties",
         include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
+    ),
+    (
+        "escape-to-guard",
+        include_str!("../../../assets/auto_tasks/escape-to-guard.yaml"),
+    ),
+    (
+        "flaky-test-hunt",
+        include_str!("../../../assets/auto_tasks/flaky-test-hunt.yaml"),
     ),
     (
         "friction-curation",
@@ -85,6 +134,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "full-code-review",
         include_str!("../../../assets/auto_tasks/full-code-review.yaml"),
+    ),
+    (
+        "path-risk-review",
+        include_str!("../../../assets/auto_tasks/path-risk-review.yaml"),
     ),
     (
         "qa-full-sweep",
@@ -101,6 +154,18 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "security-review",
         include_str!("../../../assets/auto_tasks/security-review.yaml"),
+    ),
+    (
+        "structure-sweep",
+        include_str!("../../../assets/auto_tasks/structure-sweep.yaml"),
+    ),
+    (
+        "suppression-ratchet",
+        include_str!("../../../assets/auto_tasks/suppression-ratchet.yaml"),
+    ),
+    (
+        "workflow-health-audit",
+        include_str!("../../../assets/auto_tasks/workflow-health-audit.yaml"),
     ),
 ];
 

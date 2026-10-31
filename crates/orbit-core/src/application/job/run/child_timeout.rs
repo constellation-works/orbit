@@ -13,7 +13,8 @@ use std::collections::HashMap;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    CHILD_TIMEOUT_ERROR_CODE, JobRun, JobV2Step, JobV2StepBody, TaskCancellationPolicy,
+    CHILD_TIMEOUT_ERROR_CODE, JobRun, JobV2Step, JobV2StepBody, RunCancellationProvenance,
+    TaskCancellationPolicy,
 };
 use serde_json::{Value, json};
 
@@ -79,7 +80,10 @@ impl OrbitRuntime {
         let Some(kept) = kept else {
             return;
         };
-        let note = cancellation_note(request.actor, Some(&format!("{reason}; {kept}")));
+        let reason = format!("{reason}; {kept}");
+        let provenance =
+            RunCancellationProvenance::new(request.actor, request.source, Some(&reason));
+        let note = cancellation_note(&provenance.actor, provenance.reason.as_deref());
         if let Err(error) = self
             .stores()
             .jobs()
@@ -87,6 +91,7 @@ impl OrbitRuntime {
                 state.task_cancellation_policy = Some(TaskCancellationPolicy {
                     block: request.block_task,
                     note: note.clone(),
+                    provenance: Some(provenance.clone()),
                 });
                 Ok(())
             })

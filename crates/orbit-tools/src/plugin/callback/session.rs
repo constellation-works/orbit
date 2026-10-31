@@ -57,6 +57,10 @@ pub struct PluginCallbackSession {
     /// live server, and the `exec` backend one per call.
     #[cfg_attr(not(unix), allow(dead_code))]
     credential: File,
+    /// The route the child's decision-channel callbacks reach the host by,
+    /// when its ceiling admits one ([`Self::open_host_route`]).
+    #[cfg(unix)]
+    host_route: Option<super::host_route::HostRoute>,
 }
 
 /// The plugin a resolved callback belongs to, and what that session may do.
@@ -111,6 +115,18 @@ impl PluginCallbackSession {
         provenance: &PluginProvenance,
         effective_tools: &[String],
     ) -> Result<Self, OrbitError> {
+        Self::mint_with(global_root, provenance, effective_tools, open_credential)
+    }
+
+    /// [`Self::mint`] with the credential opener supplied. Opening fails only
+    /// under descriptor exhaustion or on a host with no inherited descriptors,
+    /// so a test drives that path through here.
+    pub(crate) fn mint_with(
+        global_root: &Path,
+        provenance: &PluginProvenance,
+        effective_tools: &[String],
+        open: impl Fn(&Path) -> Result<File, OrbitError>,
+    ) -> Result<Self, OrbitError> {
         let effective_tools = normalize_tools(effective_tools);
         let dir = callback_dir(global_root);
         ensure_private_session_dir(&dir).map_err(|error| {
@@ -135,15 +151,29 @@ impl PluginCallbackSession {
             };
             match write_session_exclusive(&path, &record) {
                 Ok(()) => {
-                    let credential = open_credential(&path)?;
+                    // The record exists and nothing owns it yet: its `pid` is
+                    // zero, so the sweep reads it as a mint in progress and
+                    // never reaps it. Remove it rather than strand it.
+                    let credential = match open(&path) {
+                        Ok(credential) => credential,
+                        Err(error) => {
+                            let _ = fs::remove_file(&path);
+                            return Err(error);
+                        }
+                    };
                     return Ok(Self {
                         path,
                         record,
                         credential,
+                        #[cfg(unix)]
+                        host_route: None,
                     });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
+                    // `create_new` may have made the file before the write
+                    // failed; a partial record is skipped by the sweep forever.
+                    let _ = fs::remove_file(&path);
                     return Err(OrbitError::Io(format!(
                         "write plugin callback session `{}`: {error}",
                         path.display()
@@ -181,6 +211,46 @@ impl PluginCallbackSession {
         use std::os::fd::AsRawFd;
 
         self.credential.as_raw_fd()
+    }
+
+    /// Give the child a route back to `host` for the callbacks only the host
+    /// can answer ([`super::HOST_ROUTED_CALLBACK_TOOLS`]), when this session's
+    /// ceiling admits one of them and the caller supplied a host. Calls on the
+    /// route are answered under this session for as long as it lives.
+    ///
+    /// Opened before the profile is built, so the spawn maps the route at
+    /// [`super::PLUGIN_HOST_ROUTE_FD`] beside the credential.
+    pub fn open_host_route(
+        &mut self,
+        host: Option<&std::sync::Arc<dyn crate::OrbitToolHost>>,
+    ) -> Result<(), OrbitError> {
+        #[cfg(unix)]
+        if let Some(host) = host
+            && self.host_route.is_none()
+            && self
+                .record
+                .effective_tools
+                .iter()
+                .any(|tool| super::is_host_routed_callback_tool(tool))
+        {
+            self.host_route = Some(super::host_route::HostRoute::start(
+                self.record.clone(),
+                std::sync::Arc::clone(host),
+            )?);
+        }
+        #[cfg(not(unix))]
+        let _ = host;
+        Ok(())
+    }
+
+    /// The host descriptor the child must receive as
+    /// [`super::PLUGIN_HOST_ROUTE_FD`], when [`Self::open_host_route`] opened
+    /// one. Borrowed like [`Self::credential_fd`].
+    #[cfg(unix)]
+    pub fn host_route_fd(&self) -> Option<i32> {
+        self.host_route
+            .as_ref()
+            .map(super::host_route::HostRoute::child_fd)
     }
 
     /// The ceiling this session was minted with, as it was recorded.
@@ -232,6 +302,9 @@ fn ensure_private_session_dir(dir: &Path) -> std::io::Result<()> {
 
 impl Drop for PluginCallbackSession {
     fn drop(&mut self) {
+        // Stop answering routed calls before the record they run under goes.
+        #[cfg(unix)]
+        self.host_route.take();
         match fs::remove_file(&self.path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

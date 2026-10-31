@@ -42,6 +42,8 @@ pub struct AutoCommand {
     #[arg(long)]
     pub auto_fix: bool,
     /// Add a review layer before landing when workspace policy has none.
+    /// `before-landing` is recommended; `before-pr` is deprecated but still
+    /// holds PR creation for a reviewer.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Start only tasks on these crews (repeatable, comma-separated).
@@ -254,7 +256,7 @@ fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut
                     child.run_id, child.job_name, child.phase, status
                 ));
             }
-            lines.push(if change.job_id == orbit_core::application::distributed::PULL_DRAIN_JOB {
+            lines.push(if change.job_id == orbit_core::application::contracts::PULL_DRAIN_JOB {
                 format!(
                     "Claimed leaves finish and settle on their own. `orbit run cancel {} --confirm` \
                      waits for them and then ends the drain; add `--force` to stop them and return \

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_engine::review_gate::{ReplayBudget, verify_base_failure};
 use orbit_engine::{BaselineHoldStatus, RuntimeHost, baseline_red_hold_update};
 use orbit_types::task::{ExternalRef, Task, TaskPriority, TaskRelationType};
 use orbit_types::workflow::{BaselineRedFailures, BaselineRedHold};
@@ -268,6 +269,62 @@ fn a_command_that_names_no_test_files_one_repair_from_its_output_tail() {
     );
 }
 
+/// Reproduced identity-less failures key repairs on command and normalized
+/// diagnostics, so host paths and output tails cannot create duplicate repairs.
+fn diagnostic_fingerprints_file_one_repair_and_link_later_holds() {
+    let fixture = super::review_baseline_hold::fixture(
+        "#!/bin/sh\necho 'policy denied widget'\nprintf '%s/src/lib.rs\\n' \"$PWD\"\nexit 2\n",
+        "after\n",
+    );
+    let base_sha = git(&fixture.repo, &["rev-parse", "main"]);
+    let make_hold = |command: &str| {
+        let check = verify_base_failure(
+            &fixture.runtime,
+            &fixture.repo,
+            &base_sha,
+            command,
+            &[],
+            "jrun-diagnostic",
+            ReplayBudget::new(Duration::from_secs(60)),
+        )
+        .unwrap();
+        let failures = check.base_failures();
+        assert_eq!(failures.identities.len(), 1, "{:?}", check.verdict);
+        assert!(failures.identities[0].starts_with("diagnostic fingerprint sha256:"));
+        assert!(failures.identity_digest.is_some());
+        BaselineRedHold {
+            base_ref: "main".into(),
+            base_sha: base_sha.clone(),
+            command: command.into(),
+            run_id: "jrun-diagnostic".into(),
+            selection: None,
+            failures,
+        }
+    };
+    let hold = make_hold(CHECK);
+    let first = held_task(&fixture, "First diagnostic-held task", &hold);
+    assert_eq!(tick(&fixture.runtime).repairs_filed.len(), 1);
+    let mut later = make_hold(CHECK);
+    later.failures.tail = vec!["a different per-run output tail".into()];
+    let second = held_task(&fixture, "Second diagnostic-held task", &later);
+    let refresh = tick(&fixture.runtime);
+    assert!(refresh.repairs_filed.is_empty(), "{refresh:?}");
+    assert_eq!(refresh.repairs_linked, vec![second.clone()]);
+    let filed = repairs(&fixture);
+    assert_eq!(filed.len(), 1);
+    assert_eq!(related(&filed[0]), vec![first, second]);
+
+    let other_command = make_hold("sh ./check.sh");
+    assert_eq!(other_command.failures.identities, hold.failures.identities);
+    held_task(&fixture, "Another command", &other_command);
+    assert_eq!(tick(&fixture.runtime).repairs_filed.len(), 1);
+    assert_eq!(
+        repairs(&fixture).len(),
+        2,
+        "command is part of the repair key"
+    );
+}
+
 fn complete_failure_sets_key_repairs_before_display_truncation() {
     let (fixture, legacy) = held_on_red_base();
     let common = (0..20)
@@ -481,6 +538,7 @@ crate::scenario_table!(
     the_first_hold_files_one_repair_task_and_later_holds_link_to_it_across_tasks_and_bases_scenarios,
     the_first_hold_files_one_repair_task_and_later_holds_link_to_it_across_tasks_and_bases,
     a_command_that_names_no_test_files_one_repair_from_its_output_tail,
+    diagnostic_fingerprints_file_one_repair_and_link_later_holds,
     complete_failure_sets_key_repairs_before_display_truncation,
     persisted_holds_without_a_digest_find_their_existing_repair,
     a_cached_green_base_lifts_a_hold_without_filing_its_repair

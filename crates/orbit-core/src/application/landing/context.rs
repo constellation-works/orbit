@@ -22,6 +22,18 @@ impl OrbitRuntime {
     ) -> Result<HandoffLandingContext, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let (claim, accepted) = self.landing_claim(handoff_id)?;
+        let receipt = self.claim_receipt(&accepted.handoff.claim_id)?;
+        if receipt
+            .visual_review
+            .as_ref()
+            .is_some_and(|contract| contract.mode == orbit_types::task::VisualReviewMode::Live)
+            || (self.visual_review_settings().mode == orbit_types::task::VisualReviewMode::Live
+                && orbit_types::task::has_verify_mock_ui_tag(
+                    &self.get_task(&accepted.handoff.task_id)?.tags,
+                ))
+        {
+            return Err(OrbitError::CapabilityDenied("visual_live_claim_unsupported: accepted live handoff has no owner-verified visual-resolution proof".into()));
+        }
         // [ORB-15677] The hosted checks the accepted review owed the owner,
         // read from the certificate the handoff pinned and acceptance judged.
         let owed_hosted_checks = self
@@ -68,13 +80,6 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let (claim, accepted) = self.landing_claim(&update.handoff_id)?;
         let mut context = self.landing_invocation(&claim);
-        if matches!(
-            update.step,
-            HandoffLandingStep::PublishIntent { .. } | HandoffLandingStep::Complete
-        ) {
-            context =
-                context.with_handoff_observation(self.landing_observation(update, &accepted)?);
-        }
         let attempt = self
             .landing_attempt(&update.handoff_id)?
             .ok_or_else(|| missing_attempt(&update.handoff_id))?
@@ -162,6 +167,19 @@ impl OrbitRuntime {
                 },
             ),
         };
+        // Settled claims can only replay a recorded mutation: the store checks
+        // its receipt before refusing fresh mutations as stale. Let that check
+        // run without re-observing a NoDiff admission receipt, which may already
+        // be compacted. Unsettled claims still need the full authority recheck.
+        if claim.claim.phase.is_unsettled()
+            && matches!(
+                update.step,
+                HandoffLandingStep::PublishIntent { .. } | HandoffLandingStep::Complete
+            )
+        {
+            context =
+                context.with_handoff_observation(self.landing_observation(update, &accepted)?);
+        }
         self.stores()
             .tasks()
             .mutate_execution_claim(Some(&context), &mutation_id, &mutation)?;
@@ -169,6 +187,60 @@ impl OrbitRuntime {
             let task = self.get_task(&previous_task.id)?;
             self.record_resolves_side_effects(previous_task.status, &task);
         }
+        Ok(())
+    }
+
+    /// Record that the live attempt of `handoff_id` waits for its base, as
+    /// a claim-scoped history event. The same reason replays its receipt.
+    pub(crate) fn record_handoff_landing_wait(
+        &self,
+        handoff_id: &str,
+        reason: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let (claim, _) = self.landing_claim(handoff_id)?;
+        let context = self.landing_invocation(&claim);
+        let attempt = self
+            .landing_attempt(handoff_id)?
+            .ok_or_else(|| missing_attempt(handoff_id))?
+            .attempt;
+        let digest = orbit_common::security::release::sha256_hex(reason.as_bytes());
+        self.stores().tasks().mutate_execution_claim(
+            Some(&context),
+            &format!("landing-wait:{handoff_id}:{attempt}:{digest}"),
+            &ClaimMutation::RecordLandingWait {
+                handoff_id: handoff_id.to_string(),
+                reason: reason.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Append a narrowly permitted CI observation through the current landing
+    /// claim. The store validates both the event and the live attempt.
+    pub(crate) fn record_handoff_landing_history(
+        &self,
+        handoff_id: &str,
+        event: &str,
+        note: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let (claim, _) = self.landing_claim(handoff_id)?;
+        let context = self.landing_invocation(&claim);
+        let attempt = self
+            .landing_attempt(handoff_id)?
+            .ok_or_else(|| missing_attempt(handoff_id))?
+            .attempt;
+        let digest = orbit_common::security::release::sha256_hex(note.as_bytes());
+        self.stores().tasks().mutate_execution_claim(
+            Some(&context),
+            &format!("landing-history:{handoff_id}:{attempt}:{event}:{digest}"),
+            &ClaimMutation::RecordLandingHistory {
+                handoff_id: handoff_id.to_string(),
+                event: event.to_string(),
+                note: note.to_string(),
+            },
+        )?;
         Ok(())
     }
 

@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
+use orbit_automation::routines::sweep::duplicate_ownership_skipped;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
@@ -101,8 +102,9 @@ pub struct RoutineStatus {
     /// Next scheduled slot (RFC 3339, host-local), when computable.
     pub next_due: Option<String>,
     /// Most recent fire recorded on this host, from whichever trigger fired
-    /// it: the cron fire store, or for a state- or delivery-triggered routine
-    /// the newest run that routine's automation admitted when that is newer.
+    /// it: the cron fire store, or for a state-, delivery- or
+    /// condition-triggered routine the newest run that routine's automation
+    /// admitted when that is newer.
     pub last_fire: Option<RoutineFireRecord>,
     /// Recent distinct fires, newest first, including automation runs.
     pub recent_fires: Vec<RoutineFireRecord>,
@@ -131,6 +133,7 @@ impl RoutineStatus {
         }
         if self.routine.definition.trigger.deliveries_landed.is_some()
             || self.routine.definition.trigger.state.is_some()
+            || self.routine.definition.trigger.condition.is_some()
         {
             return ScheduleDisplayState::Waiting;
         }
@@ -421,20 +424,100 @@ pub fn routine_statuses_with_providers(
     load_errors.append(&mut collection.errors);
 
     let pauses = store.routine_pauses()?;
+    // One query each for every routine's cursor and fire history, instead of
+    // two store reads per routine on the dashboard's poll path.
+    let routine_names: Vec<String> = collection
+        .routines
+        .iter()
+        .map(|routine| routine.definition.name.clone())
+        .collect();
+    let cursors = store.routine_cursors_for(&routine_names)?;
+    let fires_by_routine = store.routine_recent_fires_for(&routine_names, FIRE_HISTORY_LIMIT)?;
+    tracing::debug!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "routine status fire history and cursors loaded"
+    );
     let now = now_utc.with_timezone(&Local);
 
     let mut statuses = Vec::with_capacity(collection.routines.len());
     let source_cache = crate::application::automation::SourceCache::default();
-    for routine in collection.routines {
+    // The sweep skips a duplicate owner before evaluating it, so its status says so.
+    let duplicate_owners: Vec<bool> = collection
+        .routines
+        .iter()
+        .map(|routine| duplicate_ownership_skipped(&collection.routines, routine))
+        .collect();
+    for (routine, duplicate_owner) in collection.routines.into_iter().zip(duplicate_owners) {
         let next_due = next_scheduled_occurrence(&routine.definition.trigger.cron, &now);
-        let cron_fires =
-            store.routine_recent_fires(&routine.definition.name, FIRE_HISTORY_LIMIT)?;
-        let cursor = store.routine_cursor(&routine.definition.name)?;
+        // Keyed by name alone, as the per-routine reads were: duplicate
+        // definitions of one name share its cursor and fire history.
+        let cron_fires = fires_by_routine
+            .get(&routine.definition.name)
+            .cloned()
+            .unwrap_or_default();
+        let cursor = cursors.get(&routine.definition.name).cloned();
         let paused_at = pauses
             .get(&routine.definition.name)
             .map(|pause| pause.paused_at.clone());
-        let automation=(routine.definition.trigger.deliveries_landed.is_some() || routine.definition.trigger.state.is_some()).then(|| {
-            discovered.entries.iter().find(|(_,runtime)|runtime.shared_root()==routine.source_orbit_dir).map_or_else(||serde_json::json!({"reason":"source_unavailable"}),|(_,runtime)|match crate::application::automation::inspect_routine_with_cache(runtime,&routine.definition,now_utc,&source_cache) {Ok(value)=>serde_json::json!(value),Err(error)=>serde_json::json!({"reason":"state_unavailable","error":error.to_string()})})
+        let automation = (routine.definition.trigger.deliveries_landed.is_some()
+            || routine.definition.trigger.state.is_some())
+        .then(|| {
+            discovered
+                .entries
+                .iter()
+                .find(|(_, runtime)| runtime.shared_root() == routine.source_orbit_dir)
+                .map_or_else(
+                    || serde_json::json!({"reason": "source_unavailable"}),
+                    |(_, runtime)| {
+                        match crate::application::automation::inspect_routine_with_cache(
+                            runtime,
+                            &routine.definition,
+                            now_utc,
+                            &source_cache,
+                        ) {
+                            Ok(mut value) => {
+                                if duplicate_owner {
+                                    // The sweep records this skip without admitting any batch.
+                                    value.reason = "duplicate_routine_ownership".into();
+                                    value.batch.clear();
+                                }
+                                serde_json::json!(value)
+                            }
+                            Err(error) => serde_json::json!({
+                                "reason": "state_unavailable",
+                                "error": error.to_string(),
+                            }),
+                        }
+                    },
+                )
+        });
+        // A condition routine's state: ownership, arm counts, any stall and
+        // the last fire and skip with its reason.
+        let automation = automation.or_else(|| {
+            routine.definition.trigger.condition.as_ref()?;
+            Some(
+                discovered
+                    .entries
+                    .iter()
+                    .find(|(_, runtime)| runtime.shared_root() == routine.source_orbit_dir)
+                    .map_or_else(
+                        || serde_json::json!({"reason": "source_unavailable"}),
+                        |(_, runtime)| match runtime.routine_condition_listing(&routine.definition)
+                        {
+                            Ok(listing) => serde_json::json!({
+                                "reason": listing
+                                    .as_ref()
+                                    .and_then(|listing| listing.stall.as_ref())
+                                    .map_or("condition", |stall| stall.reason.as_str()),
+                                "condition": listing,
+                            }),
+                            Err(error) => serde_json::json!({
+                                "reason": "state_unavailable",
+                                "error": error.to_string(),
+                            }),
+                        },
+                    ),
+            )
         });
         let automation_fires = automation_fires(&discovered, &routine)?;
         let last_fire = newest_fire(
@@ -465,7 +548,8 @@ pub fn routine_statuses_with_providers(
     })
 }
 
-/// Recent runs a state- or delivery-triggered routine's automation admitted.
+/// Recent runs a state-, delivery- or condition-triggered routine's
+/// automation admitted.
 ///
 /// Those fires never touch the cron fire store: the run itself carries the
 /// routine as its trigger, so the run record is the fire record. A cron-only
@@ -475,7 +559,8 @@ fn automation_fires(
     routine: &LoadedRoutine,
 ) -> Result<Vec<RoutineFireRecord>, OrbitError> {
     let trigger = &routine.definition.trigger;
-    if trigger.deliveries_landed.is_none() && trigger.state.is_none() {
+    if trigger.deliveries_landed.is_none() && trigger.state.is_none() && trigger.condition.is_none()
+    {
         return Ok(Vec::new());
     }
     let Some((_, runtime)) = discovered
@@ -656,26 +741,40 @@ pub(crate) fn toggle_checkout_routine(
     expected_enabled: bool,
     enabled: bool,
 ) -> Result<RoutineToggleOutcome, OrbitError> {
+    let report = checkout_edit_report(runtime)?;
+    toggle_listed_routine(&report, name, None, target, expected_enabled, enabled)?
+        .map_err(checkout_refusal)
+}
+
+/// The routine report a selected-checkout edit selects from, after the role
+/// guard: an owner checkout keeps the general coordination-write guard, a
+/// replica checkout reaches selection (which refuses owner-only routines),
+/// and a claimed worker is refused.
+pub(crate) fn checkout_edit_report(
+    runtime: &OrbitRuntime,
+) -> Result<RoutineStatusReport, OrbitError> {
     let replica =
         runtime.worker_invocation().is_none() && runtime.coordination_write_owner().is_some();
     if !replica {
         runtime.ensure_coordination_task_write_permitted()?;
     }
-    let report = checkout_routine_statuses(runtime)?;
-    match toggle_listed_routine(&report, name, None, target, expected_enabled, enabled)? {
-        Ok(outcome) => Ok(outcome),
-        Err(RoutineToggleRefusal::OwnerAuthority { reason, .. }) => {
-            Err(OrbitError::CapabilityRefused(reason))
+    checkout_routine_statuses(runtime)
+}
+
+/// A selected-checkout selection refusal as the tool surface reports it.
+pub(crate) fn checkout_refusal(refusal: RoutineToggleRefusal) -> OrbitError {
+    match refusal {
+        RoutineToggleRefusal::OwnerAuthority { reason, .. } => {
+            OrbitError::CapabilityRefused(reason)
         }
-        Err(RoutineToggleRefusal::NotFound | RoutineToggleRefusal::WorkspaceMismatch { .. }) => {
-            Err(OrbitError::InvalidInput(
-                "routine unavailable in this workspace".into(),
-            ))
+        RoutineToggleRefusal::NotFound | RoutineToggleRefusal::WorkspaceMismatch { .. } => {
+            OrbitError::InvalidInput("routine unavailable in this workspace".into())
         }
     }
 }
 
-/// Why a toggle selection was refused before any definition was read.
+/// Why a routine selection (toggle or trigger edit) was refused before any
+/// definition was read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutineToggleRefusal {
     /// A replica lists the routine, but only its owner may change it.
@@ -694,14 +793,50 @@ pub enum RoutineToggleRefusal {
     },
 }
 
+/// Select routine `name` from `report` for a definition edit.
+///
+/// The one selection every edit surface runs (toggle and trigger edit): an
+/// owner-only definition is refused with the owner named, an unlisted name is
+/// not found, and `source` (workspace name and `.orbit` directory, when the
+/// report spans more than the caller's checkout) must match the routine's.
+pub fn select_listed_routine<'a>(
+    report: &'a RoutineStatusReport,
+    name: &str,
+    source: Option<(&str, &Path)>,
+) -> Result<&'a LoadedRoutine, RoutineToggleRefusal> {
+    if let Some(owned) = report
+        .owner_only
+        .iter()
+        .find(|owned| owned.routine.definition.name == name)
+    {
+        return Err(RoutineToggleRefusal::OwnerAuthority {
+            reason: owned.reason.clone(),
+            owner_machine: owned.owner_machine.clone(),
+        });
+    }
+    let Some(status) = report
+        .statuses
+        .iter()
+        .find(|status| status.routine.definition.name == name)
+    else {
+        return Err(RoutineToggleRefusal::NotFound);
+    };
+    let routine = &status.routine;
+    if source.is_some_and(|(workspace, orbit_dir)| {
+        routine.source_workspace != workspace || routine.source_orbit_dir != orbit_dir
+    }) {
+        return Err(RoutineToggleRefusal::WorkspaceMismatch {
+            source_workspace: routine.source_workspace.clone(),
+        });
+    }
+    Ok(routine)
+}
+
 /// Select routine `name` from `report` and toggle its versioned `enabled`.
 ///
-/// The one selection every toggle surface runs: an owner-only definition is
-/// refused with the owner named, an unlisted name is not found, `source`
-/// (workspace name and `.orbit` directory, when the report spans more than
-/// the caller's checkout) must match the routine's, and the caller's
-/// `target` must still be the definition's before [`set_routine_enabled`]
-/// writes. The outer error is a failed write.
+/// Selection is [`select_listed_routine`]; the caller's `target` must still
+/// be the definition's before [`set_routine_enabled`] writes. The outer error
+/// is a failed write.
 pub fn toggle_listed_routine(
     report: &RoutineStatusReport,
     name: &str,
@@ -710,31 +845,10 @@ pub fn toggle_listed_routine(
     expected_enabled: bool,
     enabled: bool,
 ) -> Result<Result<RoutineToggleOutcome, RoutineToggleRefusal>, OrbitError> {
-    if let Some(owned) = report
-        .owner_only
-        .iter()
-        .find(|owned| owned.routine.definition.name == name)
-    {
-        return Ok(Err(RoutineToggleRefusal::OwnerAuthority {
-            reason: owned.reason.clone(),
-            owner_machine: owned.owner_machine.clone(),
-        }));
-    }
-    let Some(status) = report
-        .statuses
-        .iter()
-        .find(|status| status.routine.definition.name == name)
-    else {
-        return Ok(Err(RoutineToggleRefusal::NotFound));
+    let routine = match select_listed_routine(report, name, source) {
+        Ok(routine) => routine,
+        Err(refusal) => return Ok(Err(refusal)),
     };
-    let routine = &status.routine;
-    if source.is_some_and(|(workspace, orbit_dir)| {
-        routine.source_workspace != workspace || routine.source_orbit_dir != orbit_dir
-    }) {
-        return Ok(Err(RoutineToggleRefusal::WorkspaceMismatch {
-            source_workspace: routine.source_workspace.clone(),
-        }));
-    }
     if routine.definition.target.as_ref_string() != target {
         return Ok(Ok(RoutineToggleOutcome::TargetConflict {
             actual_target: routine.definition.target.clone(),

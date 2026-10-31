@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Policy & Sandboxing"
 tags: ["policy-sandbox"]
-last_validated: 2026-10-21
+last_validated: 2026-10-30
 ---
 
 # Glossary: Policy & Sandboxing
@@ -15,10 +15,10 @@ This glossary covers Orbit-specific policy and sandboxing terms only. Generic OS
 | **Deny injection** | The mechanism by which global `denyRead` / `denyModify` rules become part of a resolved profile. Ordinary entries append as `!<rule>`; an explicit host `denyModify` exception intersects the selected profile after its enclosing deny. See [../2_design.md §2](../2_design.md#2-profile-resolution). |
 | **Effective profile** | The `ResolvedFsProfile` returned by `PolicyDef::effective_profile`: profile lookup + normalization + deny injection, with an implicit fallback only when the requested name is `unrestricted` and that profile is absent. Other undefined profile names are errors. See [../2_design.md §2](../2_design.md#2-profile-resolution). |
 | **FsCallEvent** | Historical audit event (`Request`, `Result`, or `Denied`) carrying profile, op, path, allowed flag, and matched rule. Types remain on `ToolContext`; no shipped builtin emits them after [ORB-10833]. See [../2_design.md §5](../2_design.md#5-tool-layer-enforcement-retired). |
-| **FsPolicyEvaluation** | The `PolicyEngine::check` return shape: `{ profile, operation, path, allowed, matched_rule }`. The fs-specific evaluation result; distinct from the simpler `PolicyDecision` enum used elsewhere. See [../2_design.md §4](../2_design.md#4-policyengine-facade). |
+| **FsPolicyEvaluation** | The `PolicyEngine::check` return shape: `{ profile, operation, path, allowed, matched_rule }`. See [../2_design.md §4](../2_design.md#4-policyengine-facade). |
 | **Last-match-wins** | Orbit's path evaluation order: walk all rules, the *last* matching rule decides allow vs. deny. Differs from first-match-wins POSIX-style allowlists. See [../2_design.md §3](../2_design.md#3-path-evaluation). |
 | **Implicit `unrestricted` profile** | The fallback `FsProfile { read: ["./**"], modify: ["./**"] }` synthesized when an activity omits `fsProfile:` and the policy does not define a profile named `unrestricted`. Global denies still apply. See [../2_design.md §2](../2_design.md#2-profile-resolution). |
-| **Process-group leader** | A spawned child whose PGID equals its PID, set via `command.process_group(0)` on Unix, so `killpg` can reap orphan subprocesses through the same group. See [../2_design.md §7](../2_design.md#7-sandbox--exec-primitives). |
+| **Process-group leader** | A spawned child whose PGID equals its PID, set via `command.process_group(0)` on Unix, so `killpg` can signal the whole group, including descendant subprocesses. See [../2_design.md §7](../2_design.md#7-sandbox--exec-primitives). |
 | **Resolved profile** | `ResolvedFsProfile { name, read, modify }` — the post-resolution shape that the evaluator walks. Different from the raw `FsProfile` because deny rules are already injected as negated entries. See [../2_design.md §2](../2_design.md#2-profile-resolution). |
 | **Sandbox trait** | The `Sandbox::validate` and `Sandbox::spawn` strategy seam for generic `orbit-exec::run_process` callers; the default `NoSandbox` adds no Orbit-specific validation or containment. The CLI agent path applies platform sandbox wrappers in `orbit-engine` instead of implementing this trait. See [../2_design.md §7](../2_design.md#7-sandbox--exec-primitives). |
 | **Termination escalation** | The SIGTERM → 5-second grace → SIGKILL sequence applied to a child process group on timeout or parent-signal interruption. See [../2_design.md §8](../2_design.md#8-process-supervision). |

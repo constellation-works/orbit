@@ -659,5 +659,29 @@
   },
   "repo_view_rejects_a_repository_that_looks_like_a_flag": {
     "error": "invalid input: invalid `repo`: \"--repo\"; must not start with `-`"
+  },
+  "dependabot_alert_request_rejects_dot_only_repository_segments": {
+    "error": "invalid input: invalid `repo`: \"acme/..\"; expected owner/name using ASCII letters, digits, '.', '-', or '_'"
+  },
+  "dependabot_alert_request_rejects_a_dot_only_owner": {
+    "error": "invalid input: invalid `repo`: \"../orbit\"; expected owner/name using ASCII letters, digits, '.', '-', or '_'"
+  },
+  "run_jobs_request_rejects_dot_only_repository_segments": {
+    "error": "invalid input: invalid `repo`: \"acme/..\"; expected owner/name using ASCII letters, digits, '.', '-', or '_'"
+  },
+  "job_annotations_request_rejects_dot_only_repository_segments": {
+    "error": "invalid input: invalid `repo`: \"acme/...\"; expected owner/name using ASCII letters, digits, '.', '-', or '_'"
+  },
+  "run_logs_normalises_leading_zeros_in_run_and_job_ids": {
+    "argv": [
+      "run",
+      "view",
+      "123",
+      "--job",
+      "456",
+      "--log"
+    ],
+    "cwd": null,
+    "projected": null
   }
 }

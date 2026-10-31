@@ -15,7 +15,9 @@ use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, task_pilot_warnings,
+    TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, TaskWriteMetadata,
+    TaskWriteResponsePolicy, task_listing_field_json, task_pilot_warnings,
+    task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -23,8 +25,7 @@ use super::super::input::{
     parse_optional_task_origin, parse_task_priority, parse_task_status, parse_task_type,
 };
 use super::super::json::{
-    serialize_error, serialize_task_lint_report, serialize_task_show,
-    serialize_task_write_response, task_fields_to_json,
+    serialize_error, serialize_task_lint_report, serialize_task_show, task_fields_to_json,
 };
 use super::write::{TaskWriteOutput, write_response_fields};
 
@@ -60,7 +61,11 @@ pub(in crate::adapter::tool_host) fn dispatch(
         TaskVerb::ArtifactPut => Err(OrbitError::Execution(
             "artifact preparation dispatch invariant violated".into(),
         )),
-        TaskVerb::ArtifactGet => read(super::read::artifact_get(runtime, &input)),
+        TaskVerb::ArtifactGet => read(super::read::artifact_get(
+            runtime,
+            caller.session_context,
+            &input,
+        )),
         TaskVerb::LocksList => read(crate::runtime::task::locks::list(runtime)),
         TaskVerb::LocksReserve => read(crate::runtime::task::locks::reserve(
             runtime,
@@ -147,6 +152,72 @@ pub(in crate::adapter::tool_host) fn dispatch(
                 .map_err(serialize_error("serialize landing retry"))?;
             Ok((response, Some(dispatch.task_id)))
         }
+        TaskVerb::RecoverClaim => {
+            if orbit_common::governance::authorization::agent_context_declared() {
+                return Err(OrbitError::CapabilityDenied(
+                    "managed agents cannot recover claims".into(),
+                ));
+            }
+            let authority = runtime
+                .admit_operator_operation("orbit.task.recover_claim", caller.session_context)?;
+            let actor = authority
+                .remote_caller_machine_id
+                .map_or_else(|| runtime.actor().resolve_write_label(None, None), Ok)?;
+            let claim_id = input.required_string("claim_id")?;
+            let expected_phase = input.required_string("expected_phase")?;
+            let status_raw = input.required_string("status")?;
+            let status = parse_task_status("status", &status_raw)?;
+            let reason = input.required_string("reason")?;
+            let request_key = input.required_string("request_key")?;
+            let response = runtime.recover_claim_as_operator(
+                &claim_id,
+                &expected_phase,
+                status,
+                &actor,
+                &reason,
+                &format!("operator-recover:{claim_id}:{request_key}"),
+            )?;
+            // The response names the claim, not its task; resolve the task for
+            // the redaction audit from the claim console's task id if present.
+            let persisted = response
+                .get("task_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| Some(claim_id.clone()));
+            Ok((response, persisted))
+        }
+        TaskVerb::RevokeHandoff => {
+            if orbit_common::governance::authorization::agent_context_declared() {
+                return Err(OrbitError::CapabilityDenied(
+                    "managed agents cannot revoke handoff authority".into(),
+                ));
+            }
+            let authority = runtime
+                .admit_operator_operation("orbit.task.revoke_handoff", caller.session_context)?;
+            let actor = authority
+                .remote_caller_machine_id
+                .map_or_else(|| runtime.actor().resolve_write_label(None, None), Ok)?;
+            let handoff_id = input.required_string("handoff_id")?;
+            let expected = crate::application::review::ExpectedCandidate {
+                candidate_commit: input.required_string("expected_candidate_commit")?,
+                base_commit: input.required_string("expected_base_commit")?,
+            };
+            let reason = input.required_string("reason")?;
+            let request_key = input.required_string("request_key")?;
+            let response = runtime.revoke_handoff_as_operator(
+                &handoff_id,
+                &expected,
+                &actor,
+                &reason,
+                &format!("operator-revoke:{handoff_id}:{request_key}"),
+            )?;
+            let persisted = response
+                .get("claim_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| Some(handoff_id.clone()));
+            Ok((response, persisted))
+        }
         TaskVerb::Reject => written(reject(runtime, &input, caller.agent, caller.model)),
         TaskVerb::Delete => read(delete(runtime, &input)),
     }
@@ -162,20 +233,36 @@ fn reviewed(value: Result<Value, OrbitError>) -> Result<(Value, Option<String>),
     Ok((value, id))
 }
 
-/// `orbit.task.block_triage`: the candidate list, or one triage decision.
+/// `orbit.task.block_triage`: the candidate list, or one triage decision,
+/// for a block episode or, with `subject` `pilot_warning`, a pilot warning
+/// hold.
 fn block_triage(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     input: &OperationInput,
 ) -> Result<(Value, Option<String>), OrbitError> {
-    use crate::application::task::{BlockTriageDecision, BlockTriageRequest, TriageOption};
+    use crate::application::task::escalation_triage_steps::TriageInspectionProof;
+    use crate::application::task::{
+        BlockTriageDecision, BlockTriageRequest, PilotWarningDecision, PilotWarningTriageRequest,
+    };
 
     let action = input.required_string("action")?;
+    let pilot_warning = match input.optional_string("subject")?.as_deref() {
+        None | Some("block") => false,
+        Some("pilot_warning") => true,
+        Some(other) => {
+            return Err(OrbitError::InvalidInput(format!(
+                "block triage subject `{other}` is not one of block or pilot_warning"
+            )));
+        }
+    };
     if action == "candidates" {
-        return Ok((
-            runtime.blocked_triage_candidates_json(chrono::Utc::now())?,
-            None,
-        ));
+        let candidates = if pilot_warning {
+            runtime.pilot_warning_candidates_json()?
+        } else {
+            runtime.blocked_triage_candidates_json(chrono::Utc::now())?
+        };
+        return Ok((candidates, None));
     }
     let id = input.required_string("id")?;
     let reason = || {
@@ -185,55 +272,72 @@ fn block_triage(
             })
         })
     };
+    let requested_by = || {
+        runtime
+            .actor()
+            .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())
+    };
+    // The decision is validated in full before the inspection proof, so a
+    // malformed call reports its own error and spends no `git` process.
+    let proof = || -> Result<(), OrbitError> {
+        runtime.check_triage_inspection_proof(
+            &id,
+            &TriageInspectionProof {
+                source_revision: input.optional_string("source_revision")?,
+                observed_revision: input.optional_string("observed_revision")?,
+                observed_tree: input.optional_string("observed_tree")?,
+            },
+        )
+    };
+    if pilot_warning {
+        if input.optional_string("blocker")?.is_some() {
+            return Err(OrbitError::InvalidInput(
+                "pilot warning triage quotes the holding findings itself; omit `blocker`".into(),
+            ));
+        }
+        let decision = match action.as_str() {
+            "report" => PilotWarningDecision::Report {
+                human_action: reason()?,
+            },
+            "propose" => {
+                let (options, recommended) = proposal(input)?;
+                PilotWarningDecision::Propose {
+                    options,
+                    recommended,
+                }
+            }
+            "requeue" => {
+                return Err(OrbitError::InvalidInput(
+                    "pilot warning triage cannot requeue: it only proposes or reports, and \
+                     never moves a task"
+                        .into(),
+                ));
+            }
+            other => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "pilot warning triage action `{other}` is not one of candidates, propose or report"
+                )));
+            }
+        };
+        let requested_by = requested_by()?;
+        proof()?;
+        let response = runtime.record_pilot_warning_triage(&PilotWarningTriageRequest {
+            task_id: id.clone(),
+            decision,
+            requested_by,
+        })?;
+        return Ok((response, Some(id)));
+    }
     let decision = match action.as_str() {
         "requeue" => BlockTriageDecision::Requeue { repair: reason()? },
         "report" => BlockTriageDecision::Report {
             human_action: reason()?,
         },
         "propose" => {
-            let options = input
-                .as_value()
-                .get("options")
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(
-                        "block triage `propose` needs `options`: two or three {summary, consequences, replacement} objects"
-                            .into(),
-                    )
-                })?
-                .iter()
-                .map(|option| {
-                    let text = |key: &str| {
-                        option
-                            .get(key)
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .ok_or_else(|| {
-                                OrbitError::InvalidInput(format!(
-                                    "every proposal option needs a string `{key}`"
-                                ))
-                            })
-                    };
-                    Ok(TriageOption {
-                        summary: text("summary")?,
-                        consequences: text("consequences")?,
-                        replacement: text("replacement")?,
-                    })
-                })
-                .collect::<Result<Vec<_>, OrbitError>>()?;
-            let recommended = input
-                .as_value()
-                .get("recommended")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(
-                        "block triage `propose` needs `recommended`: the 1-based option index"
-                            .into(),
-                    )
-                })?;
+            let (options, recommended) = proposal(input)?;
             BlockTriageDecision::Propose {
                 options,
-                recommended: usize::try_from(recommended).unwrap_or(usize::MAX),
+                recommended,
             }
         }
         other => {
@@ -242,16 +346,76 @@ fn block_triage(
             )));
         }
     };
-    let requested_by = runtime
-        .actor()
-        .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())?;
-    let response = runtime.record_block_triage(&BlockTriageRequest {
+    let request = BlockTriageRequest {
         task_id: id.clone(),
         blocker: input.optional_string("blocker")?.unwrap_or_default(),
         decision,
-        requested_by,
-    })?;
+        requested_by: requested_by()?,
+    };
+    proof()?;
+    let response = runtime.record_block_triage(&request)?;
     Ok((response, Some(id)))
+}
+
+/// A triage `propose` call's `options` and 1-based `recommended` index.
+fn proposal(
+    input: &OperationInput,
+) -> Result<(Vec<crate::application::task::TriageOption>, usize), OrbitError> {
+    let options = input
+        .as_value()
+        .get("options")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "block triage `propose` needs `options`: two or three {summary, consequences, target, replacement} objects"
+                    .into(),
+            )
+        })?
+        .iter()
+        .map(|option| {
+            let text = |key: &str| {
+                option
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        OrbitError::InvalidInput(format!(
+                            "every proposal option needs a string `{key}`"
+                        ))
+                    })
+            };
+            let target = match option.get("target") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_str()
+                        .and_then(crate::application::task::TriageTarget::parse)
+                        .ok_or_else(|| {
+                            OrbitError::InvalidInput(
+                                "a proposal option `target` must be `acceptance_criteria` or `description`"
+                                    .into(),
+                            )
+                        })?,
+                ),
+            };
+            Ok(crate::application::task::TriageOption {
+                summary: text("summary")?,
+                consequences: text("consequences")?,
+                target,
+                replacement: text("replacement")?,
+            })
+        })
+        .collect::<Result<Vec<_>, OrbitError>>()?;
+    let recommended = input
+        .as_value()
+        .get("recommended")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "block triage `propose` needs `recommended`: the 1-based option index".into(),
+            )
+        })?;
+    Ok((options, usize::try_from(recommended).unwrap_or(usize::MAX)))
 }
 
 /// `orbit.task.reject`.
@@ -272,7 +436,12 @@ fn reject(
         model,
     )?;
     Ok(TaskWriteOutput {
-        response: serialize_task_write_response(runtime, &task, response_fields.as_deref())?,
+        response: task_write_response_json(
+            runtime,
+            &task,
+            &TaskWriteResponsePolicy::from_fields(response_fields.as_deref()),
+            &TaskWriteMetadata::default(),
+        )?,
         persisted_id: task.id,
     })
 }
@@ -320,9 +489,36 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     // Validated before the query so an unknown field is refused even when no
     // task matches, instead of only surfacing on the first listed task.
     let fields = projection_fields(input)?.filter(|fields| !fields.is_empty());
+    let schedule_bound =
+        |field: &str| -> Result<Option<chrono::DateTime<chrono::Utc>>, OrbitError> {
+            input
+                .optional_raw_string(field)?
+                .map(|raw| {
+                    chrono::DateTime::parse_from_rfc3339(&raw)
+                .map(|at| at.with_timezone(&chrono::Utc))
+                .map_err(|error| OrbitError::InvalidInput(format!(
+                    "`{field}` must be an RFC 3339 instant with an offset; got `{raw}` ({error})"
+                )))
+                })
+                .transpose()
+        };
+    let not_before_from = schedule_bound("not_before_from")?;
+    let not_before_until = schedule_bound("not_before_until")?;
+    if not_before_from
+        .zip(not_before_until)
+        .is_some_and(|(from, until)| from > until)
+    {
+        return Err(OrbitError::InvalidInput(
+            "not_before_from must be at or before not_before_until".into(),
+        ));
+    }
     let page = runtime.query_task_rows_status_aware(&TaskListQuery {
         filter: TaskListFilter {
             statuses,
+            not_before_from,
+            not_before_until,
+            scheduled_after: (input.optional_bool("scheduled")? == Some(true))
+                .then(chrono::Utc::now),
             priority,
             task_type,
             origin,
@@ -350,20 +546,39 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     })?;
     let status_by_id = page.status_by_id;
     let os_readout = TaskOsReadout::new(runtime)?;
+    let mut warnings = Vec::new();
     let tasks = page
         .items
         .into_iter()
         .map(|row| match &fields {
             None => {
                 let mut object = task_base_json(&row.task, &status_by_id);
+                object.insert(
+                    "not_before".into(),
+                    json!(
+                        row.task
+                            .not_before
+                            .map(orbit_types::task::format_not_before)
+                    ),
+                );
                 os_readout.insert_into(&row.task, &mut object);
                 object.insert(
                     "pilot_warnings".into(),
-                    json!(task_pilot_warnings(row.task.status, &row.comments)),
+                    json!(task_pilot_warnings(
+                        row.task.status,
+                        &row.comments,
+                        &row.task.dependencies(),
+                        &|id: &str| matches!(
+                            runtime.get_task(id),
+                            Ok(found) if found.status == TaskStatus::Done
+                        ),
+                    )),
                 );
                 Ok(Value::Object(object))
             }
-            Some(fields) => project_listed_task(runtime, &row.task, fields, &os_readout),
+            Some(fields) => {
+                project_listed_task(runtime, &row.task, fields, &os_readout, &mut warnings)
+            }
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;
     let total = page.total;
@@ -374,6 +589,9 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         "total": total,
         "truncated": truncated,
     });
+    if !warnings.is_empty() {
+        payload["warnings"] = json!(warnings);
+    }
     if empty {
         let unindexed = runtime.unindexed_task_bundle_count()?;
         if unindexed > 0 {
@@ -391,6 +609,7 @@ fn project_listed_task(
     task: &Task,
     fields: &[String],
     os_readout: &TaskOsReadout,
+    warnings: &mut Vec<String>,
 ) -> Result<Value, OrbitError> {
     let mut projected = Map::new();
     for field in fields {
@@ -398,8 +617,12 @@ fn project_listed_task(
             field.clone(),
             if field == "os_requirement" {
                 os_readout.requirement(task)
+            } else if field == "placement_wait" {
+                os_readout
+                    .placement_wait(task)
+                    .map_or(Value::Null, Value::String)
             } else {
-                task_fields_to_json(runtime, task, std::slice::from_ref(field))?
+                task_listing_field_json(runtime, task, field, warnings)?
             },
         );
     }

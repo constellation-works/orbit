@@ -199,6 +199,7 @@ export async function peekDoctor() {
   }
   if (visitIsCurrent(current) && !supersedes(seq, "cached", current)) return;
   adopt(visit, seq, "cached", body);
+  failure = null;
   renderDoctor();
 }
 

@@ -1,15 +1,8 @@
-use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
-use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::optional_string_list_alias;
 use orbit_engine::DispatchError;
 use orbit_tools::{ToolCaller, ToolContext, WitnessedProgramGrant};
 use orbit_types::policy::Role;
-use orbit_types::task::{
-    TaskReferenceIndex, UnsatisfiableTaskDependency, unmet_task_dependencies_with_index,
-    unsatisfiable_task_dependencies_with_index,
-};
 use orbit_types::tool::McpCapability;
 use orbit_types::workflow::{CoreDeterministicAction, DeterministicAction};
 use serde_json::Value;
@@ -22,14 +15,12 @@ use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
 use crate::application::sweep_filing::dependabot::{
     consolidate as dependabot_consolidate, filing as dependabot_filing,
 };
+use crate::application::sweep_filing::rule_findings as rule_findings_filing;
 use crate::application::task::pilot as task_pilot;
-use crate::application::task::{blocked_recovery, finding_verification_steps};
-use crate::application::workspace_auto;
-use crate::runtime::task::locks::{
-    EmptyTaskSurfacePolicy, TaskLockIndex, emit_expired_reservation_events,
-    merge_task_lock_conflicts, parse_task_ids, requested_task_files_indexed, reserve_with_index,
-    task_lock_conflicts_indexed, workspace_orbit_dir, workspace_task_reservation_id,
+use crate::application::task::{
+    blocked_recovery, escalation_triage_steps, finding_verification_steps,
 };
+use crate::application::workspace_auto;
 
 use super::pipeline_actions::{invoke_and_wait, invoke_detached};
 
@@ -76,22 +67,14 @@ pub(crate) fn run_deterministic(
             | CoreDeterministicAction::ApplyTaskPilotResults
             | CoreDeterministicAction::PrepareFindingVerification
             | CoreDeterministicAction::ApplyFindingVerification
+            | CoreDeterministicAction::PrepareEscalationTriage
     ) {
-        let claim_input = input.get("prepared").unwrap_or(input);
-        let claim = crate::application::automation::members::claim(runtime, claim_input)
-            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-        if let Some(claim) = claim {
-            let owner = tool_context
-                .reservation_owner
-                .as_ref()
-                .map(|owner| owner.owner_run_id.as_str());
-            if owner.is_none() || owner != claim.action_id.as_deref() {
-                return Err(DispatchError::action_failed(
-                    action,
-                    "state claim belongs to another run",
-                ));
-            }
-        }
+        crate::application::automation::members::require_claim_owner(
+            runtime,
+            action,
+            input,
+            owner_run_id(&tool_context),
+        )?;
     }
     match deterministic_action {
         // The one deterministic action a plugin contributes behaviour through
@@ -160,38 +143,7 @@ pub(crate) fn run_deterministic(
             ))
         }
         CoreDeterministicAction::ContextConflictCheck => {
-            let task_ids = parse_task_ids(input)
-                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-            let index = TaskLockIndex::load(runtime, &task_ids)
-                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-            let repo_root = runtime.paths().repo_root.as_path();
-            let requested_files = requested_task_files_indexed(&index, &task_ids, repo_root)
-                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-            let task_conflicts =
-                task_lock_conflicts_indexed(&index, &task_ids, &requested_files, repo_root);
-            runtime
-                .reconcile_stale_owned_reservations_for_files(&requested_files, 32)
-                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-            let reservation_check = runtime
-                .stores()
-                .task_reservations()
-                .check_task_reservation_conflicts(
-                    orbit_store::contracts::TaskReservationCheckParams {
-                        workspace_orbit_dir: workspace_orbit_dir(runtime),
-                        workspace_id: workspace_task_reservation_id(runtime).map_err(|error| {
-                            DispatchError::action_failed(action, error.to_string())
-                        })?,
-                        requested_files,
-                    },
-                )
-                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-            emit_expired_reservation_events(runtime, &reservation_check.expired_reservations)
-                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-            let conflicts = merge_task_lock_conflicts(task_conflicts, reservation_check.conflicts);
-            Ok(serde_json::json!({
-                "clear": conflicts.is_empty(),
-                "conflicts": conflicts,
-            }))
+            pipeline_actions::context_conflict_check(runtime, action, input)
         }
         CoreDeterministicAction::Sleep => {
             let seconds = input
@@ -212,6 +164,16 @@ pub(crate) fn run_deterministic(
                 "slept_seconds": started_at.elapsed().as_secs_f64(),
             }))
         }
+        // The hourly crew-performance snapshot refresh: rebuild the
+        // by-type cell matrix from a scorecard scan and persist it for
+        // draws. No-ops without scanning while the feature is off.
+        CoreDeterministicAction::CrewPerformanceRefresh => runtime
+            .refresh_crew_performance_snapshot()
+            .map_err(|error| DispatchError::action_failed(action, error.to_string())),
+        // Publish only this workspace, with an explicit successful skip when unbound.
+        CoreDeterministicAction::TaskPublication => runtime
+            .run_task_publication()
+            .map_err(|error| DispatchError::action_failed(action, error.to_string())),
         // The opt-in daily retention sweep: audit rows and blobs, then old
         // terminal runs' pipeline state, under the configured windows.
         CoreDeterministicAction::StoreGc => {
@@ -237,6 +199,12 @@ pub(crate) fn run_deterministic(
         }
         CoreDeterministicAction::FileDependabotAlertTasks => {
             dependabot_filing::file_dependabot_alert_tasks(runtime, input)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+        }
+        // Keep one task per rule-result fingerprint from a results document
+        // any workspace script wrote; surface-agnostic by schema.
+        CoreDeterministicAction::FileRuleFindings => {
+            rule_findings_filing::file_rule_findings(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // The admissible work for one drain iteration [ORB-10819]: the
@@ -272,9 +240,8 @@ pub(crate) fn run_deterministic(
         // [ORB-13625] One follower pull-drain iteration: reconcile earlier
         // admissions, then top free slots up from the owner.
         CoreDeterministicAction::PullRefill => pull_drain::pull_refill(runtime, action, input),
-        // ADR-0223: scheduled shipment resolves only the active runtime's
-        // canonical ship input; cross-workspace enumeration stays in the
-        // legacy CLI sweep and `workflow.auto_ship` is deliberately ignored.
+        // ADR-0223: a drain resolves only the active runtime's canonical ship
+        // input, never another registered workspace's.
         CoreDeterministicAction::ResolveWorkspaceShipInput => {
             resolve_workspace_ship_input(runtime, action)
         }
@@ -309,6 +276,15 @@ pub(crate) fn run_deterministic(
             finding_verification_steps::run_id(owner_run_id(&tool_context), input),
         ),
         CoreDeterministicAction::ApplyFindingVerification => finding_verification_steps::apply(
+            runtime,
+            action,
+            input,
+            finding_verification_steps::run_id(owner_run_id(&tool_context), input),
+        ),
+        // Select the held pilot assessments an escalation triage run reads
+        // and draw each one's hard-tier triager; the triager records its own
+        // decision through `orbit.task.block_triage`.
+        CoreDeterministicAction::PrepareEscalationTriage => escalation_triage_steps::prepare(
             runtime,
             action,
             input,
@@ -349,6 +325,33 @@ pub(crate) fn run_deterministic(
         }
         CoreDeterministicAction::ReviewGateSettle => {
             crate::application::review::review_gate_settle(runtime, action, input)
+        }
+        // Visual review §4, §7: the capture of record of a `verify-mock-ui`
+        // delivery, its deterministic checks, and its settlement against the
+        // candidate head and the frozen mocks.
+        CoreDeterministicAction::VisualCapture => {
+            crate::application::visual_delivery::visual_capture_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualChecks => {
+            crate::application::visual_delivery::visual_checks_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualReviewPrepare => {
+            crate::application::visual_delivery::visual_review_prepare_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualVerifyPrepare => {
+            crate::application::visual_delivery::visual_verify_prepare_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualSettle => {
+            crate::application::visual_delivery::visual_settle_step(runtime, action, input)
+        }
+        // Visual review §1, §11.3: in `live`, settle the code reviewer's
+        // resolutions before landing (recapturing a changed candidate), and
+        // file what landed unresolved as follow-ups after landing.
+        CoreDeterministicAction::VisualRecapture => {
+            crate::application::visual_delivery::visual_recapture_step(runtime, action, input)
+        }
+        CoreDeterministicAction::VisualLanded => {
+            crate::application::visual_delivery::visual_landed_step(runtime, action, input)
         }
         // Operator-admitted review reconciliation of an already-merged
         // foreign delivery head: re-observe and pin the head, run required
@@ -392,95 +395,7 @@ pub(crate) fn run_deterministic(
         // generic `{tool_name, args}` envelope into the activity's
         // input_schema.
         CoreDeterministicAction::ReserveLocks => {
-            let admission = dependency_admission_for_input(runtime, input)
-                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
-            // Fail before the first poll: an archived/rejected/dangling
-            // `blocked_by` target cannot be cleared by waiting, so returning
-            // `reserved: false` here would burn the gate's whole iteration
-            // budget and then report a file conflict that does not exist.
-            if !admission.unsatisfiable.is_empty() {
-                update_run_waiting_reasons(
-                    runtime,
-                    input,
-                    non_empty(
-                        admission
-                            .unsatisfiable
-                            .iter()
-                            .map(|dependency| dependency.dependency_id.clone())
-                            .collect(),
-                    ),
-                    None,
-                    action,
-                )?;
-                return Err(DispatchError::action_failed(
-                    action,
-                    admission.unsatisfiable_message(),
-                ));
-            }
-            if !admission.waiting_on.is_empty() {
-                update_run_waiting_reasons(
-                    runtime,
-                    input,
-                    Some(admission.waiting_on.clone()),
-                    None,
-                    action,
-                )?;
-                return Ok(serde_json::json!({
-                    "reserved": false,
-                    "waiting_on_deps": admission.waiting_on,
-                    "conflicts": [],
-                    "footprint_deferred": false,
-                }));
-            }
-
-            let task_ids = parse_task_ids(input)
-                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
-            let lock_index = TaskLockIndex::load(runtime, &task_ids)
-                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
-            let mut output = reserve_with_index(
-                runtime,
-                input.clone(),
-                tool_context.agent_name.clone(),
-                tool_context.model_name.clone(),
-                tool_context.reservation_owner.clone(),
-                &lock_index,
-                EmptyTaskSurfacePolicy::Admit,
-            )
-            .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?;
-            // A resumed published delivery adopts before it edits, so its
-            // gate does not wait on the holders that refused it; the leaf
-            // takes its footprint before its first edit.
-            if let Some(deferred) = runtime
-                .deferred_footprint_reservation(
-                    input,
-                    &output,
-                    tool_context.agent_name.clone(),
-                    tool_context.model_name.clone(),
-                    tool_context.reservation_owner.clone(),
-                )
-                .map_err(|err| DispatchError::action_failed(action, format!("{err}")))?
-            {
-                output = deferred;
-            }
-            // Always publish `waiting_on_deps` (empty here), `conflicts`
-            // (empty once reserved) and `footprint_deferred` so the gate
-            // pipeline's always-run starvation step and child dispatch can
-            // reference them unconditionally, whichever branch produced the
-            // output [ORB-15514].
-            if let Some(object) = output.as_object_mut() {
-                object
-                    .entry("waiting_on_deps")
-                    .or_insert_with(|| Value::Array(Vec::new()));
-                object
-                    .entry("conflicts")
-                    .or_insert_with(|| Value::Array(Vec::new()));
-                object
-                    .entry("footprint_deferred")
-                    .or_insert(Value::Bool(false));
-            }
-            let waiting_on_locks = waiting_locks_from_reserve_output(&output);
-            update_run_waiting_reasons(runtime, input, None, non_empty(waiting_on_locks), action)?;
-            Ok(output)
+            pipeline_actions::reserve_locks(runtime, action, input, &tool_context)
         }
         CoreDeterministicAction::ReleaseLocks => {
             // The activity dispatcher adds execution context to core action
@@ -528,71 +443,7 @@ pub(crate) fn run_deterministic(
         // blocking tasks and the claims holding them, and returns a deferral
         // that ends the gate without a child, leaving the task in backlog.
         CoreDeterministicAction::GateStarvationDefer => {
-            let mut normalized = input.clone();
-            if let Some(reservation) = input.get("reservation") {
-                let reservation = if reservation.is_null() {
-                    // A zero/expired budget may run no body at all. Observe
-                    // blockers without ever acquiring a late reservation.
-                    let admission = dependency_admission_for_input(runtime, input)
-                        .map_err(|err| DispatchError::action_failed(action, err.to_string()))?;
-                    if !admission.unsatisfiable.is_empty() {
-                        return Err(DispatchError::action_failed(
-                            action,
-                            admission.unsatisfiable_message(),
-                        ));
-                    }
-                    let conflicts = run_deterministic(
-                        runtime,
-                        "context_conflict_check",
-                        &Value::Null,
-                        input,
-                        tool_context.clone(),
-                    )?;
-                    serde_json::json!({
-                        "reserved": false,
-                        "conflicts": conflicts["conflicts"],
-                        "waiting_on_deps": admission.waiting_on,
-                        "footprint_deferred": false,
-                    })
-                } else {
-                    reservation.clone()
-                };
-                for key in ["reserved", "conflicts", "waiting_on_deps"] {
-                    normalized[key] = reservation[key].clone();
-                }
-                normalized["reservation"] = reservation;
-            }
-            if input.get("expired").and_then(Value::as_bool) == Some(true)
-                && normalized["reserved"] == true
-            {
-                // A reservation already in flight can finish after its budget.
-                // Release that late grant before reporting a deferral; it must
-                // never authorize dispatch after expiry.
-                let reservation_id = normalized["reservation"]["reservation_id"]
-                    .as_str()
-                    .ok_or_else(|| {
-                        DispatchError::action_failed(
-                            action,
-                            "late reservation missing reservation_id".to_string(),
-                        )
-                    })?;
-                run_deterministic(
-                    runtime,
-                    "release_locks",
-                    &Value::Null,
-                    &serde_json::json!({"reservation_id": reservation_id}),
-                    tool_context,
-                )?;
-                normalized["reserved"] = Value::Bool(false);
-                normalized["reservation"]["reserved"] = Value::Bool(false);
-            }
-            let mut output = pipeline_actions::gate_starvation_defer(runtime, action, &normalized)?;
-            // Always present, including for legacy callers using flat inputs.
-            output["reservation"] = normalized
-                .get("reservation")
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({}));
-            Ok(output)
+            pipeline_actions::gate_starvation_step(runtime, action, input, tool_context)
         }
         // The gate's first step: the job this bundle is delivered by — the
         // default `task_<mode>_pipeline`, or the job its tasks select with a
@@ -709,124 +560,6 @@ fn resolve_workspace_ship_input(
         input["base_sync"] = Value::String("remote".to_string());
     }
     Ok(input)
-}
-
-/// The dependency picture for a bundle, split by what the caller should do
-/// about it.
-///
-/// `waiting_on` is the poll-and-retry set; `unsatisfiable` is the fail-now set.
-/// An edge appears in exactly one of them — every unsatisfiable edge is also
-/// unmet, but it is reported only as unsatisfiable so the two causes never
-/// blur together in a diagnostic.
-#[derive(Debug, Default)]
-pub(super) struct BundleDependencyAdmission {
-    pub(super) waiting_on: Vec<String>,
-    pub(super) unsatisfiable: Vec<UnsatisfiableTaskDependency>,
-}
-
-impl BundleDependencyAdmission {
-    /// Failure message for the unsatisfiable set. Prefixed with a stable
-    /// `task.dependencies.unsatisfiable:` marker so an operator (or a
-    /// parent job parsing run errors) can tell this apart from
-    /// `gate.starvation`, which means the opposite thing: waiting was
-    /// legitimate but ran out of budget.
-    pub(super) fn unsatisfiable_message(&self) -> String {
-        let labels = self
-            .unsatisfiable
-            .iter()
-            .map(UnsatisfiableTaskDependency::label)
-            .collect::<Vec<_>>()
-            .join("; ");
-        format!(
-            "task.dependencies.unsatisfiable: {labels}. \
-             These dependency edges can never reach 'done', so waiting cannot clear them \
-             (no file-lock conflict is involved). Fix the task graph and re-dispatch."
-        )
-    }
-}
-
-fn dependency_admission_for_input(
-    runtime: &OrbitRuntime,
-    input: &Value,
-) -> Result<BundleDependencyAdmission, OrbitError> {
-    let Some(raw_task_ids) =
-        optional_string_list_alias(input, &["task_ids", "taskIds", "task-ids"])?
-    else {
-        return Ok(BundleDependencyAdmission::default());
-    };
-    let task_ids = parse_task_ids(&serde_json::json!({ "task_ids": raw_task_ids }))?;
-    let tasks = task_ids
-        .iter()
-        .map(|task_id| runtime.get_task(task_id))
-        .collect::<Result<Vec<_>, _>>()?;
-    let status_by_id = runtime.dependency_status_index(&tasks)?;
-    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
-    let mut waiting_on = BTreeSet::new();
-    let mut unsatisfiable = Vec::new();
-    for task in tasks {
-        let dead_ends =
-            unsatisfiable_task_dependencies_with_index(&task, &status_by_id, &reference_index);
-        let dead_end_ids = dead_ends
-            .iter()
-            .map(|dependency| dependency.dependency_id.clone())
-            .collect::<BTreeSet<_>>();
-        for dependency in unmet_task_dependencies_with_index(&task, &status_by_id, &reference_index)
-        {
-            if !dead_end_ids.contains(&dependency.id) {
-                waiting_on.insert(dependency.id);
-            }
-        }
-        unsatisfiable.extend(dead_ends);
-    }
-    Ok(BundleDependencyAdmission {
-        waiting_on: waiting_on.into_iter().collect(),
-        unsatisfiable,
-    })
-}
-
-fn waiting_locks_from_reserve_output(output: &Value) -> Vec<String> {
-    output
-        .get("conflicts")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|conflict| conflict.get("file").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn update_run_waiting_reasons(
-    runtime: &OrbitRuntime,
-    input: &Value,
-    waiting_on_deps: Option<Vec<String>>,
-    waiting_on_locks: Option<Vec<String>>,
-    action: &str,
-) -> Result<(), DispatchError> {
-    let Some(run_id) = input.get("run_id").and_then(Value::as_str) else {
-        return Ok(());
-    };
-    // Same transactional primitive as checkpoints and child dispatch: a
-    // separate read then whole-document write would discard a concurrent
-    // admissions-stop or worker-limit that landed in between.
-    let mut waiting_on_deps = waiting_on_deps;
-    let mut waiting_on_locks = waiting_on_locks;
-    runtime
-        .stores()
-        .jobs()
-        .update_run_state(run_id, &mut |_, state| {
-            state.set_waiting_reasons(waiting_on_deps.take(), waiting_on_locks.take());
-            Ok(())
-        })
-        .map(|_| ())
-        .map_err(|err| DispatchError::action_failed(action, format!("{err}")))
-}
-
-fn non_empty(values: Vec<String>) -> Option<Vec<String>> {
-    (!values.is_empty()).then_some(values)
 }
 
 fn recovery_run_id(tool_context: &ToolContext) -> Option<&str> {

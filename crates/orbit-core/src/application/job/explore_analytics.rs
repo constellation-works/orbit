@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::ContextFilesWidening;
 use orbit_types::workflow::activity_job::{EXPLORE_JOB, EXPLORE_PARENT_RUN_KEY};
@@ -33,8 +34,8 @@ const IMPLEMENT_ACTIVITY: &str = "agent_implement";
 
 // Invocation activity_id stores the pipeline step id, unlike an explorer's
 // parent_activity, which stores the catalog activity name. Keep activity-name
-// aliases for records written by older callers; no backfill is needed.
-const IMPLEMENT_INVOCATION_IDS: &[&str] = &["implement_one", IMPLEMENT_ACTIVITY];
+// aliases for records written by older callers; no backfill is needed. The
+// implement aliases are `IMPLEMENT_INVOCATION_IDS`.
 const EXPLORE_INVOCATION_IDS: &[&str] = &["explore", "agent_explore"];
 
 /// Newest implement invocations read for one comparison. A window holding

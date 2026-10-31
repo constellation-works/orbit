@@ -1,7 +1,6 @@
 //  Publication transport is a separate workflow area. Its security fixture
 //  owns a child process with a private PATH so no real transport can run.
 
-
 #[cfg(unix)]
 #[test]
 fn inspect_and_restore_refuse_credentials_before_git_or_cache_writes() {
@@ -99,7 +98,7 @@ fn inspect_and_restore_refuse_credentials_before_git_or_cache_writes() {
             .unwrap_err()
             .to_string();
         assert!(marker.is_file(), "credential-free remote must reach Git");
-        assert!(error.contains("fixture transport refusal"), "{error}");
+        assert!(error.contains("transport diagnostics withheld"), "{error}");
     }
 }
 
@@ -123,6 +122,13 @@ mod inspect;
 #[path = "publication/pending.rs"]
 mod pending;
 
+#[path = "publication/shared_repo.rs"]
+mod shared_repo;
+
 #[cfg(unix)]
 #[path = "publication/archive.rs"]
 mod archive;
+
+#[cfg(unix)]
+#[path = "publication/credentials.rs"]
+mod credentials;

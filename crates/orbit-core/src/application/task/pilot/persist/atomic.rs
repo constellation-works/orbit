@@ -7,6 +7,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 
 use super::super::apply::admission::{
     Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask,
@@ -51,7 +52,8 @@ pub(super) fn resulting_fingerprint(
         return Ok(None);
     };
     let current = runtime.get_task(task_id)?;
-    crate::application::automation::preparation::fingerprint(runtime, &current, revision, policy)
+    runtime
+        .task_material_fingerprint(&current, revision, policy)
         .map(Some)
         .map_err(orbit_automation::automation_error_to_orbit)
 }
@@ -112,20 +114,23 @@ pub(in super::super) fn record_applied_assessment(
 ) {
     let changed =
         snapshot.context_files != task.after || snapshot.complexity != Some(task.complexity);
-    let (field, decision, records) = match task.admission {
+    // Serialize only at the reporting boundary; approval is read from the
+    // typed record before it becomes persisted JSON.
+    let (field, decision, approved, records) = match task.admission {
         Some(Admission::CiSweep(decision)) => (
             Some("ci_sweep_admission"),
-            Some(decision),
+            Some(json!(decision)),
+            false,
             ci_sweep_admission,
         ),
-        Some(Admission::Drain(decision)) => {
-            (Some("drain_approval"), Some(decision), drain_approval)
-        }
-        None => (None, None, ci_sweep_admission),
+        Some(Admission::Drain(decision)) => (
+            Some("drain_approval"),
+            Some(json!(decision)),
+            decision.approved == Some(true),
+            drain_approval,
+        ),
+        None => (None, None, false, ci_sweep_admission),
     };
-    let approved = decision
-        .as_ref()
-        .is_some_and(|decision| decision["approved"] == true);
     if let Value::Object(fields) = &mut task.assessment {
         fields.insert(
             "applied".to_string(),

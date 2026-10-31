@@ -102,10 +102,10 @@ impl Fleet {
         })
         .expect("install machine identity");
         crate::fixture_crew::configure_sol(&home.join(".orbit"));
-        let config: toml::Value = fs::read_to_string(home.join(".orbit/config.toml"))
-            .expect("read config")
-            .parse()
-            .expect("parse config");
+        let config: toml::Value = toml::from_str(
+            &fs::read_to_string(home.join(".orbit/config.toml")).expect("read config"),
+        )
+        .expect("parse config");
         Install {
             machine_id: config["machine"]["id"]
                 .as_str()

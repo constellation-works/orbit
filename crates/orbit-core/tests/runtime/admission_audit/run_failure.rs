@@ -7,10 +7,11 @@
 use chrono::Utc;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT};
 use orbit_store::{JobRunStepParams, TaskCreateParams};
-use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
 use tempfile::tempdir_in;
 
+use crate::task_params_test_support::task_create_params;
 use orbit_core::OrbitRuntime;
 
 const PIPELINE_JOB: &str = "task_pr_pipeline";
@@ -45,36 +46,9 @@ fn create_task(
 ) -> String {
     crate::admission_audit::store_support::tasks(runtime)
         .create_task(TaskCreateParams {
-            actor: "test".to_string(),
-            parent_id: None,
-            title: format!("task {id_hint}"),
-            description: "test".to_string(),
-            acceptance_criteria: Vec::new(),
-            dependencies: Vec::new(),
-            relations: Vec::new(),
-            tags: Vec::new(),
-            required_tools: Vec::new(),
-            plan: String::new(),
-            execution_summary: String::new(),
             context_files,
-            repo_root: None,
-            created_by: Some("test".to_string()),
-            planned_by: None,
-            implemented_by: None,
-            status: TaskStatus::Backlog,
-            priority: TaskPriority::Medium,
             complexity,
-            task_type: TaskType::Chore,
-            external_refs: Vec::new(),
-            source_task_id: None,
-            crew: None,
-            crew_source: None,
-            orchestrator: None,
-            orchestrator_model: None,
-            orchestrator_model_source: None,
-            origin: None,
-            comments: Vec::new(),
-            context_creation: Vec::new(),
+            ..task_create_params(format!("task {id_hint}"), "test", TaskStatus::Backlog)
         })
         .expect("create task")
         .id

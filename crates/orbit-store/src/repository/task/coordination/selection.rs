@@ -13,11 +13,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_types::task::{Task, TaskStatus, satisfy_completed_archived_dependencies};
 
 use super::TaskCommitBoundary;
-use super::admission::{canonical_footprint, overlaps};
+use super::admission::canonical_footprint;
 use super::lifecycle::DrainReleases;
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_history_from_events};
@@ -68,10 +69,15 @@ pub(super) struct Screen<'a> {
     pub(super) claims: &'a [ExecutionClaim],
     /// Each in-flight task's id and canonical footprint.
     pub(super) in_flight: &'a [(String, Vec<String>)],
+    /// Active task reservations and hard leases; a deferral names either by
+    /// its id. Advisory leases hold nothing, so they never appear here.
     pub(super) reservations: &'a [ActiveTaskReservation],
     /// Each task the owner's local drain admitted whose gate may not have
     /// reserved yet, with its footprint [ORB-15514].
     pub(super) owner_wave: &'a [(String, Vec<String>)],
+    /// The owner's `workflow.lock_modes`: an overlap only at a shared path
+    /// neither blocks the candidate nor names a blocker.
+    pub(super) lock_modes: &'a FootprintLockModes,
     /// Crew name to its executor `host_os`, when the executor declares one.
     pub(super) executor_host_os:
         &'a std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
@@ -159,6 +165,14 @@ impl Screen<'_> {
             receipt.os_unavailable.push(diagnostic(reason, Vec::new()));
             return None;
         }
+        // Nor one requiring a capability label the executor lacks. Read at
+        // each admission, so a relabelled host or task applies to the next.
+        if let Some(reason) = labels_unavailable(request.os, &request.labels, task) {
+            receipt
+                .labels_unavailable
+                .push(diagnostic(reason, Vec::new()));
+            return None;
+        }
         // Nor one tagged `ui` that the executor has no verified browser kit
         // to render.
         if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {
@@ -222,30 +236,31 @@ impl Screen<'_> {
                 return None;
             }
         };
+        let overlaps = |held: &[String]| self.lock_modes.footprints_block(&footprint, held);
         let blocker = self
             .claims
             .iter()
             .find(|claim| {
                 claim.phase.protects_footprint()
-                    && (claim.task_id == task.id || overlaps(&footprint, &claim.footprint))
+                    && (claim.task_id == task.id || overlaps(&claim.footprint))
             })
             .map(|claim| claim.task_id.as_str())
             .or_else(|| {
                 self.in_flight
                     .iter()
-                    .find(|(_, files)| overlaps(&footprint, files))
+                    .find(|(_, files)| overlaps(files))
                     .map(|(id, _)| id.as_str())
             })
             .or_else(|| {
                 self.reservations
                     .iter()
-                    .find(|reservation| overlaps(&footprint, &reservation.files))
+                    .find(|reservation| overlaps(&reservation.files))
                     .map(|reservation| reservation.reservation_id.as_str())
             })
             .or_else(|| {
                 self.owner_wave
                     .iter()
-                    .find(|(id, files)| *id == task.id || overlaps(&footprint, files))
+                    .find(|(id, files)| *id == task.id || overlaps(files))
                     .map(|(id, _)| id.as_str())
             });
         if let Some(blocker) = blocker {
@@ -301,6 +316,7 @@ impl TaskCommitBoundary {
                 ordering.census.as_ref(),
                 ordering.affinity,
                 &ordering.executor_host_os,
+                &ordering.crew_pools,
             );
             let dependencies = backlog.iter().flat_map(Task::dependencies).collect();
             // `Host` reaches every partition, so it reads every dependency.

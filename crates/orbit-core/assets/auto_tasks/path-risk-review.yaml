@@ -1,0 +1,87 @@
+schemaVersion: 1
+name: path-risk-review
+description: Path-risk review every 3 days - paths that keep regressing, land outside their footprint, block, or contend for locks, read from the codebase analytics; files at most three proposed fixes per run that change the mechanism behind each risky path class, and is a no-op below min_support
+enabled: false
+schedule:
+  every_minutes: 4320
+template:
+  title: Investigate high-risk paths and propose mechanism fixes
+  description: |-
+    Investigate why certain repository paths keep costing agent deliveries: they regress, land outside their declared footprint, block, get rejected, or contend for locks. Then propose fixes that change the mechanism behind those rates. This task files work; it does not change code itself, and it does not build or run tests. A run where no path clears minimum support, or where no path warrants a new task, is a successful no-op. Narrative-only output does not count as delivery.
+
+    ## Minimum support
+
+    Read `min_support` from the analytics JSON (top-level field; the CLI default is 15). Each section's `rows` already keep only rows whose denominator reaches it, and its `below_support` counts the rows dropped. `regressions` and `footprint_misses` also report a `population`; `tasks_scanned` is top-level. A section with no rows is not an error. When every section has no rows in both windows, end as a successful no-op: the execution summary states, for each ranking, its `below_support` count and its `population` where reported, plus the `min_support` used and `tasks_scanned`. File nothing.
+
+    ## Read the evidence
+
+    - Rankings: `orbit codebase analytics --window 30d --json` and `orbit codebase analytics --window 90d --json`. The sections are `regressions`, `footprint_misses`, `lock_contention`, `change_coupling`, `blocked` and `rejected`; `overlap` lists the paths that appear in more than one ranking.
+    - Per-path detail, with the task IDs behind each rate: `orbit codebase show <path> --json`. Partners: `orbit codebase related <path> --top 10 --json`.
+    - Tasks: `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'` for the tasks behind a rate: their history, comments, review findings, `regression_from` links and block reasons.
+    - Code: this checkout at the integration base (record `git rev-parse HEAD`), `git log --follow` on the path, and the file itself.
+    - Read-only. Never edit, retry, requeue or change the status of any task or run.
+
+    ## Pick the paths
+
+    Prefer paths that appear in two or more rankings, then single-ranking paths with the highest rate that is at or above minimum support in both windows. Investigate at most five paths per run. Find the newest completed prior instance with `orbit tool run orbit.task.list --input '{"status":["done"],"tag":["path-risk-review","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`, and read its `path-risk.json` artifact with `orbit tool run orbit.task.artifact.get --input '{"id":"<prior task ID>","path":"path-risk.json","model":"<agent-family>"}'`. Skip a path that instance already handled unless its rates rose since. For every path it handled whose filed task is now done, report whether the rates moved. This closes the loop on whether fixes work.
+
+    ## Find the cause
+
+    For each path, read the tasks behind its numerators and classify the dominant cause with evidence: task IDs, quoted review findings, and code lines. Typical causes:
+    - **Too many responsibilities:** unrelated changes collide in one file. Propose a split along named seams.
+    - **Shared test fixture or helper:** many tasks edit one large test file or golden harness. Propose isolating fixtures per scenario, or generating them.
+    - **Generated or mirrored output:** a file regenerated from another source, or a copy a sync step writes from a canonical one. Authors declare one side and change both, so footprint misses and regressions follow. Propose treating the derived side as derived, through a footprint rule, a lock rule or a generator check.
+    - **Under-declared coupling:** the path changes together with a partner that tasks do not declare. Propose a footprint or lock rule that adds the partner, or authoring guidance that names it.
+    - **Flaky or slow test:** name the test and its failure signature.
+    - **Unclear contract or docs:** reviewers reject for the same misunderstanding repeatedly.
+    A cause the evidence cannot establish is reported in the execution summary, not filed.
+
+    ## Propose fixes
+
+    A proposed fix changes the mechanism that produces the rate: a footprint or lock rule, a generator check, or a split of a coupling hotspot. It does not patch individual regressions, and it must not weaken gates, tests or review to lower a rate.
+
+    File at most three proposed tasks per run, one per cause (a cause may cover several paths), highest rates first. Before filing, search open and closed tasks and frictions with one distinctive token at a time: `orbit tool run orbit.search --input '{"query":"<token>","kind":"all","all":true,"model":"<agent-family>"}'`. Do not file what an open task already covers; record the mapping instead.
+
+    Read the installed `orbit` skill's task-authoring reference, then file each cause with `orbit tool run orbit.task.add`. Use the shape that fits the mechanism: `refactor` for a split, `chore` for a footprint, lock or generator rule, and `bug` for a flaky or defective test.
+
+    `orbit tool run orbit.task.add --input '{"title":"<title naming the path class and the mechanism>","description":"<markdown: path class, paths, rates and support in both windows, representative task IDs, verified cause with file and line evidence, the mechanism it changes, and how the rate should move>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["path-risk-review","no-auto-approve"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`
+
+    `orbit tool run orbit.task.add --input '{"title":"<title naming the path class and the mechanism>","description":"<markdown with the same contents>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["path-risk-review","no-auto-approve"],"type":"chore","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`
+
+    `orbit tool run orbit.task.add --input '{"title":"<title naming the path class and the mechanism>","description":"<markdown with the same contents>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>","file:<test path>"],"complexity":"<assessed>","tags":["path-risk-review","no-auto-approve"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high>","workspace":"<current workspace path>","model":"<agent-family>"}'`
+
+    Every filed task is `proposed`, carries verified `context_files` and its `spawned_from` relation, and its description names the path class and the mechanism it changes. Add observable acceptance criteria.
+
+    ## Record
+
+    Write `{"schema_version":1,"head":"<sha>","paths":[{"path":"...","rates":{...},"cause":"...","filed":["<id>"],"tracked_by":["<id>"]}]}` to `.orbit/tmp/path-risk.json` (`$ORBIT_SCRATCH_DIR`) and attach it with `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/path-risk.json","path":"path-risk.json","model":"<agent-family>"}'`. The execution summary lists the paths examined, their causes, the filed and already-tracked IDs, the paths skipped and why, the below_support counts and any population reported when nothing cleared minimum support, and the before and after rates for the prior instance's fixes. A run with nothing to file attaches the record and succeeds.
+  acceptance_criteria:
+  - At most five paths were investigated, chosen from the 30d and 90d rankings with multi-ranking paths first, and each was followed to the tasks behind its rates
+  - Each investigated path names a dominant cause backed by task IDs and code evidence, or is reported as unestablished without filing
+  - Existing tasks and frictions were searched before filing; each untracked cause became one proposed task tagged path-risk-review and no-auto-approve, with rates, evidence, proposed change and acceptance criteria; no duplicates were filed
+  - Each filed fix names its path class and the mechanism it changes, carries spawned_from and verified context_files, and at most three were filed in the run
+  - A run where every ranking is below min_support ends as a successful no-op that reports each ranking's below_support count and any population reported, and files nothing
+  - The prior instance's fixed paths were re-measured and their rate changes reported
+  - path-risk.json is attached, nothing was mutated besides filed tasks and this task's artifact, and a run with nothing to file succeeds as a no-op
+  task_type: chore
+  tags:
+  - path-risk-review
+  - no-diff-expected
+  required_tools:
+  - orbit.codebase.analytics
+  - orbit.codebase.related
+  - orbit.codebase.show
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-25T00:00:00Z
+updated_by: system
+updated_at: 2026-10-25T00:00:00Z

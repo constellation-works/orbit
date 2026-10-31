@@ -16,6 +16,8 @@ fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
         executor_type,
         command: Some("noop".to_string()),
         args: Vec::new(),
+        inspection_args: None,
+        image_input: None,
         stdout_format: None,
         model_pair_override: None,
         model_flag: None,
@@ -60,6 +62,13 @@ impl ExecutorDefStoreBackend for InMemoryExecutorStore {
             defs.push(def.clone());
         }
         Ok(())
+    }
+
+    fn delete_executor_def(&self, name: &str) -> Result<bool, OrbitError> {
+        let mut defs = self.defs.lock().expect("lock");
+        let before = defs.len();
+        defs.retain(|def| def.name != name);
+        Ok(defs.len() != before)
     }
 }
 
@@ -182,6 +191,26 @@ fn seed_without_a_host_backend_keeps_the_declared_sandbox() {
     }
 }
 
+/// Muse runs on macOS and Linux: a fresh seed on either platform carries
+/// no `host_os` restriction, and the shipped sandbox marker is translated
+/// per host (`linux-bwrap` on Linux, `macos-sandbox-exec` on macOS).
+#[test]
+fn seed_shipped_muse_is_unrestricted_with_platform_sandbox() {
+    for (target_os, sandbox) in [
+        (LINUX, ExecutorSandboxKind::LinuxBwrap),
+        ("macos", ExecutorSandboxKind::MacosSandboxExec),
+    ] {
+        let store = InMemoryExecutorStore::default();
+        seed_default_executors_for_platform(&store, false, target_os).expect("seed defaults");
+        let muse = store
+            .get_executor_def("muse")
+            .expect("get")
+            .expect("muse present");
+        assert_eq!(muse.host_os, None, "muse on {target_os}");
+        assert_eq!(muse.sandbox, Some(sandbox), "muse on {target_os}");
+    }
+}
+
 /// [ORB-13857] macOS keeps sandbox-exec on a fresh seed and, as before, does
 /// not rewrite an installed default that carries no sandbox.
 #[test]
@@ -200,4 +229,27 @@ fn seed_on_macos_keeps_sandbox_exec_and_existing_choices() {
         };
         assert_eq!(def.sandbox, expected, "{} on macos", def.name);
     }
+}
+
+/// [ORB-18096] Re-seeding retires stale shipped executors for removed lanes.
+#[test]
+fn seed_retires_stale_retired_provider_executors() {
+    let store = InMemoryExecutorStore::default();
+    for name in ["cursor", "pi", "opencode"] {
+        store
+            .upsert_executor_def(&base_def(name, ExecutorType::DirectAgent))
+            .expect("seed stale retired executor");
+    }
+    store
+        .upsert_executor_def(&base_def("custom", ExecutorType::DirectAgent))
+        .expect("seed custom");
+    seed_default_executors_for_platform(&store, false, LINUX).expect("seed");
+    for name in ["cursor", "pi", "opencode"] {
+        assert!(
+            store.get_executor_def(name).expect("get").is_none(),
+            "stale {name} executor must be retired"
+        );
+    }
+    assert!(store.get_executor_def("custom").expect("get").is_some());
+    assert!(store.get_executor_def("claude").expect("get").is_some());
 }

@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Vision
 owner: claude
-last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Accepted
 feature: auto-tasks
 doc_role: vision
@@ -93,5 +93,8 @@ task's provenance tag, and observability is the task and Operations auto-task su
 
 - ORB-10149 — Auto-task primitive.
 - ORB-10148 — qa-sweep V1.
+- ORB-10039 — the bespoke inline sweep this primitive generalizes.
+- ORB-10129 — the historical routine-fired triage pipeline.
+- ORB-12237 — delivered cross-workspace scheduling through clock consolidation.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

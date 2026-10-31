@@ -177,6 +177,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         .1,
         owed_criteria,
         regression_from,
+        visual: handoff_visual(input)?,
     };
     host.record_claim_handoff(&handoff)?;
 
@@ -192,6 +193,34 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
             HandoffDelivery::AlreadyLanded { .. } => "already_landed",
             HandoffDelivery::NoDiff { .. } => "no_diff",
         },
+    }))
+}
+
+/// The capture of record the `visual_capture` step attached on the owner,
+/// or `None` when the claim's visual review did not apply (or the step was
+/// skipped for a no-diff candidate).
+fn handoff_visual(input: &Value) -> Result<Option<HandoffArtifactRef>, OrbitError> {
+    let Some(visual) = input.get("visual").filter(|visual| !visual.is_null()) else {
+        return Ok(None);
+    };
+    if visual.get("applies").and_then(Value::as_bool) != Some(true) {
+        return Ok(None);
+    }
+    let field = |name: &str| {
+        visual
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "the visual capture output names no `{name}` for the capture of record"
+                ))
+            })
+    };
+    Ok(Some(HandoffArtifactRef {
+        path: field("capture_artifact")?,
+        sha256: field("capture_sha256")?,
     }))
 }
 
@@ -273,11 +302,44 @@ fn handoff_review(
     candidate: &HandoffCandidate,
 ) -> Result<HandoffReview, OrbitError> {
     let present = |key: &str| input.get(key).filter(|value| !value.is_null()).cloned();
+    // The leaf gate's selective-selection receipt, when the claim captured
+    // a selective policy. It must pin this candidate; the owner verifies
+    // its policy digest and predicates against the captured contract.
+    let selective_receipt: Option<orbit_types::workflow::SelectiveReviewReceipt> =
+        match present("selective_receipt") {
+            Some(raw) => {
+                let receipt: orbit_types::workflow::SelectiveReviewReceipt =
+                    serde_json::from_value(raw).map_err(|error| {
+                        OrbitError::InvalidInput(format!(
+                            "invalid selective review receipt: {error}"
+                        ))
+                    })?;
+                let reviewed_continuation = present("landing_review_evidence").is_some();
+                if (receipt.head_sha != candidate.candidate.commit && !reviewed_continuation)
+                    || receipt.base_sha != candidate.base.commit
+                {
+                    return Err(refused(format!(
+                        "the selective receipt pins {}..{} but the candidate is {}..{}; the \
+                         owner accepts a selection only for the candidate handed off",
+                        receipt.base_sha,
+                        receipt.head_sha,
+                        candidate.base.commit,
+                        candidate.candidate.commit
+                    )));
+                }
+                Some(receipt)
+            }
+            None => None,
+        };
     let (policy, evidence) = match (
         present("review_evidence"),
         present("landing_review_evidence"),
     ) {
-        (None, None) => return Ok(HandoffReview::not_required()),
+        (None, None) => {
+            let mut review = HandoffReview::not_required();
+            review.selective_receipt = selective_receipt;
+            return Ok(review);
+        }
         (Some(evidence), None) => (ReviewTiming::BeforePr, evidence),
         (None, Some(evidence)) => (ReviewTiming::BeforeLanding, evidence),
         (Some(_), Some(_)) => {
@@ -304,6 +366,7 @@ fn handoff_review(
     Ok(HandoffReview {
         policy,
         disposition,
+        selective_receipt,
     })
 }
 

@@ -30,13 +30,14 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
     }
     let delivery = Delivery::admit(done_ship());
     // Keep the same client open across the new writer's settlement.
-    let client = Store::open(&delivery._root.path().join("state.sqlite")).unwrap();
+    let client = Store::open(&delivery.owner.root().join("state.sqlite")).unwrap();
     let auth = delivery
         .worker()
         .with_handoff_observation(delivery.observation(Some(OWNER_POLICY)))
         .with_attribution(ClaimAttribution {
             crew: Some("reported-crew".into()),
             crew_model: Some("reported-model".into()),
+            ..ClaimAttribution::default()
         });
     let mutation = ClaimMutation::AcceptHandoff(delivery.handoff.clone());
     let boundary = &delivery.owner.backends.commit_boundary;
@@ -81,7 +82,7 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
         first
     );
     delivery.merge_intent(Some(OWNER_POLICY)).unwrap();
-    let reopened = Coordinated::open(delivery._root.path());
+    let reopened = Coordinated::open(delivery.owner.root());
     let states = reopened
         .backends
         .commit_boundary
@@ -140,7 +141,7 @@ fn persisted_handoffs_upgrade_atomically_without_changing_receipts_or_authority(
         .execution_claim_state(&delivery.claim.claim_id)
         .unwrap()
         .unwrap();
-    let database = delivery._root.path().join("state.sqlite");
+    let database = delivery.owner.root().join("state.sqlite");
     let conn = rusqlite::Connection::open(&database).unwrap();
     conn.execute_batch("DROP TRIGGER handoff_settlement_insert_guard; DROP TRIGGER handoff_settlement_update_guard;").unwrap();
     // Restore the precise pre-repair durable shape, including an unknown
@@ -157,8 +158,11 @@ fn persisted_handoffs_upgrade_atomically_without_changing_receipts_or_authority(
         [],
     )
     .unwrap();
-    conn.execute("DELETE FROM schema_meta WHERE key='migration.v0057'", [])
-        .unwrap();
+    crate::support::drop_replayed_migration_tables(&conn).unwrap();
+    conn.execute_batch(
+        "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0057';",
+    )
+    .unwrap();
     conn.execute(
         "UPDATE schema_meta SET value=json_set(value,'$.version',56) WHERE key='migration.compat'",
         [],
@@ -277,7 +281,7 @@ fn persisted_handoffs_upgrade_atomically_without_changing_receipts_or_authority(
         journal_after, journal_before,
         "bundle recovery intents are not lifecycle copies"
     );
-    let reopened = Coordinated::open(delivery._root.path());
+    let reopened = Coordinated::open(delivery.owner.root());
     assert_eq!(
         reopened
             .backends
@@ -313,10 +317,16 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
         return;
     }
     let delivery = Delivery::admit(done_ship());
-    let database = delivery._root.path().join("state.sqlite");
+    let database = delivery.owner.root().join("state.sqlite");
     let stale_writer = Store::open(&database).unwrap();
     let conn = rusqlite::Connection::open(&database).unwrap();
-    conn.execute_batch("DROP TRIGGER handoff_settlement_insert_guard; DROP TRIGGER handoff_settlement_update_guard; DELETE FROM schema_meta WHERE key='migration.v0057';").unwrap();
+    crate::support::drop_replayed_migration_tables(&conn).unwrap();
+    conn.execute_batch(
+        "DROP TRIGGER handoff_settlement_insert_guard;
+         DROP TRIGGER handoff_settlement_update_guard;
+         DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0057';",
+    )
+    .unwrap();
     let migrated = Store::open(&database).unwrap();
     let before = delivery
         .owner
@@ -353,6 +363,6 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
             before
         );
     }
-    assert_eq!(migrated.schema_version().unwrap(), 57);
+    assert_eq!(migrated.schema_version().unwrap(), SUPPORTED_SCHEMA_VERSION);
     delivery.accept(Some(OWNER_POLICY)).unwrap();
 }

@@ -15,11 +15,18 @@ use super::super::query::{AuthStatus, CiQueries, LogScope, RemoteBranchHeads, Ru
 #[derive(Default)]
 pub(super) struct FakeQueries {
     repo: Value,
+    repo_view_error: Option<String>,
     auth_usable: bool,
     branch_heads: BTreeMap<String, String>,
+    branch_head_errors: BTreeMap<String, String>,
+    open_pull_request_branch_errors: BTreeMap<String, String>,
+    ancestry_query_errors: BTreeMap<(String, String), String>,
+    run_view_errors: BTreeMap<String, String>,
+    run_log_errors: BTreeMap<u64, String>,
     /// Repository-wide run pages. Each `repository_runs` call pops the next
     /// page, so a test can make CI progress between calls.
     runs: Mutex<Vec<Vec<Value>>>,
+    repository_runs_error: Option<String>,
     /// `failed_jobs` per run id; an unscripted run has none.
     failed_jobs: BTreeMap<String, Value>,
     open_pull_requests: Vec<Value>,
@@ -35,11 +42,15 @@ pub(super) struct FakeQueries {
     /// Concurrency-cancellation annotation per job id.
     concurrency_cancellations: BTreeMap<u64, String>,
     /// Failed-step logs per job id; an unscripted job's log is empty.
-    logs: BTreeMap<u64, RunLog>,
-    /// Every job whose log was read.
-    pub(super) log_reads: Mutex<Vec<u64>>,
-    /// Every limit passed to `open_pull_requests` and `repository_runs`.
+    logs: BTreeMap<u64, (String, bool)>,
+    /// Logs that differ by scope for a particular job.
+    scoped_logs: Vec<(u64, LogScope, String, bool)>,
+    /// Every run, job, scope and byte limit whose log was read.
+    pub(super) log_reads: Mutex<Vec<(String, u64, LogScope, usize)>>,
+    /// Every limit passed to `open_pull_requests`.
     pub(super) pull_request_limits: Mutex<Vec<u64>>,
+    /// Every limit passed to `closed_pull_requests`.
+    pub(super) closed_pull_request_limits: Mutex<Vec<u64>>,
     pub(super) open_pull_request_branch_queries: Mutex<Vec<String>>,
     pub(super) closed_pull_request_branch_queries: Mutex<Vec<String>>,
     pub(super) run_limits: Mutex<Vec<u64>>,
@@ -70,14 +81,60 @@ impl FakeQueries {
         }
     }
 
+    pub(super) fn with_repo_view_error(mut self, error: &str) -> Self {
+        self.repo_view_error = Some(error.to_string());
+        self
+    }
+
     pub(super) fn with_head(mut self, branch: &str, sha: &str) -> Self {
         self.branch_heads
             .insert(branch.to_string(), sha.to_string());
         self
     }
 
+    pub(super) fn with_head_error(mut self, branch: &str, error: &str) -> Self {
+        self.branch_head_errors
+            .insert(branch.to_string(), error.to_string());
+        self
+    }
+
+    pub(super) fn with_open_pull_request_branch_error(mut self, branch: &str, error: &str) -> Self {
+        self.open_pull_request_branch_errors
+            .insert(branch.to_string(), error.to_string());
+        self
+    }
+
+    pub(super) fn with_ancestry_error(
+        mut self,
+        ancestor: &str,
+        descendant: &str,
+        error: &str,
+    ) -> Self {
+        self.ancestry_query_errors.insert(
+            (ancestor.to_string(), descendant.to_string()),
+            error.to_string(),
+        );
+        self
+    }
+
+    pub(super) fn with_run_view_error(mut self, run_id: u64, error: &str) -> Self {
+        self.run_view_errors
+            .insert(run_id.to_string(), error.to_string());
+        self
+    }
+
+    pub(super) fn with_run_log_error(mut self, job_id: u64, error: &str) -> Self {
+        self.run_log_errors.insert(job_id, error.to_string());
+        self
+    }
+
     pub(super) fn with_runs(self, pages: Vec<Vec<Value>>) -> Self {
         *self.runs.lock().expect("runs lock") = pages;
+        self
+    }
+
+    pub(super) fn with_repository_runs_error(mut self, error: &str) -> Self {
+        self.repository_runs_error = Some(error.to_string());
         self
     }
 
@@ -182,16 +239,20 @@ impl FakeQueries {
 
     /// A failed-step log GitHub delivered in full.
     pub(super) fn with_log(mut self, job_id: u64, text: &str) -> Self {
-        self.logs
-            .insert(job_id, super::super::query::bounded_run_log(text, 16_384));
+        self.logs.insert(job_id, (text.to_string(), true));
         self
     }
 
     /// A failed-step log whose source GitHub did not deliver in full.
     pub(super) fn with_incomplete_log(mut self, job_id: u64, text: &str) -> Self {
-        let mut log = super::super::query::bounded_run_log(text, 16_384);
-        log.source_complete = false;
-        self.logs.insert(job_id, log);
+        self.logs.insert(job_id, (text.to_string(), false));
+        self
+    }
+
+    /// A job log whose text differs between failed-step and all-log reads.
+    pub(super) fn with_scoped_log(mut self, job_id: u64, scope: LogScope, text: &str) -> Self {
+        self.scoped_logs
+            .push((job_id, scope, text.to_string(), true));
         self
     }
 }
@@ -210,6 +271,9 @@ impl CiQueries for FakeQueries {
     }
 
     fn repo_view(&self) -> Result<Value, OrbitError> {
+        if let Some(error) = &self.repo_view_error {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         Ok(self.repo.clone())
     }
 
@@ -218,14 +282,28 @@ impl CiQueries for FakeQueries {
             .lock()
             .expect("pull request limits lock")
             .push(limit);
-        Ok(self.open_pull_requests.clone())
+        Ok(self
+            .open_pull_requests
+            .iter()
+            .take(usize::try_from(limit).unwrap_or(usize::MAX))
+            .cloned()
+            .collect())
     }
 
-    fn closed_pull_requests(&self, _limit: u64) -> Result<Vec<Value>, OrbitError> {
+    fn closed_pull_requests(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
+        self.closed_pull_request_limits
+            .lock()
+            .expect("closed pull request limits lock")
+            .push(limit);
         if let Some(error) = &self.closed_pull_requests_error {
             return Err(OrbitError::Execution(error.clone()));
         }
-        Ok(self.closed_pull_requests.clone())
+        Ok(self
+            .closed_pull_requests
+            .iter()
+            .take(usize::try_from(limit).unwrap_or(usize::MAX))
+            .cloned()
+            .collect())
     }
 
     fn closed_pull_requests_for_branch(&self, branch: &str) -> Result<Vec<Value>, OrbitError> {
@@ -248,6 +326,9 @@ impl CiQueries for FakeQueries {
             .lock()
             .expect("open pull request branch queries lock")
             .push(branch.to_string());
+        if let Some(error) = self.open_pull_request_branch_errors.get(branch) {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         Ok(self
             .open_pull_requests_by_branch
             .get(branch)
@@ -261,43 +342,77 @@ impl CiQueries for FakeQueries {
 
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
         self.run_limits.lock().expect("run limits lock").push(limit);
-        let mut runs = self.runs.lock().expect("runs lock");
-        if runs.len() > 1 {
-            Ok(runs.remove(0))
-        } else {
-            Ok(runs.first().cloned().unwrap_or_default())
+        if let Some(error) = &self.repository_runs_error {
+            return Err(OrbitError::Execution(error.clone()));
         }
+        let mut runs = self.runs.lock().expect("runs lock");
+        let mut page = if runs.len() > 1 {
+            runs.remove(0)
+        } else {
+            runs.first().cloned().unwrap_or_default()
+        };
+        page.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(page)
     }
 
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError> {
+        if let Some(error) = self.run_view_errors.get(run_id) {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         let failed_jobs = self.failed_jobs.get(run_id).cloned();
         Ok(json!({"failed_jobs": failed_jobs.unwrap_or_else(|| json!([]))}))
     }
 
     fn run_logs(
         &self,
-        _run_id: &str,
+        run_id: &str,
         job_id: u64,
-        _scope: LogScope,
+        scope: LogScope,
         max_bytes: usize,
         _cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError> {
-        self.log_reads.lock().expect("log reads lock").push(job_id);
-        Ok(self
-            .logs
-            .get(&job_id)
-            .cloned()
-            .unwrap_or_else(|| super::super::query::bounded_run_log("", max_bytes)))
+        self.log_reads.lock().expect("log reads lock").push((
+            run_id.to_string(),
+            job_id,
+            scope,
+            max_bytes,
+        ));
+        if let Some(error) = self.run_log_errors.get(&job_id) {
+            return Err(OrbitError::Execution(error.clone()));
+        }
+        let scripted = self
+            .scoped_logs
+            .iter()
+            .rev()
+            .find(|(scripted_job, scripted_scope, _, _)| {
+                *scripted_job == job_id && *scripted_scope == scope
+            })
+            .map(|(_, _, text, source_complete)| (text.as_str(), *source_complete))
+            .or_else(|| {
+                self.logs
+                    .get(&job_id)
+                    .map(|(text, source_complete)| (text.as_str(), *source_complete))
+            });
+        let (text, source_complete) = scripted.unwrap_or(("", true));
+        let mut log = super::super::query::bounded_run_log(text, max_bytes);
+        log.source_complete = source_complete;
+        Ok(log)
     }
 
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {
         Ok(RemoteBranchHeads::from_scripted(
             self.branch_heads.clone(),
-            BTreeMap::new(),
+            self.branch_head_errors.clone(),
         ))
     }
 
     fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, OrbitError> {
+        if let Some(error) = self
+            .ancestry_query_errors
+            .get(&(ancestor.to_string(), descendant.to_string()))
+        {
+            return Err(OrbitError::Execution(error.clone()));
+        }
         if let Some(sha) = [ancestor, descendant]
             .into_iter()
             .find(|sha| self.ancestry_errors.iter().any(|unknown| unknown == sha))

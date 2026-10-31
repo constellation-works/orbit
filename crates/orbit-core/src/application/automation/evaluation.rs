@@ -3,12 +3,15 @@
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_automation::delivery::{self, ActionOutcome, DeliveryHost};
-use orbit_automation::{AutomationError, automation_error_to_orbit};
+use orbit_automation::{AutomationError, DeferredReason, automation_error_to_orbit};
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 
-use super::{SourceCache, consumer_key, direct, members, ownership, provider, source, stall, task};
+use super::{
+    AutomationReviewPort, SourceCache, consumer_key, direct, members, ownership, provider, source,
+    stall, task,
+};
 
 pub fn evaluate_auto_task(
     runtime: &OrbitRuntime,
@@ -28,6 +31,7 @@ pub(crate) fn evaluate_auto_task_with_cache(
 ) -> Result<AutomationDiagnostic, OrbitError> {
     let AutoTaskSchedule::Deliveries {
         deliveries_landed: declared,
+        ..
     } = &definition.schedule
     else {
         return Err(OrbitError::InvalidInput("not a delivery definition".into()));
@@ -119,6 +123,7 @@ fn evaluate(
     let host = Host {
         runtime,
         action,
+        dry_run: request.dry_run,
         source: match cache {
             Some(cache) => {
                 source::Source::with_cache(&runtime.paths().repo_root, cache, request.now)
@@ -161,6 +166,7 @@ pub(super) fn auto_task_action_liveness(
     let host = Host {
         runtime,
         action: Action::Task(definition),
+        dry_run: true,
         source: source::Source::read_only(&runtime.paths().repo_root),
     };
 
@@ -182,11 +188,42 @@ enum Action<'a> {
 struct Host<'a> {
     runtime: &'a OrbitRuntime,
     action: Action<'a>,
+    dry_run: bool,
     source: source::Source<'a>,
 }
 
 impl DeliveryHost for Host<'_> {
     fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
+        // A false or unknown `when:` guard dispatches nothing; the pending
+        // deliveries and their coverage debt stay owed, and `max_wait_minutes`
+        // does not override it (§11).
+        let (guard, clause, carrier) = match self.action {
+            Action::Task(definition) => (
+                definition
+                    .schedule
+                    .guard()
+                    .and_then(|guard| guard.when.as_deref()),
+                "schedule.when",
+                orbit_automation::condition::ConditionCarrier::AutoTask,
+            ),
+            Action::Job(definition) => (
+                definition.trigger.when.as_deref(),
+                "trigger.when",
+                orbit_automation::condition::ConditionCarrier::Routine,
+            ),
+        };
+        if let Some(when) = guard
+            && let Some(held) = super::condition::evaluate_guard(
+                self.runtime,
+                when,
+                clause,
+                carrier,
+                chrono::Utc::now(),
+            )
+            .describe()
+        {
+            return Ok(Some(held));
+        }
         if let Action::Task(definition) = self.action {
             return auto_task_admission_deferral(self.runtime, definition).map_err(Into::into);
         }
@@ -287,7 +324,8 @@ impl DeliveryHost for Host<'_> {
         // [ORB-11333] Accepted before-PR certificates become exclusions only
         // after the shared rule proves the landed trees; the evaluator then
         // applies them for review consumers alone.
-        crate::application::review::exclusions(self.runtime, &self.source, state, &mut page)?;
+        self.runtime
+            .certified_review_exclusions(&self.source, state, &mut page, self.dry_run)?;
 
         Ok(page)
     }
@@ -300,9 +338,9 @@ impl DeliveryHost for Host<'_> {
             .runtime
             .automation_store()?
             .automation_state(&attempt.batch.consumer)?
-            .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
+            .ok_or_else(|| AutomationError::Deferred(DeferredReason::ClaimMissing))?;
         if state.active.as_ref() != Some(attempt) {
-            return Err(AutomationError::Deferred("claim_superseded".into()));
+            return Err(AutomationError::Deferred(DeferredReason::ClaimSuperseded));
         }
 
         self.source.retain_batch(&attempt.batch)?;

@@ -3,8 +3,8 @@
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-//! Directional application operations, runtime mechanisms, adapters,
-//! bootstrap, and composition.
+//! Directional application operations, adapters, bootstrap, and composition
+//! over the `orbit-runtime` kernel.
 //!
 //! This is the library crate that assembles all subsystems into the
 //! [`OrbitRuntime`] — the single entry point used by the CLI, Web, and
@@ -17,8 +17,10 @@
 //! kernels below this layer do not import from `orbit-core`.
 //!
 //! Shared use cases live in [`application`]. Tool-host and engine-host protocol
-//! translation lives in [`adapter`]. Runtime code owns mechanisms and imports
-//! neither application nor adapter modules.
+//! translation lives in [`adapter`]. The runtime kernel is the `orbit-runtime`
+//! crate, which owns mechanisms and cannot import application or adapter
+//! modules; [`runtime`] re-exports it and defines [`OrbitRuntime`], which owns
+//! the kernel and implements the application port it calls back through.
 //!
 //! # Root re-export policy (ORB-10016)
 //! Every root `pub use` below is justified by a real import in a consumer
@@ -37,11 +39,17 @@
 //!
 //! # Dependency direction
 //! orbit-common, orbit-store, orbit-policy, orbit-tools, orbit-search, orbit-engine
-//! → `orbit-core` → orbit-cmd / orbit-web / orbit-cli
+//! → orbit-runtime → `orbit-core` → orbit-cmd / orbit-web / orbit-cli
 
+#[cfg(test)]
+#[path = "../tests/support/admission.rs"]
+mod admission_test_support;
 #[cfg(test)]
 #[path = "../tests/support/git.rs"]
 mod git_test_support;
+#[cfg(test)]
+#[path = "../tests/support/task_params.rs"]
+mod task_params_test_support;
 
 // A bare `cargo test` from a managed-run shell must match one from a clean shell.
 #[cfg(test)]
@@ -51,10 +59,10 @@ pub mod adapter;
 pub mod application;
 pub mod bootstrap;
 pub mod composition;
-pub mod context;
 pub mod metrics;
-mod paths;
 pub mod runtime;
+pub use orbit_runtime::context;
+use orbit_runtime::paths;
 
 /// Allow this production Orbit binary to re-execute itself as a pipeline
 /// worker. Call once from its `main` before it can submit any runs. Tests in
@@ -71,6 +79,12 @@ pub mod test_support {
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
     pub use crate::application::automation::with_reset_probe_hook;
+    pub use crate::application::distributed::admission_checkpoint::{
+        with_claim_settle_checkpoint, with_pull_admission_checkpoint,
+    };
+    pub use crate::application::job::crew_pools::{
+        with_crew_backfill_checkpoint, with_crew_selection_checkpoint,
+    };
     pub use crate::application::job::pipeline::pipeline_worker_observer_completed;
     #[cfg(unix)]
     pub use crate::application::job::pipeline::with_pipeline_worker_log_open_hook;
@@ -85,6 +99,8 @@ pub mod test_support {
     pub use crate::application::job::pipeline::{WorkerReapPhase, install_worker_reap_hook};
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
+    pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
+    pub use crate::application::task::with_decision_dkim_resolver;
     /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
     pub use crate::application::workspace_auto::with_reservation_release_failure;
     pub use crate::runtime::{
@@ -143,17 +159,19 @@ pub use orbit_store::skill_store as skill_catalog;
 pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord};
 
 // Command-layer types the CLI names in its clap surfaces.
-pub use application::distributed::{
-    DrainEntryPoint, DrainEntryRefusal, PullSettlementEntry, WorkspacePullRequest,
-};
+pub use application::contracts::{DrainEntryPoint, PullSettlementEntry};
+pub use application::distributed::{DrainEntryRefusal, WorkspacePullRequest};
 pub use application::job::{
     AgentInvokeRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
     DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
+    PipelineWaitStatus,
 };
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };
-pub use application::search::{GlobalSearchHit, GlobalSearchKind, GlobalSearchParams};
+pub use application::search::{
+    GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
+};
 pub use application::task::LockContentionReport;
 pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
 pub use application::workspace_sync::{
@@ -163,6 +181,9 @@ pub use application::workspace_sync::{
 pub use context::ActorIdentity;
 /// The per-tier pool overrides `submit_workspace_auto_run_with_mode` takes.
 pub use orbit_config::ComplexityCrewPools;
+pub use orbit_config::CrewPerformanceType;
+/// The operator's `lease.intake.peer_user`, read by Orbit Web at startup.
+pub use orbit_config::load_lease_intake_peer_user;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.
@@ -199,5 +220,9 @@ pub use orbit_store::{
 pub use orbit_store::{RoutineFireRecord, RoutineFireState};
 // Reservation history behind the dashboard's codebase analytics.
 pub use orbit_store::contracts::TaskReservationRecord;
+// Landed-delivery diff stats behind the dashboard's Metrics diff trend.
+pub use orbit_store::contracts::LandedDiffStats;
+// Stored backlog forecasts behind the dashboard's Analytics › Forecast.
+pub use orbit_store::contracts::StoredBacklogForecast;
 pub use runtime::engine::{ResolvedCrewProjection, TaskCrewRead};
 pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};

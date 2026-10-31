@@ -1,17 +1,22 @@
 pub mod agents;
 pub mod audit;
 pub mod auto_task;
+pub mod automation;
 pub mod browser_kit;
 pub mod clock;
 pub mod codebase;
 pub mod config;
+pub mod crew;
+pub mod decision;
 pub mod doctor;
+pub mod experiment;
 pub mod friction;
 pub mod gc;
 pub mod host;
 pub(crate) mod host_route;
 pub mod init;
 pub mod job;
+pub mod lease;
 pub mod locks;
 pub mod log;
 pub mod mcp;
@@ -22,12 +27,14 @@ pub use operation::args as operation_args;
 pub mod plugin;
 pub mod routine;
 pub mod run;
+pub mod script;
 pub mod search;
 pub mod skill;
 pub mod sweep;
 pub mod task;
 pub mod tool;
 pub mod update;
+pub mod visual;
 pub mod web;
 pub mod workspace;
 
@@ -79,42 +86,49 @@ pub(crate) const ROOT_HELP_TEMPLATE: &str = "\
 {usage-heading} {usage}
 
 Environment:
-  init        Initialize the global Orbit root (~/.orbit)
-  workspace   Manage workspaces
-  config      Show or update Orbit configuration
-  host        Register and inspect the remote Orbit hosts this machine reaches over SSH
-  browser-kit Install, verify and remove the headless browser kit workers check UIs with
-  plugin      Install and manage Orbit plugins
-  migrate     Apply or inspect pending .orbit layout/schema migrations
-  update      Install a published Orbit release and converge to it
+  init         Initialize the global Orbit root (~/.orbit)
+  workspace    Manage workspaces
+  config       Show or update Orbit configuration
+  host         Register and inspect the remote Orbit hosts this machine reaches over SSH
+  browser-kit  Install, verify and remove the headless browser kit workers check UIs with
+  plugin       Install and manage Orbit plugins
+  migrate      Apply or inspect pending .orbit layout/schema migrations
+  update       Install a published Orbit release and converge to it
 
 Knowledge:
-  task        Create, update, and manage tasks
-  friction    Report, list, and triage friction records
-  search      Search tasks and frictions
+  task         Create, update, and manage tasks
+  visual       Capture the working tree beside a task's mocks for comparison
+  decision     List, show and answer human decision requests on held work
+  friction     Report, list, and triage friction records
+  search       Search tasks and frictions
 
 Operate:
-  run         Run workflows, drain the backlog, and inspect runs
-  job         Define, list, and manage job workflows
-  tool        Manage and run Orbit tools, including external MCP plugins
-  gc          Inspect and explicitly reap Orbit-managed garbage
+  run          Run workflows, drain the backlog, and inspect runs
+  job          Define, list, and manage job workflows
+  script       Grant and inspect workspace scripts a job step may run
+  experiment   Define, run and conclude experiments over agent treatments
+  lease        Coordinate path leases with the workspace owner
+  tool         Manage and run Orbit tools, including external MCP plugins
+  gc           Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
-  audit       Query the audit event log
-  codebase    Rank the repository paths that are risky for agents to change
-  agents      Score orchestrators, implementers, reviewers and pilots by crew and model
-  log         Tail the unified Orbit log feed
-  doctor      Diagnose workspace health, provider CLIs, and filesystem access
+  audit        Query the audit event log
+  codebase     Rank the repository paths that are risky for agents to change
+  agents       Score orchestrators, implementers, reviewers and pilots by crew and model
+  crew         Show how crews are laddered across complexity tiers
+  log          Tail the unified Orbit log feed
+  doctor       Diagnose workspace health, provider CLIs, and filesystem access
 
 Scheduler:
-  clock       Inspect, control, and manually tick the machine scheduler
-  sweep       Compatibility alias for `orbit clock tick`
-  routine     Inspect and control scheduled routines on this machine
-  auto-task   Define recurring auto-task templates (the scheduler primitive)
+  clock        Inspect, control, and manually tick the machine scheduler
+  sweep        Compatibility alias for `orbit clock tick`
+  routine      Inspect and control scheduled routines on this machine
+  auto-task    Define recurring auto-task templates (the scheduler primitive)
+  automation   Explain what condition-triggered routines and auto-tasks would match
 
 Services:
-  mcp         Register MCP client integrations and run the MCP server
-  web         Run the Orbit dashboard
+  mcp          Register MCP client integrations and run the MCP server
+  web          Run the Orbit dashboard
 
 Options:
 {options}";
@@ -154,12 +168,17 @@ pub enum Commands {
 
     // ── Knowledge ──
     Task(Box<task::TaskCommand>),
+    Visual(visual::VisualCommand),
+    Decision(decision::DecisionCommand),
     Friction(friction::FrictionCommand),
     Search(search::SearchCommand),
 
     // ── Operate ──
     Run(run::RunCommand),
     Job(job::JobCommand),
+    Script(script::ScriptCommand),
+    Experiment(experiment::ExperimentCommand),
+    Lease(lease::LeaseCommand),
     Tool(tool::ToolCommand),
     Gc(gc::GcCommand),
 
@@ -167,6 +186,7 @@ pub enum Commands {
     Audit(audit::AuditCommand),
     Codebase(codebase::CodebaseCommand),
     Agents(agents::AgentsCommand),
+    Crew(crew::CrewCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),
 
@@ -176,6 +196,7 @@ pub enum Commands {
     Routine(routine::RoutineCommand),
     #[command(name = "auto-task")]
     AutoTask(auto_task::AutoTaskCommand),
+    Automation(automation::AutomationCommand),
 
     // ── Services ──
     Mcp(mcp::McpCommand),
@@ -194,8 +215,6 @@ pub enum Commands {
     // ── hidden compatibility commands ──
     #[command(hide = true)]
     Skill(skill::SkillCommand),
-    #[command(hide = true)]
-    Artifacts(task::artifacts::ArtifactsCommand),
     // Deprecated alias of `orbit agents --role orchestrators`, removed in the
     // next release.
     #[command(hide = true)]

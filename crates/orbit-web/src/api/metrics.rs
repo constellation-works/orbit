@@ -121,7 +121,7 @@ pub(super) async fn invocation_metrics(
         Err(e) => return map_runtime_error(e),
     };
     match blocking("invocation metrics", move || {
-        runtime.invocation_records(query)
+        runtime.workspace_invocation_records(query)
     })
     .await
     {
@@ -158,6 +158,7 @@ impl MetricsInvocationsQuery {
             model: optional_query_string(self.model),
             tool_name: optional_query_string(self.tool_name),
             limit: bounded_limit(self.limit, INVOCATIONS_DEFAULT_LIMIT),
+            skip_tool_calls: false,
         })
     }
 }

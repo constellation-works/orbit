@@ -116,6 +116,19 @@ impl RoutineListArgs {
                 Cell::new(last_fire),
             ]);
         }
+        // A condition routine also names its state and its last skip.
+        for status in &report.statuses {
+            let Some(condition) = status
+                .automation
+                .as_ref()
+                .and_then(|automation| automation.get("condition"))
+                .filter(|condition| !condition.is_null())
+            else {
+                continue;
+            };
+            table =
+                table.trailing_notice(condition_notice(&status.routine.definition.name, condition));
+        }
         // A definition targeting a retired job, or one whose plugin is off
         // (on request), is listed so the operator can see it exists, but it
         // has no schedule state of its own.
@@ -199,4 +212,40 @@ fn host_local(raw: &str) -> String {
                 .to_rfc3339_opts(SecondsFormat::Secs, false)
         },
     )
+}
+
+/// One line for a condition routine: its arm counts, any stall, and the last
+/// skip with its reason.
+fn condition_notice(name: &str, condition: &serde_json::Value) -> String {
+    let count = |key: &str| condition[key].as_u64().unwrap_or(0);
+    let mut line = format!(
+        "condition [{name}]: {} armed, {} holding, {} waiting, {} fired",
+        count("armed"),
+        count("holding"),
+        count("waiting"),
+        count("fired"),
+    );
+    if let Some(stall) = condition.get("stall") {
+        line.push_str(&format!(
+            "; STALLED {} (orbit automation clear-stall {name})",
+            stall["reason"].as_str().unwrap_or_default()
+        ));
+    }
+    if let Some(skip) = condition.get("last_skip") {
+        line.push_str(&format!(
+            "; last skip {} @ {}",
+            skip["reason"].as_str().unwrap_or_default(),
+            skip["at"].as_str().map_or_else(String::new, host_local)
+        ));
+    }
+    if condition["ownership"]
+        .as_str()
+        .is_some_and(|ownership| ownership != "owned_here")
+    {
+        line.push_str(&format!(
+            "; never fires here ({})",
+            condition["ownership"].as_str().unwrap_or_default()
+        ));
+    }
+    line
 }

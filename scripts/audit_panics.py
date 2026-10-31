@@ -16,14 +16,16 @@ matches every Rust convention used in this repo today:
   any nested ``#[cfg(test)]`` (or ``#[cfg(any(test, ...))]`` /
   ``#[cfg(all(test, ...))]``) scope.
 
-This is a heuristic, not a parser; the doc that consumes the script
-spot-checks the buckets against ``cargo expand`` to keep us honest.
+Workspace membership comes from Cargo.toml, including extracted crates;
+the execution-critical blast-radius set remains explicit. Pattern and test
+scope classification is heuristic, not a Rust parser.
 """
 from __future__ import annotations
 
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -37,26 +39,24 @@ PATTERN = re.compile(
     r"|\btodo!\("
 )
 
-CFG_TEST_ATTR = re.compile(r"^\s*#\[\s*cfg\(\s*[^)]*\btest\b[^)]*\)\s*\]")
-
-ALL_CRATES = [
-    "orbit-agent",
-    "orbit-cli",
-    "orbit-cmd",
-    "orbit-common",
-    "orbit-core",
-    "orbit-web",
-    "orbit-engine",
-    "orbit-exec",
-    "orbit-mcp",
-    "orbit-policy",
-    "orbit-registry",
-    "orbit-search",
-    "orbit-store",
-    "orbit-tools",
-]
+CFG_TEST_ATTR = re.compile(
+    r"^\s*#\[\s*cfg\((?:[^()]|\([^()]*\))*?\btest\b(?:[^()]|\([^()]*\))*\)\s*\]")
 
 EXEC_CRITICAL_CRATES = {"orbit-engine", "orbit-agent", "orbit-tools", "orbit-exec"}
+
+
+def workspace_crates() -> dict[str, Path]:
+    """Read crate names and roots from the workspace's member manifests."""
+    workspace = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text())["workspace"]
+    excluded = {path.resolve() for pattern in workspace.get("exclude", [])
+                for path in REPO_ROOT.glob(pattern)}
+    members = {path.resolve() for pattern in workspace["members"]
+               for path in REPO_ROOT.glob(pattern)} - excluded
+    crates = {}
+    for member in sorted(members):
+        manifest = tomllib.loads((member / "Cargo.toml").read_text())
+        crates[manifest["package"]["name"]] = member
+    return dict(sorted(crates.items()))
 
 
 def is_test_only_path(path: Path) -> bool:
@@ -88,7 +88,7 @@ def strip_string_and_char_literals(line: str) -> str:
 
 
 TOP_LEVEL_CFG_TEST_MOD = re.compile(
-    r"^#\[cfg\([^)]*\btest\b[^)]*\)\]\s*\n"
+    r"^#\[cfg\((?:[^()]|\([^()]*\))*?\btest\b(?:[^()]|\([^()]*\))*\)\]\s*\n"
     r"(?:#\[[^\]]*\]\s*\n)*"
     r"\s*(?:pub\s+)?mod\s+\w+\s*\{",
     re.MULTILINE,
@@ -115,11 +115,29 @@ def classify_lines(text: str) -> list[bool]:
     flags = [False] * n
 
     # 1. Last top-level `#[cfg(test)] mod ...`: everything from that line to EOF.
-    last_match: re.Match | None = None
-    for m in TOP_LEVEL_CFG_TEST_MOD.finditer(text):
-        last_match = m
-    if last_match is not None:
-        line_idx = text[: last_match.start()].count("\n")
+    # Scan with balanced parentheses: cfg(any(test, feature = "...")) nests.
+    last_start: int | None = None
+    for m in re.finditer(r"^#\[cfg\(", text, re.MULTILINE):
+        depth = 0
+        end = None
+        for pos in range(m.end() - 1, len(text)):
+            if text[pos] == "(":
+                depth += 1
+            elif text[pos] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = pos
+                    break
+        if end is None or not re.search(r"\btest\b", text[m.end():end]):
+            continue
+        rest = text[end + 1:]
+        mod = re.match(
+            r"\]\s*\n(?:#\[[^\]]*\]\s*\n)*\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{",
+            rest)
+        if mod:
+            last_start = m.start()
+    if last_start is not None:
+        line_idx = text[:last_start].count("\n")
         for i in range(line_idx, n):
             flags[i] = True
 
@@ -149,8 +167,8 @@ def classify_lines(text: str) -> list[bool]:
     return flags
 
 
-def audit_crate(crate: str) -> dict:
-    src = REPO_ROOT / "crates" / crate / "src"
+def audit_crate(crate: str, crate_root: Path) -> dict:
+    src = crate_root / "src"
     total = 0
     in_test = 0
     non_test = 0
@@ -209,9 +227,7 @@ def main(argv: list[str]) -> int:
     json_mode = "--json" in argv
     sites_mode = "--sites" in argv
 
-    per_crate: dict[str, dict] = {}
-    for crate in ALL_CRATES:
-        per_crate[crate] = audit_crate(crate)
+    per_crate = {name: audit_crate(name, root) for name, root in workspace_crates().items()}
 
     totals = {
         "total": sum(c["total"] for c in per_crate.values()),
@@ -246,7 +262,7 @@ def main(argv: list[str]) -> int:
     header = ("crate", "total", "in_cfg_test", "non_test", "blast_radius")
     print(f"{header[0]:<18} {header[1]:>8} {header[2]:>12} {header[3]:>10} {header[4]:>14}")
     print(f"{'-'*18} {'-'*8} {'-'*12} {'-'*10} {'-'*14}")
-    for crate in ALL_CRATES:
+    for crate in per_crate:
         d = per_crate[crate]
         print(
             f"{crate:<18} {d['total']:>8} {d['in_cfg_test']:>12} "
@@ -264,7 +280,7 @@ def main(argv: list[str]) -> int:
     )
     if sites_mode:
         print("\nBlast-radius sites:")
-        for crate in ALL_CRATES:
+        for crate in per_crate:
             sites = per_crate[crate]["sites"]
             if not sites:
                 continue

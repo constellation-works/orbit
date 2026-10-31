@@ -1,14 +1,15 @@
 // Orbit dashboard log-tail panel (SSE stream, buffered logs, filters).
 // Pure vanilla JS, split into ES modules with no build step.
 //
-// This module owns the #log-panel behavior on the Drain page. It is initialized
+// This module owns the #log-panel behavior in the Tasks dock. It is initialized
 // by a single `initLogTail();` call from app.js (the bootstrap call site is kept
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
-// and `setDockMode` for the router to select the Drain or Log view.
+// and `setDockMode` for the router to select the Drain, Locks held or Log view.
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
+import { recordRoutedHref } from './router.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,7 +19,7 @@ let logBuffered = [];
 // so a gap in the history is never silent.
 let logBufferedDropped = 0;
 let logFollowTail = true;
-let logRows = []; // Keep track to enforce max 200 after 250 limit
+let logRows = []; // Keep track to enforce max 200 after 250 limit, plus a flush's gap notice
 const LOG_ROWS_RETAINED = 200;
 const LOG_ROWS_MAX = 250;
 // A flush keeps at most LOG_ROWS_RETAINED rows, so a paused buffer holding
@@ -31,6 +32,7 @@ const LOG_STREAM_RETRY_MAX_MS = 15000;
 const LOG_STREAM_UNAVAILABLE = "log stream unavailable, retrying";
 let logStreamOffset = 0;
 let logAgentStreamOffset = 0;
+let logStreamCursor = null;
 let logStreamRetryTimer = null;
 let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
 // True once the snapshot resolved and a live stream is owed. A hidden tab
@@ -48,20 +50,17 @@ let logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
 let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
-// Overview, Start a window and Log share one dock. It sits on the Drain page and, while Tasks
-// shows, beside the task list (placeDock). The Drain route selects its view;
-// on Tasks the view is the last one chosen that Tasks offers. Agent and
-// wrapping preferences stay local to this browser.
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "start", "log"];
+const DOCK_MODES = ["drain", "locks", "log"];
 
 function loadLogPanelPrefs() {
   try {
     const raw = window.localStorage.getItem(LOG_PANEL_PREFS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     // `status` is the Drain mode's name before ORB-12898; a stored one opens as Drain.
-    const dockMode = parsed.dockMode === "status" ? "drain" : parsed.dockMode;
-    return { dockMode: DOCK_MODES.includes(dockMode) ? dockMode : "drain", showAgent: parsed.showAgent !== false };
+    const dockMode = ["status", "start"].includes(parsed.dockMode) ? "drain" : parsed.dockMode;
+    const known = DOCK_MODES.includes(dockMode);
+    return { dockMode: known ? dockMode : "drain", showAgent: parsed.showAgent !== false };
   } catch (_) {
     return { dockMode: "drain", showAgent: true };
   }
@@ -132,6 +131,7 @@ function wireLogWrapToggle() {
 export function fitLogPanelToViewport() {
   applyDockMode();
   applyLogWrap(loadLogWrapPref());
+  revealDockStart();
 }
 
 function applyDockMode() {
@@ -139,7 +139,9 @@ function applyDockMode() {
   if (!dock) return;
   const modes = dockModes();
   const mode = shownDockMode();
-  dock.dataset.mode = mode;
+  const card = mode === "locks" ? mode : null;
+  dock.dataset.mode = card ? "drain" : mode;
+  dock.dataset.card = card || "drain";
   for (const btn of document.querySelectorAll("#dock-mode-toggle .dock-seg")) {
     const on = btn.dataset.mode === mode;
     btn.hidden = !modes.includes(btn.dataset.mode);
@@ -147,67 +149,119 @@ function applyDockMode() {
     btn.setAttribute("aria-selected", on ? "true" : "false");
     btn.tabIndex = on ? 0 : -1;
   }
-}
-
-// One dock, two homes: the Tasks page's right column and the Drain page. It
-// moves to whichever of the two is shown, so its cards keep one renderer and
-// one set of element ids. On Tasks its first view is named Drain, since the
-// page around it is not. Start a window is the Drain page's own view: Tasks
-// starts a window from the simple card in its first view.
-const DOCK_HOMES = {
-  tasks: { slot: "tasks-dock", label: "Drain", modes: ["drain", "log"] },
-  drain: { slot: "drain-main", label: "Overview", modes: DOCK_MODES },
-};
-const dockHomeListeners = new Set();
-
-// The dock starts on the Drain page until the router first places it.
-export function dockHome() {
-  return $("side-dock")?.dataset.home || "drain";
+  // CSS keeps every tab's first card at the same depth below the shared
+  // chrome. Reassert alignment without anchoring it to drain-only notices.
+  alignTasksDock();
 }
 
 function dockModes() {
-  return DOCK_HOMES[dockHome()]?.modes || DOCK_MODES;
+  return DOCK_MODES;
 }
 
-// A remembered view this home does not offer (Start a window, chosen on
-// Drain) opens the first view instead of an empty pane.
 function shownDockMode() {
-  return dockModes().includes(logPanelPrefs.dockMode) ? logPanelPrefs.dockMode : "drain";
+  return logPanelPrefs.dockMode;
 }
 
-// Each home renders its own Start form (operations.js), so a move repaints it.
-export function onDockHomeChange(listener) {
-  dockHomeListeners.add(listener);
-  return () => dockHomeListeners.delete(listener);
-}
-
-export function placeDock(tab) {
-  const dock = $("side-dock");
-  const home = DOCK_HOMES[tab];
-  const slot = home ? $(home.slot) : null;
-  if (!dock || !slot || dock.parentNode === slot) return;
-  slot.appendChild(dock);
-  dock.dataset.home = tab;
-  const button = $("dock-tab-drain");
-  const label = button && button.querySelector(".dock-seg-label");
-  if (label) label.textContent = home.label;
-  if (button && button.dataset.drainLabel) button.setAttribute("aria-label", `${home.label}: ${button.dataset.drainLabel}`);
-  applyDockMode();
-  for (const listener of dockHomeListeners) listener(tab);
-}
-
-// On the Drain page a view is a route; on Tasks choosing one only switches it.
 export function chooseDockMode(mode) {
   setDockMode(mode);
-  if ($("side-dock")?.dataset.home !== "tasks") window.location.hash = mode === "drain" ? "#drain" : `#drain/${mode}`;
+  const url = new URL(window.location.href);
+  const [route, query = ""] = url.hash.slice(1).split("?");
+  if (route !== "tasks") return;
+  const params = new URLSearchParams(query);
+  params.set("dock", mode);
+  url.hash = `tasks?${params}`;
+  window.history.replaceState(null, "", url);
+  // ORB-19732: replaceState bypasses the router, so mirror its Tasks-branch
+  // dock-route sync here. Without it a desktop tab selection leaves
+  // `tasks-main` without `dock-route` until a reload routes the same hash,
+  // and a resize to phone width keeps the list instead of the selected dock.
+  setDockRouteShown(true);
+  // ORB-19783: the router's last-routed address must follow this rewrite, or a
+  // later hash navigation back to the list URL is skipped as already routed.
+  recordRoutedHref();
 }
 
-// The router selects the Drain page view through this presentation handle.
+// Legacy Start links reveal the existing Start card in the Drain view.
 export function setDockMode(mode) {
+  if (mode === "start") {
+    const dock = $("side-dock");
+    if (dock) dock.dataset.revealStart = "true";
+    mode = "drain";
+  } else {
+    const dock = $("side-dock");
+    if (dock) delete dock.dataset.revealStart;
+  }
   if (!DOCK_MODES.includes(mode)) return;
   logPanelPrefs = { ...logPanelPrefs, dockMode: mode };
   saveLogPanelPrefs(logPanelPrefs);
   applyDockMode();
+}
+
+export function revealDockStart() {
+  const dock = $("side-dock");
+  const card = $("auto-drain-quick-start");
+  if (dock?.dataset.revealStart !== "true" || !card || card.hidden || !card.getClientRects().length) return;
+  delete dock.dataset.revealStart;
+  card.scrollIntoView?.({ block: "nearest" });
+}
+
+// At phone width an explicit dock route (`dock=` in the Tasks hash) shows the
+// dock in place of the list. The router calls this on every Tasks route, so a
+// route without `dock=` brings the list back. Desktop keeps both (tasks.css).
+export function setDockRouteShown(shown) {
+  $("tasks-main")?.classList.toggle("dock-route", Boolean(shown));
+}
+
+/// Level the active tab's first card with the first task block.
+/// `--tasks-dock-lead` on #tasks-dock is the room above #side-dock that takes,
+/// and tasks.css gives it to the fixed message area; the tab bar sits inside
+/// that room, above the line. It is measured from the dock's own top and the
+/// card's place inside #side-dock, neither of which the lead moves, so a
+/// repeat run settles on the same value.
+export function alignTasksDock() {
+  const dock = $("tasks-dock");
+  const body = $("tasks-body");
+  const side = $("side-dock");
+  if (!dock || !body || !side || !dock.contains(side) || !side.getClientRects().length) return;
+  // The first status card starts at the list's top (its first child has no
+  // margin, and notices sit in the message area), scrolled or not.
+  const current = parseFloat(dock.style.getPropertyValue("--tasks-dock-lead")) || 0;
+  const lead = Math.max(0, Math.round((body.getBoundingClientRect().top - dock.getBoundingClientRect().top - firstDockCardOffset(side)) * 100) / 100);
+  if (Math.abs(lead - current) >= 0.01) dock.style.setProperty("--tasks-dock-lead", `${lead}px`);
+}
+
+// How far below #side-dock's top the active tab's first shown card starts:
+// Auto-drain on Drain, Locks held on Locks held, the log on Log. The pane's
+// scroll is added back so a scrolled Drain pane measures the same.
+function firstDockCardOffset(side) {
+  const pane = [...side.querySelectorAll(":scope > .dock-pane")].find((node) => node.getClientRects().length);
+  if (!pane) return 0;
+  const card = [...pane.querySelectorAll(".panel")].find((node) => node.getClientRects().length) || pane;
+  return card.getBoundingClientRect().top + pane.scrollTop - side.getBoundingClientRect().top;
+}
+
+// Re-level whenever something above the first task block, or the dock itself,
+// changes size: the toolbar or status pills wrapping, the pager coming and
+// going, the dock coming back after a task closes, the tab bar changing height.
+// The create dialog is in the top layer and moves nothing. A tab switch re-levels from applyDockMode. Passing notices
+// sit in the message area and move nothing.
+function wireDockAlignment() {
+  const dock = $("tasks-dock");
+  const panel = $("tasks-panel");
+  if (!dock || !panel || typeof ResizeObserver !== "function") return;
+  let queued = false;
+  const queue = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; alignTasksDock(); });
+  };
+  const resize = new ResizeObserver(queue);
+  resize.observe(dock);
+  const head = dock.querySelector("#side-dock > .dock-head");
+  if (head) resize.observe(head);
+  for (const node of panel.children) resize.observe(node);
+  for (const node of panel.querySelectorAll(":scope > header > *")) resize.observe(node);
+  queue();
 }
 
 function wireDockModeToggle() {
@@ -233,8 +287,24 @@ function wireDockModeToggle() {
   });
 }
 
+// The phone dock route's Back control drops only `dock=`, so the hash keeps the
+// list's filters and the router then shows the list.
+function wireDockBack() {
+  $("dock-back-tasks")?.addEventListener("click", () => {
+    const [route, query = ""] = window.location.hash.slice(1).split("?");
+    const params = new URLSearchParams(query);
+    params.delete("dock");
+    const rest = params.toString();
+    window.location.hash = rest ? `${route}?${rest}` : route;
+    // The hash change routes the list. Setting a fragment that is already the
+    // list's fires no hashchange, so mirror the list visibility here too; a
+    // router run stays idempotent.
+    setDockRouteShown(false);
+  });
+}
+
 // ORB-10972: the bottom status bar carries the newest line on every tab, not
-// just the Drain page where the full tail is mounted. The SSE connection is opened
+// just Tasks where the full tail is mounted. The SSE connection is opened
 // once at boot and never torn down on a tab change, so mirroring here is
 // enough to keep the bar live everywhere.
 //
@@ -304,6 +374,7 @@ function wireLogPanelPreferences() {
   if (logPanelPrefsWired) return;
   logPanelPrefsWired = true;
   wireDockModeToggle();
+  wireDockBack();
   applyDockMode();
 }
 
@@ -404,6 +475,7 @@ function applyLogSnapshot(payload) {
     logAgentStreamOffset = Number.isFinite(payload.agent_offset) && payload.agent_offset >= 0
       ? payload.agent_offset : 0;
   }
+  logStreamCursor = typeof payload?.cursor === "string" ? payload.cursor : null;
   events.slice().reverse().forEach(ev => {
     const row = renderLogEvent(ev, false);
     inner.appendChild(row);
@@ -458,6 +530,7 @@ function restartLogTailForHost() {
   logSnapshotReady = false;
   logStreamOffset = 0;
   logAgentStreamOffset = 0;
+  logStreamCursor = null;
   logBuffered = [];
   logBufferedDropped = 0;
   logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
@@ -501,6 +574,7 @@ export function initLogTail() {
   wireLogVisibility();
   wireLogPanelPreferences();
   wireLogWrapToggle();
+  wireDockAlignment();
   fitLogPanelToViewport();
   syncLogFilterPills();
   loadLogSnapshot();
@@ -618,6 +692,10 @@ function bufferPausedLogEvent(ev) {
 function enforceLogBounds() {
   if (logRows.length > LOG_ROWS_MAX) {
     const toRemove = logRows.splice(LOG_ROWS_RETAINED);
+    // A full flush puts its gap notice just past the retained rows. It is a
+    // notice, not a log row: keep it so discarded history stays stated, until
+    // newer rows push it out like any other old line.
+    if (toRemove[0]?.dataset.gap) logRows.push(toRemove.shift());
     for (const row of toRemove) {
       row.remove();
     }
@@ -689,7 +767,10 @@ function writeLogCounts(counts) {
 
 function rememberStreamOffset(lastEventId) {
   if (!lastEventId) return;
-  const [operational, agent] = lastEventId.split(":");
+  // Event IDs are opaque generation-bearing cursors. Retain the whole ID
+  // across explicit close/open; EventSource handles it on automatic retries.
+  logStreamCursor = lastEventId;
+  const [operational, agent] = lastEventId.split(":").map(part => part.split("@")[0]);
   const parsed = Number(operational);
   if (Number.isFinite(parsed) && parsed >= 0) logStreamOffset = parsed;
   const agentParsed = Number(agent);
@@ -749,7 +830,9 @@ function connectLogStream() {
   closeLogStream();
   // A hidden tab opens nothing; becoming visible reconnects from the offset.
   if (document.hidden) return;
-  logStream = new EventSource(withHost(`/api/log/stream?from=${encodeURIComponent(String(logStreamOffset))}&agent_from=${encodeURIComponent(String(logAgentStreamOffset))}`));
+  const query = new URLSearchParams({ from: String(logStreamOffset), agent_from: String(logAgentStreamOffset) });
+  if (logStreamCursor !== null) query.set("cursor", logStreamCursor);
+  logStream = new EventSource(withHost(`/api/log/stream?${query}`));
   logStream.onopen = () => {
     logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
     setLogStreamConnected(true);

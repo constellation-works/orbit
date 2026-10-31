@@ -21,7 +21,7 @@
 //! Unlike [`crate::serve`], this command reads no local `.orbit/` state: the
 //! workspace lives on the remote, so it needs no [`orbit_core::OrbitRuntime`].
 
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, IsTerminal, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,7 +146,27 @@ pub fn connect(args: ConnectArgs, root_override: Option<&Path>) -> Result<(), Or
         }
     }
 
-    if !args.no_open {
+    // Browser credentials are optional: failure must not drop a healthy tunnel.
+    // With redirected --no-open there is no consumer for a private URL at all.
+    if (!args.no_open || io::stdout().is_terminal())
+        && http_get_ok_body(local_port, "/api/session").is_some()
+    {
+        let session_result =
+            remote_browser_session_url(&args, local_port).and_then(|session_url| {
+                crate::browser_session::print_interactive_session_url(&session_url);
+                if args.no_open {
+                    Ok(())
+                } else {
+                    crate::browser_session::open_private_browser_url(&session_url)
+                }
+            });
+        if let Err(error) = session_result {
+            tracing::warn!(%error, "Browser session unavailable; continuing with {url}");
+            if !args.no_open {
+                open_browser(&url);
+            }
+        }
+    } else if !args.no_open {
         open_browser(&url);
     }
 
@@ -655,4 +675,53 @@ fn wait_for_shutdown(tunnel: &mut SshTunnel) {
             _ = child_exit => {}
         }
     });
+}
+
+/// Read a fresh ticket over authenticated SSH, never through the HTTP API or
+/// remote command arguments. stdout is captured privately and errors sanitized.
+fn remote_browser_session_url(args: &ConnectArgs, local_port: u16) -> Result<String, OrbitError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| OrbitError::Execution("initialize browser credential transport".into()))?;
+    let output = runtime
+        .block_on(async {
+            let mut command = tokio::process::Command::new("ssh");
+            command
+                .args([
+                    "-o",
+                    "ConnectTimeout=10",
+                    "--",
+                    &args.ssh_host,
+                    "orbit web open --no-open",
+                ])
+                .kill_on_drop(true)
+                .stdin(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit());
+            tokio::time::timeout(Duration::from_secs(120), command.output()).await
+        })
+        .map_err(|_| OrbitError::Execution("remote browser credential request timed out".into()))?
+        .map_err(|_| OrbitError::Execution("remote browser credential request failed".into()))?;
+    if !output.status.success() {
+        return Err(OrbitError::Execution(
+            "remote browser credential unavailable; run orbit web open on the dashboard host"
+                .into(),
+        ));
+    }
+    let remote = std::str::from_utf8(&output.stdout)
+        .ok()
+        .and_then(|value| url::Url::parse(value.trim()).ok())
+        .filter(|url| {
+            url.scheme() == "http" && url.port_or_known_default() == Some(args.remote_port)
+        })
+        .ok_or_else(|| {
+            OrbitError::Execution(
+                "remote browser credential does not match the tunneled dashboard".into(),
+            )
+        })?;
+    let fragment = remote
+        .fragment()
+        .filter(|value| value.starts_with("orbit-session="))
+        .ok_or_else(|| OrbitError::Execution("remote browser credential missing".into()))?;
+    Ok(format!("http://localhost:{local_port}/#{fragment}"))
 }

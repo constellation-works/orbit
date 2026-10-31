@@ -65,10 +65,10 @@ try {
           payload = { capacity: { drain_phase: 'draining', drain_run_id: 'fixture', drain_status_run_id: 'fixture', running_admitted_workers: 1, active_leaf_runs: 1, max_active_leaf_runs: 4, free_slots: 3, ends_at: new Date(Date.now() + 3600000).toISOString() }, tasks: [] };
           break;
         case '/api/config/file':
-          payload = { sections: [], scope: 'workspace', crews: [], paths: [] };
+          payload = { sections: [], scope: 'global', crews: [], paths: [], text: '' };
           break;
         case '/api/runs/fixture':
-          payload = { run_id: 'fixture', job_id: 'fixture', state: 'success', steps: [] };
+          payload = { run: { run_id: 'fixture', job_id: 'fixture', state: 'success' }, steps: [] };
           break;
         case '/api/routines':
           payload = { routines: [{ name: 'fixture', source: 'one', target: 'orbit://job/fixture', enabled: true }], clock: {} };
@@ -80,7 +80,7 @@ try {
       const text = document.getElementById('meta-text').textContent;
       const dot = document.getElementById('conn-status');
       getComputedStyle(dot).backgroundColor;
-      return /^(refreshed|offline|panel update failed)/.test(text)
+      return /^(\d{2}:\d{2}:\d{2} |refreshed|offline|panel update failed)/.test(text)
         && dot.getAnimations().every(animation => animation.playState === 'finished');
     }, undefined, { timeout: 10000 });
     const refresh = async () => { await page.locator('#refresh-btn').click(); await settled(); };
@@ -89,6 +89,8 @@ try {
         status: document.getElementById('conn-status').className,
         color: getComputedStyle(document.getElementById('conn-status')).backgroundColor,
         label: document.getElementById('meta-text').textContent,
+        labelTitle: document.getElementById('meta-text').title,
+        labelAria: document.getElementById('meta-text').getAttribute('aria-label'),
         nodes: [...document.querySelectorAll(selector)].map(node => ({
           id: node.id, text: node.textContent.trim(), title: node.title,
           stale: node.classList.contains('refresh-stale'), opacity: Number(getComputedStyle(node).opacity),
@@ -137,16 +139,22 @@ try {
     await refresh();
     expectClean(await snapshot('offline-recovery'));
     await page.locator('.tab[data-tab="config"]').click();
-    await page.locator('#config-subtabs [data-subtab="workspace-file"]').click();
+    await page.locator('#config-subtabs [data-subtab="machine"]').click();
     await settled();
-    assert.match((await snapshot('workspace-file-clean')).label, /refreshed Settings/);
+    {
+      const machineClean = await snapshot('machine-clean');
+      assert.match(machineClean.label, /^\d{2}:\d{2}:\d{2} /, 'The success line shows only the refresh time');
+      assert.ok(!machineClean.label.includes('Settings'), 'The success line hides the destination');
+      assert.match(machineClean.labelTitle, /^Refreshed Settings at \d{2}:\d{2}:\d{2} /, 'The success title carries the destination with the time');
+      assert.equal(machineClean.labelAria, machineClean.labelTitle, 'The success accessible name carries the destination');
+    }
     failedPath = '/api/config/file';
     runningCount = 18000;
     await refresh();
-    const partial = await snapshot('workspace-file-failure');
+    const partial = await snapshot('machine-failure');
     assert.match(partial.status, /orange/);
     assert.notEqual(partial.color, clean.color, 'A failed panel must not display the clean green dot');
-    assert.match(partial.label, /Settings › Workspace file/);
+    assert.match(partial.label, /Settings › Machine/);
     assert(!partial.label.includes('offline'), 'An HTTP panel failure must remain distinct from offline');
     assert.equal(partial.nodes.find(node => node.id === 'rail-count-jobs').text, '18.0k runs', 'Healthy panels must keep updating during a partial failure');
     expectStale(partial);
@@ -168,7 +176,7 @@ try {
     // events/log panels to the connection line. Missing optional streams (404)
     // remain a clean response.
     await page.evaluate(() => { location.hash = 'runs/fixture'; });
-    await page.waitForFunction(() => document.getElementById('meta-text').textContent.startsWith('refreshed Jobs'));
+    await page.waitForFunction(() => document.getElementById('meta-text').title.startsWith('Refreshed Jobs'));
     for (const [stream, label] of [['events', 'Run events'], ['logs', 'Run logs']]) {
       failedPath = `/api/runs/fixture/${stream}`;
       await refresh();

@@ -45,23 +45,15 @@ pub(super) fn resolve_identity(
     let (agent, model) = if context_has_identity {
         let agent =
             normalize_agent_family_for_model(context_agent.as_deref(), context_model.as_deref())?;
-        // Runtime-provided identity is authoritative at the tool boundary. If
-        // an agent self-reports a `model` argument, Orbit overwrites it with
-        // the canonical family string so downstream persistence compares
-        // family identity, not unstable model aliases.
-        let model = agent.clone();
-        (agent, model)
+        // Runtime identity takes precedence over any self-reported input.
+        (agent, context_model)
     } else if input_has_identity {
         (trimmed_optional(input_agent), trimmed_optional(input_model))
     } else {
         (None, None)
     };
     let family = require_canonical_agent_family(agent.as_deref(), model.as_deref())?;
-    let model = if context_has_identity {
-        family.clone()
-    } else {
-        model.or_else(|| family.clone())
-    };
+    let model = model.or_else(|| family.clone());
     Ok(OrbitIdentity {
         agent: family.clone(),
         model,
@@ -74,7 +66,7 @@ pub(super) fn identity_params() -> Vec<ToolParam> {
         ToolParam {
             name: "agent".to_string(),
             description:
-                "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`)."
+                "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`)."
                     .to_string(),
             param_type: "string".to_string(),
             required: false,
@@ -82,7 +74,7 @@ pub(super) fn identity_params() -> Vec<ToolParam> {
         ToolParam {
             name: "model".to_string(),
             description:
-                "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized."
+                "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized."
                     .to_string(),
             param_type: "string".to_string(),
             required: false,
@@ -94,7 +86,7 @@ pub(super) fn model_identity_params() -> Vec<ToolParam> {
     vec![ToolParam {
         name: "model".to_string(),
         description:
-            "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized."
+            "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
                 .to_string(),
         param_type: "string".to_string(),
         required: false,

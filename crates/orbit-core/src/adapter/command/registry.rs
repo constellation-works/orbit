@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_tools::Tool;
 use orbit_tools::external::ExternalTool;
+use orbit_tools::{Tool, ToolContext, tool_suggestions};
 use orbit_types::record::OrbitEvent;
 use orbit_types::tool::{McpToolDefinition, StoredTool, ToolParam};
 
@@ -19,6 +19,9 @@ pub struct ToolInfo {
     pub active: bool,
     pub builtin: bool,
     pub parameters: Vec<orbit_types::tool::ToolParam>,
+    /// The `orbit mcp serve` toolset that advertises this tool; `None` for a
+    /// tool MCP never advertises.
+    pub mcp_toolset: Option<orbit_types::tool::McpToolset>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +81,7 @@ impl OrbitRuntime {
                 let enabled = stored.is_none_or(|s| s.enabled);
                 let active = self.tool_registry().is_active(&schema.name);
                 ToolInfo {
+                    mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
                     name: schema.name.clone(),
                     description: schema.description.clone(),
                     enabled,
@@ -119,6 +123,7 @@ impl OrbitRuntime {
         let active = self.tool_registry().is_active(&schema.name);
 
         Ok(ToolInfo {
+            mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
             name: schema.name,
             description: schema.description,
             enabled,
@@ -250,6 +255,14 @@ impl OrbitRuntime {
     }
 
     pub fn ensure_tool_agent_facing(&self, name: &str) -> Result<(), OrbitError> {
+        self.ensure_tool_agent_facing_with_context(name, &ToolContext::default())
+    }
+
+    pub(crate) fn ensure_tool_agent_facing_with_context(
+        &self,
+        name: &str,
+        context: &ToolContext,
+    ) -> Result<(), OrbitError> {
         if self.tool_registry().is_active(name) {
             return Ok(());
         }
@@ -268,7 +281,16 @@ impl OrbitRuntime {
         if let Some(owner) = self.plugin_load().workspace_disabled_owner(name) {
             return Err(self.plugin_disabled_in_workspace(&owner.name));
         }
-        Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()))
+        // Catalog/read failures suppress guidance rather than changing the refusal.
+        let definitions = self.list_mcp_tool_definitions().unwrap_or_default();
+        Err(tool_suggestions::unknown_tool_error(
+            name,
+            definitions
+                .iter()
+                .filter(|definition| definition.schema.builtin)
+                .map(|definition| definition.schema.name.as_str()),
+            context,
+        ))
     }
 
     /// Refuse an `orbit <ns>` verb, before dispatch, when this workspace has
@@ -397,5 +419,6 @@ fn stored_external_tool_info(stored: &StoredTool) -> ToolInfo {
         active: true,
         builtin: false,
         parameters: schema.parameters,
+        mcp_toolset: None,
     }
 }

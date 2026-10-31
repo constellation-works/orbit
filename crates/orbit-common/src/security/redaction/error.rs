@@ -76,14 +76,13 @@ pub fn redact_all_and_home_error(error: OrbitError) -> OrbitError {
 fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitError {
     match error {
         OrbitError::PolicyDenied(m) => OrbitError::PolicyDenied(redact(&m)),
-        OrbitError::NotFound { kind, id } => OrbitError::NotFound {
+        OrbitError::NotFound { kind, id, guidance } => OrbitError::NotFound {
             kind,
             id: redact(&id),
+            guidance: guidance.map(|guidance| redact(&guidance)),
         },
         OrbitError::CapabilityDenied(m) => OrbitError::CapabilityDenied(redact(&m)),
         OrbitError::UnknownSelector(m) => OrbitError::UnknownSelector(redact(&m)),
-        OrbitError::AmbiguousCaller(m) => OrbitError::AmbiguousCaller(redact(&m)),
-        OrbitError::UnauthorizedCaller(m) => OrbitError::UnauthorizedCaller(redact(&m)),
         OrbitError::AmbiguousDestination(m) => OrbitError::AmbiguousDestination(redact(&m)),
         OrbitError::UnreachableDestination(m) => OrbitError::UnreachableDestination(redact(&m)),
         OrbitError::StaleRoute(m) => OrbitError::StaleRoute(redact(&m)),
@@ -135,6 +134,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             OrbitError::FrictionNotLocal(redact_friction_not_local(*details, redact))
         }
         OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact(&m)),
+        OrbitError::DecisionRefused { code, message } => OrbitError::DecisionRefused {
+            code,
+            message: redact(&message),
+        },
         OrbitError::ClaimRefused { kind, message } => OrbitError::ClaimRefused {
             kind,
             message: redact(&message),
@@ -171,9 +174,13 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             message,
             payload,
         } => OrbitError::RemoteTool {
-            code: redact(&code),
+            code: redact(code.as_str()).into(),
             message: redact(&message),
             payload: redact_json_with(payload, redact),
+        },
+        OrbitError::DeliveryRefused { refusal, message } => OrbitError::DeliveryRefused {
+            refusal,
+            message: redact(&message),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
         OrbitError::CandidateAbsorbed(mut candidate) => {
@@ -244,7 +251,6 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::SqliteContention(contention) => {
             OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact))
         }
-        OrbitError::TaskStatusTransition(m) => OrbitError::TaskStatusTransition(redact(&m)),
         OrbitError::SystemIdentityTagDropped { tag } => {
             OrbitError::SystemIdentityTagDropped { tag: redact(&tag) }
         }
@@ -257,6 +263,13 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         },
         OrbitError::PrForgeRemoteMissing { remotes } => OrbitError::PrForgeRemoteMissing {
             remotes: redact(&remotes),
+        },
+        OrbitError::TaskScheduled {
+            task_id,
+            not_before,
+        } => OrbitError::TaskScheduled {
+            task_id: redact(&task_id),
+            not_before,
         },
         OrbitError::PullRequestMergeabilityUnknown { number } => {
             OrbitError::PullRequestMergeabilityUnknown { number }
@@ -294,6 +307,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact(&m)),
         OrbitError::Migration(m) => OrbitError::Migration(redact(&m)),
         OrbitError::StorageAccessDenied { layer, message } => OrbitError::StorageAccessDenied {
+            layer,
+            message: redact(&message),
+        },
+        OrbitError::StorageLockBusy { layer, message } => OrbitError::StorageLockBusy {
             layer,
             message: redact(&message),
         },

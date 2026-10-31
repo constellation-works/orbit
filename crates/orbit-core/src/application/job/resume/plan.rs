@@ -5,7 +5,7 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
-use orbit_types::workflow::{JobRun, JobRunState, JobV2, PipelineState};
+use orbit_types::workflow::{DeliveryRefusal, JobRun, JobRunState, JobV2, PipelineState};
 use serde_json::Value;
 
 use super::binding::{
@@ -15,6 +15,7 @@ use super::binding::{
 use super::completion_repair::{grant_completion_repair, rewind_to_completion};
 use crate::OrbitRuntime;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::task::TaskRecords;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::runtime::task::resumed_task_run_id;
 
@@ -45,10 +46,39 @@ pub(crate) struct ResumePlan {
     /// Definition pinned beside the source run. `None` for a catalog-backed
     /// source, which keeps resolving `source.job_id` at admission.
     pub(crate) pinned_definition: Option<PinnedRunDefinition>,
-    /// An out-of-run auto-fix: the resume reruns the source's completion step
-    /// with repair authority, and readmits a task its lineage shelved in
-    /// `backlog` as well as one it blocked.
+    /// An out-of-run auto-fix: the resume reruns the source's last completion
+    /// round with repair authority, and readmits a task its lineage shelved
+    /// in `backlog` as well as one it blocked.
     pub(super) completion_repair: bool,
+}
+
+impl ResumePlan {
+    /// Refuse a resume whose reused checkpoints name a worktree that no
+    /// longer exists. Checkpoint reuse skips `worktree_setup`, so every step
+    /// the resume reruns would start in that missing directory and fail,
+    /// after the task was already readmitted for it. Checked before the run
+    /// is inserted, so a refusal changes neither the task nor the lineage.
+    pub(crate) fn refuse_missing_reused_worktree(&self) -> Result<(), OrbitError> {
+        let Some(path) = self
+            .resume_state
+            .as_ref()
+            .and_then(|state| state.pipeline.get("worktree"))
+            .and_then(|worktree| worktree.get("workspace_path"))
+            .and_then(Value::as_str)
+        else {
+            return Ok(());
+        };
+        if std::path::Path::new(path).is_dir() {
+            return Ok(());
+        }
+        Err(OrbitError::JobValidation(format!(
+            "job run '{}' cannot be resumed: the worktree its checkpoints reuse ({path}) no \
+             longer exists, so the steps it would rerun cannot start. Nothing was changed. A \
+             blocked task whose run published a pull request is requeued instead (`orbit task \
+             requeue`), and its next run sets up a fresh worktree on the published branch",
+            self.source.run_id
+        )))
+    }
 }
 
 /// Exact job definition a snapshot-backed run must keep across resumes.
@@ -71,8 +101,9 @@ impl OrbitRuntime {
     }
 
     /// Plan an out-of-run auto-fix of the pull request `source_run_id`
-    /// opened: the ordinary resume, rewound to rerun the completion step and
-    /// everything after it, with `auto_fix` granted, the footprint deferred
+    /// opened: the ordinary resume, rewound to rerun the last completion
+    /// round the source reached and everything after it, with `auto_fix`
+    /// granted, the footprint deferred
     /// to the first editing agent, and `repair` recorded on the run input.
     /// The run's own `completion` grant is unchanged, so a run that never
     /// held `--complete` still never merges.
@@ -166,12 +197,18 @@ impl OrbitRuntime {
             )));
         }
         // [ORB-14617] A run held because the forge refused its push resumes
-        // from its checkpoints. Every other hold names its own resumption
-        // (an evidence hold queues a fresh review on receipt).
+        // from its checkpoints, and [ORB-19430] so does one held because
+        // completion could not read the forge. Every other hold names its own
+        // resumption (an evidence hold queues a fresh review on receipt).
         let forge_held = source.state == JobRunState::Held
-            && self
-                .read_run_state(&source.run_id)?
-                .is_some_and(|state| state.pull_drain.forge_hold.is_some());
+            && (source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                == Some(DeliveryRefusal::ForgeObservationUnavailable.error_code())
+                || self
+                    .read_run_state(&source.run_id)?
+                    .is_some_and(|state| state.pull_drain.forge_hold.is_some()));
         if !forge_held
             && !matches!(
                 source.state,
@@ -180,7 +217,7 @@ impl OrbitRuntime {
         {
             return Err(OrbitError::JobValidation(format!(
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
-                 or one held because the forge refused its push",
+                 or one held because the forge refused its push or could not be read",
                 source_run_id, source.state
             )));
         }

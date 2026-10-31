@@ -10,16 +10,25 @@
 //! - **inherited**: the same signature fails on the candidate's base commit,
 //!   or the base branch has moved past that base and the same job passes on
 //!   its tip. The landing merges the current base into the pull request's
-//!   branch once, through the provider's branch update, and waits for the
-//!   checks again on the new head. No agent runs. A failure that is still
-//!   there after that one update, on a base tip where the same job passes,
-//!   is the candidate's: the landing stops for the one automatic repair,
-//!   with the failed job, its signature and a log excerpt, unless that
-//!   repair is already spent, in which case it stops for a requeue (below).
-//!   An unmoved base that is still red stops in review without a repair.
+//!   branch and waits for the checks again. If the base remains red, the
+//!   landing records a visible wait and polls within its landing deadline.
+//!   A newer base where every inherited job passes permits another update,
+//!   with at most three cumulative updates for the handoff. No agent runs.
+//!   Only a failure on a head that already contains that passing tip earns
+//!   the candidate's one automatic repair, or its backlog requeue when spent.
+//!   At the deadline, a red base stops in review with a base-never-recovered
+//!   reason.
 //! - **transient**: the log shows the network or the runner failing, by the
 //!   rule the validation gates already rerun on. The landing reruns the
 //!   failed jobs once and waits again.
+//! - **base-suspect**: the log cites only files the candidate did not
+//!   change, and the base's recorded run does not fail it that way. A
+//!   successful same-job run on the accepted base ancestry, even if it
+//!   predates the PR failure, only authorizes one unchanged-head PR rerun.
+//!   A passing rerun clears the failure; the same signature failing again
+//!   is **candidate**. Without that pass, the landing waits for base evidence
+//!   until its configurable cycle limit or deadline; a same-signature base
+//!   failure remains **inherited**.
 //! - **candidate**: the failed step names a diagnostic, and the base's own
 //!   jobs were read and do not explain it. The landing stops for the same
 //!   single automatic repair a conflicting base gets, with the failed step's
@@ -48,18 +57,16 @@
 //! A stale rollup entry for a job already rerun or updated can wait for its
 //! replacement to register, but never hides a separately failed aggregate.
 //!
-//! The rerun, the branch update and the repair are each spent once. A
-//! failure past that budget, other than the candidate's own, or one this
-//! module cannot classify, stops the landing in review, with the
-//! classification in the stop evidence. The
-//! repair an inherited failure earns after its one update is that same
-//! single repair, not a second update or a second repair.
+//! Reruns and repairs remain single-use. Inherited handoff updates share a
+//! persisted count across polls, restarts and retries; auto-fix and
+//! absent-emission recovery keep their one-update budget. Unreadable
+//! evidence stops in review without spending recovery.
 //!
 //! A branch update moves the pull request's head off the accepted candidate.
-//! [`verified_base_update`] accepts the new head only when it is a merge of
-//! that candidate with a commit already on the landing branch whose tree is
-//! exactly the clean merge of the two, so nothing but the base's own advance
-//! reaches the merge. The provider merges the base as it is when the update
+//! [`verified_base_update`] accepts the new head only when it reaches that
+//! candidate through a first-parent chain of merges with commits on the
+//! landing branch, each tree exactly the clean merge of its parents, so
+//! nothing but the base's own advance reaches the merge. The provider merges the base as it is when the update
 //! runs, so the caller refreshes the landing ref before asking. The owner's
 //! accepted candidate, its validation evidence and the observation the store
 //! rechecks stay the validated commit.
@@ -73,12 +80,17 @@ mod head;
 mod jobs;
 mod log;
 mod recovery;
+mod rerun;
+pub(in crate::executor::automation::vcs) mod rerun_diagnostic;
+mod suspect;
 
 pub(in crate::executor::automation::vcs) use base_tip::base_tip_check_evidence;
 pub(in crate::executor::automation::vcs) use base_update::verify_published_base_update;
 pub(in crate::executor::automation::vcs) use head::{
-    HeadCheckEvidence, head_check_evidence, unmoved_red_base,
+    CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
 pub(in crate::executor::automation::vcs) use recovery::{
     CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks,
 };
+
+pub(in crate::executor::automation::vcs) use rerun::{CiRerunStep, plan_ci_rerun};

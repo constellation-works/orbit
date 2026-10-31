@@ -37,7 +37,10 @@ pub use crate::runtime::plugin::definitions::{
     PluginDefinition, PluginDefinitionSet, load_plugin_definitions, read_definition_provenance,
     seeded_definition_name,
 };
-pub use conformance::{PluginTestOptions, PluginTestOutcome, PluginTestReport, test_plugin_dir};
+pub use conformance::{
+    PluginTestDeferral, PluginTestOptions, PluginTestOutcome, PluginTestReport,
+    PluginTestValidationGate, test_plugin_dir,
+};
 pub use inspect::{
     PluginDoctorResult, PluginPermissionSummary, PluginRenderedEnvironment, PluginRenderedProfile,
     PluginSummary, PluginToolSummary, PluginValidationReport, list_plugins, plugin_build_doctor,

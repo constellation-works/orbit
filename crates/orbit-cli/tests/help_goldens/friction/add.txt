@@ -6,14 +6,8 @@ Options:
       --body <BODY>
           Markdown body describing what happened and why it caused friction
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --title <TITLE>
           One-line record handle, max 120 chars; derived when omitted
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --tag <TAGS>
           Friction taxonomy tag; repeat or comma-separate for multiple tags
@@ -22,23 +16,14 @@ Options:
           Optional task ID being worked on when friction occurred; an ID that names no task is refused
 
       --model <MODEL>
-          Agent family to attribute the record to (`codex`, `claude`, `gemini`, or `grok`)
-
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
+          Agent family to attribute the record to (`codex`, `claude`, `gemini`, `grok`, or `muse`)
 
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

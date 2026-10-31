@@ -9,8 +9,8 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::CommitIdentity;
 use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::{CommitIdentity, RequiredValidationFailureKind};
 
 pub use super::base::claim::{
     BaseFailureCheck, BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure,
@@ -284,6 +284,86 @@ pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String
     Ok(paths)
 }
 
+/// One changed entry's old and new paths; either side is absent for an
+/// addition or a deletion.
+pub type ChangedPathPair = (Option<String>, Option<String>);
+
+/// Every entry of the complete `base..head` diff as `(old_path, new_path)`:
+/// deletions carry only an old path, additions only a new one, and
+/// renames/copies both, so a rename away from a path still names it.
+/// Binary, mode-only, symlink and gitlink entries appear like any other.
+/// Rename detection is on; disabling it would report the equivalent
+/// delete/add pair. Paths are Git's recorded names, never resolved
+/// through candidate symlinks.
+pub fn changed_path_pairs(
+    workspace_path: &Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<ChangedPathPair>, OrbitError> {
+    let raw = git_output_raw(
+        workspace_path,
+        &[
+            "diff",
+            "--name-status",
+            "-z",
+            "-M",
+            "-C",
+            "--end-of-options",
+            base,
+            head,
+        ],
+    )?;
+    let mut pairs = Vec::new();
+    let mut fields = raw.split('\0').filter(|field| !field.is_empty());
+    while let Some(status) = fields.next() {
+        let pair = match status.chars().next() {
+            Some('R' | 'C') => {
+                let old = fields.next().map(ToString::to_string);
+                let new = fields.next().map(ToString::to_string);
+                (old, new)
+            }
+            Some('A') => (None, fields.next().map(ToString::to_string)),
+            Some('D') => (fields.next().map(ToString::to_string), None),
+            _ => {
+                let path = fields.next().map(ToString::to_string);
+                (path.clone(), path)
+            }
+        };
+        pairs.push(pair);
+    }
+    Ok(pairs)
+}
+
+/// Insertions plus deletions of the complete `base..head` diff, the
+/// `diff_lines` risk basis. Binary entries contribute no counted lines,
+/// as Git reports none for them.
+pub fn diff_lines_between(
+    workspace_path: &Path,
+    base: &str,
+    head: &str,
+) -> Result<u64, OrbitError> {
+    let raw = git_output_raw(
+        workspace_path,
+        &["diff", "--numstat", "-z", "--end-of-options", base, head],
+    )?;
+    let mut total: u64 = 0;
+    for entry in raw.split('\0').filter(|entry| !entry.is_empty()) {
+        // `<added>\t<deleted>\t<path>`; a rename's path field is empty and
+        // its two names follow as their own NUL fields, which parse to no
+        // numbers and add nothing.
+        let mut fields = entry.split('\t');
+        let (Some(added), Some(deleted)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        for count in [added, deleted] {
+            if let Ok(count) = count.parse::<u64>() {
+                total = total.saturating_add(count);
+            }
+        }
+    }
+    Ok(total)
+}
+
 /// [ORB-14632] Whether the repository-relative `path` differs between
 /// commits `from` and `to`: its content or mode changed, or it was added or
 /// deleted. Rename detection stays off, so a file moved away reads as deleted
@@ -547,9 +627,9 @@ pub struct RequiredValidationRun {
     pub passed: bool,
     pub exit_code: i32,
     pub timed_out: bool,
-    /// `environment` when a tool was missing, `candidate` for any other
-    /// failure, `None` when the command passed.
-    pub failure_kind: Option<String>,
+    /// The raw command failure classification, absent when it passed without
+    /// deferring execution.
+    pub failure_kind: Option<RequiredValidationFailureKind>,
     pub output: String,
     /// How the validation environment was resolved.
     pub environment: serde_json::Value,
@@ -571,7 +651,7 @@ pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
         super::required::command::VALIDATION_TIMEOUT_MS,
     )?;
     Ok(RequiredValidationRun {
-        failure_kind: run.failure_kind().as_str().map(str::to_string),
+        failure_kind: run.failure_kind(),
         environment: run.environment_record(),
         command: run.command,
         passed: run.passed,

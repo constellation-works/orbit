@@ -1,13 +1,16 @@
 //! Orchestration for `backend: cli` agent subprocess dispatch.
 
+mod antigravity_usage;
 mod completion;
 mod dispatch;
 mod entry;
 mod environment;
 mod evidence;
+mod grok_usage;
 mod limit;
 mod policy;
 mod prepare;
+mod skills;
 
 #[cfg(test)]
 mod tests;

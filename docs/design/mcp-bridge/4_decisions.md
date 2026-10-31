@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Decisions
 owner: codex
-last_updated: 2026-09-27
-last_validated: 2026-10-17
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 feature: mcp-bridge
 doc_role: decisions
@@ -151,3 +151,9 @@ global-versus-workspace-required scope.
 
 **Consequences.** Discovery, dispatch lookup, snapshots, and documentation describe
 one surface.
+
+## Task References
+
+- [ORB-12564] amended destination authorization to honor argv authority and removed caller files and key-bound grants.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

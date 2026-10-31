@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-14
+last_updated: 2026-10-30
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -181,7 +181,7 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 
 4. **The run's sanction travels with the run, not with the environment.** The distinction drawn is out-of-scope destruction versus destruction the run exists to perform. `run_deterministic` stamps `McpCapability::Runner` onto the tool context it dispatches with, so `release_locks` keeps working while the agent hosted inside the same run — which builds its own context and never reaches that code — does not inherit the grant. The pipeline's git path (worktree force-removal, `branch -D`, `git clean -fd`, `checkout -B`, `merge --ff-only`, PR merge) is deliberately absent from the registry: it is sanctioned destruction, and gating it would break every ship.
 
-5. **Ambiguity fails closed, with one explicit escape hatch.** Caller capabilities resolve in strict precedence: session grants (a validated MCP session, or a run-stamped context) > `ORBIT_OPERATOR` override > agent envelope (`ORBIT_AGENT_NAME` / `ORBIT_AGENT_MODEL` / `ORBIT_TASK_ACTOR_KIND=agent` / `ORBIT_MANAGED_RUN_CONTEXT`) > interactive terminal > nothing. An unidentified caller holds no capability and every governed operation denies. An interactive TTY on both stdin and stderr is the one positive human signal available without a credential, which is what keeps `orbit workspace teardown` frictionless for a person while refusing it to a headless agent. `ORBIT_OPERATOR=1` is the documented escape hatch — trivial to set on purpose, because it is not defending against a determined caller, it is making a deliberate act look deliberate. Every use emits a `warn!` and a success-status `authorization` audit row.
+5. **Ambiguity fails closed, with one explicit escape hatch.** Caller capabilities resolve in strict precedence: session grants (a validated MCP session, or a run-stamped context) > `ORBIT_OPERATOR` override > agent envelope (`ORBIT_AGENT_NAME` / `ORBIT_AGENT_MODEL` / `ORBIT_TASK_ACTOR_KIND=agent` / `ORBIT_MANAGED_RUN_CONTEXT`) > interactive terminal > nothing. An unidentified caller holds no capability and every governed operation denies. An interactive TTY on both stdin and stderr is the one positive human signal available without a credential, which is what keeps `orbit workspace teardown` frictionless for a person while refusing it to a headless agent. `ORBIT_OPERATOR=1` is the documented escape hatch — trivial to set on purpose, because it is not defending against a determined caller, it is making a deliberate act look deliberate. Every use records a `tracing::debug!` event (target `orbit.authorization`) and a success-status `authorization` audit row; it stays off stderr at the default level.
 
 6. **A denial is a distinct, recorded outcome.** `OrbitError::CapabilityDenied` is separate from `OrbitError::PolicyDenied` (`orbit-policy`'s path-scoping refusal): this one is about who is asking, not which path was touched. Both map to `AuditEventStatus::Denied` at every audit boundary, and the decision writes its own `command = 'authorization'` row so a denial is queryable with one predicate across every entry point, including surfaces that do not otherwise audit. The message names the required capability, why the operation is governed, what the caller was resolved as, and the escape hatch.
 
@@ -215,10 +215,10 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 
 Between the filing and this decision, most of that shape was deleted rather than reconciled. `McpExposure`, `allowed_capabilities()`, `admitted()`, and the `orbit-remote` crate that hosted them are all gone with the owner-route recomposition and the MCP v1 ownership cleanup. What is left is two axes and no overlap between their declarations:
 
-- **Placement** — `OperationSpec::mcp_scope`, and `ToolRegistry::register_mcp` versus `register_inactive`. Decides which surfaces *list* a tool. `tools/list` performs no capability filtering, and `ToolRegistry::execute` never consults availability, so an unadvertised tool remains reachable through `orbit tool run`.
+- **Placement** — `OperationSpec::mcp_scope`, and `ToolRegistry::register_mcp` versus `register_inactive`. Decides which surfaces *list* a tool. `tools/list` originally performed no capability filtering (amended below on 2026-10-26), and `ToolRegistry::execute` never consults availability, so an unadvertised tool remains reachable through `orbit tool run`.
 - **Permission** — `GOVERNED_OPERATIONS`, evaluated by `authorize` at `OrbitRuntime::authorize_tool_operation`, which every tool caller traverses.
 
-The gap the earlier entry named has therefore closed by deletion, not by a fix: the friction `list` / `show` / `update` operations are ungoverned, no MCP path denies them, and an agent reads them from the CLI as before. What replaced it is the inverse pairing. `orbit.workflow.ship`, `orbit.workflow.run.{show,list,resume}` ([ORB-10534]) and `orbit.command.exec` ([ORB-10711]) are advertised to every MCP session and governed `operator` at the chokepoint, so an agent session is listed five tools it cannot perform.
+The gap the earlier entry named has therefore closed by deletion, not by a fix: the friction `list` / `show` / `update` operations are ungoverned, no MCP path denies them, and an agent reads them from the CLI as before. What replaced it is the inverse pairing. `orbit.workflow.ship`, `orbit.workflow.run.{show,list,resume}` ([ORB-10534]) and `orbit.command.exec` ([ORB-10711]) were advertised to every MCP session and governed `operator` at the chokepoint, so an agent session was listed five tools it could not perform.
 
 ### Decision
 
@@ -245,6 +245,37 @@ publication its failure handoff made; the next run still re-authenticates that
 publication before adopting it, as described in
 [stuck job runs](../../runbooks/stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
 
+Current surface addition (2026-10-25): `orbit.decision.submit` is advertised
+and governed by the operator capability. It is advertised because its real
+caller — a registered decision channel's plugin backend — reaches Orbit
+through MCP `tools/call` as well as `orbit tool run`, and must be able to
+discover the tool it was granted; an agent session is refused at the governed
+row, and advertisement grants it nothing. The session filtering amendment
+below now omits it from an ordinary agent session's list. The one caller the
+row cannot name is that plugin callback itself, which holds no capability,
+only a host-issued callback session: the runtime chokepoint admits an
+*identified* callback past the row and the submit handler decides it by the
+channel registration binding and the per-request token, as specified in
+[human decision channel](../human-decision-channel/2_design.md) §3.3. The
+channel-administration operations stay unadvertised operator CLI verbs with
+no MCP scope, like `orbit.decision.answer`.
+
+Current surface addition (2026-10-29): `orbit.script.grant` and
+`orbit.script.revoke` are governed `operator` and unadvertised. Script steps
+phase 1 registers no MCP tool for them — the operator surface is `orbit
+script grant|revoke` — so the rows exist to make both names operator-only in
+`classify_agent_tool_grant` and at the chokepoint before any tool can be
+called: an agent session or plugin callback naming either is refused rather
+than defaulting to a grantable mutation. `GOVERNED_TOOL_PLACEMENT` records
+both as unadvertised.
+
+Current surface addition (2026-10-30): `orbit.visual.accept_dispute` is governed
+`operator` and unadvertised (`mcp_scope: None`); the operator surface is `orbit visual
+accept-dispute`. Accepting a disputed blocking visual finding overrides the reviewer's and
+verifier's confirmation and lets a held candidate land, so an agent session is refused at
+the row, and the tool entry also refuses a managed run and a claimed worker.
+`GOVERNED_TOOL_PLACEMENT` records it unadvertised.
+
 ### Rejected alternatives
 
 - **Give the exposure declaration a second axis — "which surface advertises" versus "which capability may perform" — and derive chokepoint enforcement from the second** (ORB-10478 option 1). Rejected: there is no longer a second advertisement axis to split. `McpExposure` is gone and `mcp_scope` is a plain placement decision, so this would mean *introducing* a policy framework to unify two declarations that already have one enforcement point between them — speculative v2 machinery for a drift that a ten-line table catches.
@@ -257,7 +288,8 @@ publication before adopting it, as described in
 ### Consequences
 
 - The question "may this caller perform this?" has one answer and one place to look, on every surface. "Will this caller be shown it?" is a different question with a different owner, and neither now implies the other by accident.
-- An agent MCP session still sees five tools it cannot call. This is the accepted cost of a single advertised tool list plus per-call capability enforcement, and it is recorded rather than papered over. Filtering `tools/list` by session capability would remove it, but that is an MCP-server change with its own surface implications and no current demand; it is deliberately not bundled here.
+- **Amended 2026-10-26 ([ORB-18448]):** the filing measured twelve uncallable tools at 22% of the listed definition bytes, beyond the five originally accepted here. The current surface also includes operator-only routine and auto-drain controls. The shared MCP list adapter now uses the existing governed-operation catalog and the session's fixed capabilities to omit uncallable governed tools from `tools/list`. Operator sessions retain the full placed surface. Filtering is applied after the shared response cache and combined with workspace plugin hiding; it does not change registration, placement declarations, or call authorization. Calling an omitted name still reaches the same `capability_denied` refusal. `orbit.agent.invoke` remains discoverable because its managed-run explorer admission can allow an agent without operator capability; its catalog row alone cannot determine whether the call will be refused. Registered decision-channel callbacks retain their existing direct-call admission. The real MCP roundtrip checks cover agent/operator listings and direct calls, while the authorization matrix continues to guard registry placement and permission separately.
+- **Experiments (2026-10-26, [ORB-18473]):** the nine `orbit.experiment.*` writes (`create`, `update`, `clone`, `start`, `pause`, `resume`, `reweight`, `conclude`, `abandon`) are governed `operator` and advertised, so an operator MCP session can define and steer experiments, while the filter above keeps them off an agent session's list. `show` and `list` are ungoverned reads an agent may call. `GOVERNED_TOOL_PLACEMENT` records all nine.
 - Cost: adding a governed tool now requires one more line — its placement — in the guardrail table. That is the intended friction: the line is where the advertise-or-not decision gets made explicitly.
 - An MCP session's capabilities are decided once, when its server process starts, and the process environment is never consulted per call: `orbit mcp serve` grants `agent`, `orbit mcp serve --operator` grants `agent` and `operator`, and `ORBIT_OPERATOR` in the server's environment grants nothing on this surface ([ORB-10927]). The flag is the only operator path over MCP — the deliberate act has to be in the argv the operator wrote, because an environment variable is inherited by whatever server an agent happens to launch. `orbit mcp listen` is agent-only for the stronger version of the same reason: the socket authenticates no client, so a listener started with operator authority would serve it to every accepted connection.
 - Because the MCP chokepoint discards the process envelope by design, its denial names the remedy that surface actually has (`orbit mcp serve --operator`, or the CLI) rather than the `ORBIT_OPERATOR` override that is inert there. That is `CapabilityResolution` in `orbit_common::governance::authorization`: one enum on the envelope, carried into the denial, changing the remedy sentence and nothing about the decision.
@@ -313,7 +345,7 @@ That read is only correct on one surface. An MCP session's capabilities are stam
 
 ### Rejected alternatives
 
-- **Have `local_tool_session_context` state the capabilities the CLI caller holds.** Attractive — it is the other half of the same observation — but session grants outrank the override in `CallerCapabilities::resolve`, so pre-resolving `ORBIT_OPERATOR=1` into the session would erase `CallerProvenance::OperatorOverride` and with it the `warn!` and the audit row that make the escape hatch loud. The chokepoint must see the raw envelope.
+- **Have `local_tool_session_context` state the capabilities the CLI caller holds.** Attractive — it is the other half of the same observation — but session grants outrank the override in `CallerCapabilities::resolve`, so pre-resolving `ORBIT_OPERATOR=1` into the session would erase `CallerProvenance::OperatorOverride` and with it the `debug!` record (target `orbit.authorization`) and the audit row that record the escape hatch use. The chokepoint must see the raw envelope.
 - **Leave the check in the application function and widen it to accept a CLI caller.** Rejected: it would be a second capability resolver, disagreeing with the chokepoint the moment either changed — the precise failure mode the chokepoint exists to prevent.
 - **Stamp the resolved capability set back onto the session context for every tool call.** Tempting, and it would let any handler read the session safely, but the tool host captures the session before the chokepoint runs, so the stamp would have to move the resolution ahead of the decision or be applied in two places. A named helper for the one handler that needs it is smaller and keeps a single resolution point.
 
@@ -492,6 +524,21 @@ validated against, so a deny-mode activity never grants them. The dashboard's
 `auto_task.toggle` and `auto_task.mint` rows are unchanged: the dashboard still
 calls the runtime directly and still refuses a non-operator.
 
+**Condition stall clear ([ORB-20156]).** `orbit.automation.clear_stall` is
+governed `operator` and unadvertised (`mcp_scope: None`), and
+`GOVERNED_TOOL_PLACEMENT` records it: clearing a `match_storm`,
+`too_many_matches`, `loop_suspected` or `oscillating` stall lets a condition
+fire again, so only an operator decides it, with a required reason kept in the
+condition audit.
+
+**Field-level rows ([ORB-18545]).** A governed `Tool` row may name an input
+rather than a tool: `orbit.task.grant_tools` is checked at the chokepoint, in
+`authorize_registered_tool`, beside `orbit.task.add`'s or `orbit.task.update`'s
+own row whenever the input carries `granted_tools`, as
+`orbit.routine.control` is for `expected_enabled`. It is not a registered tool,
+so `GOVERNED_TOOL_PLACEMENT` records it unadvertised; denials and operator
+overrides are audited under its id like any other row.
+
 The measured differences against the pre-migration CLI, from an isolated
 fixture run of every verb with and without `ORBIT_OPERATOR=1`:
 
@@ -603,10 +650,11 @@ reviewed:
   model or name, as the tool's `model`, so attribution goes through tool
   identity resolution. The baseline's `created_by`, `updated_by` and history
   actors are unchanged.
-- **Unknown and retired fields.** Unchanged on every surface: the tool
-  registry's schema check refuses them first with "unknown field '<name>'".
-  The specs keep the tools' own retired-field messages for a direct handler
-  call, and both writes refuse unknown fields rather than warn (§4).
+- **Unknown and retired fields (historical migration behavior).** At the time
+  of this migration, the tool registry's schema check refused retired and
+  unknown fields first with "unknown field '<name>'". The specs kept the
+  tools' own retired-field messages for a direct handler call, and both
+  writes refused unknown fields rather than warn (§4).
 - **Schemas and help.** The MCP snapshot and the `add` and `update` help
   goldens are byte-identical.
 - **Not migrated.** The dashboard's task create and update routes still
@@ -879,9 +927,39 @@ different contracts; a future equivalent surface can use this shape.
 - [ORB-15941] — migrated the workflow-run tools onto a tool-only noun, kept
   every `orbit run` and `orbit job` subcommand hand-wired, and settled the
   multiplexed-action shape.
+- [ORB-18545] — added the field-level `orbit.task.grant_tools` row that gates
+  a task's operator-granted tools.
 - [ORB-11187] — made completion authority an operator decision the ship tool
   does not accept.
 - [ORB-12263] — made `orbit tool run` and `orbit task artifact get` share the
   owner-workspace list with MCP instead of keeping their own.
+- [ORB-18473] — added the experiment noun with operator-only, advertised
+  writes.
+- [ORB-10453] — recorded that destructive-operation authorization had no
+  chokepoint outside the MCP surface.
+- [ORB-10478] — reconciled MCP tool advertisement with capability
+  enforcement for operator-only tools.
+- [ORB-10534] — exposed the workflow execution surface as operator-only
+  MCP tools.
+- [ORB-10711] — added claim-gated remote command execution.
+- [ORB-10736] — removed the native project-learning subsystem from Orbit.
+- [ORB-10927] — fixed governed tools being permanently unreachable over
+  MCP because no session was ever granted.
+- [ORB-12495] — exposed key-bound claim lifecycle APIs with read-only
+  preflight for distributed drain.
+- [ORB-12563] — made dashboard `web connect` grant operator capability by
+  default.
+- [ORB-12581] — recorded that `orbit.drain.claims` was unreachable from
+  every surface.
+- [ORB-12582] — recorded that the drain read-only surface refused every
+  `orbit tool run` call.
+- [ORB-13625] — enabled follower pull with owner mutation tools and the
+  routed PullPeer for distributed drain.
+- [ORB-13832] — retired orbit-tools unit tests to the keep list.
+- [ORB-15943] — verified the authorization golden still catches tool
+  placement and permission drift.
+- [ORB-18448] — stopped advertising operator-only tools to agent MCP
+  sessions that can never call them.
+- [ORB-20156] — added the operator-only condition `clear_stall` tool.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

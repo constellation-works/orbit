@@ -11,6 +11,7 @@ mod revalidation;
 mod review;
 mod runtime_host;
 mod scratch_gc;
+mod script_step;
 mod steering;
 mod task_update;
 mod worktree_gc;
@@ -23,10 +24,11 @@ pub use config::{CrewConfig, PrConfig};
 pub use null_host::NullRuntimeHost;
 pub use plugin_broker::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun};
 pub use recovery::{
-    FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, PrAutoFixAdmission, PrAutoFixRequest, RebaseRecoveryAttemptScope,
-    STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission, StepRecoveryDecisionRead,
-    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict,
+    CompletionObservationAdmission, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
+    FinalRecoveryApplication, FinalRecoveryApplied, PrAutoFixAdmission, PrAutoFixRequest,
+    RebaseRecoveryAttemptScope, STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission,
+    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
+    StepRecoveryVerdict,
 };
 pub use revalidation::{GeneratedPath, UnlockedPathValidation, ValidatedTree};
 pub use review::{
@@ -35,6 +37,7 @@ pub use review::{
 };
 pub use runtime_host::RuntimeHost;
 pub use scratch_gc::{ScratchGcEntry, ScratchGcReport};
+pub use script_step::{ScriptStepEnd, ScriptStepRan, ScriptStepRequest, ScriptStepRun};
 pub use steering::{SteeringGateReading, SteeringRoundAdmission};
 pub use task_update::{ResolvedActivityTools, TaskActivityUpdate, TaskAutomationUpdate};
 pub use worktree_gc::WorktreeGcTaskLookup;

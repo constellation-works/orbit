@@ -17,14 +17,16 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     FindingDisposition, REVIEW_RECONCILIATION_JOB, ReconciledCommand, ReconciledCommandRun,
     ReconciledReview, ReconciledValidation, ReconciliationAdmission, ReconciliationLog,
-    ReconciliationOutcome, ReviewReconciliation, ReviewReport, ReviewVerdict,
+    ReconciliationOutcome, RequiredValidationFailureKind, ReviewReconciliation, ReviewReport,
+    ReviewVerdict,
 };
 use serde_json::{Value, json};
 
+use super::RECONCILIATION_AUDIT;
 use super::observe::observe;
 use super::submit::bind_attempt_run;
-use super::{FOLLOW_UP_TAG_PREFIX, RECONCILIATION_AUDIT};
 use crate::OrbitRuntime;
+use crate::application::contracts::RECONCILIATION_FOLLOW_UP_TAG_PREFIX;
 use crate::application::task::{TaskAddParams, TaskListFilter, TaskUpdateParams};
 
 /// An authenticated step of one admitted attempt.
@@ -169,7 +171,13 @@ pub(crate) fn validate(
     let failed: Vec<String> = commands
         .iter()
         .zip(&head_runs)
-        .filter(|(_, run)| !run.passed && run.failure_kind.as_deref() == Some("candidate"))
+        .filter(|(_, run)| {
+            !run.passed
+                && matches!(
+                    run.failure_kind,
+                    Some(RequiredValidationFailureKind::Candidate)
+                )
+        })
         .map(|(command, _)| command.clone())
         .collect();
     let base_runs = if failed.is_empty() {
@@ -465,7 +473,10 @@ fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decis
         .iter()
         .filter(|command| {
             !command.head.passed
-                && command.head.failure_kind.as_deref() == Some("candidate")
+                && matches!(
+                    command.head.failure_kind,
+                    Some(RequiredValidationFailureKind::Candidate)
+                )
                 && command
                     .baseline
                     .as_ref()
@@ -510,11 +521,11 @@ fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decis
         }
         if let Some(command) = validation.commands.iter().find(|command| {
             !command.head.passed
-                && command.head.failure_kind.as_deref() == Some("candidate")
+                && matches!(command.head.failure_kind, Some(RequiredValidationFailureKind::Candidate))
                 && command
                     .baseline
                     .as_ref()
-                    .is_none_or(|baseline| !baseline.passed && baseline.failure_kind.as_deref() != Some("candidate"))
+                    .is_none_or(|baseline| !baseline.passed && !matches!(baseline.failure_kind, Some(RequiredValidationFailureKind::Candidate)))
         }) {
             let baseline_log = command
                 .baseline
@@ -539,7 +550,7 @@ fn decide(validation: &ReconciledValidation, review: &ReconciledReview) -> Decis
             );
         }
         if let Some(command) = validation.commands.iter().find(|command| {
-            !command.head.passed && command.head.failure_kind.as_deref() != Some("candidate")
+            !command.head.passed && !matches!(command.head.failure_kind, Some(RequiredValidationFailureKind::Candidate))
         }) {
             return refused(
                 format!(
@@ -572,7 +583,10 @@ fn file_follow_up(
     if let Some(existing) = &record.follow_up_task_id {
         return Ok(existing.clone());
     }
-    let tag = format!("{FOLLOW_UP_TAG_PREFIX}{}", record.reconciliation_id);
+    let tag = format!(
+        "{RECONCILIATION_FOLLOW_UP_TAG_PREFIX}{}",
+        record.reconciliation_id
+    );
     let found = runtime.task_candidates(
         &TaskListFilter {
             tags: vec![tag.clone()],

@@ -1,0 +1,3 @@
+[
+  {"argv": ["tool", "run"], "golden": "tool/run.txt"}
+]

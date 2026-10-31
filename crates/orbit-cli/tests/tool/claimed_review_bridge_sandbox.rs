@@ -750,6 +750,8 @@ fn sandbox_fixture() {
     };
     let base = PathBuf::from(base);
     let owner = Node::init(&base, "owner", "TSO");
+    // Claim transport is exercised independently of owner-side landing review.
+    owner.orbit(&["config", "set", "review.timing", "off"]);
     let follower = Node::init(&base, "follower", "TSF");
     assert_eq!(
         Some(follower.home.as_os_str()),
@@ -1587,8 +1589,10 @@ fn wait_for(path: &Path, limit: Duration) {
 
 fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewManifest {
     ReviewManifest {
+        visual_findings: Vec::new(),
         satisfied_external_evidence: BTreeMap::new(),
         evidence_carried: None,
+        mutation_proposals: Vec::new(),
         previous_report: None,
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt_id.to_string(),

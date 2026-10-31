@@ -17,6 +17,8 @@ use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
 use tokio::sync::Notify;
 use tower_http::compression::CompressionLayer;
 
+#[cfg(unix)]
+use crate::lease_intake;
 use crate::{api, assets, health, heap, state};
 
 /// Conventional loopback port for the dashboard. Shared by `web serve`'s
@@ -67,6 +69,9 @@ pub struct ServeArgs {
 /// shutdown (ctrl-c or SIGTERM). Single-workspace mode is no longer reachable
 /// from `orbit web serve` (see [`serve_from_env`], ORB-10029); this stays for
 /// callers that already hold an `OrbitRuntime` and want it embedded directly.
+/// The supplied runtime is retained for the server's lifetime. Config writes
+/// still update its files, but config and plugin changes do not reconstruct
+/// the runtime; the caller controls when to build and serve a new one.
 pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> {
     heap::configure();
     let state = state::DashboardState::single(Arc::new(runtime.clone()));
@@ -240,7 +245,7 @@ pub(crate) fn health_router() -> Router<state::DashboardState> {
 pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitError> {
     Ok(assets::dashboard_file_router()?
         .merge(health_router())
-        .nest("/api", api::router())
+        .nest("/api", api::router(state.clone()))
         // Stream JSON through gzip when negotiated. SSE and other media stay
         // untouched; tower-http also preserves already-encoded remote bodies
         // and static assets rather than compressing them a second time.
@@ -282,6 +287,9 @@ pub(crate) async fn security_headers(mut response: Response) -> Response {
 /// Build the axum app and block on the tokio runtime until graceful shutdown.
 fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), OrbitError> {
     check_bindable_host(args.host, args.port)?;
+    // Before the TCP bind, so a refused `lease.intake.peer_user` stops startup.
+    let mut lease_intake = bind_lease_intake(state.global_root())?;
+    let intake_state = state.clone();
 
     let addr = SocketAddr::new(args.host, args.port);
     // A dashboard that took over from a replaced image already has its tab.
@@ -290,6 +298,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     let handover_target = Arc::clone(&handover);
     let host_tunnels = Arc::clone(state.host_tunnels());
     let close_host_streams = Arc::clone(&host_tunnels);
+    let config_root = state.global_root().to_path_buf();
     let app = build_app(state)?;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -297,7 +306,12 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         .build()
         .map_err(|e| OrbitError::Execution(format!("tokio runtime: {e}")))?;
 
+    let intake_socket = lease_intake.as_mut();
     let serve_result = tokio_runtime.block_on(async move {
+        // On Unix, register before binding or announcing readiness. Axum spawns
+        // its shutdown future separately: a health request can otherwise finish
+        // before that future is polled and SIGTERM still has its default action.
+        let signal = shutdown_signal()?;
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| OrbitError::Io(format!("bind {addr}: {e}")))?;
@@ -311,9 +325,37 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
             println!("Dashboard listening on {url}");
         }
 
-        if !no_open {
-            open_browser(&url);
-        }
+        let browser_sessions = crate::browser_session::start_browser_sessions(&config_root, bound)?;
+        let app = if let Some((sessions, session_url)) = browser_sessions {
+            crate::browser_session::print_interactive_session_url(&session_url);
+            if !no_open {
+                crate::browser_session::open_private_browser_url(&session_url)?;
+            }
+            app.layer(axum::Extension(sessions))
+        } else {
+            if !no_open {
+                open_browser(&url);
+            }
+            app
+        };
+
+        #[cfg(unix)]
+        let intake_task = match intake_socket {
+            Some(socket) => {
+                let accept = socket.serve(intake_state, lease_intake::IntakeLimits::default())?;
+                #[allow(clippy::print_stdout)]
+                {
+                    println!(
+                        "Lease intake socket listening on {}",
+                        socket.path().display()
+                    );
+                }
+                Some(tokio::spawn(accept))
+            }
+            None => None,
+        };
+        #[cfg(not(unix))]
+        let _ = (intake_socket, intake_state);
 
         // Shared with `drain_with_grace_period` below: the grace-period timer
         // must not start until shutdown is actually requested, so the signal
@@ -333,7 +375,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         let notify_on_signal = Arc::clone(&shutdown_notify);
         let shutdown = async move {
             tokio::select! {
-                () = shutdown_signal() => {}
+                () = signal => {}
                 target = lifecycle_boundary() => {
                     if let Ok(mut slot) = handover_target.lock() {
                         *slot = target;
@@ -353,8 +395,15 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
             .with_graceful_shutdown(shutdown)
             .into_future();
 
-        drain_with_grace_period(drain, shutdown_notify, SHUTDOWN_GRACE_PERIOD).await
+        let drained = drain_with_grace_period(drain, shutdown_notify, SHUTDOWN_GRACE_PERIOD).await;
+        #[cfg(unix)]
+        if let Some(task) = intake_task {
+            task.abort();
+        }
+        drained
     });
+    // Removes the socket file before a handover exec binds it again.
+    drop(lease_intake);
     // Both exits below — returning, and the handover exec, which keeps this
     // process's children running unreaped under the new image — need every
     // host tunnel child stopped first. Requests have drained, so none is in use.
@@ -373,6 +422,30 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         ));
     }
     Ok(())
+}
+
+/// Bind the lease intake socket when the operator's global
+/// `lease.intake.peer_user` is set; `None` when it is unset.
+#[cfg(unix)]
+fn bind_lease_intake(
+    global_root: &Path,
+) -> Result<Option<lease_intake::LeaseIntakeSocket>, OrbitError> {
+    let Some(peer_user) = orbit_core::load_lease_intake_peer_user(global_root)? else {
+        return Ok(None);
+    };
+    lease_intake::LeaseIntakeSocket::bind(global_root, &peer_user).map(Some)
+}
+
+#[cfg(not(unix))]
+fn bind_lease_intake(global_root: &Path) -> Result<Option<()>, OrbitError> {
+    match orbit_core::load_lease_intake_peer_user(global_root)? {
+        Some(_) => Err(OrbitError::InvalidInput(
+            "lease.intake.peer_user needs a Unix host: the lease intake socket checks its \
+             peer's user through the kernel"
+                .to_string(),
+        )),
+        None => Ok(None),
+    }
 }
 
 /// Stop the runtime without waiting for in-flight blocking tasks to finish.
@@ -492,27 +565,39 @@ pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitEr
     )))
 }
 
-async fn shutdown_signal() {
+/// Prepare shutdown notification, installing Unix handlers before returning.
+pub(crate) fn shutdown_signal() -> Result<impl Future<Output = ()> + Send, OrbitError> {
+    #[cfg(unix)]
+    let mut interrupt =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .map_err(|error| OrbitError::Execution(format!("install SIGINT handler: {error}")))?;
+    #[cfg(unix)]
+    let ctrl_c = async move {
+        interrupt.recv().await;
+    };
+
+    #[cfg(not(unix))]
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
 
     #[cfg(unix)]
-    let terminate = async {
-        if let Ok(mut sig) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            sig.recv().await;
-        }
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| OrbitError::Execution(format!("install SIGTERM handler: {error}")))?;
+    #[cfg(unix)]
+    let terminate = async move {
+        sigterm.recv().await;
     };
 
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
-    tokio::select! {
-        _ = ctrl_c => {}
-        _ = terminate => {}
-    }
+    Ok(async move {
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = terminate => {}
+        }
+    })
 }
 
 pub(crate) fn open_browser(url: &str) {

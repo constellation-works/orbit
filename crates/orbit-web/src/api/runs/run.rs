@@ -5,6 +5,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
+use orbit_core::application::job::JobRunCancelResultProfile;
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
@@ -40,6 +41,10 @@ pub(in crate::api) struct CancelRunBody {
     /// Keep a cancelled task leaf blocked instead of returning it to backlog.
     #[serde(default)]
     block: bool,
+    /// Cancel only while the run is still queued; one that has started is
+    /// refused with 409 and left running.
+    #[serde(default)]
+    queued_only: bool,
 }
 
 pub(in crate::api) async fn cancel_run_action(
@@ -51,41 +56,32 @@ pub(in crate::api) async fn cancel_run_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
+    if body.queued_only && body.force {
+        return bad_request("queued_only cannot be combined with force".to_string());
+    }
     match blocking("cancel run", move || {
-        Ok(runtime.cancel_job_run_with_options_and_policy(
-            &id,
-            "dashboard",
-            "web",
-            body.reason.as_deref(),
-            body.force,
-            body.block,
-        ))
+        Ok(if body.queued_only {
+            runtime.cancel_queued_job_run(
+                &id,
+                "dashboard",
+                "web",
+                body.reason.as_deref(),
+                body.block,
+            )
+        } else {
+            runtime.cancel_job_run_with_options_and_policy(
+                &id,
+                "dashboard",
+                "web",
+                body.reason.as_deref(),
+                body.force,
+                body.block,
+            )
+        })
     })
     .await
     {
-        Ok(Ok(result)) => Json(json!({
-            "run_id": result.run_id,
-            "outcome": result.outcome,
-            "previous_state": result.previous_state,
-            "final_state": result.final_state,
-            "actor": result.actor,
-            "source": result.source,
-            "signal_attempted": result.signal_attempted,
-            "signal_outcome": result.signal_outcome,
-            "provider_processes_stopped": result.provider_processes_stopped,
-            // [ORB-13663] Cancelling a follower pull drain settles what it
-            // carried: recorded settlements are delivered and claims nothing
-            // will launch go back to the owner's backlog.
-            "pull_settlements": result.pull_settlements,
-            // A gracefully cancelled pull drain is `cancelling` until these
-            // leaves finish; a forced cancel names what it stopped, and what
-            // it could not confirm stopped (those keep their claims).
-            "waiting_leaves": result.waiting_leaves,
-            "forced_runs": result.forced_runs,
-            "unstopped_leaves": result.unstopped_leaves,
-            "unstopped_children": result.unstopped_children,
-        }))
-        .into_response(),
+        Ok(Ok(result)) => Json(result.to_json(JobRunCancelResultProfile::Http)).into_response(),
         Ok(Err(orbit_core::OrbitError::JobValidation(msg)))
         | Ok(Err(orbit_core::OrbitError::JobRunStateTransition(msg))) => {
             (StatusCode::CONFLICT, Json(json!({ "error": msg }))).into_response()

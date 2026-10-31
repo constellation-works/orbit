@@ -30,7 +30,8 @@ pub const CPU_ACCOUNTING_MACOS_OWN_ONLY: &str = "macos-mach-ns-v1";
 pub struct RunResourceMinute {
     pub workspace_id: String,
     pub run_id: String,
-    /// Minutes since the worker started sampling.
+    /// Minutes since the worker started sampling. A run's first recorded
+    /// sample may be above zero when earlier reads failed.
     pub minute_index: u32,
     /// When that minute began.
     pub minute_started_at: DateTime<Utc>,
@@ -55,6 +56,12 @@ pub struct RunResourceMinute {
     /// `ri_phys_footprint`.
     pub memory_bytes: u64,
     pub samples: u32,
+    /// The crew model the run executed with; `None` when the run named none
+    /// or an older writer recorded the minute.
+    pub crew_model: Option<String>,
+    /// The Orbit version of the worker that sampled the minute; `None` from
+    /// an older writer.
+    pub orbit_version: Option<String>,
 }
 
 /// A delivery worker's lifetime, from when it started until it finished.
@@ -112,6 +119,11 @@ pub struct DeliveryRunResources {
     pub delivery_admitted_at: DateTime<Utc>,
     /// When the run finished; `None` while it is live or its row is gone.
     pub finished_at: Option<DateTime<Utc>>,
+    /// The crew model and Orbit version of its newest minute that recorded
+    /// them. A minute without a crew model reads the one its `job_runs` row
+    /// names, as the worker may resolve its crew after sampling began.
+    pub crew_model: Option<String>,
+    pub orbit_version: Option<String>,
     /// The run's minutes, oldest first.
     pub minutes: Vec<ResourceMinuteLoad>,
 }
@@ -188,7 +200,22 @@ pub struct PullForecastDecision {
     pub forecast_no_headroom: bool,
 }
 
-/// The resource history tables retention prunes on their 30-day window.
+/// What resource history retention keeps whatever its age, so a break in
+/// deliveries never empties the history profiles and the accuracy report
+/// read. Rows past the age cutoff go only when they are outside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceHistoryKeep {
+    /// The newest deliveries, by admission, of each workspace, work class
+    /// and complexity whose run minutes stay, plus the newest eligible
+    /// completed deliveries by finish time of each profile key, and of each
+    /// profile key and crew model.
+    pub deliveries_per_key: usize,
+    /// The newest admission forecasts that stay, with the host minutes from
+    /// the oldest of them on.
+    pub forecasts: usize,
+}
+
+/// The resource history tables retention prunes on their age window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceMinutesTable {
     /// `run_resource_minutes`, keyed by `minute_started_at`.
@@ -236,6 +263,14 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
     /// The finished sampled runs on the host, as a cache freshness probe.
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError>;
 
+    /// A counter that moves whenever [`Self::delivery_runs_freshness`] may
+    /// have changed, read without scanning: while it holds, the probe's
+    /// answer holds too. `None` when the store keeps no such counter, so a
+    /// caller always probes.
+    fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
+        Ok(None)
+    }
+
     /// Host minutes at or after `since`, oldest first.
     fn host_resource_minutes(
         &self,
@@ -253,11 +288,13 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         since: DateTime<Utc>,
     ) -> Result<Vec<AdmissionForecastRecord>, OrbitError>;
 
-    /// Rows of `table` from before `cutoff`, across every workspace.
+    /// Rows of `table` from before `cutoff` that `keep` does not hold,
+    /// across every workspace.
     fn resource_minutes_older_than(
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
     ) -> Result<u64, OrbitError>;
 
     /// Delete at most `limit` of the rows [`Self::resource_minutes_older_than`]
@@ -266,6 +303,45 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
         limit: usize,
     ) -> Result<usize, OrbitError>;
+}
+
+/// Latest own resource usage of a process, bound to its kernel identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerProcessResources {
+    pub pid: u32,
+    pub starttime: u64,
+    pub command: String,
+    pub memory_bytes: u64,
+    /// Own CPU time over monotonic wall time, in cores; absent at baseline.
+    pub cpu_cores: Option<f64>,
+}
+
+/// Bounded snapshot captured before a watchdog signals a worker's tree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerResourceLimitEvidence {
+    pub workspace_id: String,
+    pub run_id: String,
+    pub observed_at: DateTime<Utc>,
+    pub memory_bytes: u64,
+    pub process_count: usize,
+    pub memory_max_bytes: Option<u64>,
+    pub tasks_max: u32,
+    /// The eight largest physical footprints, descending; no argv or env.
+    pub top_processes: Vec<WorkerProcessResources>,
+}
+
+/// Durable watchdog breach evidence, separate from profile minute rows.
+pub trait WorkerResourceLimitStoreBackend: Send + Sync {
+    fn record_worker_resource_limit_evidence(
+        &self,
+        evidence: &WorkerResourceLimitEvidence,
+    ) -> Result<(), OrbitError>;
+    fn worker_resource_limit_evidence(
+        &self,
+        workspace_id: &str,
+        run_id: &str,
+    ) -> Result<Option<WorkerResourceLimitEvidence>, OrbitError>;
 }

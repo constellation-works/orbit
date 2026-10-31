@@ -3,7 +3,7 @@ use super::operation_args::{Invocation, augment_operation_args, input_from_match
 use crate::command::{CommandOut, Execute, Payload};
 use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
 use orbit_common::governance::{operation::OperationVerb, search::SearchVerb};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{OrbitError, OrbitRuntime, SearchRequestProfile};
 use serde_json::Value;
 
 pub struct SearchCommand {
@@ -76,15 +76,8 @@ impl Execute for SearchCommand {
             )
             .into());
         }
-        if !input
-            .get("query")
-            .and_then(Value::as_str)
-            .is_some_and(|query| !query.trim().is_empty())
-        {
-            return Err(OrbitError::InvalidInput(
-                "search requires a query. Usage: orbit search <query>".into(),
-            ));
-        }
+        SearchRequestProfile::NounCli
+            .require_nonempty_query(input.get("query").and_then(Value::as_str))?;
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         match spec.verb {
             SearchVerb::Query => render(&value),

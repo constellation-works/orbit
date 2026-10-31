@@ -44,7 +44,13 @@
 //! leaves no complete SARIF, or reports any result attaches its log but no
 //! result. A host test run that fails, defers or skips itself, runs no test,
 //! or meets an unavailable sandbox does too. Either way the hold stays in
-//! place with a typed reason. Every attempt is audited under
+//! place with a typed reason, except that [ORB-18660] when every refusal is
+//! reported findings, the run also attaches each result's rule, message,
+//! location and data flow as `review-evidence-findings.json` and queues the
+//! task to repair its kept candidate from them
+//! ([`super::evidence::route_evidence_findings`]): findings are a verdict on
+//! the candidate, which no later evidence can change. Every attempt is
+//! audited under
 //! [`EVIDENCE_FULFILMENT_AUDIT`] and commented on the task. At most
 //! [`MAX_ACTIVE_EVIDENCE_FULFILMENTS`] run at once; a hold gets one run
 //! unless a run refused it for a reason that can clear (disk, fetch) or ended
@@ -55,6 +61,8 @@
 mod codeql;
 mod fulfil;
 mod refusal;
+#[cfg(feature = "test-support")]
+pub(crate) mod test_support;
 mod tick;
 
 pub(crate) use fulfil::fulfil_review_evidence;
@@ -62,7 +70,7 @@ pub(super) use fulfil::fulfilment_artifact_paths;
 pub(crate) use refusal::FulfilmentRefusal;
 pub use tick::EvidenceFulfilmentTick;
 
-use orbit_types::workflow::ReviewEvidenceRequirement;
+use orbit_types::workflow::{ReviewEvidenceFinding, ReviewEvidenceRequirement};
 use serde_json::{Map, Value};
 
 /// The job each tick dispatches, one run per fulfilment attempt.
@@ -101,6 +109,10 @@ struct EvidenceRun {
     /// The kind's own log fields: CodeQL's streams and SARIF summary, or a
     /// host test's command line, output and validation environment.
     log: Map<String, Value>,
+    /// [ORB-18660] The results a CodeQL run reported, bounded, and how many
+    /// more it reported.
+    findings: Vec<ReviewEvidenceFinding>,
+    omitted_findings: usize,
 }
 
 impl EvidenceRun {
@@ -112,6 +124,8 @@ impl EvidenceRun {
             refusal: None,
             detail: String::new(),
             log: Map::new(),
+            findings: Vec::new(),
+            omitted_findings: 0,
         }
     }
 

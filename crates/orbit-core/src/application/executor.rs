@@ -1,7 +1,10 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::ExecutorDefStoreBackend;
-use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource, ResourceKind};
-use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
+use orbit_types::resource::{
+    EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource, ExecutorResourceSpec, ResourceKind,
+};
+use orbit_types::workflow::activity_job::RETIRED_PROVIDER_IDS;
+use orbit_types::workflow::{ExecutorDef, ExecutorImageInput, ExecutorSandboxKind, ExecutorType};
 
 pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
     ("claude", include_str!("../../assets/executors/claude.yaml")),
@@ -15,12 +18,6 @@ pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
     (
         "copilot",
         include_str!("../../assets/executors/copilot.yaml"),
-    ),
-    ("cursor", include_str!("../../assets/executors/cursor.yaml")),
-    ("pi", include_str!("../../assets/executors/pi.yaml")),
-    (
-        "opencode",
-        include_str!("../../assets/executors/opencode.yaml"),
     ),
     ("muse", include_str!("../../assets/executors/muse.yaml")),
     (
@@ -45,6 +42,11 @@ pub(crate) fn seed_default_executors_for_platform(
     overwrite: bool,
     target_os: &str,
 ) -> Result<usize, OrbitError> {
+    // Retire stale shipped executors for removed provider lanes (ORB-18096)
+    // so an upgraded host does not keep listing them as available or broken.
+    for retired in RETIRED_PROVIDER_IDS {
+        store.delete_executor_def(retired)?;
+    }
     let mut created = 0usize;
     for (name, yaml) in DEFAULT_EXECUTOR_FILES {
         let def = parse_default_executor_for_platform(name, yaml, target_os)?;
@@ -204,4 +206,60 @@ pub(super) fn parse_default_executor_for_platform(
     def.sandbox = select_shipped_sandbox(def.sandbox, target_os);
 
     Ok(def)
+}
+
+/// The `inspection_args` the executor named `name` declares for a
+/// pinned-source inspection run, or `None` when it declares none.
+///
+/// `installed` is the registered definition, if any. One that omits the
+/// field (every definition installed before it existed, and the unregistered
+/// fallback that runs the provider's own command) takes the declaration of
+/// the shipped default with the same name, so an upgrade keeps the shipped
+/// executors inspecting until an operator writes the field. The declaration
+/// lives in the executor assets, never in code.
+pub(crate) fn declared_inspection_args(
+    installed: Option<&ExecutorDef>,
+    name: &str,
+) -> Option<Vec<String>> {
+    if let Some(args) = installed.and_then(|def| def.inspection_args.as_ref()) {
+        return Some(args.clone());
+    }
+    shipped_executor_spec(name).and_then(|spec| spec.inspection_args.clone())
+}
+
+/// The `image_input` the executor named `name` declares, or `None` when it
+/// cannot take images. Falls back to the shipped default of the same name
+/// exactly as [`declared_inspection_args`] does, so an upgrade gives the
+/// installed shipped executors the declarations their probes earned; a crew
+/// opts out with `vision = false`.
+pub(crate) fn declared_image_input(
+    installed: Option<&ExecutorDef>,
+    name: &str,
+) -> Option<ExecutorImageInput> {
+    if let Some(declared) = installed.and_then(|def| def.image_input.as_ref()) {
+        return Some(declared.clone());
+    }
+    shipped_executor_spec(name).and_then(|spec| spec.image_input.clone())
+}
+
+/// The shipped executor named `name`, parsed once.
+fn shipped_executor_spec(name: &str) -> Option<&'static ExecutorResourceSpec> {
+    static SHIPPED: std::sync::OnceLock<
+        std::collections::BTreeMap<&'static str, ExecutorResourceSpec>,
+    > = std::sync::OnceLock::new();
+    SHIPPED
+        .get_or_init(|| {
+            DEFAULT_EXECUTOR_FILES
+                .iter()
+                .filter_map(|(name, yaml)| {
+                    serde_yaml::from_str::<ExecutorResource>(yaml)
+                        .map_err(|error| {
+                            tracing::warn!(executor = name, %error, "unreadable shipped executor");
+                        })
+                        .ok()
+                        .map(|resource| (*name, resource.spec))
+                })
+                .collect()
+        })
+        .get(name)
 }

@@ -8,6 +8,8 @@
 --ro-bind <HOME>/.cargo/bin/cargo <HOME>/.cargo/bin/cargo
 --ro-bind <HOME>/.rustup/toolchains/stable-golden <HOME>/.rustup/toolchains/stable-golden
 --ro-bind <HOME>/.rustup/settings.toml <HOME>/.rustup/settings.toml
+--tmpfs <HOME>/.orbit/run
+--remount-ro <HOME>/.orbit/run
 --tmpfs <HOME>/.ssh
 --remount-ro <HOME>/.ssh
 --tmpfs <HOME>/.aws

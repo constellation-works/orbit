@@ -1,7 +1,8 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-10-19
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
@@ -21,7 +22,7 @@ Without this contract, an implementation will key selectors on renameable `host_
 
 ## Mux, not fleet registry
 
-1. Remote destinations are operator-configured SSH remotes. The gateway does not register, retire, or enumerate a fleet of machines as host-registry records. Once [ORB-14448] ships, the operator registers them with `orbit host add` into the host-registry host file ([host-commands](../../host-registry/specs/host-commands.md)). The gateway reads that file and still registers, probes or retires nothing itself.
+1. Remote destinations are operator-configured SSH remotes. The gateway does not register, retire, or enumerate a fleet of machines as host-registry records. [ORB-14448] provides `orbit host add`, which registers them in the host-registry host file ([host-commands](../../host-registry/specs/host-commands.md)); the gateway reads that file and does not manage its entries.
 2. The accepting machine is an implicit local destination, using its existing stable `machine_id` and workspace registry. That is this host's own membership, not fleet discovery.
 3. The gateway does not auto-discover the owner checkout of a repository and does not perform placement.
 4. The gateway must not reinterpret a selector against its own local catalog. A copied `hm_*/ws_*` selector is delivered to the destination encoded in the token: the local in-process host when that destination is this machine, otherwise the configured SSH remote.
@@ -232,3 +233,20 @@ A disconnected or failed host therefore removes the affected route from useful s
 ## Agent Signature
 
 Specified by grok in [ORB-11009] (PR #1139), with contract holes closed in [ORB-11010], citing prior policy [ORB-11008]. Destination config, selector, and error identities implemented in [ORB-11013]; the federated list implemented by claude in [ORB-11014]; fail-closed routing of host-qualified selectors implemented in [ORB-11015]; federated workspace-param advertisement implemented in [ORB-11017]; implicit local membership implemented in [ORB-11044].
+
+## Task References
+
+- [ORB-11008] — recorded the federated multi-host MCP policy this spec implements
+- [ORB-11009] — specified this mux contract (PR #1139)
+- [ORB-11010] — closed the PR #1139 review contract holes
+- [ORB-11013] — destination config, selector type, and routing errors
+- [ORB-11014] — federated workspace list
+- [ORB-11015] — fail-closed workspace-scoped routing
+- [ORB-11017] — host-qualified federated `workspace` parameter
+- [ORB-11023] — routed delivery budget and `outcome_unknown`
+- [ORB-11044] — implicit local membership for federated serve
+- [ORB-12725] — renamed the discovery key from `host` to `machine_name`
+- [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
+- [ORB-14449] — task-prefix routing and `--host` (host-registry)
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

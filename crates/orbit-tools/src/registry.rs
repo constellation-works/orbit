@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::OrbitError;
 use orbit_types::tool::{
-    McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolSchema, mcp_advertised_tool_name,
-    validate_mcp_tool_definitions,
+    McpToolDefinition, McpToolDefinitionError, McpToolScope, McpToolset, ToolSchema,
+    mcp_advertised_tool_name, validate_mcp_tool_definitions,
 };
 use serde_json::Value;
 
@@ -29,6 +29,9 @@ struct ToolEntry {
     tool: Arc<dyn Tool>,
     availability: ToolAvailability,
     mcp_scope: Option<McpToolScope>,
+    /// The `orbit mcp serve` toolset that advertises this entry. Plugin and
+    /// most builtin entries are in the default toolset.
+    toolset: McpToolset,
     /// Set for a plugin-backed entry: provenance for the audit row and, on
     /// an inactive entry, the diagnostic naming the missing step.
     plugin: Option<Arc<PluginToolBinding>>,
@@ -54,7 +57,18 @@ impl ToolRegistry {
 
     /// Register one active builtin for MCP advertisement at the given scope.
     pub fn register_mcp<T: Tool + 'static>(&mut self, tool: T, scope: McpToolScope) {
-        self.register_with_availability(tool, ToolAvailability::Active, Some(scope));
+        self.register_mcp_in_toolset(tool, scope, McpToolset::Default);
+    }
+
+    /// Register one active builtin for MCP advertisement in an opt-in
+    /// `orbit mcp serve` toolset. Only advertisement depends on the toolset.
+    pub fn register_mcp_in_toolset<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        scope: McpToolScope,
+        toolset: McpToolset,
+    ) {
+        self.register_entry(tool, ToolAvailability::Active, Some(scope), toolset, None);
     }
 
     pub fn register_inactive<T: Tool + 'static>(&mut self, tool: T) {
@@ -69,7 +83,13 @@ impl ToolRegistry {
         mcp_scope: Option<McpToolScope>,
         binding: Arc<PluginToolBinding>,
     ) {
-        self.register_entry(tool, ToolAvailability::Active, mcp_scope, Some(binding));
+        self.register_entry(
+            tool,
+            ToolAvailability::Active,
+            mcp_scope,
+            McpToolset::Default,
+            Some(binding),
+        );
     }
 
     /// Register a plugin tool the host could not activate. The binding's
@@ -79,7 +99,13 @@ impl ToolRegistry {
         tool: T,
         binding: Arc<PluginToolBinding>,
     ) {
-        self.register_entry(tool, ToolAvailability::Inactive, None, Some(binding));
+        self.register_entry(
+            tool,
+            ToolAvailability::Inactive,
+            None,
+            McpToolset::Default,
+            Some(binding),
+        );
     }
 
     fn register_with_availability<T: Tool + 'static>(
@@ -88,7 +114,7 @@ impl ToolRegistry {
         availability: ToolAvailability,
         mcp_scope: Option<McpToolScope>,
     ) {
-        self.register_entry(tool, availability, mcp_scope, None);
+        self.register_entry(tool, availability, mcp_scope, McpToolset::Default, None);
     }
 
     fn register_entry<T: Tool + 'static>(
@@ -96,6 +122,7 @@ impl ToolRegistry {
         tool: T,
         availability: ToolAvailability,
         mcp_scope: Option<McpToolScope>,
+        toolset: McpToolset,
         plugin: Option<Arc<PluginToolBinding>>,
     ) {
         let schema = tool.schema();
@@ -155,6 +182,7 @@ impl ToolRegistry {
                 tool: Arc::new(tool),
                 availability,
                 mcp_scope,
+                toolset,
                 plugin,
             },
         );
@@ -176,10 +204,21 @@ impl ToolRegistry {
         ctx: &ToolContext,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        let tool = self
-            .tools
-            .get(name)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
+        let tool = self.tools.get(name).ok_or_else(|| {
+            crate::tool_suggestions::unknown_tool_error(
+                name,
+                self.tools
+                    .iter()
+                    .filter(|(_, entry)| {
+                        entry.availability.is_active()
+                            && entry.mcp_scope.is_some()
+                            && entry.plugin.is_none()
+                            && entry.tool.schema().builtin
+                    })
+                    .map(|(name, _)| name.as_str()),
+                ctx,
+            )
+        })?;
         if name.starts_with("orbit.task.")
             // Pull owns typed protocol negotiation in the host adapter, which
             // checks the fingerprint before validating the derived request
@@ -188,7 +227,15 @@ impl ToolRegistry {
             && tool.plugin.is_none()
             && !is_preloaded_artifact_payload(name, &input)
         {
-            validate_task_arguments(&input, &tool.tool.schema(), cli_fields(name, ctx))?;
+            let aliases = declared_aliases(name);
+            let retired_fields = declared_retired_fields(name);
+            validate_task_arguments(
+                &input,
+                &tool.tool.schema(),
+                cli_fields(name, ctx),
+                &aliases,
+                &retired_fields,
+            )?;
         }
         tool.tool.execute(ctx, input)
     }
@@ -236,6 +283,15 @@ impl ToolRegistry {
             .and_then(|binding| binding.diagnostic.clone())
     }
 
+    /// The `orbit mcp serve` toolset of one MCP-advertised entry, active or
+    /// not; `None` for an entry MCP never advertises.
+    pub fn mcp_toolset(&self, name: &str) -> Option<McpToolset> {
+        self.tools
+            .get(name)
+            .filter(|entry| entry.mcp_scope.is_some())
+            .map(|entry| entry.toolset)
+    }
+
     /// Advertised MCP scope of one entry, active or not.
     pub fn mcp_scope(&self, name: &str) -> Option<McpToolScope> {
         self.tools.get(name).and_then(|entry| entry.mcp_scope)
@@ -273,7 +329,8 @@ impl ToolRegistry {
                 entry.mcp_scope.map(|scope| {
                     let schema = entry.tool.schema();
                     let annotations = mcp_annotations(&schema, entry.tool.execution_kind());
-                    let rules = mcp_rules(&schema);
+                    let mut rules = mcp_rules(&schema);
+                    rules.toolset = entry.toolset;
                     McpToolDefinition::new(schema, scope)
                         .with_rules(rules)
                         .with_input_schema(entry.tool.input_schema())
@@ -308,6 +365,35 @@ fn cli_fields(name: &str, ctx: &ToolContext) -> &'static [&'static str] {
     }
 }
 
+/// The input spellings a task operation accepts besides its canonical names, as
+/// `(canonical, alias)`. The schema lists canonical names only; the handler's
+/// `OperationSpec::parse_input` renames an alias, so this check must let it
+/// through rather than refuse it as an unknown field.
+fn declared_aliases(name: &str) -> Vec<(&'static str, &'static str)> {
+    orbit_common::governance::task::TASK_OPERATIONS
+        .iter()
+        .filter(|spec| spec.tool_name == name)
+        .flat_map(|spec| spec.wire_params())
+        .flat_map(|param| param.aliases.iter().map(|alias| (param.name, *alias)))
+        .collect()
+}
+
+/// The fields retired by `orbit.task.add` name their replacement operation.
+/// Let those fields reach `OperationSpec::parse_input` so the registry does
+/// not hide that more useful refusal. Other task operations keep their
+/// existing registry-level unknown-field refusals.
+fn declared_retired_fields(name: &str) -> Vec<&'static str> {
+    if name != "orbit.task.add" {
+        return Vec::new();
+    }
+
+    orbit_common::governance::task::TASK_OPERATIONS
+        .iter()
+        .filter(|spec| spec.tool_name == name)
+        .flat_map(|spec| spec.retired_fields.iter().map(|field| field.name))
+        .collect()
+}
+
 /// Task argument shapes are checked before a handler can ignore a mistyped
 /// optional field or reach the application host. Required fields and richer
 /// guarded modes remain the handler's responsibility.
@@ -315,6 +401,8 @@ fn validate_task_arguments(
     input: &Value,
     schema: &ToolSchema,
     cli_fields: &[&str],
+    aliases: &[(&str, &str)],
+    retired_fields: &[&str],
 ) -> Result<(), OrbitError> {
     use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
     use orbit_common::protocol::tool_schema::tool_parameter_schema;
@@ -327,10 +415,19 @@ fn validate_task_arguments(
         .iter()
         .map(|param| param.name.as_str())
         .chain(cli_fields.iter().copied())
+        .chain(aliases.iter().map(|(_, alias)| *alias))
+        .chain(retired_fields.iter().copied())
         .collect::<Vec<_>>();
     reject_unknown_tool_fields(input, &allowed)?;
     for parameter in &schema.parameters {
-        let Some(value) = object.get(&parameter.name) else {
+        // A call that sets both spellings is refused by the handler; check
+        // the canonical one here.
+        let Some(value) = object.get(&parameter.name).or_else(|| {
+            aliases
+                .iter()
+                .filter(|(canonical, _)| *canonical == parameter.name)
+                .find_map(|(_, alias)| object.get(*alias))
+        }) else {
             continue;
         };
         // Existing optional parsers treat null as absence, and accept numeric

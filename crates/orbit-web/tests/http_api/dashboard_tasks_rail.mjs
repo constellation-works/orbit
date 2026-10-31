@@ -26,7 +26,12 @@ class Node {
       add: name => { if (!classesOf(node).includes(name)) node.className = [...classesOf(node), name].join(' '); },
       remove: name => { node.className = classesOf(node).filter(entry => entry !== name).join(' '); },
       contains: name => classesOf(node).includes(name),
-      toggle: (name, on) => (on ?? !classesOf(node).includes(name)) ? node.classList.add(name) : node.classList.remove(name),
+      toggle: (name, on) => {
+        const present = on ?? !classesOf(node).includes(name);
+        if (present) node.classList.add(name);
+        else node.classList.remove(name);
+        return present;
+      },
     };
   }
   set textContent(value) {
@@ -122,7 +127,7 @@ function matchesChain(path, chain) {
   return true;
 }
 
-const ids = ['tasks-main', 'tasks-body', 'task-detail-pane', 'task-detail-body', 'task-pane-resizer', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status', 'host-select'];
+const ids = ['tasks-main', 'tasks-body', 'task-detail-pane', 'task-detail-body', 'task-pane-resizer', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status', 'tasks-notices', 'host-select'];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 // The selected task's detail renders in the pane beside the list.
 const paneBody = byId['task-detail-body'];
@@ -143,28 +148,45 @@ class Event { constructor(type) { this.type = type; } }
 // Unanswered stub fetches keep their timeout behavior without keeping Node
 // alive for 30 seconds after the fixture has finished all its assertions.
 const setFixtureTimeout = (callback, delay) => setTimeout(callback, delay).unref();
+const localStorageEntries = new Map();
+const copiedTexts = [];
+window.localStorage = {
+  getItem: key => localStorageEntries.get(key) ?? null,
+  setItem: (key, value) => localStorageEntries.set(key, String(value)),
+};
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout: setFixtureTimeout, clearTimeout, document, window, Node, Event,
+  localStorage: window.localStorage,
+  navigator: { clipboard: { writeText: async text => { copiedTexts.push(String(text)); } } },
   requestAnimationFrame: () => 0,
   fetch: () => new Promise(() => {}),
 });
-const modules = new Map();
 const dir = new URL('../../assets/dashboard/js/', import.meta.url);
-const load = name => {
-  if (!modules.has(name)) {
-    const url = new URL(name, dir);
-    modules.set(name, new vm.SourceTextModule(fs.readFileSync(url, 'utf8'), { context, identifier: url.href }));
-  }
-  return modules.get(name);
-};
-const linker = async specifier => {
-  const module = load(specifier.replace(/^\.\//, ''));
-  if (module.status === 'unlinked') await module.link(linker);
-  return module;
-};
-const tasksModule = load('tasks.js');
-await tasksModule.link(linker);
-await tasksModule.evaluate();
+async function loadTaskModules(context) {
+  const modules = new Map();
+  const load = name => {
+    if (!modules.has(name)) {
+      const url = new URL(name, dir);
+      modules.set(name, new vm.SourceTextModule(fs.readFileSync(url, 'utf8'), { context, identifier: url.href }));
+    }
+    return modules.get(name);
+  };
+  // Each module links once. A module another import reaches while it is still
+  // linking waits for that link, so its dependencies exist before instantiation.
+  const linking = new Map();
+  const linker = async specifier => {
+    const name = specifier.replace(/^\.\//, '');
+    const module = load(name);
+    if (!linking.has(name)) linking.set(name, module.link(linker));
+    await linking.get(name);
+    return module;
+  };
+  const tasksModule = load('tasks.js');
+  await tasksModule.link(linker);
+  await tasksModule.evaluate();
+  return { tasksModule, modules };
+}
+const { tasksModule, modules } = await loadTaskModules(context);
 const { renderTasks, applyTasksHashQuery, buildTasksHash, setPinnedExternalTask, clearPinnedExternalTask } = tasksModule.namespace;
 const common = modules.get('common.js').namespace;
 
@@ -264,9 +286,11 @@ const historyTitle = byId['tasks-body'].querySelector('.row button.title');
 assert.ok(historyTitle, 'task title disclosure exists');
 clickTitle(historyTitle);
 const historyLines = paneBody.querySelectorAll('.history-line').map(line => line.textContent);
-assert.ok(historyLines.some(line => line.includes(': status proposed → backlog')), historyLines.join('\n'));
-assert.ok(historyLines.some(line => line.includes(': started backlog → in-progress')), historyLines.join('\n'));
-assert.ok(historyLines.some(line => line.includes(': status_changed')), historyLines.join('\n'));
+const flows = paneBody.querySelectorAll('.history-flow').map(flow => flow.querySelectorAll('.pill').map(pill => pill.textContent));
+assert.deepEqual(flows.sort(), [['backlog', 'in-progress'], ['proposed', 'backlog']], 'status transitions render from and to as pills');
+assert.ok(historyLines.some(line => line.includes('changed status') && line.includes('status_changed')), historyLines.join('\n'));
+assert.ok(historyLines.some(line => line.includes('started work') && line.includes('started')), historyLines.join('\n'));
+assert.ok(historyLines.some(line => line.includes('legacy') && line.includes('status_changed')), historyLines.join('\n'));
 
 // Drive comment presentation through the shipped task detail renderer and raw control.
 const openTask = fixture => {
@@ -459,13 +483,13 @@ contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
 assert.equal(contextTabOf(contextDraftDetail).querySelector('.detail-tab-count').textContent, '1', 'The tab count refreshes alongside selectors while another editor holds a draft');
 const refreshedSelector = contextDraftDetail.querySelector('.context-selector');
 assert.ok(
-  refreshedSelector && refreshedSelector.textContent.includes('file:src/') && refreshedSelector.textContent.includes('shared.rs'),
+  refreshedSelector && refreshedSelector.textContent.includes('shared.rs') && refreshedSelector.title.includes('file:src/shared.rs'),
   'empty-to-populated refresh renders the selector',
 );
 const activeContention = contextDraftDetail.querySelector('.context-contended-active');
-assert.ok(!activeContention.textContent.includes('ORB-38'), 'contention adds no blocker metadata');
+assert.ok(activeContention.textContent.includes('ORB-38'), 'contention pill names the holding task');
 assert.ok(activeContention.querySelector('a.context-selector').href.includes('open=ORB-37'), 'the context links to its owning task');
-assert.ok(activeContention.textContent.includes('file:src/') && activeContention.textContent.includes('shared.rs'), 'the selector text remains intact');
+assert.ok(activeContention.textContent.includes('shared.rs'), 'the selector text remains intact');
 assert.equal(contextDraftDetail.querySelector('.field-editor-input'), descriptionDraft, 'refresh preserves the separate editor control');
 assert.equal(descriptionDraft.value, 'Unsaved description', 'refresh preserves the editor text');
 assert.equal(document.activeElement, descriptionDraft, 'refresh preserves editor focus');
@@ -497,20 +521,38 @@ contextDraftTask.context_files = [
 ];
 renderTasks(currentTasks, contextDraftContext);
 contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
-const contextRows = contextDraftDetail.querySelectorAll('.file-list li');
+assert.equal(contextDraftDetail.querySelectorAll('.cf-group').length, 0, 'context files render as one flat list');
+assert.equal(contextDraftDetail.querySelectorAll('.cf-toggle-btn').length, 0, 'there is no view toggle');
+const contextRows = contextDraftDetail.querySelectorAll('.cf-row');
 assert.equal(contextRows.length, 3, 'renders 3 context files');
-const dups = contextDraftDetail.querySelectorAll('.context-duplicate-base');
-assert.equal(dups.length, 2, 'identifies duplicate basenames for recovery.md');
-const disambigAttrs = dups.map(li => li.querySelector('.selector-base').dataset.disambig);
-assert.deepEqual(disambigAttrs, ['crates', 'plugin'], 'disambiguates duplicate basenames with directory context');
-const firstDir = dups[0].querySelector('.selector-dim');
-assert.ok(firstDir.querySelector('wbr'), 'directory line includes wbr break opportunities after separators');
-assert.equal(firstDir.querySelector('.selector-root').textContent, 'crates/', 'directory line highlights the root segment');
-assert.equal(
-  dups[0].querySelector('.context-selector').textContent.replace(/[\n\r\t]+/g, '').trim(),
-  'file:crates/orbit-core/assets/skills/recovery.md',
-  'full selector text is preserved on duplicate item',
+assert.deepEqual(
+  contextRows.map(row => row.querySelector('.context-selector').textContent),
+  ['crates/orbit-core/assets/skills/recovery.md', 'crates/orbit-core/src/application/task/pilot/mod.rs', 'plugin/skills/recovery.md'],
+  'rows sort by full path so one directory\'s files sit together',
 );
+assert.ok(contextRows[0].querySelector('.context-selector').title.startsWith('file:crates/orbit-core/assets/skills/recovery.md'), 'full selector is preserved in the row title');
+assert.equal(contextDraftDetail.querySelector('.cf-summary').textContent, '3 files in 3 folders', 'the summary counts distinct directories');
+
+const rootSelectors = ['file:root/b/shared.rs', 'file:README.md', 'file:root/a/shared.rs'];
+contextDraftTask.context_files = rootSelectors;
+renderTasks(currentTasks, contextDraftContext);
+contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
+const rootRows = contextDraftDetail.querySelectorAll('.cf-row');
+assert.deepEqual(
+  rootRows.map(row => row.querySelector('.context-selector').textContent),
+  ['README.md', 'root/a/shared.rs', 'root/b/shared.rs'],
+  'flat rows keep each directory and basename in path order',
+);
+assert.deepEqual(rootRows.map(row => row.querySelector('.context-selector').title.split(' · ')[0]), ['file:README.md', 'file:root/a/shared.rs', 'file:root/b/shared.rs'], 'sorting preserves each full selector');
+contextDraftDetail.querySelector('.cf-copy-all').dispatch('click');
+await Promise.resolve();
+await Promise.resolve();
+assert.deepEqual(copiedTexts, [rootSelectors.join('\n')], 'Copy selectors copies the unchanged full selectors');
+
+contextDraftTask.context_files = ['file:crates/a.rs', 'file:crates/b.rs'];
+renderTasks(currentTasks, contextDraftContext);
+contextDraftDetail = paneBody.querySelector('#detail-ORB-37');
+assert.equal(contextDraftDetail.querySelector('.cf-summary').textContent, '2 files in crates', 'one directory is named in the summary');
 
 const repaints = [];
 const stopListening = drainWaits.onDrainReadinessChange(() => { repaints.push('changed'); paintBacklog(); });
@@ -957,6 +999,32 @@ drainWaits.setDrainReadiness({ tasks: [] });
 
 context.fetch = () => new Promise(() => {});
 
+// Mixed-host owner diagnostics: the same public payload drives the row and
+// detail, including selectors, live holder runs and explicitly local OS scope.
+const mixedEntry = {
+  task_id: 'ORB-33', status: 'backlog', eligible: false, reason: 'context_lock_conflict',
+  conflicts: [{ requested_file: 'file:src/shared.rs', blocking_selector: 'dir:src', locking_task_id: 'ORB-77' }],
+  run_ids: ['jrun-holder'], host_scope: 'local',
+  host_os_wait: 'On this linux host: waits for a macos host (os:macos)',
+  executor_evidence: { status: 'compatible_recent', detail: 'Compatible executor hm_mac (run mac-drain) reported within 600s; follower admission remains unverified.' },
+};
+const mixedCard = entry => modules.get('task-readiness.js').namespace.buildReadinessBlock(readyGaps, { entry }, 'ws_orbit');
+const mixedView = drainWaits.drainReadinessView(mixedEntry);
+assert.equal(mixedView.pool, 'locks');
+assert.ok(mixedView.title.includes('file:src/shared.rs'), 'the row tooltip identifies the overlapping requested selector');
+assert.ok(mixedView.title.includes('dir:src'), 'the row tooltip identifies the held selector');
+assert.ok(mixedView.title.includes('On this linux host'), 'the owner mismatch is explicitly host-local');
+const mixedDetail = mixedCard(mixedEntry);
+assert.ok(mixedDetail.textContent.includes('file:src/shared.rs'), 'the detail identifies the overlapping selector');
+assert.ok(mixedDetail.textContent.includes('hm_mac'), 'the detail discloses compatible executor evidence');
+assert.deepEqual(mixedDetail.querySelectorAll('.readiness-drain a').map(link => link.textContent), ['ORB-77', 'jrun-holder']);
+for (const [reason, expected] of [['follower_admission_pending', 'waiting for follower admission'], ['host_os_mismatch', 'no recent compatible executor']]) {
+  const entry = { ...mixedEntry, reason, conflicts: [], run_ids: [], executor_evidence: { status: reason === 'host_os_mismatch' ? 'no_compatible_recent' : 'compatible_recent', detail: 'Current follower admission is unknown.' } };
+  const view = drainWaits.drainReadinessView(entry);
+  assert.equal(view.pool, 'other');
+  assert.ok(view.badge.text.includes(expected), `${reason} preserves the remaining executor wait`);
+}
+
 // Review approval runs the shipped row handler and request client. Hold the
 // response to observe pending state without timers or an optimistic status edit.
 const approvalStatuses = ['proposed', 'review', 'backlog', 'in-progress', 'blocked', 'someday', 'done', 'rejected', 'archived'];
@@ -1023,7 +1091,10 @@ paintApprovals([task(81, { status: 'review' })]);
 assert.ok(approveButton('ORB-81'), 'a review-only list retains its action column');
 nextApproval = deferred();
 approveButton('ORB-81').dispatch('click');
-assert.equal(approveButton('ORB-81').textContent, 'Approving…');
+assert.equal(approveButton('ORB-81').textContent, 'Approve', 'pending approval keeps the idle label so it keeps its idle width');
+assert.equal(approveButton('ORB-81').getAttribute('aria-label'), 'Approving…', 'pending approval is named for assistive technology');
+assert.equal(approveButton('ORB-81').getAttribute('aria-busy'), 'true', 'pending approval is marked busy');
+assert.ok(approveButton('ORB-81').classList.contains('pending'), 'pending approval carries the spinner class');
 assert.equal(approveButton('ORB-81').disabled, true, 'pending approval is disabled');
 await settleActions();
 assert.deepEqual(requests, [{ path: '/api/tasks/ORB-81/approve', workspace: 'ws_orbit', body: {} }]);
@@ -1038,7 +1109,7 @@ assert.equal(refreshes, 1, 'accepted approval refreshes the list');
 assert.equal(currentTasks[0].status, 'done');
 assert.ok(byId['tasks-body'].querySelectorAll('.group-label').some(label => label.textContent === 'Done'), 'the refreshed task appears under Done');
 assert.equal(approveButton('ORB-81'), null, 'Done offers no approval');
-assert.ok(byId['tasks-body'].querySelector('.task-action-notice').textContent.includes('done'), 'the notice reports the review destination');
+assert.ok(byId['tasks-notices'].querySelector('.task-action-notice').textContent.includes('done'), 'the notice reports the review destination');
 
 paintApprovals([task(81, { status: 'review' })]);
 nextApproval = deferred();
@@ -1046,7 +1117,9 @@ approveButton('ORB-81').dispatch('click');
 await settleActions();
 nextApproval.resolve(response({ error: 'Review is not ready to approve' }, false));
 await settleActions();
-assert.equal(rowFor('ORB-81').querySelector('.task-quick-error').textContent, 'approve failed: Review is not ready to approve', 'a review without a PR shows the server refusal inline');
+assert.equal(rowFor('ORB-81').querySelector('.task-quick-error .task-quick-error-message').textContent, 'approve failed: Review is not ready to approve', 'a review without a PR shows the server refusal inline');
+assert.equal(rowFor('ORB-81').querySelector('.task-quick-error-dismiss').getAttribute('aria-label'), 'Dismiss error for ORB-81', 'the row error offers a named dismiss control');
+assert.equal(rowFor('ORB-81').querySelector('.task-quick-error-dismiss').textContent, '×', 'the dismiss control reads as a close mark');
 assert.equal(currentTasks[0].status, 'review', 'refusal leaves the task in review');
 assert.equal(refreshes, 1, 'refusal does not refresh or move the task');
 assert.equal(approveButton('ORB-81').disabled, false, 'a refused approval can be retried');
@@ -1102,7 +1175,7 @@ assert.ok(handoffRequest.body.request_id, 'handoff approval has a replay identit
 nextApproval.resolve(response({}));
 await settleActions();
 assert.equal(currentTasks[0].status, 'review', 'handoff approval waits for the owner landing job');
-assert.ok(byId['tasks-body'].querySelector('.task-action-notice').textContent.includes('owner landing job'), 'handoff notice does not claim it completed');
+assert.ok(byId['tasks-notices'].querySelector('.task-action-notice').textContent.includes('owner landing job'), 'handoff notice does not claim it completed');
 claims[0].handoff.authority = { state: 'authorized', summary: 'Landing is already authorized' };
 paintApprovals([task(86, { status: 'review' })]);
 const beforeClaimRefusal = requests.length;
@@ -1193,7 +1266,9 @@ assert.deepEqual(shownPanel(), ['overview']);
 assert.equal(tab('context_files').querySelector('.detail-tab-count').textContent, '0');
 tab('context_files').dispatch('click');
 assert.deepEqual(shownPanel(), ['context_files']);
-assert.ok(paneBody.querySelector('#' + tab('context_files').getAttribute('aria-controls')).querySelector('.field-edit'), 'Context files exposes the existing editor');
+const shownFooters = () => paneBody.querySelectorAll('.task-action-footer').filter(footer => !footer.hidden).map(footer => footer.dataset.footerTab);
+assert.deepEqual(shownFooters(), ['context_files'], 'only the Context files footer shows on its tab');
+assert.ok(paneBody.querySelectorAll('.task-action-footer').find(footer => footer.dataset.footerTab === 'context_files').querySelector('.field-edit'), 'Context files exposes the existing editor in its sticky footer');
 tab('history').dispatch('click');
 assert.deepEqual(shownPanel(), ['history'], 'a tab shows its own panel only');
 assert.equal(tab('history').getAttribute('aria-selected'), 'true');
@@ -1243,3 +1318,127 @@ assert.equal(paneHost.hidden, true);
 assert.deepEqual(selectedRows(), []);
 assert.ok(!window.location.hash.includes('open='), 'a closed pane names no task');
 delete window.history;
+
+// ORB-18240: `open_decisions` is compact (answer ids only), so a triage
+// request's numeric ids "1" and "2" say nothing. The detail reads the full
+// request from the decisions API and shows each option's label and consequence
+// beside its button; the button still submits the stable id.
+common.setWorkspace('ws_orbit');
+const decisionRequest = {
+  id: 'DR-1', gate: 'block_triage', state: 'open', expires_at: '2026-11-01T00:00:00Z',
+  answers: [
+    { id: '1', label: 'Drop criterion 2', consequence: 'The retired API stays retired and the task returns to backlog.' },
+    { id: '2', label: 'Restore the v1 API', consequence: 'The v1 API comes back and criterion 2 is kept as written.' },
+  ],
+};
+const decisionTask = task(120, {
+  status: 'blocked', open_decisions: [{ id: 'DR-1', gate: 'block_triage', expires_at: decisionRequest.expires_at, answers: ['1', '2'] }],
+});
+const decisionReads = [];
+const decisionPosts = [];
+let decisionList = null;
+context.fetch = (path, options = {}) => {
+  const url = new URL(path, 'http://dashboard.test');
+  if (options.method === 'POST') {
+    decisionPosts.push({ path: url.pathname, workspace: url.searchParams.get('workspace'), body: JSON.parse(options.body) });
+    return new Promise(() => {});
+  }
+  assert.equal(url.pathname, '/api/decisions', `the detail reads only the decisions API: ${path}`);
+  decisionReads.push({ task_id: url.searchParams.get('task_id'), workspace: url.searchParams.get('workspace') });
+  return decisionList.promise;
+};
+const decisionContext = { ...taskContext, getActiveStatuses: () => new Set(['blocked']), statusOrder: ['blocked'] };
+const paintDecision = item => {
+  served = { total: 1, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = [item];
+  renderTasks([item], decisionContext);
+};
+decisionList = holdRead();
+paintDecision(decisionTask);
+clickTitle(byId['tasks-body'].querySelector('.row button.title'));
+assert.equal(paneBody.querySelectorAll('.decision-answer').length, 0, 'no answer control is offered before its meaning is known');
+assert.ok(paneBody.querySelector('.decision-pending').textContent.includes('Loading'), 'the detail says the options are loading');
+decisionList.resolve(readinessResponse({ items: [decisionRequest], total: 1 }));
+await settleReads();
+assert.deepEqual(decisionReads, [{ task_id: 'ORB-120', workspace: 'ws_orbit' }], 'one workspace-scoped read for the task');
+const decisionButtons = paneBody.querySelectorAll('.decision-answer');
+assert.deepEqual(decisionButtons.map(node => node.textContent), ['Drop criterion 2', 'Restore the v1 API'], 'each button reads its label, not its numeric id');
+assert.deepEqual(
+  paneBody.querySelectorAll('.decision-option').map(node => node.querySelector('.decision-consequence').textContent),
+  decisionRequest.answers.map(answer => answer.consequence),
+  'each consequence sits beside its own option',
+);
+paneBody.querySelector('.decision-note').value = '';
+decisionButtons[1].dispatch('click');
+assert.deepEqual(decisionPosts.map(post => [post.path, post.workspace, post.body]), [['/api/decisions/DR-1/answer', 'ws_orbit', { answer: '2' }]], 'the stable id is what is submitted');
+
+// A failed read offers no blind buttons, and Retry reads again.
+decisionPosts.length = 0;
+decisionReads.length = 0;
+decisionList = holdRead();
+paintDecision({ ...decisionTask, id: 'ORB-121' });
+clickTitle(byId['tasks-body'].querySelector('.row button.title'));
+decisionList.resolve(readinessResponse({ error: 'decisions unavailable' }, false));
+await settleReads();
+assert.equal(paneBody.querySelectorAll('.decision-answer').length, 0, 'a failed read leaves no unlabeled answer buttons');
+assert.ok(paneBody.querySelector('.decision-pending').textContent.includes('decisions unavailable'));
+decisionList = holdRead();
+decisionList.resolve(readinessResponse({ items: [decisionRequest], total: 1 }));
+paneBody.querySelector('.decision-requests').querySelectorAll('button').find(node => node.textContent === 'Retry').dispatch('click');
+await settleReads();
+assert.equal(decisionReads.length, 2, 'Retry reads the decisions again');
+assert.equal(paneBody.querySelectorAll('.decision-answer').length, 2, 'the retried read restores the labeled options');
+
+// ORB-19489: a reload evaluates the whole renderer graph again. Seed storage
+// before evaluation so loading preferences too early cannot silently use defaults.
+const preferenceTask = task(122, { comments: [
+  { by: 'operator', at: '2026-10-01T08:00:00Z', message: 'Earlier comment' },
+  { by: 'operator', at: '2026-10-01T09:00:00Z', message: 'Later comment' },
+] });
+async function reloadCommentThread(storage) {
+  const fresh = await loadTaskModules(vm.createContext({
+    ...context,
+    window: { location: { search: '', hash: '' }, localStorage: storage },
+    localStorage: storage,
+    fetch: () => new Promise(() => {}),
+  }));
+  fresh.modules.get('common.js').namespace.setWorkspace('ws_orbit');
+  byId['tasks-body'].replaceChildren();
+  paneBody.replaceChildren();
+  fresh.tasksModule.namespace.renderTasks([preferenceTask], {
+    ...taskContext,
+    getTasks: () => [preferenceTask],
+    getTasksMeta: () => ({ total: 1, limit: 50, offset: 0, next_cursor: null }),
+  });
+  clickTitle(byId['tasks-body'].querySelector('.row button.title'));
+  return paneBody.querySelector('.comments-panel');
+}
+function assertCommentPreferences(panel, newestFirst, collapsed) {
+  assert.ok(panel, 'the public renderer opens the comment thread');
+  assert.equal(panel.querySelector('.comment-pref').textContent, newestFirst ? 'newest first' : 'oldest first', 'reload restores the thread order control');
+  assert.deepEqual(panel.querySelectorAll('.comment-card').map(node => node.id), newestFirst
+    ? ['comment-ORB-122-2', 'comment-ORB-122-1']
+    : ['comment-ORB-122-1', 'comment-ORB-122-2'], 'reload applies the preference to the rendered comment order');
+  assert.equal(panel.classList.contains('collapsed'), collapsed, 'reload restores thread disclosure');
+  assert.equal(panel.querySelector('.field-toggle').getAttribute('aria-expanded'), String(!collapsed));
+}
+localStorageEntries.set('orbit.dashboard.comments', JSON.stringify({ newestFirst: true, collapsed: true }));
+const restoredThread = await reloadCommentThread(window.localStorage);
+assertCommentPreferences(restoredThread, true, true);
+// Change both choices through the UI, then reload against the same storage.
+restoredThread.querySelector('.comment-pref').dispatch('click');
+restoredThread.querySelector('.section-title').dispatch('click', { target: restoredThread.querySelector('.field-toggle') });
+assert.deepEqual(JSON.parse(localStorageEntries.get('orbit.dashboard.comments')), { newestFirst: false, collapsed: false });
+assertCommentPreferences(await reloadCommentThread(window.localStorage), false, false);
+localStorageEntries.clear();
+assertCommentPreferences(await reloadCommentThread(window.localStorage), false, false);
+assertCommentPreferences(await reloadCommentThread(undefined), false, false);
+const unavailableStorage = {
+  getItem() { throw new Error('storage unavailable'); },
+  setItem() { throw new Error('storage unavailable'); },
+};
+const unavailableThread = await reloadCommentThread(unavailableStorage);
+assertCommentPreferences(unavailableThread, false, false);
+unavailableThread.querySelector('.comment-pref').dispatch('click');
+unavailableThread.querySelector('.section-title').dispatch('click', { target: unavailableThread.querySelector('.field-toggle') });
+assertCommentPreferences(unavailableThread, true, true);

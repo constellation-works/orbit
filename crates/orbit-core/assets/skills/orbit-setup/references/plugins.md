@@ -230,10 +230,21 @@ lands after rendering with the effective `[plugins.<ns>]` config and resolving r
 against the plugin directory, so a `{{config.<key>}}` default or `../` path naming a host
 directory needs consent just like an absolute one. Re-run with `--accept-requested` to
 test under that requested profile, or with `--grant` using the same names as `orbit plugin
-enable --grant` (`fs`, `network`, `env_pass`, `orbit_tools`, `unsandboxed`). The `--grant`
+enable --grant` (`fs`, `network`, `env_pass`, `orbit_tools`, `unsandboxed`, `agent_tools`). The `--grant`
 list has to name each of those requests. Either flag applies only to this run and does not
 record a host grant; `orbit plugin enable --grant` is still what authorizes the installed
 plugin.
+
+Inside another Seatbelt sandbox, such as a macOS Orbit worker's, `sandbox-exec` cannot apply the
+backend's profile (exit 71, `sandbox_apply: Operation not permitted`), and the backend is never
+started with weaker containment instead. Run there as a required validation gate with
+`ORBIT_VALIDATION_SUMMARY=<file>`, `ORBIT_VALIDATION_GATE='<the gate as configured>'` and
+`ORBIT_VALIDATION_BASE=<delivery base>`: every case is reported `deferred` with a
+`SKIP: sandbox-exec cannot apply a profile:` line, the command exits 0 and writes the summary, and
+the implementer hands that summary off as a deferred sandbox validation. The claim host then reruns
+the gate outside the worker sandbox, and that run is the evidence. Without a summary, or with
+`ORBIT_REQUIRE_SANDBOX_EXEC=1`, the command fails with `[validation_route_unavailable]` and runs no
+case. A deferred run certifies nothing.
 
 A passing run records this Orbit's version on the installed plugin, and `orbit plugin show <ns>` prints it as `Certified for: <version>`.
 The record is only written when the directory tested is the installed one (same manifest
@@ -311,12 +322,38 @@ Closing the descriptor is a refusal; changing environment variables or using
 `setsid` cannot expand access. The retired environment token and process
 ancestry never authorize callbacks; backends must preserve the descriptor.
 
-Who may *call* a plugin tool is decided by its `execution_kind`, not by the
-manifest: a `read_only` tool is callable by any caller Orbit can identify, and
-a `mutating` tool by an operator or a sanctioned run — an agent reaches one
-only when the task's `required_tools` or the activity's allowlist names it. A
-scripted call with no identity at all is refused; `ORBIT_OPERATOR=1` is the
-documented escape hatch, and its use is audited.
+A `read_only` plugin tool is callable by an identified agent, operator or runner.
+A `mutating` tool requires operator or runner capability unless its manifest
+sets `agent_callable: true` and the operator has granted `agent_tools`:
+
+```yaml
+- name: capture
+  execution_kind: mutating
+  agent_callable: true
+  mcp_scope: workspace
+```
+
+Use the declaration only for append-only or proposal-only tools whose writes
+are appropriate for an agent session. It defaults to false; true on a read-only
+tool is invalid. Review the backend before granting it: Orbit checks consent,
+not whether the implementation is append-only.
+
+`orbit plugin enable <ns> --grant agent_tools` consents to the declared verbs
+at that manifest digest. Include every other needed grant in the same list,
+or use `--grant requested` after reviewing the requests. Missing consent keeps
+the plugin inactive. Enable output names these tools and the grant's status;
+`plugin list` names them and `plugin show` displays their declarations and
+requested versus granted permissions. Adding another agent-callable verb on
+upgrade widens permissions and requires fresh consent, even when `agent_tools`
+was already granted. Older Orbit hosts reject the new field or grant.
+
+A consented tool is callable over `orbit mcp serve` without `--operator`,
+through `orbit tool run`, and through its derived CLI command, with the caller
+recorded in the audit trail. The declaration grants no operator authority,
+filesystem access or callback permission. Activity allowlists and denials still
+apply; `required_tools` and allowlist membership alone grant no capability.
+Unmarked mutations keep their existing operator/runner requirement.
+`ORBIT_OPERATOR=1` and `--operator` keep their existing behavior.
 
 Treat an installed plugin as code the user has chosen to run on their machine,
 and say so when proposing one: the sandbox bounds what a backend can reach, it
@@ -387,6 +424,182 @@ orbit plugin secret rm <ns> refresh_token
    "secret_updates": {"refresh_token": {"value": "<new refresh token>",
                                         "expected_version": "<context.secrets.refresh_token.version>"}}}
   ```
+
+## Decision channels
+
+A decision channel lets one plugin submit a human's answer to an open
+decision request on held work. The channel is registered per host and binds
+three things together: a channel name, the human identity the channel speaks
+for, and the plugin namespace allowed to submit through it. When the plugin
+presents the per-request single-use token minted for that request under the
+channel's key, core applies the answer as the registered human and records
+the channel and the token fingerprint as provenance. What a decision request
+is, and how held work raises one, is described in
+[run-debugging.md](../../orbit-orchestrate/references/run-debugging.md#decision-requests-on-held-work);
+this section covers only the channel side: registering, listing, revoking
+and rotating a channel, and the plugin-only submit path.
+
+The channel is off until the workspace enables it. `decision_channel.enabled`
+is a boolean, default `false`, that turns decision requests on for held work in
+the workspace. With it `false`, the digest raises nothing and writes nothing,
+and a submit from an allowed caller is refused `decision_channel_disabled`
+before the channel is looked up, so nothing is applied. Enable it, then
+register a channel:
+
+```bash
+orbit config set decision_channel.enabled true
+```
+
+`orbit config set` writes the workspace config file unless `--global` is given,
+and ordinary settings inherit per key, so a workspace value overrides a global
+one. Setting the key back to `false` turns the channel off again. Enabling it
+registers nothing: `register` below is still required, and until a channel is
+registered a submit is refused `channel_not_registered`.
+
+Channel management is an operator job on this host. `orbit decision channel
+register`, `list`, `revoke` and `rotate-key` are operator CLI commands; the
+matching tools (`orbit.decision.channel_register`, `orbit.decision.channel_list`,
+`orbit.decision.channel_revoke`, `orbit.decision.channel_rotate_key`) are
+inactive with no MCP scope, so they are never reachable from a tool call.
+Agents cannot register channels or submit answers: registering is refused
+from an agent envelope and from any plugin callback, and submitting is never
+callable from an agent session.
+
+```bash
+orbit decision channel register <channel> --human <human> --plugin <plugin>
+orbit decision channel register <channel> --human <human> --plugin <plugin> \
+  --allow-sender <sender> --allow-sender <other-sender>
+orbit decision channel register <channel> --human <human> --plugin <plugin> \
+  --require-dkim-verification
+orbit decision channel list
+orbit decision channel revoke <channel>
+orbit decision channel rotate-key <channel>
+```
+
+- `register` needs the channel name plus `--human` (the human identity
+  answers are written under) and `--plugin` (the plugin namespace allowed to
+  submit through this channel). `--allow-sender` is optional and repeatable:
+  when any senders are registered, a submission must present one of them.
+  Registration generates the channel key, mirrors it to the bound plugin's
+  `channel_key` secret, and starts key epoch 1. `--require-dkim-verification`
+  is the per-channel switch (off by default) that makes core-side DKIM
+  verification required: every submission on that channel must forward the
+  raw message and pass core's own DKIM check, or it is refused.
+- `list` shows each channel's name, human, bound plugin, key epoch and
+  fingerprint, allowed senders, whether core-side DKIM verification is
+  required, and whether it is revoked. Key material is never shown.
+- `revoke` takes effect immediately: outstanding tokens stop verifying and
+  every submission through the channel is refused `channel_revoked`.
+- `rotate-key` generates a fresh key, mirrors it to the bound plugin's
+  `channel_key` secret, and bumps the key epoch. Every outstanding token is
+  invalidated — a token minted under the previous epoch is refused even while
+  its request is still open — and open requests wait to be re-presented under
+  fresh tokens.
+
+The plugin submits through the governed `orbit.decision.submit` path: only
+the plugin the channel is bound to, through its callback session, or the
+operator testing a channel. Core keeps every channel's key in
+`~/.orbit/state/decision-channels/`, which no plugin backend can read, even
+with `orbit_tools`, and which agent sandboxes hide. The backend does not
+need to read it: the Orbit process that started the backend answers its
+digest and submit callbacks, so they work under the default plugin sandbox
+and need no `backend.sandbox: none`. The CLI form is:
+
+```bash
+orbit decision submit <request-id> <answer-id> --channel <channel> --token <token>
+orbit decision submit <request-id> <answer-id> --channel <channel> --token <token> \
+  --note "<evidence>" --sender <sender> --auth-results "<header-value>" \
+  --raw-message "<raw reply message>"
+```
+
+`<request-id>` is the id `orbit decision list` prints and `<answer-id>` is
+one of the request's allowed answers. `--note` is evidence kept with the
+answer (a pilot-admission `evaluated` answer is refused without one).
+`--sender` is the transport sender the submission presents as evidence: a
+plugin submission must present one, and it must be on the channel's
+allowlist when the channel has one; the operator's own test submission may
+omit it. `--auth-results` is the forwarded Authentication-Results header: a
+plugin submission must forward one showing `dkim=pass` and `spf=pass`, and is
+refused on `dmarc=fail`; the operator's own test submission may omit it.
+`--raw-message` is the raw reply message the transport forwards for
+core-side DKIM verification, at most 262144 bytes (256 KiB). When a raw
+message is forwarded, core verifies its DKIM signature itself: it fetches
+the selector's public key from DNS (a 5-second bounded lookup), checks the
+body hash and the signed-header signature, and requires the signing domain
+to align with the presented sender's domain. Core refuses when its own
+result contradicts the forwarded verdicts. On a channel registered with
+`--require-dkim-verification` the raw message is required; otherwise it is
+optional, and a submission without one behaves exactly as before. The
+tool form takes the same fields as `id`, `channel`, `answer`, `token`,
+`note`, `sender`, `auth_results` and `raw_message`. Never paste a real token or key into an
+example, a task record or a shell history file; the examples above use
+placeholders only.
+
+Every refusal applies nothing. A parse-level refusal does not consume the
+token. The refusal codes are:
+
+| Code | What it means |
+|---|---|
+| `decision_channel_disabled` | The decision channel is not enabled in this workspace; nothing was applied. |
+| `channel_not_registered` | No channel by that name is registered on this host. |
+| `channel_revoked` | The channel is revoked; its tokens no longer verify. |
+| `caller_not_allowed` | The caller is neither the bound plugin through its callback session nor the operator testing the channel. |
+| `sender_not_allowed` | The presented sender is not on the channel's sender allowlist. |
+| `authentication_failed` | Transport authentication evidence is missing or failing. |
+| `dkim_verification_failed` | Core's own DKIM verification of the forwarded raw message failed (unsigned, body hash or header signature mismatch, no key record, or the signing domain does not align with the sender's domain); the forwarded verdicts do not override it. The token is not consumed. |
+| `dkim_verification_unavailable` | The DNS lookup for DKIM verification failed or timed out. Retryable: the token is not consumed and nothing was applied; present the submission again. |
+| `dkim_verification_required` | The channel was registered with `--require-dkim-verification` but the submission forwarded no raw message. |
+| `raw_message_too_large` | The forwarded raw message exceeds the 262144-byte (256 KiB) bound for core-side DKIM verification. |
+| `token_invalid` | The token does not verify for this request, channel and key epoch. |
+| `token_consumed` | The token was already used (tokens are single-use), or was minted under the previous key epoch after rotate-key, which rotation invalidated; a previous-epoch token is consumed when refused. |
+| `request_expired` | The request expired while open. |
+| `request_superseded` | The hold changed before the answer arrived. |
+| `answer_not_allowed` | The answer id is not one of the request's allowed answers. |
+| `request_not_found` | No decision request has that id. |
+
+The plugin's digest routine raises what it presents through the governed
+`orbit.decision.digest` path, on the same terms as submit: only the plugin
+the channel is bound to, through its callback session, or the operator —
+never an agent session (`caller_not_allowed`), and a plugin the named
+channel is not bound to is refused `channel_not_registered`, as is an
+unregistered channel; a revoked channel is refused `channel_revoked`. The
+CLI form is:
+
+```bash
+orbit decision digest --channel <channel>
+```
+
+One call returns the whole digest. For every proposed task without an open
+`proposed_approval` request, and every review task without an open
+`review_approval` request, it first raises one open request — idempotently
+per task, gate and binding, with answers `approve`/`reject` — then returns
+`requests` (the digest), `raised` (what this call raised) and `expiring`
+(every still-open request expiring within 24 hours, the digest window). A
+second call raises nothing new and returns the same request ids. A
+`proposed_approval` request binds to the task's description and acceptance
+criteria plus its proposed status, and a `review_approval` request also to
+the candidate under review, so either reads superseded once what it was
+raised against changes and the next digest raises a fresh one. With the
+decision channel disabled in the workspace, the digest raises nothing,
+writes nothing and returns no requests. The tool form takes the same
+`channel` field. Mail rendering, batching, quiet hours and parsing a reply
+that answers several digest items stay the plugin's.
+
+Verify a channel without spending a real answer:
+
+1. `orbit config get decision_channel.enabled` prints `true`. Confirm this
+   first: while the key is `false`, the refusal in step 3 is
+   `decision_channel_disabled` for any channel name, not the channel codes
+   below. `orbit config show --all` lists the key with the file or default it
+   came from.
+2. `orbit decision channel list` shows the channel with the expected human,
+   bound plugin, key epoch and fingerprint, and (when set) the allowed
+   senders. A revoked channel reads revoked here.
+3. Exercise the refusal path with a bad submit — for example a channel name
+   that is not registered, or a revoked channel — and confirm the matching
+   refusal code above. Because every refusal applies nothing, the open
+   request is untouched; re-list the request to confirm it is still open
+   before the real answer goes through the bound plugin.
 
 ## Backends
 
@@ -651,3 +864,85 @@ reserved `orbit.graph.*` namespace only by adding
 plugin through a verified `git+https://github.com/constellation-works/...`
 source; a manifest digest bundled into an Orbit release is the other trusted
 path.
+
+## Managing legacy external tools
+
+The older form — one executable plus one `*.orbit-tool.yaml` sidecar per tool,
+registered with `orbit tool add` — keeps working unchanged, with its own
+retained controls. These commands manage per-tool stored rows. They never grant
+plugin permissions: grants come only from `orbit plugin enable --grant …` (see
+[Permissions and grants](#permissions-and-grants)), and `orbit tool enable` /
+`orbit tool disable` record no grant. A plugin tool that is `inactive` for a
+missing grant still needs that plugin grant; a tool toggle cannot fix it (see
+[When a plugin is not serving its tools](#when-a-plugin-is-not-serving-its-tools)).
+A tool toggle is likewise not a plugin switch: switching a plugin off in one
+workspace stays `orbit plugin disable <ns> --scope workspace` (see [Switching a
+plugin off in one workspace](#switching-a-plugin-off-in-one-workspace)).
+
+```bash
+orbit tool add ./bin/my-tool --description "What it does"
+orbit tool list
+orbit tool list --all
+orbit tool show my-tool
+orbit tool run my-tool --input '{}'
+orbit tool run my-tool --dry-run --input '{}'
+orbit tool disable my-tool
+orbit tool enable my-tool
+orbit tool remove my-tool
+orbit tool doctor
+```
+
+- `add <PATH> [--name] [--description] [--manifest]` registers the executable
+  at `PATH`, starting enabled. The path must exist. The name is `--name`,
+  else the sidecar manifest name, else the filename stem. The description is
+  `--description` when non-empty, else the manifest description, else empty.
+  `list` and `show` append the external-tool runtime contract to the stored
+  description. `--manifest` names an explicit sidecar; otherwise
+  the sibling `<stem>.orbit-tool.yaml` (also `.yml` or `.json`) beside the
+  executable is used when present. A name that would overwrite a built-in tool
+  is refused.
+- `list` shows the registered tools; `list --all` also includes the inactive
+  tools hidden from the default agent surface. The `STATUS` column reads
+  `inactive` when the tool is not active, `disabled` when it is not enabled,
+  else `active`. A stored external tool counts as active, so a disabled
+  external reads `disabled`.
+- `show <name>` prints the name, description, built-in flag, status and
+  parameters. A disabled external stays inspectable here.
+- `run <name>` executes the tool. `--dry-run` checks admission and required
+  parameters without executing. A disabled external is absent from the
+  executable registry, so both report it as not found; a disabled built-in or
+  plugin-registered tool stays registered and refuses naming
+  `orbit tool enable <name>`.
+- `disable <name>` / `enable <name>` is a per-tool override that takes effect
+  on the next command. Disabling blocks `run` for any tool with a stored row,
+  including a plugin-registered tool, and drops that tool from MCP
+  `tools/list`; a stored external is loaded only while enabled. The disabled
+  entry stays listed: `list` reads `disabled`, `show` still inspects it, and
+  `doctor` warns it is disabled. Built-in tools can be disabled. Enabling or
+  disabling an inactive tool that is already in the requested state is refused
+  as a no-op.
+- `remove <name>` deletes only the stored row: it never deletes the executable
+  or sidecar files and never uninstalls a plugin. It refuses built-in tools
+  (disable those instead) and reports an unknown name as not found. An absent
+  row reads as enabled, so removing a disabled plugin-registered row
+  re-enables that tool.
+- `doctor` is read-only and never runs a tool. One row per tool: a warning
+  when the tool is disabled, a warning when its description is missing, an
+  error when its stored executable is missing, else ok. An external added
+  without a description still shows the appended runtime contract, so it
+  reports ok rather than the missing-description warning.
+
+Verify a legacy external tool without touching live state:
+
+1. `orbit tool add` a throwaway executable with a description and confirm the
+   `Added tool …` reply.
+2. `orbit tool list` and `orbit tool show <name>` report it `active` with the
+   expected description and parameters; `orbit tool list --all` includes the
+   inactive entries the default list hides.
+3. `orbit tool run <name> --dry-run --input '{}'` reports the admission check
+   without executing, then a real `orbit tool run <name>` executes.
+4. `orbit tool doctor` reports the tool ok.
+5. `orbit tool disable <name>`, then confirm `list` reads `disabled`, `run`
+   reports it as not found, and `doctor` warns it is disabled.
+6. `orbit tool enable <name>`, then confirm `list` reads `active` again.
+7. `orbit tool remove <name>`, then confirm it is gone from `list`.

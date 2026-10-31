@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionRefusal, AdmissionRequest, AdmissionReviewContract,
     AdmissionRunContext, AdmissionShipContract, DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
@@ -13,19 +13,9 @@ use orbit_store::contracts::{
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 use orbit_types::workflow::REVIEW_CONTRACT_VERSION;
 
+use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 use crate::application::job::crew_pools::random_crew_ticket;
 use crate::application::review::crew::pre_landing_review_crew_unset;
-
-/// Whether the mutating distributed entry points are reachable from any public
-/// surface.
-///
-/// It is a constant rather than configuration on purpose: the feature must not
-/// become reachable, or unreachable, because an operator set a key or an
-/// environment variable. [ORB-13625] opened it once the routed follower peer,
-/// the owner's pull/bind/settle tools and `orbit run auto --pull` landed
-/// together; every gated entry point still names it, so closing the feature
-/// again is one deliberate source change.
-pub const DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED: bool = true;
 
 /// The authorization reference an owner-policy completion carries: the config
 /// key that grants it. A claim admitted under `completion: done` pins this
@@ -72,8 +62,17 @@ impl crate::OrbitRuntime {
     /// rather than claiming a task its gate would escalate.
     pub(crate) fn claimed_review_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
         let review = ship.review.as_ref()?;
+        let selective_enforced = ship
+            .selective_policy()
+            .is_some_and(|policy| policy.is_enforced());
+        if !ship.before_pr && !ship.before_landing && !selective_enforced {
+            // Observe-only selective review needs no reviewer crew.
+            return None;
+        }
         let key = if ship.before_landing {
             "review.timing = before_landing"
+        } else if selective_enforced && !ship.before_pr {
+            "review.selective_before_landing.mode = enforce"
         } else {
             "review.timing = before_pr"
         };
@@ -132,6 +131,7 @@ impl crate::OrbitRuntime {
             // [ORB-16855] The leaf judges light-delivery tags against the
             // owner's allow-list, which acceptance judges again.
             light_delivery_paths: Some(self.workflow_light_delivery_paths().to_vec()),
+            review_skip_tags: Some(self.review_skip_profiles()),
         }
     }
 
@@ -156,6 +156,21 @@ impl crate::OrbitRuntime {
         let policy = self.operation_policy();
         let before_pr = self.local_review_before_pr();
         let before_landing = policy.reviews_before_landing_for(executor);
+        // A stronger landing layer keeps its selective observation and
+        // obligation; only the incompatible legacy before-PR layer omits it.
+        let mut selective = if before_pr {
+            None
+        } else {
+            policy.selective_before_landing_policy()
+        };
+        // Probes carry no durable authenticated model snapshot. Freeze an
+        // explicit owner-side unknown instead of trusting a leaf's fit or
+        // allowing model refits between probe, claim and acceptance.
+        if let Some(policy) = &mut selective
+            && policy.risk_threshold.is_some()
+        {
+            policy.freeze_risk_model("owner-risk-model/unknown".to_string());
+        }
         AdmissionShipContract {
             mode: match self
                 .workspace_runtime_binding()
@@ -170,15 +185,18 @@ impl crate::OrbitRuntime {
             before_landing,
             completion: self.workflow_distributed_completion().to_string(),
             authorization_reference: self.owner_completion_authority(),
-            review: (before_pr || before_landing).then(|| AdmissionReviewContract {
-                contract_version: REVIEW_CONTRACT_VERSION,
-                crew: self.claim_review_crew(),
-                budget: policy.review_budget(),
-                required_validation_commands: Some(
-                    self.workflow_required_validation_commands().to_vec(),
-                ),
-                baseline_commands: self.review_baseline_commands().to_vec(),
-                host_evidence: policy.review_host_evidence.value.clone(),
+            review: (before_pr || before_landing || selective.is_some()).then(|| {
+                AdmissionReviewContract {
+                    contract_version: REVIEW_CONTRACT_VERSION,
+                    crew: self.claim_review_crew(),
+                    budget: policy.review_budget(),
+                    required_validation_commands: Some(
+                        self.workflow_required_validation_commands().to_vec(),
+                    ),
+                    baseline_commands: self.review_baseline_commands().to_vec(),
+                    host_evidence: policy.review_host_evidence.value.clone(),
+                    selective_before_landing: selective.clone(),
+                }
             }),
         }
     }
@@ -204,7 +222,7 @@ impl crate::OrbitRuntime {
             .and_then(|candidates| {
                 self.draw_review_crew(candidates, &BTreeSet::new(), &mut random_crew_ticket)
             })
-            .map(|crew| crew.name)
+            .map(|draw| draw.crew.name)
             .ok()
             .or(first)
     }
@@ -305,6 +323,7 @@ impl crate::OrbitRuntime {
             // Every executor of this binary runs the before-PR gate on its
             // claimed PR leaves [ORB-13908].
             review_gate: true,
+            selective_review: true,
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),
@@ -314,6 +333,7 @@ impl crate::OrbitRuntime {
             crews: None,
             os: None,
             browser_kit: false,
+            labels: Vec::new(),
             admissible: None,
         };
         let identity = trusted_identity(&machine_id, session, None);
@@ -342,6 +362,13 @@ impl crate::OrbitRuntime {
                     "ship mode '{}' is not available to this caller",
                     request.ship.mode
                 ),
+                AdmissionRefusal::SelectiveUnsupported => {
+                    "owner has an active selective before-landing policy \
+                     (review.selective_before_landing); this executor does not declare \
+                     selective-review capability on the PR route, so it is refused rather \
+                     than allowed to drop the policy"
+                        .to_string()
+                }
                 AdmissionRefusal::BeforePrUnsupported => format!(
                     "owner has {}; that review runs only on the PR route, and this owner \
                      ships '{}'",
@@ -473,14 +500,16 @@ pub(crate) fn probe_pull_contract(
 /// Recover the typed protocol refusal across a structured remote tool error.
 pub(crate) fn owner_protocol_error(error: OrbitError) -> OrbitError {
     match error {
-        OrbitError::RemoteTool { code, message, .. } if code == "protocol_skew" => {
-            OrbitError::ProtocolSkew(
-                message
-                    .strip_prefix("protocol_skew: ")
-                    .unwrap_or(&message)
-                    .to_string(),
-            )
-        }
+        OrbitError::RemoteTool {
+            code: RemoteToolCode::ProtocolSkew,
+            message,
+            ..
+        } => OrbitError::ProtocolSkew(
+            message
+                .strip_prefix("protocol_skew: ")
+                .unwrap_or(&message)
+                .to_string(),
+        ),
         other => other,
     }
 }

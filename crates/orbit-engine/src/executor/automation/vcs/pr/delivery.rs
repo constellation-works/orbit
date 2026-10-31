@@ -20,14 +20,19 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use super::super::super::input::input_string_field;
 use super::super::freshness::{branch_freshness_against_ref, commit_sha};
 use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point};
 use super::super::operations;
-use super::answers::{CheckState, PullRequestStatus, RequiredChecks, ReviewDecision, StatusCheck};
+use super::answers::{CheckState, PullRequestStatus, RequiredChecks};
 use super::auto_fix::UNSETTLED_BLOCKED_POLLS;
+use super::merge_state::{BlockedCheckRefusal, blocked_checks, has_failed_pr_check};
+pub(in crate::executor::automation::vcs) use super::merge_state::{
+    PrMergeState, classify_pr_state,
+};
 use crate::context::RuntimeHost;
 
 /// The candidate identity a completion-authorized run is allowed to deliver.
@@ -263,139 +268,33 @@ fn ensure_matches(
         return Ok(());
     };
     let Some(reported) = reported else {
-        return Err(OrbitError::Execution(format!(
-            "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
+        return Err(OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::EvidenceStale,
+            message: format!(
+                "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
              the authorized candidate '{pinned}' cannot be confirmed; the task stays in review"
-        )));
+            ),
+        });
     };
     if reported != pinned {
-        return Err(OrbitError::Execution(format!(
+        let message = format!(
             "delivery_evidence_stale: pull request #{pr_number} reports {field} '{reported}' \
              but this run published '{pinned}'; completion delivers only the candidate it \
              published, so the task stays in review"
-        )));
+        );
+        return Err(if field == "headRefOid" {
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::HeadChanged,
+                message,
+            }
+        } else {
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::EvidenceStale,
+                message,
+            }
+        });
     }
     Ok(())
-}
-
-/// What GitHub's reported PR state means for a completion or landing attempt.
-pub(in crate::executor::automation::vcs) enum PrMergeState {
-    Merged,
-    Closed,
-    /// The provider's answer disagrees with itself about whether this PR
-    /// merged. Completion refuses rather than picking the convenient half.
-    Contradictory(String),
-    /// Merging is refused by a gate this run must not bypass.
-    Blocked(String),
-    /// GitHub reports a content conflict. The local rebase boundary must prove
-    /// actual unmerged entries before an agent may be launched.
-    Conflict,
-    /// Ready to merge now.
-    Mergeable,
-    /// Required checks are still in flight.
-    Pending,
-}
-
-pub(in crate::executor::automation::vcs) fn classify_pr_state(
-    pull_request: &PullRequestStatus,
-) -> PrMergeState {
-    let state = pull_request
-        .state
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    if state == "MERGED" {
-        return PrMergeState::Merged;
-    }
-    // [ORB-11982] A merge timestamp on a pull request the provider does not
-    // report as merged is the shape F2026-09-102 recorded: an open PR that
-    // nonetheless looks delivered. Only the authoritative `state` may close a
-    // run, so the disagreement itself becomes the refusal.
-    if let Some(merged_at) = &pull_request.merged_at {
-        return PrMergeState::Contradictory(format!(
-            "state '{state}' alongside merge timestamp {merged_at}"
-        ));
-    }
-    if state == "CLOSED" {
-        return PrMergeState::Closed;
-    }
-
-    // [ORB-16342] GitHub can report a draft with a merge state other than
-    // DRAFT, including BLOCKED, UNKNOWN and CLEAN. Completion used to request
-    // a merge from those states and spend recovery on HTTP 405. An explicit
-    // draft is refused before that match. The DRAFT arm below still covers an
-    // answer that omits `isDraft`.
-    if pull_request.is_draft {
-        return PrMergeState::Blocked("the pull request is still a draft".into());
-    }
-
-    let merge_state = pull_request
-        .merge_state_status
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    match merge_state.as_str() {
-        // Mergeable now: no gate outstanding, or only non-required signals.
-        "CLEAN" | "HAS_HOOKS" | "UNSTABLE" => PrMergeState::Mergeable,
-        // Required checks still running.
-        "PENDING" => PrMergeState::Pending,
-        "BLOCKED" => classify_blocked_pr(pull_request),
-        "DIRTY" => PrMergeState::Conflict,
-        "BEHIND" => {
-            PrMergeState::Blocked("the branch is behind its base and must be updated".into())
-        }
-        "DRAFT" => PrMergeState::Blocked("the pull request is still a draft".into()),
-        // An empty or unrecognized merge state is treated as still settling:
-        // GitHub reports UNKNOWN while it computes mergeability.
-        _ => PrMergeState::Pending,
-    }
-}
-
-/// Review and readable-rollup guards shared by landing and auto-fix. They
-/// precede any pending-check or source-repair authority.
-pub(super) fn blocked_checks(pull_request: &PullRequestStatus) -> Result<&[StatusCheck], String> {
-    match &pull_request.review_decision {
-        ReviewDecision::Reported(decision)
-            if matches!(decision.as_str(), "REVIEW_REQUIRED" | "CHANGES_REQUESTED") =>
-        {
-            return Err(format!("review is required ({decision})"));
-        }
-        ReviewDecision::NotApplicable => {}
-        ReviewDecision::Reported(decision) if decision == "APPROVED" => {}
-        _ => return Err("review decision is unavailable".into()),
-    }
-    let checks = pull_request
-        .status_checks
-        .as_deref()
-        .ok_or_else(|| "status check rollup is unreadable".to_string())?;
-    for check in checks {
-        let name = check
-            .name
-            .as_deref()
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| "status check rollup is unreadable".to_string())?;
-        if check.state.is_none() {
-            return Err(format!("status check rollup is unreadable for '{name}'"));
-        }
-    }
-    Ok(checks)
-}
-
-fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
-    let checks = match blocked_checks(pull_request) {
-        Ok(checks) => checks,
-        Err(reason) => return PrMergeState::Blocked(reason),
-    };
-    for check in checks {
-        if check.state == Some(CheckState::Failed) {
-            return PrMergeState::Blocked(format!(
-                "status check '{}' failed",
-                check.name.as_deref().unwrap_or_default()
-            ));
-        }
-    }
-    // A rollup alone cannot say which pending checks protection requires.
-    PrMergeState::Blocked("required reviews or checks are not satisfied".into())
 }
 
 /// Which consumer may refine a failed rollup into a bounded required-check wait.
@@ -475,6 +374,7 @@ impl UnreportedChecks {
 pub(in crate::executor::automation::vcs) struct CheckWaitRefusal {
     reason: String,
     cause: Option<Box<OrbitError>>,
+    refusal: Option<DeliveryRefusal>,
 }
 
 impl CheckWaitRefusal {
@@ -485,6 +385,16 @@ impl CheckWaitRefusal {
         wrap: impl FnOnce(&str) -> OrbitError,
     ) -> OrbitError {
         let wrapper = wrap(&self.reason);
+        let refusal = self.refusal.or(match self.cause.as_deref() {
+            Some(OrbitError::DeliveryRefused { refusal, .. }) => Some(*refusal),
+            _ => None,
+        });
+        if let Some(refusal) = refusal {
+            return match wrapper {
+                OrbitError::Execution(message) => OrbitError::DeliveryRefused { refusal, message },
+                other => other,
+            };
+        }
         match &self.cause {
             Some(cause) => operations::carry_class(cause, wrapper),
             None => wrapper,
@@ -497,6 +407,17 @@ impl From<String> for CheckWaitRefusal {
         Self {
             reason,
             cause: None,
+            refusal: None,
+        }
+    }
+}
+
+impl From<BlockedCheckRefusal> for CheckWaitRefusal {
+    fn from(reason: BlockedCheckRefusal) -> Self {
+        Self {
+            reason: reason.to_string(),
+            cause: None,
+            refusal: reason.delivery_refusal(),
         }
     }
 }
@@ -544,7 +465,13 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     if status.state.as_deref() != Some("OPEN") {
         return Err("pull request state is unavailable for a blocked check wait".into());
     }
-    let checks = blocked_checks(status)?;
+    let checks = blocked_checks(status).map_err(|reason| {
+        let mut refusal = CheckWaitRefusal::from(reason);
+        if has_failed_pr_check(status) {
+            refusal.refusal = None;
+        }
+        refusal
+    })?;
     let owed = match wait {
         BlockedCheckWait::Owner(owed) => {
             if checks
@@ -567,6 +494,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
         .map_err(|error| CheckWaitRefusal {
             reason: format!("required-check evidence is unavailable: {error}"),
             cause: Some(Box::new(error)),
+            refusal: None,
         })?;
     if status.head_sha.as_deref() != Some(required.head_sha.as_str())
         || required.reported_head_sha.as_deref() != Some(required.head_sha.as_str())
@@ -576,15 +504,16 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     }
     unreported.required_observation["head_matches"] = json!(true);
     let mut pending = false;
+    let mut failed = None;
     for check in &required.checks {
         match check.state {
             Some(CheckState::Pending) => pending = true,
             Some(CheckState::Passed) => {}
             Some(CheckState::Failed) => {
-                return Ok(PrMergeState::Blocked(format!(
+                failed = Some(format!(
                     "required check '{}' failed",
                     check.name.as_deref().unwrap_or_default()
-                )));
+                ));
             }
             None => {
                 unreported.required_observation["outcome"] = json!("unreadable_state");
@@ -605,6 +534,9 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     });
     if pending {
         return Ok(PrMergeState::Pending);
+    }
+    if let Some(reason) = failed {
+        return Ok(PrMergeState::Blocked(reason.into()));
     }
     // A failed check keeps its existing recovery or stop.
     if checks

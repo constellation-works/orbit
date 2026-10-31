@@ -6,10 +6,8 @@
 //! this command cannot drift from the tool's behavior or relax its checks.
 
 use clap::Args;
-use orbit_common::security::redaction::redact_all;
 use orbit_core::{AgentInvokeRequest, OrbitRuntime};
 use orbit_types::tool::ToolSessionContext;
-use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
 
@@ -110,31 +108,7 @@ impl Execute for RunAgentArgs {
             session_context: &session_context,
         })?;
 
-        // Submission data can carry sensitive values. Scrub warnings once so
-        // progress on stderr and both output projections share the same boundary.
-        let warnings: Vec<String> = submission
-            .warnings
-            .iter()
-            .map(|warning| redact_all(warning))
-            .collect();
-        let mut doc = json!({
-            "run_id": submission.run_id,
-            "job_id": submission.job_id,
-            "submitted_at": submission.submitted_at,
-            "state": if submission.queued { "queued" } else { "submitted" },
-            "queued": submission.queued,
-            "queue_position": submission.queue_position,
-            "waited": self.wait,
-            "deduplicated": submission.deduplicated,
-            "timeout_seconds": submission.timeout_seconds,
-            "authorized_by": submission.admission.authorized_by,
-            "authorizer_provenance": submission.admission.authorizer_provenance,
-            "workspace_path": submission.admission.workspace_path,
-            "cwd": submission.admission.cwd,
-            "sandboxed": false,
-            "provider_sandbox": submission.provider_sandbox,
-            "warnings": warnings,
-        });
+        let mut doc = submission.cli_submission_json(self.wait);
         let mut lines = Vec::new();
         if submission.deduplicated {
             lines.push(format!(
@@ -160,17 +134,20 @@ impl Execute for RunAgentArgs {
             ));
             lines.push(format!("provider sandbox: {}", submission.provider_sandbox));
         }
-        lines.extend(warnings.iter().cloned());
-        if self.wait {
-            for warning in &warnings {
+        for warning in doc["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            lines.push(warning.to_string());
+            if self.wait {
                 eprintln!("{warning}");
             }
+        }
+        if self.wait {
             let result = runtime.wait_agent_invoke_run(&submission.run_id, None)?;
-            doc["state"] = json!(result.outcome);
-            doc["agent_invocation"] = serde_json::to_value(&result).map_err(|error| {
-                orbit_core::OrbitError::Execution(format!("encode agent invocation: {error}"))
-            })?;
-            doc["answer"] = doc["agent_invocation"]["answer"].clone();
+            result.project_submission_result(&mut doc)?;
             lines.push(super::show::agent_invocation_lines(
                 &doc["agent_invocation"],
             ));

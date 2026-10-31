@@ -1,5 +1,5 @@
 // Why a backlog task is not starting: the drain readiness snapshot, shared by
-// the Drain card (operations.js) and the Tasks list (tasks.js).
+// the Tasks dock (operations.js) and the Tasks list (tasks.js).
 // The Drain card owns the fetch and hands each payload to `setDrainReadiness`;
 // the Tasks list reads each task's pool and wait back for its readiness dot and
 // the Backlog card's readiness strip, and repaints on a change. A task detail's
@@ -62,6 +62,7 @@ const WAIT_LABELS = {
   active_pilot_preparation: "pilot preparing",
   task_pilot_preparation_required: "needs pilot",
   unmet_dependency: "waits on deps",
+  follower_admission_pending: "waiting for follower admission",
   baseline_red_hold: "base red",
   // A `ui` task on a host without a verified browser kit; the badge's title
   // carries the detail, which names the install command.
@@ -86,7 +87,11 @@ export function drainWaitBadge(entry) {
   let holders = [];
   let runIds = [];
   let dependencies = [];
+  const selectors = entry.host_scope === "local" ? (Array.isArray(entry.conflicts) ? entry.conflicts : [])
+    .map(conflict => ({ requested: conflict.requested_file || conflict.requested_selector, held: conflict.blocking_selector }))
+    .filter(conflict => typeof conflict.requested === "string" && conflict.requested) : [];
   let message = DRAIN_LOCK_REASONS.has(reason) ? "" : detail;
+  if (entry.host_scope === "local") message = entry.host_os_wait || message;
   if (DRAIN_LOCK_REASONS.has(reason)) {
     holders = drainHolders(entry);
     runIds = [...new Set((Array.isArray(entry.run_ids) ? entry.run_ids : [])
@@ -94,9 +99,13 @@ export function drainWaitBadge(entry) {
     text = holders.length ? `waits on ${holders.join(", ")}` : runIds.length ? "waits on live run" : "waits on lock";
     const blockers = [...holders, ...runIds];
     lines.push(blockers.length ? `Waits on ${blockers.join(", ")}` : "Lock holder unavailable");
+    for (const selector of selectors) if (selector.held === selector.requested) selector.held = "";
+    for (const selector of selectors) lines.push(`${selector.requested}${selector.held ? ` overlaps ${selector.held}` : ""}`);
   } else if (DRAIN_HOST_WAIT_REASONS.has(reason)) {
     const os = /\bos:([a-z0-9_-]+)/i.exec(detail)?.[1] || /\b(macos|linux|windows)\b/i.exec(detail)?.[1];
     text = os ? `needs ${os.toLowerCase()} host` : "needs other host";
+    if (entry.executor_evidence?.status === "unavailable") text = "executor evidence unavailable";
+    else if (entry.executor_evidence?.status === "no_compatible_recent") text = "no recent compatible executor";
   } else if (reason === "not_backlog") {
     // Only an explicit request names a task outside the backlog; a proposed
     // one waits for approval before any drain can take it.
@@ -118,9 +127,12 @@ export function drainWaitBadge(entry) {
       }
     }
   }
+  const notes = [message, entry.host_os_wait, entry.executor_evidence?.detail]
+    .filter(note => typeof note === "string" && note.trim());
+  message = [...new Set(notes)].join("\n");
   if (!lines.length) lines.push(text);
   if (message && !lines.includes(message)) lines.push(message);
-  return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holders, runIds, dependencies, detail: message, reason };
+  return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holders, runIds, dependencies, selectors, detail: message, reason };
 }
 
 function drainCrewNames(crews) {
@@ -203,15 +215,18 @@ function drainPublishedDelivery(entry) {
 }
 
 let waits = new Map();
+let readinessErrors = new Map();
 let haveSnapshot = false;
 let signature = "";
 const listeners = new Set();
 
 function clearWaits() {
-  if (!haveSnapshot) return;
+  const changed = haveSnapshot || waits.size > 0 || readinessErrors.size > 0;
   waits = new Map();
+  readinessErrors = new Map();
   haveSnapshot = false;
   signature = "";
+  if (!changed) return;
   for (const listener of listeners) listener();
 }
 
@@ -219,18 +234,32 @@ function clearWaits() {
 // Listeners fire only when what a task row shows changed, so the 30 s poll
 // does not repaint the list for nothing.
 export function setDrainReadiness(payload) {
-  const tasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
+  const tasks = [
+    ...(Array.isArray(payload?.tasks) ? payload.tasks : []),
+    ...(Array.isArray(payload?.detail_tasks) ? payload.detail_tasks : []),
+  ];
   const next = new Map();
   for (const entry of tasks) {
     if (typeof entry?.task_id !== "string" || !entry.task_id) continue;
     next.set(entry.task_id, { entry, view: drainReadinessView(entry) });
   }
   const nextSignature = [...next].map(([id, { view }]) => `${id}:${view.pool}:${view.label}|${view.title}`).join("\n");
-  const changed = nextSignature !== signature;
+  const changed = nextSignature !== signature || readinessErrors.size > 0;
   waits = next;
+  readinessErrors = new Map();
   signature = nextSignature;
   haveSnapshot = Array.isArray(payload?.tasks);
   if (changed) for (const listener of listeners) listener();
+}
+
+export function setDrainReadinessFailure(taskId, error) {
+  if (typeof taskId !== "string" || !taskId) return;
+  const message = typeof error === "string" && error.trim() ? error : "readiness unavailable";
+  if (readinessErrors.get(taskId) === message) return;
+  readinessErrors.set(taskId, message);
+  // The snapshot entry stands in until a later poll succeeds: keep `waits`
+  // so the detail Readiness row and the backlog row dot keep showing it.
+  for (const listener of listeners) listener();
 }
 
 export function onDrainReadinessChange(listener) {
@@ -253,9 +282,13 @@ export function drainReadinessFor(taskId) {
 }
 
 // The snapshot's raw entry for a task, or null; a Readiness card falls back to
-// it until its own read answers.
+// it until its own read answers, and it stands in when that read fails.
 export function drainReadinessEntry(taskId) {
   return waits.get(taskId)?.entry || null;
+}
+
+export function drainReadinessFailure(taskId) {
+  return readinessErrors.get(taskId) || null;
 }
 
 // How the Backlog group's rows split across the pools. `known` is false until

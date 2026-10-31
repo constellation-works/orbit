@@ -1,17 +1,17 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
-use orbit_types::identity::Crew;
+use orbit_types::identity::{Crew, all_agent_families};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    OrchestratorModelSource, Task, TaskOrigin, TaskStatus, TaskType, normalize_required_tools,
-    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin, TaskStatus, TaskType,
+    normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
+    normalize_task_tags, validate_os_tags,
 };
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{
-    CreationCrewAssignment, random_crew_ticket, seeded_crew_ticket,
-};
+use crate::application::contracts::CreationCrewAssignment;
+use crate::application::task::TaskJobPort;
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{
@@ -20,6 +20,7 @@ use super::helpers::{
 };
 use super::params::TaskAddParams;
 use super::paths::normalize_context_files_for_write;
+use crate::application::task::TaskRecords;
 
 const AUTO_TASK_TITLE_PREFIX: &str = "[auto-task] ";
 
@@ -45,16 +46,27 @@ impl OrbitRuntime {
         &self,
         required_tools: &[String],
     ) -> Result<Vec<String>, OrbitError> {
+        self.validate_task_tool_names("required_tools", required_tools)
+    }
+
+    /// Validate durable requirement names against the current registry, as
+    /// [`Self::validate_required_tools`] describes. Grants use the stricter
+    /// [`Self::validate_granted_tools`] rule.
+    pub(crate) fn validate_task_tool_names(
+        &self,
+        field: &str,
+        names: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
         let mut warnings = Vec::new();
-        for name in normalize_required_tools(required_tools.to_vec()) {
+        for name in normalize_required_tools(names.to_vec()) {
             if !self.tool_registry().has(&name) {
                 return Err(self.ungrantable_required_tool(format!(
-                    "required_tools contains unregistered tool '{name}'"
+                    "{field} contains unregistered tool '{name}'"
                 )));
             }
             if !self.tool_registry().is_active(&name) {
                 return Err(self.ungrantable_required_tool(format!(
-                    "required_tools contains tool '{name}', which is an admin/human-only \
+                    "{field} contains tool '{name}', which is an admin/human-only \
                      operation that is never granted to an agent"
                 )));
             }
@@ -66,7 +78,7 @@ impl OrbitRuntime {
                 .is_some_and(|tool| !tool.enabled);
             if stored_disabled {
                 warnings.push(format!(
-                    "required_tools includes registered tool '{name}', which is currently disabled"
+                    "{field} includes registered tool '{name}', which is currently disabled"
                 ));
             }
         }
@@ -133,6 +145,7 @@ impl OrbitRuntime {
     ) -> Result<(Task, Vec<String>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
+        self.validate_granted_tools(&params.granted_tools)?;
 
         // [ORB-00417] Redact secrets at the single task-creation choke point
         // (shared by the dashboard POST, CLI `task add`, and the MCP task tool)
@@ -148,6 +161,11 @@ impl OrbitRuntime {
 
         let normalized_tags = normalize_task_tags(params.tags.clone());
         validate_os_tags(&normalized_tags)?;
+        // A label requirement no registered serving host carries is refused
+        // before anything is stored, naming the labels and the known sets.
+        let requires_labels =
+            normalize_host_labels(params.requires_labels.clone(), REQUIRES_LABELS_FIELD)?;
+        self.refuse_unservable_labels(&normalized_tags, &requires_labels)?;
         let provenance_prefix = provenance_title_prefix(&normalized_tags);
         // A system filer, or a sweep finding its provenance tag marks, is
         // automation unless the caller stated an origin. Any other filing
@@ -184,11 +202,13 @@ impl OrbitRuntime {
         // transition. A caller-supplied crew is kept verbatim; otherwise the
         // purpose pool its tags name, then the complexity pools (then
         // `default_crew`), choose one for this task.
-        let mut crew_assignment = self.creation_crew_assignment(
+        let mut crew_assignment = self.creation_crew(
             Some(params.complexity),
             params.crew.as_deref(),
             &normalized_tags,
-            &mut creation_crew_ticket(action_key),
+            &requires_labels,
+            &params.context_files,
+            &mut creation_crew_ticket(self, action_key),
         )?;
         // A crew the system chose from a setting records that setting rather
         // than `explicit` [ORB-15195].
@@ -216,6 +236,8 @@ impl OrbitRuntime {
                 "initial status {initial_status} cannot carry an orchestrator; orchestrator can only be set while proposed or backlog"
             )));
         }
+        let created_by_model =
+            creation_creator_model(uses_system_identity, canonical_model.as_deref());
         let (orchestrator_model, orchestrator_model_source) = creation_orchestrator_model(
             orchestrator.as_ref(),
             params.orchestrator_model.as_deref(),
@@ -252,11 +274,15 @@ impl OrbitRuntime {
                     relations: params.relations.clone(),
                     tags: normalized_tags.clone(),
                     required_tools: normalize_required_tools(params.required_tools.clone()),
+                    granted_tools: normalize_required_tools(params.granted_tools.clone()),
+                    requires_labels: requires_labels.clone(),
+                    not_before: params.not_before,
                     plan: params.plan.clone(),
                     execution_summary: String::new(),
                     context_files,
                     repo_root: None,
                     created_by: Some(create_label.clone()),
+                    created_by_model: created_by_model.clone(),
                     planned_by,
                     implemented_by: None,
                     status: initial_status,
@@ -273,8 +299,10 @@ impl OrbitRuntime {
                     orchestrator_model: orchestrator_model.clone(),
                     orchestrator_model_source,
                     origin,
+                    rule_fingerprint: params.rule_fingerprint.clone(),
                     comments: comments.clone(),
                     context_creation: params.context_creation.authorize.clone(),
+                    creation_decision: params.creation_decision.clone(),
                 },
                 action_key,
                 digest,
@@ -284,6 +312,7 @@ impl OrbitRuntime {
             let event = (!replayed).then(|| OrbitEvent::TaskAdded {
                 id: task.id.clone(),
             });
+            self.schedule_task_quality_after_commit(&task);
             let task = match &crew_assignment {
                 Some(assignment) if !replayed => {
                     self.record_creation_crew_provenance(task, assignment, digest)
@@ -340,14 +369,31 @@ impl OrbitRuntime {
 /// crew would be refused as a changed input. A keyed create therefore draws
 /// from the action key, which makes the retry reproduce the first draw; an
 /// ordinary create draws from the system RNG.
-fn creation_crew_ticket(
+fn creation_crew_ticket<'a>(
+    runtime: &'a OrbitRuntime,
     action_key: Option<&str>,
-) -> impl FnMut() -> Result<u64, OrbitError> + use<> {
-    let mut keyed = action_key.map(|key| seeded_crew_ticket(format!("crew:{key}")));
+) -> impl FnMut() -> Result<u64, OrbitError> + use<'a> {
+    let mut keyed = action_key.map(|key| runtime.seeded_crew_draw_tickets(format!("crew:{key}")));
     move || match &mut keyed {
         Some(ticket) => ticket(),
-        None => random_crew_ticket(),
+        None => runtime.random_crew_draw_ticket(),
     }
+}
+
+/// The creator's full model id a new task records as `created_by_model`:
+/// the caller's `model` input when it is more than a bare agent family, so
+/// `claude-opus-5-5` is kept while `created_by` stays `claude`. A system
+/// filer records none: its `created_by` is `system`, not the caller's model.
+/// An id longer than [`MAX_ORCHESTRATOR_MODEL_LEN`] or holding control
+/// characters is not recorded; `created_by` still takes its family.
+fn creation_creator_model(system_created: bool, model: Option<&str>) -> Option<String> {
+    let model = model.map(str::trim).filter(|model| !model.is_empty())?;
+    let bare_family = all_agent_families()
+        .iter()
+        .any(|family| family.eq_ignore_ascii_case(model));
+    let recordable =
+        model.len() <= MAX_ORCHESTRATOR_MODEL_LEN && !model.chars().any(char::is_control);
+    (!system_created && !bare_family && recordable).then(|| model.to_string())
 }
 
 /// Longest explicit `orchestrator_model` a create accepts.

@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Vision
 owner: codex
-last_updated: 2026-10-13
-last_validated: 2026-10-20
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: automation-triggers
 doc_role: vision
@@ -137,6 +137,11 @@ against its actual adapter contract during implementation.
 ## Task References
 
 - [ORB-11315] — formulates shared triggers and leaves these decisions for review.
+- [ORB-11330] — implements delivery triggers; the remaining proposals above
+  are not shipped behavior.
+- [ORB-11331] — implements bounded state preparation; the remaining
+  multi-member coordination proposals above are not shipped behavior.
+- [ORB-11333] — implements the before-PR review gate this vision defers to.
 - [ORB-11314] — proposes mode defaults and scoped automation.
 - [ORB-11316] — proposes review timing, repair limits and coverage meaning.
 

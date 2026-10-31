@@ -4,9 +4,11 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
@@ -30,6 +32,11 @@ struct FailingPipeline<'a> {
     task: &'a str,
     decision: Value,
     failure_status: TaskStatus,
+    /// Leave the task status alone. An already-settled task cannot be moved
+    /// back to in progress by the failing step.
+    keep_status: bool,
+    /// Counts invocations of the job's failure activity.
+    handoffs: Option<&'a AtomicUsize>,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
@@ -42,38 +49,47 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
     ) -> Result<Value, DispatchError> {
         match action {
             "setup" => {
-                self.fixture
-                    .runtime
-                    .apply_task_automation_update(
-                        self.task,
-                        TaskAutomationUpdate {
-                            status: Some(TaskStatus::InProgress),
-                            job_run_id: Some(self.run.to_string()),
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+                if !self.keep_status {
+                    self.fixture
+                        .runtime
+                        .apply_task_automation_update(
+                            self.task,
+                            TaskAutomationUpdate {
+                                status: Some(TaskStatus::InProgress),
+                                job_run_id: Some(self.run.to_string()),
+                                ..Default::default()
+                            },
+                        )
+                        .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+                }
                 Ok(json!({"workspace_path": self.fixture.repo, "base_ref": "main"}))
             }
             "implement" => {
                 // A task may have returned to backlog before the failure.
-                self.fixture
-                    .runtime
-                    .apply_task_automation_update(
-                        self.task,
-                        TaskAutomationUpdate {
-                            status: Some(self.failure_status),
-                            ..Default::default()
-                        },
-                    )
-                    .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+                if !self.keep_status {
+                    self.fixture
+                        .runtime
+                        .apply_task_automation_update(
+                            self.task,
+                            TaskAutomationUpdate {
+                                status: Some(self.failure_status),
+                                ..Default::default()
+                            },
+                        )
+                        .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+                }
                 Err(DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: "injected implementation failure".to_string(),
                 })
             }
             "decide" => Ok(self.decision.clone()),
-            "handoff" => Ok(json!({"blocked": true})),
+            "handoff" => {
+                if let Some(handoffs) = self.handoffs {
+                    handoffs.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(json!({"blocked": true}))
+            }
             _ => panic!("unexpected fixture action: {action}"),
         }
     }
@@ -160,6 +176,13 @@ fn failing_job() -> JobV2 {
     job
 }
 
+/// Extra controls for a failing pipeline. The ordinary path moves the task
+/// and does not count the failure activity.
+struct PipelineFailure<'a> {
+    keep_status: bool,
+    handoffs: Option<&'a AtomicUsize>,
+}
+
 /// Fail a real engine step, apply its final decision and terminalize through
 /// Core's ordinary cleanup. Return the task's snapshot before cleanup so the
 /// assertions detect any later status, history or comment write.
@@ -170,6 +193,29 @@ fn fail_pipeline(
     decision: Value,
     completion: &str,
     failure_status: TaskStatus,
+) -> (Value, Vec<(String, Option<String>)>) {
+    fail_pipeline_with(
+        fixture,
+        run,
+        task,
+        decision,
+        completion,
+        failure_status,
+        PipelineFailure {
+            keep_status: false,
+            handoffs: None,
+        },
+    )
+}
+
+fn fail_pipeline_with(
+    fixture: &Fixture,
+    run: &str,
+    task: &str,
+    decision: Value,
+    completion: &str,
+    failure_status: TaskStatus,
+    failure: PipelineFailure<'_>,
 ) -> (Value, Vec<(String, Option<String>)>) {
     let audit = V2AuditWriter::with_disk_sinks(
         &fixture.repo.join("audit"),
@@ -191,6 +237,8 @@ fn fail_pipeline(
             task,
             decision,
             failure_status,
+            keep_status: failure.keep_status,
+            handoffs: failure.handoffs,
         },
         None,
     );
@@ -461,6 +509,149 @@ fn other_final_recovery_outcomes_survive_failed_run_terminalization() {
     }
 }
 
+/// A completion decision against an already-done task that still carries an
+/// unapplied proposal is a recorded refusal. The engine settles that run and
+/// does not open the failure activity.
+fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
+    let fixture = fixture("[\"sol\"]");
+    let task = fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Already done with an open proposal".into(),
+            plan: "Propose the definition change.".into(),
+            granted_tools: vec!["orbit.auto_task.update".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let task_id = task.id;
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.auto_task.add",
+            json!({
+                "name": "proposal-target",
+                "description": "before",
+                "schedule": {"every_minutes": 60},
+                "template": {"title": "Proposal target"},
+            }),
+        )
+        .unwrap();
+    let source = fixture.repo.join(".orbit/tmp/proposal.json");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(
+        &source,
+        json!({
+            "tool": "orbit.auto_task.update",
+            "input": {"name": "proposal-target", "description": "revised"},
+            "rationale": "The definition's description is stale.",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.task.artifact.put",
+            json!({
+                "id": task_id,
+                "model": "codex",
+                "path": "mutation-proposals/describe.json",
+                "source_path": source,
+            }),
+        )
+        .unwrap();
+    for status in [TaskStatus::InProgress, TaskStatus::Review] {
+        fixture
+            .runtime
+            .update_task_with_identity(
+                &task_id,
+                TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+    }
+    fixture
+        .runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .force_update_task_with_identity(
+            &task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("a human force still completes a task that has an unapplied proposal");
+    assert_eq!(fixture.status(&task_id), "done");
+    let run = fixture.pipeline_run(&task_id, "task_pr_pipeline");
+    let handoffs = AtomicUsize::new(0);
+    let decision = json!({
+        "decision": "complete_no_diff",
+        "evidence_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "rationale": "already landed"
+    });
+    let (_before, attempts) = fail_pipeline_with(
+        &fixture,
+        &run,
+        &task_id,
+        decision,
+        "done",
+        TaskStatus::Done,
+        PipelineFailure {
+            keep_status: true,
+            handoffs: Some(&handoffs),
+        },
+    );
+    assert_eq!(
+        attempts,
+        [("settled".to_string(), Some("complete_no_diff".to_string()))]
+    );
+    assert_eq!(
+        handoffs.load(Ordering::SeqCst),
+        0,
+        "a settled terminal refusal does not run the failure activity"
+    );
+    assert_eq!(fixture.status(&task_id), "done");
+    let shown = fixture
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task_id}))
+        .unwrap();
+    let comments = shown["comments"].as_array().unwrap();
+    assert!(
+        comments.iter().any(|comment| {
+            comment["message"].as_str().is_some_and(|message| {
+                message.contains("outcome=refused")
+                    && message.contains("already done")
+                    && message.contains("final recovery never reopens settled work")
+            })
+        }),
+        "the refusal comment must be recorded: {comments:?}"
+    );
+    let outcome = fixture.state(&run).final_recovery.unwrap().outcome.unwrap();
+    assert!(outcome.starts_with("settled: refused:"), "{outcome}");
+    let replayed = fixture.apply(
+        &run,
+        &task_id,
+        FinalRecoveryDecision::CompleteNoDiff {
+            evidence_commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            rationale: "already landed".to_string(),
+        },
+        None,
+    );
+    assert!(
+        matches!(replayed, FinalRecoveryApplied::Settled { .. }),
+        "replaying the recorded refusal stays settled: {replayed:?}"
+    );
+    assert_eq!(fixture.decision_comments(&task_id), 1);
+    assert_eq!(handoffs.load(Ordering::SeqCst), 0);
+}
+
 fn failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run() {
     for case in [
         "ordinary backlog",
@@ -524,5 +715,6 @@ crate::scenario_table!(
     a_later_resume_target_records_the_downgrade_on_the_task,
     a_requeue_survives_failed_run_terminalization_even_if_the_outcome_write_fails,
     other_final_recovery_outcomes_survive_failed_run_terminalization,
+    already_done_unapplied_proposal_settles_without_the_failure_handoff,
     failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run
 );

@@ -6,6 +6,7 @@ use orbit_types::task::{
     LIGHT_DELIVERY_TAGS, SKIP_VALIDATION_TAG, Task, TaskComment, TaskHistoryEntry,
     refuses_implementer_writes,
 };
+use orbit_types::workflow::ExploreBriefAdmission;
 use serde_json::Value;
 
 use orbit_common::fs::selector::canonical_selector_in_workspace;
@@ -169,6 +170,18 @@ pub(crate) fn regression_risk_for_agent_input(
     })
 }
 
+/// What `activity_name` of `run_id` does with the explore brief of the task
+/// `input` names, or `None` when the input names no single task. The engine
+/// asks only for an activity that declares an `explore_brief_instruction`.
+pub(crate) fn explore_brief_for_agent_input(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    input: &Value,
+) -> Option<ExploreBriefAdmission> {
+    let task_id = singular_task_id_from_input(input)?;
+    Some(runtime.explore_brief_for_dispatch(run_id, task_id))
+}
+
 /// The required commands this invocation's pipeline runs itself on the final
 /// candidate, for an implementer that need not run them first. Only a
 /// delivery pipeline whose deterministic final validation follows the
@@ -207,6 +220,8 @@ fn agent_task_context_json(
     // literal, and takes the map by value instead of cloning it.
     let mut context = match serde_json::json!({
         "id": task.id.clone(),
+        "admission_tier": task.complexity,
+        "admission_type": task.task_type,
         "status": task.status.cli_name(),
         "terminal": refuses_implementer_writes(task.status),
         "title": task.title.clone(),

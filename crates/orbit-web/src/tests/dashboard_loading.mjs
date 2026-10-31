@@ -276,12 +276,19 @@ const refresh = () => {
 const click = target => target.listeners ? target.listeners.click() : target.click();
 const release = (request, payload = request.payload) => request.resolve(response(payload));
 const text = id => node(id).textContent;
+// diagnostics.js prefixes every cell value with a responsive `diag-cell-label` span,
+// so a cell's value is read without that label.
+const diagCellValue = cell => {
+  const value = cell.cloneNode(true);
+  value.querySelectorAll('.diag-cell-label').forEach(label => label.remove());
+  return value.textContent;
+};
 const busy = id => node(id).getAttribute ? node(id).getAttribute('aria-busy') : node(id)['aria-busy'];
 const auditHeadPage = await fetchJsonPage('/api/audit?limit=50');
 check(auditHeadPage.header('x-audit-next-before') === 'fixture-audit-cursor', 'continuing audit fixture response exposes its paging cursor');
 const auditTerminalPage = await fetchJsonPage('/api/audit?limit=50&before=fixture-audit-cursor');
 check(auditTerminalPage.header('x-audit-next-before') === null, 'terminal audit fixture response exposes an absent cursor as null');
-check(text('tasks-body').includes('Loading'), 'cold Tasks must visibly load');
+check(text('tasks-messages').includes('Loading'), 'cold Tasks must visibly load');
 check(!text('tasks-body').includes('No tasks'), 'cold Tasks cannot claim empty');
 for (const request of pendingReads.splice(0)) release(request, list([]));
 await settle();
@@ -406,6 +413,10 @@ const surfaces = [
   { route: 'operations/routines', body: 'routines-body', path: '/api/routines', empty: { routines: [], clock: {} }, emptyText: 'No routines' },
 ];
 for (const surface of surfaces) {
+  // A list that names a message area (`data-messages`, the Tasks list) keeps
+  // its load note there, beside its rows.
+  const messages = node(surface.body).dataset.messages;
+  const shown = () => text(surface.body) + (messages ? text(messages) : '');
   heldPath = surface.path;
   setWorkspace('one');
   setWorkspace('two');
@@ -413,10 +424,10 @@ for (const surface of surfaces) {
   setActiveTab(surface.route);
   await settle();
   if (!pendingReads.length) { refresh(); await settle(); }
-  check(text(surface.body).includes('Loading'), `${surface.route}: cold load visible`);
-  check(!text(surface.body).includes(surface.emptyText), `${surface.route}: cold load cannot be empty`);
+  check(shown().includes('Loading'), `${surface.route}: cold load visible`);
+  check(!shown().includes(surface.emptyText), `${surface.route}: cold load cannot be empty`);
   check(busy(surface.body) === 'true', `${surface.route}: loading marked busy`);
-  const status = Array.from(node(surface.body).children).find(child => child.dataset.panelStatus);
+  const status = Array.from(node(messages || surface.body).children).find(child => child.dataset.panelStatus);
   const attribute = name => status?.getAttribute ? status.getAttribute(name) : status?.[name];
   check(attribute('role') === 'status' && attribute('aria-live') === 'polite', `${surface.route}: accessible loading feedback`);
   if (status.getBoundingClientRect) {
@@ -425,23 +436,23 @@ for (const surface of surfaces) {
   }
   for (const request of pendingReads.splice(0)) release(request);
   await settle();
-  check(text(surface.body).includes(marker), `${surface.route}: loaded data visible`);
-  check(text(surface.body).includes('Updated.'), `${surface.route}: success visible`);
+  check(shown().includes(marker), `${surface.route}: loaded data visible`);
+  check(shown().includes('Updated.'), `${surface.route}: success visible`);
 
   marker = 'late-old-scope';
   refresh(); await settle();
   const old = pendingReads.splice(0);
-  check(text(surface.body).includes('Refreshing') && text(surface.body).includes('current-scope-data'), `${surface.route}: refresh retains labeled data`);
+  check(shown().includes('Refreshing') && shown().includes('current-scope-data'), `${surface.route}: refresh retains labeled data`);
   check(!node('refresh-btn').disabled, `${surface.route}: refresh remains usable`);
   setWorkspace('one');
-  check(!text(surface.body).includes('current-scope-data'), `${surface.route}: workspace change clears synchronously`);
+  check(!shown().includes('current-scope-data'), `${surface.route}: workspace change clears synchronously`);
   marker = 'new-scope-data';
   refresh(); await settle();
   for (const request of pendingReads.splice(0)) release(request);
   await settle();
   for (const request of old) release(request);
   await settle();
-  check(text(surface.body).includes('new-scope-data') && !text(surface.body).includes('late-old-scope'), `${surface.route}: old scope response discarded`);
+  check(shown().includes('new-scope-data') && !shown().includes('late-old-scope'), `${surface.route}: old scope response discarded`);
 
   marker = 'older-overlap'; refresh(); await settle();
   const earlier = pendingReads.splice(0);
@@ -450,30 +461,30 @@ for (const surface of surfaces) {
   await settle();
   for (const request of earlier) release(request);
   await settle();
-  check(text(surface.body).includes('newer-overlap') && !text(surface.body).includes('older-overlap'), `${surface.route}: latest request wins`);
+  check(shown().includes('newer-overlap') && !shown().includes('older-overlap'), `${surface.route}: latest request wins`);
 
   marker = 'late-before-roundtrip'; refresh(); await settle();
   const roundtrip = pendingReads.splice(0);
   setWorkspace('two'); setWorkspace('one');
   for (const request of roundtrip) release(request);
   await settle();
-  check(text(surface.body).includes('Loading') && !text(surface.body).includes('late-before-roundtrip'), `${surface.route}: A→B→A rejects old response`);
+  check(shown().includes('Loading') && !shown().includes('late-before-roundtrip'), `${surface.route}: A→B→A rejects old response`);
   marker = 'newer-overlap'; refresh(); await settle();
   for (const request of pendingReads.splice(0)) release(request);
   await settle();
   refresh(); await settle();
   for (const request of pendingReads.splice(0)) request.reject(new TypeError('Fixture refresh failure'));
   await settle();
-  check(text(surface.body).includes('stale data') && text(surface.body).includes('newer-overlap'), `${surface.route}: refresh failure retains labeled stale data`);
+  check(shown().includes('stale data') && shown().includes('newer-overlap'), `${surface.route}: refresh failure retains labeled stale data`);
   check(busy(surface.body) === 'false', `${surface.route}: failure clears busy`);
   setWorkspace('two'); refresh(); await settle();
   for (const request of pendingReads.splice(0)) request.reject(new TypeError('Fixture cold failure'));
   await settle();
-  check(text(surface.body).includes('Unable to load') && !text(surface.body).includes(surface.emptyText), `${surface.route}: cold error differs from empty`);
+  check(shown().includes('Unable to load') && !shown().includes(surface.emptyText), `${surface.route}: cold error differs from empty`);
   refresh(); await settle();
   for (const request of pendingReads.splice(0)) release(request, surface.empty);
   await settle();
-  check(text(surface.body).includes(surface.emptyText) && !text(surface.body).includes('Unable to load'), `${surface.route}: empty success recovers`);
+  check(shown().includes(surface.emptyText) && !shown().includes('Unable to load'), `${surface.route}: empty success recovers`);
 }
 heldPath = null;
 terminalRunFixture = true;
@@ -623,7 +634,13 @@ networkDown = false;
 metricsError = false;
 refresh(); await settle();
 check(node('conn-status').className.includes('green'), 'connection recovers');
-check(text('meta-text').includes('refreshed') && !text('meta-text').includes('analytics/'), 'connection line names the destination, not its route');
+{
+  const meta = node('meta-text');
+  const clock = meta.textContent;
+  check(/^\d{2}:\d{2}:\d{2} /.test(clock) && !clock.includes('analytics/') && !clock.includes('Metrics'), 'success line shows only the refresh time, never the destination or route');
+  check(meta.title.startsWith('Refreshed ') && meta.title.endsWith(clock) && meta.title.includes(' at '), 'success title carries the destination with the time');
+  check((meta.getAttribute('aria-label') || '') === meta.title && meta.getAttribute('aria-label').length > clock.length, 'success accessible name carries the destination');
+}
 check(document.title !== 'orbit' && document.title.endsWith('orbit'), 'the page title names the current destination');
 // Exercise Health through the full request builder and DOM rendering path.
 healthFixture = true;
@@ -637,8 +654,10 @@ for (const selectedWindow of ['24h', '7d']) {
   const coverageLabel = `covers since ${formatDateTime(errorsRetentionStart)}`;
   check(text('diag-count').includes(coverageLabel) === (selectedWindow === '7d'),
     `errors header names its coverage start only when retention starts after the ${selectedWindow} window: ${text('diag-count')}`);
-  check(node('diag-body').querySelector('.c-target').textContent === 'orbit.job.step_finished', 'process target is displayed');
-  check(node('diag-body').querySelector('.c-recovered').textContent === 'recovered — run succeeded', 'historical step failure shows the later run recovery');
+  check(diagCellValue(node('diag-body').querySelector('.c-target')) === 'orbit.job.step_finished', 'process target is displayed');
+  // The recovery cell must hold a value, not its empty-state placeholder; its wording is presentation.
+  const recovery = node('diag-body').querySelector('.c-recovered');
+  check(diagCellValue(recovery) !== '' && !recovery.querySelector('.diag-empty-desktop, .diag-empty-phone'), 'historical step failure shows the later run recovery');
   check(!node('diag-body').querySelector('.c-provider'), 'all-empty provider column is removed from the Errors table');
   const messageDisclosure = node('diag-body').querySelector('.diagnostics-errors-main .c-message details.error-message');
   check(messageDisclosure && !messageDisclosure.open && messageDisclosure.querySelector('summary'), 'error message starts as a two-line expandable disclosure');
@@ -649,7 +668,9 @@ for (const selectedWindow of ['24h', '7d']) {
   check(errorsBounds.left >= panelBounds.left - 1 && errorsBounds.right <= panelBounds.right + 1
     && getComputedStyle(errorsMain).overflowX === 'auto'
     && previewStyle.webkitLineClamp === '2', 'at 1440x900 the Errors table stays in its panel and the message preview wraps to two lines');
-  messageDisclosure.open = true;
+  const errorsHash = location.hash;
+  messageDisclosure.querySelector('summary').click();
+  check(messageDisclosure.open && location.hash === errorsHash, 'clicking a message disclosure expands it without opening its run');
   check(messageDisclosure.querySelector('.error-message-full').textContent === longErrorMessage, 'expanding an error message reveals its full text');
   const errorRunLink = node('diag-body').querySelector('.diagnostics-errors-main .c-job_run a');
   const errorRunUrl = new URL(errorRunLink.href);
@@ -876,9 +897,20 @@ const pressedValue = id => node(id).querySelector('[aria-pressed="true"]')?.data
 check(pressedValue('codebase-window') === '30d' && pressedValue('codebase-rollup') === 'crate' && node('codebase-min-support').value === '15', 'the hash restores the codebase controls');
 const codebaseQuery = codebaseQueries.at(-1);
 check(codebaseQuery && codebaseQuery.get('window') === '30d' && codebaseQuery.get('rollup') === 'crate' && codebaseQuery.get('min_support') === '15', 'the restored view requests its selection');
-const codebaseTiles = [...node('codebase-body').querySelectorAll('.codebase-tile[aria-pressed]')].map(tile => tile.dataset.tile);
-check(codebaseTiles.includes('regressions') && codebaseTiles.includes('overlap') && codebaseTiles.includes('lock_contention'), 'the codebase view renders supported ranking destinations');
-check(!codebaseTiles.includes('task_pilot'), 'the codebase view omits retired task-pilot ranking tile');
+const codebaseKeys = () => [...node('codebase-body').children].map(child => child.dataset.key).filter(Boolean);
+const currentView = () => node('codebase-views').querySelector('[aria-current="page"]')?.dataset.view;
+check(codebaseKeys().includes('hotspots') && currentView() === 'hotspots', `a bare codebase hash opens Hotspots: ${codebaseKeys()}`);
+check(!node('codebase-body').querySelector('.codebase-tile, [data-tile]'), 'the codebase view has no ranking tiles');
+window.location.hash = '#analytics/codebase/coupling?window=30d&rollup=crate';
+await settle();
+check(codebaseKeys().join() === 'pairs,locks' && currentView() === 'coupling', `the coupling segment opens Coupling & locks: ${codebaseKeys()}`);
+window.location.hash = '#analytics/codebase/file?window=30d&rollup=crate&path=crates%2Forbit-web';
+await settle();
+check(codebaseKeys()[0] === 'file-head' && node('codebase-file-path')?.textContent === 'orbit-web' && node('codebase-toolbar').hidden, `a file hash opens its file view: ${codebaseKeys()}`);
+check(node('codebase-body').querySelector('.codebase-back')?.getAttribute('href')?.endsWith('#analytics/codebase?window=30d&rollup=crate'), 'the file view links back to Hotspots');
+window.location.hash = '#analytics/codebase/file?window=30d&rollup=crate';
+await settle();
+check(codebaseKeys().includes('hotspots'), 'a file hash without a path falls back to Hotspots');
 check(node('agents-roles')?.querySelector('[data-view="pilots"]'), 'task-pilot ranking destination is available under Agents > Pilots');
 const denialBadge = node('rail-count-denials');
 check(denialBadge.closest('.tab')?.dataset.tab === 'diagnostics', 'the denial badge sits on the Health rail entry');

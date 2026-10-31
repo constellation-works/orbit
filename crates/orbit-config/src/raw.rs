@@ -70,6 +70,10 @@ pub(crate) struct RawCrewEntry {
     /// the registry is resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) env: Option<Vec<String>>,
+    /// Whether the crew may be given images. Absent means it may when its
+    /// executor declares `image_input`; `false` opts a text-only model out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) vision: Option<bool>,
     /// Retired role tables are retained only to reject stale configuration
     /// with rewrite guidance at load time. They are not part of the crew
     /// schema and never participate in assignment resolution or serialization.

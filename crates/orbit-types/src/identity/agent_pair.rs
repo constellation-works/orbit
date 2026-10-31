@@ -51,7 +51,7 @@ pub struct CrewAssignment {
 /// This closed set is shared by config admission and CLI argument rendering so
 /// an unsupported value cannot make it past config loading and then be
 /// silently ignored at execution time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     Low,
@@ -66,48 +66,26 @@ impl ReasoningEffort {
 
     /// Validates the provider-model contract before an effort reaches argv.
     ///
-    /// Claude and Codex expose the complete crew vocabulary. Pi does too: its
-    /// `--thinking` flag validates against a fixed, model-independent set
-    /// (`off, minimal, low, medium, high, xhigh, max`) that is a strict
-    /// superset of this enum, and it rejects a value outside that set with a
-    /// diagnostic rather than ignoring it. [ORB-11296] Muse does as well:
-    /// `muse exec --reasoning-effort` accepts
+    /// Claude and Codex expose the complete crew vocabulary. Muse does as
+    /// well: `muse exec --reasoning-effort` accepts
     /// `none, minimal, low, medium, high, xhigh, max, ultra` (Muse Code
     /// 1.4.10), a strict superset of this enum. [ORB-16577]
     ///
     /// Grok's published contract is model-specific, so unknown models fail
     /// closed instead of accepting a setting the CLI might silently
-    /// reinterpret. OpenCode is narrower still: see
-    /// `Self::validate_opencode_effort`. [ORB-11295]
+    /// reinterpret.
     pub fn validate_for_provider_model(
         self,
         provider: &str,
         model: Option<&str>,
     ) -> Result<(), ProviderModelError> {
         match provider {
-            "claude" | "codex" | "pi" | "muse" => Ok(()),
+            "claude" | "codex" | "muse" => Ok(()),
             "grok" => Self::validate_grok_model_effort(self, model),
             "antigravity" => Self::validate_antigravity_effort(self, model),
-            "opencode" => Self::validate_opencode_effort(self),
             other => Err(ProviderModelError::EffortUnsupportedByProvider {
                 provider: other.to_string(),
             }),
-        }
-    }
-
-    /// OpenCode renders effort as `--variant`, documented as "model variant
-    /// (provider-specific reasoning effort, e.g., high, max, minimal)". The
-    /// value is forwarded verbatim to whichever model provider `--model`
-    /// selected, and OpenCode publishes no provider-independent vocabulary, so
-    /// only the two spellings its own help text names *and* that exist in
-    /// Orbit's crew vocabulary are accepted. `low`, `medium`, and `xhigh` fail
-    /// closed rather than being remapped onto `minimal`/`high`: a variant the
-    /// underlying provider does not define is a configuration error, not
-    /// something Orbit should guess at. [ORB-11295]
-    fn validate_opencode_effort(self) -> Result<(), ProviderModelError> {
-        match self {
-            Self::High | Self::Max => Ok(()),
-            effort => Err(ProviderModelError::OpenCodeEffort { effort }),
         }
     }
 
@@ -230,6 +208,12 @@ pub struct Crew {
     /// config file, so a workspace cannot route host secrets into agents.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<CrewEnvVar>,
+    /// `[crews.<name>] vision`: whether this crew may be given images. A
+    /// table without the key may, when its executor declares `image_input`;
+    /// `false` opts a text-only model out on an image-capable lane. Omitted
+    /// from the serialized form while `true`.
+    #[serde(default = "crew_enabled_default", skip_serializing_if = "is_enabled")]
+    pub vision: bool,
 }
 
 impl Crew {
@@ -277,12 +261,13 @@ pub fn resolve_crew(name: &str, registry: &BTreeMap<String, Crew>) -> Result<Cre
 /// cardinality is enforced at compile time: adding a family requires
 /// changing the array size, which in turn surfaces any call site that
 /// made assumptions about the previous number of families.
-pub const fn all_agent_families() -> [&'static str; 4] {
+pub const fn all_agent_families() -> [&'static str; 5] {
     [
         AgentFamily::Codex.as_str(),
         AgentFamily::Claude.as_str(),
         AgentFamily::Gemini.as_str(),
         AgentFamily::Grok.as_str(),
+        AgentFamily::Muse.as_str(),
     ]
 }
 
@@ -330,6 +315,9 @@ pub fn infer_agent_family_from_model(model: &str) -> Option<String> {
     if model.starts_with("grok-") || model.starts_with("grok3") {
         return Some("grok".to_string());
     }
+    if model.starts_with("muse-") {
+        return Some("muse".to_string());
+    }
 
     None
 }
@@ -369,8 +357,8 @@ pub fn normalize_agent_family_for_model(
 
 /// Resolve an optional agent/model pair to a canonical write-attribution family.
 ///
-/// A present `model` (or `agent`) must name `codex`, `claude`, `gemini`, or
-/// `grok`, or be a full model string those families can infer. Unrecognized
+/// A present `model` (or `agent`) must name `codex`, `claude`, `gemini`,
+/// `grok`, or `muse`, or be a full model string those families can infer. Unrecognized
 /// values such as `llama` are refused rather than stored verbatim.
 pub fn require_canonical_agent_family(
     agent_cli: Option<&str>,
@@ -390,7 +378,7 @@ pub fn require_canonical_agent_family(
             Ok(Some(family))
         }
         _ => Err(IdentityError::Invalid(format!(
-            "`model` '{shown}' is not a canonical agent family (codex, claude, gemini, grok) or a recognized full model string"
+            "`model` '{shown}' is not a canonical agent family (codex, claude, gemini, grok, muse) or a recognized full model string"
         ))),
     }
 }

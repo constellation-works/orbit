@@ -15,11 +15,12 @@
 //! **Every string below is shipped contract.** Tool names and parameter names
 //! are the MCP wire; CLI flag spellings and help text are the argv surface.
 
-use orbit_types::task::{TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS_CSV};
+use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
 use orbit_types::tool::McpToolScope;
 
 use super::lifecycle_operations::{
-    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, REJECT, REQUEUE, RETRY_HANDOFF, REVIEW_RESET,
+    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REQUEUE, RETRY_HANDOFF,
+    REVIEW_RESET, REVOKE_HANDOFF,
 };
 use super::nested_operations::{
     ARTIFACT_GET, ARTIFACT_PUT, LOCKS_LIST, LOCKS_RELEASE, LOCKS_RESERVE,
@@ -28,7 +29,7 @@ use super::write_operations::{ADD, UPDATE};
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Description, Effect, EnumValue, NounSpec, OperationSpec,
     ParamSpec, ParamType, ToolOnlyRegistration, UnknownFields, aliased, both, cli_only, defaulted,
-    mcp_only, operation_registry,
+    mcp_only, operation_registry, preserve_empty,
 };
 
 operation_registry! {
@@ -78,6 +79,10 @@ operation_registry! {
         BlockTriage => BLOCK_TRIAGE,
         /// Retry a stopped or uncertain authorized owner handoff.
         RetryHandoff => RETRY_HANDOFF,
+        /// Recover a live claim to blocked or backlog, as an operator decision.
+        RecoverClaim => RECOVER_CLAIM,
+        /// Revoke a handoff's completion authority, as an operator decision.
+        RevokeHandoff => REVOKE_HANDOFF,
         /// Reject a task.
         Reject => REJECT,
         /// Permanently delete a task.
@@ -181,7 +186,7 @@ pub const TASK_STATUS_VALUES: &[EnumValue] = &[
     EnumValue::helped("review", "Implementation complete; awaiting review/merge"),
     EnumValue::helped(
         "done",
-        "Accepted and closed. May be reopened by an explicit status edit",
+        "Accepted and closed. Terminal; reopening requires a human operator to use `task update --force`",
     ),
     EnumValue::helped(
         "blocked",
@@ -189,11 +194,11 @@ pub const TASK_STATUS_VALUES: &[EnumValue] = &[
     ),
     EnumValue::helped(
         "archived",
-        "Soft-deleted. Can be restored to any other status",
+        "Soft-deleted. Terminal; restoration requires a human operator to use `task update --force`",
     ),
     EnumValue::helped(
         "rejected",
-        "Declined. Can be reclassified to any other status",
+        "Declined. Ordinary edits may return it to backlog or in-progress; other transitions require a human operator to use `task update --force`",
     ),
     EnumValue::helped(
         "someday",
@@ -213,12 +218,12 @@ pub(super) const IDENTITY_PARAMS: &[ParamSpec] = &[
     mcp_only(
         "agent",
         ParamType::String,
-        "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
+        "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`).",
     ),
     mcp_only(
         "model",
         ParamType::String,
-        "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, `grok`, or `muse`); full model strings are accepted and auto-normalized.",
     ),
 ];
 
@@ -226,14 +231,14 @@ pub(super) const IDENTITY_PARAMS: &[ParamSpec] = &[
 const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+    "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response.",
 );
 
 const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on, not_before_from, not_before_until (inclusive RFC 3339 bounds; unscheduled tasks do not match). scheduled:true lists future schedules soonest first, including proposed tasks. Default rows carry not_before (null when unset). os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
@@ -243,6 +248,9 @@ const LIST: TaskOperation = TaskOperation {
         ),
         flag_order: &[
             "status",
+            "scheduled",
+            "not_before_from",
+            "not_before_until",
             "all",
             "limit",
             "priority",
@@ -304,6 +312,27 @@ const LIST: TaskOperation = TaskOperation {
                 ),
                 &["task_type", "taskType"],
             ),
+            both(
+                "scheduled",
+                ParamType::Switch,
+                "Keep only future not_before schedules, soonest first, including proposed tasks. Other filters still apply.",
+                CliArgKind::flag("scheduled"),
+                "List future-scheduled tasks soonest first, including proposed tasks labelled by status",
+            ),
+            preserve_empty(both(
+                "not_before_from",
+                ParamType::String,
+                "Inclusive lower not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
+                CliArgKind::flag("not-before-from"),
+                "Inclusive lower schedule bound (RFC 3339 with an offset)",
+            )),
+            preserve_empty(both(
+                "not_before_until",
+                ParamType::String,
+                "Inclusive upper not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match.",
+                CliArgKind::flag("not-before-until"),
+                "Inclusive upper schedule bound (RFC 3339 with an offset)",
+            )),
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
@@ -373,7 +402,7 @@ const LIST: TaskOperation = TaskOperation {
             mcp_only(
                 "fields",
                 ParamType::StringList,
-                "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit.task.show`.",
+                "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, not_before, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit.task.show`.",
             ),
             BOUNDED_VIEW_PARAM,
             mcp_only("offset", ParamType::Integer, "Bounded view list offset"),
@@ -500,7 +529,7 @@ const SHOW: TaskOperation = TaskOperation {
     verb: TaskVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.task.show",
-    tool_description: "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. `os_requirement` reports tags intersected with the stored crew executor host_os, its source, and unresolved/conflict states; it is never persisted. The `crew` field selects execution, while `orchestrator` records orchestration attribution. `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed and landed for the task: typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only, from the host's own commit and merge step records. Missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `orbit.workflow.run.show`.",
+    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
     cli_help: CliHelp {
         long_about: Some(
@@ -541,7 +570,9 @@ const SHOW: TaskOperation = TaskOperation {
                 preserve_empty: false,
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
-                mcp_description: Some(Description::Computed(show_fields_description)),
+                mcp_description: Some(Description::Static(
+                    "Optional field names as a string or array; returns only those fields. `delivery` must be selected alone. Catalogue and response semantics: installed Orbit skill `references/task-fields.md`.",
+                )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,
                     kind: CliArgKind::Flag {
@@ -552,13 +583,9 @@ const SHOW: TaskOperation = TaskOperation {
                         value_name: None,
                         multiple: true,
                     },
-                    help: Description::Static(concat!(
-                        "Print only the specified field projection(s). Valid values: ",
-                        orbit_types::task_show_projection_fields_csv!(),
-                        ". Repeat the flag or use a comma-separated value list. Combined with --json, \
-                         a single field returns that field as JSON and multiple fields return a JSON object. \
-                         The derived terminal field remains keyed as an object."
-                    )),
+                    help: Description::Static(
+                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`.",
+                    ),
                 }),
             },
             mcp_only(
@@ -659,12 +686,6 @@ const TASK_ID_PARAM: ParamSpec = ParamSpec {
         "Task ID",
     )
 };
-
-fn show_fields_description() -> String {
-    format!(
-        "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `{TASK_SHOW_DELIVERY_FIELD}` alone returns what a delivery run committed and landed for this task instead of task fields."
-    )
-}
 
 fn show_run_id_description() -> String {
     format!(

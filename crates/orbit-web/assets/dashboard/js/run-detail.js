@@ -302,6 +302,9 @@ export function renderRunDetailMeta() {
     grid.appendChild(cell);
   }
   addCell("attempt", run.attempt);
+  const launches = Array.isArray(run.agent_executions) ? run.agent_executions : [];
+  addCell("reasoning effort", launches.length ? [...new Set(launches.map(launch =>
+    `${launch.crew || launch.provider || "agent"} · ${launch.model || "unknown model"} · ${launch.reasoning_effort === null ? "provider default" : launch.reasoning_effort || "unknown"}`))].join("; ") : "unknown");
   addCell("started", run.started_at ? fmtAbsTime(run.started_at) : "-");
   addCell("finished", run.finished_at ? fmtAbsTime(run.finished_at) : "-");
   addCell("duration", recordDurationText(run));
@@ -1012,7 +1015,11 @@ export function renderRunSteps() {
     const duration = recordDurationText(step);
     const row = el("div", { class: "step-row" }, [
       el("span", { class: "idx", text: `#${Number(step.step_index) + 1}` }),
-      el("span", { class: "target", text: `${step.target_type}:${step.target_id}` }),
+      el("span", { class: "target" }, [
+        el("span", { text: `${step.target_type}:${step.target_id}` }),
+        ...(step.agent_executions || []).map(launch => el("small", { class: "run-agent-effort", text:
+          `${launch.crew || launch.provider || "agent"} · ${launch.model || "unknown model"} · effort ${launch.reasoning_effort === null ? "provider default" : launch.reasoning_effort || "unknown"}` })),
+      ]),
       el("span", {}, [stateCell(step.state)]),
       el("span", { class: "duration", text: duration }),
       el("span", { class: exitClass, text: exit == null ? "-" : String(exit), title: exit == null ? "No exit code recorded" : `Exit code ${exit}` }),
@@ -1021,7 +1028,7 @@ export function renderRunSteps() {
     // Expansion is part of the row's identity: without it the keyed diff reuses
     // the collapsed node and drops the `expanded` class and `aria-expanded`
     // the toggle just set.
-    row.dataset.hash = `${step.step_index}-${step.state}-${exit}-${duration}-${expandedStepIndices.has(step.step_index)}`;
+    row.dataset.hash = `${step.step_index}-${step.state}-${exit}-${duration}-${JSON.stringify(step.agent_executions)}-${expandedStepIndices.has(step.step_index)}`;
     if (expandedStepIndices.has(step.step_index)) row.classList.add("expanded");
     makeToggleRow(row, {
       expanded: expandedStepIndices.has(step.step_index),
@@ -1454,7 +1461,7 @@ function buildEventDetail(key, fields) {
     else expandedRunEvents.delete(key);
   });
   details.appendChild(el("summary", { text: fields.join(" ") }));
-  details.appendChild(el("pre", { text: fields.join("\n") }));
+  details.appendChild(el("pre", { class: "run-event-fields", text: fields.join("\n") }));
   td.appendChild(details);
   return td;
 }

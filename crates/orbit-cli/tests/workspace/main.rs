@@ -57,7 +57,6 @@ mod routine_state_seed;
 mod run_profiles;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod scratch_gc;
-mod ship_sweep_root;
 #[cfg(unix)]
 mod store_gc;
 mod sweep_root;
@@ -66,6 +65,7 @@ mod sweep_workspace;
 mod teardown_retry;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tmp_gc;
+mod workspace_preset;
 mod workspace_selector;
 mod workspace_ship_mode;
 mod workspace_source_remote;

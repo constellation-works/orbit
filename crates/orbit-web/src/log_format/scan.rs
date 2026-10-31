@@ -13,7 +13,6 @@ use std::string::FromUtf8Error;
 
 use super::MAX_LOG_RECORD_BYTES;
 use super::filter::{Filters, LevelFilter, event_timestamp, parse_timestamp};
-use super::render::{RenderedLogEvent, render_log_event_for_web};
 
 pub(crate) fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, OrbitError> {
     if let Some(path) = override_path {
@@ -375,50 +374,56 @@ fn scan_recent_matching_events<R: Read + Seek>(
 /// Newest matching events of a snapshot plus the byte cursor that resumes
 /// exactly after the bytes those events were drawn from.
 #[derive(Debug)]
-pub(crate) struct RenderedLogTail {
-    pub events: Vec<RenderedLogEvent>,
+pub(crate) struct LogTail {
+    pub events: Vec<Value>,
     pub cursor: u64,
+    pub generation: String,
 }
 
 /// Snapshot the newest matching events of the log at `path` together with a
-/// replay cursor bound to the same file extent.
+/// replay cursor bound to the same file extent. Rendering is left to the API
+/// after it merges feed tails and removes events outside the requested limit.
 ///
 /// The extent is fixed by one `stat` of the open handle; bytes appended later
 /// are neither scanned nor covered by the cursor, so a stream resumed at
 /// `cursor` delivers each record exactly once across snapshot and stream.
-pub(crate) fn read_recent_rendered_tail(
+pub(crate) fn read_recent_matching_tail(
     path: &Path,
     filters: &Filters,
     limit: usize,
-) -> io::Result<RenderedLogTail> {
+) -> io::Result<LogTail> {
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Ok(RenderedLogTail {
+            return Ok(LogTail {
                 events: Vec::new(),
                 cursor: 0,
+                generation: "missing".into(),
             });
         }
         Err(err) => return Err(err),
     };
-    let len = file.metadata()?.len();
-    read_rendered_tail_from(&mut file, len, filters, limit, TAIL_READ_BLOCK)
+    let metadata = file.metadata()?;
+    let generation = super::log_file_generation(&metadata)?;
+    let mut tail = read_tail_from(&mut file, metadata.len(), filters, limit, TAIL_READ_BLOCK)?;
+    tail.generation = generation;
+    Ok(tail)
 }
 
-/// [`read_recent_rendered_tail`] over the first `len` bytes of `reader`.
+/// [`read_recent_matching_tail`] over the first `len` bytes of `reader`.
 ///
 /// Newline-terminated records are always complete. An unterminated final
 /// record counts only when it parses as JSON: a finished record written
 /// without a newline is served and the cursor moves past it (its newline later
 /// reads as an empty, skipped line), while a partial write leaves the cursor at
 /// its start so the stream reads it whole once it completes.
-fn read_rendered_tail_from<R: Read + Seek>(
+fn read_tail_from<R: Read + Seek>(
     reader: &mut R,
     len: u64,
     filters: &Filters,
     limit: usize,
     block_size: usize,
-) -> io::Result<RenderedLogTail> {
+) -> io::Result<LogTail> {
     let block_size = if block_size == 0 {
         TAIL_READ_BLOCK
     } else {
@@ -454,9 +459,10 @@ fn read_rendered_tail_from<R: Read + Seek>(
         block_size,
     )?;
     events.extend(final_match);
-    Ok(RenderedLogTail {
-        events: events.iter().map(render_log_event_for_web).collect(),
+    Ok(LogTail {
+        events,
         cursor,
+        generation: "missing".into(),
     })
 }
 

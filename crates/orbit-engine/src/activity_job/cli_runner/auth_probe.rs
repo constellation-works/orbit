@@ -10,7 +10,7 @@ use orbit_types::workflow::{AuthProbe, AuthProbeSuccess};
 
 use super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::orchestrator::provider_child_environment;
-use super::spawn::{SpawnError, prepare_sandbox_for_dispatch};
+use super::spawn::{SpawnError, UnavailableWrapper, prepare_sandbox_for_dispatch};
 use super::supervisor::{
     SpawnTraceContext, SpawnWithTimeoutRequest, spawn_for_supervision, spawn_with_timeout,
 };
@@ -77,13 +77,20 @@ pub fn run_auth_probe(
     let program = resolve_provider_launcher(provider, &executor.command, Some(cwd))
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     let resolved = host.resolve_executor_sandbox(provider, None, Some(cwd))?;
-    let prepared = prepare_sandbox_for_dispatch(resolved.as_ref())
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
+    let prepared =
+        prepare_sandbox_for_dispatch(resolved.as_ref(), UnavailableWrapper::RefuseUnlessFallback)
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     // Rendering a normal invocation supplies exactly the provider's required
     // and fixed environment entries. Only the declared probe argv/stdin run.
-    let config =
-        AgentConfig::from_cli_config(executor.command, None, &host.provider_cli_config(provider))
-            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    // The declared provider selects the runtime, so a custom-named launcher
+    // probes through the same identity ordinary leaf dispatch uses.
+    let config = AgentConfig::from_provider_and_cli_config(
+        provider,
+        executor.command,
+        None,
+        &host.provider_cli_config(provider),
+    )
+    .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let agent = Agent::new(&config)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let (invocation, _) = agent

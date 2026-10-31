@@ -27,6 +27,43 @@ impl Store {
         .map_err(sqlite_store_error)
     }
 
+    /// Cursors for every named routine in one query, keyed by routine name.
+    pub fn routine_cursors_for(
+        &self,
+        names: &[String],
+    ) -> Result<std::collections::BTreeMap<String, RoutineCursor>, OrbitError> {
+        if names.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+        let placeholders = vec!["?"; names.len()].join(",");
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT routine_name, baseline_at, last_slot FROM routine_cursors
+                 WHERE routine_name IN ({placeholders})"
+            ))
+            .map_err(sqlite_store_error)?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = names
+            .iter()
+            .map(|name| name as &dyn rusqlite::types::ToSql)
+            .collect();
+        let rows = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok(RoutineCursor {
+                    routine_name: row.get(0)?,
+                    baseline_at: row.get(1)?,
+                    last_slot: row.get(2)?,
+                })
+            })
+            .map_err(sqlite_store_error)?;
+        let mut cursors = std::collections::BTreeMap::new();
+        for row in rows {
+            let cursor = row.map_err(sqlite_store_error)?;
+            cursors.insert(cursor.routine_name.clone(), cursor);
+        }
+        Ok(cursors)
+    }
+
     /// Record the first observation of a routine on this host. Idempotent:
     /// an existing cursor is left untouched, so the baseline never moves
     /// backwards or forwards once set. Returns whether a row was created.

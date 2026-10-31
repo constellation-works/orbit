@@ -2,8 +2,10 @@
 title: Terminal Interface — Overview
 owner: claude
 last_updated: 2026-08-02
-last_validated: 2026-10-18
+last_validated: 2026-10-28
 status: Accepted
+stage: shipped
+next: "—"
 feature: terminal-interface
 doc_role: overview
 type: design

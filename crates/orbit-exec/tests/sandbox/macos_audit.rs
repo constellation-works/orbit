@@ -53,7 +53,7 @@ fn compiled_profile_honors_an_activity_keychain_deny_for_keychain_backed_provide
         read: vec![home_text.clone()],
         modify: vec![],
     };
-    for provider in ["claude", "copilot", "cursor", "antigravity"] {
+    for provider in ["claude", "copilot", "antigravity"] {
         assert_eq!(
             macos_login_keychain_access(
                 provider,

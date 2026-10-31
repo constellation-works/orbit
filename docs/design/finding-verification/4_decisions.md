@@ -1,8 +1,8 @@
 ---
 title: Finding Verification — Decisions
 owner: claude
-last_updated: 2026-10-11
-last_validated: 2026-10-11
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Accepted
 feature: finding-verification
 doc_role: decisions
@@ -100,3 +100,40 @@ the next tier's pool. No new configuration key exists.
   implementation.
 - Cost: a single-member pool cannot avoid the filer's crew, and a workspace
   without pools verifies every finding with the default crew.
+
+## Reject findings in the pilot and the implementer by default
+
+**Recorded:** 2026-10 · [ORB-19635]
+**Code anchors:** `crates/orbit-core/src/application/task/finding_verification.rs::reject_invalid_finding`, `crates/orbit-engine/src/executor/automation/vcs/commit/finding_invalid.rs`
+
+### Context
+
+The verification job is off by default [ORB-15760]: findings are almost
+always true, so a dedicated verifier run costs more than it saves. Without
+it, nothing recorded a wrong finding, and an implementer could only leave
+one through the no-op exit, which requires a full gate run.
+
+### Decision
+
+The task pilot, which already reads the code at a pinned revision, may
+return `finding_invalid` for a review finding, and apply rejects the task.
+An implementer that finds the defect absent at pickup hands off a
+`finding-invalid.json` report with no gates, and the commit step rejects the
+task. Both reuse the verdict record and its write
+(`record_finding_verification`), marked by a `source` field, rather than a
+parallel store. The job remains the opt-in route with escalation.
+
+### Consequences
+
+- A wrong finding is rejected with evidence at no extra agent run, and the
+  REJECTED record exists for scorecards to read whichever route wrote it.
+- Cost: one agent's judgement decides, without the job's escalation tier,
+  and a claimed implementer can only block, not reject.
+
+## Task References
+
+- ORB-15662 — the separate verification job, the history-entry verdict record, and verifier crews from the complexity pools.
+- ORB-15760 — the opt-in verification gate that the default rejection routes avoid.
+- ORB-19635 — rejecting findings by default in the task pilot and the implementer.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

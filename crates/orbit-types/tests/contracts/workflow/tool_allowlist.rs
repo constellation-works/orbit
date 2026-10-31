@@ -35,10 +35,12 @@ fn agent_loop_activity(
         output_schema_json: Value::Null,
         fs_profile: None,
         spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
+            crew_name: None,
             instruction: "test".to_string(),
             steering_instruction: None,
             regression_risk_instruction: None,
             explore_instruction: None,
+            explore_brief_instruction: None,
             tools,
             on_denial: OnDenial::Terminate,
             model: None,
@@ -55,6 +57,7 @@ fn agent_loop_activity(
             tool_disallow_list: None,
             crew_env: Vec::new(),
             crew_account: None,
+            crew_vision_disabled: false,
         }),
     }
 }

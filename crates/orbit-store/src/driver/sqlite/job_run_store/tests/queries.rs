@@ -10,9 +10,22 @@ use rusqlite::types::Value;
 fn recency_pages_walk_an_index_instead_of_sorting_the_workspace() {
     let store = Store::open_in_memory().unwrap();
     let conn = store.read().unwrap();
-    for state in [None, Some(JobRunState::Failed)] {
+    // A `created_since` window on a single-state recency page (the failed-run
+    // page behind the auth-failure scan) must still walk the state-recency
+    // index. Without planner statistics, which the store never collects,
+    // SQLite instead ranges over the created-at window and sorts that whole
+    // retained cohort to answer a bounded page [ORB-20163].
+    let windowed = Some(parse_timestamp("2026-10-23T08:50:22+00:00").unwrap());
+    for (state, states, created_since) in [
+        (None, Vec::new(), None),
+        (Some(JobRunState::Failed), Vec::new(), None),
+        (Some(JobRunState::Failed), Vec::new(), windowed),
+        (None, vec![JobRunState::Failed], windowed),
+    ] {
         let query = JobRunQuery {
             state,
+            states,
+            created_since,
             limit: Some(50),
             order_by: JobRunOrder::Recency,
             ..JobRunQuery::default()
@@ -22,7 +35,7 @@ fn recency_pages_walk_an_index_instead_of_sorting_the_workspace() {
             .iter()
             .map(|param| match param.to_sql().unwrap() {
                 rusqlite::types::ToSqlOutput::Owned(value) => value,
-                rusqlite::types::ToSqlOutput::Borrowed(value) => value.into(),
+                rusqlite::types::ToSqlOutput::Borrowed(value) => Value::try_from(value).unwrap(),
                 other => panic!("unexpected parameter {other:?}"),
             })
             .collect::<Vec<Value>>();
@@ -32,7 +45,7 @@ fn recency_pages_walk_an_index_instead_of_sorting_the_workspace() {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        let index = if state.is_some() {
+        let index = if query.state.is_some() || !query.states.is_empty() {
             "idx_job_runs_ws_state_recency"
         } else {
             "idx_job_runs_ws_recency"

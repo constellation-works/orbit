@@ -278,3 +278,349 @@ fn build_directory_size_does_not_follow_symlinks() {
         "an outside file reachable only through a symlink is not part of the build directory"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn script_grants_cannot_override_state_or_git_protections() {
+    use orbit_exec::{ScriptSandboxSpec, compile_linux_script_argv};
+    use std::fs;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let cwd = dir.path().join("work");
+    let state = cwd.join(".orbit");
+    let global = dir.path().join("global");
+    let output = dir.path().join("output");
+    let scratch = dir.path().join("scratch");
+    for path in [&cwd, &state, &global, &output, &scratch, &cwd.join(".git")] {
+        fs::create_dir_all(path).expect("fixture directory");
+    }
+    let masked = vec![state.clone(), global.clone()];
+    let writable = vec![dir.path().to_path_buf(), cwd.clone(), output.clone()];
+    let spec = ScriptSandboxSpec {
+        cwd: &cwd,
+        cwd_writable: true,
+        scratch: &scratch,
+        readable: &[],
+        writable: &writable,
+        masked: &masked,
+        home: None,
+    };
+    let args =
+        compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).expect("compile profile");
+    let bind = |flag: &str, path: &std::path::Path| {
+        let path = path.to_str().expect("path");
+        args.windows(2)
+            .rposition(|pair| pair[0] == flag && pair[1] == path)
+            .expect("mount")
+    };
+    let last_grant = bind("--bind", &output)
+        .max(bind("--bind", &cwd))
+        .max(bind("--bind", dir.path()));
+    for path in [&state, &global] {
+        assert!(
+            bind("--tmpfs", path) > last_grant,
+            "state mask must win over every grant"
+        );
+    }
+    assert!(
+        bind("--ro-bind", &cwd.join(".git")) > last_grant,
+        "Git metadata must stay read-only"
+    );
+
+    let enclosing_mask = vec![dir.path().to_path_buf()];
+    let spec = ScriptSandboxSpec {
+        masked: &enclosing_mask,
+        ..spec
+    };
+    assert!(
+        compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).is_err(),
+        "a grant must not expose an enclosing state tree"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn script_profile_preserves_masks_with_overlapping_grant() {
+    use orbit_exec::{ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxSpec, run_script_sandboxed};
+    use std::fs;
+
+    if !build_sandbox_available("script_profile_preserves_masks_with_overlapping_grant") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("fixture");
+    let cwd = dir.path().join("work");
+    let state = cwd.join(".orbit");
+    let git = cwd.join(".git");
+    let global = dir.path().join("global");
+    let output = dir.path().join("output");
+    let scratch = dir.path().join("scratch");
+    for path in [&state, &git, &global, &output, &scratch] {
+        fs::create_dir_all(path).expect("fixture directory");
+    }
+    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
+        fs::create_dir_all(scratch.join(name)).expect("scratch directory");
+    }
+    fs::write(state.join("secret"), "secret").expect("state");
+    fs::write(global.join("secret"), "secret").expect("global");
+    let masked = vec![state.clone(), global.clone()];
+    let writable = vec![dir.path().to_path_buf(), cwd.clone(), output.clone()];
+    let script = format!(
+        "test ! -e '{}/secret' && test ! -e '{}/secret' && ! touch '{}/new' && echo ok > '{}/result'",
+        state.display(),
+        global.display(),
+        git.display(),
+        output.display()
+    );
+    let argv = vec!["/bin/sh".into(), "-c".into(), script];
+    let run = run_script_sandboxed(ScriptSandboxRequest {
+        sandbox: ScriptSandboxSpec {
+            cwd: &cwd,
+            cwd_writable: true,
+            scratch: &scratch,
+            readable: &[],
+            writable: &writable,
+            masked: &masked,
+            home: None,
+        },
+        argv: &argv,
+        env: &[],
+        launcher: &[],
+        launcher_env: &[],
+        stdin: vec![],
+        timeout: Duration::from_secs(20),
+        scratch_cap_bytes: u64::MAX,
+    })
+    .expect("run script");
+    assert_eq!(
+        run.end,
+        ScriptRunEnd::Exited(0),
+        "{}",
+        String::from_utf8_lossy(&run.log)
+    );
+    assert_eq!(
+        fs::read_to_string(output.join("result")).expect("output"),
+        "ok\n"
+    );
+    assert!(!git.join("new").exists());
+}
+
+/// A script in a linked worktree reads the repository's Git metadata, which
+/// lives in the common directory, and that directory is never writable.
+#[cfg(target_os = "linux")]
+mod script_linked_worktree {
+    use super::build_sandbox_available;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    use orbit_exec::{
+        SCRIPT_SCRATCH_DIRS, ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxSpec,
+        compile_linux_script_argv, run_script_sandboxed,
+    };
+
+    struct LinkedWorktree {
+        _temp: tempfile::TempDir,
+        worktree: PathBuf,
+        common: PathBuf,
+        gitdir: PathBuf,
+        scratch: PathBuf,
+    }
+
+    fn git(cwd: &Path, args: &[&str]) -> String {
+        let output = crate::git_test_support::command()
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .current_dir(cwd)
+            .args(["-c", "commit.gpgSign=false"])
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.com",
+            ])
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("utf8 git output")
+            .trim()
+            .to_string()
+    }
+
+    fn linked_worktree() -> LinkedWorktree {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().canonicalize().expect("canonical root");
+        let primary = root.join("primary");
+        let worktree = root.join("worktree");
+        let scratch = root.join("scratch");
+        fs::create_dir(&primary).expect("primary");
+        git(&primary, &["init", "-q"]);
+        git(
+            &primary,
+            &["commit", "-q", "--allow-empty", "-m", "fixture"],
+        );
+        git(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "linked",
+                worktree.to_str().expect("utf8 worktree path"),
+            ],
+        );
+        for directory in SCRIPT_SCRATCH_DIRS {
+            fs::create_dir_all(scratch.join(directory)).expect("scratch directory");
+        }
+        let common = primary
+            .join(".git")
+            .canonicalize()
+            .expect("common directory");
+        let gitdir = common.join("worktrees").join("worktree");
+        LinkedWorktree {
+            worktree: worktree.canonicalize().expect("worktree"),
+            common,
+            gitdir,
+            scratch: scratch.canonicalize().expect("scratch"),
+            _temp: temp,
+        }
+    }
+
+    /// Where a read-only bind of `path` onto itself sits in the argv.
+    fn ro_bind_at(argv: &[String], path: &Path) -> Option<usize> {
+        let path = path.display().to_string();
+        argv.windows(3)
+            .position(|bind| bind[0] == "--ro-bind" && bind[1] == path && bind[2] == path)
+    }
+
+    #[test]
+    fn the_common_git_directory_is_read_only_beneath_the_worktree_gitdir() {
+        let fixture = linked_worktree();
+        let spec = ScriptSandboxSpec {
+            cwd: &fixture.worktree,
+            cwd_writable: true,
+            scratch: &fixture.scratch,
+            readable: &[],
+            writable: &[],
+            masked: &[],
+            home: None,
+        };
+        let argv = compile_linux_script_argv(&spec, &[], &["/usr/bin/true".to_string()])
+            .expect("compile profile");
+        let pointer_at = ro_bind_at(&argv, &fixture.worktree.join(".git"))
+            .expect("the worktree Git pointer is bound read-only");
+        let cwd = fixture.worktree.display().to_string();
+        let cwd_at = argv
+            .windows(3)
+            .position(|bind| bind[0] == "--bind" && bind[1] == cwd && bind[2] == cwd)
+            .expect("the worktree is bound writable");
+        assert!(
+            pointer_at > cwd_at,
+            "the pointer bind must cover the writable worktree"
+        );
+        let common_at = ro_bind_at(&argv, &fixture.common)
+            .expect("the common Git directory is bound read-only");
+        let gitdir_at =
+            ro_bind_at(&argv, &fixture.gitdir).expect("the per-worktree gitdir is bound read-only");
+        assert!(
+            common_at < gitdir_at,
+            "the per-worktree gitdir must mount over the common directory: {argv:?}"
+        );
+        let worktree = fixture.worktree.display().to_string();
+        assert!(
+            argv.windows(3)
+                .any(|bind| bind[0] == "--bind" && bind[1] == worktree && bind[2] == worktree),
+            "the run worktree stays writable: {argv:?}"
+        );
+        let common = fixture.common.display().to_string();
+        assert!(
+            !argv
+                .windows(3)
+                .any(|bind| bind[0] == "--bind" && bind[1] == common),
+            "the common Git directory is never writable: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn a_script_in_a_linked_worktree_reads_git_and_keeps_its_writes() {
+        if !build_sandbox_available("a_script_in_a_linked_worktree_reads_git_and_keeps_its_writes")
+        {
+            return;
+        }
+        let fixture = linked_worktree();
+        let head = git(&fixture.worktree, &["rev-parse", "HEAD"]);
+        let config = fixture.common.join("config");
+        let config_before = fs::read(&config).expect("common config");
+        let pointer_before = fs::read(fixture.worktree.join(".git")).expect("Git pointer");
+        let script = format!(
+            "set -eu\n\
+             git rev-parse HEAD\n\
+             git log -1 --format=%H\n\
+             git status --porcelain\n\
+             git archive --format=tar -o /orbit-script/out/archive.tar HEAD\n\
+             echo generated > generated.txt\n\
+             if (echo tampered >> '{}') 2>/dev/null; then exit 3; fi\n\
+             if (: > .git) 2>/dev/null; then exit 4; fi\n\
+             if rm .git 2>/dev/null; then exit 5; fi\n\
+             if mv .git moved-git 2>/dev/null; then exit 6; fi\n\
+             echo replacement > replacement\n\
+             if mv -f replacement .git 2>/dev/null; then exit 7; fi\n\
+             if ln -sf replacement .git 2>/dev/null; then exit 8; fi\n",
+            config.display()
+        );
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), script];
+        let env = vec![
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("HOME".to_string(), "/orbit-script/home".to_string()),
+        ];
+        let request = ScriptSandboxRequest {
+            sandbox: ScriptSandboxSpec {
+                cwd: &fixture.worktree,
+                cwd_writable: true,
+                scratch: &fixture.scratch,
+                readable: &[],
+                writable: &[],
+                masked: &[],
+                home: None,
+            },
+            argv: &argv,
+            env: &env,
+            launcher: &[],
+            launcher_env: &[],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(60),
+            scratch_cap_bytes: 64 * 1024 * 1024,
+        };
+        let run = run_script_sandboxed(request).expect("run the script");
+        assert_eq!(
+            run.end,
+            ScriptRunEnd::Exited(0),
+            "log: {}",
+            String::from_utf8_lossy(&run.log)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            format!("{head}\n{head}\n")
+        );
+        assert!(fixture.scratch.join("out/archive.tar").is_file());
+        assert_eq!(
+            fs::read(fixture.worktree.join(".git")).expect("Git pointer"),
+            pointer_before
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.worktree.join("generated.txt")).expect("source write"),
+            "generated\n"
+        );
+        assert_eq!(
+            fs::read(&config).expect("common config"),
+            config_before,
+            "the common Git config is unchanged"
+        );
+    }
+}

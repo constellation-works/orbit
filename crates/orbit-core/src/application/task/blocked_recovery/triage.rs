@@ -4,9 +4,10 @@
 //! Every block already gets one recovery decision — final recovery in the
 //! pipeline, or the backstop outside it. What stays blocked is what that
 //! decision escalated, plus blocks the backstop never decides (older than
-//! [`MAX_EPISODE_AGE_HOURS`]). The `blocked-task-triage` auto-task reads each
-//! such episode once and records one of three dispositions through
-//! [`OrbitRuntime::record_block_triage`]:
+//! [`MAX_EPISODE_AGE_HOURS`]). The seeded `blocked_task_triage` routine
+//! (`kind: block_escalated`) admits each such episode once into
+//! `escalation_triage_pipeline`, whose hard-tier triager records one of three
+//! dispositions through [`OrbitRuntime::record_block_triage`]:
 //!
 //! - **requeue** (mechanical): back to `backlog` as a final-recovery requeue,
 //!   counted against the same [`FinalRecoveryRequeueBound`] and recorded with
@@ -14,8 +15,9 @@
 //!   past the bound is refused and recorded; an unreadable count refuses
 //!   without writing.
 //! - **propose** (decision): one comment with the quoted blocker, the
-//!   options, a recommendation and ready-to-apply replacement text. Nothing
-//!   else on the task changes.
+//!   options, a recommendation and, per option, the field it rewrites and
+//!   the ready-to-apply replacement text. Nothing else on the task changes
+//!   until an operator answers an option.
 //! - **report** (human-only): one comment naming the human action.
 //!
 //! Each records a [`BLOCKED_TASK_TRIAGED_EVENT`] in the task history, which
@@ -29,8 +31,9 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactManifestFileV2, FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, Task, TaskComment,
-    TaskDecision, TaskHistoryEntry, TaskStatus,
+    ArtifactManifestFileV2, DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest,
+    FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, Task, TaskComment, TaskDecision,
+    TaskHistoryEntry, TaskStatus,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -42,6 +45,7 @@ use super::MAX_EPISODE_AGE_HOURS;
 use super::episode::{FinalRecoveryRecord, LaterTouch, later_touch};
 use super::readout::{blocking_run_id, current_block, is_escalation};
 use crate::OrbitRuntime;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// History event that marks a block episode triaged.
 pub const BLOCKED_TASK_TRIAGED_EVENT: &str = "blocked_task_triaged";
@@ -74,6 +78,38 @@ pub struct TriageEpisode {
     pub block_note: String,
     /// The escalation's recorded comment, when it wrote one.
     pub escalation: Option<String>,
+}
+
+impl TriageEpisode {
+    /// The episode's identity, as its triage marker records it: the time the
+    /// task last moved to `blocked`, to the nanosecond.
+    pub fn key(&self) -> String {
+        episode_key(self.blocked_at)
+    }
+}
+
+fn episode_key(blocked_at: DateTime<Utc>) -> String {
+    blocked_at.to_rfc3339_opts(SecondsFormat::Nanos, true)
+}
+
+/// When the triage marker for the episode whose [key](TriageEpisode::key) is
+/// `episode` was recorded. A requeue moves the task on, so this reads the
+/// marker itself rather than the task's current candidacy.
+pub(crate) fn block_triaged_at(
+    history: &[TaskHistoryEntry],
+    episode: &str,
+) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .find(|entry| {
+            entry.event == BLOCKED_TASK_TRIAGED_EVENT
+                && entry.by == SYSTEM_ACTOR_LABEL
+                && entry.note.as_deref().is_some_and(|note| {
+                    note.split_whitespace()
+                        .any(|field| field.strip_prefix("episode=") == Some(episode))
+                })
+        })
+        .map(|entry| entry.at)
 }
 
 /// Whether a task's current block episode awaits triage, and why not.
@@ -124,7 +160,9 @@ impl TriageCandidacy {
         }
     }
 
-    fn detail(&self) -> String {
+    /// Human-readable detail for the candidacy, naming the episode state
+    /// behind it.
+    pub fn detail(&self) -> String {
         match self {
             Self::Qualifies(episode) => format!("qualifies ({:?})", episode.basis),
             Self::NotBlocked => "the task is not blocked".to_string(),
@@ -278,10 +316,49 @@ pub struct TriageOption {
     pub summary: String,
     /// What choosing it leads to.
     pub consequences: String,
-    /// The exact replacement text for each changed description section or
-    /// criterion, ready to apply.
+    /// The task field `replacement` rewrites. Without it an operator's
+    /// answer cannot apply the option and is refused.
+    pub target: Option<TriageTarget>,
+    /// The complete new value of the `target` field, ready to apply.
     pub replacement: String,
 }
+
+/// The task field a decision option's replacement text rewrites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriageTarget {
+    /// The whole acceptance-criteria list, one criterion per line (a leading
+    /// `- ` or `* ` bullet is dropped).
+    AcceptanceCriteria,
+    /// The whole description.
+    Description,
+}
+
+impl TriageTarget {
+    /// The spelling a proposal carries and its comment records.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AcceptanceCriteria => "acceptance_criteria",
+            Self::Description => "description",
+        }
+    }
+
+    /// The target `value` spells, if any.
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::AcceptanceCriteria, Self::Description]
+            .into_iter()
+            .find(|target| target.as_str() == value)
+    }
+}
+
+/// Sequences the proposal comment's layout uses to find an option's parts
+/// again when an answer applies it; no option text may contain one.
+const RESERVED_PROPOSAL_SEQUENCES: [&str; 5] = [
+    "\n\nOption ",
+    "\n\nRecommended:",
+    "\nConsequences: ",
+    "\nApplies to: ",
+    "\nReplacement text:\n",
+];
 
 /// A triage decision for one task's current episode.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,9 +381,25 @@ struct TriageWrite {
     comment: String,
     requeue: Option<(usize, FinalRecoveryRequeueBound)>,
     refusal: Option<String>,
+    decision_answers: Option<Vec<DecisionAnswer>>,
 }
 
 impl OrbitRuntime {
+    /// `task`'s current block episode candidacy at `now`, from its current
+    /// history, comments and artifacts: [`triage_candidacy`], the one
+    /// definition the triage tool, the auto-task precondition and the
+    /// `block_escalated` trigger share.
+    pub fn block_triage_candidacy_of(
+        &self,
+        task: &Task,
+        now: DateTime<Utc>,
+    ) -> Result<TriageCandidacy, OrbitError> {
+        let history = self.get_task_history(&task.id)?;
+        let comments = self.get_task_comments(&task.id)?;
+        let artifacts = self.get_task_artifact_manifest(&task.id)?;
+        Ok(triage_candidacy(task, &history, &comments, &artifacts, now))
+    }
+
     /// Every blocked task with its current episode's triage candidacy,
     /// oldest block first.
     pub fn blocked_triage_view(
@@ -317,10 +410,7 @@ impl OrbitRuntime {
         for task in
             self.list_tasks_filtered(Some(TaskStatus::Blocked), None, None, None, None, None)?
         {
-            let history = self.get_task_history(&task.id)?;
-            let comments = self.get_task_comments(&task.id)?;
-            let artifacts = self.get_task_artifact_manifest(&task.id)?;
-            let candidacy = triage_candidacy(&task, &history, &comments, &artifacts, now);
+            let candidacy = self.block_triage_candidacy_of(&task, now)?;
             views.push(BlockedTriageView { task, candidacy });
         }
         views.sort_by_key(|view| match &view.candidacy {
@@ -391,24 +481,20 @@ impl OrbitRuntime {
         let mut answer = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
-            let history = self.get_task_history(id)?;
-            let comments = self.get_task_comments(id)?;
-            let artifacts = self.get_task_artifact_manifest(id)?;
-            let episode =
-                match triage_candidacy(&task, &history, &comments, &artifacts, Utc::now()) {
-                    TriageCandidacy::Qualifies(episode) => episode,
-                    other => {
-                        return Err(OrbitError::InvalidInput(format!(
-                            "{id} has no block episode awaiting triage: {}; nothing was recorded",
-                            other.detail()
-                        )));
-                    }
-                };
+            let episode = match self.block_triage_candidacy_of(&task, Utc::now())? {
+                TriageCandidacy::Qualifies(episode) => episode,
+                other => {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "{id} has no block episode awaiting triage: {}; nothing was recorded",
+                        other.detail()
+                    )));
+                }
+            };
             let write = self.plan_triage(&task, &episode, &blocker, &decision, request)?;
             self.write_triage(&task, &episode, &write)?;
             answer = Some(json!({
                 "task_id": id,
-                "episode": episode.blocked_at.to_rfc3339_opts(SecondsFormat::Nanos, true),
+                "episode": episode.key(),
                 "disposition": write.disposition,
                 "outcome": write.outcome,
                 "status": if write.outcome == "requeued" { TaskStatus::Backlog } else { TaskStatus::Blocked },
@@ -443,11 +529,7 @@ impl OrbitRuntime {
                 request.requested_by
             )
         };
-        let quoted = blocker
-            .lines()
-            .map(|line| format!("> {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let quoted = quote(blocker);
         Ok(match decision {
             BlockTriageDecision::Requeue { repair } => {
                 let refused = |reason: String, human_action: &str| TriageWrite {
@@ -459,6 +541,7 @@ impl OrbitRuntime {
                     ),
                     requeue: None,
                     refusal: Some(reason),
+                    decision_answers: None,
                 };
                 if let Some(reason) = operator_only_requeue(self, task) {
                     return Ok(refused(
@@ -507,36 +590,26 @@ impl OrbitRuntime {
                     ),
                     requeue: Some((recent + 1, bound)),
                     refusal: None,
+                    decision_answers: None,
                 }
             }
             BlockTriageDecision::Propose {
                 options,
                 recommended,
-            } => {
-                let mut comment = format!("{}\nblocker:\n{quoted}", header("decision", "proposed"));
-                for (index, option) in options.iter().enumerate() {
-                    comment.push_str(&format!(
-                        "\n\nOption {}: {}\nConsequences: {}\nReplacement text:\n{}",
-                        index + 1,
-                        option.summary,
-                        option.consequences,
-                        option.replacement
-                    ));
-                }
-                comment.push_str(&format!(
-                    "\n\nRecommended: option {recommended} ({})\nNothing else on this task was \
-                     changed: apply the chosen replacement text with `orbit task update`, then \
-                     move the task back to backlog.",
-                    options[*recommended - 1].summary
-                ));
-                TriageWrite {
-                    disposition: "decision",
-                    outcome: "proposed",
-                    comment,
-                    requeue: None,
-                    refusal: None,
-                }
-            }
+            } => TriageWrite {
+                disposition: "decision",
+                outcome: "proposed",
+                comment: format!(
+                    "{}\nblocker:\n{quoted}{}\nNothing else on this task was changed: apply the \
+                     chosen replacement text with `orbit task update`, then move the task back to \
+                     backlog.",
+                    header("decision", "proposed"),
+                    proposal_text(options, *recommended)
+                ),
+                requeue: None,
+                refusal: None,
+                decision_answers: Some(proposal_answers(options)),
+            },
             BlockTriageDecision::Report { human_action } => TriageWrite {
                 disposition: "human_only",
                 outcome: "reported",
@@ -546,6 +619,7 @@ impl OrbitRuntime {
                 ),
                 requeue: None,
                 refusal: None,
+                decision_answers: None,
             },
         })
     }
@@ -571,9 +645,7 @@ impl OrbitRuntime {
                 "disposition={} outcome={} episode={}",
                 write.disposition,
                 write.outcome,
-                episode
-                    .blocked_at
-                    .to_rfc3339_opts(SecondsFormat::Nanos, true)
+                episode.key()
             )),
             from_status: None,
             to_status: None,
@@ -600,9 +672,25 @@ impl OrbitRuntime {
                     outcome: RecordedFinalRecovery::Requeued,
                 }),
             });
-            history.extend(self.published_owner_requeue_record(task, run_id)?);
+            history.extend(self.published_owner_preservation(task, run_id)?);
         }
         history.push(marker);
+        if self.decision_channel_enabled()
+            && let Some(answers) = &write.decision_answers
+        {
+            let binding = DecisionBinding::BlockEpisode {
+                episode: episode.key(),
+            };
+            let request = DecisionRequest::new(
+                task.id.clone(),
+                DecisionGate::BlockTriage,
+                answers.clone(),
+                binding,
+                "block_triage".to_string(),
+                now,
+            );
+            history.push(request.history_entry(SYSTEM_ACTOR_LABEL));
+        }
         let status_note = requeued.then(|| match &episode.run_id {
             Some(run_id) => format!(
                 "final recovery (run_id={run_id}): blocked-task triage requeue: {}",
@@ -638,6 +726,26 @@ impl OrbitRuntime {
     }
 }
 
+/// Allowed answers for a decision proposal: the option numbers its
+/// comment prints, plus `dismiss` (leave blocked for this episode).
+fn proposal_answers(options: &[TriageOption]) -> Vec<DecisionAnswer> {
+    let mut answers: Vec<DecisionAnswer> = options
+        .iter()
+        .enumerate()
+        .map(|(index, option)| DecisionAnswer {
+            id: (index + 1).to_string(),
+            label: option.summary.clone(),
+            consequence: option.consequences.clone(),
+        })
+        .collect();
+    answers.push(DecisionAnswer {
+        id: "dismiss".to_string(),
+        label: "Dismiss".to_string(),
+        consequence: "Leave blocked, stop asking for this episode.".to_string(),
+    });
+    answers
+}
+
 /// Why only an operator may requeue `task`, when only one may: a security
 /// tag, or a run another machine executed whose evidence this owner cannot
 /// read.
@@ -665,16 +773,7 @@ fn operator_only_requeue(runtime: &OrbitRuntime, task: &Task) -> Option<String> 
 }
 
 fn validated(decision: &BlockTriageDecision) -> Result<BlockTriageDecision, OrbitError> {
-    let text = |value: &str, field: &str| {
-        let value = redact_all(value.trim());
-        if value.is_empty() {
-            Err(OrbitError::InvalidInput(format!(
-                "block triage needs a non-empty `{field}`"
-            )))
-        } else {
-            Ok(value)
-        }
-    };
+    let text = triage_text;
     Ok(match decision {
         BlockTriageDecision::Requeue { repair } => BlockTriageDecision::Requeue {
             repair: text(repair, "reason")?,
@@ -685,34 +784,102 @@ fn validated(decision: &BlockTriageDecision) -> Result<BlockTriageDecision, Orbi
         BlockTriageDecision::Propose {
             options,
             recommended,
-        } => {
-            if !(2..=3).contains(&options.len()) {
-                return Err(OrbitError::InvalidInput(format!(
-                    "a decision proposal needs two or three `options`, not {}",
-                    options.len()
-                )));
-            }
-            if !(1..=options.len()).contains(recommended) {
-                return Err(OrbitError::InvalidInput(format!(
-                    "`recommended` must name one of the {} options (1-based)",
-                    options.len()
-                )));
-            }
-            BlockTriageDecision::Propose {
-                options: options
-                    .iter()
-                    .map(|option| {
-                        Ok(TriageOption {
-                            summary: text(&option.summary, "options[].summary")?,
-                            consequences: text(&option.consequences, "options[].consequences")?,
-                            replacement: text(&option.replacement, "options[].replacement")?,
-                        })
-                    })
-                    .collect::<Result<_, OrbitError>>()?,
-                recommended: *recommended,
-            }
-        }
+        } => BlockTriageDecision::Propose {
+            options: validated_proposal(options, *recommended)?,
+            recommended: *recommended,
+        },
     })
+}
+
+/// A decision proposal's options, trimmed and redacted: two or three, each
+/// with every text non-empty, and `recommended` naming one of them (1-based).
+/// Shared by every triage subject that proposes.
+pub(crate) fn validated_proposal(
+    options: &[TriageOption],
+    recommended: usize,
+) -> Result<Vec<TriageOption>, OrbitError> {
+    if !(2..=3).contains(&options.len()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "a decision proposal needs two or three `options`, not {}",
+            options.len()
+        )));
+    }
+    if !(1..=options.len()).contains(&recommended) {
+        return Err(OrbitError::InvalidInput(format!(
+            "`recommended` must name one of the {} options (1-based)",
+            options.len()
+        )));
+    }
+    options
+        .iter()
+        .map(|option| {
+            Ok(TriageOption {
+                summary: proposal_field(&option.summary, "options[].summary")?,
+                consequences: proposal_field(&option.consequences, "options[].consequences")?,
+                target: option.target,
+                replacement: proposal_field(&option.replacement, "options[].replacement")?,
+            })
+        })
+        .collect()
+}
+
+/// A proposal option text: [`triage_text`] that also leaves the proposal
+/// comment's layout unambiguous.
+fn proposal_field(value: &str, field: &str) -> Result<String, OrbitError> {
+    let text = triage_text(value, field)?;
+    match RESERVED_PROPOSAL_SEQUENCES
+        .iter()
+        .find(|reserved| text.contains(**reserved))
+    {
+        Some(reserved) => Err(OrbitError::InvalidInput(format!(
+            "`{field}` must not contain the proposal layout sequence {reserved:?}"
+        ))),
+        None => Ok(text),
+    }
+}
+
+/// `value` trimmed and redacted, refused when that leaves nothing.
+pub(crate) fn triage_text(value: &str, field: &str) -> Result<String, OrbitError> {
+    let value = redact_all(value.trim());
+    if value.is_empty() {
+        Err(OrbitError::InvalidInput(format!(
+            "block triage needs a non-empty `{field}`"
+        )))
+    } else {
+        Ok(value)
+    }
+}
+
+/// `text` as a Markdown quote, line by line.
+pub(crate) fn quote(text: &str) -> String {
+    text.lines()
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The options and recommendation of a validated proposal, as a proposal
+/// comment lists them.
+pub(crate) fn proposal_text(options: &[TriageOption], recommended: usize) -> String {
+    let mut text = String::new();
+    for (index, option) in options.iter().enumerate() {
+        let applies_to = option
+            .target
+            .map(|target| format!("\nApplies to: {}", target.as_str()))
+            .unwrap_or_default();
+        text.push_str(&format!(
+            "\n\nOption {}: {}\nConsequences: {}{applies_to}\nReplacement text:\n{}",
+            index + 1,
+            option.summary,
+            option.consequences,
+            option.replacement
+        ));
+    }
+    text.push_str(&format!(
+        "\n\nRecommended: option {recommended} ({})",
+        options[recommended - 1].summary
+    ));
+    text
 }
 
 /// `requeue n of 2 per 24h`, as the comment and the run summary state it.

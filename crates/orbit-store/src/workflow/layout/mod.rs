@@ -50,6 +50,7 @@ mod registry;
 mod steps;
 mod upgrade;
 
+pub use marker::layout_ever_stamped;
 pub use registry::SUPPORTED_LAYOUT_VERSION;
 pub(crate) use registry::layout_compatibility;
 pub use upgrade::{

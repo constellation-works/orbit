@@ -10,6 +10,41 @@ Treat runtime state as evidence. Do not edit files under `~/.orbit/state/`,
 `.orbit/state/`, or the system journal to make a warning disappear. Logs can
 contain task content and command output, so report only the decisive lines.
 
+## Prompt-Size Cost Accounting
+
+Prompt-size tiers are selected per model request, using that request's whole
+input-side prompt: uncached input plus cache reads and cache-creation tokens,
+including a separate longer-lived cache-write bucket when the provider reports
+one. When per-request usage is available, every request that reaches a tier's
+threshold is priced at that tier's rates for the whole request; requests below
+the threshold use the base rates. Invocation-wide totals cannot show which
+individual requests reached the threshold.
+
+Orbit derives an estimate from the recorded model, time and available usage
+against its versioned model-rate table. A provider-reported amount, when
+available, is separate from this derived estimate. Neither figure is a promise
+about an external invoice or a claim about current provider prices.
+
+Treat an unknown derived cost as unavailable, not as zero. It can mean that no
+rate row covers the model and time, the reported input and cache buckets are
+inconsistent, or a prompt-size tier might apply but per-request usage was not
+captured. Without per-request usage, an invocation total below the tier
+threshold proves no request could have reached it, so base-rate cost remains
+known; a total at or above the threshold cannot identify the qualifying
+requests, so cost stays unknown. A captured empty list means all relevant
+requests stayed below the capture floor; a missing list means that request
+detail was unavailable.
+
+To check a cost figure, open **Analytics › Cost**, choose the workspace and
+time window, and review **Provider-reported** and **Derived estimate** with
+their coverage counts. Use **Same-invocation comparison** only when its count
+is nonzero; the separate totals can cover different invocations. The model
+token totals show normalized usage attribution, not a cross-provider cost
+ranking. If derived coverage is short, use the model and time range to check
+whether a rate applies, then whether request-level usage is available for
+invocations that could have crossed a prompt threshold. A gap in coverage is
+not evidence of zero usage or zero spend.
+
 ## Identify the Source
 
 There are four separate operational evidence sources (plus, on Linux, each
@@ -113,6 +148,20 @@ orbit audit list --json --limit 100
 orbit audit stats --since 7d
 ```
 
+To inspect one invocation, list matching events as JSON and take the numeric
+`id` from the event object. The JSON list is an array; filters such as
+`--since` and `--status` can narrow it to the event you need:
+
+```bash
+orbit audit list --json --since 1h --status failure
+orbit audit show <event_id> --json
+```
+
+Replace `<event_id>` with the selected event's `id`. Confirm that the `id` in
+the returned detail matches, then review its command, timestamp, status, exit
+code and any error or target fields relevant to the investigation. `show`
+returns the full event record, while the default list view is a summary.
+
 Use `orbit log tail` for trace events, `orbit audit` for persistent invocation
 metadata, and the run commands below for a single pipeline's detailed audit
 trail.
@@ -147,7 +196,8 @@ orbit config show
 
 Profiles summarize per-delivery CPU and memory by workspace, work class and
 complexity on this host; `auto-task:<template>` profiles omit complexity.
-They use recent completed deliveries from the last 30 days, excluding resumed
+They use each key's last `profile_window` completed deliveries, whatever their
+age, under the newest crew model and Orbit version, excluding resumed
 or retried deliveries. Sparse keys fall back to broader profiles; inspect
 sample counts and spread before drawing conclusions. `BUILD_FLAG` identifies
 no-diff work using more than one core for two consecutive minutes, with its
@@ -168,6 +218,104 @@ New unattended admissions hold within `machine.host_shutdown_hold_minutes`
 Running work is left alone by the hold. Report the schedule and configured
 window; preserve the hold and operator capacity policy rather than raising
 concurrency, changing forecast thresholds, or cancelling a shutdown automatically.
+
+## Provider failure holds
+
+A local run can stop because its provider failed rather than the work. The
+step error then carries a typed marker followed by `provider=<name>`. Only
+the provider CLI's own stderr, terminal error, or failure frames set a
+marker; an agent transcript or tool output that merely mentions a rate limit
+does not. Treat this as read-only diagnosis: the hold lifts by itself, and
+the next run resumes the kept candidate. Do not clear state files, unblock
+or replay the task, file a duplicate, or dispatch repeatedly to force it
+through.
+
+| Marker | Meaning | Run outcome | Excluded crews | Base backoff |
+| --- | --- | --- | --- | --- |
+| `[provider_capacity]` | The selected model was at capacity. | `held` (`provider_capacity`) | The run's crew, or, when the step ran on another provider or account, only the named account's crew (`account=<crew>`), or the provider's crews without their own credentials for a default-login failure. | 15 minutes |
+| `[provider_unavailable]` | Unusable on this host, such as a failed login. | `failed`; the task is still held | The run's crew, or, when the step ran on another provider or account, only the named account's crew (`account=<crew>`), or the provider's crews without their own credentials for a default-login failure. | 30 minutes |
+| `[provider_refusal]` | The provider's content policy refused the task. | `failed`; the task is still held | Every crew of the refusing provider. | 24 hours |
+| `[provider_limit]` | The account hit a usage limit. | `held` (`provider_limit`) | The failing account's crews on that provider. If the failure names a model and at least one of them runs a model containing it (case-insensitive), only those crews; otherwise all of them. | Until the reported reset (below) |
+
+Capacity, unavailability, and refusal backoffs double for each earlier hold
+the task received in the last 24 hours, up to 24 hours. A usage-limit hold
+lasts until the provider's reset, clamped between 5 minutes and 7 days;
+with no readable reset it starts at 30 minutes and doubles per earlier
+usage-limit hold on that provider account in the last 24 hours, up to
+6 hours.
+
+A crew that sets its own credentials is its own account: the marker then
+carries `account=<crew>` after the provider, and a limit, capacity, or
+unavailability failure excludes that crew alone. A failure without one is
+the provider's default login and excludes only the provider's crews without
+their own credentials. A refusal is the provider's content policy and still
+excludes every crew of that provider. An unavailability hold also names the
+host's machine: a failed login is that host's, so its crews are excluded
+only there, while crews an earlier still-standing capacity, limit, or
+refusal hold excluded stay excluded on every machine. A claimed run on
+another host that a provider refused releases its claim the same way, and
+the owner records the hold from its own crews.
+
+Until the release time, the drain gives the task to a crew the hold does
+not exclude: the task's own crew or pool first, then the other enabled
+members of its purpose or type pool, then its complexity pool, then the
+workspace default. One case differs. Under the default
+`workflow.provider_limit_explicit_crews = wait`, a usage-limit hold on the
+task's explicit crew (`crew_source` `explicit`, or a legacy pin) does not
+redraw it: the task waits in the backlog until the release time. Under
+`pool`, it is drawn from its complexity pool and then the workspace default,
+as above. The draw source names the hold. With no crew left, the task waits
+and `orbit run readiness` reports it with `reason: "provider_backoff"` and
+the release time. A run started with an explicit crew input ignores the
+hold. The hold ends at the release time or at any
+later status change; do not move the task just to lift it. The next run
+resumes the committed candidate: a held run commits it on the run's branch
+and pushes it to the candidate ref on the origin without opening a branch
+or a pull request, so there is nothing to re-run or rebuild by hand.
+
+Inspect the hold through these read-only surfaces:
+
+```bash
+orbit run show <run-id> --no-reconcile --json
+orbit task show <task-id>
+orbit run readiness <task-id> --json
+```
+
+The `--no-reconcile` flag reads stored run records without reconciling stale
+runs or settling orphaned pull claims. The default `orbit run show` command can
+reconcile a stale run, release its task reservations, and settle orphaned pull
+claims, so it is not read-only.
+
+`orbit run show` names the marker (`provider=<name>`, with
+`account=<crew>` for a crew account), the diagnostic code, and whether the
+run ended `held` or `failed`. `orbit task show` leaves the task in
+`backlog` under a `provider_failure_hold` history event whose note names
+the class, provider, excluded crews, release time, and run. `orbit run
+readiness` reports the waiting task with `reason: "provider_backoff"` and a
+detail naming that run, class, excluded crews, and release time; eligibility
+commands alone never clear it. Check `orbit run readiness --help`,
+`orbit run show --help`, and `orbit task show --help` on the installed host
+for the exact output shape before scripting around it.
+
+Separate the hold from two lookalikes. A host outage from an
+unavailability failure is recorded for this host only: until its backoff
+lapses the local drain draws no task onto that crew, not only the held one,
+and moving the held task through another status does not lift that. Sign
+the provider in again on that host; tasks draw the crew once the outage
+lapses. An unavailability hold placed on another host excludes only the
+crews carried from an earlier still-standing capacity, limit, or refusal
+hold; those stay excluded on every machine. A provider usage-budget wait
+instead reports `reason:
+"provider_limit"` with a `Provider limits:` line naming each gated window,
+its reset, and the skipped crews; `orbit doctor` warns on the provider's
+`provider-limits` row. Nothing failed and nothing needs repair there: the
+wait lifts by itself after the reset. Thresholds and budgets are in
+[configuration.md](configuration.md#common-settings). When the scheduled
+task pilot withholds its dispatch, its reason names the provider or crew,
+when the backoff ends, the failing run, and the skipped crews. After the
+hold lifts, the pilot dispatches again with no operator action once the
+routine's own debounce has passed; the first tick after the hold lifts
+only starts that debounce.
 
 ## Worker Resource Containment
 
@@ -281,12 +429,36 @@ By default, containment falls back to the old behaviour, with one warning per
 Orbit process (`orbit log tail --level warn --target orbit.core.job_run`: "pipeline
 workers launch without a bounded systemd scope"), when it is disabled or when
 `systemd-run --user --scope` cannot reach a user manager on Linux (containers,
-sandboxes, sessions without `XDG_RUNTIME_DIR`). macOS and other platforms
-without systemd launch uncontained silently: no warning is logged. With
-`machine.worker_containment = "strict"` or `--strict-worker-containment` on
+sandboxes, sessions without `XDG_RUNTIME_DIR`). macOS instead uses an in-worker watchdog when containment is enabled. Every
+second it checks the tracked process/session set's total physical footprint and
+process count against `machine.worker_memory_max` and `machine.worker_tasks_max`.
+It records the eight largest consumers, sends descendants SIGTERM, escalates to
+SIGKILL after one second, finalizes the run as failed and terminates the worker
+last. The worker owns the watchdog, so exiting the submitting CLI does not stop
+it. `orbit doctor` and submission notes label this **watchdog**, never kernel
+containment. `off` disables it; memory high-water throttling and CPU quota are
+not implemented on macOS. Percent memory limits use physical RAM; `infinity`
+disables only the memory ceiling. The five-second profile sampler is unchanged.
+
+A watchdog breach carries `worker_resource_limit` in `orbit run show`, with
+command names, PIDs and memory bytes for top consumers. The resource evidence is
+kept with the run: the same bounded snapshot with start keys, CPU rates (absent
+at the first reading), totals, limits and observation time, one record per run
+until that run is deleted. `orbit run show --json` returns it under
+`worker_resource_limit`. Arguments and environment are not collected.
+
+Polling can overshoot between checks. Unreadable snapshots skip a check. After
+a breach, persistent identity-binding or signal errors keep the watchdog
+retrying and the run active until it can verify that tracked children stopped;
+finalization can be delayed indefinitely. A process that calls `setsid` after
+leaving the tree, and any children it starts, escape tracking; a session that
+starts and loses its leader between checks can also be missed. A killed worker
+cannot run its watchdog. These are watchdog gaps, not guarantees of kernel
+containment. Other platforms without systemd still launch uncontained silently.
+With `machine.worker_containment = "strict"` or `--strict-worker-containment` on
 `orbit run ship` or `orbit run auto`, an unavailable scope instead refuses the
-worker before spawn; `orbit run show` reports
-`worker_containment_unavailable` and the reason. The CLI flag is inherited by
+worker before spawn, including macOS (strict keeps its kernel-only meaning);
+`orbit run show` reports `worker_containment_unavailable` and the reason. The CLI flag is inherited by
 the auto coordinator's leaf workers. Uncontained workers share the launching
 service's cgroup. The rendered `orbit-sweep.service`
 carries `MemoryHigh=70%` and `TasksMax=4096` as a backstop, and re-enabling the

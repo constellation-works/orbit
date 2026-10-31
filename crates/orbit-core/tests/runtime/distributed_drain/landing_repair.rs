@@ -527,6 +527,7 @@ fn to_itself(owner: &OrbitRuntime) -> Arc<Wire> {
         fingerprint: Mutex::default(),
         gateless: Mutex::default(),
         refuse_settle: Mutex::default(),
+        observe_handoffs: Mutex::default(),
         accept_handoffs: Mutex::default(),
         local: Mutex::new(true),
         prefix_hosts: Mutex::default(),
@@ -848,7 +849,7 @@ impl OwnerLocal {
             .unwrap();
         assert_eq!(
             observed.results[0].status,
-            terminal.to_string(),
+            orbit_core::PipelineWaitStatus::from(terminal),
             "{observed:?}"
         );
         assert_eq!(

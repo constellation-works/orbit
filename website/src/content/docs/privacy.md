@@ -1,12 +1,12 @@
 ---
-title: Privacy Policy
+title: Privacy
 description: "What Orbit, its MCP server, its agent plugins, and orbit-cli.com do with your data."
 tableOfContents:
   minHeadingLevel: 2
   maxHeadingLevel: 2
 ---
 
-**Effective date: 4 October 2026**
+**Effective date: 27 October 2026**
 
 This policy covers the Orbit project maintained by
 [constellation-works](https://github.com/constellation-works):
@@ -54,19 +54,36 @@ command. These are the destinations.
 ### AI coding agents you choose
 
 Orbit runs agent work by launching the CLI of the provider you configure: Claude
-Code, Codex, Gemini CLI, Antigravity, Grok, GitHub Copilot, Cursor Agent, Pi, or
-OpenCode. It passes the agent your task's context, such as the task
+Code, Codex, Gemini CLI, Antigravity, Grok, GitHub Copilot, or Muse Code (the
+Cursor, Pi, and OpenCode lanes were [retired](/concepts/agents/#retired-providers)).
+It passes the agent your task's context, such as the task
 description, prompts, and workspace files. The agent may send that content to
-its provider, under the provider's own terms and privacy policy. Orbit itself
-does not contact any AI provider's API.
+its provider, under the provider's own terms and privacy policy. Aside from
+the optional decision assistance described below, Orbit itself does not
+contact any AI provider's API.
+
+### Optional decision assistance (off by default)
+
+If you enable it, Orbit sends a bounded assistance request directly to the
+fixed OpenAI Decisions endpoint (`https://api.openai.com/v1/decisions`). Each
+request carries only the policy's allowed evidence fields and its question
+text, using the model fixed in the policy. The host-only `[assistance]` table
+ships with an empty policy list, so this traffic is off by default and never
+leaves your machine until you add a policy. No agent crew makes these calls.
 
 ### Your Git host
 
 Delivery workflows run `git push` and `git fetch` against your repository's
 remotes. They use the GitHub CLI (`gh`) to open, update, and merge pull requests
 and to read code-scanning and Dependabot alerts. These requests go to the Git
-host you configured, under that host's terms. The scheduled routines that ship
-with Orbit are all disabled until you enable them.
+host you configured, under that host's terms. Scheduled routines that contact
+GitHub or perform delivery are shipped disabled until you enable them. The
+crew-performance refresh is a local exception: it is seeded enabled and
+scheduled hourly. While `workflow.crew_performance` is `off` (the default),
+its action skips the scan and writes no snapshot. Unattended hourly runs
+require the host's Orbit scheduler clock to be enabled, but an operator can
+still run a due refresh with `orbit clock tick` while scheduled ticks are
+paused.
 
 ### Task publication (optional)
 

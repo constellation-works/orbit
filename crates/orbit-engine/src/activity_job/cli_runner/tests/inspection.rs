@@ -89,13 +89,16 @@ fn slot_exhaustion_and_git_io_stay_retryable() {
     // repository and the missing revision reads as a permanent missing SHA.
     fs::write(bare.join(".git"), "gitdir: missing-gitdir\n").expect("bare gitfile");
     let missing = "0123456789abcdef0123456789abcdef01234567";
+    // Crate-owned command prefix: git's repository-missing wording varies by
+    // build ("not a git repository" vs "gitfile does not point to a valid
+    // repository"), while the retryable variant is what this case guards.
     assert_retryable(
         SourceInspection::from_input(
             &json!({"inspection_revision": missing}),
             Some(&bare),
             Some("reviewer"),
         ),
-        "not a git repository",
+        "git rev-parse --verify -q",
     );
 
     let repo = temp.path().join("repo");

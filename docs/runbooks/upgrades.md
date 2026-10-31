@@ -4,8 +4,8 @@ summary: Install a new Orbit release with `orbit update`, then review, apply, an
 tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-common/src/fs/generation/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320]
-last_validated: 2026-10-19
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434, ORB-13631, ORB-14320, ORB-20262, ORB-20272]
+last_validated: 2026-10-30
 ---
 
 # Upgrade Orbit Safely
@@ -150,6 +150,132 @@ feature migrations declared compatibility compare feature versions exactly, so s
 build stays refused beside a newer feature schema. Distinct executables share the
 authority; identical copies trivially do.
 
+#### The authority that protects a workspace
+
+The generation authority is chosen from `--root`, `ORBIT_ROOT` or the home directory
+(`~/.orbit`), while the workspace `.orbit` is discovered from the working directory.
+The two can disagree. A process with a fresh home, run from an uninitialized directory
+inside a live checkout, joins an empty authority but discovers that checkout. So can a
+process whose `--root` names the workspace data directory itself, or one whose home
+merely registered the same checkout. The workspace layout is the one part of a
+compatibility identity that belongs to the workspace, so a pending layout migration is
+admitted only under the authority whose participants use the workspace:
+
+- A workspace records that authority's canonical path in
+  `.orbit/state/generation-authority.json`. Only two things write it: the first open of
+  a workspace that no layout-versioned Orbit has stamped records its creator, and
+  `orbit migrate --adopt-authority` records the authority it runs under. An open never
+  records anything otherwise. Neither does a registered open, the data directory used as
+  its own explicit root, or an open of a current layout. Each of those is just as true
+  of an unrelated authority. A record is never replaced.
+- A pending layout migration under any other authority is refused before bootstrap
+  writes anything to the workspace. The refusal reads `upgrade admission refused:
+  workspace '<path>' has a pending layout upgrade (vN to vM) but its clients are
+  protected by generation authority '<A>', not this process's '<B>'`.
+- A workspace that recorded nothing refuses every pending layout migration, from
+  every authority including its own, with `it has recorded no generation authority`.
+  This applies, for example, to a workspace last opened by an older binary, or to a data
+  directory used as its own `--root`. Adopt it as described below. An unreadable or
+  malformed record also refuses, and Orbit never rewrites it.
+- Every opening authority is also listed in `.orbit/state/generation-authorities.json`.
+  A pending migration under the recorded authority additionally holds admission on every
+  other listed authority. It is refused, naming that authority, while one of that
+  authority's long-lived clients is live (`which has also used this workspace, still has
+  clients this process's authority cannot protect`). Short-lived commands are waited
+  for. Stop those clients and re-run; this authority cannot wait for them.
+- The guard applies only when a layout migration is pending. Opening a current
+  workspace, or joining read-only beside a foreign generation, never consults the record.
+  Registered followers, managed children (which use the dispatching host's registry
+  authority) and a fresh explicit-root data directory record or match their own authority
+  and keep working.
+
+To recover from a refusal that names a recorded authority, run the command under that
+authority: the same home directory, `--root` or `ORBIT_ROOT`. Admission there waits for
+incompatible clients to quiesce, as described below. Do not delete the record, the
+ledger, the layout marker or admission files, and do not point a scratch home at a live
+checkout. Retrying from a fresh home does not help: releasing the other authority's
+clients does not authorize a process that does not protect the workspace.
+
+##### Adopt a workspace that recorded no authority
+
+When the refusal says the workspace `has recorded no generation authority`, Orbit
+cannot tell which authority's clients use it. Adopt it explicitly:
+
+1. Stop every Orbit process that uses the workspace, under every home directory,
+   `--root` and `ORBIT_ROOT`: `mcp serve` sessions, the dashboard, drains and clock
+   ticks. Adoption refuses rather than restarting any of them.
+2. Under the authority those clients use, run:
+
+   ```sh
+   orbit migrate --adopt-authority ~/.orbit        # home authority, from the checkout
+   orbit --root /srv/orbit migrate --adopt-authority /srv/orbit   # explicit-root data directory
+   ```
+
+   `PATH` must name the authority the command runs under, and that authority must have
+   registered the checkout or be the workspace data directory itself.
+3. Re-run the refused command, or `orbit migrate --confirm`. The migration is then
+   admitted under the recorded authority, and still waits for its incompatible clients.
+
+Adoption holds admission exclusively on its own authority, on every authority in the
+workspace's ledger, and on the data directory when it has served as an authority. It
+writes the record only while none of their long-lived clients is live, and it refuses
+by naming the participant otherwise. It is refused, and changes nothing, when:
+
+- `PATH` names a different authority from the one the command runs under;
+- that authority neither registered the checkout nor is its data directory;
+- any authority it fences has a live long-lived client;
+- the workspace already records another authority, or its record or ledger is unreadable
+  or malformed; or
+- another authority opens the workspace while the adoption is fencing.
+
+Re-running an adoption that already landed, for example after a lost reply, reports
+`recorded: false` and changes nothing. The record carries `recorded_by`: the method
+(`created` or `adopted`), the evidence, time, PID, executable and layout version. It is
+the audit trail of who claimed the workspace.
+
+Binaries from before the ledger leave no entry in it, so adoption cannot fence an
+authority that only such binaries have used. Step 1 covers them: stop them yourself
+before adopting. Adoption never makes an unverifiable claim true. It only records a
+claim that the authority's registration and a fenced, quiescent moment support.
+
+#### A build that is not the installed orbit
+
+Admission protects only processes that are live, and a short-lived CLI command rarely
+is. A development, candidate or QA build run under the operator's home opens the same
+global store, and from a run worktree the same primary workspace `.orbit`, as the
+installed binary. With nobody live it could apply a breaking migration, and every later
+installed command on the host would be refused as "behind" although no deploy was missed.
+
+So before a process that is not the installed executable applies a workspace layout or
+store schema migration that older writers cannot keep, it asks the installed `orbit` in the
+managed install directory (`$ORBIT_INSTALL_DIR`, default `~/.orbit/bin`) for its
+compatibility through `orbit update --contract --json`. When the installed binary would lose
+the state, the build refuses before writing anything:
+
+```text
+error: execution failed: upgrade admission refused: '<checkout>/target/debug/orbit' is not
+the installed orbit '~/.orbit/bin/orbit' and would migrate the workspace layout at
+'<primary>/.orbit' from v4 past v5, which the installed orbit cannot keep using: it supports
+workspace layout v4. Nothing was changed. Run development and QA builds under a disposable
+home with their own workspace, or install this build first with
+`orbit update --local-candidate` so the installed orbit applies the migration
+```
+
+- Additive migrations and a fresh workspace or store (version 0) are never refused, and
+  neither is the installed executable itself, however it is reached.
+- When an `orbit` exists in the managed install directory but does not report its compatibility in time,
+  nothing is refused and the open logs a warning instead. With no `orbit` there (as on a Homebrew,
+  npm or `cargo install` host, or in a disposable QA home), nothing is refused and this guard logs
+  no compatibility warning because there is no executable to query.
+- Run QA builds against their own home and workspace
+  ([Manual QA from a managed lane](../DEVELOPMENT.md#manual-qa-from-a-managed-lane)), or
+  deploy the build ([Deploy a locally built candidate](#deploy-a-locally-built-candidate-pinned-to-a-source-commit)),
+  after which the installed binary applies the migration.
+
+Each layout advance also records the executable that applied it in
+`.orbit/state/layout.writer`, so an older binary refused by that layout names it (see
+[Breaking-newer, or unclassified](#breaking-newer-or-unclassified-still-refused)).
+
 #### A migration older processes cannot keep: the quiesce wait
 
 A newer **writing** command whose migrations the live processes cannot keep (a
@@ -172,8 +298,8 @@ read-compatible or breaking migration beyond them) does not fail at once:
      automatically at most once from that checkpoint (`orbit job resume <run_id>`
      remains available for manual continuation). The clock resumes only runs the
      current upgrade interrupted — within the last 30 minutes. It skips a run
-     interrupted by an earlier upgrade, a drain (or `workspace_ship_pipeline`
-     wrapper) whose window has elapsed or whose admissions were stopped, and a run
+     interrupted by an earlier upgrade, a drain whose window has elapsed or whose
+     admissions were stopped, and a run
      superseded by a newer run of the same drain or routine. Each resume and skip
      is recorded once as a `pipeline.run.upgrade_resume` audit event with its
      reason, and a run with a recorded decision is not reconsidered.
@@ -661,6 +787,12 @@ signed release)`.
 
 Two ledgers guard `.orbit/` state and auto-apply on workspace open:
 
+At the implementation level, the store-schema ledger applies inside
+`Store::open`, while the workspace-layout registry applies during runtime
+pre-flight. Opening a runtime therefore applies pending entries in both
+ledgers. The `orbit migrate` inspection path avoids opening the runtime so it
+can report pending entries before `--confirm` applies them.
+
 - **Workspace layout:** `.orbit/state/layout.version` plus an ordered migration registry in
   `crates/orbit-store/src/workflow/layout/`. A missing marker means a pre-versioning workspace and is adopted
   as v1. Upgraders serialize on `state/layout.lock`.
@@ -841,6 +973,8 @@ orbit migrate --dry-run    # list pending without applying; exit 1 when any are 
 orbit migrate              # same safe inspection default
 orbit migrate --confirm    # open the workspace, auto-apply, and report
 orbit migrate --json       # machine-readable inspection report
+orbit migrate --backfill-diff-stats [--limit N]  # apply, then record landed diff stats
+orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery (run or claimed-leaf settlement)
 ```
 
 Example dry run on a pre-upgrade workspace:
@@ -861,6 +995,24 @@ error: execution failed: 3 migration(s) pending; run `orbit migrate --confirm` t
 Bare `orbit migrate` and the compatibility-explicit `--dry-run` form inspect without opening
 the runtime. Applying pending migrations always requires `--confirm`; the command never prompts
 or reads stdin.
+
+`--backfill-diff-stats` applies pending migrations like `--confirm`, then records the
+lines added and deleted for done tasks that landed before Orbit recorded them, newest
+first, until it has recorded `--limit` tasks (default 500, at most 5000). It diffs each
+landed commit against its first parent in the local checkout and never fetches: a task
+whose landed commit is not available locally is counted as unresolvable and skipped, and
+one with no recorded landing is counted separately. A rerun records only what is still
+missing, and the report says how many tasks remain past the limit. The rows feed
+Analytics › Metrics › Lines changed.
+
+`--backfill-task-crews` applies pending migrations like `--confirm`, then sets each task's
+crew from its latest delivery: the newer of its latest local delivery run and its latest
+claimed-leaf settlement (a tie uses the run). A run's crew comes from its `crew_selection`,
+or, for claimed-leaf work, the selection frozen in pipeline state; a settlement uses its
+recorded crew. Terminal tasks are included. Each change records
+`crew_source: backfill:admission` and a `crew_assigned` history entry; the report names the
+workspace, how many tasks had a selection and which changed. Run it on the owner, once,
+after upgrading to a build that writes admission crews back. A rerun changes nothing.
 
 Before applying layout v3, pause admissions and stop every older Orbit process
 that can write tasks. Install the new binary, apply or trigger the workspace
@@ -978,9 +1130,15 @@ A breaking migration the binary lacks refuses the open, now naming that migratio
 
 ```text
 error: schema migration failed: workspace '….orbit' has .orbit layout version 4, newer
-than the newest version this orbit binary supports (3); migration v4 (relocate-run-state)
-is a breaking change this binary does not have; upgrade orbit to open this workspace
+than the newest version this orbit binary ('~/.orbit/bin/orbit') supports (3); migration v4
+(relocate-run-state) is a breaking change this binary does not have; layout version 4 was
+written by '<checkout>/target/debug/orbit'; upgrade orbit to open this workspace
 ```
+
+The `was written by` clause appears when the binary that advanced the layout recorded
+itself in `.orbit/state/layout.writer`. When it names a build other than an installed
+release, such as a candidate build in a run worktree, the refused binary was not missed by
+a deploy: that build advanced the shared workspace ahead of it.
 
 State written **before** this contract shipped carries no compatibility record, and so
 does state whose record is stale (a crash between stamping the version and writing the
@@ -996,7 +1154,7 @@ orbit to open this workspace
 
 In every refusing case the remedy is the same as before: upgrade the binary that is
 reporting it — through its own install channel — and re-run. Never hand-edit
-`layout.version` or `layout.compat`, and never delete the record to force an open: that
+`layout.version`, `layout.compat` or `layout.writer`, and never delete the record to force an open: that
 converts a refusal into a binary operating on state it cannot interpret.
 
 ## Lexical search migration

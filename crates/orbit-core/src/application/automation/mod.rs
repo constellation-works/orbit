@@ -4,34 +4,46 @@ use crate::OrbitRuntime;
 use orbit_common::OrbitError;
 
 mod after_landing;
+mod board_port;
+pub(crate) mod condition;
 mod deadline;
 mod direct;
 mod evaluation;
+mod explain;
 pub(crate) mod incidents;
 mod inspect;
+mod job_port;
 pub(crate) mod members;
 mod ownership;
 mod pilot_presence;
-pub(crate) mod pilot_reservation;
+mod pilot_reservation;
 mod pins;
 pub(crate) mod preparation;
 mod provider;
 mod recovery;
 mod reset;
+mod review_port;
 pub(crate) mod source;
 mod source_cache;
 pub(crate) mod stall;
 mod task;
+mod task_port;
 
 pub(crate) use after_landing::review_crew_overrides_definition;
 pub use after_landing::{
     AfterLandingHealth, AfterLandingSource, after_landing_health, after_landing_switch,
+};
+pub(in crate::application) use board_port::AutomationBoardPort;
+pub use condition::{
+    ConditionChainLink, ConditionEnablePreview, ConditionFireView, ConditionListing,
+    ConditionStallCleared, ConditionStatus,
 };
 pub(crate) use deadline::expiring_frozen_batch_tasks;
 pub(crate) use direct::record_direct_landing_intent;
 use evaluation::{auto_task_action_liveness, auto_task_admission_deferral};
 pub use evaluation::{evaluate_auto_task, evaluate_routine};
 pub(crate) use evaluation::{evaluate_auto_task_with_cache, evaluate_routine_with_cache};
+pub use explain::{AutomationExplain, ConditionExplain, JobStepsExplain};
 pub(crate) use inspect::inspect_routine_with_cache;
 pub use inspect::{
     UnadmittableDefinition, UnresolvableBranch, WedgedConsumer, delivery_ownership_refusal,
@@ -44,6 +56,7 @@ pub use recovery::recover_auto_task;
 pub use reset::probe_hook::with_reset_probe_hook;
 pub use reset::{ConsumerTeardown, reset_auto_task};
 pub(crate) use reset::{consumer_teardown_refusals, tear_down_auto_task_consumer};
+pub(in crate::application) use review_port::AutomationReviewPort;
 pub(crate) use source_cache::SourceCache;
 pub use stall::{StalledConsumer, stalled_consumers, stalled_minutes};
 pub(crate) use task::accepted_action_coverage;

@@ -31,6 +31,7 @@ impl Serialize for PipelineState {
             run_id: &self.run_id => false,
             job_id: &self.job_id => false,
             initial_input: &self.initial_input => false,
+            crew_selection: &self.crew_selection => self.crew_selection.is_none(),
             pipeline: &self.pipeline => false,
             step_outputs: &self.step_outputs => false,
             compound_outputs: &self.compound_outputs => self.compound_outputs.is_empty(),

@@ -50,6 +50,7 @@ pub(crate) mod loop_clock;
 mod parallel;
 mod recovery;
 mod reviewer;
+mod script;
 mod steering_gate;
 mod step;
 mod target;
@@ -68,6 +69,7 @@ use self::loop_block::*;
 use self::parallel::*;
 use self::recovery::evidence::inject_recovery_evidence;
 use self::recovery::*;
+use self::script::*;
 use self::steering_gate::*;
 use self::step::*;
 use self::target::*;
@@ -75,7 +77,10 @@ use self::templating::*;
 
 use self::execute::panic_payload_message;
 
-pub use self::execute::{execute_job_with_resume, resolve_job_catalog_refs_for_execution};
+pub use self::execute::{
+    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
+    resolve_job_catalog_refs_with_scripts_for_execution,
+};
 pub use self::validate::{validate_job, validate_job_deterministic_actions};
 
 #[derive(Debug, Clone)]

@@ -47,7 +47,7 @@ pub(crate) fn validate_bundles(action: &str, input: &Value) -> Result<Value, Dis
                     format!("bundle[{idx}] contains a non-string task_id"),
                 )
             })?;
-            if !known.is_empty() && !known.contains(id) {
+            if !known.contains(id) {
                 violations.push(format!("bundle[{idx}] references unknown task_id {id}"));
             }
             if !seen.insert(id.to_string()) {

@@ -6,14 +6,8 @@ Options:
       --force
           Reset the global Orbit root (~/.orbit/) to shipped defaults before initialization, including executor sandbox settings and the machine identity. Non-interactive resets require --machine-name and --task-prefix
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --host-prerequisites-only
           Prepare the Linux host without creating a machine identity or writing Orbit state
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --skip-host-prerequisites
           On Linux, leave Bubblewrap packages and AppArmor profiles to the host's administrator. Orbit still seeds `linux-bwrap` executors, and dispatch stays fail-closed until `orbit doctor providers` reports the sandbox ready
@@ -29,27 +23,18 @@ Options:
       --task-prefix <PREFIX>
           Immutable task-id namespace for this machine (2-5 uppercase ASCII letters). Required on first init or with --force; reserved artifact namespaces cannot be chosen
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
 
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
 On Linux, sandbox preparation failures warn and initialization continues.
 linux-bwrap dispatch stays blocked until orbit doctor providers reports
-the sandbox ready. Fix the host using docs/runbooks/linux-sandbox.md,
+the sandbox ready. Fix the cause named in the warning,
 then retry with orbit init --host-prerequisites-only. JSON output includes
 linux_sandbox.status (ready, skipped, or not_ready) and its reason.

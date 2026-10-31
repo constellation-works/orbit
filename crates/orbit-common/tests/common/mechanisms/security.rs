@@ -4,7 +4,9 @@
 use chrono::NaiveDate;
 use orbit_common::security::child_env::allowlisted_child_env_from;
 use orbit_common::security::operator_env::{parse_env_text, read_env_file};
-use orbit_common::security::redaction::{redact_all, redact_sensitive_env_text};
+use orbit_common::security::redaction::{
+    is_high_confidence_single_token_credential, redact_all, redact_sensitive_env_text,
+};
 use orbit_common::security::release::{TrustedReleaseKey, verify_checksum_signature};
 use orbit_common::test_env::scoped;
 
@@ -188,6 +190,162 @@ fn redact_all_scrubs_key_query_params_case_insensitively() {
 }
 
 #[test]
+fn redact_all_masks_same_line_api_key_assignments_and_keeps_key_names() {
+    const VALUE: &str = "q7Lx2Rv9Kp4Nm8Zs3Tw6";
+    for (key, separator) in [
+        ("HTTPAPIKey", "="),
+        ("SERVICEAPIKey", ": "),
+        ("api_key", "="),
+        ("serviceApiKey", "="),
+        ("api-key", ": "),
+        ("x-api-key", "="),
+        ("my_api_key", " = "),
+        ("APIKEY", "="),
+        ("serviceAPIKey", "="),
+        ("HTTPApiKey", "="),
+        ("apiKey", "="),
+        ("apikey", "="),
+        ("API_KEY", ": "),
+    ] {
+        for prefix in ["", "2026-10-26T14:42:00.0000000Z "] {
+            let raw = format!("{prefix}{key}{separator}{VALUE}");
+            let redacted = redact_all(&raw);
+            assert!(
+                !redacted.contains(VALUE),
+                "{key} value leaked for prefix {prefix:?}: {redacted}"
+            );
+            assert!(
+                redacted.contains(key),
+                "key name must stay for {key}: {redacted}"
+            );
+            assert!(
+                redacted.contains("[REDACTED_AUTH]"),
+                "marker style for {key}: {redacted}"
+            );
+            // Redacting an already-redacted line is idempotent.
+            assert_eq!(redact_all(&redacted), redacted, "idempotent: {key}");
+        }
+    }
+
+    // A value ends at whitespace; following prose stays readable.
+    assert_eq!(
+        redact_all(&format!("api_key={VALUE} after")),
+        "api_key=[REDACTED_AUTH] after"
+    );
+
+    // Quoted assignments keep their quotes and mask only the value.
+    let quoted = redact_all(&format!("api_key=\"{VALUE}\""));
+    assert_eq!(quoted, "api_key=\"[REDACTED_AUTH]\"");
+
+    // Text that is not a credential stays unchanged.
+    for raw in [
+        "the api_key setting is documented here",
+        "apikey",
+        "api_key=",
+        "api_key:",
+        "api_keyboard=ordinarybuildvalue",
+        "serviceApiKeyboard=ordinarybuildvalue",
+        "capiKey=ordinarybuildvalue",
+        "build_id=ordinarybuildvalue",
+    ] {
+        assert_eq!(redact_all(raw), raw, "non-credential changed: {raw}");
+    }
+
+    // Existing Bearer / Authorization behaviour is unchanged.
+    assert_eq!(
+        redact_all(&format!("Bearer {VALUE}")),
+        "Bearer [REDACTED_AUTH]"
+    );
+    assert_eq!(
+        redact_all(&format!("Authorization: Bearer {VALUE}")),
+        "Authorization: [REDACTED_AUTH]"
+    );
+    assert_eq!(
+        redact_all(&format!("Authorization: {VALUE}")),
+        "Authorization: [REDACTED_AUTH]"
+    );
+}
+
+#[test]
+fn redact_all_leaves_following_line_alone_after_empty_api_key_assignment() {
+    const TIMESTAMP: &str = "2026-10-26T14:42:00.0000000Z";
+    // An empty `=` assignment carries no value, so the next line's timestamp
+    // and prose must stay readable (ORB-19017 regression).
+    for key in ["apiKey", "serviceApiKey", "api_key", "my_api_key"] {
+        let raw = format!("{key}=\n{TIMESTAMP} safe output");
+        assert_eq!(redact_all(&raw), raw, "next line masked after empty {key}=");
+    }
+
+    // A same-line value still masks through the public boundary.
+    let redacted = redact_all("serviceApiKey=q7Lx2Rv9Kp4Nm8Zs3Tw6");
+    assert_eq!(redacted, "serviceApiKey=[REDACTED_AUTH]");
+
+    // The pinned multi-line `api_key:` mapping still masks its next-line
+    // value via the line-start pattern.
+    assert_eq!(
+        redact_all("api_key:\nSYNTHETICVALUE1234567890\nsafe output\n"),
+        "api_key:\n[REDACTED_AUTH]\nsafe output\n"
+    );
+}
+
+#[test]
+fn redact_all_masks_prefixed_api_key_values_in_pretty_printed_json() {
+    const VALUE: &str = "q7Lx2Rv9Kp4Nm8Zs3Tw6";
+    for key in ["serviceApiKey", "my_api_key"] {
+        let raw = format!("{{\"{key}\":\n  \"{VALUE}\"}}\n");
+        let redacted = redact_all(&raw);
+        assert_eq!(
+            redacted,
+            format!("{{\"{key}\":\n  \"[REDACTED_AUTH]\"}}\n"),
+            "pretty-printed JSON value leaked for {key}"
+        );
+        assert!(!redacted.contains(VALUE), "credential leaked for {key}");
+    }
+
+    // An empty JSON value and an empty unquoted assignment carry no secret;
+    // neither may consume an unrelated value from the following line.
+    let empty_json = "{\"serviceApiKey\":\n  \"\"}\n2026-10-26T14:42:00.0000000Z safe output";
+    assert_eq!(redact_all(empty_json), empty_json);
+
+    let empty_assignment = "serviceApiKey=\n2026-10-26T14:42:00.0000000Z safe output";
+    assert_eq!(redact_all(empty_assignment), empty_assignment);
+}
+
+#[test]
+fn redact_all_masks_embedded_quotes_in_api_key_assignments() {
+    for key in ["api_key", "serviceApiKey", "\"api_key\""] {
+        for (value, quote) in [
+            ("abcdefgh'ijklmnop", '"'),
+            ("abcdefgh\"ijklmnop", '\''),
+            (r#"abcdefgh\"ijklmnop"#, '"'),
+            (r"abcdefgh\'ijklmnop", '\''),
+            (r"abcdefgh\\", '"'),
+            (r"abcdefgh\", '\''),
+        ] {
+            let raw = format!("{key}={quote}{value}{quote} after");
+            let redacted = redact_all(&raw);
+            assert!(!redacted.contains("abcdefgh"), "prefix leaked: {redacted}");
+            assert!(!redacted.contains("ijklmnop"), "suffix leaked: {redacted}");
+            assert!(
+                redacted.ends_with(" after"),
+                "following text changed: {redacted}"
+            );
+            assert_eq!(redact_all(&redacted), redacted, "idempotence: {redacted}");
+        }
+    }
+    let json = r#"{"api_key":"abcdefgh\"ijklmnop","other":"visible"}"#;
+    assert_eq!(
+        redact_all(json),
+        r#"{"api_key":"[REDACTED_AUTH]","other":"visible"}"#
+    );
+    let json_header = r#"{"x-api-key":"abcdefgh\"ijklmnop","other":"visible"}"#;
+    assert_eq!(
+        redact_all(json_header),
+        r#"{"x-api-key":"[REDACTED_AUTH]","other":"visible"}"#
+    );
+}
+
+#[test]
 fn redact_all_scrubs_provider_scm_cloud_tokens_and_connection_passwords() {
     let google = format!("AIza{}", "A".repeat(35));
     let gitlab = format!("glpat-{}", "B".repeat(20));
@@ -237,6 +395,22 @@ fn redact_all_scrubs_provider_scm_cloud_tokens_and_connection_passwords() {
     }
 
     assert!(redacted.contains("postgres://orbit_user:[REDACTED_SECRET]@db.example.test/orbit"));
+}
+
+#[test]
+fn redact_all_masks_lease_listener_tokens_in_captured_output() {
+    // ORB-18410: lease tokens carry the `orbl_` prefix so captured output that
+    // echoes one (a client's error, a shell transcript) cannot leak it.
+    let token = format!("orbl_{}", "0123456789abcdef".repeat(4));
+    let captured = format!(
+        "Authorization: Bearer {token}\ncurl -H 'x: {token}' failed\n{{\"token\":\"{token}\"}}"
+    );
+
+    let redacted = redact_all(&captured);
+
+    assert!(!redacted.contains(&token), "lease token leaked: {redacted}");
+    assert!(!redacted.contains("0123456789abcdef"), "{redacted}");
+    assert!(is_high_confidence_single_token_credential(&token));
 }
 
 #[test]

@@ -39,6 +39,7 @@ mod mcp_rules;
 pub use mcp_rules::{ID_ROUTED_TASK_TOOLS, NOT_ID_ROUTED_TOOLS, builtin_mcp_rules};
 pub mod plugin;
 mod registry;
+pub mod tool_suggestions;
 
 mod context;
 mod fs_audit;

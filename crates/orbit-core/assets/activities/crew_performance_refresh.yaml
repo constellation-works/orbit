@@ -1,0 +1,31 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: crew_performance_refresh
+spec:
+  type: deterministic
+  description: >
+    Rebuild this workspace's crew-performance snapshot: scan the implementer
+    scorecard facts over `workflow.crew_performance_window_days`, compute the
+    (crew, model, tier, type) cell matrix for
+    `workflow.crew_performance_types`, and replace the stored snapshot
+    atomically so crew draws read it instead of scanning. When
+    `workflow.crew_performance` is `off` this writes nothing and returns
+    `skipped: crew_performance_off` without scanning.
+  input_schema_json:
+    type: object
+  output_schema_json:
+    type: object
+    properties:
+      skipped:
+        type: string
+      computed_at:
+        type: string
+      window_days:
+        type: integer
+      types_hash:
+        type: string
+      cells:
+        type: integer
+  action: crew_performance_refresh
+  config: {}

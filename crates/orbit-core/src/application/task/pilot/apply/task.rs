@@ -8,8 +8,10 @@ use orbit_common::OrbitError;
 use orbit_types::task::{ContextCreationState, Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::application::sweep_filing::ci_failure::admission as ci_failure_admission;
-use crate::application::task::{MachineRequirement, NativeOsRequirement};
+use crate::application::task::{
+    CiSweepAdmission, InvalidFinding, MachineRequirement, NativeOsRequirement, REVIEW_FINDING_TAGS,
+    TaskSweepFilingPort, VerdictConfidence, VerdictSource, VerdictWrite, is_review_finding,
+};
 
 use super::super::PostDeployRequirement;
 
@@ -17,6 +19,8 @@ use super::super::attachment_budget::{
     CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
 };
 use super::super::drain_promotion;
+use super::super::explore_brief::{BriefScope, decide_explore_brief, take_explore_brief};
+use super::super::no_diff::VerifiedNoDiff;
 use super::super::persist::{
     ApplyTaskOutcome, apply_task, operation_was_applied, record_applied_assessment,
     source_superseded, stale_task, superseded_task, task_operation_id, task_outcome,
@@ -24,8 +28,8 @@ use super::super::persist::{
 use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
-    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps, post_deploy,
-    required_machine, required_os, required_string, required_string_array,
+    FINDING_INVALID, PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps,
+    post_deploy, required_machine, required_os, required_string, required_string_array,
     retained_review_evidence, review_filed, reviewed_evidence_drops, unauthorized_missing_targets,
     user_facing_ui, validate_after_selectors, validate_recommendations,
 };
@@ -56,6 +60,8 @@ struct Scope {
     /// A review-filed task's evidence the pilot omitted.
     evidence: Vec<String>,
     reauthorization: Vec<String>,
+    /// Creation targets the task's durable grant names.
+    authorized_creation: Vec<String>,
 }
 
 /// The assessment as apply records it, with the host's findings attached.
@@ -63,7 +69,6 @@ struct Assessed {
     assessment: Value,
     after: Vec<String>,
     complexity: TaskComplexity,
-    current: Task,
     required_os: Vec<NativeOsRequirement>,
     required_machine: Option<MachineRequirement>,
     post_deploy: Vec<PostDeployRequirement>,
@@ -87,28 +92,39 @@ pub(super) fn settle_task(
     {
         return Err(outcome);
     }
-    let scope = scope(context, task_id, assessment, snapshot)?;
-    let assessed = assess(context, task_id, assessment, snapshot, scope)?;
-    let operation_id = task_operation_id(context.prepared, task_id, &assessed.assessment);
-    let admission = admit(context, task_id, snapshot, &assessed, &operation_id)?;
-    // The CI sweep promotes inside the atomic pilot write; a drain approves
-    // afterwards through the approve transition, so its history names the
-    // drain.
-    let promote = matches!(
-        &admission,
-        Some(Admission::CiSweep(decision)) if decision["decision"] == "promote"
+    // The brief is the artifact's, never the receipt's: it is removed before
+    // the assessment is validated, fingerprinted or audited.
+    let mut assessment = assessment.clone();
+    let brief = take_explore_brief(&mut assessment);
+    let scope = scope(context, task_id, &mut assessment, snapshot)?;
+    let authorized_creation = scope.authorized_creation.clone();
+    let assessed = assess(context, task_id, &assessment, snapshot, scope)?;
+    // Decided only once the assessment itself is valid, so an invalid brief
+    // never makes the task `invalid` or spends the repair pass.
+    let explore_brief = decide_explore_brief(
+        context.action,
+        brief,
+        &BriefScope {
+            requested: snapshot.explore_brief_requested,
+            disposition: assessed.assessment["disposition"]
+                .as_str()
+                .unwrap_or_default(),
+            recommended_complexity: assessed.assessment["recommended_complexity"].as_str(),
+            after: &assessed.after,
+            authorized_creation: &authorized_creation,
+            workspace_root: context.workspace_root,
+            source: context.source,
+            source_tree: context.source_tree,
+        },
     );
-    let history_decision = match &admission {
-        Some(Admission::Drain(decision)) => drain_promotion::hold_decision(decision),
-        _ => None,
-    };
+    let operation_id = task_operation_id(context.prepared, task_id, &assessed.assessment);
     let validated = ValidatedTask {
         task_id: task_id.clone(),
         after: assessed.after,
         assessment: assessed.assessment,
-        admission,
-        promote,
-        history_decision,
+        admission: None,
+        promote: false,
+        history_decision: None,
         complexity: assessed.complexity,
         operation_id,
         required_os: assessed.required_os,
@@ -117,6 +133,8 @@ pub(super) fn settle_task(
         user_facing_ui: assessed.user_facing_ui,
         applied_material: None,
         pilot_run_id: context.run_id.map(str::to_string),
+        pilot_crew: context.pilot_crew.map(str::to_string),
+        explore_brief,
     };
     write(context, applied, validated, snapshot)
 }
@@ -124,25 +142,25 @@ pub(super) fn settle_task(
 fn scope(
     context: &ApplyContext<'_>,
     task_id: &str,
-    assessment: &Value,
+    assessment: &mut Value,
     snapshot: &PreparedTaskSnapshot,
 ) -> Settled<Scope> {
     let action = context.action;
-    let disposition =
-        required_string(assessment, "disposition", action).map_err(refused(task_id, "invalid"))?;
+    let mut disposition = required_string(assessment, "disposition", action)
+        .map_err(refused(task_id, "invalid"))?
+        .to_string();
     let proposed_after = required_string_array(assessment, "context_files_after", action)
         .map_err(refused(task_id, "invalid"))?;
     // The grant is read from the task, never from the prepared payload or the
     // agent's result. The write boundary refuses a grant that moved since
     // preparation, after its replay receipt check, so a retried apply still
     // settles as already applied.
-    let creation = match context
-        .runtime
-        .get_task(task_id)
-        .and_then(|task| context.runtime.context_creation_state(&task))
-    {
+    let (current, creation) = match context.runtime.get_task(task_id).and_then(|task| {
+        let creation = context.runtime.context_creation_state(&task)?;
+        Ok((Some(task), creation))
+    }) {
         Ok(creation) => creation,
-        Err(OrbitError::NotFound { .. }) => ContextCreationState::Absent,
+        Err(OrbitError::NotFound { .. }) => (None, ContextCreationState::Absent),
         Err(error) => {
             return Err(task_outcome(
                 task_id,
@@ -154,10 +172,10 @@ fn scope(
         }
     };
     let authorized_creation = creation.selectors();
-    let selectors = validate_after_selectors(
+    let mut selectors = validate_after_selectors(
         action,
         task_id,
-        disposition,
+        &disposition,
         assessment,
         &proposed_after,
         context.workspace_root,
@@ -165,6 +183,29 @@ fn scope(
         authorized_creation,
     )
     .map_err(refused(task_id, "invalid"))?;
+    if !authorized_creation.is_empty()
+        && (disposition == "verified_no_diff"
+            || (disposition == "selectors"
+                && assessment
+                    .get("already_landed")
+                    .is_some_and(|value| !value.is_null())))
+    {
+        let task = current.as_ref().ok_or_else(|| {
+            task_outcome(
+                task_id,
+                "invalid",
+                Some("creation task no longer exists".into()),
+            )
+        })?;
+        selectors.values = landed_creation_scope(
+            context,
+            task,
+            assessment,
+            &selectors.values,
+            authorized_creation,
+        )?;
+        disposition = "selectors".into();
+    }
     if !authorized_creation.is_empty() && disposition != "selectors" {
         return Err(task_outcome(
             task_id,
@@ -233,7 +274,83 @@ fn scope(
         retained,
         evidence,
         reauthorization,
+        authorized_creation: authorized_creation.to_vec(),
     })
+}
+
+/// A no-change finding cannot revoke a creation grant. Prove the complete
+/// retained scope at the inspection revision, then preserve it as an existing
+/// already-landed hold for an operator to reconcile.
+fn landed_creation_scope(
+    context: &ApplyContext<'_>,
+    task: &Task,
+    assessment: &mut Value,
+    proposed_after: &[String],
+    authorized_creation: &[String],
+) -> Settled<Vec<String>> {
+    if let Some(finding) = assessment
+        .get("already_landed")
+        .filter(|value| !value.is_null())
+    {
+        required_string(finding, "evidence", context.action)
+            .map_err(refused(task.id.as_str(), "invalid"))?;
+    }
+    let invalid = refused(task.id.as_str(), "invalid");
+    let source = context.source.ok_or_else(|| {
+        task_outcome(
+            task.id.as_str(),
+            "invalid",
+            Some("already-landed creation work requires a pinned source revision".into()),
+        )
+    })?;
+    let mut paths = task.context_files.clone();
+    for selector in proposed_after.iter().chain(authorized_creation) {
+        if !paths.contains(selector) {
+            paths.push(selector.clone());
+        }
+    }
+    // No missing-target exception: a grant authorizes future creation, but
+    // does not establish that the target already exists at this revision.
+    let selectors = validate_after_selectors(
+        context.action,
+        task.id.as_str(),
+        "selectors",
+        assessment,
+        &paths,
+        context.workspace_root,
+        Some(source),
+        &[],
+    )
+    .map_err(invalid)?;
+    let finding = VerifiedNoDiff::from_landed_evidence(assessment);
+    if finding.evidence.is_empty() {
+        return Err(task_outcome(
+            task.id.as_str(),
+            "invalid",
+            Some("already-landed creation work requires evidence".into()),
+        ));
+    }
+    let covering = finding
+        .creation_covering_proof(
+            context.runtime,
+            task,
+            &selectors.values,
+            &source.source_revision,
+        )
+        .map_err(refused(task.id.as_str(), "invalid"))?;
+    let mut already_landed = assessment
+        .get("already_landed")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    already_landed["evidence"] = json!(finding.evidence);
+    already_landed["covering_commits"] = json!(covering);
+    already_landed["source_revision"] = json!(source.source_revision);
+    already_landed["operator_reconciliation_required"] = json!(true);
+    assessment["already_landed"] = already_landed;
+    assessment["disposition"] = json!("selectors");
+    assessment["context_files_after"] = json!(selectors.values);
+    Ok(selectors.values)
 }
 
 fn assess(
@@ -275,9 +392,17 @@ fn assess(
             ));
         }
     };
+    invalid_finding_target(context, task_id, &assessment, &current)?;
     let criteria = current.acceptance_criteria.len();
-    let native_os = required_os(action, task_id, &assessment, &current.acceptance_criteria)
-        .map_err(refused(task_id, "invalid"))?;
+    let native_os = required_os(
+        action,
+        task_id,
+        &assessment,
+        &current.acceptance_criteria,
+        context.workspace_root,
+        context.source,
+    )
+    .map_err(refused(task_id, "invalid"))?;
     let native_machine = required_machine(
         action,
         task_id,
@@ -312,16 +437,138 @@ fn assess(
         &ImplementationLane::resolve(context.runtime),
         &current.required_tools,
     );
+    warn_mocks_without_tag(context, &current, &mut assessment);
     Ok(Assessed {
         assessment,
         after: scope.after,
         complexity,
-        current,
         required_os: native_os,
         required_machine: native_machine,
         post_deploy,
         user_facing_ui,
     })
+}
+
+/// `mocks_without_tag`: the task carries `mocks/` artifacts but no
+/// `verify-mock-ui` tag, so nothing will validate or compare them. The
+/// pilot warns and the operator decides; it never adds the tag
+/// (visual-review §2.1). Advisory: it holds no promotion.
+fn warn_mocks_without_tag(context: &ApplyContext<'_>, current: &Task, assessment: &mut Value) {
+    if orbit_types::task::has_verify_mock_ui_tag(&current.tags) {
+        return;
+    }
+    let Ok(artifacts) = context.runtime.get_task_artifacts(&current.id) else {
+        return;
+    };
+    let mocks: Vec<&str> = artifacts
+        .iter()
+        .map(|artifact| artifact.path.as_str())
+        .filter(|path| orbit_types::task::is_mock_artifact(path))
+        .collect();
+    if mocks.is_empty() {
+        return;
+    }
+    let Some(warnings) = assessment
+        .get_mut("utility_warnings")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    warnings.push(json!({
+        "text": format!(
+            "mocks_without_tag: task has mocks/ artifacts ({}) but no `verify-mock-ui` tag; \
+             they will not be validated or compared. Add the tag to make them the visual \
+             specification, or leave them as plain attachments.",
+            mocks.join(", ")
+        ),
+        "holds_promotion": false,
+    }));
+}
+
+/// A `finding_invalid` result judges a review-filed bug at the pinned
+/// revision, so on any other task, or without a pinned revision, the whole
+/// assessment is invalid and nothing is written. Its evidence was already
+/// required to be non-empty by `validate_recommendations`.
+fn invalid_finding_target(
+    context: &ApplyContext<'_>,
+    task_id: &str,
+    assessment: &Value,
+    current: &Task,
+) -> Settled<()> {
+    if assessment.get(FINDING_INVALID).is_none_or(Value::is_null) {
+        return Ok(());
+    }
+    let refusal = if !is_review_finding(current) {
+        format!(
+            "task {task_id} {FINDING_INVALID} applies only to a review-filed bug (type bug \
+             tagged {}); return null for any other task",
+            REVIEW_FINDING_TAGS.join(", ")
+        )
+    } else if context.source.is_none() {
+        format!(
+            "task {task_id} {FINDING_INVALID} needs a pinned source revision to cite; a non-Git \
+             workspace returns null"
+        )
+    } else {
+        return Ok(());
+    };
+    Err(task_outcome(task_id, "invalid", Some(refusal)))
+}
+
+/// Record the pilot's `finding_invalid` as a REJECTED finding verdict once
+/// its assessment is written, which moves the task to `rejected`. The
+/// outcome is reported on the assessment as `finding_rejection`; the pilot
+/// write already stands, so a rejection that does not record is reported
+/// rather than failing the apply.
+fn reject_invalid_finding(context: &ApplyContext<'_>, validated: &mut ValidatedTask) {
+    let Some(evidence) = validated
+        .assessment
+        .get(FINDING_INVALID)
+        .and_then(|finding| finding.get("evidence"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(source) = context.source else {
+        return;
+    };
+    let confidence = match validated.assessment["confidence"].as_str() {
+        Some("high") => VerdictConfidence::High,
+        Some("low") => VerdictConfidence::Low,
+        _ => VerdictConfidence::Medium,
+    };
+    let finding = InvalidFinding {
+        source: VerdictSource::TaskPilot,
+        verified_sha: &source.source_revision,
+        base_branch: &source.base_branch,
+        confidence,
+        detail: &evidence,
+        evidence: Vec::new(),
+        crew: validated.pilot_crew.as_deref(),
+        run_id: validated.pilot_run_id.as_deref(),
+    };
+    let report = match context
+        .runtime
+        .reject_invalid_finding(&validated.task_id, &finding)
+    {
+        Ok(VerdictWrite::Recorded(status)) => json!({ "recorded": true, "status": status }),
+        Ok(VerdictWrite::Superseded { reason, detail }) => {
+            json!({ "recorded": false, "reason": reason, "detail": detail })
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.core.task_pilot",
+                task_id = %validated.task_id,
+                %error,
+                "could not reject a review finding task-pilot judged invalid"
+            );
+            json!({ "recorded": false, "reason": "apply_failed", "detail": error.to_string() })
+        }
+    };
+    if let Value::Object(fields) = &mut validated.assessment {
+        fields.insert("finding_rejection".to_string(), report);
+    }
 }
 
 /// The pilot never sees the deterministic findings — the lane's
@@ -383,17 +630,21 @@ fn attach_host_findings(
 /// The promotion decision the apply's authority makes for this task.
 fn admit(
     context: &ApplyContext<'_>,
-    task_id: &str,
     snapshot: &PreparedTaskSnapshot,
-    assessed: &Assessed,
-    operation_id: &str,
+    current: &Task,
+    assessed: &ValidatedTask,
+    graph: &super::super::blockers::PilotDependencyGraph,
 ) -> Settled<Option<Admission>> {
+    // Only edges in the locked mutation (or already stored on replay) can
+    // cover a prerequisite. The done lookup reads that same locked graph.
+    let task_id = assessed.task_id.as_str();
+    let operation_id = assessed.operation_id.as_str();
+    let dependencies = current.dependencies();
+    let is_done = |id: &str| graph.is_done(id);
     let admission = match context.authority {
         PromotionAuthority::CiSweep(filing, authorized) => {
-            let mut admission_task = assessed.current.clone();
-            if snapshot.status == TaskStatus::Proposed
-                && assessed.current.status == TaskStatus::Backlog
-            {
+            let mut admission_task = current.clone();
+            if snapshot.status == TaskStatus::Proposed && current.status == TaskStatus::Backlog {
                 if operation_was_applied(context.runtime, task_id, operation_id)
                     .map_err(refused(task_id, "apply_failed"))?
                 {
@@ -409,38 +660,42 @@ fn admit(
                     return Err(super::super::superseded_outcome(
                         task_id,
                         "promoted_elsewhere",
-                        assessed.current.status,
+                        current.status,
                         "the CI-sweep task was promoted to backlog elsewhere before admission",
                     ));
                 }
             }
-            ci_failure_admission::assess(
-                context.action,
-                task_id,
-                &admission_task,
-                &assessed.assessment,
-                &assessed.after,
-                filing,
-                *authorized,
-            )
-            .map(|outcome| match outcome {
-                ci_failure_admission::AdmissionOutcome::Decision(decision) => {
-                    CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
-                }
-                ci_failure_admission::AdmissionOutcome::Superseded(outcome) => {
-                    CheckedAdmission::Superseded(outcome)
-                }
-            })
+            context
+                .runtime
+                .ci_sweep_admission(
+                    context.action,
+                    task_id,
+                    &admission_task,
+                    &assessed.assessment,
+                    &assessed.after,
+                    filing,
+                    *authorized,
+                    &dependencies,
+                    &is_done,
+                )
+                .map(|outcome| match outcome {
+                    CiSweepAdmission::Decision(decision) => {
+                        CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
+                    }
+                    CiSweepAdmission::Superseded(outcome) => CheckedAdmission::Superseded(outcome),
+                })
         }
-        PromotionAuthority::Drain(drain) => drain_promotion::assess(
+        PromotionAuthority::Drain(drain) => drain_promotion::assess_drain_admission(
             context.action,
             task_id,
             snapshot,
-            &assessed.current,
+            current,
             &assessed.assessment,
             &assessed.after,
             assessed.complexity,
             drain,
+            &dependencies,
+            &is_done,
         )
         .map(|decision| CheckedAdmission::Apply(Some(Admission::Drain(decision)))),
         PromotionAuthority::None => Ok(CheckedAdmission::Apply(None)),
@@ -466,6 +721,8 @@ fn write(
         &mut validated,
         context.prepared,
         context.policy,
+        matches!(context.authority, PromotionAuthority::CiSweep(..)),
+        |current, assessed, graph| admit(context, snapshot, current, assessed, graph),
     );
     let outcome = match (outcome, context.authority) {
         (
@@ -485,6 +742,8 @@ fn write(
         outcome,
         Ok(ApplyTaskOutcome::Applied(_) | ApplyTaskOutcome::AlreadyApplied(_))
     ) {
+        // Rejected first: an invalid finding is never archived as fixed.
+        reject_invalid_finding(context, &mut validated);
         close_verified_no_diff(context.runtime, &mut validated);
     }
     let (label, fingerprint) = match outcome {
@@ -496,7 +755,9 @@ fn write(
         Ok(ApplyTaskOutcome::Invalid(detail)) => {
             return Err(task_outcome(&task_id, "invalid", Some(detail)));
         }
-        Ok(ApplyTaskOutcome::Superseded(outcome)) => return Err(outcome),
+        Ok(ApplyTaskOutcome::Superseded(outcome) | ApplyTaskOutcome::AdmissionRefused(outcome)) => {
+            return Err(outcome);
+        }
         Err(error) => return Err(refused(&task_id, "apply_failed")(error)),
     };
     if let Some(fingerprint) = fingerprint {

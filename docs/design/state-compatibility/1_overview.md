@@ -1,9 +1,11 @@
 ---
 title: State Compatibility — Overview
 owner: claude
-last_updated: 2026-09-13
-last_validated: 2026-10-19
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
+stage: shipped
+next: "—"
 feature: state-compatibility
 doc_role: overview
 type: design
@@ -16,11 +18,12 @@ related_artifacts: [ORB-10003, ORB-10012, ORB-11994, ORB-12078, ORB-12434]
 
 # State Compatibility — Overview
 
-Orbit versions two pieces of durable workspace state: the `.orbit/` layout
-(a marker file plus a migration registry) and the store database schema (the
-`schema_meta` ledger). Both auto-apply pending migrations when a workspace
-opens. This feature covers the other direction — an **older binary meeting
-newer state** — and defines what it may do with it.
+Orbit versions the `.orbit/` layout (a marker file plus a migration registry)
+and each SQLite database holding authority: the store, task registry and
+recovery authority. Each database has its own `schema_meta` ledger and uses
+the same compatibility decision. A binary applies pending migrations when their versions
+are within its supported range. This feature covers the other direction — an
+**older binary meeting newer state** — and defines what it may do with it.
 
 ## 1 Motivation
 
@@ -70,18 +73,36 @@ answers in advance, and the older binary reads that answer.
 
 | Concern | File | Task |
 | --- | --- | --- |
-| Compatibility types and the decision | `crates/orbit-store/src/contracts/compat.rs` | [ORB-12434] |
-| Layout registry, marker, and `layout.compat` | `crates/orbit-store/src/workflow/layout/registry.rs`, `crates/orbit-store/src/workflow/layout/marker.rs` | [ORB-10012], [ORB-12434] |
-| Schema ledger and the `migration.compat` row | `crates/orbit-store/src/driver/sqlite/migration/ledger.rs` | [ORB-10003], [ORB-12434] |
-| Read-only enforcement on the store handle | `crates/orbit-store/src/driver/sqlite/connection.rs` | [ORB-12434] |
-| Operator reporting (`orbit migrate`) | `crates/orbit-cmd/src/migrate.rs`, `crates/orbit-cli/src/command/migrate.rs` | [ORB-10012], [ORB-12434] |
+| Compatibility types and the decision | `crates/orbit-store/src/contracts/compat.rs` | Done — [ORB-12434] |
+| Layout registry, marker, and `layout.compat` | `crates/orbit-store/src/workflow/layout/registry.rs`, `crates/orbit-store/src/workflow/layout/marker.rs` | Done — [ORB-10012], [ORB-12434] |
+| Shared schema engine and frozen store ledger | `crates/orbit-store/src/driver/sqlite/migration/ledger/` | Done — [ORB-10003], [ORB-12434], [ORB-15821] |
+| Read-only enforcement on the store handle | `crates/orbit-store/src/driver/sqlite/connection.rs` | Done — [ORB-12434] |
+| Operator reporting (`orbit migrate`) | `crates/orbit-cmd/src/migrate.rs`, `crates/orbit-cli/src/command/migrate.rs` | Done — [ORB-10012], [ORB-12434] |
+| Older-writer classification and upgrade admission | `crates/orbit-store/src/contracts/compat.rs`, `crates/orbit-common/src/fs/generation/` | Done — [ORB-13631] |
+| Task registry ledger and pre-ledger fence | `crates/orbit-store/src/driver/sqlite/task_registry/ledger.rs` | Done — [ORB-15822] |
+| Frozen feature ledgers absorbed by store v49 | `crates/orbit-store/src/driver/sqlite/migration/feature_ledgers/` | Done — [ORB-15823] |
+| Recovery authority's own ledger | `crates/orbit-runtime/src/recovery_authority/schema.rs` | Done — [ORB-15824] |
+| Older-client-safe handoff attribution, store v57 | `crates/orbit-store/src/driver/sqlite/migration/handoff_settlement.rs` | Done — [ORB-17530] |
+
+The one-ledger-per-database work designed in [ORB-15729] is complete through
+[ORB-15821], [ORB-15822], [ORB-15823] and [ORB-15824]. The committed scope is
+shipped; the vision's stronger verification and file-write gating are future
+work. This document remains Draft: implementation completion alone does not
+record owner approval of the whole design.
 
 ## Task References
 
 - [ORB-10003] added the versioned SQLite schema ledger.
-- [ORB-10012] added the workspace-layout registry and `orbit migrate`.
-- [ORB-11994] and [ORB-12078] removed the task checkout projections that
-  older binaries recreate, the worked example of a breaking layout change.
-- [ORB-12434] replaced the version-number refusal with this contract.
+- [ORB-10012] added the workspace-layout registry and orbit migrate reporting.
+- [ORB-11994] removed task checkout projections that older binaries could recreate.
+- [ORB-12078] completed removal of task checkout projections and their compatibility paths.
+- [ORB-12434] introduced declared state compatibility and enforced read-only newer-store opens.
+- [ORB-13631] extended compatibility to older writers and based upgrade admission on compatibility floors.
+- [ORB-15729] designed one versioned ledger per authoritative SQLite database.
+- [ORB-15821] froze shipped store migration bodies and added per-version schema goldens.
+- [ORB-15822] implemented the task registry ledger and baseline envelope stamps.
+- [ORB-15823] absorbed and froze automation, review and local-pull feature ledgers.
+- [ORB-15824] moved recovery authority onto its own versioned schema ledger.
+- [ORB-17530] preserved older-client handoff compatibility with a sidecar and read-compatible v57.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

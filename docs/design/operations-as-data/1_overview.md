@@ -1,9 +1,11 @@
 ---
 title: Operations as Data — Overview
 owner: claude
-last_updated: 2026-10-20
-last_validated: 2026-10-20
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Accepted
+stage: building
+next: "Restore ORB-15934 after 2026-11-12 to refuse unknown fields"
 feature: operations-as-data
 doc_role: overview
 type: design
@@ -159,9 +161,20 @@ and again in the tool handler.
   by tool name.
 - [ORB-15938] — phase 3b: migrated task `add` and `update`, adding the array
   parameter kind, refuse-mode unknown fields and the schema extension table.
+- [ORB-15939] — phase 3c: migrated task artifacts and locks, adding
+  registry-derived nested CLI groups.
+- [ORB-15940] — phase 3d: migrated the task review and lifecycle tools,
+  adding CLI action subcommands.
 - [ORB-15941] — phase 4: migrated the workflow-run tools as a tool-only noun
   and settled that a multiplexed tool's action is an enum parameter.
+- [ORB-15942] — phase 5: migrated search and judged the remaining tools.
+- [ORB-15934] — phase 0c: unknown-field refusal after the compatibility
+  window; archived until its 2026-11-12 gate.
 - [ORB-16787] — declared the read-only codebase analytics noun in the
   registry, with its CLI and MCP surfaces derived from it.
+- [ORB-16957] — declared the agent scorecard registry behind the
+  `orbit agents` CLI and MCP tools, with deprecated orchestrator aliases.
+- [ORB-17118] — reworked the orchestrator score the deprecated aliases
+  return so it measures spec quality.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

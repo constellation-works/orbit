@@ -15,5 +15,5 @@ pub use command::{ToolCommand, ToolSubcommand};
 pub use run::ToolRunArgs;
 pub(crate) use run::{
     ToolRunBootstrap, answers_with_bare_field, request_write_sidecars_from_cli_fields,
-    shape_tool_output,
+    shape_tool_output, task_list_result_profile,
 };

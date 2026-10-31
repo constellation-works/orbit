@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Design
 owner: grok
-last_updated: 2026-10-12
-last_validated: 2026-10-19
+last_updated: 2026-10-29
+last_validated: 2026-10-29
 status: Draft
 feature: federated-mcp
 doc_role: design
@@ -92,6 +92,8 @@ Each descriptor keeps today's v1 workspace fields (`id`, `name`, `ship_mode`, `o
 - `reachability` — SSH/MCP reachability of the configured destination;
 - `checkout_health` — repo-root presence at that destination, or `unknown` when it could not be probed;
 - `capabilities` — classes the destination currently advertises for that workspace (a hint).
+- `crews` or `crews_error` — the destination's crew projection, present only when the caller
+  requests `include: ["crews"]`.
 
 Do not overload one `health` field with both SSH reachability and repo-root presence. A down or unreachable host is **included** with an explicit unreachable/unhealthy projection, not omitted. Omission makes every later call a stale-route surprise.
 
@@ -108,7 +110,10 @@ Caller-facing precedence when more than one class could apply:
 - `unreachable_destination` — configured destination does not answer. Unreachable wins over capability and stale because those are undecidable without the host.
 - `stale_route` — destination configured; a live probe shows the workspace is absent.
 - `unhealthy_checkout` — destination answers but the checkout is not usable.
-- `tool_not_on_this_host` — destination identified; the tool is not advertised there.
+- `tool_not_on_this_host` — destination identified; the tool is absent from its public surface
+  for a reason other than the caller's session authorization. A governed tool omitted from
+  `tools/list` only because this session cannot authorize it still reaches the destination's
+  call-time guard, which returns its audited `capability_denied` refusal.
 - `capability_refused` — destination holds the workspace but refuses the tool's class. Unclassified discovery/list tools are not subject to this error.
 
 It must not fall back to a local workspace, another host with a matching `ws_*`, a default workspace, or a cached host-local runtime.
@@ -162,7 +167,10 @@ v1 local stdio, direct SSH stdio, and `orbit mcp listen` stay as specified in mc
 - [ORB-11015] — fail-closed routing of host-qualified selectors
 - [ORB-11016] — registered the federated serve path and aligned current docs
 - [ORB-11017] — federated workspace param is the host-qualified selector
+- [ORB-11023] — routed delivery gets its own budget; a lost answer after
+  dispatch is `outcome_unknown`
 - [ORB-11044] — implicit local membership: local workspaces listed and routed without SSH
+- [ORB-12564] — `--operator` propagates into every destination the client opens
 - [ORB-14448] — host file and `orbit host` commands (specified in host-registry)
 - [ORB-14449] — task-prefix routing and `--host` (host-registry)
 

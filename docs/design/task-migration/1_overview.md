@@ -1,9 +1,11 @@
 ---
 title: Task Migration — Overview
 owner: claude
-last_updated: 2026-10-10
-last_validated: 2026-10-19
+last_updated: 2026-10-28
+last_validated: 2026-10-30
 status: Draft
+stage: shipped
+next: "—"
 feature: task-migration
 doc_role: overview
 type: design
@@ -81,8 +83,17 @@ machine a disjoint id range).
 | Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs) | [ORB-10721] |
 | Runtime facades | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
-| `[tasks] id_start` config | [crates/orbit-config/src/raw.rs](../../../crates/orbit-config/src/raw.rs) | [ORB-00034] |
+| `[tasks] id_start` config | [crates/orbit-config/src/registry/settings/table/keys_head.rs](../../../crates/orbit-config/src/registry/settings/table/keys_head.rs) | [ORB-00034] |
 | Owner-wins mirror sync | [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-12126] |
+
+The export/import/reindex surfaces and owner-wins policy are shipped. Later
+repairs also landed: [ORB-10042] preserved artifact blobs through import,
+[ORB-13448] handled allocator exhaustion during import, [ORB-13449] kept
+foreign-prefix reindex entries from advancing the local allocator, and
+[ORB-13653] bounded reindex's bundle locks. [ORB-15666] corrected registry
+recovery guidance, while [ORB-15668] reconciled the authority rules with
+shipped follower claims. [ORB-12725] moved machine identity configuration
+from `host.toml` into global `config.toml`.
 
 ## 4. The migration recipe
 
@@ -219,7 +230,7 @@ When the registry is missing or unusable:
    configured `[tasks] id_start` floor does not.
 
 Full-bundle readers, writers, creation, deletion, and reindex coordinate through
-persistent `.<task-id>.bundle.lock` files beside the canonical bundles.
+persistent `<task-id>.bundle` lock files beside the canonical bundles.
 These lock files must not be removed while Orbit processes run. Writers recheck
 the envelope after acquiring the lock, so a queued update cannot recreate a
 deleted bundle. Upgrades changing this lock location require restarting all
@@ -297,9 +308,16 @@ that record and the current [distributed-drain setup procedure](../../runbooks/d
 
 ## Task References
 
-- [ORB-00034] — task migration tooling: `orbit task export/import/reindex`, `tasks.id_start` allocator config.
-- [ORB-10721] — per-host `task_prefix` in global `~/.orbit/config.toml`, projected into the allocator.
-- [ORB-12126] — owner-wins cross-host sync: import policy that overwrites only foreign-prefix bundles.
-- [ORB-12164] — the unbound-bundle repair path honors the local-prefix guard.
+- [ORB-00034] introduced task migration tooling and the `tasks.id_start` allocator floor.
+- [ORB-10042] preserved artifact blobs through archive import.
+- [ORB-10721] introduced per-host `task_prefix` and its allocator projection.
+- [ORB-12126] implemented owner-wins import for foreign-prefix mirrors.
+- [ORB-12164] made the unbound-bundle repair honor the local-prefix guard.
+- [ORB-12725] moved machine configuration into global `config.toml`.
+- [ORB-13448] handled allocator exhaustion during task import.
+- [ORB-13449] kept foreign-prefix reindex entries from advancing the local allocator.
+- [ORB-13653] bounded the number of bundle locks held by reindex.
+- [ORB-15666] corrected the lost-registry recovery procedure.
+- [ORB-15668] reconciled task authority guidance with claimed follower execution.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

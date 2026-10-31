@@ -67,6 +67,8 @@ impl OrbitRuntime {
         plan: &ResumePlan,
         actor: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        // Before anything is inserted or any task is readmitted.
+        plan.refuse_missing_reused_worktree()?;
         let job_id = plan.source.job_id.clone();
         // Settle orphans first: a lineage run whose worker died (a host reboot)
         // still reads as running and would otherwise refuse the resume that

@@ -35,10 +35,6 @@
   --sl-color-hairline: #26262b;
   --sl-color-hairline-shade: #17171a;
 
-  /* Failure state for the copy controls. Not a Starlight role, so it carries
-     the project prefix; tuned for AA contrast on the surface colour above. */
-  --orbit-color-danger: #ff9d9d;
-
   /* Caution panels (changelog breaking changes). */
   --orbit-caution-bg: #1a140c;
   --orbit-caution-line: #5a4225;
@@ -68,7 +64,6 @@
   --sl-color-hairline: #eceef3;
   --sl-color-hairline-shade: #f4f5f8;
 
-  --orbit-color-danger: #b3261e;
   --orbit-caution-bg: #fff6ea;
   --orbit-caution-line: #f0cf9f;
   --orbit-caution-text: #8a4b00;
@@ -112,6 +107,60 @@ body {
 
 .sl-markdown-content {
   line-height: 1.65;
+}
+
+/* Build-time Mermaid SVGs retain readable native dimensions. Scrolling stays
+   inside a keyboard-focusable region, including on narrow screens. */
+.sl-markdown-content .orbit-diagram {
+  margin-inline: 0;
+  min-width: 0;
+}
+
+.orbit-diagram figcaption {
+  color: var(--sl-color-gray-2);
+  font-size: 0.875rem;
+  margin-block-end: 0.75rem;
+}
+
+.orbit-diagram-viewport {
+  max-width: 100%;
+  max-height: 38rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  background: var(--sl-color-bg);
+}
+
+.orbit-diagram-viewport:focus-visible {
+  outline: 2px solid var(--sl-color-text-accent);
+  outline-offset: 2px;
+}
+
+.orbit-diagram-viewport svg {
+  display: block;
+  max-width: none;
+  --_text: var(--sl-color-text);
+  --_text-sec: var(--sl-color-gray-2);
+  --_text-muted: var(--sl-color-gray-3);
+  --_text-faint: var(--sl-color-gray-4);
+  --_line: var(--sl-color-gray-3);
+  --_arrow: var(--sl-color-text-accent);
+  --_node-fill: var(--sl-color-bg-inline-code);
+  --_node-stroke: var(--sl-color-gray-4);
+  --_group-fill: var(--sl-color-bg);
+  --_group-hdr: var(--sl-color-bg-inline-code);
+  --_inner-stroke: var(--sl-color-hairline-light);
+  --_key-badge: var(--sl-color-bg-inline-code);
+}
+
+.orbit-diagram-viewport text {
+  font-family: var(--sl-font);
+}
+
+.orbit-diagram details pre {
+  max-height: 24rem;
+  overflow: auto;
 }
 
 .sl-markdown-content h2 {
@@ -184,6 +233,11 @@ body {
   border: 0;
   box-shadow: inset 0 0 0 1px var(--sl-color-hairline-light);
   table-layout: fixed;
+  /* Prose such as a nested type signature has no break opportunity. anywhere,
+     unlike break-word, also lowers the minimum width that auto layout gives the
+     description column, so the table fits its container at 320 px and 1152 px.
+     Code keeps its own overflow-wrap: normal. */
+  overflow-wrap: anywhere;
 }
 
 .sl-markdown-content table.orbit-config-keys th:first-child,
@@ -273,13 +327,6 @@ body {
     border-bottom: 0;
     padding-bottom: 0.25rem;
   }
-}
-
-.sl-markdown-content table.sl-table-options th:first-child,
-.sl-markdown-content table.sl-table-options td:first-child,
-.sl-markdown-content table.orbit-table-options th:first-child,
-.sl-markdown-content table.orbit-table-options td:first-child {
-  white-space: nowrap;
 }
 
 /* CLI reference rows keep both columns on their first line. Their code wraps
@@ -749,10 +796,6 @@ html:not([data-has-sidebar]) header.header {
 .orbit-section {
   border-top: 1px solid var(--sl-color-hairline);
   padding: 4rem 0;
-}
-
-.orbit-section:last-of-type {
-  padding-bottom: 0;
 }
 
 .orbit-section-head {
@@ -1928,4 +1971,14 @@ a.orbit-card:focus-visible :is(h2, h3) {
 .sl-markdown-content img[src*="dashboard-"] {
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 8px;
+}
+
+/* Search dialog Cancel (mobile): Starlight paints this button with
+   --sl-color-text-accent on the gray-6 dialog surface, which is 4.46:1 in
+   light theme — below the 4.5:1 normal-text threshold. Repoint just this
+   control at the darker accent-high step (9.07:1); links elsewhere keep
+   the text-accent token. Unlayered rules win over Starlight's layered
+   ones, so no !important is needed. */
+:root[data-theme='light'] site-search button[data-close-modal] {
+  color: var(--sl-color-accent-high);
 }

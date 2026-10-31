@@ -27,7 +27,10 @@
 #   detached worktree with a run-local build target, outside any sandbox, as
 #   required validation does. It attaches each run's log, and the results
 #   only when every run passed; receipt of every result queues a fresh
-#   review. A refusal leaves the hold in place with a typed reason. Every
+#   review. A refusal leaves the hold in place with a typed reason, unless
+#   every refusal is `findings_reported`: the findings are then attached as
+#   `review-evidence-findings.json` and the task is queued to repair its kept
+#   candidate from them. Every
 #   attempt is audited as `review.evidence_fulfilment` and commented on the
 #   task.
 #

@@ -5,7 +5,7 @@ mod host;
 mod member_host;
 mod stale;
 
-pub(crate) use claim::{bundle_crews, claim};
+pub(crate) use claim::{bundle_crews, claim, require_claim_owner};
 pub(crate) use host::{evaluate, evaluate_with_cache};
 pub(crate) use stale::stale_tasks;
 
@@ -42,13 +42,13 @@ pub(crate) struct Host<'a> {
     /// One provider-hold scan per evaluation clock, shared by observation and
     /// admission. Observation replaces it when its clock differs.
     pilot_hold: RefCell<Option<PilotHoldCache>>,
+    /// The routine's `when:` guard, evaluated once per evaluation at the
+    /// first due member.
+    guard: Option<String>,
+    guard_verdict: RefCell<Option<orbit_automation::condition::GuardVerdict>>,
 }
 
 struct PilotHoldCache {
     now: DateTime<Utc>,
     withhold: Option<String>,
 }
-
-/// The task outcome reason apply and prepare record for a task the branch
-/// made stale under its claim; the member settles superseded, not failed.
-pub(crate) const SUPERSEDED_BY_SOURCE: &str = "superseded_by_source";

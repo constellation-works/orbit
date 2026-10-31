@@ -43,6 +43,12 @@ struct LandingHost {
     intents: Mutex<Vec<(DirectLandingRequest, String)>>,
 }
 
+impl LandingHost {
+    fn last_step(&self) -> Option<HandoffLandingStep> {
+        self.steps.lock().unwrap().last().cloned()
+    }
+}
+
 impl orbit_engine::test_support::NullRuntimeHost for LandingHost {
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
@@ -75,7 +81,10 @@ impl orbit_engine::test_support::NullRuntimeHost for LandingHost {
 fn owner_checkout(repo: &Path) -> LandingHost {
     git(repo, &["init", "-q", "-b", "main"]);
     std::fs::write(repo.join("README.md"), "base\n").unwrap();
+    std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+    std::fs::write(repo.join(".github/workflows/ci.yml"), "name: CI\n").unwrap();
     git(repo, &["add", "README.md"]);
+    git(repo, &["add", ".github/workflows/ci.yml"]);
     git(repo, &["commit", "-q", "-m", "base"]);
     git(repo, &["checkout", "-q", "-b", "orbit/T1"]);
     std::fs::write(repo.join("work.txt"), "delivered\n").unwrap();
@@ -130,6 +139,141 @@ fn land_with(host: &impl RuntimeHost, extra: Value) -> Result<Value, OrbitError>
     )
 }
 
+/// An owner checkout's context re-pointed at pull request #42.
+fn pr_context(sandbox: &Path) -> HandoffLandingContext {
+    let mut context = owner_checkout(sandbox).context;
+    context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+    context.candidate.repository = "owner/repository".into();
+    context
+}
+
+/// Land with no owner wait.
+fn land_now(host: &impl RuntimeHost) -> Result<Value, OrbitError> {
+    land_with(host, json!({"max_wait_seconds": 0}))
+}
+
+/// Land through the retry-wait hook, recording wait durations, never sleeping.
+fn counted_land(host: &impl RuntimeHost, input: Value) -> (Result<Value, OrbitError>, Vec<u64>) {
+    let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let captured = waits.clone();
+    let result = orbit_engine::test_support::with_vcs_retry_wait(
+        move |duration| captured.borrow_mut().push(duration.as_secs()),
+        || land_with(host, input),
+    );
+    let durations = waits.borrow().clone();
+    (result, durations)
+}
+
+/// Commit the base's fix on `main`; return its new tip.
+fn fix_base(repo: &Path) -> String {
+    std::fs::write(repo.join("fix.txt"), "the base's fix\n").unwrap();
+    git(repo, &["add", "fix.txt"]);
+    git(repo, &["commit", "-q", "-m", "fix the base"]);
+    git(repo, &["rev-parse", "main"])
+}
+
+/// A fresh forge in its own sandbox, with candidate and base commits.
+fn forge_fixture(owed: bool, spent: bool) -> (tempfile::TempDir, FakeForge, String, String) {
+    let sandbox = tempdir().unwrap();
+    let mut forge = FakeForge::new(sandbox.path(), owed);
+    forge.context.automatic_repair_spent = spent;
+    let candidate = forge.context.candidate.candidate.commit.clone();
+    let base = forge.context.candidate.base.commit.clone();
+    (sandbox, forge, candidate, base)
+}
+
+/// Change the workflow file on the candidate branch and refresh the PR
+/// observation so the landing classifies a citation to that changed file.
+fn change_candidate_workflow(forge: &mut FakeForge) -> String {
+    let candidate_branch = forge.context.candidate.source_branch.clone();
+    let base_branch = forge.context.candidate.base_branch.clone();
+    git(&forge.repo, &["checkout", "-q", &candidate_branch]);
+    std::fs::write(
+        forge.repo.join(".github/workflows/ci.yml"),
+        "name: changed CI\n",
+    )
+    .unwrap();
+    git(&forge.repo, &["add", ".github/workflows/ci.yml"]);
+    git(&forge.repo, &["commit", "-q", "-m", "change workflow"]);
+    git(&forge.repo, &["checkout", "-q", &base_branch]);
+
+    let mut candidate = observe_candidate(
+        &forge.repo,
+        Some(&candidate_branch),
+        &base_branch,
+        &base_branch,
+        HandoffDelivery::LocalCandidate,
+        "workspace",
+        orbit_engine::BaseSyncMode::Local,
+    )
+    .unwrap();
+    candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+    candidate.repository = "owner/repository".into();
+    let commit = candidate.candidate.commit.clone();
+    forge.context.candidate = candidate;
+    forge.state.lock().unwrap().head = commit.clone();
+    commit
+}
+
+/// Script the inherited-failure jobs: candidate and base fail, tip answers `tip`.
+fn inherited_jobs(forge: &FakeForge, candidate: &str, base: &str, fixed: &str, tip: FakeJob) {
+    forge.job(candidate, failed(1, 11, CLIPPY_DEAD_CODE));
+    forge.job(base, failed(2, 21, CLIPPY_DEAD_CODE));
+    forge.job(fixed, tip);
+}
+
+fn assert_not_sent(forge: &FakeForge, ops: &[&str], label: &str) {
+    for op in ops {
+        assert!(forge.sent(op).is_empty(), "{label}: sent {op}");
+    }
+}
+
+fn assert_steps(steps: &[HandoffLandingStep], expected: &[HandoffLandingStep], label: &str) {
+    assert_eq!(steps, expected, "{label}");
+}
+
+fn assert_sent_len(forge: &FakeForge, op: &str, expected: usize, label: &str) {
+    assert_eq!(forge.sent(op).len(), expected, "{label}: {op}");
+}
+
+fn assert_contains(text: &str, parts: &[&str], label: &str) {
+    for part in parts {
+        assert!(text.contains(part), "{label}: {text}");
+    }
+}
+
+fn evidence_of(forge: &FakeForge) -> Value {
+    serde_json::from_str(&forge.last_evidence()).unwrap()
+}
+
+fn head_of(forge: &FakeForge) -> String {
+    forge.state.lock().unwrap().head.clone()
+}
+
+fn assert_reason(forge: &FakeForge, label: &str, parts: &[&str]) {
+    let reason = forge.stop_reason();
+    for part in parts {
+        assert!(reason.contains(part), "{label}: {reason}");
+    }
+}
+
+fn policy_commit(policy: &mut Value) -> &mut Value {
+    &mut policy["pull_request"]["commits"]["nodes"][0]["commit"]
+}
+
+fn policy_contexts(policy: &mut Value) -> &mut Value {
+    &mut policy_commit(policy)["statusCheckRollup"]["contexts"]
+}
+
+/// The mutable required-check context nodes of a pending policy.
+fn policy_nodes(policy: &mut Value) -> &mut Value {
+    &mut policy_contexts(policy)["nodes"]
+}
+
+fn policy_first(policy: &mut Value) -> &mut Value {
+    &mut policy_nodes(policy)[0]
+}
+
 fn a_local_candidate_landing_names_its_task_before_the_branch_moves() {
     let sandbox = tempdir().unwrap();
     let host = owner_checkout(sandbox.path());
@@ -154,10 +298,7 @@ fn a_local_candidate_landing_names_its_task_before_the_branch_moves() {
         )],
         "one intent, naming the handoff and its task, retained while main was still at the base"
     );
-    assert_eq!(
-        host.steps.lock().unwrap().last(),
-        Some(&HandoffLandingStep::Complete)
-    );
+    assert_eq!(host.last_step(), Some(HandoffLandingStep::Complete));
 }
 
 fn a_candidate_that_cannot_fast_forward_records_no_landing_intent() {
@@ -170,11 +311,8 @@ fn a_candidate_that_cannot_fast_forward_records_no_landing_intent() {
     land(&host).expect_err("a diverged landing branch stops the attempt");
 
     assert!(host.intents.lock().unwrap().is_empty());
-    assert_eq!(
-        host.steps.lock().unwrap().last(),
-        Some(&HandoffLandingStep::Stop { repairable: true }),
-        "a landing branch that moved past the candidate's base earns an automatic repair"
-    );
+    let stop = HandoffLandingStep::Stop { repairable: true };
+    assert_eq!(host.last_step(), Some(stop));
 }
 
 /// Model the owner's journal guards at the RuntimeHost boundary: Stop needs a
@@ -241,9 +379,7 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
         ("headRefOid", "another-commit"),
     ] {
         let sandbox = tempdir().unwrap();
-        let mut context = owner_checkout(sandbox.path()).context;
-        context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
-        context.candidate.repository = "owner/repository".into();
+        let mut context = pr_context(sandbox.path());
         let intent_id = "handoff-1:42".to_string();
         // A lost merge reply leaves this intent for the next attempt to read.
         context.unresolved_merge_intent = Some(intent_id.clone());
@@ -265,36 +401,24 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
 
         let error = land(&host).expect_err("a foreign merged identity cannot complete the handoff");
         let updates = host.updates.lock().unwrap().clone();
-        assert_eq!(
-            updates.len(),
-            2,
-            "one resolved intent and one durable Stop for {field}"
-        );
-        assert_eq!(
-            updates[0].step,
-            HandoffLandingStep::ResolveIntent {
-                intent_id,
-                merged: true
-            }
-        );
-        assert_eq!(
-            updates[1].step,
-            HandoffLandingStep::Stop { repairable: false },
-            "stale delivery evidence is not a base conflict a rebase repairs"
-        );
+        assert_eq!(updates.len(), 2, "{field}: resolved intent and Stop");
+        let resolved = HandoffLandingStep::ResolveIntent {
+            intent_id,
+            merged: true,
+        };
+        assert_eq!(updates[0].step, resolved, "{field}");
+        let stop = HandoffLandingStep::Stop { repairable: false };
+        assert_eq!(updates[1].step, stop, "{field}: stale evidence");
         let stopped: Value = serde_json::from_str(&updates[1].evidence).unwrap();
         assert_eq!(stopped["kind"], "owner_landing_refusal");
-        assert_eq!(
-            stopped["observation"]["required_checks"]["state"],
-            "not_collected"
-        );
+        let observation = &stopped["observation"];
+        assert_eq!(observation["required_checks"]["state"], "not_collected");
         assert!(updates[1].observed.is_none());
         let reason = stopped["reason"]["value"].as_str().unwrap();
-        assert!(
-            reason.contains("delivery_evidence_stale")
-                && reason.contains(field)
-                && reason.contains(replacement),
-            "the Stop must retain the observed identity mismatch: {reason}"
+        assert_contains(
+            reason,
+            &["delivery_evidence_stale", field, replacement],
+            field,
         );
         assert!(
             matches!(error, OrbitError::Execution(ref message) if message == &format!("handoff_land: {reason}"))
@@ -309,14 +433,9 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
             "headRefOid" => "head",
             _ => unreachable!(),
         };
-        assert_eq!(
-            reconciled["provider_state"][observed_field]["value"],
-            replacement
-        );
-        assert_eq!(
-            stopped["observation"]["pr"][observed_field]["value"],
-            replacement
-        );
+        let provider = &reconciled["provider_state"][observed_field];
+        assert_eq!(provider["value"], replacement, "{field}");
+        assert_eq!(observation["pr"][observed_field]["value"], replacement);
         for update in &updates {
             assert!(!update.evidence.contains("futureField"));
             assert!(!update.evidence.contains(&format!("ghp_{}", "a".repeat(36))));
@@ -348,16 +467,26 @@ struct OpenPullRequestHost {
     steps: Mutex<Vec<HandoffLandingStep>>,
     merge_state: &'static str,
     rollup: Value,
+    review_decision: &'static str,
     sent: Mutex<Vec<String>>,
 }
 
 impl OpenPullRequestHost {
+    fn steps(&self) -> Vec<HandoffLandingStep> {
+        self.steps.lock().unwrap().clone()
+    }
+
+    fn sent_ops(&self) -> Vec<String> {
+        self.sent.lock().unwrap().clone()
+    }
+
     fn new(context: HandoffLandingContext, merge_state: &'static str, rollup: Value) -> Self {
         Self {
             context,
             steps: Mutex::default(),
             merge_state,
             rollup,
+            review_decision: "",
             sent: Mutex::default(),
         }
     }
@@ -391,15 +520,9 @@ impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
             )));
         }
         let candidate = &self.context.candidate;
-        Ok(json!({"pull_request": {
-            "state": "OPEN",
-            "headRefName": candidate.source_branch,
-            "baseRefName": candidate.base_branch,
-            "headRefOid": candidate.candidate.commit,
-            "mergeStateStatus": self.merge_state,
-            "reviewDecision": "",
-            "statusCheckRollup": self.rollup,
-        }}))
+        Ok(
+            json!({"pull_request": { "state": "OPEN", "headRefName": candidate.source_branch, "baseRefName": candidate.base_branch, "headRefOid": candidate.candidate.commit, "mergeStateStatus": self.merge_state, "reviewDecision": self.review_decision, "statusCheckRollup": self.rollup, }}),
+        )
     }
 }
 
@@ -413,22 +536,19 @@ fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
         (" DIRTY ", false),
     ] {
         let sandbox = tempdir().unwrap();
-        let mut context = owner_checkout(sandbox.path()).context;
-        context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
-        context.candidate.repository = "owner/repository".into();
+        let context = pr_context(sandbox.path());
         let host = OpenPullRequestHost::new(context, merge_state, json!([]));
 
-        land_with(&host, json!({"max_wait_seconds": 0}))
-            .expect_err("an unmergeable pull request stops the landing");
+        land_now(&host).expect_err("an unmergeable pull request stops the landing");
 
-        assert_eq!(
-            *host.steps.lock().unwrap(),
-            vec![HandoffLandingStep::Stop { repairable }],
-            "merge state {merge_state}"
+        assert_steps(
+            &host.steps(),
+            &[HandoffLandingStep::Stop { repairable }],
+            merge_state,
         );
         assert!(
-            host.sent.lock().unwrap().is_empty(),
-            "a stopped landing sends no merge"
+            host.sent_ops().is_empty(),
+            "merge state {merge_state}: no merge sent"
         );
     }
 }
@@ -442,22 +562,10 @@ fn only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair() {
 /// runs, never lands with one.
 fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
     const OWED: &str = "CodeQL / Analyze (rust)";
-    let check = |conclusion: Option<&str>| {
-        json!({
-            "__typename": "CheckRun",
-            "name": "Analyze (rust)",
-            "workflowName": "CodeQL",
-            "status": if conclusion.is_some() { "COMPLETED" } else { "IN_PROGRESS" },
-            "conclusion": conclusion.unwrap_or_default(),
-        })
-    };
-    let other = json!({"__typename": "CheckRun", "name": "fast", "workflowName": "CI",
-                       "status": "COMPLETED", "conclusion": "SUCCESS"});
-    let status_success = json!({
-        "__typename": "StatusContext",
-        "context": OWED,
-        "state": "SUCCESS",
-    });
+    let check = |conclusion: Option<&str>| json!({ "__typename": "CheckRun", "name": "Analyze (rust)", "workflowName": "CodeQL", "status": if conclusion.is_some() { "COMPLETED" } else { "IN_PROGRESS" }, "conclusion": conclusion.unwrap_or_default(), });
+    let other = json!({"__typename": "CheckRun", "name": "fast", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS"});
+    let status_success =
+        json!({ "__typename": "StatusContext", "context": OWED, "state": "SUCCESS", });
     for (case, rollup, merges, stop_reason) in [
         ("passed", json!([other, check(Some("SUCCESS"))]), true, None),
         (
@@ -493,27 +601,24 @@ fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
         ),
     ] {
         let sandbox = tempdir().unwrap();
-        let mut context = owner_checkout(sandbox.path()).context;
-        context.candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
-        context.candidate.repository = "owner/repository".into();
+        let mut context = pr_context(sandbox.path());
         context.owed_hosted_checks = vec![OWED.into()];
         let host = OpenPullRequestHost::new(context, "CLEAN", rollup);
 
-        let error = land_with(&host, json!({"max_wait_seconds": 0}))
-            .expect_err("the fixture never reports a merge");
+        let error = land_now(&host).expect_err("the fixture never reports a merge");
 
-        let sent = host.sent.lock().unwrap().clone();
+        let sent = host.sent_ops();
         assert_eq!(!sent.is_empty(), merges, "{case}: {sent:?} {error}");
-        let steps = host.steps.lock().unwrap().clone();
+        let steps = host.steps();
         match stop_reason {
             // The owed check passed, so the landing went on to the merge; the
             // fixture refuses its merge-policy read, and the failed run
             // settles with its own stop rather than an owed-check refusal.
             None => {
-                assert_eq!(
-                    steps,
-                    vec![HandoffLandingStep::Stop { repairable: false }],
-                    "{case}"
+                assert_steps(
+                    &steps,
+                    &[HandoffLandingStep::Stop { repairable: false }],
+                    case,
                 );
                 let message = error.to_string();
                 assert!(
@@ -522,10 +627,10 @@ fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
                 );
             }
             Some(reason) => {
-                assert_eq!(
-                    steps,
-                    vec![HandoffLandingStep::Stop { repairable: false }],
-                    "{case}"
+                assert_steps(
+                    &steps,
+                    &[HandoffLandingStep::Stop { repairable: false }],
+                    case,
                 );
                 let message = error.to_string();
                 assert!(
@@ -546,11 +651,8 @@ fn an_owed_hosted_check_must_pass_before_the_owner_merges() {
         *host.steps.lock().unwrap(),
         vec![HandoffLandingStep::Stop { repairable: false }]
     );
-    assert_eq!(
-        git(&host.repo, &["rev-parse", "main"]),
-        tip,
-        "nothing landed"
-    );
+    let main_tip = git(&host.repo, &["rev-parse", "main"]);
+    assert_eq!(main_tip, tip, "nothing landed");
 }
 
 /// The hosted CI one failed check job ran: its run, job and log.
@@ -559,6 +661,8 @@ struct FakeJob {
     job_id: u64,
     conclusion: &'static str,
     log: FakeLog,
+    run_attempt: u64,
+    event: &'static str,
 }
 
 /// What a read of one job's log answers.
@@ -592,8 +696,13 @@ enum UpdateShape {
 struct ForgeState {
     head: String,
     merged: bool,
+    merge_commit: Option<String>,
     /// The `CI / clippy` job on each commit.
     jobs: HashMap<String, FakeJob>,
+    /// Provider timestamps for the stale-base regression; absent in other fixtures.
+    job_times: HashMap<u64, (&'static str, &'static str)>,
+    /// Exercise the real branch-run adapter against a local substitute gh.
+    base_push_provider: bool,
     /// Commits whose job query fails.
     unreadable: Vec<String>,
     /// What a rerun of a failed job leaves on the head.
@@ -657,11 +766,9 @@ impl FakeForge {
     /// landing reads `origin/main` and fetches it.
     fn publish(&mut self, remote: &Path) {
         let repo = self.repo.to_string_lossy().into_owned();
+        let origin = remote.to_string_lossy();
         git(remote, &["clone", "-q", "--bare", &repo, "."]);
-        git(
-            &self.repo,
-            &["remote", "add", "origin", &remote.to_string_lossy()],
-        );
+        git(&self.repo, &["remote", "add", "origin", &origin]);
         git(&self.repo, &["fetch", "-q", "origin"]);
         self.remote = Some(remote.to_path_buf());
     }
@@ -709,15 +816,42 @@ impl FakeForge {
     }
 
     fn job_json(job: &FakeJob) -> Value {
-        json!({
-            "run_id": job.run_id, "job_id": job.job_id, "workflow": "CI", "name": "clippy",
-            "status": "completed", "conclusion": job.conclusion,
-            "failed_step": (job.conclusion == "failure").then_some("Run clippy"),
-        })
+        json!({ "run_id": job.run_id, "job_id": job.job_id, "workflow": "CI", "workflow_id":1,"started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z","name": "clippy", "status": "completed", "conclusion": job.conclusion, "failed_step": (job.conclusion == "failure").then_some("Run clippy"), "run_attempt": job.run_attempt, "event": job.event, "pull_requests": [{"number": 42}], "pull_request_numbers": [42], })
     }
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
+    fn apply_task_automation_update(
+        &self,
+        _task_id: &str,
+        _update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        Err(OrbitError::InvalidInput(
+            "active execution claim requires a claim-scoped mutation".into(),
+        ))
+    }
+    fn admit_ci_rerun(
+        &self,
+        _tasks: &[String],
+        _handoff: Option<&str>,
+        plan: &orbit_types::workflow::CiRerunPlan,
+    ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
+        let mut history = self.history.lock().unwrap();
+        let decision = orbit_types::workflow::decide_ci_rerun(&history, plan);
+        if matches!(decision, orbit_types::workflow::CiRerunAdmission::Reserved) {
+            history.push(orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "owner".into(),
+                event: orbit_types::workflow::CI_RERUN_RESERVED_EVENT.into(),
+                note: Some(serde_json::to_string(plan).unwrap()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        }
+        Ok(decision)
+    }
     fn admit_handoff_base_update(
         &self,
         _: &str,
@@ -768,6 +902,52 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         Ok(())
     }
 
+    fn record_handoff_landing_wait(&self, _: &str, reason: &str) -> Result<(), OrbitError> {
+        self.history
+            .lock()
+            .unwrap()
+            .push(orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "owner".into(),
+                event: orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT.into(),
+                note: Some(reason.into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        Ok(())
+    }
+
+    fn record_handoff_landing_history(
+        &self,
+        handoff_id: &str,
+        event: &str,
+        note: &str,
+    ) -> Result<(), OrbitError> {
+        if handoff_id != self.context.handoff_id
+            || !matches!(event, "ci_check_rerun" | "ci_base_suspect")
+        {
+            return Err(OrbitError::InvalidInput(
+                "current handoff claim does not authorize this history event".into(),
+            ));
+        }
+        self.history
+            .lock()
+            .unwrap()
+            .push(orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "system".into(),
+                event: event.into(),
+                note: Some(note.into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        Ok(())
+    }
+
     fn run_private_vcs_operation(
         &self,
         operation: &str,
@@ -780,6 +960,15 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         let mut state = self.state.lock().unwrap();
         let candidate = &self.context.candidate;
         match operation {
+            "ci.rerun_plan" => {
+                let job = state.jobs.get(&state.head).unwrap();
+                if job.event != "pull_request" {
+                    return Err(OrbitError::Execution("foreign retry event".into()));
+                }
+                Ok(
+                    json!({"plan":orbit_types::workflow::CiRerunPlan {schema_version:1,repository:candidate.repository.clone(),repository_id:1,pr_number:"42".into(),head_sha:state.head.clone(),head_branch:candidate.source_branch.clone(),base_branch:candidate.base_branch.clone(),accepted_base:candidate.base.commit.clone(),run_id:job.run_id,run_attempt:job.run_attempt,workflow_id:1,roots:serde_json::from_value(input["roots"].clone()).unwrap(),failed_jobs:vec![json!({"id":job.job_id,"name":"clippy","started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z"})],authentication:json!({})}}),
+                )
+            }
             "ci.current_gates" => Ok(json!({"gates_passed":true,"required":[],"missing":[]})),
             "ci.emission_evidence" => Ok(json!({"evidence":null})),
             "pr.status" => {
@@ -800,26 +989,14 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     "" => "PENDING",
                     _ => "BLOCKED",
                 });
-                let mut rollup = vec![json!({
-                    "__typename": "CheckRun", "name": "clippy", "workflowName": "CI",
-                    "status": status, "conclusion": conclusion,
-                })];
+                let mut rollup = vec![
+                    json!({ "__typename": "CheckRun", "name": "clippy", "workflowName": "CI", "status": status, "conclusion": conclusion, }),
+                ];
                 if state.aggregate.is_some() {
-                    rollup.push(json!({"__typename": "CheckRun", "name": "CodeQL",
-                        "workflowName": "", "status": "COMPLETED", "conclusion": "FAILURE"}));
+                    rollup.push(json!({"__typename": "CheckRun", "name": "CodeQL", "workflowName": "", "status": "COMPLETED", "conclusion": "FAILURE"}));
                 }
-                Ok(json!({"pull_request": {
-                    "number": 42,
-                    "url": "https://github.com/owner/repository/pull/42",
-                    "state": if state.merged { "MERGED" } else { "OPEN" },
-                    "headRefName": candidate.source_branch,
-                    "baseRefName": candidate.base_branch,
-                    "headRefOid": state.head,
-                    "mergeStateStatus": merge_state,
-                    "reviewDecision": state.review_decision.unwrap_or(""),
-                    "mergeCommit": state.merged.then(|| json!({"oid": "provider-merge"})),
-                    "statusCheckRollup": rollup,
-                }}))
+                let pr = json!({"number": 42, "url": "https://github.com/owner/repository/pull/42", "state": if state.merged { "MERGED" } else { "OPEN" }, "headRefName": candidate.source_branch, "baseRefName": candidate.base_branch, "headRefOid": state.head, "mergeStateStatus": merge_state, "reviewDecision": state.review_decision.unwrap_or(""), "mergeCommit": state.merged.then(|| json!({"oid": state.merge_commit.as_deref().unwrap_or("provider-merge")})), "statusCheckRollup": rollup});
+                Ok(json!({"pull_request": pr}))
             }
             "pr.required_checks" => {
                 let mut policy = pending_policy(
@@ -832,17 +1009,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     true,
                 );
                 if state.aggregate.is_some() {
-                    policy
-                        .pointer_mut(
-                            "/pull_request/commits/nodes/0/commit/statusCheckRollup/contexts/nodes",
-                        )
-                        .and_then(Value::as_array_mut)
-                        .unwrap()
-                        .push(
-                            json!({"__typename":"CheckRun","name":"CodeQL","status":"COMPLETED",
-                            "conclusion":"FAILURE","isRequired":true,"databaseId":7001,
-                            "checkSuite":{"app":{"databaseId":57789},"workflowRun":null}}),
-                        );
+                    policy_nodes(&mut policy).as_array_mut().unwrap().push(
+ json!({"__typename":"CheckRun","name":"CodeQL","status":"COMPLETED", "conclusion":"FAILURE","isRequired":true,"databaseId":7001, "checkSuite":{"app":{"databaseId":57789},"workflowRun":null}}),
+                    );
                 }
                 Ok(policy)
             }
@@ -852,34 +1021,46 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     (&input["check_run_id"], &input["app_id"], &input["head_sha"]),
                     (&json!(7001), &json!(57789), &json!(state.head))
                 );
-                Ok(json!({
-                    "repository": "owner/repository", "pr": 42, "head_sha": state.head,
-                    "check_run": {"id": 7001, "name": "CodeQL", "app_id": 57789,
-                        "conclusion": "failure", "annotations_count": 1},
-                    "annotations": [{
-                        "path": path, "start_line": 1, "end_line": 1,
-                        "blob_href": format!("https://github.com/owner/repository/blob/{}/{path}", state.head),
-                        "annotation_level": "failure", "title": "Uncontrolled data used in path expression",
-                        "message": "This path depends on a user-provided value.",
-                    }],
-                }))
+                let annotation = json!({"path": path, "start_line": 1, "end_line": 1, "blob_href": format!("https://github.com/owner/repository/blob/{}/{path}", state.head), "annotation_level": "failure", "title": "Uncontrolled data used in path expression", "message": "This path depends on a user-provided value."});
+                Ok(
+                    json!({"repository": "owner/repository", "pr": 42, "head_sha": state.head, "check_run": {"id": 7001, "name": "CodeQL", "app_id": 57789, "conclusion": "failure", "annotations_count": 1}, "annotations": [annotation]}),
+                )
             }
             "ci.commit_jobs" => {
+                if state.base_push_provider && input["base_push_tip"].is_string() {
+                    return orbit_engine::run_private_vcs_operation(operation, &input);
+                }
                 let commit = input["commit"].as_str().unwrap();
-                if state
-                    .unreadable
-                    .iter()
-                    .any(|unreadable| unreadable == commit)
-                {
+                if state.unreadable.iter().any(|bad| bad == commit) {
                     return Err(OrbitError::Execution(
                         "gh api failed: HTTP 401: Bad credentials".into(),
                     ));
                 }
                 let jobs: Vec<Value> = state
                     .jobs
-                    .get(commit)
-                    .map(Self::job_json)
-                    .into_iter()
+                    .iter()
+                    .filter(|(sha, _)| {
+                        if let Some(tip) = input["base_push_tip"].as_str() {
+                            git(&self.repo, &["merge-base", commit, sha]) == commit
+                                && git(&self.repo, &["merge-base", sha, tip]) == **sha
+                        } else {
+                            *sha == commit
+                        }
+                    })
+                    .map(|(sha, job)| {
+                        let mut value = Self::job_json(job);
+                        value["head_sha"] = json!(sha);
+                        value["head_branch"] = json!(self.context.candidate.source_branch);
+                        value["repository_id"] = json!(1);
+                        value["repository"] = json!(self.context.candidate.repository);
+                        if let Some((started, completed)) = state.job_times.get(&job.job_id) {
+                            value["started_at"] = json!(started);
+                            value["completed_at"] = json!(completed);
+                            value["run_started_at"] = json!(started);
+                            value["run_status"] = json!("completed");
+                        }
+                        value
+                    })
                     .collect();
                 Ok(json!({"commit": commit, "jobs": jobs}))
             }
@@ -895,10 +1076,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     FakeLog::Text(log) => {
                         Ok(json!({"log": log, "truncated": false, "fallback_error": null}))
                     }
-                    FakeLog::Unrecovered => Ok(json!({
-                        "log": "", "truncated": false,
-                        "fallback_error": format!("job {job_id} (`clippy`) returned no log text"),
-                    })),
+                    FakeLog::Unrecovered => Ok(
+                        json!({ "log": "", "truncated": false, "fallback_error": format!("job {job_id} (`clippy`) returned no log text"), }),
+                    ),
                     FakeLog::Unreadable => Err(OrbitError::Execution(
                         "gh api job logs failed: HTTP 502".into(),
                     )),
@@ -909,7 +1089,14 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 if state.queued_rerun {
                     state.jobs.remove(&head);
                 } else {
-                    let rerun = state.after_rerun.take().expect("a scripted rerun");
+                    let mut rerun = state.after_rerun.take().expect("a scripted rerun");
+                    let original = state.jobs.get(&head).unwrap();
+                    rerun.run_attempt = original.run_attempt + 1;
+                    rerun.event = original.event;
+                    state.job_times.insert(
+                        rerun.job_id,
+                        ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"),
+                    );
                     state.jobs.insert(head, rerun);
                 }
                 state.aggregate = state.after_recovery_aggregate.take();
@@ -945,13 +1132,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 state.aggregate = state.after_recovery_aggregate.take();
                 Ok(json!({}))
             }
-            "pr.merge_capabilities" => Ok(json!({"repository": {
-                "name_with_owner": candidate.repository,
-                "base_branch": candidate.base_branch,
-                "allow_squash_merge": true, "allow_rebase_merge": false,
-                "allow_merge_commit": false, "allow_auto_merge": false,
-                "requires_linear_history": false,
-            }})),
+            "pr.merge_capabilities" => Ok(
+                json!({"repository": { "name_with_owner": candidate.repository, "base_branch": candidate.base_branch, "allow_squash_merge": true, "allow_rebase_merge": false, "allow_merge_commit": false, "allow_auto_merge": false, "requires_linear_history": false, }}),
+            ),
             "pr.merge" => {
                 assert_eq!(input["reviewed_head_sha"], state.head.as_str());
                 state.merged = true;
@@ -1059,95 +1242,70 @@ fn pending_forge(repo: &Path, observations: Vec<Value>, policies: Vec<Value>) ->
 }
 
 fn blocked_aggregate() -> Value {
-    json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[{
-        "__typename":"CheckRun","name":"CodeQL","status":"COMPLETED","conclusion":"NEUTRAL"
-    }]})
+    json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[{ "__typename":"CheckRun","name":"CodeQL","status":"COMPLETED","conclusion":"NEUTRAL" }]})
 }
 
-#[test]
 fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "owner_landing_waits_for_exact_required_checks_before_one_verified_merge",
-        || {
-            let sandbox = tempdir().unwrap();
-            let host = pending_forge(
-                sandbox.path(),
-                vec![
-                    blocked_aggregate(),
-                    blocked_aggregate(),
-                    json!({"mergeStateStatus":"CLEAN"}),
-                ],
-                vec![],
-            );
-            let head = host.forge.context.candidate.candidate.commit.clone();
-            *host.policies.lock().unwrap() = vec![
-                pending_policy(&head, "QUEUED", true),
-                pending_policy(&head, "IN_PROGRESS", true),
-            ]
-            .into();
-            let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-            let captured = waits.clone();
-            let result = orbit_engine::test_support::with_vcs_retry_wait(
-                move |duration| captured.borrow_mut().push(duration.as_secs()),
-                || {
-                    land_with(
-                        &host,
-                        json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
-                    )
-                },
-            );
-            assert_eq!(
-                result.expect("BLOCKED with conclusive exact-head required pending must wait")["phase"],
-                "landed"
-            );
-            assert_eq!(*waits.borrow(), [5, 5]);
-            assert_eq!(
-                host.forge.sent("pr.required_checks").len(),
-                2,
-                "current policy is read on every blocked observation"
-            );
-            assert_eq!(host.forge.sent("pr.status").len(), 4);
-            assert_eq!(host.forge.sent("pr.merge").len(), 1);
-            let ops = host.forge.ops.lock().unwrap();
-            let deadlines: Vec<u64> = ops
-                .iter()
-                .filter(|(op, _)| matches!(op.as_str(), "pr.status" | "pr.required_checks"))
-                .map(|(_, input)| {
-                    input["deadline_ms"]
-                        .as_u64()
-                        .expect("poll reads carry the original deadline")
-                })
-                .collect();
-            assert_eq!(deadlines.len(), 6);
-            assert!(
-                deadlines.iter().all(|deadline| *deadline == deadlines[0]),
-                "queued/running/success transitions never reset the enclosing deadline"
-            );
-            let merge = ops.iter().position(|(op, _)| op == "pr.merge").unwrap();
-            assert_eq!(
-                ops[..merge]
-                    .iter()
-                    .filter(|(op, _)| op == "pr.status")
-                    .count(),
-                3,
-                "no merge before checks settle"
-            );
-            assert_eq!(
-                host.forge.steps(),
-                [
-                    HandoffLandingStep::PublishIntent {
-                        intent_id: "handoff-1:42".into()
-                    },
-                    HandoffLandingStep::ResolveIntent {
-                        intent_id: "handoff-1:42".into(),
-                        merged: true
-                    },
-                    HandoffLandingStep::Complete
-                ]
-            );
-        },
+    let sandbox = tempdir().unwrap();
+    let host = pending_forge(
+        sandbox.path(),
+        vec![
+            blocked_aggregate(),
+            blocked_aggregate(),
+            json!({"mergeStateStatus":"CLEAN"}),
+        ],
+        vec![],
     );
+    let head = host.forge.context.candidate.candidate.commit.clone();
+    *host.policies.lock().unwrap() = vec![
+        pending_policy(&head, "QUEUED", true),
+        pending_policy(&head, "IN_PROGRESS", true),
+    ]
+    .into();
+    let (result, waits) = counted_land(
+        &host,
+        json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
+    );
+    assert_eq!(
+        result.expect("BLOCKED with conclusive exact-head required pending must wait")["phase"],
+        "landed"
+    );
+    assert_eq!(waits, [5, 5]);
+    assert_sent_len(&host.forge, "pr.required_checks", 2, "exact");
+    assert_sent_len(&host.forge, "pr.status", 4, "exact");
+    assert_sent_len(&host.forge, "pr.merge", 1, "exact");
+    let ops = host.forge.ops.lock().unwrap();
+    let deadlines: Vec<u64> = ops
+        .iter()
+        .filter(|(op, _)| matches!(op.as_str(), "pr.status" | "pr.required_checks"))
+        .map(|(_, input)| {
+            input["deadline_ms"]
+                .as_u64()
+                .expect("poll reads carry the original deadline")
+        })
+        .collect();
+    assert_eq!(deadlines.len(), 6);
+    let first_deadline = deadlines[0];
+    let uniform = deadlines.iter().all(|d| *d == first_deadline);
+    assert!(uniform, "deadline never resets: {deadlines:?}");
+    let merge = ops.iter().position(|(op, _)| op == "pr.merge").unwrap();
+    let before_merge = ops[..merge]
+        .iter()
+        .filter(|(op, _)| op == "pr.status")
+        .count();
+    assert_eq!(before_merge, 3, "no merge before checks settle");
+    let intent = "handoff-1:42".to_string();
+    let expected_steps = [
+        HandoffLandingStep::PublishIntent {
+            intent_id: intent.clone(),
+        },
+        HandoffLandingStep::ResolveIntent {
+            intent_id: intent,
+            merged: true,
+        },
+        HandoffLandingStep::Complete,
+    ];
+    assert_steps(&host.forge.steps(), &expected_steps, "exact");
 }
 
 /// [ORB-16339] A freshly pushed head reads BLOCKED before the provider has
@@ -1157,534 +1315,445 @@ fn owner_landing_waits_for_exact_required_checks_before_one_verified_merge() {
 /// the provider reports the pull request mergeable; a check that never
 /// appears stops at the deadline and names it. Unreadable policy earns only
 /// the bounded unsettled-poll grace, never a wait to the deadline.
-#[test]
 fn owner_landing_waits_for_required_checks_the_head_has_not_reported() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "owner_landing_waits_for_required_checks_the_head_has_not_reported",
-        || {
-            let unreported = || json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[]});
-            let missing = json!({"gates_passed":false,"required":[{"context":"clippy","app_id":null}],
-                "missing":[{"context":"clippy","app_id":null}]});
-            for (case, observations, gates, max_wait, expected_waits, stop_reason) in [
-                (
-                    "appears",
-                    vec![
-                        unreported(),
-                        unreported(),
-                        json!({"mergeStateStatus":"CLEAN"}),
-                    ],
-                    missing.clone(),
-                    15,
-                    2,
-                    None,
-                ),
-                (
-                    "never",
-                    vec![unreported()],
-                    missing.clone(),
-                    10,
-                    2,
-                    Some("within 10s (required checks the head has not reported: clippy)"),
-                ),
-                (
-                    "unreadable",
-                    vec![unreported()],
-                    json!("auth"),
-                    60,
-                    4,
-                    Some("required reviews or checks are not satisfied"),
-                ),
-            ] {
-                let sandbox = tempdir().unwrap();
-                let host = pending_forge(sandbox.path(), observations, vec![]);
-                let head = host.forge.context.candidate.candidate.commit.clone();
-                *host.policies.lock().unwrap() = vec![json!({"pull_request":{"headRefOid":head,
-                    "commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":null}}]}}})]
-                .into();
-                *host.gates.lock().unwrap() = vec![gates].into();
-                let waits = std::rc::Rc::new(std::cell::Cell::new(0));
-                let captured = waits.clone();
-                let result = orbit_engine::test_support::with_vcs_retry_wait(
-                    move |_| captured.set(captured.get() + 1),
-                    || {
-                        land_with(
-                            &host,
-                            json!({"max_wait_seconds":max_wait,"poll_interval_seconds":5}),
-                        )
-                    },
-                );
-                assert_eq!(waits.get(), expected_waits, "{case}: {result:?}");
-                assert_eq!(
-                    host.forge.sent("ci.current_gates").len(),
-                    if case == "unreadable" { 5 } else { 2 },
-                    "{case}: current policy is read on every unreported observation"
-                );
-                match stop_reason {
-                    None => {
-                        assert_eq!(result.unwrap()["phase"], "landed", "{case}");
-                        assert_eq!(host.forge.sent("pr.merge").len(), 1, "{case}");
-                    }
-                    Some(reason) => {
-                        let error = result.unwrap_err().to_string();
-                        assert!(error.contains(reason), "{case}: {error}");
-                        assert!(host.forge.sent("pr.merge").is_empty(), "{case}");
-                        assert_eq!(
-                            host.forge.steps(),
-                            [HandoffLandingStep::Stop { repairable: false }],
-                            "{case}"
-                        );
-                    }
-                }
+    let unreported = || json!({"mergeStateStatus":"BLOCKED","statusCheckRollup":[]});
+    let missing = json!({"gates_passed":false,"required":[{"context":"clippy","app_id":null}], "missing":[{"context":"clippy","app_id":null}]});
+    for (case, observations, gates, max_wait, expected_waits, stop_reason) in [
+        (
+            "appears",
+            vec![
+                unreported(),
+                unreported(),
+                json!({"mergeStateStatus":"CLEAN"}),
+            ],
+            missing.clone(),
+            15,
+            2,
+            None,
+        ),
+        (
+            "never",
+            vec![unreported()],
+            missing.clone(),
+            10,
+            2,
+            Some("within 10s (required checks the head has not reported: clippy)"),
+        ),
+        (
+            "unreadable",
+            vec![unreported()],
+            json!("auth"),
+            60,
+            4,
+            Some("required reviews or checks are not satisfied"),
+        ),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let host = pending_forge(sandbox.path(), observations, vec![]);
+        let head = host.forge.context.candidate.candidate.commit.clone();
+        *host.policies.lock().unwrap() = vec![json!({"pull_request":{"headRefOid":head, "commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":null}}]}}})]
+        .into();
+        *host.gates.lock().unwrap() = vec![gates].into();
+        let (result, waits) = counted_land(
+            &host,
+            json!({"max_wait_seconds":max_wait,"poll_interval_seconds":5}),
+        );
+        assert_eq!(waits.len(), expected_waits, "{case}: {result:?}");
+        let gates = if case == "unreadable" { 5 } else { 2 };
+        assert_sent_len(&host.forge, "ci.current_gates", gates, case);
+        match stop_reason {
+            None => {
+                assert_eq!(result.unwrap()["phase"], "landed", "{case}");
+                assert_sent_len(&host.forge, "pr.merge", 1, case);
             }
-        },
-    );
+            Some(reason) => {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains(reason), "{case}: {error}");
+                assert_not_sent(&host.forge, &["pr.merge"], case);
+                assert_steps(
+                    &host.forge.steps(),
+                    &[HandoffLandingStep::Stop { repairable: false }],
+                    case,
+                );
+            }
+        }
+    }
 }
 
 /// Controls share the public accepted-candidate setup, without real sleeps.
-#[test]
 #[allow(clippy::print_stderr)] // Identify each control in isolated child failure output.
 fn owner_landing_pending_evidence_never_extends_refusal_or_merge_authority() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "owner_landing_pending_evidence_never_extends_refusal_or_merge_authority",
-        || {
-            for case in [
-                "optional",
-                "empty_contexts",
-                "null_contexts",
-                "missing_contexts",
-                "bounded_redacted",
-                "bounded_reason",
-                "optional_failed_required_pending",
-                "administrative",
-                "review",
-                "review_failed",
-                "draft_failed",
-                "contradiction_failed",
-                "missing_state",
-                "changes_requested",
-                "unknown_review",
-                "unreadable_rollup",
-                "auth",
-                "foreign_policy",
-                "foreign_commit",
-                "missing_policy",
-                "missing_policy_head",
-                "truncated",
-                "unknown_check",
-                "contradiction",
-                "head_changed",
-                "base_changed",
-                "policy_changed",
-                "timeout",
-                "changing_checks_timeout",
-                "cancelled",
-                "owed",
-                "neutral",
-                "skipped",
-                "owed_absent",
-                "owed_foreign",
-                "required_neutral",
-                "required_skipped",
-            ] {
-                eprintln!("pending evidence control: {case}");
-                let sandbox = tempdir().unwrap();
-                let mut host = pending_forge(sandbox.path(), vec![blocked_aggregate()], vec![]);
-                let head = host.forge.context.candidate.candidate.commit.clone();
-                let mut patch = blocked_aggregate();
-                let mut policy = pending_policy(&head, "IN_PROGRESS", true);
-                let mut after = None;
-                let mut next_policy = None;
-                let mut expected_waits = 0;
-                let mut merges = false;
-                let mut reason = "cannot be merged";
+    for case in [
+        "optional",
+        "empty_contexts",
+        "null_contexts",
+        "missing_contexts",
+        "bounded_redacted",
+        "bounded_reason",
+        "optional_failed_required_pending",
+        "administrative",
+        "review",
+        "review_failed",
+        "draft_failed",
+        "contradiction_failed",
+        "missing_state",
+        "changes_requested",
+        "unknown_review",
+        "unreadable_rollup",
+        "auth",
+        "foreign_policy",
+        "foreign_commit",
+        "missing_policy",
+        "missing_policy_head",
+        "truncated",
+        "unknown_check",
+        "contradiction",
+        "head_changed",
+        "base_changed",
+        "policy_changed",
+        "timeout",
+        "changing_checks_timeout",
+        "cancelled",
+        "owed",
+        "neutral",
+        "skipped",
+        "owed_absent",
+        "owed_foreign",
+        "required_neutral",
+        "required_skipped",
+    ] {
+        eprintln!("pending evidence control: {case}");
+        let sandbox = tempdir().unwrap();
+        let mut host = pending_forge(sandbox.path(), vec![blocked_aggregate()], vec![]);
+        let head = host.forge.context.candidate.candidate.commit.clone();
+        let mut patch = blocked_aggregate();
+        let mut policy = pending_policy(&head, "IN_PROGRESS", true);
+        let mut after = None;
+        let mut next_policy = None;
+        let mut expected_waits = 0;
+        let mut merges = false;
+        let mut reason = "cannot be merged";
+        match case {
+            "empty_contexts" => {
+                patch["statusCheckRollup"] = json!([]);
+                *policy_nodes(&mut policy) = json!([]);
+            }
+            "null_contexts" | "missing_contexts" => {
+                let commit = policy_commit(&mut policy);
+                if case == "null_contexts" {
+                    commit["statusCheckRollup"] = Value::Null;
+                } else {
+                    commit.as_object_mut().unwrap().remove("statusCheckRollup");
+                }
+            }
+            "bounded_reason" => {
+                patch["mergedAt"] = json!(format!("ghp_{}{}", "a".repeat(36), "界".repeat(5000)));
+                reason = "contradictory";
+            }
+            "bounded_redacted" => {
+                let secret = format!("ghp_{}", "a".repeat(36));
+                patch["statusCheckRollup"] = json!(
+                    (0..40)
+ .map(|_| json!({ "name":format!("{secret} {}", "界".repeat(800)), "status":"COMPLETED", "conclusion":"SUCCESS" }))
+                        .collect::<Vec<_>>()
+                );
+                // Arbitrary raw payload must never enter persisted diagnostics.
+                policy["transcript"] = json!("untrusted-raw-payload-sentinel");
+                *policy_nodes(&mut policy) = json!(
+                    (0..40)
+ .map(|_| json!({ "name":format!("{secret} {}", "界".repeat(800)), "status":"COMPLETED", "conclusion":"SUCCESS", "isRequired":true }))
+                        .collect::<Vec<_>>()
+                );
+            }
+            "optional" => {
+                policy = pending_policy(&head, "IN_PROGRESS", false);
+                patch["statusCheckRollup"] = json!([{"name":"optional","status":"QUEUED"}]);
+            }
+            "optional_failed_required_pending" => {
+                patch["statusCheckRollup"] = json!([ {"name":"clippy","workflowName":"CI","status":"IN_PROGRESS"}, {"name":"coverage","status":"COMPLETED","conclusion":"FAILURE"} ]);
+            }
+            "administrative" => policy = pending_policy(&head, "COMPLETED", true),
+            "review" => patch["reviewDecision"] = json!("REVIEW_REQUIRED"),
+            "missing_state" => {
+                patch["state"] = Value::Null;
+                reason = "unavailable";
+            }
+            "review_failed" | "draft_failed" | "contradiction_failed" => {
+                host.forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
+                patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE"}]);
+                if case == "review_failed" {
+                    patch["reviewDecision"] = json!("REVIEW_REQUIRED");
+                }
+                if case == "draft_failed" {
+                    patch["mergeStateStatus"] = json!("DRAFT");
+                }
+                if case == "contradiction_failed" {
+                    patch["mergedAt"] = json!("2026-10-15T00:00:00Z");
+                    reason = "contradictory";
+                }
+            }
+            "changes_requested" => patch["reviewDecision"] = json!("CHANGES_REQUESTED"),
+            "unknown_review" => patch["reviewDecision"] = json!(42),
+            "unreadable_rollup" => patch["statusCheckRollup"] = Value::Null,
+            "auth" => {
+                policy = json!("auth");
+                reason = "HTTP 401";
+            }
+            "foreign_policy" => {
+                policy = pending_policy("foreign", "QUEUED", true);
+                reason = "current head";
+            }
+            "foreign_commit" => {
+                policy_commit(&mut policy)["oid"] = json!("foreign");
+                reason = "current head";
+            }
+            "missing_policy" => {
+                policy = json!({});
+                reason = "no pull request";
+            }
+            "required_neutral" | "required_skipped" => {
+                policy = pending_policy(&head, "COMPLETED", true);
+                policy_first(&mut policy)["conclusion"] = json!(if case == "required_neutral" {
+                    "NEUTRAL"
+                } else {
+                    "SKIPPED"
+                });
+            }
+            "missing_policy_head" => {
+                policy["pull_request"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("headRefOid");
+                reason = "current head";
+            }
+            "truncated" => {
+                policy_contexts(&mut policy)["pageInfo"]["hasNextPage"] = json!(true);
+                reason = "truncated";
+            }
+            "unknown_check" => {
+                policy_first(&mut policy)["status"] = json!("UNRECOGNIZED");
+                reason = "unreadable";
+            }
+            "contradiction" => {
+                patch["mergedAt"] = json!("2026-10-15T00:00:00Z");
+                reason = "contradictory";
+            }
+            "head_changed" | "base_changed" => {
+                after = Some(
+                    json!({if case == "head_changed" { "headRefOid" } else { "baseRefName" }:"foreign"}),
+                );
+                expected_waits = 1;
+                reason = "delivery_evidence_stale";
+            }
+            "policy_changed" => {
+                next_policy = Some(pending_policy(&head, "QUEUED", false));
+                expected_waits = 1;
+            }
+            "timeout" | "changing_checks_timeout" => {
+                expected_waits = 2;
+                reason = "within 10s";
+                if case == "changing_checks_timeout" {
+                    let mut next = pending_policy(&head, "QUEUED", true);
+                    policy_first(&mut next)["name"] = json!("another required job");
+                    next_policy = Some(next);
+                }
+            }
+            "cancelled" => {
+                after = Some(json!({"error":"execution cancelled"}));
+                expected_waits = 1;
+                reason = "cancelled";
+            }
+            "owed" | "neutral" | "skipped" | "owed_absent" | "owed_foreign" => {
+                host.forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
+                policy = pending_policy(&head, "IN_PROGRESS", false);
+                if case != "owed_absent" {
+                    patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":if case == "owed" {"QUEUED"} else {"COMPLETED"},"conclusion":if case == "neutral" {"NEUTRAL"} else {"SKIPPED"}}]);
+                }
+                if case == "owed_foreign" {
+                    patch["statusCheckRollup"] =
+                        json!([{"name":"clippy","workflowName":"Foreign","status":"QUEUED"}]);
+                }
+                if case == "owed" {
+                    after = Some(json!({"mergeStateStatus":"CLEAN"}));
+                    expected_waits = 1;
+                    merges = true;
+                }
+            }
+            _ => unreachable!(),
+        }
+        let mut observations = vec![patch];
+        if let Some(after) = after {
+            observations.push(after);
+        }
+        let mut policies = vec![policy];
+        if let Some(next) = next_policy {
+            policies.push(next);
+        }
+        *host.observations.lock().unwrap() = observations.into();
+        *host.policies.lock().unwrap() = policies.into();
+        let (result, waits) = counted_land(
+            &host,
+            json!({"max_wait_seconds":10,"poll_interval_seconds":5}),
+        );
+        assert_eq!(waits.len(), expected_waits, "{case}: {result:?}");
+        assert_not_sent(&host.forge, &["ci.rerun_failed", "pr.update_branch"], case);
+        if case == "optional_failed_required_pending" {
+            assert_sent_len(&host.forge, "ci.commit_jobs", 1, case);
+        } else {
+            assert_not_sent(&host.forge, &["ci.commit_jobs"], case);
+        }
+        assert_sent_len(&host.forge, "pr.merge", usize::from(merges), case);
+        if merges {
+            assert_eq!(result.unwrap()["phase"], "landed");
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains(reason), "{case}: {error}");
+            if case != "cancelled" {
+                assert_steps(
+                    &host.forge.steps(),
+                    &[HandoffLandingStep::Stop { repairable: false }],
+                    case,
+                );
+                let updates = host.forge.updates.lock().unwrap();
+                let stopped = updates.last().unwrap();
+                assert!(
+                    stopped.observed.is_none(),
+                    "diagnostics never carry candidate authority"
+                );
+                let evidence: Value = serde_json::from_str(&stopped.evidence).unwrap();
+                assert_eq!(evidence["schema_version"], 1, "{case}: {evidence}");
+                assert_eq!(evidence["kind"], "owner_landing_refusal");
+                assert_eq!(evidence["repairable"], false);
+                let ev_reason = evidence["reason"]["value"].as_str().unwrap();
+                assert!(ev_reason.contains(reason), "{case}: {ev_reason}");
+                assert_eq!(evidence["accepted"]["candidate"]["value"], head);
+                assert_eq!(evidence["emission_proof"]["state"], "not_collected");
+                assert_eq!(evidence["workflow_prerequisites"]["state"], "not_collected");
+                let observation = &evidence["observation"];
+                let required = &observation["required_checks"];
                 match case {
                     "empty_contexts" => {
-                        patch["statusCheckRollup"] = json!([]);
-                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
-                            ["contexts"]["nodes"] = json!([]);
+                        assert_eq!(observation["pr"]["rollup"]["original_count"], 0);
+                        assert_eq!(required["contexts"]["original_count"], 0);
+                        assert_eq!(required["outcome"], "parsed");
+                        assert_eq!(
+                            observation["classification"]["value"],
+                            "blocked: required reviews or checks are not satisfied"
+                        );
                     }
                     "null_contexts" | "missing_contexts" => {
-                        let commit = &mut policy["pull_request"]["commits"]["nodes"][0]["commit"];
-                        if case == "null_contexts" {
-                            commit["statusCheckRollup"] = Value::Null;
+                        assert_eq!(required["outcome"], "parsed");
+                        assert_eq!(required["contexts"]["state"], "missing");
+                        let rollup_state = if case == "null_contexts" {
+                            "null"
                         } else {
-                            commit.as_object_mut().unwrap().remove("statusCheckRollup");
-                        }
+                            "missing"
+                        };
+                        assert_eq!(required["rollup_state"], rollup_state, "{case}");
+                    }
+                    "timeout" | "changing_checks_timeout" => {
+                        assert_eq!(required["outcome"], "parsed");
+                        assert_eq!(required["contexts"]["items"][0]["state"], "Pending");
+                        assert_eq!(observation["classification"]["value"], "pending");
+                    }
+                    "review" => {
+                        assert_eq!(observation["pr"]["review"]["value"], "REVIEW_REQUIRED");
+                        assert_eq!(required["state"], "not_collected");
+                    }
+                    "optional_failed_required_pending" => {
+                        assert_eq!(observation["pr"]["rollup"]["items"][1]["state"], "Failed");
+                        assert_eq!(required["outcome"], "parsed");
+                    }
+                    "auth" => assert_eq!(required["outcome"], "read_error"),
+                    "missing_policy" | "truncated" => {
+                        assert_eq!(required["outcome"], "parse_error")
+                    }
+                    "foreign_policy" | "foreign_commit" | "missing_policy_head" => {
+                        assert_eq!(required["outcome"], "head_mismatch");
+                    }
+                    "unknown_check" => {
+                        assert_eq!(required["outcome"], "unreadable_state");
+                        let provider = &required["contexts"]["items"][0]["provider_status"];
+                        assert_eq!(provider["value"], "UNRECOGNIZED", "{case}");
+                    }
+                    "unreadable_rollup" => {
+                        assert_eq!(observation["pr"]["rollup"]["state"], "null");
+                        assert_eq!(required["state"], "not_collected");
                     }
                     "bounded_reason" => {
-                        patch["mergedAt"] =
-                            json!(format!("ghp_{}{}", "a".repeat(36), "界".repeat(5000)));
-                        reason = "contradictory";
+                        let reason = &evidence["reason"];
+                        assert_eq!(reason["truncated"], true);
+                        assert!(reason["original_chars"].as_u64().unwrap() > 5000);
+                        let human = reason["value"].as_str().unwrap();
+                        assert_eq!(human.chars().count(), 4096);
+                        assert!(human.ends_with("landing needs an unambiguous merged state"));
+                        let secret = format!("ghp_{}", "a".repeat(36));
+                        assert!(!stopped.evidence.contains(&secret), "{case}");
                     }
                     "bounded_redacted" => {
                         let secret = format!("ghp_{}", "a".repeat(36));
-                        patch["statusCheckRollup"] = json!(
-                            (0..40)
-                                .map(|_| json!({
-                                    "name":format!("{secret} {}", "界".repeat(800)),
-                                    "status":"COMPLETED", "conclusion":"SUCCESS"
-                                }))
-                                .collect::<Vec<_>>()
-                        );
-                        // Arbitrary raw payload must never enter persisted diagnostics.
-                        policy["transcript"] = json!("untrusted-raw-payload-sentinel");
-                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
-                            ["contexts"]["nodes"] =
-                            json!((0..40).map(|_| json!({
-                            "name":format!("{secret} {}", "界".repeat(800)),
-                            "status":"COMPLETED", "conclusion":"SUCCESS", "isRequired":true
-                        })).collect::<Vec<_>>());
-                    }
-                    "optional" => {
-                        policy = pending_policy(&head, "IN_PROGRESS", false);
-                        patch["statusCheckRollup"] = json!([{"name":"optional","status":"QUEUED"}]);
-                    }
-                    "optional_failed_required_pending" => {
-                        patch["statusCheckRollup"] = json!([
-                            {"name":"clippy","workflowName":"CI","status":"IN_PROGRESS"},
-                            {"name":"coverage","status":"COMPLETED","conclusion":"FAILURE"}
-                        ]);
-                    }
-                    "administrative" => policy = pending_policy(&head, "COMPLETED", true),
-                    "review" => patch["reviewDecision"] = json!("REVIEW_REQUIRED"),
-                    "missing_state" => {
-                        patch["state"] = Value::Null;
-                        reason = "unavailable";
-                    }
-                    "review_failed" | "draft_failed" | "contradiction_failed" => {
-                        host.forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
-                        patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":"COMPLETED","conclusion":"FAILURE"}]);
-                        if case == "review_failed" {
-                            patch["reviewDecision"] = json!("REVIEW_REQUIRED");
+                        assert!(!stopped.evidence.contains(&secret), "{case}");
+                        assert!(!stopped.evidence.contains("untrusted-raw-payload-sentinel"));
+                        for entries in [&observation["pr"]["rollup"], &required["contexts"]] {
+                            assert_eq!(entries["original_count"], 40);
+                            assert_eq!(entries["truncated"], true);
+                            assert_eq!(entries["items"].as_array().unwrap().len(), 32);
+                            let name = &entries["items"][0]["name"];
+                            assert_eq!(name["original_chars"], 841);
+                            assert_eq!(name["truncated"], true);
+                            assert_eq!(name["value"].as_str().unwrap().chars().count(), 512);
                         }
-                        if case == "draft_failed" {
-                            patch["mergeStateStatus"] = json!("DRAFT");
-                        }
-                        if case == "contradiction_failed" {
-                            patch["mergedAt"] = json!("2026-10-15T00:00:00Z");
-                            reason = "contradictory";
-                        }
+                        assert!(stopped.evidence.len() < 160_000);
                     }
-                    "changes_requested" => patch["reviewDecision"] = json!("CHANGES_REQUESTED"),
-                    "unknown_review" => patch["reviewDecision"] = json!(42),
-                    "unreadable_rollup" => patch["statusCheckRollup"] = Value::Null,
-                    "auth" => {
-                        policy = json!("auth");
-                        reason = "HTTP 401";
-                    }
-                    "foreign_policy" => {
-                        policy = pending_policy("foreign", "QUEUED", true);
-                        reason = "current head";
-                    }
-                    "foreign_commit" => {
-                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["oid"] =
-                            json!("foreign");
-                        reason = "current head";
-                    }
-                    "missing_policy" => {
-                        policy = json!({});
-                        reason = "no pull request";
-                    }
-                    "required_neutral" | "required_skipped" => {
-                        policy = pending_policy(&head, "COMPLETED", true);
-                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
-                            ["contexts"]["nodes"][0]["conclusion"] =
-                            json!(if case == "required_neutral" {
-                                "NEUTRAL"
-                            } else {
-                                "SKIPPED"
-                            });
-                    }
-                    "missing_policy_head" => {
-                        policy["pull_request"]
-                            .as_object_mut()
-                            .unwrap()
-                            .remove("headRefOid");
-                        reason = "current head";
-                    }
-                    "truncated" => {
-                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
-                            ["contexts"]["pageInfo"]["hasNextPage"] = json!(true);
-                        reason = "truncated";
-                    }
-                    "unknown_check" => {
-                        policy["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
-                            ["contexts"]["nodes"][0]["status"] = json!("UNRECOGNIZED");
-                        reason = "unreadable";
-                    }
-                    "contradiction" => {
-                        patch["mergedAt"] = json!("2026-10-15T00:00:00Z");
-                        reason = "contradictory";
-                    }
-                    "head_changed" | "base_changed" => {
-                        after = Some(
-                            json!({if case == "head_changed" { "headRefOid" } else { "baseRefName" }:"foreign"}),
-                        );
-                        expected_waits = 1;
-                        reason = "delivery_evidence_stale";
-                    }
-                    "policy_changed" => {
-                        next_policy = Some(pending_policy(&head, "QUEUED", false));
-                        expected_waits = 1;
-                    }
-                    "timeout" | "changing_checks_timeout" => {
-                        expected_waits = 2;
-                        reason = "within 10s";
-                        if case == "changing_checks_timeout" {
-                            let mut next = pending_policy(&head, "QUEUED", true);
-                            next["pull_request"]["commits"]["nodes"][0]["commit"]["statusCheckRollup"]
-                                ["contexts"]["nodes"][0]["name"] = json!("another required job");
-                            next_policy = Some(next);
-                        }
-                    }
-                    "cancelled" => {
-                        after = Some(json!({"error":"execution cancelled"}));
-                        expected_waits = 1;
-                        reason = "cancelled";
-                    }
-                    "owed" | "neutral" | "skipped" | "owed_absent" | "owed_foreign" => {
-                        host.forge.context.owed_hosted_checks = vec!["CI / clippy".into()];
-                        policy = pending_policy(&head, "IN_PROGRESS", false);
-                        if case != "owed_absent" {
-                            patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"CI","status":if case == "owed" {"QUEUED"} else {"COMPLETED"},"conclusion":if case == "neutral" {"NEUTRAL"} else {"SKIPPED"}}]);
-                        }
-                        if case == "owed_foreign" {
-                            patch["statusCheckRollup"] = json!([{"name":"clippy","workflowName":"Foreign","status":"QUEUED"}]);
-                        }
-                        if case == "owed" {
-                            after = Some(json!({"mergeStateStatus":"CLEAN"}));
-                            expected_waits = 1;
-                            merges = true;
-                        }
-                    }
-                    _ => unreachable!(),
+                    _ => {}
                 }
-                let mut observations = vec![patch];
-                if let Some(after) = after {
-                    observations.push(after);
-                }
-                let mut policies = vec![policy];
-                if let Some(next) = next_policy {
-                    policies.push(next);
-                }
-                *host.observations.lock().unwrap() = observations.into();
-                *host.policies.lock().unwrap() = policies.into();
-                let waits = std::rc::Rc::new(std::cell::Cell::new(0));
-                let captured = waits.clone();
-                let result = orbit_engine::test_support::with_vcs_retry_wait(
-                    move |_| captured.set(captured.get() + 1),
-                    || {
-                        land_with(
-                            &host,
-                            json!({"max_wait_seconds":10,"poll_interval_seconds":5}),
-                        )
-                    },
-                );
-                assert_eq!(waits.get(), expected_waits, "{case}: {result:?}");
-                for operation in ["ci.commit_jobs", "ci.rerun_failed", "pr.update_branch"] {
-                    if case == "optional_failed_required_pending" && operation == "ci.commit_jobs" {
-                        assert_eq!(
-                            host.forge.sent(operation).len(),
-                            1,
-                            "owner landing retains its existing failed-rollup diagnosis before stopping"
-                        );
-                    } else {
-                        assert!(
-                            host.forge.sent(operation).is_empty(),
-                            "{case}: no recovery bypass of a refusal"
-                        );
-                    }
-                }
-                assert_eq!(
-                    host.forge.sent("pr.merge").len(),
-                    usize::from(merges),
-                    "{case}"
-                );
-                if merges {
-                    assert_eq!(result.unwrap()["phase"], "landed");
-                } else {
-                    let error = result.unwrap_err().to_string();
-                    assert!(error.contains(reason), "{case}: {error}");
-                    if case != "cancelled" {
-                        assert_eq!(
-                            host.forge.steps(),
-                            [HandoffLandingStep::Stop { repairable: false }],
-                            "{case}"
-                        );
-                        let updates = host.forge.updates.lock().unwrap();
-                        let stopped = updates.last().unwrap();
-                        assert!(
-                            stopped.observed.is_none(),
-                            "diagnostics never carry candidate authority"
-                        );
-                        let evidence: Value = serde_json::from_str(&stopped.evidence).unwrap();
-                        assert_eq!(evidence["schema_version"], 1, "{case}: {evidence}");
-                        assert_eq!(evidence["kind"], "owner_landing_refusal");
-                        assert_eq!(evidence["repairable"], false);
-                        assert!(
-                            evidence["reason"]["value"]
-                                .as_str()
-                                .unwrap()
-                                .contains(reason)
-                        );
-                        assert_eq!(evidence["accepted"]["candidate"]["value"], head);
-                        assert_eq!(evidence["emission_proof"]["state"], "not_collected");
-                        assert_eq!(evidence["workflow_prerequisites"]["state"], "not_collected");
-                        let observation = &evidence["observation"];
-                        let required = &observation["required_checks"];
-                        match case {
-                            "empty_contexts" => {
-                                assert_eq!(observation["pr"]["rollup"]["original_count"], 0);
-                                assert_eq!(required["contexts"]["original_count"], 0);
-                                assert_eq!(required["outcome"], "parsed");
-                                assert_eq!(
-                                    observation["classification"]["value"],
-                                    "blocked: required reviews or checks are not satisfied"
-                                );
-                            }
-                            "null_contexts" | "missing_contexts" => {
-                                assert_eq!(required["outcome"], "parsed");
-                                assert_eq!(required["contexts"]["state"], "missing");
-                                assert_eq!(
-                                    required["rollup_state"],
-                                    if case == "null_contexts" {
-                                        "null"
-                                    } else {
-                                        "missing"
-                                    }
-                                );
-                            }
-                            "timeout" | "changing_checks_timeout" => {
-                                assert_eq!(required["outcome"], "parsed");
-                                assert_eq!(required["contexts"]["items"][0]["state"], "Pending");
-                                assert_eq!(observation["classification"]["value"], "pending");
-                            }
-                            "review" => {
-                                assert_eq!(observation["pr"]["review"]["value"], "REVIEW_REQUIRED");
-                                assert_eq!(required["state"], "not_collected");
-                            }
-                            "optional_failed_required_pending" => {
-                                assert_eq!(
-                                    observation["pr"]["rollup"]["items"][1]["state"],
-                                    "Failed"
-                                );
-                                assert_eq!(required["outcome"], "parsed");
-                            }
-                            "auth" => assert_eq!(required["outcome"], "read_error"),
-                            "missing_policy" | "truncated" => {
-                                assert_eq!(required["outcome"], "parse_error")
-                            }
-                            "foreign_policy" | "foreign_commit" | "missing_policy_head" => {
-                                assert_eq!(required["outcome"], "head_mismatch");
-                            }
-                            "unknown_check" => {
-                                assert_eq!(required["outcome"], "unreadable_state");
-                                assert_eq!(
-                                    required["contexts"]["items"][0]["provider_status"]["value"],
-                                    "UNRECOGNIZED"
-                                );
-                            }
-                            "unreadable_rollup" => {
-                                assert_eq!(observation["pr"]["rollup"]["state"], "null");
-                                assert_eq!(required["state"], "not_collected");
-                            }
-                            "bounded_reason" => {
-                                let reason = &evidence["reason"];
-                                assert_eq!(reason["truncated"], true);
-                                assert!(reason["original_chars"].as_u64().unwrap() > 5000);
-                                let human = reason["value"].as_str().unwrap();
-                                assert_eq!(human.chars().count(), 4096);
-                                assert!(
-                                    human.ends_with("landing needs an unambiguous merged state")
-                                );
-                                assert!(
-                                    !stopped
-                                        .evidence
-                                        .contains(&format!("ghp_{}", "a".repeat(36)))
-                                );
-                            }
-                            "bounded_redacted" => {
-                                assert!(
-                                    !stopped
-                                        .evidence
-                                        .contains(&format!("ghp_{}", "a".repeat(36)))
-                                );
-                                assert!(
-                                    !stopped.evidence.contains("untrusted-raw-payload-sentinel")
-                                );
-                                for entries in [&observation["pr"]["rollup"], &required["contexts"]]
-                                {
-                                    assert_eq!(entries["original_count"], 40);
-                                    assert_eq!(entries["truncated"], true);
-                                    assert_eq!(entries["items"].as_array().unwrap().len(), 32);
-                                    let name = &entries["items"][0]["name"];
-                                    assert_eq!(name["original_chars"], 841);
-                                    assert_eq!(name["truncated"], true);
-                                    assert_eq!(
-                                        name["value"].as_str().unwrap().chars().count(),
-                                        512
-                                    );
-                                }
-                                assert!(stopped.evidence.len() < 160_000);
-                            }
-                            _ => {}
-                        }
-                        assert_eq!(
-                            host.forge.sent("pr.required_checks").len(),
-                            match case {
-                                "review"
-                                | "review_failed"
-                                | "draft_failed"
-                                | "contradiction_failed"
-                                | "missing_state"
-                                | "changes_requested"
-                                | "unknown_review"
-                                | "unreadable_rollup"
-                                | "contradiction"
-                                | "bounded_reason" => 0,
-                                "timeout" | "changing_checks_timeout" => expected_waits,
-                                "head_changed" | "base_changed" => 1,
-                                _ => expected_waits + 1,
-                            },
-                            "{case}: diagnostic capture adds no required-check read"
-                        );
-                    }
-                }
+                let reads = match case {
+                    "review"
+                    | "review_failed"
+                    | "draft_failed"
+                    | "contradiction_failed"
+                    | "missing_state"
+                    | "changes_requested"
+                    | "unknown_review"
+                    | "unreadable_rollup"
+                    | "contradiction"
+                    | "bounded_reason" => 0,
+                    "timeout" | "changing_checks_timeout" => expected_waits,
+                    "head_changed" | "base_changed" => 1,
+                    _ => expected_waits + 1,
+                };
+                assert_sent_len(&host.forge, "pr.required_checks", reads, case);
             }
-        },
-    );
+        }
+    }
 }
 
 /// The provider's branch update of `head` on the published `remote`, after
 /// `main` there advanced past what the owner fetched, shaped by `shape`.
 fn provider_update(remote: &Path, head: &str, shape: UpdateShape) -> String {
     let base_tree = git(remote, &["rev-parse", "main^{tree}"]);
-    let advanced = git(
-        remote,
-        &[
-            "commit-tree",
-            &base_tree,
-            "-p",
-            "main",
-            "-m",
-            "the base advances",
-        ],
-    );
+    let advance_args = [
+        "commit-tree",
+        base_tree.as_str(),
+        "-p",
+        "main",
+        "-m",
+        "the base advances",
+    ];
+    let advanced = git(remote, &advance_args);
     git(remote, &["update-ref", "refs/heads/main", &advanced]);
     let base_side = match shape {
-        UpdateShape::Foreign => git(
-            remote,
-            &[
+        UpdateShape::Foreign => {
+            let foreign = [
                 "commit-tree",
-                &base_tree,
+                base_tree.as_str(),
                 "-p",
                 &advanced,
                 "-m",
                 "not on main",
-            ],
-        ),
+            ];
+            git(remote, &foreign)
+        }
         _ => advanced,
     };
     let clean = git(remote, &["merge-tree", "--write-tree", head, &base_side]);
@@ -1731,6 +1800,8 @@ fn failed_reading(run_id: u64, job_id: u64, log: FakeLog) -> FakeJob {
         job_id,
         conclusion: "failure",
         log,
+        run_attempt: 1,
+        event: "pull_request",
     }
 }
 
@@ -1740,7 +1811,365 @@ fn passed(run_id: u64, job_id: u64) -> FakeJob {
         job_id,
         conclusion: "success",
         log: FakeLog::Text(""),
+        run_attempt: 1,
+        event: "push",
     }
+}
+
+const UNTOUCHED_TEST_FAILURE: &str = "error: shutdown test timed out\n --> README.md:1:1\n";
+
+#[test]
+fn handoff_fake_refuses_unscoped_automation_updates() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "handoff_fake_refuses_unscoped_automation_updates",
+        || {
+            let (_sandbox, forge, _, _) = forge_fixture(true, false);
+            let error = RuntimeHost::apply_task_automation_update(
+                &forge,
+                TASK_ID,
+                orbit_engine::TaskAutomationUpdate::default(),
+            )
+            .expect_err("a live handoff claim fences the unscoped writer");
+            assert!(
+                error
+                    .to_string()
+                    .contains("active execution claim requires a claim-scoped mutation"),
+                "unscoped automation update refusal: {error}"
+            );
+        },
+    );
+}
+
+/// ORB-19342: a fresh base pass warrants a flake rerun before a repair,
+/// including when the repair is spent or a retry finishes after that pass.
+#[test]
+fn untouched_failure_reruns_once_after_fresh_base_pass() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "untouched_failure_reruns_once_after_fresh_base_pass",
+        || {
+            for case in [
+                "pass",
+                "repeat",
+                "repair_spent",
+                "repeat_spent",
+                "shared_budget",
+                "transient_after_flake",
+            ] {
+                let (_sandbox, forge, head, base) =
+                    forge_fixture(true, matches!(case, "repair_spent" | "repeat_spent"));
+                forge.job(
+                    &head,
+                    failed(
+                        1,
+                        11,
+                        if case == "shared_budget" {
+                            NETWORK_FLAKE
+                        } else {
+                            UNTOUCHED_TEST_FAILURE
+                        },
+                    ),
+                );
+                forge.job(&base, passed(2, 21));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state
+                        .job_times
+                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+                    state.job_times.insert(
+                        21,
+                        if case == "shared_budget" {
+                            ("2026-10-26T14:06:00Z", "2026-10-26T14:07:00Z")
+                        } else {
+                            ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z")
+                        },
+                    );
+                    // A repeated failure must not wait for yet another base run.
+                    state
+                        .job_times
+                        .insert(12, ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"));
+                    state.after_rerun = Some(if matches!(case, "pass" | "repair_spent") {
+                        passed(1, 12)
+                    } else if case == "transient_after_flake" {
+                        failed(1, 12, NETWORK_FLAKE)
+                    } else {
+                        failed(1, 12, UNTOUCHED_TEST_FAILURE)
+                    });
+                }
+                let outcome = land_now(&forge);
+                assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+                assert_not_sent(&forge, &["pr.update_branch"], case);
+                if matches!(case, "pass" | "repair_spent") {
+                    assert_eq!(outcome.expect(case)["phase"], "landed");
+                    assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
+                    assert!(
+                        !forge
+                            .steps()
+                            .iter()
+                            .any(|step| matches!(step, HandoffLandingStep::Stop { .. }))
+                    );
+                } else {
+                    outcome.expect_err(case);
+                    let step = if case == "repeat_spent" {
+                        HandoffLandingStep::StopForRequeue
+                    } else {
+                        HandoffLandingStep::Stop {
+                            repairable: !matches!(case, "transient_after_flake" | "shared_budget"),
+                        }
+                    };
+                    assert_steps(&forge.steps(), &[step], case);
+                    assert_reason(
+                        &forge,
+                        case,
+                        if case == "transient_after_flake" {
+                            &["classified `transient`", "one rerun"]
+                        } else if case == "shared_budget" {
+                            &["CI retry was reserved", "observing without resending"]
+                        } else {
+                            &["classified `candidate`", "automatic repair"]
+                        },
+                    );
+                }
+                let history = forge.history.lock().unwrap();
+                let reruns = history
+                    .iter()
+                    .filter(|row| row.event == "ci_check_rerun")
+                    .collect::<Vec<_>>();
+                assert_eq!(reruns.len(), 1, "{case}: record the rerun once");
+                let note: Value = serde_json::from_str(reruns[0].note.as_deref().unwrap()).unwrap();
+                assert_eq!(note["head"], head);
+                assert_eq!(note["run_id"], 1);
+                assert_eq!(note["jobs"][0]["job_id"], 11);
+                assert_eq!(note["jobs"][0]["check"], "CI / clippy");
+            }
+        },
+    );
+}
+
+/// A `ci_base_suspect` record proves no rerun was requested. A later push
+/// or workflow_dispatch run on the same head cannot be treated as the
+/// unchanged-head PR rerun
+/// and cannot admit candidate repair. Only a verified rerun of the same
+/// provider run — same PR, head and run, later attempt, same signature —
+/// releases the hold in a resumed landing.
+#[test]
+fn suspicion_only_history_cannot_admit_repair_from_a_non_pr_run() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "suspicion_only_history_cannot_admit_repair_from_a_non_pr_run",
+        || {
+            for case in ["push_other_run", "dispatch_other_run", "valid_pr_rerun"] {
+                let (_sandbox, forge, head, base) = forge_fixture(true, false);
+                let mut current = if case == "valid_pr_rerun" {
+                    failed(1, 12, UNTOUCHED_TEST_FAILURE)
+                } else {
+                    failed(3, 31, UNTOUCHED_TEST_FAILURE)
+                };
+                current.run_attempt = if case == "valid_pr_rerun" { 2 } else { 1 };
+                current.event = match case {
+                    "push_other_run" => "push",
+                    "dispatch_other_run" => "workflow_dispatch",
+                    _ => "pull_request",
+                };
+                let current_job_id = current.job_id;
+                forge.job(&head, current);
+                forge.job(&base, passed(2, 21));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state.job_times.insert(
+                        current_job_id,
+                        ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"),
+                    );
+                    state
+                        .job_times
+                        .insert(21, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
+                }
+                forge
+                    .history
+                    .lock()
+                    .unwrap()
+                    .push(orbit_types::task::TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".into(),
+                        event: "ci_base_suspect".into(),
+                        note: Some(
+                            json!({
+                                "head": head, "check": "CI / clippy",
+                                "signature": "error: shutdown test timed out",
+                                "run_id": 1, "job_id": 11, "run_attempt": 1,
+                                "pr_number": 42,
+                                "started_at": "2026-10-26T14:00:00Z",
+                                "completed_at": "2026-10-26T14:01:00Z",
+                            })
+                            .to_string(),
+                        ),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    });
+                let outcome = land_now(&forge);
+                assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
+                if case == "valid_pr_rerun" {
+                    outcome.expect_err(case);
+                    assert_steps(
+                        &forge.steps(),
+                        &[HandoffLandingStep::Stop { repairable: true }],
+                        case,
+                    );
+                    assert_reason(&forge, case, &["classified `candidate`"]);
+                    assert_not_sent(&forge, &["ci.rerun_failed"], case);
+                } else {
+                    let _ = outcome;
+                    assert_sent_len(&forge, "ci.rerun_failed", 0, case);
+                    assert!(
+                        !forge.steps().iter().any(|step| matches!(
+                            step,
+                            HandoffLandingStep::Stop { repairable: true }
+                        )),
+                        "{case}: no repair without a verified rerun: {:?}",
+                        forge.steps()
+                    );
+                }
+            }
+        },
+    );
+}
+
+/// A finished push on the accepted base ancestry can authorize the PR rerun
+/// even when its job or run predates the first candidate failure.
+#[test]
+fn untouched_failure_uses_a_fresh_pass_behind_the_moving_tip() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "untouched_failure_uses_a_fresh_pass_behind_the_moving_tip",
+        || {
+            for case in ["fresh_base", "fresh_middle", "stale_middle"] {
+                let (_sandbox, forge, head, base) = forge_fixture(true, false);
+                let middle = fix_base(&forge.repo);
+                git(
+                    &forge.repo,
+                    &["commit", "--allow-empty", "-m", "tip moved again"],
+                );
+                forge.job(&head, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+                forge.job(
+                    if case == "fresh_base" { &base } else { &middle },
+                    passed(2, 21),
+                );
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state
+                        .job_times
+                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+                    state.job_times.insert(
+                        21,
+                        if case == "stale_middle" {
+                            ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z")
+                        } else {
+                            ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z")
+                        },
+                    );
+                    state.after_rerun = Some(if case == "stale_middle" {
+                        failed(1, 12, UNTOUCHED_TEST_FAILURE)
+                    } else {
+                        passed(1, 12)
+                    });
+                }
+                let outcome = land_now(&forge);
+                if case == "stale_middle" {
+                    let error = outcome.expect_err(case);
+                    assert!(
+                        error.to_string().contains("classified `candidate`"),
+                        "{error}"
+                    );
+                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+                    assert_steps(
+                        &forge.steps(),
+                        &[HandoffLandingStep::Stop { repairable: true }],
+                        case,
+                    );
+                } else {
+                    assert_eq!(outcome.expect(case)["phase"], "landed");
+                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+                }
+                assert_not_sent(&forge, &["pr.update_branch"], case);
+            }
+        },
+    );
+}
+
+/// The real provider adapter finds a superseded push, and cannot substitute
+/// a stale run, PR run, foreign branch/commit or incomplete workflow for it.
+#[cfg(unix)]
+#[test]
+fn untouched_failure_checks_push_history_through_the_real_adapter() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::git_fixture::isolated(
+        module_path!(),
+        "untouched_failure_checks_push_history_through_the_real_adapter",
+        || {
+            for case in [
+                "fresh",
+                "stale_job",
+                "stale_run",
+                "pull_request",
+                "other_branch",
+                "foreign_commit",
+                "pending",
+                "cancelled",
+                "wrong_job",
+            ] {
+                let (_sandbox, forge, head, base) = forge_fixture(true, false);
+                let middle = fix_base(&forge.repo);
+                git(
+                    &forge.repo,
+                    &["commit", "--allow-empty", "-m", "tip moved again"],
+                );
+                let tip = git(&forge.repo, &["rev-parse", "main"]);
+                forge.job(&head, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+                forge.job(&base, passed(9, 91));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state.base_push_provider = true;
+                    state
+                        .job_times
+                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+                    state.after_rerun = Some(passed(1, 12));
+                }
+                let runs = json!({"total_count":200,"workflow_runs":[
+                    {"id":2,"workflow_id":1,"name":"CI","event":if case == "pull_request" {"pull_request"} else {"push"},"head_branch":if case == "other_branch" {"other"} else {"main"},"head_sha":if case == "foreign_commit" {&head} else {&middle},"status":if case == "pending" {"in_progress"} else {"completed"},"conclusion":if case == "cancelled" {"cancelled"} else {"success"},"run_started_at":if case == "stale_run" {"2026-10-26T12:00:00Z"} else {"2026-10-26T14:02:00Z"}},
+                    {"id":3,"workflow_id":1,"name":"CI","event":"push","head_branch":"main","head_sha":tip,"status":"in_progress","conclusion":null,"run_started_at":"2026-10-26T14:04:00Z"}
+                ]});
+                let jobs = json!({"total_count":1,"jobs":[{"id":21,"name":if case == "wrong_job" {"other"} else {"clippy"},"status":"completed","conclusion":"success","started_at":if case == "stale_job" {"2026-10-26T12:00:00Z"} else {"2026-10-26T14:02:00Z"},"completed_at":"2026-10-26T14:03:00Z","steps":[]}]});
+                std::fs::write(forge.repo.join("ci-runs.json"), runs.to_string()).unwrap();
+                std::fs::write(forge.repo.join("ci-jobs.json"), jobs.to_string()).unwrap();
+                let bin = forge.repo.join("bin");
+                std::fs::create_dir(&bin).unwrap();
+                let gh = bin.join("gh");
+                std::fs::write(&gh, "#!/bin/sh\nset -eu\ncase \"$*\" in\n *'/actions/runs/2/jobs'*) cat ci-jobs.json ;;\n *'/actions/runs') exit 1 ;;\n *'/actions/runs '*)\n  case \"$*\" in\n   *head_sha=*) printf '%s' '{\"total_count\":0,\"workflow_runs\":[]}' ;;\n   *event=push*branch=main*) cat ci-runs.json ;;\n   *) exit 1 ;;\n  esac ;;\n *) exit 1 ;;\nesac\n").unwrap();
+                std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let mut paths = vec![bin];
+                paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+                let path = std::env::join_paths(paths).unwrap();
+                let _env = orbit_common::test_env::scoped([("PATH", Some(path.to_str().unwrap()))]);
+
+                let outcome = land_now(&forge);
+                if matches!(case, "fresh" | "stale_job" | "stale_run") {
+                    assert_eq!(outcome.expect(case)["phase"], "landed");
+                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+                } else {
+                    assert!(
+                        matches!(&outcome, Err(OrbitError::DeliveryRefused { refusal, .. }) if refusal.error_code() == "delivery_base_checks_pending"),
+                        "{case}: {outcome:?}"
+                    );
+                    assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], case);
+                }
+                assert_not_sent(&forge, &["pr.update_branch"], case);
+            }
+        },
+    );
 }
 
 /// [ORB-15956] The incident: a pull request goes red on its base's own
@@ -1751,25 +2180,17 @@ fn passed(run_id: u64, job_id: u64) -> FakeJob {
 /// candidate; the merge is pinned to the updated head.
 #[test]
 fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
-    let sandbox = tempdir().unwrap();
-    let forge = FakeForge::new(sandbox.path(), true);
-    let candidate = forge.context.candidate.candidate.commit.clone();
-    let base = forge.context.candidate.base.commit.clone();
-    std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
-    git(&forge.repo, &["add", "fix.txt"]);
-    git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
-    let fixed = git(&forge.repo, &["rev-parse", "main"]);
-    forge.job(&candidate, failed(1, 11, CLIPPY_DEAD_CODE));
-    forge.job(&base, failed(2, 21, CLIPPY_DEAD_CODE));
-    forge.job(&fixed, passed(3, 31));
+    let (_sandbox, forge, candidate, base) = forge_fixture(true, false);
+    let fixed = fix_base(&forge.repo);
+    inherited_jobs(&forge, &candidate, &base, &fixed, passed(3, 31));
     forge.state.lock().unwrap().after_update = Some(passed(4, 41));
 
-    let landed = land_with(&forge, json!({"max_wait_seconds": 0})).expect("the update lands");
+    let landed = land_now(&forge).expect("the update lands");
 
     assert_eq!(landed["phase"], "landed", "{landed}");
-    assert_eq!(forge.sent("pr.update_branch").len(), 1);
-    assert!(forge.sent("ci.rerun_failed").is_empty());
-    let head = forge.state.lock().unwrap().head.clone();
+    assert_sent_len(&forge, "pr.update_branch", 1, "inherited");
+    assert_not_sent(&forge, &["ci.rerun_failed"], "inherited");
+    let head = head_of(&forge);
     assert_eq!(
         git(
             &forge.repo,
@@ -1802,7 +2223,7 @@ fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
             .all(|observed| observed.candidate.commit == candidate),
         "the owner observes the validated candidate, never the merged head"
     );
-    let evidence: Value = serde_json::from_str(&forge.last_evidence()).unwrap();
+    let evidence = evidence_of(&forge);
     assert_eq!(evidence["updated_head"], head.as_str(), "{evidence}");
     assert!(
         evidence["check_recovery"][0]
@@ -1810,6 +2231,107 @@ fn a_check_failure_inherited_from_the_base_updates_the_branch_and_lands() {
             .is_some_and(|action| action.contains("inherited") && action.contains(&fixed)),
         "{evidence}"
     );
+}
+
+/// The base fix arrives only after the first updated head has failed.
+#[test]
+fn inherited_landing_waits_for_a_later_passing_base_and_updates_again() {
+    let (_sandbox, forge, candidate, base) = forge_fixture(true, false);
+    let forge = std::rc::Rc::new(forge);
+    let red_tip = fix_base(&forge.repo);
+    inherited_jobs(
+        &forge,
+        &candidate,
+        &base,
+        &red_tip,
+        failed(3, 31, CLIPPY_DEAD_CODE),
+    );
+    forge.state.lock().unwrap().after_update = Some(failed(4, 41, CLIPPY_DEAD_CODE));
+    let waits = std::rc::Rc::new(std::cell::Cell::new(0));
+    let captured_waits = waits.clone();
+    let captured_forge = forge.clone();
+    let result = orbit_engine::test_support::with_vcs_retry_wait(
+        move |_| {
+            let forge = &captured_forge;
+            let waits = &captured_waits;
+            waits.set(waits.get() + 1);
+            if waits.get() == 1 {
+                // While the landing waits, the base's own fix lands on main.
+                let tree = git(&forge.repo, &["rev-parse", "main^{tree}"]);
+                let fixed = git(
+                    &forge.repo,
+                    &[
+                        "commit-tree",
+                        &tree,
+                        "-p",
+                        "main",
+                        "-m",
+                        "the base recovers",
+                    ],
+                );
+                git(&forge.repo, &["update-ref", "refs/heads/main", &fixed]);
+                forge.job(&fixed, passed(5, 51));
+                forge.state.lock().unwrap().after_update = Some(passed(6, 61));
+            }
+        },
+        || {
+            land_with(
+                forge.as_ref(),
+                json!({"max_wait_seconds":30,"poll_interval_seconds":5}),
+            )
+        },
+    );
+    assert_eq!(
+        result.expect("the later base fix resumes landing")["phase"],
+        "landed"
+    );
+    assert_eq!(waits.get(), 1);
+    assert_sent_len(&forge, "pr.update_branch", 2, "later recovery");
+    let history = forge.history.lock().unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|row| row.event == orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT)
+    );
+    assert_eq!(
+        history
+            .iter()
+            .filter(|row| row.event == "pr_base_update_reserved")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn landing_accepts_two_clean_operator_base_merges_and_refuses_a_dirty_hop() {
+    for shape in [
+        UpdateShape::CleanMerge,
+        UpdateShape::Dirty,
+        UpdateShape::NotAMerge,
+        UpdateShape::Foreign,
+    ] {
+        let sandbox = tempdir().unwrap();
+        let remote = tempdir().unwrap();
+        let mut forge = FakeForge::new(sandbox.path(), false);
+        fix_base(&forge.repo);
+        forge.publish(remote.path());
+        let candidate = forge.context.candidate.candidate.commit.clone();
+        let first = provider_update(remote.path(), &candidate, shape);
+        let second = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
+        forge.state.lock().unwrap().head = second.clone();
+        forge.job(&second, passed(1, 11));
+        let result = land_now(&forge);
+        if matches!(shape, UpdateShape::CleanMerge) {
+            assert_eq!(
+                result.expect("both clean hops are the accepted candidate")["phase"],
+                "landed"
+            );
+            assert_eq!(forge.sent("pr.merge")[0]["reviewed_head_sha"], second);
+        } else {
+            result.expect_err("a clean outer merge cannot hide an invalid inner hop");
+            assert_not_sent(&forge, &["pr.merge"], "invalid inner hop");
+        }
+    }
 }
 
 /// [ORB-16322] An inherited check that still fails after the one branch
@@ -1855,46 +2377,26 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
             "function `stale_helper` is never used",
         ),
     ] {
-        let sandbox = tempdir().unwrap();
-        let mut forge = FakeForge::new(sandbox.path(), true);
-        forge.context.automatic_repair_spent = repair_spent;
-        let candidate = forge.context.candidate.candidate.commit.clone();
-        let base = forge.context.candidate.base.commit.clone();
-        std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
-        git(&forge.repo, &["add", "fix.txt"]);
-        git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
-        let fixed = git(&forge.repo, &["rev-parse", "main"]);
-        forge.job(&candidate, failed(1, 11, CLIPPY_DEAD_CODE));
-        forge.job(&base, failed(2, 21, CLIPPY_DEAD_CODE));
-        forge.job(
-            &fixed,
-            if tip_passes {
-                passed(3, 31)
-            } else {
-                failed(3, 31, CLIPPY_DEAD_CODE)
-            },
-        );
+        let (_sandbox, forge, candidate, base) = forge_fixture(true, repair_spent);
+        let fixed = fix_base(&forge.repo);
+        let tip = if tip_passes {
+            passed(3, 31)
+        } else {
+            failed(3, 31, CLIPPY_DEAD_CODE)
+        };
+        inherited_jobs(&forge, &candidate, &base, &fixed, tip);
         forge.state.lock().unwrap().after_update = Some(failed(4, 41, after));
 
-        let error = land_with(&forge, json!({"max_wait_seconds": 0}))
-            .expect_err("the surviving failure stops the landing");
+        let error = land_now(&forge).expect_err("the surviving failure stops the landing");
 
-        assert_eq!(
-            forge.sent("pr.update_branch").len(),
-            1,
-            "{label}: one update"
-        );
-        assert!(
-            forge.sent("ci.rerun_failed").is_empty(),
-            "{label}: no rerun"
-        );
-        assert!(forge.sent("pr.merge").is_empty(), "{label}: no merge");
+        assert_sent_len(&forge, "pr.update_branch", 1, label);
+        assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], label);
         let step = if repair_spent && tip_passes {
             HandoffLandingStep::StopForRequeue
         } else {
             HandoffLandingStep::Stop { repairable }
         };
-        assert_eq!(forge.steps(), vec![step], "{label}");
+        assert_steps(&forge.steps(), &[step], label);
         let reason = forge.stop_reason();
         assert!(
             reason.contains("CI / clippy")
@@ -1915,7 +2417,7 @@ fn an_inherited_failure_that_survives_the_branch_update_gets_one_repair() {
             );
         } else {
             assert!(
-                reason.contains("one branch update")
+                reason.contains("base never recovered")
                     && reason.contains("stays in review")
                     && !reason.contains("automatic repair"),
                 "{label}: {reason}"
@@ -1938,38 +2440,359 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
         (true, true, HandoffLandingStep::StopForRequeue),
         (false, false, HandoffLandingStep::Stop { repairable: true }),
     ] {
-        let sandbox = tempdir().unwrap();
-        let mut forge = FakeForge::new(sandbox.path(), false);
-        forge.context.automatic_repair_spent = repair_spent;
-        let candidate = forge.context.candidate.candidate.commit.clone();
-        let base = forge.context.candidate.base.commit.clone();
+        let (_sandbox, forge, candidate, base) = forge_fixture(false, repair_spent);
         forge.job(&candidate, failed(1, 11, CANDIDATE_ERROR));
         if base_ran {
             forge.job(&base, passed(2, 21));
         }
 
-        let error = land_with(&forge, json!({"max_wait_seconds": 0}))
-            .expect_err("the candidate's failure stops the landing");
+        let error = land_now(&forge).expect_err("the candidate's failure stops the landing");
 
-        assert_eq!(
-            forge.steps(),
-            vec![step],
-            "repair spent: {repair_spent}, base ran: {base_ran}"
-        );
-        let reason = forge.stop_reason();
-        assert!(
-            reason.contains("classified `candidate`")
-                && reason.contains("cannot find value `delivered` in this scope")
-                && reason.contains("Process completed with exit code 101"),
-            "the stop carries the classification, signature and log excerpt: {reason}"
+        assert_steps(&forge.steps(), &[step], "candidate-caused");
+        assert_reason(
+            &forge,
+            "candidate-caused",
+            &[
+                "classified `candidate`",
+                "cannot find value `delivered` in this scope",
+                "Process completed with exit code 101",
+            ],
         );
         assert!(
             error.to_string().contains("classified `candidate`"),
             "{error}"
         );
-        assert!(forge.sent("pr.merge").is_empty());
-        assert!(forge.sent("pr.update_branch").is_empty());
-        assert!(forge.sent("ci.rerun_failed").is_empty());
+        assert_not_sent(
+            &forge,
+            &["pr.merge", "pr.update_branch", "ci.rerun_failed"],
+            "candidate failure",
+        );
+    }
+}
+
+/// A green base run, even an earlier one, only authorizes one unchanged-head
+/// PR rerun. The same signature on that rerun is candidate-caused; a passing
+/// rerun clears it, and missing base evidence remains a bounded hold.
+#[test]
+fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
+    // Runner checkout paths, as a hosted lockfile audit cites them.
+    const UNTOUCHED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
+                             ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
+    const CHANGED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
+                           ┌─ /home/runner/work/repo/repo/work.txt:365:1\n";
+    const UNCHANGED_GITHUB: &str = "error[workflow]: invalid action pin\n    \
+                                    ┌─ /home/runner/work/repo/repo/.github/workflows/ci.yml:12:1\n";
+    const CHANGED_GITHUB: &str = "error[workflow]: invalid action pin\n    \
+                                  ┌─ /home/runner/work/repo/repo/.github/workflows/ci.yml:12:1\n";
+    for case in [
+        "stale",
+        "changed",
+        "fresh_green",
+        "fresh_red",
+        "github_stale",
+        "github_changed",
+        "stale_pass",
+    ] {
+        let (_sandbox, mut forge, original_candidate, base) = forge_fixture(false, false);
+        let candidate = if case == "github_changed" {
+            change_candidate_workflow(&mut forge)
+        } else {
+            original_candidate
+        };
+        let forge = std::sync::Arc::new(forge);
+        forge.job(
+            &candidate,
+            failed(
+                1,
+                11,
+                if case == "changed" {
+                    CHANGED
+                } else if case == "github_stale" {
+                    UNCHANGED_GITHUB
+                } else if case == "github_changed" {
+                    CHANGED_GITHUB
+                } else {
+                    UNTOUCHED
+                },
+            ),
+        );
+        forge.job(
+            &base,
+            if case == "fresh_red" {
+                failed(2, 21, CLIPPY_DEAD_CODE)
+            } else {
+                passed(2, 21)
+            },
+        );
+        {
+            let mut state = forge.state.lock().unwrap();
+            if matches!(case, "fresh_green" | "stale" | "github_stale") {
+                state.after_rerun = Some(failed(
+                    1,
+                    12,
+                    if case == "github_stale" {
+                        UNCHANGED_GITHUB
+                    } else {
+                        UNTOUCHED
+                    },
+                ));
+            } else if case == "stale_pass" {
+                state.after_rerun = Some(passed(1, 12));
+            }
+            state
+                .job_times
+                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+            state
+                .job_times
+                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
+        }
+        let captured = forge.clone();
+        let refreshed_base = base.clone();
+        let outcome = orbit_engine::test_support::with_vcs_retry_wait(
+            move |_| {
+                if case.starts_with("fresh_") {
+                    let mut state = captured.state.lock().unwrap();
+                    state.jobs.insert(
+                        refreshed_base.clone(),
+                        if case == "fresh_green" {
+                            passed(3, 31)
+                        } else {
+                            failed(3, 31, UNTOUCHED)
+                        },
+                    );
+                    state
+                        .job_times
+                        .insert(31, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
+                }
+            },
+            || {
+                land_with(
+                    forge.as_ref(),
+                    json!({"max_wait_seconds":60,"poll_interval_seconds":30}),
+                )
+            },
+        );
+        if case == "stale_pass" {
+            assert_eq!(
+                outcome.expect("a passing same-head rerun clears the failure")["phase"],
+                "landed"
+            );
+            assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+            continue;
+        }
+        let error = outcome.expect_err(case);
+        if matches!(case, "fresh_red") {
+            assert!(
+                matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
+                    if refusal.error_code() == "delivery_base_checks_pending"),
+                "{case}: the base wait must not dispatch job recovery: {error}"
+            );
+        }
+        let repairable = matches!(
+            case,
+            "changed" | "fresh_green" | "github_changed" | "stale" | "github_stale"
+        );
+        assert_steps(
+            &forge.steps(),
+            &[HandoffLandingStep::Stop { repairable }],
+            case,
+        );
+        assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
+        assert_sent_len(
+            &forge,
+            "ci.rerun_failed",
+            usize::from(matches!(case, "fresh_green" | "stale" | "github_stale")),
+            case,
+        );
+        if matches!(case, "changed" | "github_changed") {
+            assert_reason(&forge, case, &["classified `candidate`"]);
+        } else if matches!(case, "stale" | "fresh_green" | "github_stale") {
+            assert_reason(&forge, case, &["classified `candidate`"]);
+            assert_eq!(
+                forge
+                    .history
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| row.event == "ci_base_suspect")
+                    .count(),
+                0,
+                "{case}: a passing base run authorizes a rerun, not a base-suspect hold"
+            );
+        } else {
+            let records = forge
+                .history
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|row| row.event == "ci_base_suspect")
+                .count();
+            assert_eq!(records, 1, "{case}: surface base-wide suspicion once");
+            assert!(
+                forge
+                    .sent("ci.commit_jobs")
+                    .iter()
+                    .filter(|input| input["commit"] == base)
+                    .count()
+                    >= 2,
+                "{case}: re-check the base after its stale run"
+            );
+            if case == "fresh_green" {
+                assert_reason(&forge, case, &["classified `candidate`"]);
+            } else if case == "fresh_red" {
+                assert_reason(&forge, case, &["classified `inherited`"]);
+            } else {
+                assert!(
+                    forge.last_evidence().contains("base-suspect"),
+                    "{}",
+                    forge.last_evidence()
+                );
+            }
+        }
+    }
+}
+
+/// A base-suspect hold with no decisive base result escalates at the configured
+/// observation-cycle limit and keeps the failed check and signature in its stop.
+#[test]
+fn untouched_failure_escalates_after_configured_base_ci_cycles() {
+    let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
+    forge.job(&candidate, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+
+    let error = orbit_engine::test_support::with_vcs_retry_wait(
+        |_| {},
+        || {
+            land_with(
+                &forge,
+                json!({
+                    "max_wait_seconds": 30,
+                    "poll_interval_seconds": 5,
+                    "max_base_ci_cycles": 2,
+                }),
+            )
+        },
+    )
+    .expect_err("the unresolved base evidence is escalated");
+
+    assert!(
+        error
+            .to_string()
+            .contains("escalated after 2 base CI observation cycles"),
+        "{error}"
+    );
+    assert_reason(
+        &forge,
+        "base cycle limit",
+        &["CI / clippy", "shutdown test timed out", "agent-main"],
+    );
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "base cycle limit",
+    );
+    assert_eq!(
+        forge
+            .sent("ci.commit_jobs")
+            .iter()
+            .filter(|input| input["commit"] == base && input["latest_push_branch"] == "main")
+            .count(),
+        2,
+        "one base ancestry observation per configured cycle"
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "base cycle limit",
+    );
+}
+
+/// A base-suspect failure whose landing tip has moved is decided only by
+/// a fresh run of the same job on that tip: a fresh pass permits one
+/// rerun before repair, with no branch update, and a fresh
+/// same-signature failure is inherited (one branch update, then a review
+/// stop while the tip does not pass).
+#[test]
+fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
+    const UNTOUCHED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
+                             ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
+    for (case, tip_passes) in [("fresh pass", true), ("fresh same failure", false)] {
+        let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
+        let fixed = fix_base(&forge.repo);
+        forge.job(&candidate, failed(1, 11, UNTOUCHED));
+        forge.job(&base, passed(2, 21));
+        forge.job(
+            &fixed,
+            if tip_passes {
+                passed(3, 31)
+            } else {
+                failed(3, 31, UNTOUCHED)
+            },
+        );
+        if !tip_passes {
+            forge.state.lock().unwrap().after_update = Some(failed(4, 41, UNTOUCHED));
+        } else {
+            forge.state.lock().unwrap().after_rerun = Some(failed(1, 12, UNTOUCHED));
+        }
+        {
+            let mut state = forge.state.lock().unwrap();
+            state
+                .job_times
+                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+            state
+                .job_times
+                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
+            state
+                .job_times
+                .insert(31, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
+            state
+                .job_times
+                .insert(41, ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"));
+        }
+
+        let error = land_now(&forge).expect_err(case);
+
+        assert!(
+            error.to_string().contains("allocator shim"),
+            "{case}: {error}"
+        );
+        assert_not_sent(&forge, &["pr.merge"], case);
+        assert_sent_len(&forge, "ci.rerun_failed", usize::from(tip_passes), case);
+        if tip_passes {
+            assert_not_sent(&forge, &["pr.update_branch"], case);
+            assert_steps(
+                &forge.steps(),
+                &[HandoffLandingStep::Stop { repairable: true }],
+                case,
+            );
+            assert_reason(&forge, case, &["classified `candidate`"]);
+            assert_eq!(
+                forge
+                    .history
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| row.event == "ci_base_suspect")
+                    .count(),
+                0,
+                "{case}: a fresh pass is not recorded as base-suspect"
+            );
+        } else {
+            assert_sent_len(&forge, "pr.update_branch", 1, case);
+            assert_steps(
+                &forge.steps(),
+                &[HandoffLandingStep::Stop { repairable: false }],
+                case,
+            );
+            assert_reason(
+                &forge,
+                case,
+                &[
+                    "classified `inherited`",
+                    "base never recovered",
+                    "stays in review",
+                ],
+            );
+        }
     }
 }
 
@@ -1979,33 +2802,56 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
 #[test]
 fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
     for (rerun, lands) in [(passed(1, 12), true), (failed(1, 12, NETWORK_FLAKE), false)] {
-        let sandbox = tempdir().unwrap();
-        let forge = FakeForge::new(sandbox.path(), true);
-        let candidate = forge.context.candidate.candidate.commit.clone();
+        let (_sandbox, forge, candidate, _base) = forge_fixture(true, false);
         forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
         forge.state.lock().unwrap().after_rerun = Some(rerun);
 
-        let outcome = land_with(&forge, json!({"max_wait_seconds": 0}));
+        let outcome = land_now(&forge);
 
-        assert_eq!(
-            forge.sent("ci.rerun_failed"),
-            vec![json!({"run_id": "1", "workspace_path": forge.repo.to_string_lossy()})]
-        );
-        assert!(forge.sent("pr.update_branch").is_empty());
+        let sent = forge.sent("ci.rerun_failed");
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0]["run_id"], "1");
+        assert_eq!(sent[0]["plan"]["head_sha"], candidate);
+        assert_eq!(sent[0]["plan"]["failed_jobs"][0]["id"], 11);
+        assert_not_sent(&forge, &["pr.update_branch"], "transient");
         if lands {
             assert_eq!(outcome.expect("the rerun passes")["phase"], "landed");
         } else {
             outcome.expect_err("a second transient failure stops");
-            assert_eq!(
-                forge.steps(),
-                vec![HandoffLandingStep::Stop { repairable: false }]
+            assert_steps(
+                &forge.steps(),
+                &[HandoffLandingStep::Stop { repairable: false }],
+                "transient",
             );
-            let reason = forge.stop_reason();
-            assert!(
-                reason.contains("classified `transient`") && reason.contains("one rerun"),
-                "{reason}"
+            assert_reason(
+                &forge,
+                "transient",
+                &["classified `transient`", "one rerun"],
             );
         }
+    }
+}
+
+#[test]
+fn transient_non_pull_request_rerun_records_the_source_event() {
+    for event in ["push", "workflow_dispatch"] {
+        let (_sandbox, forge, candidate, _base) = forge_fixture(true, false);
+        let mut failure = failed(1, 11, NETWORK_FLAKE);
+        failure.event = event;
+        forge.job(&candidate, failure);
+        assert!(
+            land_now(&forge).is_err(),
+            "{event}: a foreign event cannot authorize a PR retry"
+        );
+        assert!(forge.sent("ci.rerun_failed").is_empty());
+        assert!(
+            !forge
+                .history
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|row| row.event == "ci_check_rerun")
+        );
     }
 }
 
@@ -2068,14 +2914,8 @@ fn a_check_failure_whose_evidence_cannot_be_read_spends_nothing() {
             "names no diagnostic",
         ),
     ] {
-        let sandbox = tempdir().unwrap();
-        let forge = FakeForge::new(sandbox.path(), true);
-        let candidate = forge.context.candidate.candidate.commit.clone();
-        let base = forge.context.candidate.base.commit.clone();
-        std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
-        git(&forge.repo, &["add", "fix.txt"]);
-        git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
-        let fixed = git(&forge.repo, &["rev-parse", "main"]);
+        let (_sandbox, forge, candidate, base) = forge_fixture(true, false);
+        let fixed = fix_base(&forge.repo);
         forge.job(&candidate, failed_reading(1, 11, head_log));
         forge.job(
             &base,
@@ -2092,22 +2932,19 @@ fn a_check_failure_whose_evidence_cannot_be_read_spends_nothing() {
             }
         }
 
-        land_with(&forge, json!({"max_wait_seconds": 0}))
-            .expect_err("unreadable evidence stops the landing");
+        land_now(&forge).expect_err("unreadable evidence stops the landing");
 
-        assert_eq!(
-            forge.steps(),
-            vec![HandoffLandingStep::Stop { repairable: false }],
-            "{case}: no automatic repair"
+        assert_steps(
+            &forge.steps(),
+            &[HandoffLandingStep::Stop { repairable: false }],
+            case,
         );
-        let reason = forge.stop_reason();
-        assert!(
-            reason.contains(why) && reason.contains("stays in review"),
-            "{case}: {reason}"
+        assert_reason(&forge, case, &[why, "stays in review"]);
+        assert_not_sent(
+            &forge,
+            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+            case,
         );
-        for spent in ["ci.rerun_failed", "pr.update_branch", "pr.merge"] {
-            assert!(forge.sent(spent).is_empty(), "{case}: sent {spent}");
-        }
     }
 }
 
@@ -2132,24 +2969,19 @@ fn a_branch_update_is_verified_against_the_base_it_merged() {
         let mut forge = FakeForge::new(sandbox.path(), true);
         let candidate = forge.context.candidate.candidate.commit.clone();
         let base = forge.context.candidate.base.commit.clone();
-        std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
-        git(&forge.repo, &["add", "fix.txt"]);
-        git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
-        let fixed = git(&forge.repo, &["rev-parse", "main"]);
+        let fixed = fix_base(&forge.repo);
         forge.publish(remote.path());
-        forge.job(&candidate, failed(1, 11, CLIPPY_DEAD_CODE));
-        forge.job(&base, failed(2, 21, CLIPPY_DEAD_CODE));
-        forge.job(&fixed, passed(3, 31));
+        inherited_jobs(&forge, &candidate, &base, &fixed, passed(3, 31));
         {
             let mut state = forge.state.lock().unwrap();
             state.after_update = Some(passed(4, 41));
             state.update = shape;
         }
 
-        let outcome = land_with(&forge, json!({"max_wait_seconds": 0}));
+        let outcome = land_now(&forge);
 
-        assert_eq!(forge.sent("pr.update_branch").len(), 1, "{shape:?}");
-        let head = forge.state.lock().unwrap().head.clone();
+        assert_sent_len(&forge, "pr.update_branch", 1, "update");
+        let head = head_of(&forge);
         if lands {
             assert_eq!(
                 outcome.expect("the verified update lands")["phase"],
@@ -2162,12 +2994,12 @@ fn a_branch_update_is_verified_against_the_base_it_merged() {
             );
         } else {
             outcome.expect_err("an unverified head stops the landing");
-            assert_eq!(
-                forge.steps(),
-                vec![HandoffLandingStep::Stop { repairable: false }],
-                "{shape:?}"
+            assert_steps(
+                &forge.steps(),
+                &[HandoffLandingStep::Stop { repairable: false }],
+                "unverified",
             );
-            assert!(forge.sent("pr.merge").is_empty(), "{shape:?}");
+            assert_not_sent(&forge, &["pr.merge"], "unverified");
         }
     }
 }
@@ -2176,84 +3008,59 @@ fn a_branch_update_is_verified_against_the_base_it_merged() {
 /// locally, but origin becomes unreachable before landing starts. Cached
 /// containment cannot authorize adoption: stop without spending recovery.
 /// Restoring origin with the same objects lets the same head land.
-#[test]
 fn a_cached_branch_update_requires_a_fresh_landing_base() {
-    super::git_fixture::isolated(
-        module_path!(),
-        "a_cached_branch_update_requires_a_fresh_landing_base",
-        || {
-            let sandbox = tempdir().unwrap();
-            let remote = tempdir().unwrap();
-            let mut forge = FakeForge::new(sandbox.path(), true);
-            let candidate = forge.context.candidate.candidate.commit.clone();
-            forge.publish(remote.path());
-            let head = provider_update(remote.path(), &candidate, UpdateShape::CleanMerge);
-            git(&forge.repo, &["fetch", "-q", "origin"]);
-            let base = git(&forge.repo, &["rev-parse", "origin/main"]);
-            assert_eq!(
-                git(&forge.repo, &["rev-list", "--parents", "-n", "1", &head]),
-                format!("{head} {candidate} {base}"),
-                "the genuine updated head and its base are cached before fetch fails"
-            );
-            forge.state.lock().unwrap().head = head.clone();
-            forge.job(&head, passed(1, 11));
-            let unreachable = remote.path().join("unreachable.git");
-            git(
-                &forge.repo,
-                &[
-                    "remote",
-                    "set-url",
-                    "origin",
-                    &unreachable.to_string_lossy(),
-                ],
-            );
-
-            land_with(&forge, json!({"max_wait_seconds": 0}))
-                .expect_err("a cached branch update cannot land after the initial fetch fails");
-
-            assert_eq!(
-                forge.steps(),
-                vec![HandoffLandingStep::Stop { repairable: false }]
-            );
-            for operation in ["ci.rerun_failed", "pr.update_branch", "pr.merge"] {
-                assert!(
-                    forge.sent(operation).is_empty(),
-                    "unreachable origin sent {operation}"
-                );
-            }
-            assert_eq!(git(&forge.repo, &["rev-parse", "origin/main"]), base);
-            assert_eq!(forge.state.lock().unwrap().head, head);
-
-            git(
-                &forge.repo,
-                &[
-                    "remote",
-                    "set-url",
-                    "origin",
-                    &remote.path().to_string_lossy(),
-                ],
-            );
-            forge.ops.lock().unwrap().clear();
-            forge.updates.lock().unwrap().clear();
-
-            let outcome = land_with(&forge, json!({"max_wait_seconds": 0}))
-                .expect("the identical cached head lands once origin is reachable");
-
-            assert_eq!(outcome["phase"], "landed");
-            assert_eq!(forge.sent("pr.merge").len(), 1);
-            assert_eq!(
-                forge.sent("pr.merge")[0]["reviewed_head_sha"],
-                head.as_str()
-            );
-            assert!(forge.sent("ci.rerun_failed").is_empty());
-            assert!(forge.sent("pr.update_branch").is_empty());
-            assert_eq!(git(&forge.repo, &["rev-parse", "origin/main"]), base);
-            let evidence: Value = serde_json::from_str(&forge.last_evidence()).unwrap();
-            assert_eq!(evidence["updated_head"], head.as_str());
-            assert!(evidence.get("check_recovery").is_none());
-            assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
-        },
+    let sandbox = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let mut forge = FakeForge::new(sandbox.path(), true);
+    let candidate = forge.context.candidate.candidate.commit.clone();
+    forge.publish(remote.path());
+    let head = provider_update(remote.path(), &candidate, UpdateShape::CleanMerge);
+    git(&forge.repo, &["fetch", "-q", "origin"]);
+    let base = git(&forge.repo, &["rev-parse", "origin/main"]);
+    assert_eq!(
+        git(&forge.repo, &["rev-list", "--parents", "-n", "1", &head]),
+        format!("{head} {candidate} {base}"),
+        "the genuine updated head and its base are cached before fetch fails"
     );
+    forge.state.lock().unwrap().head = head.clone();
+    forge.job(&head, passed(1, 11));
+    let unreachable = remote.path().join("unreachable.git");
+    let bad_origin = unreachable.to_string_lossy();
+    git(&forge.repo, &["remote", "set-url", "origin", &bad_origin]);
+
+    land_now(&forge).expect_err("a cached branch update cannot land after the initial fetch fails");
+
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "cached",
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "unreachable origin",
+    );
+    assert_eq!(git(&forge.repo, &["rev-parse", "origin/main"]), base);
+    assert_eq!(forge.state.lock().unwrap().head, head);
+
+    let good_origin = remote.path().to_string_lossy();
+    git(&forge.repo, &["remote", "set-url", "origin", &good_origin]);
+    forge.ops.lock().unwrap().clear();
+    forge.updates.lock().unwrap().clear();
+
+    let outcome =
+        land_now(&forge).expect("the identical cached head lands once origin is reachable");
+
+    assert_eq!(outcome["phase"], "landed");
+    assert_sent_len(&forge, "pr.merge", 1, "cached");
+    let merge_head = forge.sent("pr.merge")[0]["reviewed_head_sha"].clone();
+    assert_eq!(merge_head, head.as_str(), "cached");
+    assert_not_sent(&forge, &["ci.rerun_failed", "pr.update_branch"], "cached");
+    assert_eq!(git(&forge.repo, &["rev-parse", "origin/main"]), base);
+    let evidence = evidence_of(&forge);
+    assert_eq!(evidence["updated_head"], head.as_str());
+    assert!(evidence.get("check_recovery").is_none());
+    assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
 }
 
 /// [ORB-16185] A required aggregate check outside any workflow fails with
@@ -2275,56 +3082,45 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
             false,
         ),
     ] {
-        let sandbox = tempdir().unwrap();
-        let mut forge = FakeForge::new(sandbox.path(), false);
-        forge.context.automatic_repair_spent = spent;
-        let candidate = forge.context.candidate.candidate.commit.clone();
+        let (_sandbox, forge, candidate, _base) = forge_fixture(false, spent);
         forge.job(&candidate, clippy);
         forge.state.lock().unwrap().aggregate = Some(annotated);
 
-        land_with(&forge, json!({"max_wait_seconds": 0}))
-            .expect_err("a failed required aggregate stops the landing");
+        land_now(&forge).expect_err("a failed required aggregate stops the landing");
 
         let step = match case {
             "candidate" => HandoffLandingStep::Stop { repairable: true },
             "spent" => HandoffLandingStep::StopForRequeue,
             _ => HandoffLandingStep::Stop { repairable: false },
         };
-        assert_eq!(forge.steps(), vec![step], "{case}");
+        assert_steps(&forge.steps(), &[step], case);
         let reason = forge.stop_reason();
         let class = if case == "candidate" || case == "spent" {
             "classified `candidate`"
         } else {
             "classified `inconclusive`"
         };
-        assert!(
-            reason.contains(class)
-                && reason.contains("check run 7001 of app 57789")
-                && reason.contains(&format!(
-                    "- {annotated}:1 [Uncontrolled data used in path expression]"
-                )),
-            "{case}: the stop carries the classification and the source annotations: {reason}"
+        let annotation = format!("- {annotated}:1 [Uncontrolled data used in path expression]");
+        assert_contains(
+            reason.as_str(),
+            &[class, "check run 7001 of app 57789", &annotation],
+            case,
         );
-        assert!(forge.sent("ci.rerun_failed").is_empty(), "{case}");
-        assert!(forge.sent("pr.update_branch").is_empty(), "{case}");
-        assert!(forge.sent("pr.merge").is_empty(), "{case}");
+        assert_not_sent(
+            &forge,
+            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+            case,
+        );
     }
 }
 
 /// A completed recovery cannot hide a separately failed required aggregate.
 fn required_aggregate_after_recovery(updated: bool) {
-    let sandbox = tempdir().unwrap();
-    let forge = FakeForge::new(sandbox.path(), true);
-    let candidate = forge.context.candidate.candidate.commit.clone();
+    let (_sandbox, forge, candidate, _base) = forge_fixture(true, false);
     if updated {
         let base = forge.context.candidate.base.commit.clone();
-        std::fs::write(forge.repo.join("fix.txt"), "the base's fix\n").unwrap();
-        git(&forge.repo, &["add", "fix.txt"]);
-        git(&forge.repo, &["commit", "-q", "-m", "fix the base"]);
-        let fixed = git(&forge.repo, &["rev-parse", "main"]);
-        forge.job(&candidate, failed(1, 11, CLIPPY_DEAD_CODE));
-        forge.job(&base, failed(2, 21, CLIPPY_DEAD_CODE));
-        forge.job(&fixed, passed(3, 31));
+        let fixed = fix_base(&forge.repo);
+        inherited_jobs(&forge, &candidate, &base, &fixed, passed(3, 31));
         forge.state.lock().unwrap().after_update = Some(passed(4, 41));
     } else {
         forge.job(&candidate, failed(1, 11, NETWORK_FLAKE));
@@ -2332,102 +3128,81 @@ fn required_aggregate_after_recovery(updated: bool) {
     }
     forge.state.lock().unwrap().after_recovery_aggregate = Some("work.txt");
 
-    land_with(&forge, json!({"max_wait_seconds": 0}))
-        .expect_err("the failed aggregate stops for repair without waiting");
+    land_now(&forge).expect_err("the failed aggregate stops for repair without waiting");
 
-    assert_eq!(forge.sent("ci.rerun_failed").len(), usize::from(!updated));
-    assert_eq!(forge.sent("pr.update_branch").len(), usize::from(updated));
-    assert_eq!(
-        forge.sent("pr.status").len(),
-        2,
-        "classify on the next poll"
+    assert_sent_len(&forge, "ci.rerun_failed", usize::from(!updated), "recovery");
+    assert_sent_len(&forge, "pr.update_branch", usize::from(updated), "recovery");
+    assert_sent_len(&forge, "pr.status", 2, "recovery");
+    assert_sent_len(&forge, "ci.check_annotations", 1, "recovery");
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: true }],
+        "recovery",
     );
-    assert_eq!(forge.sent("ci.check_annotations").len(), 1);
-    assert_eq!(
-        forge.steps(),
-        [HandoffLandingStep::Stop { repairable: true }]
+    assert_reason(
+        &forge,
+        "recovery",
+        &["classified `candidate`", "check run 7001"],
     );
-    let reason = forge.stop_reason();
-    assert!(
-        reason.contains("classified `candidate`") && reason.contains("check run 7001"),
-        "the aggregate's classification earns the repair: {reason}"
-    );
-    assert!(forge.sent("pr.merge").is_empty());
+    assert_not_sent(&forge, &["pr.merge"], "recovery");
 }
 
-#[test]
-fn a_required_aggregate_after_rerun_is_classified_without_waiting() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "a_required_aggregate_after_rerun_is_classified_without_waiting",
-        || required_aggregate_after_recovery(false),
-    );
-}
-
-#[test]
-fn a_required_aggregate_after_branch_update_is_classified_without_waiting() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "a_required_aggregate_after_branch_update_is_classified_without_waiting",
-        || required_aggregate_after_recovery(true),
-    );
+#[allow(clippy::print_stderr)] // Identify each labelled row in isolated child failure output.
+fn a_required_aggregate_after_recovery_is_classified_without_waiting() {
+    for (label, updated) in [("after rerun", false), ("after branch update", true)] {
+        eprintln!("aggregate recovery row: {label}");
+        required_aggregate_after_recovery(updated);
+    }
 }
 
 /// A stale failure for the rerun job waits until its replacement registers.
-#[test]
 fn a_transient_rerun_waits_for_queued_replacement_jobs() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "a_transient_rerun_waits_for_queued_replacement_jobs",
+    let sandbox = tempdir().unwrap();
+    let forge = std::rc::Rc::new(FakeForge::new(sandbox.path(), true));
+    let head = forge.context.candidate.candidate.commit.clone();
+    forge.job(&head, failed(1, 11, NETWORK_FLAKE));
+    {
+        let mut state = forge.state.lock().unwrap();
+        state.after_rerun = Some(passed(1, 12));
+        state.queued_rerun = true;
+    }
+    let waits = std::rc::Rc::new(std::cell::Cell::new(0));
+    let captured_waits = waits.clone();
+    let queued_forge = forge.clone();
+    let result = orbit_engine::test_support::with_vcs_retry_wait(
+        move |_| {
+            let forge = queued_forge.as_ref();
+            captured_waits.set(captured_waits.get() + 1);
+            assert!(
+                forge.steps().is_empty(),
+                "queued work must not stop for repair"
+            );
+            assert!(forge.sent("pr.merge").is_empty());
+            assert_eq!(forge.sent("ci.rerun_failed").len(), 1);
+            let mut state = forge.state.lock().unwrap();
+            assert!(
+                !state.jobs.contains_key(&head),
+                "replacement has not registered"
+            );
+            let replacement = state.after_rerun.take().unwrap();
+            state.jobs.insert(head.clone(), replacement);
+            state.queued_rerun = false;
+        },
         || {
-            let sandbox = tempdir().unwrap();
-            let forge = std::rc::Rc::new(FakeForge::new(sandbox.path(), true));
-            let head = forge.context.candidate.candidate.commit.clone();
-            forge.job(&head, failed(1, 11, NETWORK_FLAKE));
-            {
-                let mut state = forge.state.lock().unwrap();
-                state.after_rerun = Some(passed(1, 12));
-                state.queued_rerun = true;
-            }
-            let waits = std::rc::Rc::new(std::cell::Cell::new(0));
-            let captured_waits = waits.clone();
-            let queued_forge = forge.clone();
-            let result = orbit_engine::test_support::with_vcs_retry_wait(
-                move |_| {
-                    let forge = queued_forge.as_ref();
-                    captured_waits.set(captured_waits.get() + 1);
-                    assert!(
-                        forge.steps().is_empty(),
-                        "queued work must not stop for repair"
-                    );
-                    assert!(forge.sent("pr.merge").is_empty());
-                    assert_eq!(forge.sent("ci.rerun_failed").len(), 1);
-                    let mut state = forge.state.lock().unwrap();
-                    assert!(
-                        !state.jobs.contains_key(&head),
-                        "replacement has not registered"
-                    );
-                    let replacement = state.after_rerun.take().unwrap();
-                    state.jobs.insert(head.clone(), replacement);
-                    state.queued_rerun = false;
-                },
-                || {
-                    land_with(
-                        forge.as_ref(),
-                        json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
-                    )
-                },
-            );
-            assert_eq!(
-                result.expect("the queued rerun eventually passes")["phase"],
-                "landed"
-            );
-            assert_eq!(waits.get(), 1, "wait only while the replacement is queued");
-            assert_eq!(forge.sent("pr.merge").len(), 1);
-            assert!(forge.sent("pr.update_branch").is_empty());
-            assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
+            land_with(
+                forge.as_ref(),
+                json!({"max_wait_seconds":15,"poll_interval_seconds":5}),
+            )
         },
     );
+    assert_eq!(
+        result.expect("the queued rerun eventually passes")["phase"],
+        "landed"
+    );
+    assert_eq!(waits.get(), 1, "wait only while the replacement is queued");
+    assert_sent_len(&forge, "pr.merge", 1, "queued rerun");
+    assert_not_sent(&forge, &["pr.update_branch"], "queued rerun");
+    assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -2480,6 +3255,10 @@ fn handoff_landing_contracts_2() {
     crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_2", || {
         crate::git_fixture::run_scenarios(&[
             (
+                "landing_refusals_keep_typed_holds_and_candidate_red_stays_failed",
+                landing_refusals_keep_typed_holds_and_candidate_red_stays_failed,
+            ),
+            (
                 "only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair",
                 only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair,
             ),
@@ -2491,111 +3270,269 @@ fn handoff_landing_contracts_2() {
     });
 }
 
+#[test]
+fn handoff_landing_contracts_3() {
+    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_3", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "owner_landing_waits_for_exact_required_checks_before_one_verified_merge",
+                owner_landing_waits_for_exact_required_checks_before_one_verified_merge,
+            ),
+            (
+                "owner_landing_waits_for_required_checks_the_head_has_not_reported",
+                owner_landing_waits_for_required_checks_the_head_has_not_reported,
+            ),
+            (
+                "owner_landing_pending_evidence_never_extends_refusal_or_merge_authority",
+                owner_landing_pending_evidence_never_extends_refusal_or_merge_authority,
+            ),
+        ]);
+    });
+}
+
+#[test]
+fn handoff_landing_contracts_4() {
+    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_4", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "a_cached_branch_update_requires_a_fresh_landing_base",
+                a_cached_branch_update_requires_a_fresh_landing_base,
+            ),
+            (
+                "a_required_aggregate_after_recovery_is_classified_without_waiting",
+                a_required_aggregate_after_recovery_is_classified_without_waiting,
+            ),
+            (
+                "a_transient_rerun_waits_for_queued_replacement_jobs",
+                a_transient_rerun_waits_for_queued_replacement_jobs,
+            ),
+            (
+                "owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence",
+                owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence,
+            ),
+        ]);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn handoff_landing_contracts_5() {
+    crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_5", || {
+        crate::git_fixture::run_scenarios(&[
+            (
+                "adopted_provider_head_accepts_readable_empty_policy",
+                adopted_provider_head_accepts_readable_empty_policy,
+            ),
+            (
+                "adopted_provider_head_accepts_authentic_legacy_success",
+                adopted_provider_head_accepts_authentic_legacy_success,
+            ),
+            (
+                "adopted_provider_head_refuses_unavailable_or_unsatisfied_policy",
+                adopted_provider_head_refuses_unavailable_or_unsatisfied_policy,
+            ),
+        ]);
+    });
+}
+
 /// The public landing action keeps UNKNOWN/PENDING bounded and never extends
 /// that wait to a real review or administrative refusal.
-#[test]
 fn owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence",
+    orbit_engine::test_support::with_vcs_retry_wait(
+        |_| {},
         || {
-            orbit_engine::test_support::with_vcs_retry_wait(
-                |_| {},
-                || {
-                    for (case, states, review) in [
-                        ("settles", vec!["UNKNOWN", "PENDING", "CLEAN"], ""),
-                        ("expires", vec!["UNKNOWN"], ""),
-                        ("review", vec!["BLOCKED"], "REVIEW_REQUIRED"),
-                        ("administrative", vec!["BLOCKED"], ""),
-                    ] {
-                        let sandbox = tempdir().unwrap();
-                        let forge = FakeForge::new(sandbox.path(), false);
-                        forge.job(&forge.context.candidate.candidate.commit, passed(1, 11));
-                        {
-                            let mut state = forge.state.lock().unwrap();
-                            state.merge_states = states.into();
-                            state.review_decision = Some(review);
-                        }
-                        let result = land_with(
-                            &forge,
-                            json!({"max_wait_seconds": if case == "settles" {15} else {0}, "poll_interval_seconds":5}),
-                        );
-                        if case == "settles" {
-                            assert_eq!(result.unwrap()["phase"], "landed");
-                            assert_eq!(forge.sent("pr.merge").len(), 1);
-                            assert_eq!(
-                                forge.sent("pr.status").len(),
-                                4,
-                                "bounded observations settle and verify the one merge"
-                            );
-                        } else {
-                            assert!(result.is_err(), "{case}");
-                            assert_eq!(
-                                forge.sent("pr.status").len(),
-                                1,
-                                "no administrative wait expansion: {case}"
-                            );
-                            assert!(forge.sent("pr.merge").is_empty(), "{case}");
-                            assert_eq!(
-                                forge.steps(),
-                                [HandoffLandingStep::Stop { repairable: false }],
-                                "durable refusal without repair: {case}"
-                            );
-                            assert!(
-                                !forge.last_evidence().is_empty(),
-                                "expired/refused observations retain evidence"
-                            );
-                        }
-                    }
-                },
-            )
+            for (case, states, review) in [
+                ("settles", vec!["UNKNOWN", "PENDING", "CLEAN"], ""),
+                ("expires", vec!["UNKNOWN"], ""),
+                ("review", vec!["BLOCKED"], "REVIEW_REQUIRED"),
+                ("administrative", vec!["BLOCKED"], ""),
+            ] {
+                let sandbox = tempdir().unwrap();
+                let forge = FakeForge::new(sandbox.path(), false);
+                forge.job(&forge.context.candidate.candidate.commit, passed(1, 11));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state.merge_states = states.into();
+                    state.review_decision = Some(review);
+                }
+                let result = land_with(
+                    &forge,
+                    json!({"max_wait_seconds": if case == "settles" {15} else {0}, "poll_interval_seconds":5}),
+                );
+                if case == "settles" {
+                    assert_eq!(result.unwrap()["phase"], "landed");
+                    assert_eq!(forge.sent("pr.merge").len(), 1);
+                    assert_eq!(
+                        forge.sent("pr.status").len(),
+                        4,
+                        "bounded observations settle and verify the one merge"
+                    );
+                } else {
+                    assert!(result.is_err(), "{case}");
+                    assert_eq!(
+                        forge.sent("pr.status").len(),
+                        1,
+                        "no administrative wait expansion: {case}"
+                    );
+                    assert!(forge.sent("pr.merge").is_empty(), "{case}");
+                    assert_eq!(
+                        forge.steps(),
+                        [HandoffLandingStep::Stop { repairable: false }],
+                        "durable refusal without repair: {case}"
+                    );
+                    assert!(
+                        !forge.last_evidence().is_empty(),
+                        "expired/refused observations retain evidence"
+                    );
+                }
+            }
         },
-    );
+    )
 }
 
 #[cfg(unix)]
-#[test]
 fn adopted_provider_head_accepts_readable_empty_policy() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "adopted_provider_head_accepts_readable_empty_policy",
-        || {
-            crate::pr_landing::adopted_policy_cases(&["empty", "no-rule"]);
-        },
-    );
+    crate::pr_landing::adopted_policy_cases(&["empty", "no-rule"]);
 }
 
 #[cfg(unix)]
-#[test]
 fn adopted_provider_head_accepts_authentic_legacy_success() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "adopted_provider_head_accepts_authentic_legacy_success",
-        || {
-            crate::pr_landing::adopted_policy_cases(&["success"]);
-        },
-    );
+    crate::pr_landing::adopted_policy_cases(&["success"]);
 }
 
 #[cfg(unix)]
-#[test]
 fn adopted_provider_head_refuses_unavailable_or_unsatisfied_policy() {
-    crate::git_fixture::isolated(
-        module_path!(),
-        "adopted_provider_head_refuses_unavailable_or_unsatisfied_policy",
-        || {
-            crate::pr_landing::adopted_policy_cases(&[
-                "unavailable",
-                "pending",
-                "failed",
-                "wrong-head",
-                "foreign",
-                "wrong-row",
-                "foreign-row",
-                "foreign-host",
-                "shadow-pending",
-                "app-bound",
-            ]);
-        },
+    crate::pr_landing::adopted_policy_cases(&[
+        "unavailable",
+        "pending",
+        "failed",
+        "wrong-head",
+        "foreign",
+        "wrong-row",
+        "foreign-row",
+        "foreign-host",
+        "shadow-pending",
+        "app-bound",
+    ]);
+}
+
+/// Refusals cross the public job dispatcher as typed codes; unreadable and
+/// candidate-red observations retain the ordinary failure path.
+fn landing_refusals_keep_typed_holds_and_candidate_red_stays_failed() {
+    use orbit_types::workflow::{DeliveryRefusal, HeldFailure};
+    for (case, state, review, rollup, refusal) in [
+        (
+            "conflict",
+            "DIRTY",
+            "",
+            json!([]),
+            Some(DeliveryRefusal::LandingConflict),
+        ),
+        (
+            "draft",
+            "DRAFT",
+            "",
+            json!([]),
+            Some(DeliveryRefusal::PullRequestDraft),
+        ),
+        (
+            "review",
+            "BLOCKED",
+            "REVIEW_REQUIRED",
+            json!([]),
+            Some(DeliveryRefusal::RequirementsUnsatisfied),
+        ),
+        (
+            "candidate_red",
+            "BLOCKED",
+            "APPROVED",
+            json!([{"name":"test", "status":"COMPLETED", "conclusion":"FAILURE"}]),
+            None,
+        ),
+        ("unreadable_review", "BLOCKED", "unknown", json!([]), None),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let mut host = OpenPullRequestHost::new(pr_context(sandbox.path()), state, rollup);
+        host.review_decision = review;
+        let job = super::v2_runtime::job_asset(json!([{
+            "id": "land", "spec": {"type":"deterministic", "action":"handoff_land", "config":{}},
+            "default_input": {"handoff_id":"handoff-1", "task_id":TASK_ID, "max_wait_seconds":0},
+        }]));
+        let audit = tempdir().unwrap();
+        let (writer, _, _) = super::v2_runtime::build_writer_and_sinks(audit.path(), RUN_ID);
+        let error =
+            orbit_engine::execute_job_with_resume(&job, json!({}), RUN_ID, writer, &host, None)
+                .unwrap_err();
+        assert_eq!(
+            HeldFailure::of(Some(error.failure_code()), Some(&error.to_string())),
+            refusal.map(HeldFailure::DeliveryRefused),
+            "{case}: {error}"
+        );
+        if let Some(refusal) = refusal {
+            assert!(
+                matches!(&error, orbit_engine::DispatchError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{case}: {error}"
+            );
+            assert_eq!(error.failure_code(), refusal.error_code());
+            assert!(
+                matches!(orbit_engine::dispatch_error_to_orbit(error), OrbitError::DeliveryRefused { refusal: actual, .. } if actual == refusal)
+            );
+        }
+        assert!(
+            host.steps()
+                .iter()
+                .any(|step| matches!(step, HandoffLandingStep::Stop { .. })),
+            "{case}"
+        );
+        assert!(!host.sent_ops().iter().any(|op| op == "pr.merge"), "{case}");
+    }
+}
+
+/// The active wait also observes an operator merge with its deleted PR head.
+#[test]
+fn externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref() {
+    let sandbox = tempdir().unwrap();
+    let remote = tempdir().unwrap();
+    let mut forge = FakeForge::new(sandbox.path(), false);
+    forge.publish(remote.path());
+    let candidate = forge.context.candidate.candidate.commit.clone();
+    let first = provider_update(remote.path(), &candidate, UpdateShape::CleanMerge);
+    let head = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
+    let tree = git(remote.path(), &["rev-parse", &format!("{head}^{{tree}}")]);
+    let merged = git(
+        remote.path(),
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            "main",
+            "-m",
+            "external squash merge",
+        ],
+    );
+    git(remote.path(), &["update-ref", "refs/heads/main", &merged]);
+    git(remote.path(), &["update-ref", "refs/pull/42/head", &head]);
+    git(remote.path(), &["update-ref", "-d", "refs/heads/orbit/T1"]);
+    {
+        let mut state = forge.state.lock().unwrap();
+        state.head = head.clone();
+        state.merged = true;
+        state.merge_commit = Some(merged);
+    }
+    assert_eq!(
+        land_now(&forge).expect("a clean externally merged chain completes")["phase"],
+        "landed"
+    );
+    assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], "already merged");
+    assert_eq!(git(&forge.repo, &["rev-parse", "FETCH_HEAD"]), head);
+    let updates = forge.updates.lock().unwrap();
+    let completion = updates
+        .iter()
+        .find(|update| update.step == HandoffLandingStep::Complete)
+        .expect("the landing completes from the external merge");
+    let evidence: Value = serde_json::from_str(&completion.evidence).unwrap();
+    assert_eq!(
+        evidence["external_merge"], true,
+        "the completion history note records the merge as external"
     );
 }

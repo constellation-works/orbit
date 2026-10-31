@@ -1,6 +1,8 @@
 use std::io;
 
-use crate::update::stage::{restore_backup_with_rename, write_staging_file_with_mode};
+use crate::update::stage::{
+    restore_backup_with_rename, stage_executable, write_staging_file_with_mode,
+};
 
 // Fault injection: chmod failures are not reproducible across filesystems or privileges.
 #[test]
@@ -46,6 +48,52 @@ fn a_failed_executable_mode_change_removes_the_complete_staging_file() {
         [destination],
         "mode failure must leave no staging file"
     );
+}
+
+#[test]
+fn restore_syncs_the_staged_copy_before_the_rename() {
+    let root = tempfile::tempdir().expect("fixture root");
+    let destination = root.path().join("orbit");
+    let backup = root.path().join("orbit.previous");
+    std::fs::write(&destination, b"replacement").expect("write replacement");
+    std::fs::write(&backup, b"previous").expect("write backup");
+
+    let syncs_before = orbit_common::fs::io::durability_syncs_requested();
+    restore_backup_with_rename(&destination, &backup, |from, to| {
+        assert!(
+            orbit_common::fs::io::durability_syncs_requested() > syncs_before,
+            "the staged copy must be synced before the rename"
+        );
+        std::fs::rename(from, to)
+    })
+    .expect("restore succeeds");
+
+    assert_eq!(
+        std::fs::read(&destination).expect("read restored"),
+        b"previous"
+    );
+}
+
+#[test]
+fn commit_syncs_the_backup_copy_before_installing() {
+    let root = tempfile::tempdir().expect("fixture root");
+    let destination = root.path().join("orbit");
+    let backup = root.path().join("orbit.previous");
+    std::fs::write(&destination, b"previous").expect("write installed");
+    let staged =
+        stage_executable(&destination, b"replacement".as_slice(), 1024).expect("stage replacement");
+
+    let syncs_before = orbit_common::fs::io::durability_syncs_requested();
+    staged
+        .commit(&destination, &backup)
+        .expect("commit succeeds");
+
+    assert!(
+        orbit_common::fs::io::durability_syncs_requested() > syncs_before,
+        "the backup copy must be synced before the rename"
+    );
+    assert_eq!(std::fs::read(&destination).unwrap(), b"replacement");
+    assert_eq!(std::fs::read(&backup).unwrap(), b"previous");
 }
 
 #[test]

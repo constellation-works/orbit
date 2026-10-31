@@ -274,7 +274,8 @@ function fetchAndRenderAudit(ctx) {
     }
     : async () => {
       const page = await fetchJsonPage(path);
-      return { events: page.body, nextBefore: page.header(AUDIT_NEXT_BEFORE_HEADER) };
+      const head = { events: page.body, nextBefore: page.header(AUDIT_NEXT_BEFORE_HEADER) };
+      return revalidateAuditTail(path, head);
     };
   // A head for another scope retires the previous paging now, not when it
   // settles: an older page still in flight for the old scope must not paint
@@ -296,6 +297,45 @@ function freshAuditPaging() {
   return { path: null, nextBefore: null, loading: false, error: null, epoch: 0 };
 }
 
+// Re-fetch the pages behind a same-scope head from the server, so a retained
+// tail is revalidated against the window as the server now sees it. A relative
+// `since` is reparsed on every request, so rows that aged out of the window
+// simply do not come back; still-valid rows do, in paging order. Without this,
+// the prior tail survived solely by ID and expired rows stayed on screen.
+async function revalidateAuditTail(path, head) {
+  if (auditPaging.path !== path || lastAudit.length <= head.events.length || head.events.length === 0) return head;
+  const headOldest = head.events[head.events.length - 1].id;
+  const exhausted = head.events.length < AUDIT_LIMIT && !head.nextBefore;
+  if (!exhausted && headOldest > lastAudit[0].id) return head;
+  const priorOldest = lastAudit[lastAudit.length - 1].id;
+  if (!head.nextBefore) return { ...head, tailRows: [], tailNextBefore: null, tailRevalidated: true, tailFloor: priorOldest };
+  const seen = new Set(head.events.map(ev => ev.id));
+  const tail = [];
+  let cursor = head.nextBefore;
+  let nextBefore = cursor;
+  while (cursor) {
+    let page;
+    try {
+      page = await fetchJsonPage(`${path}&before=${encodeURIComponent(cursor)}`);
+    } catch {
+      // Keep a successful head even if an older page failed. Discard the
+      // partial walk so the merge falls back to the complete prior tail.
+      return head;
+    }
+    for (const ev of page.body) {
+      // Rows older than the loaded tail were never on screen; they stay
+      // behind the Load older cursor rather than joining the retained tail.
+      if (ev.id < headOldest && ev.id >= priorOldest && !seen.has(ev.id)) { seen.add(ev.id); tail.push(ev); }
+    }
+    nextBefore = page.header(AUDIT_NEXT_BEFORE_HEADER) || null;
+    if (page.body.some(ev => ev.id < priorOldest)) { nextBefore = String(priorOldest); break; }
+    if (!nextBefore || page.body.length === 0) break;
+    if (tail.length > 0 && tail[tail.length - 1].id <= priorOldest) break;
+    cursor = nextBefore;
+  }
+  return { ...head, tailRows: tail, tailNextBefore: nextBefore, tailRevalidated: true, tailFloor: priorOldest };
+}
+
 // Fold a freshly fetched newest page into the rows already on screen. Older
 // pages survive a refresh only when the new head reaches back to them: a head
 // that ends above the newest loaded row may have skipped events in between.
@@ -312,11 +352,28 @@ function mergeAuditHead(path, head, pageable) {
     // row, so it reaches the tail only by overlapping it.
     const exhausted = rows.length < AUDIT_LIMIT && !head.nextBefore;
     if (exhausted || headOldest <= prior[0].id) {
-      const tail = prior.filter(ev => ev.id < headOldest);
+      // A revalidated head carries the tail the server returned afresh; only
+      // an unrevalidated one (including a failed tail fetch) falls back to
+      // the prior rows by ID.
+      let tail;
+      let tailNextBefore;
+      if (head.tailRevalidated) {
+        const walked = (head.tailRows || []).filter(ev => ev.id < headOldest);
+        const walkedIds = new Set(walked.map(ev => ev.id));
+        const floor = head.tailFloor;
+        const loadedDuringRefresh = floor == null ? [] : prior.filter(ev => ev.id < floor && ev.id < headOldest && !walkedIds.has(ev.id));
+        tail = walked.concat(loadedDuringRefresh);
+        tailNextBefore = loadedDuringRefresh.length > 0 ? auditPaging.nextBefore : head.tailNextBefore;
+      } else {
+        tail = prior.filter(ev => ev.id < headOldest);
+        tailNextBefore = auditPaging.nextBefore;
+      }
       if (tail.length > 0) {
         rows = rows.concat(tail);
-        nextBefore = auditPaging.nextBefore;
+        nextBefore = tailNextBefore;
         keptTail = true;
+      } else if (head.tailRevalidated) {
+        nextBefore = head.tailNextBefore;
       }
     }
   }

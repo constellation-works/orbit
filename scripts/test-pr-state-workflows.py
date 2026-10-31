@@ -5,8 +5,10 @@ import http.server
 import json
 import os
 from pathlib import Path
+import fnmatch
 import re
 import self_test_hang
+import shlex
 import shutil
 import signal
 import sys
@@ -17,6 +19,8 @@ import time
 import unittest
 
 from workflow_helper_tests import WorkflowHelperRevisionTests
+from ci_cache_workflow_tests import CiDependencyCacheWorkflowTests
+from self_test_hang_regression import assert_hang_group_identity
 
 try:
     import yaml
@@ -283,6 +287,9 @@ class CiCacheWorkflowTests(unittest.TestCase):
                 if uses.startswith("Swatinem/rust-cache@"):
                     condition = step.get("with", {}).get("save-if")
                     self.assertIsNotNone(condition, f"{name}: rust-cache saves on every event unless save-if limits it")
+                    if step.get("with", {}).get("lookup-only"):
+                        self.assertIs(condition, False, "cache lookups must never save, including after a miss")
+                        continue
                 elif uses.startswith("actions/cache/save@"):
                     condition = step.get("if")
                     self.assertIsNotNone(condition, f"{name}: an unconditional cache save runs on pull requests")
@@ -397,6 +404,11 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
                 finally:
                     _stop_owned_processes(record, marker)
 
+    def test_ready_file_timeout_preserves_group_identity(self):
+        assert_hang_group_identity(self, lambda: self_test_hang.run(
+            ["fixture"], step="identity fixture", ready_file="empty-ready-file",
+            capture_output=True, timeout=1))
+
 
 def _recorded_pids(path):
     if not path.exists():
@@ -441,44 +453,95 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.calls = self.root / "calls"
         # Each stub records its argv, one JSON list per line. It names the real
         # interpreter: the python3 stub shadows it on PATH.
-        record = f"#!{sys.executable}\nimport json, sys\nopen({str(self.calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        record = f"#!{sys.executable}\nimport json, os, sys\nopen({str(self.calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\nraise SystemExit(int(os.environ.get('SHARD_FIXTURE_EXIT', '0')))\n"
         for path in (self.root / "bin/python3", self.root / "scripts/cpu-utilisation.sh"):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(record)
             path.chmod(0o755)
 
-    def run_step(self, job, name):
+    def run_step(self, job, name, expected_status=0):
         step = next(step for step in job["steps"] if step.get("name") == name)
         self.calls.write_text("")
         env = dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(self.root),
+                   SHARD_FIXTURE_EXIT=str(expected_status),
                    **self.document["env"], **job.get("env", {}))
+        env.update(step.get("env", {}))
+        cwd = self.root / step.get("working-directory", ".")
+        cwd.mkdir(parents=True, exist_ok=True)
+        if step.get("working-directory"):
+            # Stub only the producer boundary, leaving the actual hardened
+            # workflow shell and argument construction in execution.
+            import subprocess
+            helper = cwd / "scripts/ci-await-jobs.py"
+            helper.parent.mkdir(parents=True, exist_ok=True)
+            helper.write_text(f"import json, sys\nopen({str(self.calls)!r}, 'a').write(json.dumps(sys.argv) + '\\n')\n")
+            subprocess.run(["git", "init"], cwd=cwd, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "fixture@example.invalid"],
+                           cwd=cwd, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Fixture"],
+                           cwd=cwd, capture_output=True, check=True)
+            subprocess.run(["git", "add", "scripts/ci-await-jobs.py"],
+                           cwd=cwd, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "trusted producer"],
+                           cwd=cwd, capture_output=True, check=True)
+            env["ORBIT_DEPENDENCY_PRODUCER_SHA"] = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=cwd,
+                capture_output=True, text=True, check=True).stdout.strip()
+        script = self.root / "step-script"
+        script.write_text(step["run"])
+        shell = step.get("shell", "bash --noprofile --norc -e -o pipefail {0}")
         result = self_test_hang.run(
-            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-            step=name, cwd=self.root,
+            [word.replace("{0}", str(script)) for word in shlex.split(shell)],
+            step=name, cwd=cwd,
             env={key: str(value) for key, value in env.items()},
             text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
 
     def test_shard_jobs_partition_once_each_and_the_check_job_awaits_all_of_them(self):
         shards = int(self.document["env"]["NEXTEST_SHARDS"])
+        partition_count = int(self.document["env"]["NEXTEST_PARTITIONS"])
         jobs = self.document["jobs"]
         shard_jobs = {job_id: job for job_id, job in jobs.items() if job_id.startswith("test-")
                       and job_id != "test-build"}
         self.assertGreater(shards, 1)
-        # The shards start on the build's upload step; the partition guard
-        # follows it. A renamed upload step would leave them waiting for the
-        # whole build job.
+        # The shards start on the build's last upload step; the partition
+        # guard follows it. A renamed upload step would leave them waiting for
+        # the whole build job, and a step after the awaited one would let
+        # them download before every part exists.
+        parts = int(self.document["env"]["NEXTEST_ARCHIVE_PARTS"])
+        self.assertGreater(parts, 1)
         build_steps = [step.get("name") for step in jobs["test-build"]["steps"]]
-        upload = "Upload nextest archive"
-        self.assertIn(upload, build_steps)
+        uploads = [f"Upload nextest archive part {k}/{parts}" for k in range(1, parts + 1)]
+        self.assertEqual([name for name in build_steps if name and name.startswith("Upload nextest archive")],
+                         uploads)
+        upload = uploads[-1]
         self.assertLess(build_steps.index(upload), build_steps.index("Prove the shards cover every test"))
+        [pack] = self.run_step(jobs["test-build"], "Pack nextest archive for transfer")
+        self.assertEqual(pack[1], "pack")
+        self.assertEqual(pack[4:], ["--parts", str(parts)])
+        names = set()
+        for k, name in enumerate(uploads, 1):
+            upload_step = next(step for step in jobs["test-build"]["steps"] if step.get("name") == name)
+            self.assertEqual(upload_step["with"]["path"].replace("${{ runner.temp }}", str(self.root)),
+                             f"{pack[3]}.{k}")
+            names.add(upload_step["with"]["name"])
         partitions = {}
         for job_id, job in shard_jobs.items():
             with self.subTest(job=job_id):
                 self.assertNotIn("strategy", job, "Orbit's rerun certification needs literal shard jobs")
                 self.assertEqual(job["steps"], shard_jobs["test-1"]["steps"], "every shard runs the same steps")
                 [nextest] = self.run_step(job, "Run nextest shard")
+                [unpack] = self.run_step(job, "Restore native nextest archive")
+                self.assertEqual(unpack[:2], [pack[0], "unpack"])
+                self.assertEqual(unpack[2:], [pack[3], pack[2], "--parts", str(parts)])
+                download = next(step for step in job["steps"] if step.get("name") == "Download nextest archive")
+                self.assertTrue(download["with"]["merge-multiple"])
+                uploaded = {step["with"]["name"] for other in jobs.values() for step in other["steps"]
+                            if step.get("uses", "").startswith("actions/upload-artifact@")}
+                self.assertEqual({name for name in uploaded if fnmatch.fnmatchcase(name, download["with"]["pattern"])},
+                                 names, "every shard downloads every part and nothing else")
+                self.assertEqual(nextest[nextest.index("--archive-file") + 1], unpack[3])
                 self.assertEqual(nextest[:4], ["--label", "nextest", "--", "cargo"])
                 self.assertIn("--no-fail-fast", nextest)
                 self.assertNotIn("--run-ignored", nextest)
@@ -487,21 +550,47 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 partitions[partition] = job["name"]
                 [wait] = self.run_step(job, "Await the nextest archive")
                 self.assertEqual(wait[1:], ["--job", "Test build", "--step", upload])
-        self.assertEqual(sorted(partitions), sorted(f"count:{k}/{shards}" for k in range(1, shards + 1)),
-                         "the shard jobs must select every count partition of NEXTEST_SHARDS")
-        self.assertEqual(sorted(partitions.values()), sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
+        # The test build runs the one partition no shard job runs, from the
+        # archive it built, after the last upload the shards wait for.
+        self.assertLess(build_steps.index(upload),
+                        build_steps.index("Run nextest partition on the test build"))
+        [build_nextest] = self.run_step(jobs["test-build"], "Run nextest partition on the test build")
+        self.assertEqual(build_nextest[:4], ["--label", "nextest", "--", "cargo"])
+        self.assertIn("--no-fail-fast", build_nextest)
+        self.assertNotIn("--run-ignored", build_nextest)
+        self.assertEqual(build_nextest[build_nextest.index("--archive-file") + 1], pack[2],
+                         "the test build runs its partition from the archive it built")
+        build_partition = build_nextest[build_nextest.index("--partition") + 1]
+        self.assertNotIn(build_partition, partitions, "the test build repeats a shard's partition")
+        partitions[build_partition] = jobs["test-build"]["name"]
+        self.assertEqual(sorted(partitions),
+                         sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
+                         "the shard jobs and the test build must select every count partition "
+                         "of NEXTEST_PARTITIONS")
+        self.assertEqual(sorted(name for name in partitions.values() if name != jobs["test-build"]["name"]),
+                         sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
-        self.assertEqual(wait[0], ".orbit/tmp/workflow-ci/scripts/ci-await-jobs.py")
+        self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
-        self.assertEqual(sorted(awaited), sorted([jobs["test-build"]["name"], *partitions.values()]),
+        self.assertEqual(sorted(awaited), sorted(set(partitions.values())),
                          "the Check job's elapsed time must cover the test build and every shard")
+
+    def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
+        for job, step in (("test-build", "Pack nextest archive for transfer"),
+                          ("test-build", "Run nextest partition on the test build"),
+                          ("test-1", "Restore native nextest archive"),
+                          ("test-1", "Run nextest shard")):
+            with self.subTest(step=step):
+                self.run_step(self.document["jobs"][job], step, expected_status=7)
 
     def test_an_affected_crates_archive_passes_empty_partitions_and_gates_only_orbit_exec(self):
         jobs = self.document["jobs"]
-        for job_id in ("test-1", "test-2", "test-3"):
+        for job_id, step in (("test-1", "Run nextest shard"), ("test-2", "Run nextest shard"),
+                             ("test-3", "Run nextest shard"),
+                             ("test-build", "Run nextest partition on the test build")):
             with self.subTest(job=job_id):
-                [nextest] = self.run_step(jobs[job_id], "Run nextest shard")
+                [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
                 # empty shard, so only an affected-crates archive relies on this.
                 self.assertEqual(nextest[nextest.index("--no-tests") + 1], "pass")
@@ -694,6 +783,21 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 self.assertEqual(admitted, {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
+
+    def test_validated_push_admits_seeders_even_after_a_superseded_pending_push(self):
+        seeds = yaml.safe_load((ROOT / ".github/workflows/ci-cache-seed.yml").read_text())["jobs"]
+        original_head = self.HEAD
+        for fast_forward in (False, True):
+            self.HEAD = self.SHA if fast_forward else original_head
+            for before in ("success", "cancelled", "queued", None):
+                with self.subTest(fast_forward=fast_forward, previous_push=before):
+                    mode = self.push("Cargo.toml", same_tree=True, before_check=before)
+                    self.assertEqual(mode, "skip", "the full PR proof establishes validation trust")
+                    admitted = {name for name, job in seeds.items() if name != "scope" and
+                                evaluate(job["if"], "push", bindings={SCOPE: mode})}
+                    self.assertEqual(admitted, {"seed-check", "seed-build"},
+                                     "a replaced pending push cannot prove either archive was saved")
+        self.HEAD = original_head
 
     def test_modes_admit_the_matching_jobs(self):
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())

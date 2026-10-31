@@ -81,7 +81,7 @@ try {
     await page.waitForFunction(() => window.polishReady);
     await page.evaluate(async () => {
       await document.fonts.ready;
-      await new Promise(requestAnimationFrame);
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       await Promise.all(document.getAnimations()
         .filter(animation => animation.effect.getTiming().iterations !== Infinity)
         .map(animation => animation.finished.catch(() => {})));
@@ -96,6 +96,7 @@ try {
       .map(button => `diagnostics/incidents/${button.dataset.view}`),
     ...[...document.querySelectorAll('#analytics-subtabs .subtab')].map(button => `analytics/${button.dataset.subtab}`),
     'analytics/reliability/tools',
+    'analytics/agents/pilots',
     'jobs/history',
   ]);
   const navigation = async (route, visit) => {
@@ -118,10 +119,31 @@ try {
     if (layout.subtab) assert.ok(layout.subtab.left >= layout.views.left - 1 && layout.subtab.right <= layout.views.right + 1,
       `${route} ${visit}: active view fits its scroller: ${JSON.stringify(layout)}`);
     assert.equal(layout.pageWidth, 375, `${route} ${visit}: no page overflow`);
-    assert.equal(layout.focus, 'BODY', 'route scrolling preserves focus on a direct load');
+    if (!visit.startsWith('click')) assert.equal(layout.focus, 'BODY', 'route scrolling preserves focus on a direct load');
     measurements.navigation.push({ route, visit, ...layout });
   };
+  // Counts arrive after the initial route, widening the active destination or
+  // an earlier one. A direct load must keep both selections visible afterwards.
+  const countRoutes = ['config/hosts', 'analytics/agents/pilots', 'diagnostics/doctor', 'operations/auto-tasks'];
+  for (const route of countRoutes) {
+    await page.goto('about:blank');
+    await page.goto(`${origin}#${route}`);
+    for (const visit of ['load', 'reload']) {
+      if (visit === 'reload') await page.reload();
+      await settle();
+      await page.evaluate(() => {
+        document.getElementById('rail-count-jobs').textContent = '8 runs';
+        document.getElementById('rail-count-diagnostics').textContent = '5 warn';
+        document.getElementById('rail-count-operations').textContent = '3';
+        document.getElementById('rail-count-ops-auto-tasks').textContent = '6';
+      });
+      await settle();
+      await page.screenshot({ path: path.join(evidence, `navigation-${route.replaceAll('/', '-')}-dark-375-${visit}.png`) });
+      await navigation(route, `late-counts-${visit}`);
+    }
+  }
   for (const route of routes) {
+    await page.goto('about:blank');
     await page.goto(`${origin}#${route}`);
     await settle();
     await navigation(route, 'load');
@@ -135,6 +157,20 @@ try {
     await page.waitForFunction(route => location.hash.slice(1).split('?')[0] === route && document.querySelector('.tab.active').dataset.tab === route.split('/')[0], route);
     await settle();
     await navigation(route, 'hashchange');
+  }
+  // Real sub-view clicks still reveal each selection after the counts settle.
+  for (const section of ['config', 'analytics', 'diagnostics', 'operations']) {
+    await page.goto('about:blank');
+    await page.goto(`${origin}#${section}`);
+    await settle();
+    const bar = section === 'diagnostics' ? 'diag' : section;
+    const subviews = await page.locator(`#${bar}-subtabs .subtab`).evaluateAll(nodes => nodes.map(node => node.dataset.subtab));
+    for (const subview of subviews) {
+      await page.locator(`#${bar}-subtabs [data-subtab="${subview}"]`).click();
+      await settle();
+      await navigation(`${section}/${subview}`, 'click');
+    }
+    await page.screenshot({ path: path.join(evidence, `navigation-${section}-click-dark-375.png`) });
   }
   // Walk every Observe destination, rail view and secondary view by clicking,
   // as an operator does. Each step shows exactly one view's <main>, marks its
@@ -150,10 +186,10 @@ try {
     nodes.map(node => node.dataset.tab || `${node.closest('nav').id}:${node.dataset.subtab}`)),
   ['diagnostics', 'diag-subtabs:incidents', 'diag-subtabs:doctor', 'analytics',
     'analytics-subtabs:metrics', 'analytics-subtabs:reliability', 'analytics-subtabs:codebase', 'analytics-subtabs:resources',
-    'analytics-subtabs:cost', 'agents'],
-  'Observe holds Health (Incidents, Doctor), Analytics (Metrics, Reliability, Codebase, Resources, Cost) and Agents');
+    'analytics-subtabs:forecast', 'analytics-subtabs:cost', 'analytics-subtabs:agents', 'analytics-subtabs:experiments'],
+  'Observe holds Health (Incidents, Doctor) and Analytics (Metrics, Reliability, Codebase, Resources, Forecast, Cost, Agents, Experiments)');
   const mains = ['diagnostics-main', 'diagnostics-events-main', 'diagnostics-doctor-main', 'analytics-metrics-main',
-    'analytics-reliability-main', 'analytics-tools-main', 'analytics-codebase-main', 'analytics-resources-main', 'analytics-cost-main'];
+    'analytics-reliability-main', 'analytics-tools-main', 'analytics-codebase-main', 'analytics-resources-main', 'analytics-forecast-main', 'analytics-cost-main'];
   const walk = [
     { click: '.rail .tab[data-tab="diagnostics"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'incidents', main: 'diagnostics-main', hash: /^#diagnostics\/incidents\?window=24h$/ },
     { click: '#incidents-views [data-view="events"]', tab: 'diagnostics', subtab: 'incidents', views: 'incidents-views', view: 'events', main: 'diagnostics-events-main', hash: /^#diagnostics\/incidents\/events\?since=24h&status=non_success$/ },
@@ -167,6 +203,7 @@ try {
     { click: '#reliability-views [data-view="tools"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'tools', main: 'analytics-tools-main', hash: /^#analytics\/reliability\/tools\?window=24h$/ },
     { click: '#analytics-subtabs [data-subtab="codebase"]', tab: 'analytics', subtab: 'codebase', main: 'analytics-codebase-main', hash: /^#analytics\/codebase$/ },
     { click: '#analytics-subtabs [data-subtab="resources"]', tab: 'analytics', subtab: 'resources', main: 'analytics-resources-main', hash: /^#analytics\/resources\?window=24h$/ },
+    { click: '#analytics-subtabs [data-subtab="forecast"]', tab: 'analytics', subtab: 'forecast', main: 'analytics-forecast-main', hash: /^#analytics\/forecast\?window=24h$/ },
     { click: '#analytics-subtabs [data-subtab="cost"]', tab: 'analytics', subtab: 'cost', main: 'analytics-cost-main', hash: /^#analytics\/cost\?window=24h$/ },
     { click: '#analytics-subtabs [data-subtab="reliability"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'tools', main: 'analytics-tools-main', hash: /^#analytics\/reliability\/tools\?/, note: 'Reliability reopens on Tools' },
     { click: '#reliability-views [data-view="pipeline"]', tab: 'analytics', subtab: 'reliability', views: 'reliability-views', view: 'pipeline', main: 'analytics-reliability-main', hash: /^#analytics\/reliability\?window=24h$/ },
@@ -305,7 +342,7 @@ try {
   }
   assert.deepEqual(errors, [], 'the fixture reports no browser errors');
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify(measurements, null, 2));
-  console.log(`PASS: ${routes.length} phone deep links on load/reload and three hash changes; ${walk.length} clicks through every Observe view; inline crew labels and usage at 390/768; crew headers/placeholders at 1280/1440/1920; full Tools names at 1440/375.`);
+  console.log(`PASS: ${routes.length} phone deep links on load/reload, late counts on ${countRoutes.length} routes, every rail sub-view click and three hash changes; ${walk.length} clicks through every Observe view; inline crew labels and usage at 390/768; crew headers/placeholders at 1280/1440/1920; full Tools names at 1440/375.`);
 } finally {
   await browser?.close();
   server.close();

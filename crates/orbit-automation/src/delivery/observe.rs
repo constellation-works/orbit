@@ -1,6 +1,6 @@
 //! Monotonic bounded observation; no observation certifies examination.
 
-use crate::AutomationError;
+use crate::{AutomationError, DeferredReason};
 use orbit_types::workflow::automation::{
     AutomationState, CoverageClass, ExcludedDelivery, SourcePage,
 };
@@ -24,7 +24,7 @@ pub(super) fn apply_with_commit_limit(
     now: chrono::DateTime<chrono::Utc>,
     commit_limit: usize,
 ) -> Result<AutomationState, AutomationError> {
-    let invalid = || AutomationError::Deferred("source_page_invalid".into());
+    let invalid = || AutomationError::Deferred(DeferredReason::SourcePageInvalid);
 
     // A page must resume exactly where the cursor stands, stay within its bounds,
     // and end on the revision it claims to reach.
@@ -50,7 +50,9 @@ pub(super) fn apply_with_commit_limit(
     }
 
     if next.pending_commits.len() > 5000 {
-        return Err(AutomationError::Deferred("source_backpressure".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::SourceBackpressure,
+        ));
     }
 
     for (sha, association) in page.associations {
@@ -104,7 +106,7 @@ pub(super) fn apply_with_commit_limit(
             .all(|sha| next.pending_commits.contains(sha))
         {
             return Err(AutomationError::Deferred(
-                "delivery_crosses_boundary".into(),
+                DeferredReason::DeliveryCrossesBoundary,
             ));
         }
 
@@ -112,7 +114,7 @@ pub(super) fn apply_with_commit_limit(
         if let Some(old) = next.pending.iter().find(|old| old.key == delivery.key) {
             if old != &delivery {
                 return Err(AutomationError::Deferred(
-                    "delivery_evidence_changed".into(),
+                    DeferredReason::DeliveryEvidenceChanged,
                 ));
             }
             continue;
@@ -124,7 +126,7 @@ pub(super) fn apply_with_commit_limit(
             .any(|old| old.commits.iter().any(|sha| delivery.commits.contains(sha)))
         {
             return Err(AutomationError::Deferred(
-                "delivery_grouping_ambiguous".into(),
+                DeferredReason::DeliveryGroupingAmbiguous,
             ));
         }
 
@@ -172,7 +174,9 @@ pub(super) fn apply_with_commit_limit(
         .retain(|sha, _| next.unresolved.contains_key(sha) && !next.associations.contains_key(sha));
 
     if next.pending.len() > 1000 {
-        return Err(AutomationError::Deferred("source_backpressure".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::SourceBackpressure,
+        ));
     }
 
     Ok(next)

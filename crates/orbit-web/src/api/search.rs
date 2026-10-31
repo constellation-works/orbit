@@ -4,56 +4,58 @@ use std::str::FromStr;
 
 use axum::extract::RawQuery;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::{GlobalSearchKind, GlobalSearchParams};
+use orbit_core::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
 
 use crate::state::Ws;
 
 use super::{bad_request, blocking, non_empty_string};
 
 pub(super) async fn search(Ws(runtime): Ws, RawQuery(raw): RawQuery) -> Response {
-    let params = match parse_search_query(raw.as_deref()) {
-        Ok(params) => params,
+    let request = match parse_search_query(raw.as_deref()) {
+        Ok(request) => request,
         Err(message) => return bad_request(message),
     };
-    match blocking("search", move || runtime.global_search(params)).await {
+    match blocking("search", move || {
+        runtime.search_with_profile(SearchRequestProfile::Http, request)
+    })
+    .await
+    {
         Ok(response) => Json(response).into_response(),
         Err(response) => *response,
     }
 }
 
-/// Parse the raw `/api/search` query string, accepting repeated and
-/// comma-separated filters and capping `limit` like the other list endpoints.
-pub(super) fn parse_search_query(raw: Option<&str>) -> Result<GlobalSearchParams, String> {
-    let mut params = GlobalSearchParams {
-        limit: 10,
-        ..GlobalSearchParams::default()
-    };
+/// Decode the raw `/api/search` query string, accepting repeated and
+/// comma-separated filters. Limit capping, defaults and the retired
+/// `hybrid`/`semantic` refusal are the core Http profile's policy.
+pub(super) fn parse_search_query(raw: Option<&str>) -> Result<SearchRequest, String> {
+    let mut request = SearchRequest::default();
 
     for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
+        if let Some(message) = SearchRequestProfile::Http.http_retired_parameter(key.as_ref()) {
+            return Err(message);
+        }
         match key.as_ref() {
-            "query" | "q" => params.query = non_empty_string(&value),
-            "hybrid" | "semantic" => return Err(format!("unknown search parameter `{key}`")),
+            "query" | "q" => request.query = non_empty_string(&value),
             "kind" => {
-                params.kind = GlobalSearchKind::from_str(&value)?;
+                request.kind = GlobalSearchKind::from_str(&value)?;
             }
             "limit" => {
-                let requested = value.parse::<usize>().map_err(|_| {
+                request.limit = Some(value.parse::<usize>().map_err(|_| {
                     format!("invalid limit `{value}`; expected a non-negative integer")
-                })?;
-                // Same ceiling as every other list endpoint.
-                params.limit = super::bounded_limit(Some(requested), params.limit);
+                })?);
             }
-            "tag" | "tags" => append_csv(&mut params.tags, &value),
-            "all" => params.all = parse_bool("all", &value)?,
-            "status" | "statuses" => append_csv(&mut params.status, &value),
-            "path" => params.path = non_empty_string(&value),
+            "tag" | "tags" => append_csv(&mut request.tags, &value),
+            "all" => request.all = parse_bool("all", &value)?,
+            "status" | "statuses" => append_csv(&mut request.status, &value),
+            "path" => request.path = non_empty_string(&value),
             // `workspace` is consumed by the Ws extractor. Ignore unknown
             // query keys like the other dashboard GET endpoints do.
             _ => {}
         }
     }
 
-    Ok(params)
+    Ok(request)
 }
 
 fn append_csv(target: &mut Vec<String>, raw: &str) {

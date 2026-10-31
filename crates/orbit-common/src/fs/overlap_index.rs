@@ -12,12 +12,15 @@
 //! contain descendants — the key range beneath it.
 //!
 //! Every candidate the prefix walk produces is re-checked with
-//! [`OverlapScope::overlaps`], so the answers are those of
-//! [`overlaps`](super::selector::overlaps) by construction rather than by a parallel reimplementation of its rules.
+//! [`FootprintLockModes::blocks`], so the answers are those of
+//! [`overlaps`](super::selector::overlaps), less the overlaps the lock modes
+//! waive, by construction rather than by a parallel reimplementation of its
+//! rules.
 
 use std::collections::BTreeMap;
 use std::ops::Bound;
 
+use super::lock_mode::FootprintLockModes;
 use super::selector::{OverlapScope, root_ancestor};
 
 /// One indexed selector and the value it carries.
@@ -79,9 +82,14 @@ impl<V> OverlapIndex<V> {
         self.anchored.is_empty() && self.exact.is_empty()
     }
 
-    /// Every indexed selector overlapping `selector`, with its value, in
-    /// anchor order. Empty when `selector` does not parse.
-    pub fn overlapping<'a>(&'a self, selector: &str) -> Vec<(&'a str, &'a V)> {
+    /// Every indexed selector whose overlap with `selector` blocks under
+    /// `modes`, with its value, in anchor order. Empty when `selector` does
+    /// not parse.
+    pub fn overlapping<'a>(
+        &'a self,
+        selector: &str,
+        modes: &FootprintLockModes,
+    ) -> Vec<(&'a str, &'a V)> {
         let Some(scope) = OverlapScope::parse(selector) else {
             return Vec::new();
         };
@@ -128,7 +136,7 @@ impl<V> OverlapIndex<V> {
         };
         candidates
             .into_iter()
-            .filter(|entry| scope.overlaps(&entry.scope))
+            .filter(|entry| modes.blocks(&scope, &entry.scope))
             .map(|entry| (entry.selector.as_str(), &entry.value))
             .collect()
     }

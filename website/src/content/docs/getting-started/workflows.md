@@ -1,5 +1,5 @@
 ---
-title: Delivery Workflows
+title: Delivery workflows
 description: "Ship one task, drain a backlog, or hand a spec to your orchestrator agent, from the dashboard, your agent, or the CLI; then let runs merge and recover the ones that fail."
 sidebar:
   order: 4
@@ -73,11 +73,11 @@ file locks.
 
 | From | Do |
 |---|---|
-| Dashboard | Open **Drain** › **Start a window**. Pick a window length and parallel tasks, then **Start**. |
+| Dashboard | Open **Tasks**, then **Start a window** in its **Drain** dock. Pick a window length and parallel tasks, then **Start**. |
 | Agent | "Drain the backlog for four hours, eight at a time." |
 | CLI | `orbit run auto --for 4h --concurrency 8` |
 
-![The Drain page's Overview: a throttle banner, summary tiles for slots, queue and locked files, the Auto-drain card and why tasks are waiting, and beside them Fleet drains above Locks held.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Tasks dock with Auto-drain status, a throttle note and Start a window](../../../assets/dashboard/dashboard-drain-card.png)
 
 The window bounds only when new work starts; a task already running when it
 closes still finishes. The **Start a window** card's eligible and waiting
@@ -105,7 +105,7 @@ request, or a failed merge or push, fails the run and leaves the task in
 `review`.
 
 Local ship and auto runs require completion authorization on that run;
-scheduled ship sweeps never complete tasks. For
+routines never complete tasks. For
 [distributed handoffs](../../how-to/distributed-drain/), the owner can instead
 set `workflow.distributed_completion = "done"` to authorize landing accepted
 handoffs automatically. Its default, `"review"`, waits for **Approve handoff**
@@ -147,7 +147,6 @@ of child runs.
 | Command | What it does |
 |---|---|
 | `orbit run task-pilot` | Prepare `proposed` and `backlog` tasks by pinning the files each one touches. Promotes and dispatches nothing. |
-| `orbit run ship-sweep` | Start a ship run in every workspace with `[workflow] auto_ship = true` and ready work. Meant for a scheduler; never completes. |
 | `orbit run job <job-id>` | Run any job definition directly. `--wait` blocks until it finishes. |
 
 The [CLI reference](../../reference/cli/) lists every flag.

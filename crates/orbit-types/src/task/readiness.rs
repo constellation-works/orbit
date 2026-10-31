@@ -112,10 +112,6 @@ impl ReadinessGap {
 
 const CONTEXT_FILES_FIX: &str =
     "add context files, run the task pilot, or tag no-diff-expected if no diff is expected";
-/// The backlog form names the order that avoids the gap: a backlog task is
-/// admitted within one drain pass, before a pilot can prepare it.
-const BACKLOG_CONTEXT_FILES_FIX: &str = "file it as proposed and let the task pilot prepare it \
-     before promoting, set context_files, or tag no-diff-expected if no diff is expected";
 
 /// Whether a task declares no footprint: no `context_files`, and no
 /// [`NO_DIFF_EXPECTED_TAG`] saying it edits nothing. Such a task holds no
@@ -157,7 +153,7 @@ pub fn readiness_gaps(
                 message: "No context files are declared, so it holds no file lock and can \
                           conflict with concurrent work; a multi-slot drain waits for the task \
                           pilot to prepare it, then runs it only alone.",
-                fix: BACKLOG_CONTEXT_FILES_FIX,
+                fix: CONTEXT_FILES_FIX,
             },
         });
     }

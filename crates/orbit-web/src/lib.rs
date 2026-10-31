@@ -5,19 +5,30 @@
 //! large dependency subtree (axum, etc). Behavior is identical to the prior
 //! in-tree implementation.
 //!
-//! Public surface is deliberately tiny: `ServeArgs` (clap) plus two entry
-//! points — `serve()` for a caller-supplied runtime (single-workspace mode)
-//! and `serve_from_env()`, the entry point for `orbit web serve`, which
-//! always serves every registered workspace (global mode; see ORB-10029).
+//! Public entry points include `ServeArgs` (clap), `serve()` for a
+//! caller-supplied runtime (single-workspace mode), and `serve_from_env()`,
+//! the entry point for `orbit web serve`, which always serves every registered
+//! workspace (global mode; see ORB-10029). [`lease_router`] exposes just the
+//! lease API over a [`LeaseBackend`] for servers with their own authentication.
+//! [`lease_intake`] is the Unix socket Orbit Web serves to the lease listener
+//! user when `lease.intake.peer_user` is set, and the client the listener
+//! calls it with. [`lease_listener`] is that listener: the lease routes and
+//! `/healthz` behind lease-token authentication, run by `orbit lease listen`
+//! as the listener user.
 //! All routes, content types, defaults, and graceful shutdown are preserved.
 
 mod api;
 mod assets;
+mod browser_session;
 mod connect;
 mod doctor_report;
 mod health;
 mod heap;
 mod host_tunnels;
+#[cfg(unix)]
+mod lease;
+#[cfg(unix)]
+pub use lease::{intake as lease_intake, listener as lease_listener};
 mod log_format;
 mod parse;
 mod projections;
@@ -25,10 +36,16 @@ mod runtime_memo;
 mod serve;
 mod ssh_tunnel;
 mod state;
+mod why_stuck;
 
 #[cfg(test)]
 mod tests;
 
+pub use api::leases::{
+    LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseCallerToken, LeaseNoticePages, lease_router,
+};
+pub use api::session::RequireBrowserSession;
+pub use browser_session::{OpenArgs, open_dashboard};
 pub use connect::{ConnectArgs, connect};
 
 pub(crate) use serve::{DEFAULT_DASHBOARD_PORT, default_workspace_selection, open_browser};
@@ -50,6 +67,8 @@ pub(crate) const DASHBOARD_CSS: &str = concat!(
     include_str!("../assets/dashboard/css/log-tail.css"),
     include_str!("../assets/dashboard/css/audit.css"),
     include_str!("../assets/dashboard/css/health.css"),
+    include_str!("../assets/dashboard/css/forecast.css"),
+    include_str!("../assets/dashboard/css/experiments.css"),
     include_str!("../assets/dashboard/css/scoreboard.css"),
     include_str!("../assets/dashboard/css/agents.css"),
     include_str!("../assets/dashboard/css/knowledge.css"),
@@ -57,4 +76,5 @@ pub(crate) const DASHBOARD_CSS: &str = concat!(
     include_str!("../assets/dashboard/css/drain.css"),
     include_str!("../assets/dashboard/css/settings.css"),
     include_str!("../assets/dashboard/css/plugins.css"),
+    include_str!("../assets/dashboard/css/leases.css"),
 );

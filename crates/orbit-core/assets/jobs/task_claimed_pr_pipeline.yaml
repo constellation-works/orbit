@@ -95,7 +95,10 @@
 # than an approve fails the leaf with the PR open and unmerged, and its
 # failure settlement blocks the task on the owner. An evidence-only gap
 # holds the leaf and releases its claim with the reviewed candidate and open
-# PR. If the evidence-branch push fails, settlement carries the tip to its
+# PR. Once that evidence arrives, a landing admission of `evidence_received`
+# skips `landing_review` and settlement reuses the held certificate. A fresh
+# `admitted` or `resumed` decision still starts the reviewer.
+# If the evidence-branch push fails, settlement carries the tip to its
 # durable candidate ref, or records why it remains on the source host.
 #
 # ORB-14261: a repair claim — admitted after the owner's landing of an earlier
@@ -151,6 +154,7 @@ spec:
 
   steps:
     - id: worktree
+      stage: { id: setup, label: Setup }
       target: activity:worktree_setup
       retry:
         max_attempts: 4
@@ -185,6 +189,7 @@ spec:
         claim_repair: "{{ input.claim_repair }}"
 
     - id: implement_bundle
+      stage: { id: implement, label: Implement }
       loop:
         items: "{{ input.task_ids }}"
         max_iterations: 256
@@ -213,6 +218,7 @@ spec:
               resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
+      stage: { id: validate, label: Validate }
       recovery_activity: step_failure_recovery
       target: activity:git_commit
       default_input:
@@ -273,6 +279,7 @@ spec:
     # reviews after `pr_open` instead). Transient gate and reviewer failures
     # retry, then get one diagnosed recovery before the leaf fails.
     - id: review_gate_admit
+      stage: { id: review, label: Review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -335,6 +342,7 @@ spec:
     # (`recovery_commit_refused:reviewed_candidate`): the repair would publish
     # an unreviewed change, so the leaf fails and carries its candidate.
     - id: validate
+      stage: { id: validate, label: Validate }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:claim_validate
@@ -345,7 +353,195 @@ spec:
         # ORB-15287: replays a gate the implementer's sandbox deferred.
         implementation: "{{ steps.implement_one.output }}"
 
+    # Visual review (capture of record and checks): for a `verify-mock-ui`
+    # task whose `visual_review.mode` is not `off`, capture the final
+    # candidate in a detached checkout once per mock at the digests frozen
+    # at admission, attach the side-by-side images and the system-written
+    # `visual/capture.json`, record the deterministic checks, and settle the
+    # capture against the head and the frozen mocks (`stale_capture`,
+    # `mock_changed`). Every other delivery reports `applies: false` and
+    # writes nothing. In shadow nothing blocks; only
+    # `visual_review.require_established` holds a capture that is not
+    # established. The leaf captures against the contract its owner
+    # captured at admission, and the handoff returns the capture for the
+    # owner to check (`visual_capture_mismatch`).
+    # It always runs, so the later steps' conditions may read its output;
+    # a `no-diff-expected` skip has no candidate and reports `applies: false`.
+    - id: visual_capture
+      target: activity:visual_capture
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
+
+    - id: visual_checks
+      when: "{{ steps.visual_capture.output.applies }} == true"
+      target: activity:visual_checks
+      default_input:
+        capture: "{{ steps.visual_capture.output }}"
+
+    # Mock comparison review and in-line verification, in shadow: prepare
+    # assembles each shown mock with its capture under the image budgets
+    # and draws an image-capable reviewer, verifier and escalation crew;
+    # the reviewer answers the eight comparison questions; verify-prepare
+    # drops invalid evidence and partitions the findings (check findings
+    # included) five per verifier invocation; one escalation round
+    # re-verifies low-confidence verdicts. `visual_settle` records the
+    # outcome in `visual/review.json` under purpose `visual_review`.
+    # Shadow only: nothing here is filed, blocks, or reaches the code
+    # reviewer below, whose inputs do not name any visual step.
+    # Preparers always run and return empty collections when capture does not
+    # apply. Conditions may only read outputs whose producer always runs;
+    # empty fan-outs establish the collected aliases without invoking agents.
+    - id: visual_review_prepare
+      target: activity:visual_review_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_capture.output }}"
+
+    - id: visual_review_empty
+      when: "{{ steps.visual_review_prepare.output.review_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_reviewer
+          target: activity:visual_review
+      fan_in:
+        join: { mode: all }
+        collect: visual_review_results
+        errors: visual_review_errors
+
+    - id: visual_reviewers
+      when: "{{ steps.visual_review_prepare.output.review_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_review_prepare.output.reviews }}"
+        max_workers: 3
+        worker:
+          id: visual_reviewer
+          target: activity:visual_review
+          default_input:
+            task_id: "{{ item.task_id }}"
+            candidate_sha: "{{ item.candidate_sha }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            shown: "{{ item.shown }}"
+            not_shown: "{{ item.not_shown }}"
+            max_findings: "{{ item.max_findings }}"
+            task: "{{ item.task }}"
+            deviations: "{{ item.deviations }}"
+            check_findings: "{{ item.check_findings }}"
+            design_rules: "{{ item.design_rules }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_review_results
+        errors: visual_review_errors
+
+    - id: visual_verify_prepare
+      target: activity:visual_verify_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        prepared: "{{ steps.visual_review_prepare.output }}"
+        review_results: "{{ steps.visual_review_results.output }}"
+
+    - id: visual_verify_empty
+      when: "{{ steps.visual_verify_prepare.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_verifier
+          target: activity:visual_verify
+      fan_in:
+        join: { mode: all }
+        collect: visual_verify_results
+        errors: visual_verify_errors
+
+    - id: visual_verifiers
+      when: "{{ steps.visual_verify_prepare.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_verify_prepare.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: visual_verifier
+          target: activity:visual_verify
+          default_input:
+            task_id: "{{ item.task_id }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: "{{ item.escalation }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            findings: "{{ item.findings }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_verify_results
+        errors: visual_verify_errors
+
+    - id: visual_verify_escalations
+      target: activity:visual_verify_prepare
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        prepared: "{{ steps.visual_verify_prepare.output }}"
+        verify_results: "{{ steps.visual_verify_results.output }}"
+        round: escalation
+
+    - id: visual_verify_escalation_empty
+      when: "{{ steps.visual_verify_escalations.output.partition_count }} == 0"
+      fan_out:
+        items: "[]"
+        max_workers: 1
+        worker:
+          id: empty_visual_escalation_verifier
+          target: activity:visual_verify
+      fan_in:
+        join: { mode: all }
+        collect: visual_escalation_results
+        errors: visual_escalation_errors
+
+    - id: visual_escalation_verifiers
+      when: "{{ steps.visual_verify_escalations.output.partition_count }} != 0"
+      fan_out:
+        items: "{{ steps.visual_verify_escalations.output.partitions }}"
+        max_workers: 5
+        worker:
+          id: visual_escalation_verifier
+          target: activity:visual_verify
+          default_input:
+            task_id: "{{ item.task_id }}"
+            partition_index: "{{ item.partition_index }}"
+            escalation: "{{ item.escalation }}"
+            workspace_path: "{{ item.workspace_path }}"
+            crew: "{{ item.crew }}"
+            image_input: "{{ item.image_input }}"
+            staged_images: "{{ item.staged_images }}"
+            findings: "{{ item.findings }}"
+            catalog: "{{ item.catalog }}"
+      fan_in:
+        join: { mode: any }
+        collect: visual_escalation_results
+        errors: visual_escalation_errors
+
+    - id: visual_settle
+      when: "{{ steps.visual_capture.output.applies }} == true"
+      target: activity:visual_settle
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        capture: "{{ steps.visual_capture.output }}"
+        checks: "{{ steps.visual_checks.output }}"
+        verified: "{{ steps.visual_verify_prepare.output }}"
+        verify_results: "{{ steps.visual_verify_results.output }}"
+        escalation_prepared: "{{ steps.visual_verify_escalations.output }}"
+        escalation_results: "{{ steps.visual_escalation_results.output }}"
+
     - id: push
+      stage: { id: publish, label: Publish }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:git_push
@@ -412,6 +608,7 @@ spec:
     # head, natively outside the agent sandbox; admission hands those results
     # to the reviewer and settlement decides the gates from them.
     - id: landing_review_gate_admit
+      stage: { id: landing_review, label: Review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -430,8 +627,10 @@ spec:
         before_landing: true
         host_validation_step: validate
 
+    # Same exclusion as `review`: an owed hold whose evidence arrived settles
+    # on the held certificate and must not start another reviewer.
     - id: landing_review
-      when: "{{ steps.landing_review_gate_admit.output.applies }} == true"
+      when: "{{ steps.landing_review_gate_admit.output.applies }} == true && {{ steps.landing_review_gate_admit.output.decision }} != evidence_received"
       retry:
         max_attempts: 2
         initial_backoff_ms: 5000
@@ -497,6 +696,7 @@ spec:
     # The leaf's published pull request pins the validation that already
     # passed on this exact commit and base; no command runs again.
     - id: pin_validation
+      stage: { id: handoff, label: Handoff }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       target: activity:claim_validate
       default_input:
@@ -521,9 +721,16 @@ spec:
         review_evidence: "{{ steps.review_gate_settle.output.handoff_evidence }}"
         # [ORB-14849] The settled before-landing verdict, or null.
         landing_review_evidence: "{{ steps.landing_review_gate_settle.output.handoff_evidence }}"
+        # The leaf gate's selective-selection receipt, or null when the
+        # claim captured no selective policy: the owner verifies it
+        # against the captured contract and this candidate.
+        selective_receipt: "{{ steps.landing_review_gate_settle.output.selective_receipt }}"
         # A claim binds exactly one task, so the loop ran once and this is
         # that task's implementer output; its summary becomes the owner's.
         implementation: "{{ steps.implement_one.output }}"
+        # The capture of record, already attached on the owner, or
+        # `applies: false` when the claim captured no visual review contract.
+        visual: "{{ steps.visual_capture.output }}"
 
     # No branch publication, PR or reviewer is needed for a verified clean base.
     # [ORB-14791] A `no-diff-expected` review reaches here with no report: the
@@ -532,6 +739,7 @@ spec:
     # That skip runs no required command or replay here, as the owner's own
     # pipeline skips `validate` for the tag; a verified report still does.
     - id: validate_no_diff
+      stage: { id: validate, label: Validate }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
       target: activity:claim_validate
       default_input:
@@ -545,6 +753,7 @@ spec:
         implementation: "{{ steps.implement_one.output }}"
 
     - id: handoff_no_diff
+      stage: { id: handoff, label: Handoff }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
       target: activity:claim_handoff
       default_input:

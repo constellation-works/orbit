@@ -104,6 +104,12 @@ impl PluginManifest {
         let mut cli_verbs: std::collections::BTreeMap<&str, &str> =
             std::collections::BTreeMap::new();
         for (index, tool) in self.spec.tools.iter().enumerate() {
+            if tool.agent_callable && tool.execution_kind != PluginExecutionKind::Mutating {
+                return Err(PluginManifestError::new(
+                    format!("spec.tools[{index}].agent_callable"),
+                    "agent_callable is only valid for execution_kind: mutating",
+                ));
+            }
             let field = format!("spec.tools[{index}].name");
             if !is_valid_verb(&tool.name) {
                 return Err(PluginManifestError::new(

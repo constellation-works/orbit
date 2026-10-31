@@ -1,5 +1,5 @@
 ---
-title: Choose Scopes
+title: Choose scopes
 description: "Select the right state scope and filesystem profile for Orbit assets and execution."
 sidebar:
   order: 4

@@ -163,7 +163,11 @@ impl Fixture {
             .into_iter()
             .next()
             .expect("scratch GC wait entry");
-        assert_eq!(entry.status, "success", "scratch GC job failed: {entry:?}");
+        assert_eq!(
+            entry.status,
+            orbit_core::PipelineWaitStatus::Success,
+            "scratch GC job failed: {entry:?}"
+        );
         entry.pipeline.expect("scratch GC pipeline")["reap"].clone()
     }
 }

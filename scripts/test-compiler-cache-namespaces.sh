@@ -97,11 +97,67 @@ if ! command -v cargo >/dev/null 2>&1; then
   skip "cargo not on PATH"
 fi
 
+# The supervisor below starts participants with subprocess.Popen(process_group=),
+# which needs Python 3.11. Refuse here, before WORKDIR and any participant or
+# cache daemon. The disabled-cache and namespace-unavailable exits above never
+# reach this, so they need no Python.
+"$ROOT/scripts/require-python.sh" || exit 1
+
+HOLD_PID=""
+HOLD_RELEASE=""
 alloc_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+  # Hold the socket until release_port so no other process takes the port while
+  # the caller reads it. Callers release it before starting any sccache daemon:
+  # the daemon binds this same address, which the held socket blocks.
+  HOLD_RELEASE="$WORKDIR/port-release.$$.${RANDOM:-0}"
+  # One output file per allocation: a reused file still holds the previous
+  # port until this python child truncates it, so polling it would return a
+  # stale or empty port.
+  local out="$HOLD_RELEASE.port"
+  rm -f "$out"
+  python3 - "$HOLD_RELEASE" >"$out" <<'PY' &
+import os, socket, sys, time
+release = sys.argv[1]
+sock = socket.socket()
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1], flush=True)
+while not os.path.exists(release):
+    time.sleep(0.02)
+sock.close()
+PY
+  HOLD_PID=$!
+  local attempts=0
+  while [[ ! -s "$out" ]]; do
+    attempts=$((attempts + 1))
+    [[ "$attempts" -lt 200 ]] || fail "timed out allocating a port"
+    sleep 0.05
+  done
+  ALLOC_PORT="$(cat "$out")"
+  # An empty port makes the wrapper fall back to a private UDS daemon, which
+  # silently skips the shared-TCP scenario, so refuse anything but a number.
+  [[ "$ALLOC_PORT" =~ ^[0-9]+$ ]] || fail "allocated an invalid port: '$ALLOC_PORT'"
 }
 
-WORKDIR="$(mktemp -d)"
+release_port() {
+  [[ -n "$HOLD_RELEASE" ]] || return 0
+  : >"$HOLD_RELEASE"
+  if [[ -n "$HOLD_PID" ]]; then
+    local attempts=0
+    while kill -0 "$HOLD_PID" 2>/dev/null && [[ "$attempts" -lt 200 ]]; do
+      attempts=$((attempts + 1))
+      sleep 0.05
+    done
+    kill -KILL "$HOLD_PID" >/dev/null 2>&1 || true
+    wait "$HOLD_PID" 2>/dev/null || true
+  fi
+  HOLD_PID=""
+  HOLD_RELEASE=""
+}
+
+WAIT_TIMEOUT="${ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS:-300}"
+[[ "$WAIT_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail "namespace wait seconds must be a positive integer"
+
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/orbit-cache-ns.XXXXXX")"
 PIDS=()
 STAGE="fixture-setup"
 PARTICIPANTS=()
@@ -140,12 +196,27 @@ report_participants() {
   done
 }
 
+pid_running() {
+  kill -0 "$1" 2>/dev/null || return 1
+  if [[ -r "/proc/$1/status" ]] && grep -q '^State:[[:space:]]*Z' "/proc/$1/status"; then
+    return 1
+  fi
+  return 0
+}
+
+# The supervisor enforces the deadline and reaps its complete tree before this
+# wait can return, including when cleanup requests cancellation with SIGTERM.
+bounded_wait() {
+  BOUNDED_STATUS=0
+  wait "$1" || BOUNDED_STATUS=$?
+}
+
 # Reap both peers even when the first fails; never collapse their statuses.
 wait_participants() {
   local i status=0
   for ((i=0; i<${#PIDS[@]}; i++)); do
-    STATUSES[$i]=0
-    wait "${PIDS[$i]}" || STATUSES[$i]=$?
+    bounded_wait "${PIDS[$i]}"
+    STATUSES[$i]="$BOUNDED_STATUS"
     [[ "${STATUSES[$i]}" -eq 0 ]] || status=1
   done
   PIDS=()
@@ -154,6 +225,10 @@ wait_participants() {
 
 cleanup() {
   local exit_status=$? pid i
+  if [[ -n "${HOLD_PID:-}" ]]; then
+    kill -KILL "$HOLD_PID" >/dev/null 2>&1 || true
+    wait "$HOLD_PID" 2>/dev/null || true
+  fi
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done
@@ -167,6 +242,132 @@ cleanup() {
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
+# Each transport gets its own supervisor, so its deadline starts at launch,
+# even while the shell is waiting for its peer or an owner-ready file. Linux
+# subreaping keeps orphaned grandchildren (including new sessions) ours to reap.
+cat >"$WORKDIR/supervise.py" <<'PYSUPERVISOR'
+import ctypes
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+linux = sys.platform == "linux"
+if linux:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), "cannot supervise namespace descendants")
+
+cancelled = 0
+
+
+def cancel(signum, _frame):
+    global cancelled
+    cancelled = signum
+
+
+for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(signum, cancel)
+
+
+def descendants(pid):
+    if not linux:
+        return []
+    try:
+        children = list(map(int, Path(f"/proc/{pid}/task/{pid}/children").read_text().split()))
+    except (FileNotFoundError, ProcessLookupError):
+        return []
+    return [child for pid in children for child in [pid, *descendants(pid)]]
+
+
+deadline = time.monotonic() + int(sys.argv[1])
+process = subprocess.Popen(sys.argv[2:], process_group=0)
+anchor = None
+status = None
+try:
+    # An owned, unreaped anchor reserves the group even if polling reaps the
+    # transport. Ignore TERM so the group has a live member until the final KILL
+    # (Darwin refuses signals to a group containing only zombies). This supervisor
+    # is single-threaded, so setting the inherited disposition before exec is safe.
+    anchor = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, process_group=process.pid,
+        preexec_fn=lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN))
+    while status is None and not cancelled and time.monotonic() < deadline:
+        status = process.poll()
+        if status is None:
+            time.sleep(0.02)
+    if cancelled:
+        status = 128 + cancelled
+    elif status is None:
+        status = 124
+        print("namespace participant timed out", file=sys.stderr, flush=True)
+    elif status < 0:
+        status = 128 - status
+except (OSError, subprocess.SubprocessError) as error:
+    status = 125
+    print(f"namespace participant supervision failed: {error}", file=sys.stderr, flush=True)
+finally:
+    # A successful leader may also leave daemons behind. Terminate the whole
+    # tree on every outcome, then adopt and reap orphans before returning.
+    anchor_pid = anchor.pid if anchor is not None else None
+    grace_end = time.monotonic() + 1
+    reap_end = grace_end + 1
+    terminated = set()
+    group_killed = False
+    while True:
+        owned = descendants(os.getpid())
+        sig = signal.SIGKILL if time.monotonic() >= grace_end else signal.SIGTERM
+        if not group_killed:
+            os.killpg(process.pid, sig)
+            group_killed = sig == signal.SIGKILL
+        for pid in reversed(owned):
+            if pid == anchor_pid:
+                continue
+            if sig == signal.SIGTERM and pid in terminated:
+                continue
+            try:
+                os.kill(pid, sig)
+                terminated.add(pid)
+            except ProcessLookupError:
+                pass
+        # Reap specific descendants only; keep the anchor (or, if its startup
+        # failed, the original leader) unreaped until all group signals finish.
+        for pid in reversed(owned):
+            if pid in (process.pid, anchor_pid):
+                continue
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+        if anchor is None:
+            leader_exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        else:
+            leader_exited = process.poll() is not None
+        remaining = [pid for pid in descendants(os.getpid()) if pid not in (process.pid, anchor_pid)]
+        if leader_exited and not remaining:
+            break
+        if time.monotonic() >= reap_end:
+            print("namespace descendants did not reap after SIGKILL", file=sys.stderr)
+            status = 125
+            break
+        time.sleep(0.02)
+    # Send the final group signal while its identity is still reserved. Never
+    # signal this numeric group again, even if a wait or a cleanup assertion fails.
+    if not group_killed:
+        os.killpg(process.pid, signal.SIGKILL)
+    process.wait(timeout=1)
+    if anchor is not None:
+        anchor.wait(timeout=1)
+
+sys.exit(status)
+PYSUPERVISOR
 
 write_probe() {
   local dest="$1" value="$2"
@@ -176,6 +377,9 @@ write_probe() {
 name = "orbit_cache_probe"
 version = "0.1.0"
 edition = "2021"
+
+# TMPDIR may be under the benchmark checkout, outside its workspace members.
+[workspace]
 EOF
   printf 'pub fn value() -> i32 { %s }\n' "$value" >"$dest/src/lib.rs"
   cat >"$dest/src/main.rs" <<'EOF'
@@ -216,7 +420,7 @@ run_ns() {
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
     extra_binds+=(--ro-bind "$HOME" "$HOME")
   fi
-  bwrap \
+  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" bwrap \
     --die-with-parent \
     --new-session \
     --unshare-all \
@@ -267,7 +471,7 @@ run_ns_hold() {
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
     extra_binds+=(--ro-bind "$HOME" "$HOME")
   fi
-  bwrap \
+  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" bwrap \
     --die-with-parent \
     --new-session \
     --unshare-all \
@@ -296,7 +500,10 @@ run_ns_hold() {
       SCCACHE_DIR="$SCCACHE_DIR" SCCACHE_SERVER_PORT="$SCCACHE_SERVER_PORT" \
         "$ORBIT_COMPILER_CACHE_BIN" --show-stats || true
       : >"$READY_FILE"
+      hold_attempts=0
       while [[ ! -f "$DONE_FILE" ]]; do
+        hold_attempts=$((hold_attempts + 1))
+        [[ "$hold_attempts" -lt 6000 ]] || exit 124
         sleep 0.05
       done
       SCCACHE_DIR="$SCCACHE_DIR" SCCACHE_SERVER_PORT="$SCCACHE_SERVER_PORT" \
@@ -308,6 +515,7 @@ wait_for_file() {
   local path="$1" attempts=0
   while [[ ! -f "$path" ]]; do
     attempts=$((attempts + 1))
+    pid_running "$pid_c" || fail "owner namespace exited before readiness"
     [[ "$attempts" -lt 400 ]] || fail "timed out waiting for $path"
     sleep 0.05
   done
@@ -355,12 +563,12 @@ fi
 STAGE=warm-identical-source
 PARTICIPANTS=(E)
 LOGFILES=("$WORKDIR/logs/ok-e")
-STATUSES=(0)
+STATUSES=(pending)
 rm -rf "$WORKDIR/tgt-e"
 mkdir -p "$WORKDIR/tgt-e"
-run_ns "$WORKDIR/src-e" "$WORKDIR/tgt-e" "$WORKDIR/logs/ok-e" \
-  || STATUSES[0]=$?
-[[ "${STATUSES[0]}" -eq 0 ]] || fail "warm identical-source namespace failed"
+run_ns "$WORKDIR/src-e" "$WORKDIR/tgt-e" "$WORKDIR/logs/ok-e" &
+PIDS+=($!)
+wait_participants || fail "warm identical-source namespace failed"
 assert_out_e="$(probe_out "$WORKDIR/logs/ok-e")"
 [[ "$assert_out_e" == "3" ]] || fail "warm namespace E expected 3"
 if ! has_rust_hit "$WORKDIR/logs/ok-e"; then
@@ -372,7 +580,8 @@ STAGE=client-side-shared-tcp
 PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/cs-c" "$WORKDIR/logs/cs-d")
 STATUSES=(pending pending)
-cs_port="$(alloc_port)"
+alloc_port; cs_port="$ALLOC_PORT"
+release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
@@ -393,7 +602,8 @@ STAGE=server-side-shared-tcp
 PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/bad-c" "$WORKDIR/logs/bad-d")
 STATUSES=(pending pending)
-bad_port="$(alloc_port)"
+alloc_port; bad_port="$ALLOC_PORT"
+release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
 ready="$WORKDIR/sync/c-ready"
@@ -404,18 +614,23 @@ run_ns_hold "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/bad-c" "$ready" "$d
 PIDS+=($!)
 pid_c=$!
 wait_for_file "$ready"
+# D's failure only means something if C compiled through the daemon on this
+# port. Otherwise D simply started its own daemon, so fail on the precondition.
+if ! grep -Eq 'Compile requests[[:space:]]+[1-9]' "$WORKDIR/logs/bad-c"; then
+  fail "participant C did not compile through the shared daemon on port $bad_port"
+fi
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/bad-d" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
   --setenv SCCACHE_SERVER_PORT "$bad_port" &
 PIDS+=($!)
 pid_d=$!
-STATUSES[1]=0
-wait "$pid_d" || STATUSES[1]=$?
+bounded_wait "$pid_d"; STATUSES[1]="$BOUNDED_STATUS"
 d_status="${STATUSES[1]}"
 : >"$donef"
-STATUSES[0]=0
-wait "$pid_c" || STATUSES[0]=$?
+bounded_wait "$pid_c"; STATUSES[0]="$BOUNDED_STATUS"
 PIDS=()
+[[ "${STATUSES[0]}" -eq 0 ]] || fail "shared TCP owner namespace failed"
+[[ "$d_status" -ne 124 && "$d_status" -ne 125 ]] || fail "shared TCP peer namespace timed out or failed cleanup"
 if [[ "$d_status" -eq 0 ]]; then
   fail "shared TCP daemon should not succeed for a different-source namespace"
 fi

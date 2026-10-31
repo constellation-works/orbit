@@ -1,28 +1,52 @@
-//! The blocked-task triage through its public boundaries: the scheduler's
-//! `skip_unless_blocked_candidates` precondition mints only for an episode
-//! awaiting triage, and `orbit.task.block_triage` records exactly one
+//! The blocked-task triage through its public boundaries: an operator
+//! auto-task's `skip_unless_blocked_candidates` precondition mints only for
+//! an episode awaiting triage, and `orbit.task.block_triage` — the tool the
+//! `block_escalated` escalation triager records with — records exactly one
 //! disposition per episode — a requeue counted against the requeue bound
 //! final recovery shares, a decision proposal that changes nothing else, or a
-//! human-only report — and refuses anything else.
+//! human-only report — and refuses anything else. The seeded
+//! `blocked_task_triage` routine's `block_escalated` trigger admits each
+//! qualifying episode once, under the same rule.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Utc};
 use orbit_core::application::auto_tasks::state::{cursor_state_path, load_cursor_state};
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_core::application::automation::evaluate_routine;
 use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
-use orbit_core::{ActorIdentity, AutoTaskDefinition, OrbitRuntime};
+use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{ExecutionLocation, TaskStatus};
-use orbit_types::workflow::{AutoTaskSchedule, JobRunState};
+use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-const DEFINITION: &str = "blocked-task-triage";
-const BUNDLED: &str = include_str!("../../assets/auto_tasks/blocked-task-triage.yaml");
+const DEFINITION: &str = "block-reader";
+/// An operator's own blocked-task reader: the precondition is a definition
+/// field any auto-task may set, now that the routine replaced the shipped
+/// default.
+const OPERATOR_DEFINITION: &str = "\
+schemaVersion: 1
+name: block-reader
+enabled: true
+schedule:
+  every_minutes: 1
+dedupe: skip_if_open
+skip_unless_blocked_candidates: true
+template:
+  title: Read escalated blocks
+  description: Triage each block episode once.
+  acceptance_criteria:
+  - Every qualifying episode has one disposition.
+  complexity: medium
+  tags:
+  - block-reader
+";
 
 struct Fixture {
     _root: TempDir,
+    _git_ceiling: orbit_common::test_env::ScopedEnv,
     global: PathBuf,
     repo: PathBuf,
     runtime: OrbitRuntime,
@@ -30,14 +54,39 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    fixture_with_config("")
+}
+
+fn fixture_with_config(config: &str) -> Fixture {
+    fixture_in(&orbit_common::test_env::bulk_write_temp_dir(), config)
+}
+
+/// A fixture rooted under `parent`, so a test can nest the non-Git workspace
+/// inside a checkout it builds.
+fn fixture_in(parent: &Path, config: &str) -> Fixture {
+    let root = TempDir::new_in(parent).unwrap();
+    // Git walks past a plain directory when looking for a repository, so a
+    // fixture rooted under a checkout (a managed run's nested TMPDIR) would
+    // discover the enclosing checkout's `.git` and lock/fetch it. Stop lookup
+    // at the fixture root. The canonical spelling matches what `getcwd`
+    // reports, including the macOS `/var` to `/private/var` link.
+    let ceiling = std::fs::canonicalize(root.path())
+        .unwrap_or_else(|_| root.path().to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let git_ceiling =
+        orbit_common::test_env::scoped([("GIT_CEILING_DIRECTORIES", Some(ceiling.as_str()))]);
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit/auto_tasks")).unwrap();
+    if !config.is_empty() {
+        std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
+    }
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
     Fixture {
         _root: root,
+        _git_ceiling: git_ceiling,
         global,
         repo,
         runtime,
@@ -176,6 +225,42 @@ impl Fixture {
             .to_string()
     }
 
+    /// Hold `task` in a live escalation triage run with a real successful
+    /// prepare checkpoint, as a run is while its triagers work.
+    fn hold_in_triage_run(&self, task: &str) -> String {
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            self.runtime.sqlite_store().unwrap(),
+            self.runtime.workspace_id().unwrap(),
+        );
+        let run = jobs
+            .insert_job_run("escalation_triage_pipeline", 1, Utc::now(), None, None)
+            .unwrap();
+        jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        let prepared = self
+            .runtime
+            .run_deterministic(
+                "prepare_escalation_triage",
+                &json!({}),
+                &json!({
+                    "subject": "block", "task_ids": [task],
+                    "workspace_path": self.repo, "base_branch": "main",
+                    "run_id": run.run_id,
+                }),
+                orbit_tools::ToolContext::default(),
+            )
+            .unwrap();
+        assert_eq!(prepared["task_ids"], json!([task]), "{prepared}");
+        let mut state = PipelineState::new(
+            run.run_id.clone(),
+            "escalation_triage_pipeline".into(),
+            json!({}),
+        );
+        state.record_step(0, JobRunState::Success, Some(prepared), None);
+        self.runtime.write_run_state(&run.run_id, &state).unwrap();
+        run.run_id
+    }
+
     fn triage_comments(&self, task: &str) -> Vec<String> {
         self.show(task)["comments"]
             .as_array()
@@ -187,17 +272,12 @@ impl Fixture {
             .collect()
     }
 
-    /// The bundled definition, enabled and due every minute.
+    /// The operator's definition, enabled and due every minute.
     fn install_definition(&self) {
-        let mut definition: AutoTaskDefinition = serde_yaml::from_str(BUNDLED).unwrap();
-        assert!(!definition.enabled, "the bundled definition ships inert");
-        assert!(definition.skip_unless_blocked_candidates);
-        definition.enabled = true;
-        definition.schedule = AutoTaskSchedule::Interval { every_minutes: 1 };
         std::fs::write(
             self.repo
                 .join(format!(".orbit/auto_tasks/{DEFINITION}.yaml")),
-            serde_yaml::to_string(&definition).unwrap(),
+            OPERATOR_DEFINITION,
         )
         .unwrap();
     }
@@ -533,4 +613,1009 @@ fn each_episode_is_triaged_once_and_a_human_touch_excludes_it() {
         .unwrap();
     let view = late.iter().find(|view| view.task.id == manual).unwrap();
     assert_eq!(view.candidacy.as_str(), "human_intervened");
+}
+
+/// The seeded routine, enabled, with its seed-time placeholders rendered.
+fn seeded_routine() -> orbit_types::workflow::RoutineDefinition {
+    let yaml = include_str!("../../assets/routines/blocked_task_triage.yaml")
+        .replace("__ORBIT_ROUTINE_NAME__", "blocked-task-triage-fixture")
+        .replace("__ORBIT_OWNER_MACHINE__", "fixture-machine")
+        .replace("__ORBIT_BASE_BRANCH__", "main")
+        .replace("enabled: false", "enabled: true");
+    orbit_common::protocol::yaml::parse_routine_yaml(&yaml).unwrap()
+}
+
+#[test]
+fn the_block_escalated_trigger_admits_each_escalated_episode_once() {
+    let fx = fixture();
+    // The trigger observes the workspace's branch.
+    let git = |args: &[&str]| {
+        let status = crate::git_test_support::command()
+            .args([
+                "-c",
+                "user.name=Orbit Test",
+                "-c",
+                "user.email=orbit-test@example.com",
+            ])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(&fx.repo)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(fx.repo.join(".gitignore"), ".orbit/\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "seed"]);
+    let runtime = OrbitRuntime::from_roots(&fx.global, &fx.repo.join(".orbit"))
+        .unwrap()
+        .with_automation_machine_identity(Some("fixture-machine".into()));
+    let routine = seeded_routine();
+    let pending = |now| {
+        evaluate_routine(&runtime, &routine, false, now)
+            .unwrap()
+            .state
+            .unwrap()
+            .members
+            .unwrap()
+            .pending
+    };
+
+    let escalated = fx.task(&[]);
+    fx.escalate(&escalated);
+    let undecided = fx.task(&[]);
+    fx.update(json!({"id": undecided, "status": "in_progress"}));
+    fx.update(json!({"id": undecided, "status": "blocked", "note": "worker exited"}));
+    let touched = fx.task(&[]);
+    fx.escalate(&touched);
+    fx.human()
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": touched, "comment": "I am looking at this"}),
+        )
+        .unwrap();
+    let triaged = fx.task(&[]);
+    fx.escalate(&triaged);
+    fx.triage(json!({"action": "report", "id": triaged, "blocker": "login", "reason": "sign in"}))
+        .unwrap();
+
+    let now = Utc::now();
+    let observed = evaluate_routine(&runtime, &routine, false, now).unwrap();
+    assert_eq!(observed.reason, "debouncing", "{observed:?}");
+    let members = pending(now);
+    assert_eq!(
+        members.keys().collect::<Vec<_>>(),
+        vec![&escalated],
+        "only the untouched, untriaged escalated episode is observed"
+    );
+    let episode = members[&escalated].fingerprint.clone();
+    let due = evaluate_routine(&runtime, &routine, true, now + Duration::minutes(3)).unwrap();
+    assert_eq!(due.reason, "would_fire", "{due:?}");
+    assert_eq!(due.batch.len(), 1, "{due:?}");
+    assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&escalated));
+
+    // Triaging the episode takes it out of observation; a fresh block on the
+    // same task is a new episode.
+    fx.triage(
+        json!({"action": "report", "id": escalated, "blocker": "login", "reason": "sign in"}),
+    )
+    .unwrap();
+    assert!(pending(now + Duration::minutes(4)).is_empty());
+    fx.update(json!({"id": escalated, "status": "backlog"}));
+    fx.escalate(&escalated);
+    let fresh = pending(Utc::now() + Duration::minutes(5));
+    assert_ne!(fresh[&escalated].fingerprint, episode, "a new episode");
+}
+
+#[test]
+fn a_task_a_live_triage_run_holds_is_decided_only_with_its_inspection_proof() {
+    let fx = fixture();
+    let git = |args: &[&str]| -> String {
+        let output = crate::git_test_support::command()
+            .args(args)
+            .current_dir(&fx.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Orbit Test"]);
+    git(&["config", "user.email", "orbit-test@example.com"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(fx.repo.join("README.md"), "fixture\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "seed"]);
+    let revision = git(&["rev-parse", "HEAD"]);
+    let tree = git(&["rev-parse", "HEAD^{tree}"]);
+
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    fx.hold_in_triage_run(&task);
+    let decide = |action: &str, proof: Value| {
+        let mut input = json!({
+            "action": action,
+            "id": task,
+            "blocker": "the worker crashed while the host was rebooting",
+            "reason": "the host is back and a later run on it succeeded",
+            "options": [
+                {"summary": "Requeue", "consequences": "it runs again", "replacement": "- Recovered."},
+                {"summary": "Archive", "consequences": "nobody recovers it", "replacement": "- Recovered."},
+            ],
+            "recommended": 1,
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(proof.as_object().unwrap().clone());
+        fx.triage(input)
+    };
+    // The run's triager owes the proof on every decision: one without it,
+    // or with a pair it did not read from the pinned checkout, records,
+    // proposes and requeues nothing.
+    for action in ["report", "propose", "requeue"] {
+        for proof in [
+            json!({}),
+            json!({"source_revision": revision}),
+            json!({
+                "source_revision": revision, "observed_revision": revision,
+                "observed_tree": "0".repeat(40),
+            }),
+        ] {
+            decide(action, proof.clone()).expect_err(&format!("{action} with {proof} is refused"));
+            assert!(fx.triage_comments(&task).is_empty(), "nothing was recorded");
+            assert_eq!(fx.status(&task), "blocked", "nothing was requeued");
+        }
+    }
+
+    // The pair read from the checkout, in whatever hex case Git printed it,
+    // records the decision.
+    let reported = decide(
+        "report",
+        json!({
+            "source_revision": revision.to_ascii_uppercase(),
+            "observed_revision": revision.to_ascii_uppercase(),
+            "observed_tree": tree.to_ascii_uppercase(),
+        }),
+    )
+    .unwrap();
+    assert_eq!(reported["outcome"], "reported");
+    assert_eq!(fx.triage_comments(&task).len(), 1);
+}
+
+#[test]
+fn a_non_git_triage_run_pins_no_revision_and_its_decisions_report_none() {
+    let fx = fixture();
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    fx.hold_in_triage_run(&task);
+    let report = |proof: Value| {
+        let mut input = json!({
+            "action": "report", "id": task,
+            "blocker": "the worker crashed while the host was rebooting",
+            "reason": "the operator checks the host",
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(proof.as_object().unwrap().clone());
+        fx.triage(input)
+    };
+    let stale = "0".repeat(40);
+    report(json!({"source_revision": null, "observed_revision": stale, "observed_tree": stale}))
+        .expect_err("a non-Git checkout has no HEAD to observe");
+    assert!(fx.triage_comments(&task).is_empty(), "nothing was recorded");
+    let reported = report(json!({"source_revision": null})).unwrap();
+    assert_eq!(reported["outcome"], "reported");
+    assert_eq!(fx.triage_comments(&task).len(), 1);
+}
+
+#[test]
+fn a_non_git_workspace_inside_a_checkout_pins_no_enclosing_revision() {
+    // The enclosing checkout is built here, so the regression holds under any
+    // TMPDIR: without the fixture's Git ceiling, triage pins this checkout's
+    // `main` and the null report below is refused.
+    let checkout = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let git = |args: &[&str]| {
+        let output = crate::git_test_support::command()
+            .args(args)
+            .current_dir(checkout.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Orbit Test"]);
+    git(&["config", "user.email", "orbit-test@example.com"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(checkout.path().join("README.md"), "enclosing\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "seed"]);
+
+    let fx = fixture_in(checkout.path(), "");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    fx.hold_in_triage_run(&task);
+    let reported = fx
+        .triage(json!({
+            "action": "report", "id": task,
+            "blocker": "the worker crashed while the host was rebooting",
+            "reason": "the operator checks the host",
+            "source_revision": null,
+        }))
+        .unwrap();
+    assert_eq!(reported["outcome"], "reported");
+}
+
+fn decision_requests(fx: &Fixture, task: &str) -> Vec<orbit_types::task::DecisionRequest> {
+    fx.runtime.get_task_decision_requests(task).unwrap()
+}
+
+fn propose(fx: &Fixture, task: &str) -> Value {
+    fx.triage(json!({
+        "action": "propose",
+        "id": task,
+        "blocker": "criterion 2 contradicts the retired API",
+        "options": [
+            {"summary": "Drop criterion 2", "consequences": "the old API stays retired", "target": "acceptance_criteria", "replacement": "- Recovered."},
+            {"summary": "Keep the API", "consequences": "the retirement is reverted", "target": "acceptance_criteria", "replacement": "- Recovered.\n- The API answers."},
+        ],
+        "recommended": 1,
+    }))
+    .unwrap()
+}
+
+/// A blocked task whose criteria carry the contradiction the proposal's
+/// first option drops, with a decision proposal over `options` raised.
+fn contradictory_proposal(fx: &Fixture, options: Value) -> (String, String) {
+    let task = fx.task(&[]);
+    fx.update(json!({
+        "id": task,
+        "acceptance_criteria": ["Recovered.", "The retired API answers."],
+    }));
+    fx.escalate(&task);
+    fx.triage(json!({
+        "action": "propose",
+        "id": task,
+        "blocker": "criterion 2 contradicts the retired API",
+        "options": options,
+        "recommended": 1,
+    }))
+    .unwrap();
+    let request = decision_requests(fx, &task).pop().unwrap();
+    (task, request.id)
+}
+
+#[test]
+fn an_enabled_proposal_raises_one_open_decision_request() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    let proposal = propose(&fx, &task);
+    assert_eq!(proposal["disposition"], "decision");
+    let requests = decision_requests(&fx, &task);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let request = &requests[0];
+    assert_eq!(request.state, orbit_types::task::DecisionRequestState::Open);
+    assert_eq!(request.gate, orbit_types::task::DecisionGate::BlockTriage);
+    assert_eq!(request.task_id, task);
+    assert_eq!(
+        request
+            .answers
+            .iter()
+            .map(|answer| answer.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["1", "2", "dismiss"]
+    );
+    assert_eq!(request.answers[0].label, "Drop criterion 2");
+    assert!(
+        matches!(&request.binding, orbit_types::task::DecisionBinding::BlockEpisode { episode } if episode == proposal["episode"].as_str().unwrap()),
+        "{request:?}"
+    );
+    assert!(request.id.starts_with("dr-"), "{request:?}");
+    assert!(request.expires_at > request.raised_at, "{request:?}");
+}
+
+#[test]
+fn a_disabled_or_absent_channel_writes_no_decision_request() {
+    for config in ["", "[decision_channel]\nenabled = false\n"] {
+        let fx = fixture_with_config(config);
+        let task = fx.task(&[]);
+        fx.escalate(&task);
+        propose(&fx, &task);
+        assert!(
+            decision_requests(&fx, &task).is_empty(),
+            "config {config:?} must write no decision request"
+        );
+        let history = fx.runtime.get_task_history(&task).unwrap();
+        assert!(
+            history
+                .iter()
+                .all(|entry| entry.event != orbit_types::task::DECISION_REQUESTED_EVENT),
+            "config {config:?} must write no decision_requested entry"
+        );
+    }
+}
+
+#[test]
+fn leaving_a_block_episode_supersedes_its_request_without_a_new_proposal() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    propose(&fx, &task);
+    fx.human()
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task, "status": "backlog"}),
+        )
+        .unwrap();
+    for new_episode in [false, true] {
+        if new_episode {
+            fx.escalate(&task);
+        }
+        let requests = decision_requests(&fx, &task);
+        assert_eq!(requests.len(), 1, "no replacement request was raised");
+        assert_eq!(
+            requests[0].state,
+            orbit_types::task::DecisionRequestState::Superseded
+        );
+        let history = fx.runtime.get_task_history(&task).unwrap();
+        assert!(
+            orbit_types::task::open_decision_requests(
+                &fx.runtime.get_task(&task).unwrap(),
+                &history,
+                None,
+                Utc::now()
+            )
+            .is_empty()
+        );
+    }
+}
+
+#[test]
+fn a_second_proposal_supersedes_the_first() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    propose(&fx, &task);
+    fx.update(json!({"id": task, "status": "backlog"}));
+    fx.escalate(&task);
+    propose(&fx, &task);
+    let requests = decision_requests(&fx, &task);
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(
+        requests[0].state,
+        orbit_types::task::DecisionRequestState::Superseded
+    );
+    assert_eq!(
+        requests[1].state,
+        orbit_types::task::DecisionRequestState::Open
+    );
+    assert_ne!(requests[0].binding.key(), requests[1].binding.key());
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    assert_eq!(
+        orbit_types::task::open_decision_requests(
+            &fx.runtime.get_task(&task).unwrap(),
+            &history,
+            None,
+            Utc::now()
+        )
+        .len(),
+        1,
+        "at most one request per task is open"
+    );
+}
+
+#[test]
+fn answering_a_proposal_applies_the_choice_as_human_and_reads_answered() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.update(json!({
+        "id": task,
+        "acceptance_criteria": ["Recovered.", "The retired API answers."],
+    }));
+    fx.escalate(&task);
+    propose(&fx, &task);
+    let request = decision_requests(&fx, &task).pop().unwrap();
+
+    // The read surfaces see the open request before it is answered.
+    let listed = fx
+        .runtime
+        .run_tool(
+            "orbit.decision.list",
+            json!({"model": "codex", "task_id": task}),
+        )
+        .unwrap();
+    assert_eq!(listed["count"], 1, "{listed}");
+    assert_eq!(listed["requests"][0]["id"], request.id);
+    assert_eq!(listed["requests"][0]["state"], "open");
+    let shown = fx
+        .runtime
+        .run_tool(
+            "orbit.task.show",
+            json!({"id": task, "model": "codex", "fields": ["open_decisions"]}),
+        )
+        .unwrap();
+    // A single selected field answers with that field's value.
+    assert_eq!(shown[0]["id"], request.id, "{shown}");
+    assert_eq!(shown[0]["answers"], json!(["1", "2", "dismiss"]));
+
+    let answered = fx
+        .human()
+        .answer_decision_request_as_human(
+            &request.id,
+            "1",
+            Some("Criterion 2 goes.".to_string()),
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        answered.state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+    let resolution = answered.resolution.as_ref().unwrap();
+    assert_eq!(resolution.answer_id, "1");
+    assert_eq!(resolution.answered_by, "human:operator");
+    assert_eq!(resolution.provenance.as_deref(), Some("cli"));
+
+    let task_after = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(
+        task_after.status,
+        TaskStatus::Backlog,
+        "choosing an option returns the task to backlog"
+    );
+    assert_eq!(
+        task_after.acceptance_criteria,
+        vec!["Recovered.".to_string()],
+        "the chosen option's criteria replace the contradictory ones"
+    );
+    let comments = fx.runtime.get_task_comments(&task).unwrap();
+    let answer_comment = comments
+        .iter()
+        .find(|comment| comment.message.starts_with("Decision answer:"))
+        .expect("the human answer comment is recorded");
+    assert_eq!(answer_comment.by, "human:operator", "human provenance");
+    assert!(
+        answer_comment.message.contains("- Recovered."),
+        "the chosen option's replacement text is quoted in the answer: {}",
+        answer_comment.message
+    );
+    assert!(
+        fx.runtime
+            .list_decision_requests(None, Some(&task), false)
+            .unwrap()
+            .is_empty(),
+        "no open request remains"
+    );
+    assert_eq!(
+        fx.runtime
+            .get_decision_request(&request.id)
+            .unwrap()
+            .unwrap()
+            .state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+}
+
+#[test]
+fn answering_a_description_option_rewrites_the_description() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let (task, request) = contradictory_proposal(
+        &fx,
+        json!([
+            {"summary": "Reword", "consequences": "the scope narrows", "target": "description", "replacement": "Recover without the retired API.\n\nSecond paragraph."},
+            {"summary": "Drop it", "consequences": "criterion 2 goes", "target": "acceptance_criteria", "replacement": "- Recovered."},
+        ]),
+    );
+    fx.human()
+        .answer_decision_request_as_human(
+            &request,
+            "1",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .unwrap();
+    let after = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(after.status, TaskStatus::Backlog);
+    assert_eq!(
+        after.description,
+        "Recover without the retired API.\n\nSecond paragraph."
+    );
+    assert_eq!(
+        after.acceptance_criteria,
+        vec![
+            "Recovered.".to_string(),
+            "The retired API answers.".to_string()
+        ],
+        "a description option leaves the criteria alone"
+    );
+}
+
+#[test]
+fn an_option_that_cannot_be_applied_is_refused_and_the_task_stays_blocked() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let (task, request) = contradictory_proposal(
+        &fx,
+        json!([
+            {"summary": "No target", "consequences": "unknown field", "replacement": "- Recovered."},
+            {"summary": "No change", "consequences": "nothing differs", "target": "acceptance_criteria", "replacement": "- Recovered.\n- The retired API answers."},
+        ]),
+    );
+    let task_before = fx.runtime.get_task(&task).unwrap();
+    let comments_before = fx.runtime.get_task_comments(&task).unwrap().len();
+    let history_before = fx.runtime.get_task_history(&task).unwrap().len();
+    for (answer, reason) in [("1", "names no field"), ("2", "unchanged")] {
+        let refused = fx
+            .human()
+            .answer_decision_request_as_human(
+                &request,
+                answer,
+                None,
+                "human:operator".to_string(),
+                Some("cli".to_string()),
+            )
+            .expect_err("an option with no resolvable edit is refused");
+        let message = refused.to_string();
+        assert!(message.contains("answer_not_applicable"), "{message}");
+        assert!(message.contains(reason), "{message}");
+    }
+    let task_after = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(task_after.status, TaskStatus::Blocked);
+    assert_eq!(
+        task_after.acceptance_criteria,
+        task_before.acceptance_criteria
+    );
+    assert_eq!(
+        fx.runtime.get_task_comments(&task).unwrap().len(),
+        comments_before
+    );
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        history_before
+    );
+    assert_eq!(
+        fx.runtime
+            .get_decision_request(&request)
+            .unwrap()
+            .unwrap()
+            .state,
+        orbit_types::task::DecisionRequestState::Open,
+        "the request stays open for another answer"
+    );
+}
+
+#[test]
+fn a_proposal_option_with_an_unknown_target_or_layout_text_is_refused() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    for option in [
+        json!({"summary": "a", "consequences": "b", "target": "plan", "replacement": "c"}),
+        json!({"summary": "a", "consequences": "b", "target": "description", "replacement": "c\n\nOption 2: injected"}),
+    ] {
+        fx.triage(json!({
+            "action": "propose",
+            "id": task,
+            "blocker": "x",
+            "options": [option, {"summary": "d", "consequences": "e", "target": "description", "replacement": "f"}],
+            "recommended": 1,
+        }))
+        .expect_err("an ambiguous proposal option is refused");
+    }
+    assert!(fx.triage_comments(&task).is_empty(), "nothing was recorded");
+}
+
+#[test]
+fn answering_a_superseded_request_is_refused_and_changes_nothing() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    propose(&fx, &task);
+    let request = decision_requests(&fx, &task).pop().unwrap();
+    let human = fx.human();
+
+    // An answer outside the allowed set is refused before anything writes.
+    let refused = human
+        .answer_decision_request_as_human(
+            &request.id,
+            "bogus",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .expect_err("an unlisted answer is refused");
+    assert!(
+        refused.to_string().contains("answer_not_allowed"),
+        "{refused}"
+    );
+    assert_eq!(
+        decision_requests(&fx, &task)[0].state,
+        orbit_types::task::DecisionRequestState::Open
+    );
+
+    // A human answers on another surface: the task leaves blocked and the
+    // request's binding stops matching.
+    human
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task, "status": "backlog"}),
+        )
+        .unwrap();
+    let status_before = fx.runtime.get_task(&task).unwrap().status;
+    let comments_before = fx.runtime.get_task_comments(&task).unwrap().len();
+    let history_before = fx.runtime.get_task_history(&task).unwrap().len();
+
+    let stale = human
+        .answer_decision_request_as_human(
+            &request.id,
+            "1",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .expect_err("a superseded answer is refused");
+    assert!(stale.to_string().contains("request_superseded"), "{stale}");
+    assert_eq!(fx.runtime.get_task(&task).unwrap().status, status_before);
+    assert_eq!(
+        fx.runtime.get_task_comments(&task).unwrap().len(),
+        comments_before,
+        "the refusal wrote no comment"
+    );
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        history_before,
+        "the refusal wrote no history"
+    );
+}
+
+#[test]
+fn answering_an_expired_request_is_refused_and_changes_nothing() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let blocked_at = history
+        .iter()
+        .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        .expect("seeded blocked task records its block")
+        .at;
+    let mut request = orbit_types::task::DecisionRequest::new(
+        task.clone(),
+        orbit_types::task::DecisionGate::BlockTriage,
+        vec![
+            orbit_types::task::DecisionAnswer {
+                id: "1".to_string(),
+                label: "Drop criterion 2".to_string(),
+                consequence: "the old API stays retired".to_string(),
+            },
+            orbit_types::task::DecisionAnswer {
+                id: "dismiss".to_string(),
+                label: "Dismiss".to_string(),
+                consequence: "Leave blocked, stop asking for this episode.".to_string(),
+            },
+        ],
+        orbit_types::task::DecisionBinding::BlockEpisode {
+            episode: blocked_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+        },
+        "block_triage".to_string(),
+        chrono::Utc::now(),
+    );
+    request.expires_at = chrono::Utc::now() - chrono::Duration::hours(1);
+    assert_eq!(request.state, orbit_types::task::DecisionRequestState::Open);
+    fx.runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                append_history: vec![request.history_entry("system")],
+                ..Default::default()
+            },
+        )
+        .expect("record the expired decision request");
+    assert_eq!(
+        decision_requests(&fx, &task)[0].state,
+        orbit_types::task::DecisionRequestState::Expired
+    );
+    let human = fx.human();
+    let status_before = fx.runtime.get_task(&task).unwrap().status;
+    let comments_before = fx.runtime.get_task_comments(&task).unwrap().len();
+    let history_before = fx.runtime.get_task_history(&task).unwrap().len();
+    let expired = human
+        .answer_decision_request_as_human(
+            &request.id,
+            "1",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .expect_err("an expired answer is refused");
+    assert!(expired.to_string().contains("request_expired"), "{expired}");
+    assert_eq!(fx.runtime.get_task(&task).unwrap().status, status_before);
+    assert_eq!(
+        fx.runtime.get_task_comments(&task).unwrap().len(),
+        comments_before,
+        "the refusal wrote no comment"
+    );
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        history_before,
+        "the refusal wrote no history"
+    );
+}
+
+/// [ORB-18246] Escalation triage of a task whose implementer requires
+/// `orbit.task.add` is admitted through the public pipeline and runs the
+/// triager, while the triager's callable set still excludes every tool on
+/// the `triage_escalation` disallow list.
+#[cfg(unix)]
+#[test]
+fn escalation_triage_runs_a_triager_for_a_task_requiring_a_disallowed_tool() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
+    use orbit_engine::{
+        DispatchError, V2AuditWriter, execute_job_with_resume,
+        resolve_job_catalog_refs_for_execution,
+    };
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::activity_job::{ActivityV2Spec, V2AuditEventKind};
+    use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
+
+    if !crate::dispatch_admission::isolated(
+        "blocked_task_triage::escalation_triage_runs_a_triager_for_a_task_requiring_a_disallowed_tool",
+    ) {
+        return;
+    }
+    let fx = fixture_with_config(
+        "[workflow]\ndefault_crew = \"hard_lane\"\nhard_complexity_crews = [\"hard_lane\"]\n\
+         [crews.hard_lane]\nprovider = \"codex\"\nmodel = \"fixture-hard\"\n",
+    );
+    let git = |args: &[&str]| -> String {
+        let output = crate::git_test_support::command()
+            .args(args)
+            .current_dir(&fx.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Orbit Test"]);
+    git(&["config", "user.email", "orbit-test@example.com"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(fx.repo.join("README.md"), "fixture\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "seed"]);
+    let revision = git(&["rev-parse", "HEAD"]);
+    let tree = git(&["rev-parse", "HEAD^{tree}"]);
+
+    let created = fx
+        .runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "File findings as tasks",
+                "description": "The implementer files findings as tasks.",
+                "acceptance_criteria": ["Findings are filed."],
+                "complexity": "low",
+                "type": "chore",
+                "workspace": fx.repo.to_string_lossy(),
+                "model": "codex",
+                "required_tools": ["orbit.task.add", "orbit.task.show"],
+            }),
+        )
+        .unwrap();
+    let task = created["id"].as_str().unwrap().to_string();
+    fx.update(json!({"id": task, "plan": "1. Do it."}));
+    fx.update(json!({"id": task, "status": "backlog"}));
+    fx.escalate(&task);
+
+    let runtime = OrbitRuntime::from_roots(&fx.global, &fx.repo.join(".orbit"))
+        .unwrap()
+        .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm())
+        .with_automation_machine_identity(Some("fixture-machine".into()));
+
+    // Only the provider response is scripted; admission, preparation,
+    // fan-out and the triager dispatch use the shipped job and runtime.
+    let provider = fx._root.path().join("codex");
+    let response = json!({
+        "schemaVersion": 1, "status": "success", "error": null,
+        "result": {
+            "partition_index": 0, "observed_revision": revision, "observed_tree": tree,
+            "tasks": [{"task_id": task, "action": "report", "detail": "operator checks the host"}],
+            "summary": "triaged",
+        },
+    });
+    std::fs::write(
+        &provider,
+        format!("#!/bin/sh\ncat > /dev/null\ncat <<'RESPONSE'\n{response}\nRESPONSE\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let mut executor: ExecutorResource = serde_yaml::from_str(
+        &std::fs::read_to_string(assets.join("executors/codex.yaml")).unwrap(),
+    )
+    .unwrap();
+    executor.spec.command = Some(provider.display().to_string());
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+
+    let triage_asset = load_activity_asset(
+        &std::fs::read_to_string(assets.join("activities/triage_escalation.yaml")).unwrap(),
+    )
+    .unwrap();
+    let ActivityV2Spec::AgentLoop(triage_spec) = &triage_asset.spec.spec else {
+        panic!("triage_escalation must run an agent");
+    };
+    let disallow_list = triage_spec.tool_disallow_list.clone().unwrap();
+    assert!(
+        disallow_list.iter().any(|tool| tool == "orbit.task.add"),
+        "triage_escalation disallows orbit.task.add"
+    );
+    let mut catalog = V2ActivityCatalog::new();
+    for name in ["prepare_escalation_triage", "triage_escalation"] {
+        let asset = load_activity_asset(
+            &std::fs::read_to_string(assets.join(format!("activities/{name}.yaml"))).unwrap(),
+        )
+        .unwrap();
+        catalog.insert(asset.name, asset.spec);
+    }
+    let mut job = load_job_asset(
+        &std::fs::read_to_string(assets.join("jobs/escalation_triage_pipeline.yaml")).unwrap(),
+    )
+    .unwrap()
+    .spec;
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run("escalation_triage_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(
+                run.run_id.clone(),
+                "escalation_triage_pipeline".into(),
+                json!({}),
+            ),
+        )
+        .unwrap();
+    let audit = V2AuditWriter::with_disk_sinks(
+        &fx._root.path().join("audit"),
+        runtime.v2_audit_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+        &run.run_id,
+        "codex",
+        Some(&fx.repo),
+    )
+    .unwrap();
+    let outcome = execute_job_with_resume(
+        &job,
+        json!({
+            "subject": "block", "task_ids": [task],
+            "workspace_path": fx.repo, "base_branch": "main",
+        }),
+        &run.run_id,
+        audit.clone(),
+        &runtime,
+        None,
+    )
+    .expect("ORB-18246: escalation triage must admit a task requiring orbit.task.add");
+    assert!(outcome.success, "the triage job succeeds: {outcome:?}");
+    assert_eq!(outcome.pipeline["prepare"]["task_count"], 1);
+    assert_eq!(outcome.pipeline["prepare"]["partition_count"], 1);
+
+    let events = audit.events_snapshot().unwrap();
+    let (requested, effective, notes, event_disallow_list) = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            V2AuditEventKind::ToolAllowlistHarnessDelegated {
+                task_ids,
+                requested_tools,
+                effective_tools,
+                omitted_requirement_notes,
+                tool_disallow_list,
+                ..
+            } if task_ids == std::slice::from_ref(&task) => Some((
+                requested_tools,
+                effective_tools,
+                omitted_requirement_notes,
+                tool_disallow_list,
+            )),
+            _ => None,
+        })
+        .expect("the triager reached the provider with its admitted tool policy");
+    assert_eq!(
+        event_disallow_list.as_ref(),
+        Some(&disallow_list),
+        "the triager event must carry the shipped triage_escalation disallow list"
+    );
+    assert!(
+        !requested.iter().any(|tool| tool == "orbit.task.add"),
+        "the covered requirement is dropped from requested_tools: {requested:?}"
+    );
+    assert!(
+        requested.iter().any(|tool| tool == "orbit.task.show"),
+        "a requirement the disallow list does not cover stays requested: {requested:?}"
+    );
+    for tool in &disallow_list {
+        assert!(
+            !effective.iter().any(|allowed| allowed == tool),
+            "the triager must never receive disallowed tool {tool}: {effective:?}"
+        );
+    }
+    assert!(
+        notes.iter().any(|note| {
+            note.contains(&task)
+                && note.contains("orbit.task.add")
+                && note.contains("triage_escalation")
+        }),
+        "the dropped requirement is recorded: {notes:?}"
+    );
+    assert_eq!(
+        runtime.get_task(&task).unwrap().required_tools,
+        vec!["orbit.task.add".to_string(), "orbit.task.show".to_string()],
+        "triaging preserves the implementer's contract"
+    );
+
+    // The implementing activity remains fail-closed for the same requirement.
+    let refused = runtime
+        .resolve_activity_tool_denials(
+            std::slice::from_ref(&task),
+            "agent_implement",
+            &["orbit.task.add".to_string()],
+        )
+        .expect_err("implementing activities remain fail-closed for covered requirements");
+    assert!(
+        matches!(
+            &refused,
+            DispatchError::RequiredToolAdmission { task_id, tool_name, .. }
+                if task_id == &task && tool_name == "orbit.task.add"
+        ),
+        "a covering implementer deny list still refuses its required tool: {refused}"
+    );
+    jobs.finalize_job_run(&run.run_id, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+}
+
+#[test]
+fn a_pilot_warning_requeue_is_refused_as_a_requeue_whatever_proof_it_carries() {
+    let fx = fixture();
+    let task = fx.task(&[]);
+    let requeue = |proof: Value| {
+        let mut input = json!({
+            "action": "requeue", "subject": "pilot_warning", "id": task,
+            "reason": "the finding is wrong",
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(proof.as_object().unwrap().clone());
+        fx.triage(input)
+            .expect_err("pilot warning triage never requeues")
+    };
+    let stale = "0".repeat(40);
+    assert_eq!(
+        requeue(json!({
+            "source_revision": stale, "observed_revision": stale, "observed_tree": stale,
+        })),
+        requeue(json!({})),
+        "an unsupported action is refused before its proof is read"
+    );
 }

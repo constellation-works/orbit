@@ -1,15 +1,15 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-21
-last_validated: 2026-10-20
+last_updated: 2026-10-30
+last_validated: 2026-10-29
 status: Accepted
 feature: auto-tasks
 doc_role: design
 type: design
 summary: Current implementation of the auto-task record, due-math, host-local cursor, generic scheduler, CRUD surfaces, the on-demand manual mint, and the dashboard Operations surface.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations.js"]
+paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations-auto-tasks.js"]
 related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327]
 ---
@@ -35,14 +35,19 @@ semantics remain current.
 `schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b) and
 `skip_unless_blocked_candidates` (§4c) preconditions, and
 provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
-— exactly one of `{ cron: "…" }`, `{ every_minutes: N }`, or
-`{ deliveries_landed: { … } }`. Delivery schedules use source evaluation and
+— exactly one of `{ cron: "…" }`, `{ every_minutes: N }`,
+`{ deliveries_landed: { … } }`, or `{ condition: { … } }`. A `condition` fires once per subject edge on the workspace owner; the other forms take an optional `when` guard ([condition triggers](../condition-triggers/1_scope.md)). Delivery schedules use source evaluation and
 durable coverage state rather than time-slot due-math. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
 `crew`, optional `required_tools` and `context_files`, and `status` (default `backlog`).
 Context selectors are copied unchanged into minted tasks. Diff-producing
 chores must declare a scope in their YAML template; otherwise admission holds
 them for task-pilot. Older definitions without selectors remain readable.
+`comment-hygiene` (§4e) is the deliberate exception: its batch is known only
+after selection, so it mints selector-free as `proposed` and its footprint
+is prepared before admission — the task pilot or an operator persists the
+selected selectors and the task is approved to `backlog` — rather than
+entering a drain as selector-free backlog work.
 An explicit complexity must be an
 assessed `low`, `medium`, `hard`, or `xhard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
@@ -167,6 +172,22 @@ definition minted nothing — `orbit auto-task show <name>` renders it under
 `cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
 clears it.
 
+`orbit.auto_task.list` projects the same cursor into a bounded `last_fire`
+[ORB-19112]:
+`{ kind: "fired", at, task_id, task_status }` for a fire,
+`{ kind: "skipped", at, skip_reason }` for the latest precondition skip, or
+`null` before either. The fired projection reads the task's current status by
+its ID. It exposes no run ID, logs, step output, or skip comparison metadata.
+
+Delivery schedules never write that cursor, so their `last_fire` reads
+scheduler-owned automation records instead [ORB-19122]: the active batch's
+latest minted task, including the preceding attempt while a retry waits for
+admission [ORB-19131], or
+the newest accepted receipt's task, whichever was minted later. `at` is the minted task's creation time, falling back to the recorded
+batch or receipt time when the task is gone. A leftover cursor from an
+earlier time schedule never shadows a delivery fire, and a delivery
+definition that has not fired reports `null`.
+
 ## 4. The scheduler pass
 
 `scheduler::run_auto_task_scheduler_at` loads the workspace's definitions,
@@ -278,8 +299,10 @@ triaged. `None` skips like `Unchanged` — the slot is not consumed, the skip is
 recorded as `last_skip` with reason `no_blocked_candidates` and a `detail`
 naming how many blocked tasks were read, and the tick report says the same.
 `Qualifying` mints. A probe error or `Unknown` **fails open**: the definition
-mints and the tick report's reason says the precondition was inconclusive. The
-shipped `blocked-task-triage` default carries it.
+mints and the tick report's reason says the precondition was inconclusive. No
+shipped default carries it any more: the retired `blocked-task-triage` default
+did, and the seeded `blocked_task_triage` routine's `block_escalated` trigger
+now applies the same rule ([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated)).
 
 The host tick calls `run_auto_task_scheduler_at` directly for every registered
 owner checkout after routine evaluation and under the host sweep lock. The pass
@@ -287,6 +310,182 @@ is bounded by the finite discovered workspace and definition collections. Its
 sidecar lock remains the per-workspace exclusion boundary. No scheduler routine,
 job, activity, or job run is created, and fires do not appear on
 `GET /api/routines`; the tick report and Operations auto-task panel expose them.
+
+### 4d. The shipped whole-tree reviews: `code-review` rotation, `full-code-review` on demand
+
+`code-review` is the steady whole-tree review, run as a **module rotation**.
+It no longer reviews the commits merged since its last cursor — per-delivery
+diff review is owned by `delivery-code-review` — because that window re-read
+recent changes and never re-read stable code. Each fired run pins one
+integration-branch SHA, partitions the tracked tree into modules with the
+partition rule below, and reads in full the **2 modules reviewed least
+recently**. This `code-review` rotation includes source, tests, documentation
+and authored assets, including files at the root; its partition rule is
+separate from the code-only `full-code-review` area rule. A module's ID is its
+selectors; a module that grows past the bound is split, and its children
+inherit its last-reviewed time.
+
+The rotation state is durable and artifact-carried. Each completed run
+attaches `reviewed-modules.json` (`schema_version`, the pinned SHA, and per
+reviewed module its ID/selectors, line count and filed finding IDs). The next
+run builds its last-reviewed map only from those artifacts on done chores
+carrying `auto-task:code-review`, taking each module's most recent review; a
+sweep without the artifact — including every legacy merged-window sweep —
+counts as reviewing nothing. Selection is never-reviewed first, then oldest
+last-reviewed time, with ties broken by more commits since the last review
+and then the smaller module ID. Both selected modules are read in full at
+the pinned SHA (partitions or subagents for large modules, every line, no
+sampling), so the rotation also surfaces defects older than any recent
+change. Each confirmed high or critical finding is filed as its own task; a
+module's medium and low findings are grouped into at most one cleanup `bug`
+per module, listing each finding with its file:line evidence, unioning their
+`context_files`, and carrying at most one classified `regression_from` per
+distinct culprit of an attributable finding. Findings sharing a culprit stay
+listed in the description; when their nature or escape classifications differ,
+the description states those differences and the single link is classified
+`unclassified`. The run also still attaches `sweep-cursor.json` with
+the pinned SHA, and its `skip_if_unchanged` gate (§4b) is unchanged, so the
+scheduler still skips a tick on a quiet tree. At two modules per fired
+six-hourly run, a tree of about 55 modules is covered in about a week of
+fired runs.
+
+`full-code-review` is the **on-demand snapshot** review, not a scheduled one.
+It ships `enabled: false` and is meant to be run by a manual mint
+(`orbit auto-task mint full-code-review`, §5b) — for example before a release
+or for a newly onboarded repository — even though the definition carries a
+cron expression for an operator who chooses otherwise. A scheduled full
+review is deliberately not the steady state: one run fans the whole tree out
+as one area chore per 25,000-line area in a single mint (about 55 area chores
+on a 1.3M-line tree), which floods the backlog, while the `code-review`
+rotation already provides steady whole-tree coverage a little at a time. The
+snapshot stays available for the moments a complete, single-SHA reading of
+the entire tree is worth that fan-out.
+
+### 4e. `comment-hygiene`: the doc-duties ledger over code comments
+
+`comment-hygiene` is the daily comment counterpart of `doc-duties`: disabled
+by default, `low` complexity, tagged `comment-hygiene`, and shipped in
+`DEFAULT_AUTO_TASK_FILES` beside the other defaults. Each run checks at most
+six tracked source files and about 1,500 lines against a generic,
+language-agnostic comment standard stated in its body (comments say why, doc
+comments state the contract, no history narration or commented-out code, no
+ownerless TODOs, escape hatches state their reason, stale comments are bugs,
+density stays low). A workspace sharpens that standard through a
+`comment-hygiene` tag instruction (`[workflow.tag_instructions.comment-hygiene]`);
+the shipped body stays project- and language-agnostic. Fixes are ordered
+contradicting comments, history narration, restating comments, then the rest.
+
+It reuses the `doc-duties` ledger scheme rather than inventing a second one:
+each run attaches `comment-hygiene-ledger.json` (`schema_version` 2) with one
+row per selected file and a cumulative `state` map carrying each path's two
+most recent attempts forward, read back through the same newest-ledger
+sequence. Two differences follow from the subject matter. Each row also
+records `checked_through`, the commit the check covered, and a file unchanged
+since its last `clean`/`fixed` check is not a candidate — a comment mostly
+goes stale when its own file changes. Selection is therefore files changed
+since their last check (oldest check first), then never-checked files (oldest
+git date first), ties by path; a missing or unreadable ledger, including a
+predecessor read the run's tool scope refuses, is stated explicitly instead
+of falling back to prose. Outcomes are the same `clean`/`fixed`/`partial`/`skipped`;
+a file over 800 lines is taken alone or as recorded line ranges and is not
+`clean` until every range is checked; two `skipped`/`partial` outcomes in a
+row hold the file back for a dedicated task; and a clean batch is a
+successful no-diff run. The ledger is attached on every run, including
+all-skipped ones. Carry-forward across real instances is confirmed
+post-deploy on the owner host, from the second minted instance's `state`;
+the definition itself is proven by loading and seeding it through the
+existing loader.
+
+Unlike `doc-duties`, which locks `dir:docs` plus the tracked top-level
+`README.md` and `CONTRIBUTING.md`, `comment-hygiene` declares no
+`context_files` and mints as `proposed`: a selector-free instance is not a
+backlog drain candidate, so it never becomes the unknown-footprint
+whole-tree holder that stalls unrelated editing work, with or without a
+pilot. Batch selection is pre-admission preparation — the task pilot (or
+an operator) follows the body's selection steps, persists exactly the
+selected `file:` selectors, and only then is the task approved to
+`backlog`. That write precedes any execution claim, so the route never
+depends on a scope update a protecting claim refuses or on
+`context_files_added` returned after editing; in claimed mode the
+selectors simply travel with the owner-prepared task. Without preparation
+the instance waits in `proposed`. Files in the footprint of an open or
+in-progress task are skipped during selection. The executing run reads the
+prepared selectors back with `orbit.task.show`, quotes them in the
+execution summary, edits only files they name (dropping one as `skipped`
+is safe; adding one is not), and edits nothing if it was admitted without
+preparation. The diff is comment-only: everything
+outside comments and doc comments stays byte-identical, confirmed before
+handoff by hunk inspection and the repository's normal validation (or a
+comment-stripped comparison where the language tooling offers one). A stale
+comment that reveals a real code defect is filed as a deduplicated task —
+at most two per run, `spawned_from` the hygiene task — never fixed in place,
+so each delivery stays a trivially reviewable comment-only change through
+normal validation and CI.
+
+### 4f. `design-sync`: design judgment alongside mechanical doc checks
+
+The bundled `design-sync` default [ORB-18557] is disabled until enabled,
+runs every 720 minutes, uses `medium` complexity and `skip_if_open`, and
+mints a backlog chore tagged `design-sync` and `docs` with `dir:docs` as
+its footprint. It reads `docs/design/CONVENTIONS.md` before selecting work;
+repositories without it get a successful no-edit, no-filing no-op. No
+workspace identity, crew name or task ID is baked into its body, and its
+integration-branch placeholder is rendered by the same seeding path as
+the other defaults. `doc-duties` keeps its shipped mechanical checks and
+low complexity.
+
+Each run selects at most three feature folders, task-status changes since
+their previous ledger date first, then oldest reconciliation date with
+entry-doc `last_validated` and git-date fallbacks. Related tasks come from
+citations, separate path/slug/tag searches and verified relations, with each
+candidate confirmed through task records. Reconciliation checks stage,
+status, next, phase/slice citations, stale implementation prose and Task
+References against those records and the pinned checkout. A done task does
+not establish integration-branch delivery, and implementation never
+establishes owner approval of a Draft design. Historical decisions retain
+their reasoning and metadata; only links and Task References are corrected.
+
+The task corrects drift without changing design intent. An unexplained
+design/code divergence gets a cited open task or a proposed bug with the
+doc section, code location at HEAD, evidence, honest complexity, selectors
+for only the files its fix would modify, and a `spawned_from` relation.
+At most three tasks are filed per run, counting deprecation or archival
+follow-ups; these operations are never performed by the reconciliation
+itself. Frontmatter edits regenerate the repository's index. Fully checked
+features alone may advance an existing `last_validated` key.
+
+Every run attaches `design-sync-ledger.json` (schema version 1), including
+clean runs and repositories without conventions. Its `features` rows record
+selection order, changed-since-ledger, outcome, stage/status transitions,
+whether next changed, cited tasks and divergence tasks. Its cumulative
+`state` carries every other feature's date and outcome forward unchanged.
+The next run reads the newest completed design-sync chore's artifact, never
+its summary prose; missing ledgers and unverified evidence are explicit.
+Clean runs follow the workspace's validated no-diff evidence requirements.
+
+### 4g. `workflow-health-audit`: jobs and routines must produce their effects
+
+The weekly `workflow-health-audit` default inventories every effective job and
+routine, including disabled and custom definitions. Owner-only, non-reconciling
+inspection traces triggers through admission and terminal settlement, and checks
+durable effects rather than treating a green wrapper as proof of success. The
+seven-day scan uses up to 30 days for sparse definitions and records unobserved,
+unavailable and unvalidated rows explicitly. Existing isolated public-boundary
+fixtures can supply missing proof under the workspace's validation policy;
+production jobs and providers are never fired to manufacture coverage.
+
+Concrete, testable repairs become deduplicated proposed tasks. Other actionable
+obstacles become frictions naming the evidence or external action needed. Each
+pass files at most five new records and retains overflow. Its
+`workflow-health-audit.json` artifact contains the complete per-definition
+inventory, provenance, expected effects, evidence, validation gaps and finding
+dispositions. It complements `run-failure-patterns`: even a successful sweep
+with no output must explain eligible findings and their dispositions.
+
+Like other bundled defaults it is disabled until the operator enables it with
+`orbit auto-task toggle workflow-health-audit on`; `skip_if_open` prevents
+overlapping weekly audit tasks. Enabling or running the audit grants no
+production retry, dispatch, configuration, merge or release authority.
 
 ## 5. CRUD surfaces
 
@@ -550,11 +749,11 @@ manual mint when the two ids differ. Grouping, the enabled count, row state
 and the switch follow `effective_enabled`, falling back to the raw `enabled`
 flag when a payload omits it. Enable/disable posts that raw flag as
 `expected_enabled` and the opposite of the effective state as `enabled`.
-Compare-and-swap stays on the raw flag. The handler treats the definition as
-already in the requested state only when that matches the effective switch, so
-Disable on a legacy-enabled consumer (raw flag still false) reaches
-`auto_task_toggle_checked` and the operator stamp clears the legacy
-enablement. The governed dashboard operation is `auto_task.toggle`, with a
+Compare-and-swap stays on the raw flag. The handler runs the observed
+profile of the shared `auto_task_toggle_command`, which treats the definition
+as already in the requested state only when that matches the effective switch,
+so Disable on a legacy-enabled consumer (raw flag still false) reaches the
+write and the operator stamp clears the legacy enablement. The governed dashboard operation is `auto_task.toggle`, with a
 dashboard-operations audit row. `Mint now` calls
 `auto_task_mint` after the operator acknowledges the unconditional warning
 (`acknowledge_unconditional: true`); the request is refused without that
@@ -651,15 +850,31 @@ accurate.
 
 ## Task References
 
+- [ORB-18557] — Adds design-sync with bounded reconciliation, intent safeguards and a cumulative ledger.
+
 - [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
+- [ORB-11330] — implements delivery-trigger consumers on the sweep clock with
+  durable batches and coverage checkpoints.
+- [ORB-11331] — implements bounded state-preparation consumers with Store
+  checkpoints.
+- [ORB-13422] — confines auto-task show and mint to the definition path.
 
 - ORB-10876 — dashboard Operations inspection, toggle, and manual mint.
+- ORB-10800 — doctor check for stale, deprecated and faulty definition
+  artifacts plus `--fix-stale-artifacts`.
 - ORB-10149 — Auto-task primitive.
 - ORB-10439 — on-demand manual mint (renamed to `orbit auto-task mint <name>` by ORB-10446).
+- ORB-10446 — renamed `orbit auto-task generate` to `orbit auto-task mint`.
 - ORB-10441 — mint-time visible title provenance.
 - ORB-10472 — worktree-local, atomic definition refresh.
 - ORB-10583 — workspace-local weekly official model-price audit definition.
+- ORB-10798 — narrowed the auto-task MCP surface to list and mint.
 - ORB-11095 — centralized tag-derived title provenance and the canonical
   `code-review` auto-task name.
+- ORB-15663 — retired the system lane: system work routes through the
+  complexity pools instead.
+- ORB-19112 — `orbit.auto_task.list` reports each definition's last fire.
+- ORB-19122 — delivery auto-tasks report their actual last fire.
+- ORB-19131 — keeps the delivery `last_fire` visible while a retry backs off.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -26,8 +26,10 @@ mod tool_input_hint_cases;
 
 mod artifact_source_cwd;
 mod claimed_review_bridge_sandbox;
+mod decision_channel_sandbox;
 mod github_broker_sandbox;
 mod github_capability_preflight;
+mod github_run_list_workflow;
 mod plugin_broker_sandbox;
 mod plugin_child_cli_surface;
 mod plugin_cli_group;

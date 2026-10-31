@@ -197,9 +197,65 @@ fn pull_matches_local_dispatch_for_an_expiring_frozen_batch() {
     assert_eq!(pair.owner_status(distant), "backlog");
 }
 
+/// [ORB-17773] A follower that reports weekly pressure is offered first
+/// the tied task whose pool contains its highest-pressure crew, while
+/// owner-local dispatch — which has no pressure input — keeps age order
+/// for the same backlog.
+fn follower_pressure_offers_the_pressured_pool_first_but_local_order_is_unchanged() {
+    const CONFIG: &str = "\
+[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\"]\n\
+hard_complexity_crews = [\"opus\", \"sol\"]\n\n\
+[crews.sol]\nprovider = \"codex\"\nmodel = \"gpt-sol\"\n\n\
+[crews.opus]\nprovider = \"claude\"\nmodel = \"claude-opus\"\n";
+    let pair = Pair::with_configs(CONFIG, CONFIG, &[Some("sol")]);
+    let older = pair.tasks[0].clone();
+    let newer = backlog_task_with_input(
+        &pair.wire.owner,
+        &pair.owner_repo,
+        "src/pressured.rs",
+        Some("sol"),
+        json!({"complexity": "hard"}),
+    );
+    assert_eq!(
+        local_order(&pair.wire.owner),
+        json!([older, newer]),
+        "owner-local dispatch has no pressure input"
+    );
+
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let reply = pair
+        .wire
+        .call(
+            "",
+            "orbit.task.pull",
+            json!({
+                "request_id": "pressure-first",
+                "caller_version": probe["binary_version"],
+                "caller_schema": probe["protocol_schema"],
+                "caller_fingerprint": probe["protocol_fingerprint"],
+                "review_gate": true,
+                "ship": probe["ship"],
+                "run_context": {"run_id": "pressure-drain", "job_name": "workspace_pull_pipeline"},
+                "os": HostOs::Linux,
+                "crews": {
+                    "runnable": ["opus", "sol"],
+                    "default_crew": "sol",
+                    "usage_pressure": [
+                        {"crew": "opus", "pressure_milli": 25000},
+                        {"crew": "sol", "pressure_milli": 1000},
+                    ],
+                },
+            }),
+        )
+        .unwrap();
+    assert_eq!(reply["receipt"]["claim"]["task_id"], newer, "{reply}");
+    assert_eq!(pair.owner_status(&older), "backlog");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     census_orders_the_mac_dk_server_and_owner_mix_scenarios,
     census_orders_the_mac_dk_server_and_owner_mix,
-    pull_matches_local_dispatch_for_an_expiring_frozen_batch
+    pull_matches_local_dispatch_for_an_expiring_frozen_batch,
+    follower_pressure_offers_the_pressured_pool_first_but_local_order_is_unchanged
 );

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskComment, TaskStatus};
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::Value;
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -140,10 +141,18 @@ pub(super) fn load_handoff_context<H: RuntimeHost + ?Sized>(
             task.status,
             TaskStatus::InProgress | TaskStatus::Review | TaskStatus::Done
         ) {
-            return Err(OrbitError::Execution(format!(
+            let message = format!(
                 "{action}: task '{}' is not promotable from status '{}'",
                 task.id, task.status
-            )));
+            );
+            return Err(if action == "pr_complete" {
+                OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::TaskNotPromotable,
+                    message,
+                }
+            } else {
+                OrbitError::Execution(message)
+            });
         }
         reject_failed_attempt(host, input, &task)?;
         tasks.push(task);
@@ -176,6 +185,9 @@ pub(super) enum FailedHandoffPhase {
     Push,
     PrLookup,
     PrCreate,
+    /// The configured body could not be rendered, or a required section is
+    /// unfilled under `pr.missing_required_section = "refuse"`.
+    PrBody,
     PrView,
     Promote,
     EmptyBranch,
@@ -192,6 +204,7 @@ impl FailedHandoffPhase {
             Self::Push => "push",
             Self::PrLookup => "automation.vcs.pr.lookup",
             Self::PrCreate => "automation.vcs.pr.create",
+            Self::PrBody => "automation.vcs.pr.body",
             Self::PrView => "automation.vcs.pr.view",
             Self::Promote => "promote",
             Self::EmptyBranch => "empty-branch",

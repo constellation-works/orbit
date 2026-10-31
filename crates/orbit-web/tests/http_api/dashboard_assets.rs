@@ -34,6 +34,27 @@ fn dashboard_drops_superseded_audit_codebase_and_scoreboard_responses() {
     );
 }
 
+/// Analytics › Forecast renders a kept review mode, a dropped review mode,
+/// unknown current and historical evidence, and an older response that omits
+/// those fields. The public path is `fetchAndRenderForecast`.
+#[test]
+fn forecast_view_renders_review_mode_uncertainty_and_legacy_responses() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_forecast_review.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard forecast review fixture");
+    assert!(
+        result.status.success(),
+        "dashboard forecast review behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 #[test]
 fn codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge() {
     let result = std::process::Command::new("node")
@@ -52,12 +73,12 @@ fn codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge() {
     );
 }
 
-/// Observe › Agents counts each role tab's ranked rows, splits the strip by
-/// owner, moves the detail column with the selected row, keeps "How the score
-/// works" open across polls, re-reads the detail after a newer scan, shows the
+/// Analytics › Agents counts each role tab's ranked rows, splits the strip by
+/// owner, moves the detail column with the selected row without fetching agent
+/// detail, keeps "How the score works" open across polls, shows the
 /// empty and not-computed states, the Reviewers provisional banner, `accepts
 /// often` tag and verdict-outcome bars, and routes `#analytics/orchestrators`
-/// to `#agents/orchestrators`.
+/// to `#analytics/agents/orchestrators`.
 #[test]
 fn agents_view_executes_selection_disclosure_states_and_redirect() {
     let result = std::process::Command::new("node")
@@ -76,7 +97,7 @@ fn agents_view_executes_selection_disclosure_states_and_redirect() {
     );
 }
 
-/// Observe › Agents › Pilots ranks the crews, leaves the tier matrix out of
+/// Analytics › Agents › Pilots ranks the crews, leaves the tier matrix out of
 /// the detail column and renders one assessed-by-observed matrix per row with
 /// its diagonal and its too-easy and too-hard counts.
 #[test]
@@ -92,25 +113,6 @@ fn agents_pilots_view_executes_ranking_detail_and_tier_matrix() {
     assert!(
         result.status.success(),
         "dashboard pilots view behavior failed:\n{}\n{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-}
-
-#[test]
-fn settings_system_view_executes_render_provenance_override_edit_and_refused_write() {
-    let result = std::process::Command::new("node")
-        .args([
-            "--experimental-vm-modules",
-            "tests/http_api/dashboard_config_system.mjs",
-        ])
-        .env("TZ", "America/Los_Angeles")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("node is required to execute the dashboard asset behavior fixture");
-    assert!(
-        result.status.success(),
-        "dashboard settings system behavior failed:\n{}\n{}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
@@ -240,6 +242,81 @@ fn hidden_dashboard_polls_lightly_prefixes_failures_and_notifies_only_after_opt_
         "dashboard background polling behavior failed:\n{}\n{}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+/// Analytics › Experiments cumulative chart: three 5-minute buckets stay
+/// distinct on the dashboard clock, a finished bucket's hover ends at the
+/// next boundary, and the last open bucket ends at the response cutoff.
+#[test]
+fn experiment_cumulative_chart_names_intraday_buckets_on_the_dashboard_clock() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_experiments_browser.mjs",
+        ])
+        .env("TZ", "America/Los_Angeles")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard experiments fixture");
+    assert!(
+        result.status.success(),
+        "dashboard experiment cumulative labels failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR"]
+fn experiment_cumulative_tooltips_stay_inside_the_chart_and_viewport() {
+    let output = std::process::Command::new("node")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/http_api/dashboard_experiments_browser.mjs"),
+        )
+        .arg(std::env::var_os("ORBIT_PLAYWRIGHT_MODULE").expect("prepared Playwright module"))
+        .arg(
+            std::env::var_os("ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR")
+                .expect("browser evidence directory"),
+        )
+        .output()
+        .expect("node is required to execute the experiment tooltip browser fixture");
+    assert!(
+        output.status.success(),
+        "experiment tooltip bounds failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Analytics › Experiments authoring in Chromium at 1440 and 375 px: the New
+/// experiment form creates a draft (a refused guardrail shows under
+/// Guardrails, crew pickers list only configured crews), a draft card edits
+/// and starts it after a confirmation naming arms, weights and population,
+/// Save and start does both and locks the definition it confirms, and a
+/// started experiment's detail says it can no longer be edited.
+#[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR"]
+fn experiment_authoring_creates_edits_and_starts_a_draft() {
+    let output = std::process::Command::new("node")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/http_api/dashboard_experiments_browser.mjs"),
+        )
+        .arg(std::env::var_os("ORBIT_PLAYWRIGHT_MODULE").expect("prepared Playwright module"))
+        .arg(
+            std::env::var_os("ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR")
+                .expect("browser evidence directory"),
+        )
+        .arg("--authoring")
+        .output()
+        .expect("node is required to execute the experiment authoring browser fixture");
+    assert!(
+        output.status.success(),
+        "experiment authoring flow failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 

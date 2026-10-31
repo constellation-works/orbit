@@ -3,13 +3,18 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
+use orbit_common::governance::automation::AutomationVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::crew::CrewVerb;
+use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
+use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
 use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
+use orbit_common::governance::visual::VisualVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_common::security::redaction::{
@@ -119,6 +124,7 @@ pub(super) fn sanitize_tool_input(
                     sanitize_string_array_field(&mut object, field, field, mode, &mut report)?
                 }
                 ParamType::String
+                | ParamType::RawString
                 | ParamType::Path
                 | ParamType::Integer
                 | ParamType::UnsignedInteger
@@ -282,6 +288,10 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
+        OrbitBuiltinAction::Lease(verb) => ActionPolicy {
+            declared: verb.spec().params,
+            ..NO_REDACTION
+        },
         OrbitBuiltinAction::Friction(verb) => ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
@@ -315,6 +325,8 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => ActionPolicy {
                 declared: verb.spec().params,
@@ -349,8 +361,61 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
+        // Free-text hypothesis and reason redact per their declared class.
+        OrbitBuiltinAction::Experiment(verb) => match verb {
+            ExperimentVerb::Create
+            | ExperimentVerb::Update
+            | ExperimentVerb::Clone
+            | ExperimentVerb::Start
+            | ExperimentVerb::Pause
+            | ExperimentVerb::Resume
+            | ExperimentVerb::Assign
+            | ExperimentVerb::Reweight
+            | ExperimentVerb::Conclude
+            | ExperimentVerb::Abandon
+            | ExperimentVerb::Show
+            | ExperimentVerb::List
+            | ExperimentVerb::Readout => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        // List and show persist nothing; the answer verb never reaches
+        // dispatch as a tool, and its note redacts per its declared class.
+        OrbitBuiltinAction::Decision(verb) => match verb {
+            DecisionVerb::List
+            | DecisionVerb::Show
+            | DecisionVerb::Answer
+            | DecisionVerb::Submit
+            | DecisionVerb::Digest
+            | DecisionVerb::ChannelRegister
+            | DecisionVerb::ChannelList
+            | DecisionVerb::ChannelRevoke
+            | DecisionVerb::ChannelRotateKey => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
         OrbitBuiltinAction::Agents(verb) => match verb {
             AgentsVerb::Scorecard | AgentsVerb::Show => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        OrbitBuiltinAction::Automation(verb) => match verb {
+            AutomationVerb::Explain | AutomationVerb::ClearStall => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        OrbitBuiltinAction::Crew(verb) => match verb {
+            CrewVerb::Ladder => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        OrbitBuiltinAction::Visual(verb) => match verb {
+            VisualVerb::Capture | VisualVerb::AcceptDispute => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -415,6 +480,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
         },
+        OrbitBuiltinAction::Lease(_) => false,
         OrbitBuiltinAction::Search(verb) => match verb {
             SearchVerb::Query => false,
         },
@@ -423,6 +489,16 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         },
         OrbitBuiltinAction::Agents(verb) => match verb {
             AgentsVerb::Scorecard | AgentsVerb::Show => false,
+        },
+        OrbitBuiltinAction::Automation(verb) => match verb {
+            AutomationVerb::Explain | AutomationVerb::ClearStall => false,
+        },
+        OrbitBuiltinAction::Crew(verb) => match verb {
+            CrewVerb::Ladder => false,
+        },
+        OrbitBuiltinAction::Visual(verb) => match verb {
+            VisualVerb::Capture => false,
+            VisualVerb::AcceptDispute => true,
         },
         OrbitBuiltinAction::Orchestrator(verb) => match verb {
             OrchestratorVerb::Scorecard | OrchestratorVerb::Show => false,
@@ -443,6 +519,8 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject => true,
             TaskVerb::List
             | TaskVerb::Eligible
@@ -611,23 +689,34 @@ fn sanitize_string(
             let env_scrubbed = redact_sensitive_env_text(raw);
             let pattern_scrubbed = redact_all(raw);
             let sanitized = redact_home_dir(&pattern_scrubbed);
-            let mut kinds = BTreeSet::new();
-            let mut classes = BTreeSet::new();
-            if env_scrubbed != raw {
-                kinds.insert(ArtifactRedactionKind::Env);
-                classes.insert("sensitive_environment_value");
-            }
-            if pattern_scrubbed != env_scrubbed {
-                kinds.insert(ArtifactRedactionKind::Pattern);
-                classes.extend(pattern_redaction_classes(&env_scrubbed, &pattern_scrubbed));
-            }
-            if sanitized != pattern_scrubbed {
-                kinds.insert(ArtifactRedactionKind::HomeDir);
-                classes.insert("home_directory");
-            }
+            let (kinds, classes) =
+                classify_redaction_evidence(raw, &env_scrubbed, &pattern_scrubbed, &sanitized);
             Ok((sanitized, kinds, classes))
         }
     }
+}
+
+fn classify_redaction_evidence(
+    raw: &str,
+    env_scrubbed: &str,
+    pattern_scrubbed: &str,
+    sanitized: &str,
+) -> (BTreeSet<ArtifactRedactionKind>, BTreeSet<&'static str>) {
+    let mut kinds = BTreeSet::new();
+    let mut classes = BTreeSet::new();
+    if env_scrubbed != raw {
+        kinds.insert(ArtifactRedactionKind::Env);
+        classes.insert("sensitive_environment_value");
+    }
+    if pattern_scrubbed != env_scrubbed {
+        kinds.insert(ArtifactRedactionKind::Pattern);
+        classes.extend(pattern_redaction_classes(env_scrubbed, pattern_scrubbed));
+    }
+    if sanitized != pattern_scrubbed {
+        kinds.insert(ArtifactRedactionKind::HomeDir);
+        classes.insert("home_directory");
+    }
+    (kinds, classes)
 }
 
 fn pattern_redaction_classes(before: &str, after: &str) -> BTreeSet<&'static str> {
@@ -652,20 +741,12 @@ fn sanitize_response_value(value: &mut Value, path: &str, report: &mut ArtifactR
             let env_scrubbed = redact_sensitive_env_text(raw);
             let pattern_scrubbed = redact_all(&env_scrubbed);
             let sanitized = redact_home_dir(&pattern_scrubbed);
-            let mut kinds = BTreeSet::new();
-            let mut classes = BTreeSet::new();
-            if env_scrubbed != *raw {
-                kinds.insert(ArtifactRedactionKind::Env);
-                classes.insert("sensitive_environment_value");
-            }
-            if pattern_scrubbed != env_scrubbed {
-                kinds.insert(ArtifactRedactionKind::Pattern);
-                classes.extend(pattern_redaction_classes(&env_scrubbed, &pattern_scrubbed));
-            }
-            if sanitized != pattern_scrubbed {
-                kinds.insert(ArtifactRedactionKind::HomeDir);
-                classes.insert("home_directory");
-            }
+            let (kinds, classes) = classify_redaction_evidence(
+                raw.as_str(),
+                &env_scrubbed,
+                &pattern_scrubbed,
+                &sanitized,
+            );
             if sanitized != *raw {
                 *raw = sanitized;
                 report.push(path.to_string(), kinds, classes);
@@ -757,6 +838,8 @@ fn artifact_target<'a>(
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject => {
                 let id = persisted_task_id.ok_or_else(|| {
                     OrbitError::Execution("redaction audit missing persisted task id".to_string())
@@ -843,7 +926,10 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
+        OrbitBuiltinAction::Lease(verb) => verb.tool_name(),
         OrbitBuiltinAction::Task(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Decision(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Experiment(verb) => verb.tool_name(),
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::AutoTask(verb) => verb.tool_name(),
         OrbitBuiltinAction::Drain(verb) => match verb {

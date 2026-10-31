@@ -1,3 +1,9 @@
+---
+type: context
+summary: "Contributor guide: setup, change workflow, required checks, review process and agent use"
+last_validated: 2026-10-27
+---
+
 # Contributing to Orbit
 
 Thanks for pitching in. Orbit welcomes bug fixes, docs, new features, new agent executors, plugins, and skills.
@@ -31,7 +37,7 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
 1. **Branch from `agent-main`,** and target your PR at `agent-main`. `main` is reserved for releases.
 2. **Keep it scoped.** One change per PR, with no unrelated refactors.
 3. **Follow the code rules** in [CLAUDE.md](CLAUDE.md#code). Lints are enforced, behaviour is tested at the boundary first (integration, golden, e2e) with unit tests only by exception ([test_strategy.md](docs/design-patterns/test_strategy.md)) in a sibling `tests/` dir, and internal IDs stay out of user-facing text.
-4. **Update docs in the same PR.** That includes the affected pages in `docs/design/` and `website/`, and `make goldens UPDATE=1` if you changed CLI help or the MCP surface. Leave `CHANGELOG.md` alone, because it's compiled at release.
+4. **Update docs in the same PR.** That includes the affected pages in `docs/design/` and `website/`. Run `make goldens` when you change CLI help, MCP text, or another golden surface; use `make goldens UPDATE=1` to regenerate expected output, then review the diff. Leave `CHANGELOG.md` alone, because it's compiled at release.
 5. **Run focused local checks** before opening the PR. For a diff, run the
    checks relevant to the change, such as tests for the behavior you changed,
    `make goldens` when you change CLI help, MCP text or another golden surface,
@@ -42,10 +48,52 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
    `task.final_validation_commands`, configured through
    `workflow.required_validation_commands`. See
    [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci) for details.
-
 6. **Write a clear commit message** with a type prefix: `feat:`, `fix:`, `docs:`, `refactor:`, or `chore:`.
 
 Tests that mutate Orbit state, spawn pipeline runs, or depend on the sandbox have specific isolation rules. Read [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) before writing one. The same file covers coverage targets, MSRV bumps, dependency and license policy, and vendored dashboard JS.
+
+### CLI help goldens
+
+The existing public target `cargo test -p orbit-cli --test output help_goldens::`
+discovers `*.cases.json` files recursively under
+`crates/orbit-cli/tests/help_goldens/`. Each command family owns its sidecar
+(for example, `lease.cases.json`); a new family adds its own file without editing
+the Rust harness or a shared registration list. Each file is a nonempty JSON
+array of explicit argv and golden paths relative to that fixture directory:
+
+```json
+[
+  {"argv": ["lease", "token", "create"], "golden": "lease/token-create.txt"}
+]
+```
+
+Use `[]` as argv for root help. Keep command tokens explicit: a filename like
+`task/retry-handoff.txt` does not imply separate `retry` and `handoff` tokens,
+and historical paths such as `config-show.txt` remain valid. Argv contains
+command names only, without flags; the harness appends `--help`. Bindings reject
+unknown fields, duplicate argv or golden paths, path traversal, and unreferenced
+`.txt` goldens. Missing referenced goldens fail in normal mode; explicit update
+mode creates them. Fixture entries must be regular files or directories.
+
+After adding or changing family bindings, run
+`ORBIT_UPDATE_HELP_GOLDENS=1 cargo test -p orbit-cli --test output help_goldens::`,
+review the complete text diff, then run the target without the environment
+variable. `make goldens UPDATE=1` and `make goldens` regenerate and check the
+broader corpus through `scripts/check-goldens.sh`, which selects `help_goldens::`.
+The harness uses the real binary with an isolated home and working directory,
+scrubs inherited authority, normalizes the package version, and compares the
+entire help text.
+
+For the next path-risk measurement after this discovery refactor lands, use a
+separate cohort of subsequent command-addition deliveries that add help bindings.
+The numerator is deliveries whose implementation widens onto
+`tests/output/help_goldens.rs` solely to register argv/golden pairs; the
+denominator is all deliveries in that cohort. Identify registration-only changes
+by reviewing diffs and widening receipts, excluding harness behavior changes.
+Report the cohort's start revision, observation window, counts and support
+separately from the historical 25/40 footprint-miss window. Do not infer an
+immediate analytics-rate drop or a causal regression-rate improvement; existing
+gate, review, lock and analytics definitions still apply.
 
 ## Review
 

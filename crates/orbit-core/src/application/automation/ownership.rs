@@ -72,9 +72,9 @@ pub(crate) fn auto_task_epoch(
     trigger: &DeliveryTrigger,
 ) -> Result<String, OrbitError> {
     delivery::definition_epoch(&(
-        &AutoTaskSchedule::Deliveries {
-            deliveries_landed: trigger.clone(),
-        },
+        // The guard is not part of the delivery identity: editing it keeps
+        // the consumer's debt and receipts.
+        &AutoTaskSchedule::deliveries(trigger.clone()),
         &definition.template,
         definition.dedupe,
     ))
@@ -89,6 +89,9 @@ pub(crate) fn routine_epoch(
 ) -> Result<String, OrbitError> {
     let mut resolved = definition.trigger.clone();
     resolved.deliveries_landed = Some(trigger.clone());
+    // The guard is not part of the delivery identity.
+    resolved.when = None;
+    resolved.guard_miss = None;
 
     delivery::definition_epoch(&(&resolved, &definition.target, &definition.policy))
         .map_err(automation_error_to_orbit)

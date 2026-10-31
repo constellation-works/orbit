@@ -5,19 +5,21 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::PrAutoFixBlocker;
+use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBlocker};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
 use super::super::super::super::ci::bounded_u64;
 use super::super::super::super::input::input_string_field;
+use super::super::super::landing::checks::CheckReadGap;
 use super::super::super::push::push_batch_changes;
 use super::super::answers::{ReviewedMergeOutcome, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
-    AutoFix, BlockedVerdict, LocalRepair, adopt_published_repairs, base_tip_checks,
-    blocked_verdict, publish_local_repair, record_base_path, record_landed_repair,
-    record_published_repair, red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
+    AutoFix, BlockedStopReason, BlockedVerdict, CheckRepair, LocalRepair, adopt_published_repairs,
+    base_tip_checks, blocked_verdict, defer_throttled_read, hold_auto_fix_stop, owed_read_wait,
+    publish_local_repair, record_base_path, record_landed_repair, record_published_repair,
+    red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
 };
 use super::super::delivery::{
     BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, UnreportedChecks,
@@ -32,7 +34,8 @@ use super::conflict::{
 };
 use super::mutation::{observation_failure, request_merge, resolved_capabilities};
 use super::reviewed::{
-    ensure_pr_head_is_reviewed, merge_condition_sha, merge_wait_timeout, reviewed_head_sha,
+    ensure_pr_head_is_reviewed, ensure_pr_head_matches_selection, merge_condition_sha,
+    merge_wait_timeout, reviewed_head_sha, selective_selection_head_sha,
 };
 
 /// Default budget for waiting out required checks before giving up.
@@ -75,6 +78,42 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     workspace_path: &str,
     pr_number: &str,
     auto_fix: Option<&AutoFix>,
+) -> Result<Delivery, OrbitError> {
+    let mut diagnostic = None;
+    let result = drive_pr_to_merged_observed(
+        host,
+        input,
+        workspace_path,
+        pr_number,
+        auto_fix,
+        &mut diagnostic,
+    );
+    let result = result.map_err(|error| {
+        super::super::super::landing::checks::rerun_diagnostic::append_ci_rerun_diagnostic(
+            error,
+            diagnostic.as_ref(),
+        )
+    });
+    if let Some(auto_fix) = auto_fix {
+        super::super::super::landing::checks::rerun_diagnostic::record_ci_rerun_outcome(
+            host,
+            &auto_fix.task_ids,
+            &auto_fix.run_id,
+            &result,
+        );
+    }
+    result
+}
+
+fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &str,
+    pr_number: &str,
+    auto_fix: Option<&AutoFix>,
+    diagnostic: &mut Option<
+        super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
+    >,
 ) -> Result<Delivery, OrbitError> {
     let max_wait_seconds = bounded_u64(
         input,
@@ -127,6 +166,7 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let mut base_race: Option<String> = None;
 
     let reviewed_head_sha = reviewed_head_sha(input);
+    let selective_head_sha = selective_selection_head_sha(input);
     // [ORB-11982] The candidate this run is authorized to deliver. It moves
     // through authenticated repair publications, or when bounded conflict
     // repair rewrites and lease-pushes the same branch.
@@ -191,10 +231,36 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             )
         }
         .map_err(observed)?;
+        let has_failures = !super::super::super::landing::checks::failed_checks(&status).is_empty();
+        if diagnostic
+            .as_ref()
+            .is_some_and(|previous| previous.head_sha != status.head_sha || !has_failures)
+        {
+            *diagnostic = None;
+        }
+        if let Some(auto_fix) = auto_fix {
+            super::super::super::landing::checks::rerun_diagnostic::observe_ci_rerun_head(
+                host,
+                &auto_fix.task_ids,
+                &auto_fix.run_id,
+                status.head_sha.as_deref(),
+                has_failures,
+            );
+        }
         let mut state = classify_pr_state(&status);
         let mut base_refresh_wait = false;
         if let Some(auto_fix) = auto_fix {
             pin.ensure_candidate_identity(&status, pr_number)?;
+            // Honor a durable wait before any head/base log diagnosis, including
+            // conflict and resumed paths. The freshly read head was pinned above.
+            if has_failures
+                && let Some(head) = status.head_sha.as_deref()
+                && let Some(wait_ms) =
+                    owed_read_wait(host, auto_fix, pr_number, head, observation_budget)?
+            {
+                sleep(Duration::from_millis(wait_ms));
+                continue;
+            }
             if base_candidate.is_none() {
                 base_candidate = super::super::super::base::refresh::owner_candidate(
                     Path::new(workspace_path),
@@ -255,6 +321,11 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             pin.ensure_pinned_candidate(&status, pr_number)?;
             if !base_adopted {
                 ensure_pr_head_is_reviewed(&status, pr_number, reviewed_head_sha.as_deref())?;
+                ensure_pr_head_matches_selection(
+                    &status,
+                    pr_number,
+                    selective_head_sha.as_deref(),
+                )?;
             }
         }
         state = checked_pr_state(
@@ -300,10 +371,53 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         let pending_required = matches!(state, PrMergeState::Pending);
         let mut infrastructure_wait = base_refresh_wait;
         // Set only when this poll's failed checks are an inherited red base:
-        // the base has not moved, or it moved and the same job has not
-        // concluded. A later poll that is no longer that hold must not keep
-        // the reason.
+        // the base has not moved, or it moved to a tip that cannot prove the
+        // failure fixed yet. A later poll that is no longer that hold must
+        // not keep the reason.
         let mut base_red_reason: Option<String> = None;
+        // A conflicting PR can still carry an inherited or base-suspect
+        // check failure. Decide that hold before admitting a rebase repair.
+        if matches!(state, PrMergeState::Conflict)
+            && let Some(auto_fix) = auto_fix
+        {
+            let failed = super::super::super::landing::checks::failed_checks(&status);
+            if !failed.is_empty()
+                && let Some(reason) = {
+                    match red_base_wait(
+                        host,
+                        auto_fix,
+                        input,
+                        workspace_path,
+                        pr_number,
+                        &status,
+                        &failed,
+                        observation_budget,
+                    ) {
+                        Ok(reason) => reason,
+                        Err(deferred) => {
+                            let wait_ms = defer_throttled_read(
+                                host,
+                                auto_fix,
+                                pr_number,
+                                &deferred,
+                                observation_budget,
+                                mutated,
+                            )?;
+                            sleep(Duration::from_millis(wait_ms));
+                            continue;
+                        }
+                    }
+                }
+            {
+                record_base_path(
+                    host,
+                    auto_fix,
+                    "pr_auto_fix_base_red",
+                    &json!({"failed_head":status.head_sha,"reason":reason}),
+                )?;
+                base_red_reason = Some(reason);
+            }
+        }
         if let Some(auto_fix) = auto_fix
             && !base_refresh_wait
             && matches!(
@@ -316,12 +430,51 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             // rerun, including when a reservation already exists.
             let diagnose = is_blocked_merge_state(&status)
                 && matches!(verdict, BlockedVerdict::RepairChecks(_));
-            if let BlockedVerdict::Stop(reason) = &verdict
-                && (reason.starts_with("review is required")
-                    || reason == "review decision is unavailable"
-                    || reason.contains("unreadable"))
-            {
-                return Err(stopped(pr_number, reason));
+            if let BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)) = &verdict {
+                let error = stopped(pr_number, &reason.to_string());
+                return Err(match reason.delivery_refusal() {
+                    Some(code) => hold_auto_fix_stop(error, code),
+                    None => error,
+                });
+            }
+            if diagnose {
+                let retry = super::super::auto_fix::recover_ci_rerun(
+                    host,
+                    auto_fix,
+                    input,
+                    workspace_path,
+                    pr_number,
+                    &status,
+                    completion_deadline_ms,
+                    diagnostic,
+                );
+                infrastructure_wait |= match retry {
+                    Ok(waiting) => waiting,
+                    Err(error) => {
+                        // [ORB-20178] The first throttled answer ends this
+                        // poll's reads of that log until its not-before.
+                        if let Some(deferred) = diagnostic
+                            .as_ref()
+                            .and_then(|observed| observed.throttled_log_read(&error))
+                        {
+                            let wait_ms = defer_throttled_read(
+                                host,
+                                auto_fix,
+                                pr_number,
+                                &deferred,
+                                observation_budget,
+                                mutated,
+                            )?;
+                            sleep(Duration::from_millis(wait_ms));
+                            continue;
+                        }
+                        // The existing evidence/hold route retains its typed
+                        // refusal and any recorded base inheritance. A failed
+                        // planner read grants no CI mutation permission.
+                        tracing::debug!(%error,"CI retry read deferred to existing check evidence gates");
+                        false
+                    }
+                };
             }
             infrastructure_wait |= matches!(
                 super::super::infrastructure::recover(
@@ -344,6 +497,7 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             );
         }
         match state {
+            _ if base_red_reason.is_some() => {}
             _ if infrastructure_wait => {}
             PrMergeState::Merged if watch_only => {
                 return Ok(Delivery::Watched(json!({
@@ -380,32 +534,51 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 }));
             }
             PrMergeState::Closed => {
-                return Err(OrbitError::Execution(format!(
-                    "pr_complete: pull request #{pr_number} was closed without being merged; \
-                     the task stays in review"
-                )));
+                return Err(OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::PullRequestClosed,
+                    message: format!(
+                        "pr_complete: pull request #{pr_number} was closed without being merged; the task stays in review"
+                    ),
+                });
             }
             PrMergeState::Contradictory(reason) => {
-                return Err(OrbitError::Execution(format!(
-                    "delivery_evidence_stale: pull request #{pr_number} reports a contradictory \
+                return Err(OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::EvidenceStale,
+                    message: format!(
+                        "delivery_evidence_stale: pull request #{pr_number} reports a contradictory \
                      merge state ({reason}); completion needs an unambiguous merged state, so the \
                      task stays in review"
-                )));
+                    ),
+                });
             }
             PrMergeState::Blocked(reason) => {
                 let Some(auto_fix) = auto_fix.filter(|_| is_blocked_merge_state(&status)) else {
                     let diagnosis = pin
                         .base_advance_note(input, workspace_path)
                         .unwrap_or_default();
-                    return Err(OrbitError::Execution(format!(
+                    let message = format!(
                         "pr_complete: pull request #{pr_number} cannot be merged ({reason}); \
                          branch protection or required reviews are unsatisfied and this run does \
                          not bypass them — the task stays in review.{diagnosis}"
-                    )));
+                    );
+                    return Err(reason.into_error(message));
                 };
                 match blocked_verdict(&status, unsettled_polls, pending_required) {
                     BlockedVerdict::Wait => unsettled_polls += 1,
-                    BlockedVerdict::Stop(reason) => return Err(stopped(pr_number, &reason)),
+                    BlockedVerdict::Stop(reason) => {
+                        let error = stopped(pr_number, &reason.to_string());
+                        return Err(match reason {
+                            BlockedStopReason::CheckRefusal(refusal) => {
+                                match refusal.delivery_refusal() {
+                                    Some(code) => hold_auto_fix_stop(error, code),
+                                    None => error,
+                                }
+                            }
+                            BlockedStopReason::UnsatisfiedChecks => {
+                                hold_auto_fix_stop(error, DeliveryRefusal::RequirementsUnsatisfied)
+                            }
+                        });
+                    }
                     // A repair commit on a reviewed head is reviewed again
                     // before it is published; the last completion round has
                     // no re-review left to give it.
@@ -419,14 +592,35 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                         ));
                     }
                     BlockedVerdict::RepairChecks(failed) => {
-                        let base_evidence = base_tip_checks(
+                        let base_evidence = match base_tip_checks(
                             host,
                             input,
                             workspace_path,
                             pr_number,
                             &status,
                             &failed,
-                        );
+                            observation_budget,
+                        ) {
+                            Ok(evidence) => evidence,
+                            Err(CheckReadGap::Deferred(deferred)) => {
+                                let wait_ms = defer_throttled_read(
+                                    host,
+                                    auto_fix,
+                                    pr_number,
+                                    &deferred,
+                                    observation_budget,
+                                    mutated,
+                                )?;
+                                sleep(Duration::from_millis(wait_ms));
+                                continue;
+                            }
+                            Err(CheckReadGap::Unavailable(reason)) => {
+                                return Err(hold_auto_fix_stop(
+                                    stopped(pr_number, &reason),
+                                    DeliveryRefusal::CheckEvidenceInconclusive,
+                                ));
+                            }
+                        };
                         if base_evidence
                             .as_ref()
                             .is_some_and(|evidence| evidence["path"] == "known_red_base")
@@ -502,9 +696,32 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                             pin.adopt_refreshed_candidate(Some(to));
                             landed_refresh_attempted = true;
                             continue;
-                        } else if let Some(reason) =
-                            red_base_wait(host, input, workspace_path, pr_number, &status, &failed)
-                        {
+                        } else if let Some(reason) = {
+                            match red_base_wait(
+                                host,
+                                auto_fix,
+                                input,
+                                workspace_path,
+                                pr_number,
+                                &status,
+                                &failed,
+                                observation_budget,
+                            ) {
+                                Ok(reason) => reason,
+                                Err(deferred) => {
+                                    let wait_ms = defer_throttled_read(
+                                        host,
+                                        auto_fix,
+                                        pr_number,
+                                        &deferred,
+                                        observation_budget,
+                                        mutated,
+                                    )?;
+                                    sleep(Duration::from_millis(wait_ms));
+                                    continue;
+                                }
+                            }
+                        } {
                             record_base_path(
                                 host,
                                 auto_fix,
@@ -513,14 +730,32 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                             )?;
                             base_red_reason = Some(reason);
                         } else {
-                            return Err(repair_failed_checks(
+                            match repair_failed_checks(
                                 host,
                                 auto_fix,
                                 workspace_path,
                                 pr_number,
                                 &status,
                                 &failed,
-                            ));
+                                observation_budget,
+                            ) {
+                                CheckRepair::Ended(error) => return Err(error),
+                                // Wait out the provider's throttle within the
+                                // original deadline, then observe the pull
+                                // request again before reading any evidence.
+                                CheckRepair::ReadDeferred(deferred) => {
+                                    let wait_ms = defer_throttled_read(
+                                        host,
+                                        auto_fix,
+                                        pr_number,
+                                        &deferred,
+                                        observation_budget,
+                                        mutated,
+                                    )?;
+                                    sleep(Duration::from_millis(wait_ms));
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
@@ -720,7 +955,10 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
 
         if waited_seconds >= max_wait_seconds {
             if let Some(reason) = base_red_reason.as_deref() {
-                return Err(stopped(pr_number, reason));
+                return Err(hold_auto_fix_stop(
+                    stopped(pr_number, reason),
+                    DeliveryRefusal::BaseChecksPending,
+                ));
             }
             return Err(merge_wait_timeout(
                 pr_number,
@@ -737,7 +975,10 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
 
         if waited_seconds >= max_wait_seconds {
             if let Some(reason) = base_red_reason.as_deref() {
-                return Err(stopped(pr_number, reason));
+                return Err(hold_auto_fix_stop(
+                    stopped(pr_number, reason),
+                    DeliveryRefusal::BaseChecksPending,
+                ));
             }
             return Err(merge_wait_timeout(
                 pr_number,

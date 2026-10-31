@@ -232,9 +232,11 @@ fn an_unscrubbed_child_routes_its_write_into_the_ambient_authority() {
     crate::git_repo::init(&work);
 
     // The pre-ORB-11300 fixture shape: pin `HOME`, drop `ORBIT_ROOT`, and
-    // leave everything else inherited.
+    // leave everything else inherited. Clear the worker refusal marker so the
+    // intentionally ambient sentinel authority remains reachable.
     let mut command = cargo_bin_cmd!("orbit");
     sentinel.export_authority(&mut command);
+    command.env_remove("ORBIT_WORKER_CONTEXT_REQUIRED");
     let output = run_ok(
         command
             .current_dir(&work)

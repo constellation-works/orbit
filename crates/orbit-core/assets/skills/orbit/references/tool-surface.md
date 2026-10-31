@@ -122,24 +122,125 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Task attachments | `orbit_task_artifact_put`, `orbit_task_artifact_get` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
 | Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `orchestrators`, `implementers`, `reviewers`, or `pilots`) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`. `orbit.orchestrator.scorecard` and `orbit.orchestrator.show` stay advertised as deprecated aliases of the orchestrators role and are removed in the next release |
-| Codebase risk | `orbit_codebase_analytics`, `orbit_codebase_show`, and `orbit_codebase_related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. Rankings count declared footprints; related paths are landed co-change |
+| Codebase risk | `orbit_codebase_analytics`, `orbit_codebase_show`, and `orbit_codebase_related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. The analytics and show metrics, attribution, filters, and response fields are described below. Regression-risk prompt marks count declared footprints; related paths are landed co-change |
 | Friction | `orbit_friction_add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` (`--auto-fix` also has an operator-only dashboard checkbox; no MCP auto-fix start input) |
 | Forecast mode for a local drain | `orbit_workflow_auto` `action: "start"` accepts `auto_concurrency: "off"`, `"shadow"` or `"enforce"`; omission follows the configured host mode each admission pass. Pull drains refuse this override and use the executor host mode. | `orbit run auto --auto-concurrency <MODE>`; omission has the same live host default. Explicit overrides and inheritance source (`explicit` or `configured`) survive restart/resume without writing config; host thresholds and provider-limit policy refresh next pass, caching unchanged config by mtime and retaining the previous policies with a warning on invalid config; run show and readiness expose `mode`, `source` and the current `configured_mode`. This selects forecast policy only: normal operator authority, worker ceiling and host thresholds still apply. |
-| Submit a catalog job | `orbit_pipeline_invoke` (`job_name` plus `input`, or operator-only `default_input: true` with `workspace`). Returns a run ID; a managed run needs a host-authorized child admission. No MCP wait — poll `orbit_workflow_run_show` | `orbit run job <id>` (`--wait` blocks). `orbit.pipeline.wait` is CLI-only |
-| Observe/resume workflows | `orbit_workflow_run_show/list/resume`; resize a live auto drain with operator-only `orbit_workflow_auto` `action: "resize"`; its `start` takes `approve_proposed: true` for the same per-pass approval as `run auto --approve-proposed`, which never approves a task tagged `no-auto-approve` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; `orbit run extend`; job replay/resume |
+| Submit a catalog job | `orbit_pipeline_invoke` (`job_name` plus `input`, or operator-only `default_input: true` with `workspace`). Returns a run ID; a managed run needs a host-authorized child admission. No MCP wait — an operator session polls `orbit_workflow_run_show` (operator authority; denied for agent sessions); a session with a shell on the owning host uses `orbit run show <run-id>` instead | `orbit run job <id>` (`--wait` blocks). `orbit.pipeline.wait` is CLI-only |
+| Observe/resume workflows | Operator-only `orbit_workflow_run_show/list/resume` (denied for agent sessions; a session with a shell on the owning host uses `orbit run show/history/events/trace/logs/cancel`); resize a live auto drain with operator-only `orbit_workflow_auto` `action: "resize"`; its `start` takes `approve_proposed: true` for the same per-pass approval as `run auto --approve-proposed`, which never approves a task tagged `no-auto-approve` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; `orbit run extend`; job replay/resume |
 | Delivery evidence | `orbit_task_show` with `field: "delivery"` alone and optional `run_id` (read only; needs no operator authority) | What one delivery run committed and landed for one task of this workspace, read only from the host's commit and merge step records: typed status, base/head and landed SHAs, PR number, timestamps and provenance. Missing, inconsistent or foreign evidence is `unavailable` with a reason, never inferred; a local fast-forward records no landed SHA. Without `run_id` it reads the newest task-delivery run submitted with the task. Inherited commits require a bounded (64-parent), same-workspace/job/submitted-task retry chain and matching deterministic producer checkpoints/definitions; `provenance.source_run_id` and the source timestamp retain the original commit, while a resumed landing requires its own current host evidence. Execution identity/time can come from bounded (256-event) host step lifecycle audit metadata when the run record has no activity steps; audit metadata never supplies commit/landing bytes. Refreshed candidate heads never replace `commit.head_sha`. Full run details stay on operator-only `orbit_workflow_run_show` |
 | Auto-tasks | `orbit_auto_task_add/list/update/mint`; `update` `enabled` enables or disables a definition | Those four are also CLI commands. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are not on MCP (`orbit auto-task`, or `orbit tool run`); `delete` and `reset` need operator authority |
 | Routine enablement | `orbit_routine_control` with `action: "list"` or `"toggle"`; operator authority and explicit `workspace` required | `orbit routine list/show` reads definitions and state. MCP toggle needs the observed `expected_enabled` and `target` plus desired `enabled`; after a lost reply, observe state before retrying. `orbit routine pause/resume` controls the separate host-local pause. |
 | Review recovery | `orbit_task_reconcile_review` (`inspect`, `submit`, `status`, `accept_baseline`) and `orbit_task_review_reset`; operator-only and unavailable to managed runs | `orbit task reconcile-review` and `orbit task review-reset`. Reconciliation judges a recovered delivery's changed merged head; reset closes an open attempt and renews one selected lineage budget with a reason, preserving history. Inspect authoritative state after a lost reply. |
 | Blocked-task requeue | `orbit_task_requeue` (`id`, `reason`, optional `discard_candidate`); operator-only and unavailable to managed runs | `orbit task requeue <id> --reason <why> [--discard-candidate]`. Returns a blocked task whose run has stopped to the backlog so its next run resumes the candidate and pull request its failure handoff published, after re-authenticating that publication, or the latest candidate a claim of the task kept, which a later claim that ended without one does not replace (`resumes.source: claim`); a live run or unsettled claim is refused. A changed task specification is refused; `discard_candidate` closes the task's undelivered Orbit pull requests (as `orbit task update --status backlog --discard-candidate` does) and reruns fresh. Nothing is written on a refusal. |
+| Human decision requests | `orbit.decision.list` and `orbit.decision.show` (read only; an agent may see a request, never answer it). `orbit.task.show` with `fields: ["open_decisions"]` lists one task's open requests | `orbit decision list` and `orbit decision show` (read). `orbit decision answer <id> <answer> [--note]` is operator-only, from the CLI or the dashboard. `orbit decision submit` and `orbit decision channel` manage registered decision channels |
+| Experiments | `orbit.experiment.show`, `orbit.experiment.list` and `orbit.experiment.readout` (read only; an agent may see an experiment's arms, event log and per-arm outcomes, never change it) | `orbit experiment show <id>`, `orbit experiment list` and `orbit experiment readout <id> [--metric <name>]` (read). `create`, `update`, `clone`, `start`, `pause`, `resume`, `reweight`, `conclude` and `abandon` are operator-only. `conclude` stores the readout at that moment on the conclusion event and, when an arm is chosen, files one proposed task that names the experiment, arm, verdict and overlay. It changes no configuration or repository file. |
+| Crew ladder | `orbit.crew.ladder` (read only) | `orbit crew ladder [--json]`: per complexity tier, the pool, floor, candidate rung and the `system:crew-ladder` shadow trial with its would-be count, or why the tier has none. Trials are created, started and concluded at delivery admission, never by this read. |
+| Condition explain | `orbit.automation.explain` (read only; `definition`, optional `subject`) | `orbit automation explain <definition> [--subject <key>] [--json]`: a routine's or auto-task's condition over live state with its scope, prefilter, ownership verdict, up to 20 matches (with arm state and remaining hold) and closest misses, one subject's clause tree with operand values, and its durable tracking: stall, last pass and skip, recent fires with their upstream chain, and `self`. Writes nothing. `job:<name>` shows a job's auto-task steps instead: outer bound, revision pin, each step's resolved target auto-task (digest, enabled, own condition guard) and its waits and step reads; such jobs cannot run yet. |
+| Condition stall clear | `orbit.automation.clear_stall` is operator-only; agents report a stalled condition instead | `orbit automation clear-stall <definition> --reason <text>`: clears `match_storm`, `too_many_matches`, `loop_suspected` or `oscillating` on the workspace owner, audited. |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; returns a run ID, or the answer with `--wait` |
-| Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval, revocation and recovery remain owner-dashboard actions. See [distributed-drain.md](setup/distributed-drain.md). |
+| Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval is an owner-dashboard action with no CLI verb or tool. Handoff revocation and claim recovery are operator-only: `orbit task revoke-handoff` and `orbit task recover-claim`, with the tools `orbit.task.revoke_handoff` and `orbit.task.recover_claim`, which managed runs cannot call. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
-`orbit_workflow_run_show` and each `orbit_workflow_run_list` item carry the
-same run projection as `.run` in `orbit run show --json` and the dashboard:
+### Codebase analytics and path detail
+
+Use `orbit_codebase_analytics` to compare repository paths across the codebase
+risk rankings. Pass a `path` returned in a ranking row to
+`orbit_codebase_show` to inspect that path's standing in every ranking and
+follow its counts to tasks, regression sites, lock waiters, or coupled paths.
+Both tools use the same selection: `window` (`7d`, `30d`, `90d`, or `all`,
+default `90d`), `min_support` (default `15`: minimum denominator for the rate
+rankings, minimum shared-reservation count for change coupling) and `rollup`
+(`file`, parent `dir`, or `crate`, default `file`). `touched` means the task's
+declared footprint (`context_files`, including widened selectors), not the
+landed diff.
+
+Analytics returns six path rankings and an `overlap` summary. Each rate row
+includes its numerator and denominator. Rankings use distinct tasks as their
+counts, except lock contention, which counts distinct requesting identities,
+and change coupling, which counts reservations. The rate rankings keep rows
+with a positive numerator and at least `min_support` denominator support, are
+sorted by rate then numerator then path, and analytics returns at most 25 per
+ranking; `blocked` additionally keeps a supported row whose attributed
+numerator is zero when the path has unclassified blocks, ranking at rate zero
+so that bucket stays visible per path. Change coupling instead keeps pairs
+with at least `min_support` reservations naming both paths, regardless of the
+Jaccard `either` denominator, sorted the same way with the shared count
+standing in for the numerator. `below_support` counts rows omitted for low
+support (pairs below shared-count support for coupling). For the rate
+rankings, `show` reports the path's 1-based rank over the full ranking and
+whether its denominator is below support; a missing ranking row is `null`.
+
+The ranking sections mean:
+
+- `regressions`: done tasks with an incoming regression link whose recorded
+  site attributes the task to the path, divided by done tasks whose declared
+  footprint touched it. A task attributed by a site outside its footprint is
+  added to that path's denominator, so its rate stays at most 1. Recorded
+  directory sites cover their descendant keys. The response includes task
+  counts, sites, and the link breakdowns described below.
+- `footprint_misses`: tasks whose declared footprint was widened onto the
+  path during the window, divided by active tasks whose footprint touched it.
+  `widenings` counts widening events, while the rate counts each task once.
+- `blocked`: tasks blocked by a run failure or recorded base conflict on the
+  path, divided by active tasks whose footprint touched it (plus any
+  conflicting paths outside that footprint). Unclassified blocks are reported
+  separately, including per-path counts; infrastructure, manual,
+  base-conflict, run-failure, and non-failure totals are also exposed.
+- `rejected`: tasks rejected after a job run, divided by tasks with a run
+  whose footprint touched the path. Proposal-stage rejections without a run
+  are excluded.
+- `lock_contention`: distinct requesters refused a lock on the path divided
+  by distinct requesters with a reservation or refusal there. The response
+  includes reservation and denial counts, wait summaries, and a second list
+  ranked by total wait time.
+- `change_coupling`: pairs of paths reserved together, ranked by Jaccard rate
+  (`reservations naming both ÷ reservations naming either`). Pair support is
+  the number of reservations naming both, and `min_support` gates that shared
+  count rather than the `either` denominator. Reservations covering more than
+  12 files are excluded.
+
+`overlap` lists paths appearing in at least two of the first 25 rows of
+`regressions`, `footprint_misses`, `blocked`, and `rejected`, plus each path's
+rankings and its highest non-rejection rate. `ranked_paths` is the number of
+distinct paths across those four lists.
+
+Regression attribution and filters apply to `regressions`, its path detail,
+and the crew and complexity rates. A link's `nature` and `escape` come from
+its recorded classification; a missing classification is `absent`, distinct
+from an explicit `unclassified`. `layer` describes where the fix landed,
+using landed paths or, when unavailable, its declared footprint. `detected_by`
+comes from the regression task's tags or its filer. Filters `nature`,
+`escape`, `layer`, and `detected_by` combine: every selected dimension must
+match. `absent` selects links without a recorded classification.
+
+The regression section's `breakdowns` count links by nature, escape, layer,
+and detector while retaining filters on the other dimensions. `cross_tabs`
+contains link counts for nature × escape and escape × layer under the full
+filter. `by_crew` and `by_complexity` are rates of done tasks with a matching
+regression link within each crew or complexity group; missing values appear
+as `unassigned` and `unset`. Each path row also has per-crew numerator,
+denominator, and rate. A regressed task entry includes its crew, complexity,
+regression task IDs, matching regression links, and sites attributing it to
+that path. `unsited` counts regressed tasks and links whose kept links have no
+valid recorded site; they are not attributed across the task's footprint.
+
+In `show`, each task-rate ranking entry carries its rate, numerator,
+denominator, rank, and support status, plus the evidence behind its numerator.
+The regression detail lists the recorded site selectors under the path and
+their regressed and regression tasks. Its `unsited` task count is limited to
+regressed tasks that declared the path but have no site attributing them to
+any path. Lock detail lists refused requesters and wait episodes.
+`change_coupling` reports the path's reservation count and ranked pairs; each
+pair includes its Jaccard rate, rank, reservation counts for both paths, and
+requesters. The same four regression filters narrow regression counts and
+drill-downs; they do not change the other rankings.
+
+`orbit_workflow_run_show` and each `orbit_workflow_run_list` item are
+operator-only (denied for agent sessions) and carry the same run projection
+as `.run` in `orbit run show --json` and the dashboard; a session with a
+shell on the owning host reads that projection with `orbit run show --json`:
 state and timing, `error_code`/`error_message` from the step that explains the
 outcome, `root_cause` for a run that failed only because a child did,
 `run_role`, crew, `trigger`, `child_dispatches` and drain controls. They add
@@ -161,6 +262,24 @@ integration. Governed workflow and command operations need operator authority;
 a managed worker cannot dispatch/resume another workflow or use operator command
 execution. An allowlisted tool still has to pass runtime policy, filesystem,
 subprocess, and external authentication checks.
+
+### MCP toolsets
+
+`orbit mcp serve` and `orbit mcp listen` advertise the `default` toolset plus
+the opt-in toolsets the host enables: `leases` (path leases), `experiments`
+(experiment tools), `analytics` (agent scorecards, orchestrator scorecard and
+show, crew ladder) and `decision-channel` (decision submit and digest; decision
+list and show stay default). Enable them per server with
+`--toolset leases,analytics` (or `all`), or for the host with
+`orbit config set --global machine.mcp.toolsets '["experiments"]'`; the flag
+replaces the config. A call to a tool outside the server's toolsets is refused
+`toolset_not_enabled`, naming the tool's `toolset` and the `enable` flag and
+config key. A federated mux filters every row the same way. The toolset of each
+tool is in `orbit tool show <name> --json` (`mcp_toolset`).
+
+Toolsets change only what an MCP server lists. `orbit tool run`, CLI commands,
+activity `required_tools` and task grants, and a decision-channel plugin's
+callback session reach every tool regardless.
 
 ### Host agent invocation
 
@@ -246,8 +365,10 @@ When that mode is the provider's least-restrictive inner sandbox
 Orbit logs the same at WARN: the provider may use host integrations (browser,
 computer use, …) beyond the working directory.
 
-Track it with the ordinary run surfaces — `orbit_workflow_run_show`, or
-`orbit run show|logs|cancel <RUN_ID>`. The full MCP response puts
+An operator session tracks it with the ordinary run surfaces —
+`orbit_workflow_run_show` (operator authority; denied for agent sessions), or
+`orbit run show|logs|cancel <RUN_ID>`; a non-operator session with a shell on
+the owning host uses `orbit run show|logs|cancel <RUN_ID>`. The full MCP response puts
 `agent_invocation` at the top level; `view: "bounded"` and
 `orbit run show --json` put it at `.run.agent_invocation`:
 
@@ -277,6 +398,139 @@ The durable admission and `trusted_host.execution_admitted` event retain the
 forwarded caller machine ID — attribution, not a grant — plus the workspace
 checkout and cwd. See [remote-access.md](../../orbit-setup/references/remote-access.md). Do not
 relaunch a server with more privileges to work around a denied call.
+
+### Blocked-task triage
+
+`orbit_task_block_triage` (`orbit.task.block_triage`) records one triage
+decision on a blocked task's current block episode. `candidates` lists the
+episodes that await triage: the final-recovery decision escalated, or the block
+has no decision and the backstop never decides it (it is older than 72 hours).
+An episode already triaged, or touched by a human after the block, is excluded.
+Each other action records one decision on a qualifying episode, as one task
+comment plus a history marker, and refuses any other episode. No action
+completes, rejects or archives a task.
+
+- `requeue` returns the task to `backlog` as a final-recovery requeue, counted
+  against the requeue bound shared with final recovery: 2 per 24 hours. Past the
+  bound, for a task tagged `security` or `security-review`, or for a run another
+  machine executed, the requeue is recorded as refused with the human action and
+  the task stays blocked. When the count cannot be read, nothing is written and
+  the refusal says so.
+- `propose` records the quoted blocker, two or three options with their
+  consequences and ready-to-apply replacement text, and a recommendation. It
+  changes nothing else.
+- `report` records the human action. It changes nothing else.
+
+With `subject` `pilot_warning`, the same actions read `proposed` tasks whose
+latest task-pilot assessment holds promotion on warning findings. `candidates`
+lists each held assessment that is not yet triaged and has no operator decision,
+quoting its holding findings. `propose` and `report` record one comment quoting
+those findings plus a `pilot_warning_triaged` history marker, which excludes that
+assessment afterwards, and they refuse a task that no longer qualifies. `requeue`
+is refused. A pilot-warning triage never approves, promotes, clears the hold or
+edits any other task field.
+
+Inspection proof: a decision on a task that a live escalation triage run holds
+must carry that run's proof, in three fields:
+
+- `source_revision`: the commit the run pinned.
+- `observed_revision`: `git rev-parse HEAD` in the run's inspection checkout.
+- `observed_tree`: `git rev-parse 'HEAD^{tree}'` in the same checkout.
+
+Core checks that `observed_revision` equals the pinned revision and that
+`observed_tree` equals that revision's tree. In a non-Git workspace the run pins
+no revision: pass `source_revision` as null and omit both observed values. A
+missing or mismatched proof is refused, naming the run and the expected values,
+and nothing is recorded. A proof passed on any other decision is checked the same
+way.
+
+### Decision requests
+
+`orbit_decision_submit` (`orbit.decision.submit`) and `orbit_decision_digest`
+(`orbit.decision.digest`) are governed. Over MCP they are in the `decision-channel`
+toolset. Both are callable only by the plugin the
+channel is bound to, through its callback session, or by the operator; an agent
+session is refused `caller_not_allowed`.
+
+**Submit.** Core verifies that the channel is registered and unrevoked, that the
+request is still open against its binding, that the answer is allowed, and the
+per-request token: single-use, expiring with the request, and keyed to the
+channel's current key epoch. A submission with `raw_message` also gets core's own
+DKIM check: core reads the selector key from DNS, verifies the body hash and the
+header signature, checks signing-domain alignment with the sender, and refuses
+when its result contradicts the forwarded verdicts. A channel registered with
+`require_dkim_verification` refuses a submission without a raw message
+(`dkim_verification_required`). Only then is the answer applied as the registered
+human, with the channel and the token fingerprint recorded as provenance.
+
+A refusal applies nothing. The refusal codes are `channel_not_registered`,
+`channel_revoked`, `caller_not_allowed`, `sender_not_allowed`,
+`authentication_failed`, `dkim_verification_failed`,
+`dkim_verification_unavailable`, `dkim_verification_required`,
+`raw_message_too_large`, `token_invalid`, `token_consumed`, `request_expired`,
+`request_superseded`, `answer_not_allowed`, `answer_not_applicable`,
+`request_not_found` and `decision_channel_disabled`. A parse-level
+refusal does not consume the token. `dkim_verification_unavailable` is the only
+retryable refusal: retry the same submission unchanged; it consumes nothing.
+
+**Digest.** `orbit_decision_digest` takes one `channel`. For every proposed task
+without an open `proposed_approval` request, and every review task without an
+open `review_approval` request, it raises one open request per (task, gate,
+binding), with answers `approve` and `reject` and `raised_by` `digest`. A plugin
+the channel is not bound to is refused `channel_not_registered`; an unregistered
+or revoked channel is refused with `channel_not_registered` or `channel_revoked`.
+
+- `proposed_approval` binds to the task's description and acceptance criteria
+  plus its proposed status.
+- `review_approval` also binds to the candidate under review.
+- Either request reads `superseded` once its binding stops matching.
+
+The result carries `requests` (the digest), `raised` (what this call raised) and
+`expiring` (every still-open request expiring within 24 hours). Repeated calls
+reuse requests for unchanged task bindings, while newly eligible tasks can add
+requests. With the decision channel disabled in this workspace, the call raises
+nothing, writes nothing and returns no requests.
+
+### Agent scorecards
+
+`orbit_agents_scorecard` ranks one agent role's crews and models over the window. Over
+MCP it is in the `analytics` toolset.
+
+- **Score.** Each term's count per 100 units of work is weighted and summed.
+  Implementers start at 100 and score actual counts against fleet expectations
+  for the same tier mix; other roles sum weighted actual rates. A row above the
+  fleet average is pulled down toward it. Tasks tagged `no-diff-expected`, when
+  an attempt was admitted, are not implementer work and count nowhere on the
+  implementers scorecard.
+- **Ranking.** Rows below the minimum support are listed last without a rank. A
+  reviewer row none of whose work is judged yet is `unjudged`: no rank, null
+  `raw` and `score`, listed after every other row and left out of the fleet
+  average. A role whose terms are not computed yet answers
+  `status: not_computed`, with its terms and no rows.
+- **Switches.** `by_type` returns one cell per (crew, model, tier, type) with
+  `n`, `raw`, `crew_mean` and `score`, plus the type list used. `shadow` (with
+  `by_type`) returns each crew's draw count and its static, drawn and would-be
+  share per pool and type over the window; draws with no performance record are
+  counted separately as static. `per_task` returns one row per implemented task
+  with its crew, model, tier, configured type, tags, context-file selectors, path
+  prefixes and per-term counts, plus the type list used. Without these switches,
+  the ranking is returned.
+- **Recorded effort.** Each ranking/detail row includes `effort_breakdown` of
+  completed invocations by immutable dispatch crew, model and reasoning effort,
+  with counts, linked tasks, duration, tokens and provider-reported cost.
+  `null` means provider default; `"unknown"` means no dispatch record exists.
+  Scores retain their crew/model population. The top-level breakdown covers
+  completed workspace invocations in the selected window; `effort_population`
+  identifies that separate descriptive population. Orchestrator authorship stays
+  unknown because authorship does not record an execution effort. Never infer
+  historical effort from the crew's current configuration or an audit event.
+  The ladder's `effort_breakdown` covers 90 days (`effort_window_days`);
+  experiment arms break down invocations linked to their enrolled tasks.
+  Run show exposes `agent_executions` on the run and displayed steps, captured
+  before launch so interrupted runs remain inspectable.
+- **Cost.** Each call scans the workspace once (`cache_ttl_seconds` is 0), except
+  the `shadow` report, which reads recorded draws only.
+- The dashboard's Agents view reads this payload.
 
 ## Common MCP arguments
 
@@ -315,10 +569,58 @@ that may not find the toolchain, unset `execution.env.pass` names) and
 `validation_env_warning`. A drain start also carries `resource_throttle`, a
 `warning` line naming backlog tagged for another OS, and a `note` when no
 required validation is configured. None of them refuses the submission.
-Read the returned run with `orbit_workflow_run_show` using `id` and `workspace`.
-List bounded history with `limit`, `job_id`, `state` (including `terminal`), and
-RFC3339 `since`. Submission success means a durable run exists, not that the
-change landed. Resume returns a new linked run; preserve both IDs.
+An operator session reads the returned run with `orbit_workflow_run_show`
+using `id` and `workspace` (operator authority; denied for agent sessions);
+a session with a shell on the owning host uses `orbit run show <run-id> --json`.
+An operator session lists bounded history with `limit`, `job_id`, `state`
+(including `terminal`), and RFC3339 `since` (`orbit_workflow_run_list`);
+a session with a shell on the owning host uses `orbit run history --json`.
+Submission success means a durable run exists, not that the
+change landed. An operator session resumes with `orbit_workflow_run_resume`;
+it returns a new linked run; preserve both IDs.
+
+## Path leases
+
+`orbit.lease.request`, `.renew`, `.expand`, `.release`, `.show`, `.list`,
+`.check` and `.notices` are `orbit tool run` tools, and MCP tools (advertised as
+`orbit_lease_request`, etc.) on a server that enables the `leases` toolset. They all answer for the owner's coordination store and
+require an identified agent, operator or runner. Federated calls must target
+the owner; replicas refuse the `control_plane` class, including lease reads.
+Enable `lease.enabled` in the workspace first.
+
+Request takes `principal`, `selectors` (`file:...` or `dir:...`), optional
+`mode` (`advisory` or `hard`), `priority` (`low`, `normal`, `high`),
+`ttl_seconds` (1–14400; default 1800), `wait` (default true), tags and
+branch/machine attribution. It returns `granted` and a `lease` with `lease_id`,
+mode, principal, priority and expiry. Advisory never blocks; a hard request
+overlapping task locks, reservations or other hard leases returns
+`granted: false, queued: true` with the holders and `queue_position`, and its
+lease (state `queued`) holds nothing until a `granted` notice; `wait: false`
+returns `queued: false` and the holders instead. The queue orders by priority,
+then age, and `lease.aging_minutes` lifts a long waiter one level. A lease
+never preempts an in-progress or review task. Workspace
+policy may downgrade hard to advisory or refuse priority above the caller's
+ceiling. Over SSH, principal/class policy is attribution and a guard.
+
+Renew, release and show take `lease_id`; renew optionally takes `ttl_seconds`.
+Expand takes `lease_id` and `selectors`: free paths are `added` at once, and
+on a hard lease blocked ones are `queued` while the lease keeps what it holds.
+A mutual expansion wait refuses the expansion ranked last in queue order
+(lowest effective priority, then youngest) with a `deadlock` notice
+(`deadlock` is set in that caller's answer).
+List returns active leases, queued ones included. Check takes `paths` and optional `lease_id` and
+reports coverage, unlocked policy and overlapping holders without mutations.
+Show and list expire stale leases and can write expiry audit events.
+
+The CLI is `orbit lease request <selector>... --principal <name>
+[--mode advisory|hard | --hard] [--priority low|normal|high] [--ttl 30m]
+[--no-wait]`, `renew <lease-id> [--ttl 30m]`, `expand <lease-id> <selector>...`,
+`release <lease-id>`, `show <lease-id>`, `list`, and
+`check <path>... [--lease-id <lease-id>]`. All support `--json`.
+A refused or queued request, and a deadlock-refused expansion, exit 3. `orbit task locks list` shows leases alongside
+reservations with mode and principal; task/reservation counts retain their
+existing meaning, with `by_lease` and `total_leases` added separately; a queued request holds
+nothing and is not listed there. Preemption belongs to a later phase.
 
 ## Missing operations
 

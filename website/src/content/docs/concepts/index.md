@@ -43,7 +43,7 @@ one layer: what it guarantees and what it refuses. For commands, see the
 <div class="orbit-card-grid">
   <a class="orbit-card" href="./tasks/" data-tag="01">
     <h3>Tasks</h3>
-    <p>Lifecycle, statuses, the two approval gates, and the transition rules.</p>
+    <p>Lifecycle, statuses, the two approval gates, transition rules, and task artifacts.</p>
   </a>
   <a class="orbit-card" href="./activities-jobs/" data-tag="02">
     <h3>Activities and jobs</h3>
@@ -75,14 +75,15 @@ one layer: what it guarantees and what it refuses. For commands, see the
 ### Execute safely in parallel
 
 - **Isolated, sandboxed runs.** Each run gets its own git worktree and runs its agent CLI under `sandbox-exec` on macOS or Bubblewrap on Linux. On Linux, workers use memory-bounded cgroups when a systemd user manager is available; see [worker containment](../reference/config/#settable-keys).
-- **Conflict-aware scheduling.** Runs reserve their task's files as locks before starting, so overlapping work waits in line instead of producing merge conflicts later.
+- **Conflict-aware scheduling.** Runs reserve their task's files as locks before starting, so overlapping work waits in line instead of producing merge conflicts later. Interactive work can hold an advisory or hard path lease with `orbit lease` instead; see [Path leases](../how-to/path-leases/).
 - **Gated pipeline.** Each run goes plan → execute → review, with repair budgets and failure recovery. Dependencies gate admission, so you declare the order once and the queue enforces it.
-- **Ten agent CLIs, routed by crews.** Claude Code, Codex, Cursor, Copilot, Grok, Gemini, Antigravity, OpenCode, Pi, and Muse Code (macOS only). Crews pin a provider, model, and supported effort level. Complexity-tiered, weighted crew pools spread the work across them ([how routing works](../reference/config/#crews)).
+- **Seven agent CLIs, routed by crews.** Claude Code, Codex, Copilot, Grok, Gemini, Antigravity, and Muse Code (the Cursor, Pi, and OpenCode lanes were [retired](./agents/#retired-providers)). Crews pin a provider, model, and supported effort level. Complexity-tiered, weighted crew pools spread the work across them ([how routing works](../reference/config/#crews)).
 - **Read-only exploration and operator steering.** Opt-in exploration lets implementing and review-repair agents ask an explorer crew bounded code-reading questions. Opt-in mid-run steering delivers new operator comments and holds promotion until the run consumes them ([agent execution](./agents/)).
 
 ### Run unattended
 
 - **Bounded drains.** `orbit run auto --for 4h --concurrency 8` ships the backlog until the time window closes. `orbit run readiness` previews what would run without starting anything. Or ask your agent to run one: the `orbit-orchestrate` skill prepares the backlog, starts the drain, and works through failed runs.
+- **Scheduled task starts.** A task's optional `not_before` holds it until its earliest start time. The hold lifts on the next admission pass; approval and the other admission checks still apply. See [Scheduled tasks](./scheduling/#scheduled-tasks).
 - **Opt-in completion.** `--complete` merges PRs once GitHub allows it and closes tasks after the merge is verified. For distributed handoffs, the owner can instead authorize completion with `workflow.distributed_completion = "done"`; see [delivery workflows](../getting-started/workflows/#completing-work-with---complete).
 - **Continuous review.** The shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks read everything that landed since their last run, verify findings against live code, and file confirmed ones as tasks with `file:line` evidence.
 - **Recurring work as data.** Scheduled task templates live in `.orbit/auto_tasks/*.yaml`, and one machine scheduler (`orbit clock`) runs routines and auto-tasks.
@@ -90,7 +91,8 @@ one layer: what it guarantees and what it refuses. For commands, see the
 
 ### Observe and extend
 
-- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, managed-execution cost, jobs, frictions, and effective config, with inline editing. Agent scorecards link each role's scores to their evidence; host resource analytics compare measured CPU and memory with admission forecasts.
+- **Dashboard** (`orbit web serve`). Shows the task backlog, live audit feed, managed-execution cost, jobs, frictions, and effective config, with inline editing. The Tasks drain card and Analytics › Forecast estimate time, cost and tokens to drain the backlog. Agent scorecards link each role's scores to their evidence; host resource analytics compare measured CPU and memory with admission forecasts.
+- **Experiments.** Operators run randomized experiments over agent treatments with `orbit experiment`: sticky assignment, overlays, and a per-arm readout. Starting one needs `experiments.enabled`. See [CLI commands](../reference/cli/#experiments).
 - **Plugins** (`orbit plugin`). A plugin can add its own tools, jobs, routines, auto-tasks, skills, and CLI commands. Plugins run sandboxed under explicit permission grants, and `orbit plugin scaffold` generates a starter.
 - **Agent skills.** Three skills ship with Orbit: `orbit` (everyday task work), `orbit-orchestrate` (backlog and dispatch), and `orbit-setup` (machine and repo configuration). `orbit init` links them into your agents.
 

@@ -1,9 +1,13 @@
 //! The child process's own work: execute the run it was handed.
 
 use super::*;
+use crate::application::job::{JobAutomationPort, JobPullSettlementPort};
 
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
+        // [ORB-18166] Before anything can be killed mid-run, so a terminating
+        // signal's sender reaches the supervisor's exit record.
+        super::exit::capture_terminating_signal_senders();
         self.preflight_pipeline_worker_store()?;
         upgrade_handover::bind_worker_run(run_id);
         if upgrade_handover::adopts_run(run_id) {
@@ -142,11 +146,11 @@ impl OrbitRuntime {
         started_at: chrono::DateTime<Utc>,
         announce_start: bool,
     ) -> Result<(), OrbitError> {
-        let input = run
+        let mut input = run
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
-        // Telemetry only. Linux samples the worker scope and skips a worker
+        // Resource telemetry. Linux samples the worker scope and skips a worker
         // with none; macOS samples the process tree and skips a sample it
         // cannot read. Either way the sampler never touches the run's
         // outcome. Stopped before the run is finalized, so its last minute
@@ -157,7 +161,28 @@ impl OrbitRuntime {
         // validation, event persistence, and resume-state reads cannot escape
         // with a durable `running` projection.
         let outcome = (|| {
-            let bundle = crate::application::automation::members::bundle_crews(self, run, &input);
+            #[cfg(target_os = "macos")]
+            let _watchdog = self.start_worker_watchdog(run)?;
+            if crate::application::job::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str()) {
+                if let Some(selection) = self
+                    .read_run_state(&run.run_id)?
+                    .and_then(|state| state.crew_selection)
+                {
+                    input["crew"] = selection["crew"].clone();
+                    input["crew_selection"] = selection;
+                } else {
+                    self.install_claimed_experiment_crew(&mut input)?;
+                    if let Some(selection) = input.get("crew_selection") {
+                        self.stores()
+                            .jobs()
+                            .update_run_state(&run.run_id, &mut |_, state| {
+                                state.crew_selection = Some(selection.clone());
+                                Ok(())
+                            })?;
+                    }
+                }
+            }
+            let bundle = self.run_bundle_crews(run, &input);
             self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
 
             if announce_start {
@@ -201,7 +226,7 @@ impl OrbitRuntime {
         )?;
         // A claimed leaf's settlement that did not reach its owner is retried
         // here, after the run is final, rather than in terminalization.
-        self.retry_own_claimed_leaf_settlement(&run.run_id);
+        self.retry_leaf_settlement(&run.run_id);
         outcome.map(|_| ())
     }
 }

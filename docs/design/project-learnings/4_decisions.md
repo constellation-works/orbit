@@ -6,6 +6,8 @@ owner: claude
 last_updated: 2026-10-10
 last_validated: 2026-10-10
 status: Accepted
+stage: parked
+next: "Retired by decision (ORB-10736); candidate to move under _archived"
 feature: project-learnings
 doc_role: decisions
 tags: ["project-learnings"]

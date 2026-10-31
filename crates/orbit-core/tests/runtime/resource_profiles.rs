@@ -1,10 +1,11 @@
 //! Resource profiles through the public runtime: seeded `run_resource_minutes`
 //! and `job_runs` rows become per-key profiles, a lookup walks the fallback
-//! chain, and profiles stay cached until a delivery finishes.
+//! chain, and profiles stay cached until a delivery finishes or a template's
+//! `no-diff-expected` tag changes.
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::host_resource::profile::{
     BaseClass, ProfileLookup, ProfileSource, ResourceProfile,
 };
@@ -59,6 +60,10 @@ struct Fixture {
     workspace: String,
     /// Admission times are spaced so every delivery is distinct.
     next_admission: std::cell::Cell<i64>,
+    /// How many days before now the first admission falls.
+    days_ago: std::cell::Cell<i64>,
+    /// The crew model and Orbit version seeded minutes record.
+    sampled_under: std::cell::RefCell<(Option<String>, Option<String>)>,
 }
 
 impl Fixture {
@@ -83,13 +88,15 @@ impl Fixture {
             store,
             workspace,
             next_admission: std::cell::Cell::new(0),
+            days_ago: std::cell::Cell::new(2),
+            sampled_under: std::cell::RefCell::new((None, None)),
         }
     }
 
     fn admission(&self) -> DateTime<Utc> {
         let index = self.next_admission.get();
         self.next_admission.set(index + 1);
-        Utc::now() - Duration::days(2) + Duration::hours(index)
+        Utc::now() - Duration::days(self.days_ago.get()) + Duration::hours(index)
     }
 
     /// Seed one delivery of `task` in `workspace` and return its run ids.
@@ -147,6 +154,8 @@ impl Fixture {
                     cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
                     memory_bytes: *memory,
                     samples: 12,
+                    crew_model: self.sampled_under.borrow().0.clone(),
+                    orbit_version: self.sampled_under.borrow().1.clone(),
                 })
                 .unwrap();
         }
@@ -739,6 +748,51 @@ fn profiles_stay_cached_until_a_delivery_finishes() {
     assert_eq!(fixture.profile("change", Some("hard")).delivery_count, 2);
 }
 
+/// A template's `no-diff-expected` tag edit reclassifies it on the next
+/// profile read, with no delivery finishing in between: a cache hit must not
+/// answer with the class the template had before the edit.
+fn no_diff_tag_edit_reclassifies_a_template_on_the_next_read() {
+    let fixture = Fixture::new("");
+    let workspace = fixture.workspace.clone();
+    let template = fixture.template_task("docs-audit", false);
+    fixture.delivery(
+        &workspace,
+        &template,
+        "auto-task:docs-audit",
+        None,
+        vec![RunSeed::flat(3, 1.0, GIB)],
+    );
+    let class = "auto-task:docs-audit";
+    let tags_with = |tags: &[&str]| TaskUpdateParams {
+        tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
+        ..Default::default()
+    };
+
+    let cached = fixture.runtime.resource_profiles().unwrap();
+    assert_eq!(fixture.profile(class, None).base_class, BaseClass::Change);
+    assert!(
+        Arc::ptr_eq(&cached, &fixture.runtime.resource_profiles().unwrap()),
+        "an untouched template keeps the cached profiles"
+    );
+
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &template,
+            tags_with(&["auto-task:docs-audit", "no-diff-expected"]),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(fixture.profile(class, None).base_class, BaseClass::NoDiff);
+
+    fixture
+        .runtime
+        .update_task_with_identity(&template, tags_with(&["auto-task:docs-audit"]), None, None)
+        .unwrap();
+    assert_eq!(fixture.profile(class, None).base_class, BaseClass::Change);
+}
+
 /// No-diff profiles, and templates whose tasks are no-diff, flag deliveries
 /// over one core for two minutes in a row; a template that builds by design
 /// and change work are never flagged.
@@ -931,6 +985,303 @@ crate::scenario_table!(
     local_base_class_rollups_include_template_only_history,
     a_class_with_no_profile_borrows_the_heaviest_on_the_host,
     profiles_stay_cached_until_a_delivery_finishes,
+    no_diff_tag_edit_reclassifies_a_template_on_the_next_read,
     no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design,
-    profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes
+    profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes,
+    profiles_keep_their_newest_deliveries_after_a_month_without_any,
+    gc_preserves_profiles_behind_ineligible_deliveries,
+    gc_keeps_each_crew_models_newest_window,
+    interleaved_crew_models_keep_their_own_history_beside_a_union,
+    an_orbit_version_change_keeps_every_delivery
 );
+
+/// A month off must not blank admission: the newest deliveries of each key
+/// still make its profile when every one of them is older than 30 days.
+fn profiles_keep_their_newest_deliveries_after_a_month_without_any() {
+    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let workspace = fixture.workspace.clone();
+    fixture.days_ago.set(45);
+    for index in 0..5 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-old-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(4, 2.0, GIB)],
+        );
+    }
+
+    let profile = fixture.profile("change", Some("medium"));
+    assert_eq!(
+        profile.delivery_count, 4,
+        "the window is the last profile_window deliveries, whatever their age"
+    );
+    assert!(!profile.sparse);
+    assert_eq!(
+        profile.deliveries[0].task_id, "ORB-old-4",
+        "the window starts at the newest delivery"
+    );
+    let found = fixture
+        .runtime
+        .resource_profile_for(&ProfileLookup::new(
+            workspace.clone(),
+            "change",
+            Some("medium".into()),
+            false,
+        ))
+        .unwrap();
+    assert_eq!(found.source, ProfileSource::Exact);
+}
+
+/// GC must retain the usable window even when newer deliveries cannot train it.
+fn gc_preserves_profiles_behind_ineligible_deliveries() {
+    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let workspace = fixture.workspace.clone();
+    fixture.days_ago.set(60);
+    for index in 0..5 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-good-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(1, (index + 1) as f64, GIB)],
+        );
+    }
+    // A batch must not remove the resumed half first and make its sibling
+    // appear eligible on the next pass.
+    let batched_runs = fixture.delivery(
+        &workspace,
+        "ORB-batched",
+        "change",
+        Some("medium"),
+        vec![
+            RunSeed {
+                resumed: true,
+                ..RunSeed::flat(1000, 99.0, GIB)
+            },
+            RunSeed::finished("task_auto_pipeline", 1001, vec![50.0], vec![GIB]),
+        ],
+    );
+    fixture.days_ago.set(40);
+    for index in 0..201 {
+        let resumed = RunSeed {
+            resumed: true,
+            ..RunSeed::flat(1, 99.0, GIB)
+        };
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-bad-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(1, 50.0, GIB), resumed],
+        );
+    }
+    fixture.runtime.gc_runs(true, Some(30)).unwrap();
+    assert!(
+        fixture
+            .store
+            .run_resource_minutes(&workspace, &batched_runs[1])
+            .unwrap()
+            .is_empty()
+    );
+    let found = fixture
+        .runtime
+        .resource_profile_for(&ProfileLookup::new(
+            workspace,
+            "change",
+            Some("medium".into()),
+            false,
+        ))
+        .unwrap();
+    assert_eq!(found.source, ProfileSource::Exact);
+    let profile = found.profile.unwrap();
+    assert_eq!(profile.delivery_count, 4);
+    assert_eq!(profile.series[0].cpu_cores, 3.5);
+    assert_eq!(
+        profile
+            .deliveries
+            .iter()
+            .map(|d| d.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ORB-good-4", "ORB-good-3", "ORB-good-2", "ORB-good-1"]
+    );
+}
+
+/// Retention must keep each crew model's newest window, even when another
+/// model's deliveries fill the key's newest by admission and by finish.
+fn gc_keeps_each_crew_models_newest_window() {
+    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let workspace = fixture.workspace.clone();
+    fixture.days_ago.set(80);
+    fixture.sampled_under.borrow_mut().0 = Some("model-a".into());
+    for index in 0..4 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-a-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(1, 2.0, GIB)],
+        );
+    }
+    fixture.sampled_under.borrow_mut().0 = Some("model-b".into());
+    for index in 0..201 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-b-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(1, 4.0, GIB)],
+        );
+    }
+    for index in 0..201 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-resumed-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed {
+                resumed: true,
+                ..RunSeed::flat(1, 9.0, GIB)
+            }],
+        );
+    }
+    fixture.runtime.gc_runs(true, Some(30)).unwrap();
+    let found = fixture
+        .runtime
+        .resource_profile_for(
+            &ProfileLookup::new(workspace, "change", Some("medium".into()), false)
+                .with_crew_model(Some("model-a".into())),
+        )
+        .unwrap();
+    assert_eq!(found.source, ProfileSource::Crew);
+    let profile = found.profile.unwrap();
+    assert_eq!(profile.crew_model.as_deref(), Some("model-a"));
+    assert_eq!(profile.delivery_count, 4);
+    assert_eq!(profile.series[0].cpu_cores, 2.0);
+}
+
+/// ORB-19264: a mixed crew pool must not shrink a key's profile to whichever
+/// crew model finished last. With interleaved deliveries and the minority
+/// model newest, each model keeps its own history, and the union holds both.
+fn interleaved_crew_models_keep_their_own_history_beside_a_union() {
+    let fixture = Fixture::new(
+        "min_profile_deliveries = 3\nprofile_window = 10\n\n\
+         [workflow]\ndefault_crew = \"major\"\n\n\
+         [crews.major]\nprovider = \"codex\"\nmodel = \"model-major\"\n",
+    );
+    let workspace = fixture.workspace.clone();
+    let seed = |task: String, model: &str, cores: f64| {
+        fixture.sampled_under.borrow_mut().0 = Some(model.to_string());
+        fixture.delivery(
+            &workspace,
+            &task,
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(3, cores, GIB)],
+        );
+    };
+    for index in 0..6 {
+        seed(format!("ORB-major-{index}"), "model-major", 4.0);
+        if index % 3 == 2 {
+            seed(format!("ORB-minor-{index}"), "model-minor", 1.0);
+        }
+    }
+
+    let union = fixture.profile("change", Some("medium"));
+    assert_eq!(
+        union.delivery_count, 8,
+        "the union keeps every crew model's deliveries, not only the newest one's"
+    );
+    assert_eq!(union.deliveries[0].task_id, "ORB-minor-5");
+    assert_eq!(union.crew_model, None);
+    assert_eq!(
+        union
+            .crews
+            .iter()
+            .map(|crew| (
+                crew.crew_model.as_deref(),
+                crew.deliveries,
+                crew.profile_deliveries
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some("model-major"), 6, Some(6)),
+            (Some("model-minor"), 2, Some(2)),
+        ]
+    );
+
+    let lookup = ProfileLookup::new(workspace.clone(), "change", Some("medium".into()), false);
+    let major = fixture
+        .runtime
+        .resource_profile_for(&lookup.clone().with_crew_model(Some("model-major".into())))
+        .unwrap();
+    assert_eq!(major.source, ProfileSource::Crew);
+    let major = major.profile.unwrap();
+    assert_eq!(major.delivery_count, 6);
+    assert_eq!(major.series[0].cpu_cores, 4.0);
+
+    for crew_model in [Some("model-minor"), Some("model-unseen"), None] {
+        let found = fixture
+            .runtime
+            .resource_profile_for(&lookup.clone().with_crew_model(crew_model.map(Into::into)))
+            .unwrap();
+        assert_eq!(
+            found.source,
+            ProfileSource::Exact,
+            "{crew_model:?}: a sparse, unseen or unknown crew model falls back to the union"
+        );
+        assert_eq!(found.profile.unwrap().delivery_count, 8);
+    }
+
+    let profiles = fixture.runtime.resource_profiles().unwrap();
+    assert_eq!(
+        profiles.crew_model(Some("major")),
+        Some("model-major"),
+        "admission resolves a task's crew to the model its profiles are keyed on"
+    );
+    assert_eq!(profiles.crew_model(Some("unconfigured")), None);
+}
+
+/// A routine release does not change what a delivery costs: an Orbit version
+/// change alone leaves every earlier delivery in the window.
+fn an_orbit_version_change_keeps_every_delivery() {
+    let fixture = Fixture::new("min_profile_deliveries = 2\nprofile_window = 10\n");
+    let workspace = fixture.workspace.clone();
+    let seed = |task: String| {
+        fixture.delivery(
+            &workspace,
+            &task,
+            "change",
+            Some("hard"),
+            vec![RunSeed::flat(3, 1.0, GIB)],
+        );
+    };
+    *fixture.sampled_under.borrow_mut() = (Some("model-a".into()), Some("1.0.0".into()));
+    for index in 0..4 {
+        seed(format!("ORB-old-{index}"));
+    }
+    fixture.sampled_under.borrow_mut().1 = Some("1.1.0".into());
+    for index in 0..3 {
+        seed(format!("ORB-new-{index}"));
+    }
+
+    let profile = fixture.profile("change", Some("hard"));
+    assert_eq!(profile.delivery_count, 7);
+    assert_eq!(
+        profile.deliveries[0].orbit_version.as_deref(),
+        Some("1.1.0")
+    );
+    assert_eq!(
+        profile.deliveries[6].orbit_version.as_deref(),
+        Some("1.0.0")
+    );
+    let crew = fixture
+        .runtime
+        .resource_profile_for(
+            &ProfileLookup::new(workspace.clone(), "change", Some("hard".into()), false)
+                .with_crew_model(Some("model-a".into())),
+        )
+        .unwrap();
+    assert_eq!(crew.source, ProfileSource::Crew);
+    assert_eq!(crew.profile.unwrap().delivery_count, 7);
+}

@@ -1,8 +1,8 @@
 // Usage: node dashboard_metrics_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/metrics-browser
 // Analytics › Metrics (ORB-15746) through the shipped app, router, renderer and
-// CSS: duration, completion and defect trends, series toggles, statistic and table
-// views, hover and keyboard tooltips, window changes, the empty window with
-// its widen action, and a 390px phone.
+// CSS: duration, completion, defect and diagnostic trends, series toggles,
+// statistic and table views, hover and keyboard tooltips, window changes,
+// token-filter races, and narrow phone layouts.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -60,9 +60,11 @@ function durations(key, outcome = 'succeeded') {
   }
   return {
     window, outcome, truncated: false, buckets,
-    current: { all: outcome === 'all' ? stats(210, 30) : stats(200, 43.9), low: stats(56, 43), medium: stats(70, 41.5), hard: stats(60, 47), xhard: stats(4, 70), unset: stats(10, 25) },
+    current: { all: outcome === 'all' ? stats(210, 30) : (refreshFixture ? stats(987, 99) : stats(200, 43.9)), low: stats(56, 43), medium: stats(70, 41.5), hard: stats(60, 47), xhard: stats(4, 70), unset: stats(10, 25) },
     previous: { all: stats(180, 30.1), low: stats(50, 24.3), medium: stats(60, 31), hard: stats(55, 35), xhard: null, unset: null },
-    actors: [
+    actors: refreshFixture ? [
+      { actor: 'codex / gpt-6.1-sol', ...stats(987, 99), previous_avg: minutes(43.9), trend: buckets.map(() => minutes(99)) },
+    ] : [
       { actor: 'codex / gpt-6.1-sol', ...stats(126, 42.1), previous_avg: minutes(23.9), trend: buckets.map((_, i) => (i === 9 ? null : minutes(35 + i))) },
       { actor: 'claude / claude-opus-5-5', ...stats(60, 47.5), previous_avg: minutes(50), trend: buckets.map((_, i) => (i % 3 ? null : minutes(45))) },
       { actor: 'gemini / gemini-3.8-flash-high', ...stats(3, 25), previous_avg: null, trend: buckets.map(() => null) },
@@ -90,7 +92,7 @@ function completions(key) {
   return {
     window,
     buckets: Array.from({ length: count }, (_, i) => ({ start: start(i), ...(i === 9 ? counts(0, 0, 0, 0, 1, 0) : counts(i % 4, 5, 3, i === 2 ? 1 : 0, 0, i === 4 ? 2 : 0)) })),
-    current: counts(56, 127, 92, 1, 1, 2),
+    current: refreshFixture ? counts(60, 130, 101, 2, 1, 2) : counts(56, 127, 92, 1, 1, 2),
     previous: counts(71, 77, 81, 0, 1, 32),
   };
 }
@@ -114,17 +116,141 @@ function defects(key) {
       start: start(i),
       ...(i === 9 ? counts(0, 0, 0, {}) : i === 3 ? counts(1, 1, 1, { 'full-code-review': 2, 'friction-curation': 1 }) : counts(0, 1, 1, { 'qa-sweep': 1, other: 1 })),
     })),
-    current: counts(4, 10, 6, { 'code-review': 5, 'full-code-review': 6, 'qa-sweep': 4, 'scanning-sweep': 2, other: 3 }),
+    current: refreshFixture ? counts(8, 12, 9, { 'code-review': 5, 'full-code-review': 6, 'qa-sweep': 4, other: 8 }) : counts(4, 10, 6, { 'code-review': 5, 'full-code-review': 6, 'qa-sweep': 4, 'scanning-sweep': 2, other: 3 }),
     previous: counts(2, 8, 6, { 'code-review': 6, 'qa-sweep': 6, other: 4 }),
   };
 }
 
+function tokens(key, url) {
+  const { count, window, start } = trendWindow(key);
+  const workspace = url.searchParams.get('workspace') || 'ws_fixture';
+  const scope = url.searchParams.get('scope') || 'all';
+  const selectedTags = (url.searchParams.get('tags') || '').split(',').filter(Boolean);
+  const mean = workspace === 'ws_b' ? (scope === 'implement' ? 222 : 1000) : 111;
+  const cell = () => ({ n: 5, mean, median: mean, thin: false, excluded_uncovered: 0, excluded_no_invocations: 0 });
+  return {
+    window, outcome: url.searchParams.get('outcome') || 'done', scope,
+    tags: selectedTags, model: null, min_tasks: 3,
+    bucket_starts: Array.from({ length: count }, (_, i) => start(i)),
+    series: [{ complexity: 'low', cohort: 'all', points: Array.from({ length: count }, () => cell()), total: cell() }],
+    total: cell(), excluded_other_model: 0, available_models: [],
+    available_tags: Array.from({ length: 9 }, (_, i) => ({ tag: `tag${i}`, tasks: 5 })),
+  };
+}
+
+function turns(key, url) {
+  const { count, window, start } = trendWindow(key);
+  const selectedProvider = url.searchParams.get('provider');
+  const selectedTags = (url.searchParams.get('tags') || '').split(',').filter(Boolean);
+  const providers = [
+    { provider: 'codex', tasks: 2, coverage: { tasks: 2, measured: 1, empty_trace: 0, no_detectable_edit: 1, no_invocation: 0, trace_rate: 1, measured_rate: 0.5 } },
+    { provider: 'claude', tasks: 2, coverage: { tasks: 2, measured: 0, empty_trace: 2, no_detectable_edit: 0, no_invocation: 0, trace_rate: 0, measured_rate: 0 } },
+  ];
+  const cell = selectedProvider === 'claude'
+    ? { n: 0, tasks: 3, excluded_empty_trace: 2, excluded_no_detectable_edit: 0, excluded_no_edit: 2, excluded_no_invocation: 1 }
+    : { n: 1, tasks: 5, excluded_empty_trace: 2, excluded_no_detectable_edit: 1, excluded_no_edit: 3, excluded_no_invocation: 1 };
+  const measured = cell.n;
+  const coverage = {
+    tasks: cell.tasks, measured,
+    empty_trace: cell.excluded_empty_trace,
+    no_detectable_edit: cell.excluded_no_detectable_edit,
+    no_invocation: cell.excluded_no_invocation,
+    trace_rate: (cell.tasks - cell.excluded_empty_trace) / cell.tasks,
+    measured_rate: measured / cell.tasks,
+  };
+  const point = {
+    ...cell,
+    mean_turns: measured ? 1 : null, median_turns: measured ? 1 : null,
+    mean_result_bytes: measured ? 0 : null, median_result_bytes: measured ? 0 : null,
+    thin: measured > 0 && measured < 3,
+  };
+  return {
+    window, outcome: url.searchParams.get('outcome') || 'done', provider: selectedProvider,
+    tags: selectedTags, min_tasks: 3, truncated: false,
+    bucket_starts: Array.from({ length: count }, (_, i) => start(i)),
+    series: [{ complexity: 'medium', cohort: 'all', points: Array.from({ length: count }, (_, i) => i === count - 1 ? point : {
+      n: 0, tasks: 0, mean_turns: null, median_turns: null, mean_result_bytes: null, median_result_bytes: null,
+      thin: false, excluded_empty_trace: 0, excluded_no_detectable_edit: 0, excluded_no_edit: 0, excluded_no_invocation: 0,
+    }), total: point }],
+    total: point, coverage, excluded_other_provider: selectedProvider === 'claude' ? 2 : 0,
+    available_providers: providers,
+    available_tags: [{ tag: 'quality', tasks: 3 }],
+  };
+}
+
+// Distinct values expose stale workspace, window and filter results when a
+// filtered trend is opened after being absent from the preceding panel poll.
+function filteredTrend(url) {
+  const key = url.searchParams.get('since');
+  const { count, window, start } = trendWindow(key);
+  const value = (url.searchParams.get('workspace') === 'ws_b' ? 200 : 100)
+    + (key === '7d' ? 7 : 24)
+    + (url.searchParams.get('complexity') === 'hard' ? 10 : 0);
+  const bucket_starts = Array.from({ length: count }, (_, i) => start(i));
+  if (url.pathname.endsWith('/diff_stats')) {
+    const lines = { code_added: value, code_deleted: 5, tests_added: 10, tests_deleted: 2, net: value + 3 };
+    const cell = { n: 5, sum: lines, mean: lines, median: lines, thin: false };
+    return { window, bucket_starts, min_deliveries: 3,
+      overall: { total: cell, points: bucket_starts.map(() => cell) }, crews: [] };
+  }
+  const cell = { count: value, denominator: 5, rate: value / 5, sparse: false, breakdown: {} };
+  return { window, bucket_starts, min_done: 3,
+    complexity: url.searchParams.get('complexity'), crew: url.searchParams.get('crew'),
+    available_crews: [{ crew: 'sol', tasks: 5 }], done: { total: 5, points: bucket_starts.map(() => 5) },
+    families: url.searchParams.get('families').split(',').map(family => ({ family, unit: 'events',
+      filtered: true, total: cell, points: bucket_starts.map(() => cell) })) };
+}
+
 const requests = [];
+const tokenTagRequests = [];
 // An older host has no defect trend; set to serve its 404.
 let defectsMissing = false;
+let refreshFixture = false;
+// Controlled token replies: while `holdTokensPredicate` matches a request,
+// its response is parked in `heldTokens` until `releaseHeldTokens()`.
+let heldTokens = [];
+let holdTokensPredicate = null;
+let heldTokensAsError = false;
+let heldCompletions = [];
+let holdCompletionsPredicate = null;
+function releaseHeldTokens() {
+  for (const held of heldTokens.splice(0)) {
+    if (held.error) {
+      held.res.writeHead(404, { 'content-type': 'application/json' });
+      held.res.end(JSON.stringify({ error: 'not found' }));
+    } else {
+      held.res.setHeader('content-type', 'application/json');
+      held.res.end(JSON.stringify(held.payload));
+    }
+  }
+}
+function releaseHeldCompletions() {
+  for (const held of heldCompletions.splice(0)) {
+    held.res.setHeader('content-type', 'application/json');
+    held.res.end(JSON.stringify(held.payload));
+  }
+}
+async function waitForHeldTokens(count = 1) {
+  for (let i = 0; i < 200 && heldTokens.length < count; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(heldTokens.length, count, 'held token request arrived');
+}
+async function waitForHeldCompletions(count = 1) {
+  for (let i = 0; i < 200 && heldCompletions.length < count; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(heldCompletions.length, count, 'held completions request arrived');
+}
 function payloadFor(url) {
   switch (url.pathname) {
-    case '/api/workspaces': return [{ id: 'ws_fixture', name: 'fixture', status: 'active', is_default: true }];
+    case '/api/workspaces': return [
+      { id: 'ws_fixture', name: 'Fixture A', status: 'active', is_default: true },
+      { id: 'ws_b', name: 'Fixture B', status: 'active', is_default: false },
+    ];
+    case '/api/diagnostics/task_tokens':
+      requests.push(`task_tokens?since=${url.searchParams.get('since')}&scope=${url.searchParams.get('scope')}&workspace=${url.searchParams.get('workspace')}`);
+      tokenTagRequests.push((url.searchParams.get('tags') || '').split(',').filter(Boolean));
+      return tokens(url.searchParams.get('since'), url);
+    case '/api/diagnostics/turns_to_edit': return turns(url.searchParams.get('since'), url);
+    case '/api/diagnostics/diff_stats':
+    case '/api/diagnostics/delivery_friction': return filteredTrend(url);
     case '/api/crews': return { default_crew: null, crews: [] };
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
     case '/api/diagnostics/implement_one':
@@ -139,7 +265,9 @@ function payloadFor(url) {
       return defects(url.searchParams.get('since'));
     case '/api/tasks/completion-by-complexity': return {
       by_complexity: [
-        { complexity: 'unset', total: 762, statuses: [{ status: 'done', count: 641 }, { status: 'rejected', count: 86 }, { status: 'archived', count: 35 }] },
+        refreshFixture
+          ? { complexity: 'unset', total: 1000, statuses: [{ status: 'done', count: 900 }, { status: 'rejected', count: 60 }, { status: 'archived', count: 40 }] }
+          : { complexity: 'unset', total: 762, statuses: [{ status: 'done', count: 641 }, { status: 'rejected', count: 86 }, { status: 'archived', count: 35 }] },
         { complexity: 'low', total: 1239, statuses: [{ status: 'done', count: 1086 }, { status: 'rejected', count: 77 }, { status: 'archived', count: 60 }] },
       ],
     };
@@ -155,6 +283,14 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (url.pathname.startsWith('/api/')) {
+    if (url.pathname === '/api/diagnostics/completions' && holdCompletionsPredicate && holdCompletionsPredicate(url)) {
+      heldCompletions.push({ res, payload: payloadFor(url) });
+      return;
+    }
+    if (url.pathname === '/api/diagnostics/task_tokens' && holdTokensPredicate && holdTokensPredicate(url)) {
+      heldTokens.push({ res, payload: payloadFor(url), error: heldTokensAsError });
+      return;
+    }
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(payloadFor(url)));
     return;
@@ -167,6 +303,7 @@ const server = http.createServer((req, res) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h`;
 const assertions = [];
+const apiRequests = [];
 const pass = (name, detail = {}) => assertions.push({ name, ...detail });
 let browser;
 let page;
@@ -174,12 +311,18 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   page = await browser.newPage({ viewport: { width: 1440, height: 1600 } });
   const errors = [];
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith('/api/')) apiRequests.push(url.pathname + url.search);
+  });
   page.on('pageerror', error => errors.push(String(error)));
   // The fixture serves no log stream; the dashboard's reconnect noise is not ours.
   page.on('console', message => {
     if (message.type() === 'error' && !/EventSource|Failed to load resource/.test(message.text())) errors.push(message.text());
   });
-  await page.goto(`${origin}#analytics/metrics`);
+  // The count trends open on Cumulative or Per day; the per-bucket assertions below
+  // ask for Per bucket through the hash, as a shared link would.
+  await page.goto(`${origin}#analytics/metrics?completed_view=bucket&defects_view=bucket&diff_view=bucket&tokens_view=bucket`);
   const body = page.locator('#metrics-body');
   await body.locator('.mx-sc').first().waitFor();
   await page.evaluate(async () => { await document.fonts.ready; });
@@ -190,6 +333,7 @@ try {
     delta: node.querySelector('.mx-sc-delta').textContent, pressed: node.getAttribute('aria-pressed'),
   })));
   assert.deepEqual(cards.map(card => card.value), ['43.9m', '43.0m', '41.5m', '47.0m']);
+  assert.deepEqual(cards.map(card => card.label), ['All runs', 'Low', 'Medium', 'Hard']);
   assert.match(cards[0].delta, /▲ 46% slower/);
   assert.match(cards[0].delta, /vs prev 24h 30\.1m/);
   assert.ok(cards.every(card => card.pressed === 'true'));
@@ -199,7 +343,7 @@ try {
 
   const paths = () => body.locator('.mx-lines path').evaluateAll(nodes => nodes.map(node => ({ cls: node.getAttribute('class'), d: node.getAttribute('d') })));
   let lines = await paths();
-  assert.equal(lines.length, 4, 'All, easy, medium and hard lines');
+  assert.equal(lines.length, 4, 'All, low, medium and hard lines');
   assert.ok(lines.at(-1).cls.includes('mx-s-all'), 'All draws over the complexity lines');
   assert.equal((lines.at(-1).d.match(/M/g) || []).length, 2, 'the bucket without runs breaks the All line');
   assert.equal(await body.locator('.mx-pt.hollow').count(), 1, 'only the one-run hard bucket is hollow');
@@ -257,6 +401,7 @@ try {
   const table = body.locator('.mx-trend-view table');
   assert.equal(await table.locator('tbody tr').count(), 25);
   assert.match(await table.locator('caption').textContent(), /p95 per bucket/);
+  assert.deepEqual(await table.locator('thead th').allTextContents(), ['Bucket', 'Runs', 'All', 'Low', 'Medium', 'Hard']);
   assert.match(await table.locator('tbody tr').first().textContent(), /in progress/, 'newest bucket first');
   assert.match(await table.locator('tbody tr').nth(15).textContent(), /—/, 'an empty bucket reads as a dash');
   await page.screenshot({ path: path.join(evidence, 'duration-table-1440.png'), fullPage: true, animations: 'disabled' });
@@ -270,7 +415,9 @@ try {
   assert.equal(await body.getByRole('group', { name: 'Statistic' }).count(), 0, 'counts have no statistic');
   const doneCards = await body.locator('.mx-sc').evaluateAll(nodes => nodes.map(node => node.textContent));
   assert.match(doneCards[0], /Done \(total\)276▲ 21% morevs prev 24h 2291 rejected · 2 archived/);
-  assert.match(doneCards[2], /Medium.*127.*46% of done/);
+  assert.match(doneCards[1], /^Low.*56.*20% of done/);
+  assert.match(doneCards[2], /^Medium.*127.*46% of done/);
+  assert.match(doneCards[3], /^Hard/);
   assert.equal(await body.locator('.mx-bars .mx-bar-col').count(), 25);
   assert.equal((await paths()).length, 1, 'the total line');
   await hoverColumns.nth(4).hover();
@@ -409,8 +556,231 @@ try {
   assert.equal(await body.locator('.mx-bars .mx-bar-col').count(), 29, 'completions still render');
   pass('older host without defects');
 
+  // Tokens per task: a held reply from a retired workspace visit cannot
+  // overwrite the current visit, including an A→B→A round trip and an
+  // unavailable/error reply.
+  defectsMissing = false;
+  await page.locator('#metrics-window-selector [data-window="7d"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('window 7d'));
+  await body.getByRole('tab', { name: 'Tokens per task' }).click();
+  const tokenValue = () => body.locator('.mx-sc-value').first().textContent();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
+  assert.equal(await tokenValue(), '111', 'workspace A tokens at 7d');
+  const tagPicker = () => body.getByRole('combobox', { name: 'Compare a tag' });
+  const tagChips = () => body.locator('.mx-tags .mx-chip');
+  await page.screenshot({ path: path.join(evidence, 'tokens-tags-before-1440.jpg'), type: 'jpeg', quality: 82 });
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.screenshot({ path: path.join(evidence, 'tokens-tags-before-375.jpg'), type: 'jpeg', quality: 82 });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  for (let i = 0; i < 8; i++) {
+    await tagPicker().selectOption(`tag${i}`);
+    await body.getByRole('button', { name: `Remove tag tag${i}` }).waitFor();
+    if (i < 7) await tagPicker().locator(`option[value="tag${i + 1}"]`).waitFor({ state: 'attached' });
+  }
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
+  assert.equal(await tagChips().count(), 8, 'eight compared tag chips remain visible');
+  assert.equal(await tagPicker().locator('option').count(), 1, 'the picker offers no ninth tag');
+  assert.equal(await tagPicker().locator('option:checked').textContent(), 'Maximum of 8 tags selected');
+  await page.screenshot({ path: path.join(evidence, 'tokens-tags-cap-1440.jpg'), type: 'jpeg', quality: 82 });
+  await page.setViewportSize({ width: 375, height: 900 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'tag chips fit the 375px layout');
+  await page.screenshot({ path: path.join(evidence, 'tokens-tags-cap-375.jpg'), type: 'jpeg', quality: 82 });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  await body.getByRole('button', { name: 'Remove tag tag0' }).click();
+  await body.getByRole('button', { name: 'Remove tag tag0' }).waitFor({ state: 'detached' });
+  assert.equal(await tagChips().count(), 7, 'removing a chip makes room');
+  await tagPicker().locator('option[value="tag8"]').waitFor({ state: 'attached' });
+  assert.ok(await tagPicker().locator('option').count() > 1, 'the picker offers tags again after removal');
+  await tagPicker().selectOption('tag8');
+  await body.getByRole('button', { name: 'Remove tag tag8' }).waitFor();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
+  assert.equal(await tagChips().count(), 8, 'a newly available tag can be selected after removal');
+  assert.equal(await body.getByText('Tokens per task unavailable').count(), 0, 'the chart remains available after remove-then-add');
+  assert.ok(tokenTagRequests.some(tags => tags.length === 8), 'the browser sends requests with eight selected tags');
+  assert.ok(tokenTagRequests.every(tags => tags.length <= 8), 'no token request carries more than eight selected tags');
+  pass('tokens tag picker cap and recovery', { requests: tokenTagRequests.length, maxTags: Math.max(...tokenTagRequests.map(tags => tags.length)) });
+
+  const invocations = body.getByRole('group', { name: 'Invocations' });
+  holdTokensPredicate = url => url.searchParams.get('workspace') === 'ws_fixture' && url.searchParams.get('scope') === 'implement';
+  await invocations.getByRole('button', { name: 'Implement only' }).click();
+  await waitForHeldTokens();
+  await page.locator('#workspace-select').selectOption('ws_b');
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '222');
+  await page.screenshot({ path: path.join(evidence, 'tokens-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 1200 });
+  await page.screenshot({ path: path.join(evidence, 'tokens-375.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  releaseHeldTokens();
+  await page.waitForTimeout(200);
+  assert.equal(await tokenValue(), '222', 'held A reply does not overwrite B');
+  holdTokensPredicate = null;
+  pass('tokens workspace fence');
+
+  heldTokensAsError = true;
+  holdTokensPredicate = url => url.searchParams.get('workspace') === 'ws_b' && url.searchParams.get('scope') === 'all';
+  await invocations.getByRole('button', { name: 'All invocations' }).click();
+  await waitForHeldTokens();
+  await page.locator('#workspace-select').selectOption('ws_fixture');
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
+  releaseHeldTokens();
+  await page.waitForTimeout(200);
+  assert.equal(await tokenValue(), '111', 'held B error reply does not overwrite A');
+  assert.equal(await body.getByText('Tokens per task unavailable').count(), 0);
+  holdTokensPredicate = null;
+  heldTokensAsError = false;
+  await page.locator('#workspace-select').selectOption('ws_b');
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '1k');
+  pass('tokens round trip and error fence');
+
+  // A full-panel refresh started under All invocations cannot replace a
+  // newer Implement-only result.
+  holdTokensPredicate = url => url.searchParams.get('workspace') === 'ws_b' && url.searchParams.get('scope') === 'all';
+  await page.locator('#refresh-btn').click();
+  await waitForHeldTokens();
+  await invocations.getByRole('button', { name: 'Implement only' }).click();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '222');
+  releaseHeldTokens();
+  await page.waitForTimeout(200);
+  assert.equal(await tokenValue(), '222', 'held full refresh does not overwrite Implement only');
+  assert.equal(await invocations.getByRole('button', { name: 'Implement only' }).getAttribute('aria-pressed'), 'true');
+  holdTokensPredicate = null;
+  pass('tokens full-refresh fence');
+
+  // A token-filter refresh can retire the tokens bundled with an in-flight
+  // full-panel refresh. The same-scope non-token metrics must still land.
+  await invocations.getByRole('button', { name: 'All invocations' }).click();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '1k');
+  await page.locator('#metrics-window-selector [data-window="24h"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('window 24h'));
+  await body.getByRole('tab', { name: 'implement_one duration' }).click();
+  await body.getByRole('tab', { name: 'Tokens per task' }).click();
+
+  refreshFixture = true;
+  holdCompletionsPredicate = url => url.searchParams.get('since') === '24h';
+  await page.locator('#refresh-btn').click();
+  await waitForHeldCompletions();
+  await page.waitForFunction(() => document.getElementById('metrics-body').getAttribute('aria-busy') === 'true');
+  await invocations.getByRole('button', { name: 'Implement only' }).click();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '222');
+  holdCompletionsPredicate = null;
+  releaseHeldCompletions();
+  await page.waitForFunction(() => document.getElementById('metrics-body').getAttribute('aria-busy') === 'false');
+
+  await body.getByRole('tab', { name: 'implement_one duration' }).click();
+  await page.screenshot({ path: path.join(evidence, 'refresh-race-dark-1440.jpg'), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 1000 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'no page overflow at 375px after refresh');
+  await page.screenshot({ path: path.join(evidence, 'refresh-race-dark-375.jpg'), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+
+  assert.match(await page.locator('#metrics-count').textContent(), /987 runs · 293 done · window 24h/);
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '1h 39m');
+  assert.match(await body.locator('.mx-actors tbody tr').first().textContent(), /987.*1h 39m/);
+  assert.match(await body.locator('.mx-outcome').first().textContent(), /n=1000/);
+  await body.getByRole('tab', { name: 'Tasks completed' }).click();
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '293');
+  await body.getByRole('tab', { name: 'Defects' }).click();
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '29');
+  await body.getByRole('tab', { name: 'Tokens per task' }).click();
+  assert.equal(await tokenValue(), '222', 'the newest Implement-only token result survives the older bundled result');
+  assert.equal(await invocations.getByRole('button', { name: 'Implement only' }).getAttribute('aria-pressed'), 'true');
+  refreshFixture = false;
+  pass('non-token metrics update across token-filter race');
+
+  // Both other filtered trends must still load on selection, refresh with
+  // their filters and window, and recover from older/unavailable hosts.
+  for (const [name, endpoint, chart] of [
+    ['Lines changed', 'diff_stats', 'diff'], ['Delivery friction', 'delivery_friction', 'friction'],
+  ]) {
+    await page.locator('#workspace-select').selectOption('ws_fixture');
+    await page.locator('#metrics-window-selector [data-window="24h"]').click();
+    await body.getByRole('tab', { name }).click();
+    await body.locator(`.mx-chart-${chart}`).waitFor();
+    const complexity = body.getByRole('combobox', { name: 'Task complexity' });
+    await complexity.selectOption('hard');
+    await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '134');
+    await page.locator('#metrics-window-selector [data-window="7d"]').click();
+    await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '117');
+    await page.locator('#workspace-select').selectOption('ws_b');
+    await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '217');
+    if (chart === 'friction') {
+      await body.getByRole('combobox', { name: 'Task crew' }).selectOption('sol');
+      await body.locator('.mx-chart-friction').waitFor();
+      await body.getByRole('button', { name: 'Step recoveries', exact: true }).click();
+      await body.locator('.mx-chart-friction').waitFor();
+      assert.equal(await body.locator('.mx-sc').count(), 4, 'family selection remains applied');
+    }
+    const beforePoll = apiRequests.length;
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(() => document.getElementById('metrics-body').getAttribute('aria-busy') === 'false');
+    await body.locator(`.mx-chart-${chart}`).waitFor();
+    const selected = apiRequests.slice(beforePoll).filter(value => value.startsWith(`/api/diagnostics/${endpoint}?`));
+    assert.equal(selected.length, 1, `${name} refreshes its selected trend once`);
+    const query = new URL(selected[0], origin).searchParams;
+    assert.equal(query.get('workspace'), 'ws_b');
+    assert.equal(query.get('since'), '7d');
+    assert.equal(query.get('complexity'), 'hard');
+    if (chart === 'friction') {
+      assert.equal(query.get('crew'), 'sol');
+      assert.ok(!query.get('families').split(',').includes('step_recovery'));
+    }
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await body.locator(`.mx-chart-${chart}`).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, `${chart}-dark-${width}.jpg`), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+    }
+    await page.route(`**/api/diagnostics/${endpoint}?*`, route => route.fulfill({
+      status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }),
+    }));
+    await page.locator('#refresh-btn').click();
+    await body.getByText(`${name} unavailable`, { exact: true }).waitFor();
+    await body.getByRole('tab', { name: 'Tasks completed' }).click();
+    await body.locator('.mx-chart-completed').waitFor();
+    await page.unroute(`**/api/diagnostics/${endpoint}?*`);
+    await body.getByRole('tab', { name }).click();
+    await body.locator(`.mx-chart-${chart}`).waitFor();
+    assert.equal(await body.locator('.mx-sc-value').first().textContent(), '217');
+    pass(`${name}: on-demand loading, selected poll, scope/window/filter and unavailable recovery`, { requests: selected });
+    await page.setViewportSize({ width: 1440, height: 1600 });
+  }
+
+  for (const [name, chart] of [
+    ['implement_one duration', 'duration'], ['Tasks completed', 'completed'], ['Defects', 'defects'],
+    ['Tokens per task', 'tokens'], ['Turns to first edit', 'turns'],
+  ]) {
+    await body.getByRole('tab', { name, exact: true }).click();
+    await body.locator(`.mx-chart-${chart}`).waitFor();
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await body.locator(`.mx-chart-${chart}`).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, `${chart}-dark-${width}.jpg`), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+    }
+  }
+  await body.getByRole('tab', { name: 'Turns to first edit', exact: true }).click();
+  await body.locator('.mx-chart-turns').waitFor();
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /2 had an empty or unavailable tool trace/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /populated trace without a recognized editor/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /codex: 1\/2 measured/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /1 populated without a recognized editor/);
+  assert.match(await body.locator('.mx-chart .mx-notes').textContent(), /claude: no tool telemetry/);
+  const providerPicker = body.getByRole('combobox', { name: 'Provider' });
+  assert.match(await providerPicker.locator('option[value="claude"]').textContent(), /0\/2 measured · 0%/);
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await body.locator('.mx-chart-turns').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'turns-coverage-dark-1440.jpg'), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 1100 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'turns coverage fits the 375px view');
+  await page.screenshot({ path: path.join(evidence, 'turns-coverage-dark-375.jpg'), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await providerPicker.selectOption('claude');
+  await body.locator('.mx-empty').waitFor();
+  assert.match(await body.locator('.mx-empty').textContent(), /No measured first edits/);
+  assert.match(await body.locator('.mx-empty').textContent(), /empty or unavailable tool trace/);
+  assert.match(await body.locator('.mx-empty').textContent(), /no tool telemetry/);
+  assert.ok(apiRequests.some(value => value.startsWith('/api/diagnostics/turns_to_edit?') && new URL(value, origin).searchParams.get('provider') === 'claude'));
+  pass('turns coverage categories and provider rates');
   assert.deepEqual(errors, [], 'no browser errors');
-  fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions, apiRequests }, null, 2));
   console.log(`PASS: ${assertions.length} Analytics › Metrics scenarios.`);
 } catch (error) {
   await page?.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true });

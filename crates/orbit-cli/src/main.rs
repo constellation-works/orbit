@@ -29,6 +29,7 @@
 
 mod audit_middleware;
 mod command;
+mod help;
 mod output;
 mod parse;
 mod plugin_cli;
@@ -107,31 +108,59 @@ fn declares_format(command: &Command) -> bool {
 /// `FormatArg` under the subcommand's — each one a downcast panic in the other
 /// reader. Declaring the argument per level keeps every value at the level it
 /// was parsed at, where its type is the one that level expects.
-fn install_output_args(command: Command) -> Command {
+fn install_output_args(command: Command, is_root: bool) -> Command {
     let subcommands: Vec<String> = command
         .get_subcommands()
         .map(|sub| sub.get_name().to_string())
         .collect();
 
+    let mut global_ids: Vec<_> = command
+        .get_arguments()
+        .filter(|arg| arg.is_global_set() && matches!(arg.get_id().as_str(), "root" | "workspace"))
+        .map(|arg| arg.get_id().clone())
+        .collect();
     let mut command = if declares_format(&command) {
         command
     } else {
+        global_ids.push(FORMAT_ARG_ID.into());
         command.arg(format_arg())
     };
     if !command
         .get_arguments()
         .any(|arg| arg.get_long() == Some(JSON_ARG_ID))
     {
+        global_ids.push(JSON_ARG_ID.into());
         command = command.arg(json_arg());
     }
     if !command
         .get_arguments()
         .any(|arg| arg.get_long() == Some(HEADER_ARG_ID))
     {
+        global_ids.push(HEADER_ARG_ID.into());
         command = command.arg(header_arg());
     }
+    if !is_root {
+        command = help::compact_globals(command, &global_ids);
+    }
+    // Install inherited arguments before clap propagates them, so their help
+    // can differ from the root's. Keep a command's own same-id argument intact.
+    let inherited: Vec<_> = command
+        .get_arguments()
+        .filter(|arg| arg.is_global_set() && global_ids.contains(arg.get_id()))
+        .cloned()
+        .collect();
     for name in subcommands {
-        command = command.mut_subcommand(name, install_output_args);
+        command = command.mut_subcommand(name, |mut sub| {
+            for arg in &inherited {
+                if !sub
+                    .get_arguments()
+                    .any(|local| local.get_id() == arg.get_id())
+                {
+                    sub = sub.arg(arg.clone());
+                }
+            }
+            install_output_args(sub, false)
+        });
     }
     command
 }
@@ -424,19 +453,31 @@ fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
 /// `main` and the help goldens both build it here, so a golden pins the help
 /// the binary prints rather than the bare derive.
 fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Command {
+    // Grouped rows share one description column per template derived from the
+    // longest name, wrapping to the sink width on a terminal [ORB-19912].
+    // Width 0 (piped) keeps single-line rows so help goldens stay
+    // deterministic. The width comes from the sink, the only place that
+    // queries terminal state (`check-terminal-state-guard.sh`); `main` still
+    // resolves its own sink after parsing for rendering.
+    let term_width = crate::output::sink::OutputSink::from_process(None, false).width();
     let root = plugin_cli::augment(command::Cli::command(), groups);
-    let root = if groups.is_empty() {
-        root
-    } else {
+    let mut root = root.help_template(crate::help::root_help_template(term_width));
+    if !groups.is_empty() {
         // The hand-rolled top-level template lists commands by section, so a
         // plugin group is listed in its own section rather than left out of
         // `orbit --help` entirely.
-        root.help_template(command::ROOT_HELP_TEMPLATE.replace(
+        root = root.help_template(crate::help::root_help_template(term_width).replace(
             "\nOptions:",
             &format!("{}\nOptions:", plugin_cli::help_section(groups)),
-        ))
-    };
-    install_output_args(root)
+        ));
+    }
+    root = root.mut_subcommand("run", |cmd| {
+        cmd.help_template(crate::help::run_help_template(term_width))
+    });
+    root = root.mut_subcommand("task", |cmd| {
+        cmd.help_template(crate::help::task_help_template(term_width))
+    });
+    install_output_args(root, true)
 }
 
 /// Parse argv into the derived CLI, the two inputs to mode resolution, and
@@ -640,9 +681,14 @@ fn run() {
     // Invalid `orbit tool run` input cannot run. Reporting it before generation
     // pin keeps a typo from resolving a workspace or applying pending migrations.
     let unusable_tool_input = matches!(runtime_need, RuntimeNeed::UnusableToolInput { .. });
+    // `orbit lease token` and `orbit lease listen` run as the lease listener
+    // user and touch only its own Orbit home, so they pin no generation there.
+    let listener_user_command =
+        matches!(&cli.command, command::Commands::Lease(lease) if lease.runs_as_listener_user());
     let _generation = if matches!(&cli.command, command::Commands::Update(_))
         || inspection
         || unusable_tool_input
+        || listener_user_command
     {
         None
     } else {
@@ -666,7 +712,7 @@ fn run() {
             &root,
             matches!(
                 runtime_need,
-                RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly
+                RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly | RuntimeNeed::HostReadOnly
             ),
             participant_role(&cli.command),
             handover_capability(&cli.command),
@@ -741,6 +787,17 @@ fn run() {
     } else {
         false
     };
+    if let command::Commands::Config(config) = &cli.command
+        && let command::config::ConfigSubcommand::Set(args) = &config.command
+        && let Err(error) = command::config::set::preflight_indirect_workspace_write(
+            root_override.as_deref(),
+            args.global,
+            workspace_selector.is_some(),
+        )
+    {
+        print_error(&error, &sink, json_error_preference);
+        orbit_common::observability::logging::exit(1);
+    }
     let bootstrapped = if let RuntimeNeed::UnusableToolInput { message } = &runtime_need {
         Err(orbit_core::OrbitError::InvalidInput(message.clone()))
     } else if claimed_owner_worker {
@@ -797,6 +854,12 @@ fn run() {
             },
             RuntimeNeed::PluginReadOnly => {
                 RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                )
+            }
+            RuntimeNeed::HostReadOnly => {
+                RegisteredRuntimeFactory::initialize_host_read_only_with_overrides(
                     root_override.as_deref(),
                     workspace_selector.as_deref(),
                 )

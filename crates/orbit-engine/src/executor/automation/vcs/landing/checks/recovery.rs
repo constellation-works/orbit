@@ -1,6 +1,6 @@
 //! Classifying failed hosted checks and recovering from them once.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
@@ -26,7 +26,9 @@ const REQUEUE_OUTCOME: &str = "the automatic repair is already spent, so the own
 pub(super) enum CheckFailureClass {
     Transient,
     Inherited,
+    Flaky,
     Candidate,
+    BaseSuspect,
     Inconclusive,
 }
 
@@ -35,7 +37,9 @@ impl CheckFailureClass {
         match self {
             Self::Transient => "transient",
             Self::Inherited => "inherited",
+            Self::Flaky => "flaky",
             Self::Candidate => "candidate",
+            Self::BaseSuspect => "base-suspect",
             Self::Inconclusive => "inconclusive",
         }
     }
@@ -45,7 +49,15 @@ impl CheckFailureClass {
 #[derive(Default)]
 pub(in crate::executor::automation::vcs) struct CheckRecovery {
     rerun: bool,
+    pub(in crate::executor::automation::vcs) rerun_diagnostic:
+        Option<super::rerun_diagnostic::CiRerunDiagnostic>,
+    /// Untouched failures whose same-check base pass authorized a rerun.
+    /// The rerun's later completion must not demand yet another base pass.
+    /// Repeated base-evidence observations keyed by unchanged head, check and signature.
+    base_suspect_cycles: BTreeMap<(String, String, String), u64>,
     updated: bool,
+    pub(in crate::executor::automation::vcs) max_base_ci_cycles: u64,
+    pub(in crate::executor::automation::vcs) waiting_for_base: Option<String>,
     pub(super) deadline_ms: u64,
     /// Failed jobs already acted on, so a rollup that still shows them
     /// before the provider registers the rerun or update waits instead.
@@ -60,9 +72,13 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
 }
 
 impl CheckRecovery {
-    pub(in crate::executor::automation::vcs) fn before(deadline_ms: u64) -> Self {
+    pub(in crate::executor::automation::vcs) fn before(
+        deadline_ms: u64,
+        max_base_ci_cycles: u64,
+    ) -> Self {
         Self {
             deadline_ms,
+            max_base_ci_cycles,
             ..Default::default()
         }
     }
@@ -79,6 +95,8 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     Acted,
     /// Every failed job was already acted on; keep waiting.
     Wait,
+    /// A base-suspect failure waits without authorizing candidate recovery.
+    WaitForBase(String),
     /// Stop for the one automatic repair, with this evidence.
     Repair(String),
     /// [ORB-16890] That repair is spent: stop so the owner returns the task
@@ -106,7 +124,7 @@ pub(in crate::executor::automation::vcs) fn failed_checks(
 
 /// One failed job, or one failed required check run outside a workflow, on
 /// the pull request's head.
-pub(super) struct FailedJob {
+pub(in crate::executor::automation::vcs) struct FailedJob {
     /// The workflow run to rerun; none for a check run outside a workflow.
     pub(super) run_id: Option<u64>,
     /// The job's, or the check run's, provider identity.
@@ -116,8 +134,8 @@ pub(super) struct FailedJob {
     pub(super) signature: String,
     pub(super) why: String,
     pub(super) excerpt: String,
-    /// The moved base tip's same job succeeded. A failure that remains after
-    /// the one branch update is then the candidate's, not the base's.
+    /// The moved base tip's same job succeeded. A failure that remains on a
+    /// head containing that tip is then the candidate's, not the base's.
     pub(super) tip_passes: bool,
 }
 
@@ -182,7 +200,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 .to_string(),
         ));
     }
-    if aggregates.is_empty()
+    if recovery.updated
+        && aggregates.is_empty()
         && failed_jobs.iter().all(|job| {
             job["job_id"]
                 .as_u64()
@@ -209,7 +228,14 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             ));
         };
         let label = job_label(job);
-        let log = match job_log(host, workspace, run_id, job_id, job) {
+        let log = match job_log(
+            host,
+            workspace,
+            run_id,
+            job_id,
+            job,
+            Some(recovery.deadline_ms),
+        ) {
             Ok(log) => log,
             Err(error) => {
                 return Ok(unclassified(format!(
@@ -217,16 +243,61 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 )));
             }
         };
-        let (class, why, tip_passes, signature) = classify_logged_job(
+        let (mut class, mut why, tip_passes, signature) = classify_logged_job(
             host,
             workspace,
             job,
             &log,
+            head,
             base,
+            &context.candidate.base_branch,
             moved_tip,
             &mut base_jobs,
             &mut tip_jobs,
-        );
+            Some(recovery.deadline_ms),
+        )
+        .map_err(|deferred| deferred.error())?;
+        if class == CheckFailureClass::Flaky
+            && super::suspect::has_matching_candidate_rerun(
+                host,
+                std::slice::from_ref(&context.task_id),
+                head,
+                job,
+                &label,
+                &signature,
+                Some(pr),
+            )
+        {
+            class = CheckFailureClass::Candidate;
+            why = "the unchanged pull-request head failed the same signature again after the base check passed".into();
+        }
+        if class == CheckFailureClass::Flaky
+            && !(job["event"].as_str() == Some("pull_request")
+                && job["head_sha"].as_str().is_none_or(|sha| sha == head)
+                && {
+                    let numbers = super::suspect::pull_request_numbers(job);
+                    numbers.is_empty() || numbers.contains(&pr)
+                })
+        {
+            // A push or workflow_dispatch job on the head is not the pull
+            // request's run: rerunning it would not be a PR rerun, and its
+            // failure alone cannot admit a repair. Hold as base-suspect
+            // until a verified PR rerun repeats the signature.
+            class = CheckFailureClass::BaseSuspect;
+            why = "base-suspect: the failed job is not a verified pull_request run for this pull request, so it cannot authorize a rerun or repair; waiting for an unchanged-head pull_request rerun with the same failure signature".into();
+        }
+        if class == CheckFailureClass::BaseSuspect {
+            super::suspect::record_base_suspect(
+                host,
+                std::slice::from_ref(&context.task_id),
+                &json!({
+                    "base":landing_tip.unwrap_or(base), "head":head, "check":label, "signature":signature,
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr, "event":job["event"],
+                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason":why,
+                }),
+                Some(&context.handoff_id),
+            )?;
+        }
         jobs.push(FailedJob {
             run_id: Some(run_id),
             job_id,
@@ -238,7 +309,52 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             tip_passes,
         });
     }
+    let has_aggregates = !aggregates.is_empty();
     jobs.extend(aggregates);
+    let planned = if has_aggregates
+        || (recovery.rerun
+            && jobs
+                .iter()
+                .all(|job| job.class == CheckFailureClass::Transient))
+    {
+        Ok(super::rerun::CiRerunStep::NotEligible)
+    } else {
+        super::rerun::plan_ci_rerun(
+            host,
+            workspace,
+            std::slice::from_ref(&context.task_id),
+            Some(&context.handoff_id),
+            status,
+            failed,
+            &context.candidate.base.commit,
+            landing_tip.unwrap_or(&context.candidate.base.commit),
+            &context.candidate.base_branch,
+            recovery.deadline_ms,
+            Some(&jobs),
+            &context.handoff_id,
+            &mut recovery.rerun_diagnostic,
+        )
+    };
+    match planned.unwrap_or_else(|error| {
+        super::rerun::CiRerunStep::Wait(format!("CI retry evidence is unavailable: {error}"))
+    }) {
+        super::rerun::CiRerunStep::Wait(reason) => {
+            return Ok(CheckRecoveryStep::WaitForBase(reason));
+        }
+        super::rerun::CiRerunStep::Acted(plan) => {
+            recovery.rerun = true;
+            recovery
+                .handled_checks
+                .extend(answered_checks.iter().cloned());
+            recovery.actions.push(format!(
+                "reserved unchanged-head failed-jobs retry for run {} attempt {}",
+                plan.run_id, plan.run_attempt
+            ));
+            return Ok(CheckRecoveryStep::Acted);
+        }
+        super::rerun::CiRerunStep::NotEligible => {}
+    }
+
     let class = jobs
         .iter()
         .map(|job| job.class)
@@ -248,33 +364,39 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     let evidence = |outcome: &str| format!("{reason}; {classified}; {outcome}");
 
     match class {
-        CheckFailureClass::Transient if !recovery.rerun => {
-            let runs: BTreeSet<u64> = jobs.iter().filter_map(|job| job.run_id).collect();
-            for run_id in runs {
-                host.run_private_vcs_operation(
-                    operations::CI_RERUN_FAILED,
-                    json!({
-                        "run_id": run_id.to_string(),
-                        "workspace_path": workspace.to_string_lossy(),
-                    }),
-                )?;
+        CheckFailureClass::BaseSuspect => {
+            let limit = recovery.max_base_ci_cycles;
+            let mut exhausted = None;
+            for job in jobs
+                .iter()
+                .filter(|job| job.class == CheckFailureClass::BaseSuspect)
+            {
+                let key = (head.to_owned(), job.label.clone(), job.signature.clone());
+                let cycles = recovery.base_suspect_cycles.entry(key).or_default();
+                *cycles = cycles.saturating_add(1);
+                if *cycles >= limit {
+                    exhausted.get_or_insert((*cycles, job.label.clone(), job.signature.clone()));
+                }
             }
-            recovery.rerun = true;
-            recovery.handled.extend(jobs.iter().map(|job| job.job_id));
-            recovery.handled_checks.extend(answered_checks);
-            recovery
-                .actions
-                .push(format!("reran the failed jobs: {classified}"));
-            Ok(CheckRecoveryStep::Acted)
+            if let Some((cycles, check, signature)) = exhausted {
+                Ok(CheckRecoveryStep::Stop(evidence(&format!(
+                    "escalated after {cycles} base CI observation cycles (limit {limit}): check '{check}' still fails with signature `{signature}` on unchanged head {head}; a matching pull_request rerun failure and a successful same-check agent-main run on the accepted base ancestry have not both been observed, so review the missing base/check evidence",
+                ))))
+            } else {
+                Ok(CheckRecoveryStep::WaitForBase(evidence(
+                    "waiting for a same-signature pull_request rerun and a successful same-check agent-main run on the accepted base ancestry; no candidate repair",
+                )))
+            }
         }
         CheckFailureClass::Transient => Ok(CheckRecoveryStep::Stop(evidence(
             "it failed again after its one rerun, so the candidate stays in review",
         ))),
         CheckFailureClass::Inherited
             if (recovery.updated || head != context.candidate.candidate.commit)
-                && onto_passing_tip(&jobs) =>
+                && onto_passing_tip(&jobs)
+                && landing_tip.is_some_and(|tip| contains(workspace, tip, head)) =>
         {
-            // The one update already landed the candidate on a base tip where
+            // An update already landed the candidate on a base tip where
             // the same job passes, so the failure that remains is the
             // candidate's. It takes the same single repair a candidate-class
             // failure does, and a spent repair stops in review.
@@ -282,25 +404,26 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 Ok(CheckRecoveryStep::Requeue(evidence(REQUEUE_OUTCOME)))
             } else {
                 Ok(CheckRecoveryStep::Repair(evidence(
-                    "it failed again after one branch update onto a base where the same job \
+                    "it failed again after a branch update onto a base where the same job \
                      passes, so the candidate is handed to one automatic repair",
                 )))
             }
         }
-        CheckFailureClass::Inherited
-            if recovery.updated || head != context.candidate.candidate.commit =>
-        {
-            Ok(CheckRecoveryStep::Stop(evidence(
-                "it failed again after one branch update, so the candidate stays in review",
-            )))
-        }
         CheckFailureClass::Inherited => {
             let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) else {
-                return Ok(CheckRecoveryStep::Stop(evidence(
-                    "the base branch has not moved past it, so the base is still red and the \
-                     candidate stays in review",
+                return Ok(CheckRecoveryStep::WaitForBase(evidence(
+                    "waiting for a newer passing base commit within the landing deadline; the base is still red",
                 )));
             };
+            // After the first update, only a same-job passing base authorizes
+            // another. A newer red or unproven tip keeps waiting.
+            if (recovery.updated || head != context.candidate.candidate.commit)
+                && !onto_passing_tip(&jobs)
+            {
+                return Ok(CheckRecoveryStep::WaitForBase(evidence(
+                    "waiting for the same job to pass on a newer base commit within the landing deadline",
+                )));
+            }
             let request = orbit_types::workflow::PrBaseUpdateReservation {
                 execution: context.handoff_id.clone(),
                 repository: context.candidate.repository.clone(),
@@ -310,7 +433,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 base_branch: context.candidate.base_branch.clone(),
                 base_sha: tip.into(),
                 deadline_ms: recovery.deadline_ms,
-                evidence: json!({"cause":"inherited","classification":classified}),
+                evidence: json!({"cause":"inherited","handoff_id":context.handoff_id,"candidate":context.candidate.candidate.commit,"classification":classified}),
             };
             match host.admit_handoff_base_update(&context.handoff_id, &request)? {
                 orbit_types::workflow::PrBaseUpdateAdmission::Reserved => {}
@@ -318,6 +441,15 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                     super::super::super::completion_deadline::Deadline(previous.deadline_ms)
                         .remaining()?;
                     return Ok(CheckRecoveryStep::Wait);
+                }
+                // A spent budget waits out the deadline for the base itself to
+                // recover; unreadable or invalid reservation evidence stops.
+                orbit_types::workflow::PrBaseUpdateAdmission::Refused(reason)
+                    if reason.starts_with(orbit_types::workflow::PR_BASE_UPDATE_BUDGET_SPENT) =>
+                {
+                    return Ok(CheckRecoveryStep::WaitForBase(evidence(&format!(
+                        "waiting within the landing deadline: {reason}"
+                    ))));
                 }
                 orbit_types::workflow::PrBaseUpdateAdmission::Refused(reason) => {
                     return Ok(CheckRecoveryStep::Stop(reason));
@@ -344,6 +476,9 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         CheckFailureClass::Candidate if context.automatic_repair_spent => {
             Ok(CheckRecoveryStep::Requeue(evidence(REQUEUE_OUTCOME)))
         }
+        CheckFailureClass::Flaky => Ok(CheckRecoveryStep::WaitForBase(evidence(
+            "the unchanged-head retry has no authenticated repeated signature; no candidate repair",
+        ))),
         CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Repair(evidence(
             "the candidate is handed to one automatic repair",
         ))),

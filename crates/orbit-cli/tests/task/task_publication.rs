@@ -186,6 +186,8 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
         .expect("authority")
         .to_string();
 
+    set_equivalent_legacy_pairing(&owner_home, RUNTIME_WORKSPACE_ID);
+
     let published = orbit_json(
         &source_repo,
         &owner_home,
@@ -352,6 +354,7 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
         .into_iter()
         .chain(["--confirm".to_string()])
         .collect::<Vec<_>>();
+    set_equivalent_legacy_pairing(&recovery_home, RECOVERY_RUNTIME_WORKSPACE_ID);
     let restored = orbit_json_owned(
         &recovery_repo,
         &recovery_home,
@@ -605,6 +608,22 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
     assert_eq!(repository_state(&source_repo), source_before);
 }
 
+// Model upgraded stores with a raw URL whose transport spelling differs from
+// the publication binding. Exercise publish and restore through the real CLI.
+fn set_equivalent_legacy_pairing(home: &Path, partition: &str) {
+    let connection = rusqlite::Connection::open(home.join(".orbit/tasks/index.sqlite"))
+        .expect("legacy task registry fixture");
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE workspace_bindings SET repo_fingerprint = ?2 WHERE workspace_id = ?1",
+                rusqlite::params![partition, "https://source.test/orbit.git"],
+            )
+            .expect("legacy HTTPS pairing"),
+        1
+    );
+}
+
 /// The shared artifact route must preserve the native operator's authority,
 /// while a human-looking agent cannot release the same hold (ORB-16220).
 #[test]
@@ -666,6 +685,7 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
         budget: ReviewBudget { minutes: 10 },
         required_validation_commands: Some(vec!["native fixture".into()]),
         baseline_commands: Vec::new(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
         host_evidence: Vec::new(),
     };

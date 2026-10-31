@@ -20,12 +20,9 @@ pub mod ship;
 mod show;
 mod steps;
 pub(crate) mod support;
-pub mod sweep;
 pub mod task_pilot;
 mod trace;
 mod worktree_gc;
 
 pub use command::{RunCommand, RunSubcommand};
 pub use job::{JobReplayArgs, JobResumeArgs, JobRunArgs, JobRunPipelineWorkerArgs};
-pub(crate) use show::run_show_payload;
-pub(crate) use steps::RunRead;

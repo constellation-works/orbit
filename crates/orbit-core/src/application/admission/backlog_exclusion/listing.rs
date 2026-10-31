@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use orbit_engine::DispatchError;
 use orbit_types::task::{EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
@@ -8,15 +8,16 @@ use serde_json::Value;
 use super::super::pass_error::PassError;
 use super::super::unknown_footprint::{FootprintGuard, FootprintWave, whole_tree_holder};
 use super::exclusions::{
-    browser_kit_exclusion, clears_complexity_gate, footprint_exclusion, host_os_exclusion,
-    inherited_only_epic_root_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion,
+    browser_kit_exclusion, clears_complexity_gate, footprint_exclusion, host_labels_exclusion,
+    host_os_exclusion, inherited_only_epic_root_exclusion, mock_validation_exclusion,
+    pilot_finding_exclusion, pilot_preparation_exclusion, scheduled_exclusion,
 };
 use super::snapshot::backlog_snapshot_in_mode;
 use super::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason, workspace_ship_mode,
 };
 use crate::OrbitRuntime;
-use crate::application::workspace_auto::read_live_leaf_runs;
+use crate::application::task::TaskWorkspaceAutoPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
@@ -98,19 +99,18 @@ pub(crate) fn list_backlog_tasks(
             &pools,
             mode,
             review.as_ref(),
+            false,
         )?;
         // [ORB-15191] A ship that fans out to more than one task holds work
         // with no footprint to the drain's rule: it waits for its pilot, or
         // goes alone. Other live leaves carrying tasks are the work in flight;
         // this run carries none yet.
-        let live_tasks = read_live_leaf_runs(runtime)
-            .map_err(|error| DispatchError::DeterministicActionFailed {
+        let live_tasks = runtime.live_leaf_task_ids().map_err(|error| {
+            DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
                 message: format!("list live leaf runs: {error}"),
-            })?
-            .into_iter()
-            .flat_map(|run| run.task_ids)
-            .collect::<BTreeSet<_>>();
+            }
+        })?;
         snapshot
             .include_tasks(runtime, &live_tasks)
             .map_err(|error| DispatchError::DeterministicActionFailed {
@@ -189,6 +189,13 @@ pub(crate) fn list_backlog_tasks(
                     message: format!("load task {task_id}: {err}"),
                 }
             })?;
+            // Submission refused a scheduled task unless the operator's
+            // override is on record; this catches a run resumed or replayed
+            // after `not_before` was set.
+            if let Some(exclusion) = scheduled_exclusion(runtime, &task) {
+                excluded.push(exclusion);
+                continue;
+            }
             if pilot_preparations.contains_key(&task.id) {
                 excluded.push(pilot_preparation_exclusion(&task.id));
                 continue;
@@ -209,7 +216,15 @@ pub(crate) fn list_backlog_tasks(
                 excluded.push(exclusion);
                 continue;
             }
+            if let Some(exclusion) = host_labels_exclusion(runtime, &task) {
+                excluded.push(exclusion);
+                continue;
+            }
             if let Some(exclusion) = browser_kit_exclusion(&task, kit_verified) {
+                excluded.push(exclusion);
+                continue;
+            }
+            if let Some(exclusion) = mock_validation_exclusion(runtime, &task) {
                 excluded.push(exclusion);
                 continue;
             }

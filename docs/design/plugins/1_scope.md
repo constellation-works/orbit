@@ -1,9 +1,16 @@
 ---
+title: "Scope: Orbit plugin standard"
+owner: claude
+status: Implemented
+feature: plugins
+doc_role: scope
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-21
-last_validated: 2026-10-21
+last_updated: 2026-10-27
+last_validated: 2026-10-27
+stage: shipped
+next: "—"
 ---
 
 # Scope: Orbit plugin standard
@@ -190,7 +197,7 @@ orbit plugin add <git+url#commit> --allow-build
                                               →  installed   (spec.build ran in the build sandbox; build recorded)
 orbit plugin upgrade <ns> <source> [--grant …] [--allow-build]
                                               →  upgraded    (permission diff printed; widening requires re-consent)
-orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
+orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed,agent_tools] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
 orbit plugin disable <ns>                     →  installed   (tools Inactive; seeded definitions skipped with a warning)
 orbit plugin enable|disable <ns> --scope workspace
@@ -469,19 +476,40 @@ links, refuse the enable without writing schedule files or plugin provenance in 
 
 ### 4.1 Placement, never permission
 
-The manifest says *where* a tool appears (`mcp_scope`, `execution_kind`, CLI shape), never
-*who* may call it. Plugin tools resolve to one of two generic governed rows
-(`PLUGIN_TOOL_READ_ONLY`, `PLUGIN_TOOL_MUTATING` in
-`orbit-common/src/governance/authorization/mod.rs`): `read_only` tools are callable by `Agent |
-Operator | Runner`; `mutating` tools by `Operator | Runner`, and by `Agent` only when the
-task's `required_tools` or the activity allowlist names them.
+The manifest declares where a tool appears (`mcp_scope`, CLI shape) and its execution
+kind. Three generic governed rows in `orbit-common/src/governance/authorization/catalog.rs`
+set the capability floor:
+
+| Declaration | Governed row | Caller capabilities |
+|---|---|---|
+| `execution_kind: read_only` | `PLUGIN_TOOL_READ_ONLY` | `Agent`, `Operator`, `Runner` |
+| `execution_kind: mutating`, `agent_callable` omitted or false | `PLUGIN_TOOL_MUTATING` | `Operator`, `Runner` |
+| `execution_kind: mutating`, `agent_callable: true`, with recorded `agent_tools` consent | `PLUGIN_TOOL_AGENT_CALLABLE` | `Agent`, `Operator`, `Runner` |
+
+**Decision: per-tool declaration plus explicit consent.** A plugin author may mark an
+append-only or proposal-only mutation `agent_callable: true`. The default is false, and
+true is rejected on a read-only tool. The host does not prove append-only behavior; the
+operator reviews the backend and grants `agent_tools` for the declared tool verbs at the
+installed manifest digest. Missing consent makes the plugin inactive. This admits interactive
+agent sessions over `orbit mcp serve` without `--operator`, `orbit tool run`, and the derived
+CLI group. It grants no operator authority, filesystem access or callback permissions.
+Activity allowlists and deny policies remain separate restrictions; `required_tools` or
+allowlist membership alone never grants a capability. `ORBIT_OPERATOR` and `--operator`
+keep their existing behavior. Calls retain the ordinary audit trail and caller identity.
+
+`orbit plugin enable` and `add --enable` show the agent-callable mutating tool names and
+whether `agent_tools` was granted. `list` names those tools, and `show` reports each declaration
+beside requested versus granted permissions. Adding a declared verb on upgrade is permission
+widening, even when `agent_tools` was already granted for other verbs. Removing or reordering
+verbs does not widen permissions. Older hosts reject manifests using this new field or grant;
+upgrade Orbit before enabling them.
 
 An unmanaged local CLI invocation with no declared agent or operator identity
 gets no capability for ordinary governed operations, including the owner's
 read-only drain tools. Only plugin tool authorization resolves it to `Agent`.
 This applies to both `orbit <ns> <verb>` and `orbit tool run <ns>.<verb>`:
-`read_only` succeeds without `ORBIT_OPERATOR=1`, while `mutating` retains its
-operator, runner, or sanctioned-run requirement. Session grants, an explicit
+`read_only` and consented `agent_callable` mutations succeed without `ORBIT_OPERATOR=1`;
+other mutations require operator or runner capability. Session grants, an explicit
 operator override, an agent envelope, and an interactive terminal keep their
 precedence over this fallback. MCP callers use their session capabilities;
 the local CLI fallback does not raise an unidentified MCP session.
@@ -497,14 +525,14 @@ set that fails its witness (§3) grants nothing on every surface.
   preserves recorded grants, so disable/re-enable needs no restatement.
 - A narrower list revokes down to it; `--grant none` records an explicit empty set.
 - `--grant all` (every grant this build knows) and `--grant requested` (exactly what
-  `permissions`/`backend.sandbox` ask for) are the other reserved spellings. None of the three
+  `permissions`/`backend.sandbox`/`tools[].agent_callable` ask for) are the other reserved spellings. None of the three
   mixes with a literal list; each replaces the witness like a literal list does.
 - Grants are validated identically whether fresh or read back from storage: an unrecognized
   name (retired, renamed, or from a newer Orbit) refuses the row rather than being dropped.
 - `orbit plugin add --grant …` without `--enable` is rejected.
 
 **Upgrade and widening.** On a manifest digest change, `add` and `upgrade` compare filesystem
-roots, network mode, env names, Orbit-tool allowlist and sandbox mode. Filesystem roots are
+roots, network mode, env names, Orbit-tool allowlist, sandbox mode and agent-callable tool verbs. Filesystem roots are
 compared after `{{config.<key>}}` renders against global `[plugins.<ns>]` over that manifest's
 `spec.config.defaults` (a workspace override is not host-wide, so it cannot hide a default
 another workspace would open) and each root is physically resolved the way the sandbox opens
@@ -637,8 +665,8 @@ single JSON text content item is also accepted. Plain text errors remain Executi
 Orbit forwards a valid plugin error as MCP `isError: true` with `structuredContent` containing
 `code`, `message`, `retryable` and any retained `detail`. `orbit tool run <ns>.<verb>`
 exits non-zero and writes the same JSON object to stderr; stdout is empty. A call using the
-deliberate `ORBIT_OPERATOR` override also emits its existing authorization warning on stderr
-before the JSON object.
+deliberate `ORBIT_OPERATOR` override records the override in the audit trail and at debug
+log level; stderr carries only the JSON object at the default level.
 
 Non-zero exit, non-JSON stdout, or output failing `output_schema` is a tool error; there is no
 partial success. Timeout is `backend.timeout_ms`, capped by the host's
@@ -736,10 +764,28 @@ a read a refused command offered requests the serving tool instead:
 Reaching another machine through a federated destination still needs a `network` grant and
 `ssh` in `requires.programs`.
 
+**Workspace addressing.** A callback addresses a workspace with the same `workspace` selector as any `orbit tool run`, and the session does not narrow it. The session carries a tool ceiling, not a workspace ceiling, so a callback may name any workspace the local registry lists (by name, `ws_*` ID or checkout path), not only its plugin's own. Narrowing callbacks to the plugin's own workspace is not implemented. A `hm_*/ws_*` selector is decided by the host it names:
+
+- This machine's own ID runs locally.
+- A host registered with `orbit host add` is reached over the federated route. That route needs the `network` grant and `ssh` in `requires.programs`, as stated above; without them the call fails with `unreachable_destination`.
+- A host this machine does not list is refused before the selected workspace is opened, with `invalid_input` naming the host.
+
+MCP `tools/call` takes the same selectors. A host-qualified selector there goes through the MCP server's federated router, which refuses a machine it does not list with `unknown_selector` before contacting any destination, a host that does not answer with `unreachable_destination`, a host that answers without the workspace with `stale_route`, and an ambiguous workspace name with `unknown_selector`. (`unknown_host` belongs to the distinct explicit host-resolution entry point `host_workspace_selector`, not to `tools/call` selector routing.)
+
 **Credential binding.** The descriptor must hold a current session record whose token names
 the same device and inode in the host-owned session directory; a forged file is no credential.
 The descriptor survives `setsid`, `exec` and a cleared environment when the backend keeps it
 open. `ORBIT_PLUGIN_CALLBACK_FD` selects the descriptor number, defaulting to 3.
+
+**Host-routed callbacks.** `orbit.decision.digest` and `orbit.decision.submit` read core's
+decision-channel store, which no plugin child can read (§4.3). When a session's ceiling admits
+either, the host also hands the backend one end of a datagram socket pair on fd 4 and keeps a
+server on the other for the session's life. A nested `orbit` that holds a valid fd-3 credential
+and finds that socket passes one of those two calls back over it instead of running it, and
+the host answers it for the session it minted: same dispatch, ceiling, governed row and audit
+row as any identified callback, with only the spawning caller's workspace and worker
+invocation carried over. The host refuses any other tool on the route before dispatch, so the
+socket grants nothing the descriptor does not already authorize.
 
 The retired environment token and process ancestry never authorize a callback. A caller
 presenting only the old token, or matching a live backend session without a valid descriptor,
@@ -832,9 +878,11 @@ become **readable**. Writable is a named inventory, never the roots:
 `mcp-callers.toml`, `clock.toml`, and the workspace's `plugins.yaml`, `routines/` and
 `auto_tasks/` stay read-only.
 
-**Unreadable trees.** `state/plugin-callbacks/`, `plugins/.grants/`, `state/plugins/` and
-`state/plugin-secrets/` have a broad read deny for every plugin child, regardless of manifest
-grants. On macOS, denied ancestors of an allowed state tree or single file admit metadata reads
+**Unreadable trees.** `state/plugin-callbacks/`, `plugins/.grants/`, `state/plugins/`,
+`state/plugin-secrets/` and core's decision-channel store `state/decision-channels/` have a
+broad read deny for every plugin child, regardless of manifest grants. The last keeps every
+channel's token key; a channel's bound plugin receives its own key only as `channel_key` in
+`context.secrets`, so nothing in it is granted back. On macOS, denied ancestors of an allowed state tree or single file admit metadata reads
 for path traversal, but no directory listing or content reads. Each child gets back exactly its
 own session record and own grant witness (single files), and its
 own `state/plugins/<ns>` (`{{plugin_state}}`, a whole tree); nothing in the secret store is
@@ -845,9 +893,10 @@ credential a plugin keeps in `{{plugin_state}}` is readable by that plugin alone
 dropped from the profile with a warning; no grant re-allows it. Writing `{{plugin_state}}`
 still needs an `fs.write` root there and the `fs` grant (§4.1 admission is unchanged). This is the inventory the agent sandbox grants a nested Orbit
 (`append_linux_runtime_write_roots` in `orbit-core`); widening it is a security decision
-[ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. Agent sandboxes also deny `state/plugins/`
-and `state/plugin-secrets/` for reads and writes: on Linux a read-only sentinel directory is
-bound over each tree, on macOS the profile ends with a deny for both. A backend an agent calls
+[ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. Agent sandboxes also deny `state/plugins/`,
+`state/plugin-secrets/` and `state/decision-channels/` for reads and writes: on Linux a
+read-only sentinel directory is bound over each tree, on macOS the profile ends with a deny
+for each. A backend an agent calls
 is spawned by the run's broker on the host, outside that mask
 ([2_agent_call_broker.md](./2_agent_call_broker.md) §6). `plugins/`, `plugins/.grants/` and
 `state/plugin-callbacks/` are not masked. The witness under `plugins/` stays read-only
@@ -918,7 +967,7 @@ granting no ancestor of a denied path and granting each allowed sibling in its o
 - **Catalog layer.** Activities and jobs are not copied into the workspace. The plugin layer
   loads after the workspace and the shipped defaults, so a workspace file shadows a plugin's
   and a shipped default is never displaced (L-0060). `orbit run show` prints the resolving
-  layer and what it shadowed (`orbit-core/src/application/job/catalog_layers.rs`).
+  layer and what it shadowed (`orbit-core/src/application/job/catalog/layers.rs`).
 - Routines target `job:<name>` only, and only a job the same plugin ships or a shipped default;
   cross-plugin targets are a load error.
 - Plugin jobs may reference shipped activities and their own; a reference to another plugin's
@@ -1105,7 +1154,7 @@ Typed definition hashes retain their existing struct field order.
 
 - `requires.host_api` must equal the host's `PLUGIN_HOST_API` or be one major behind it; one
   behind still registers, and `doctor` prints a deprecation. Anything else refuses
-  (`unmet_requirement` in `orbit-core/src/runtime/plugin/requirements.rs`).
+  (`unmet_requirement` in `orbit-runtime/src/plugin/requirements.rs`).
 - `requires.orbit` is checked on `enable` and again at runtime build; a mismatch after an
   upgrade flips the plugin Inactive with a diagnostic rather than failing the runtime.
 - v1 `*.orbit-tool.yaml` sidecars and `orbit tool add` keep working;
@@ -1166,7 +1215,7 @@ All landed. Extension points the standard opened: `PluginLoader` registers manif
 `register_mcp(scope)` / `register_inactive` and the MCP surface advertises them;
 `PluginBackend::{Exec,Mcp}` replaces the unsandboxed `ExternalTool` path for plugins; one
 skipped `PluginGroup` `Commands` variant carries the derived clap tree; dynamic
-`plugins.<ns>.<key>` config admission; two generic `GOVERNED_OPERATIONS` rows (§4.1);
+`plugins.<ns>.<key>` config admission; three generic `GOVERNED_OPERATIONS` rows (§4.1);
 `plugin.tool_call` in `DeterministicAction`, with the `ToolCaller` kind on `ToolContext` that
 bounds a deterministic step's declared programs by the call-time grant (§4.3); a
 provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
@@ -1178,7 +1227,7 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
    migration is pending in that repository.
 2. **Grants, sandboxed execution, `mcp` backend** (§4.1–§4.3) — landed [ORB-12736].
 3. **Definitions, skills, config** (§4.5) — landed [ORB-12737].
-4. **Derived CLI, dashboard panels, `plugin test`/`scaffold`** (§4.6, §4.7, §5) — landed.
+4. **Derived CLI, dashboard panels, `plugin test`/`scaffold`** (§4.6, §4.7, §5) — landed [ORB-12738].
 5. **Provider plugins** — deferred: open `ProviderRegistry` and collapse the four provider
    vocabularies only when a second external provider exists.
 
@@ -1204,3 +1253,39 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
    vendoring (§3).
 4. **Claude Code mirror.** `plugin/` stays the first-party mirror synced from
    `crates/orbit-core/assets`; it is not generated from installed plugins.
+
+## Task References
+
+- [ORB-12724] — measured the first-party surface cost this standard removes.
+- [ORB-12735] — phase 1: built the `plugin.yaml` v2 manifest, the
+  `orbit plugin` lifecycle, and plugin tools reaching MCP `tools/list`.
+- [ORB-12736] — phase 2: built grant enforcement and the sandboxed exec
+  backend with the versioned envelope.
+- [ORB-12737] — phase 3: built plugin definitions, skills and
+  `[plugins.<ns>]` config.
+- [ORB-12738] — phase 4: built the schema-derived `orbit <ns> <verb>` CLI,
+  dashboard plugin panels and links, and `orbit plugin test`/`scaffold`.
+- [ORB-12777] — confined the `orbit_tools` sandbox to named paths.
+- [ORB-12778] — stopped a plugin escalating its own grants by writing its
+  grant record.
+- [ORB-12785] — bound the grant witness to the install a tampered
+  `plugins` row would run.
+- [ORB-12789] — repaired the plugin callback gate's allowed-tools source.
+- [ORB-12798] — closed a callback bypass through process-group/session
+  changes: the host-issued descriptor carries identity across `setsid`, and
+  a confined child that loses it is refused instead of treated as an ordinary
+  caller.
+- [ORB-12799] — closed missing `fs.write` tails below symlinks bypassing
+  the protected-global-root check.
+- [ORB-12801] — bound callback sessions to the caller's effective tool
+  ceiling.
+- [ORB-12820] — fixed the MCP plugin backend's session key and
+  `tools/call` routing.
+- [ORB-12872] — settled the plugin write-root materialization rule.
+- [ORB-12876] — stopped plain CLI reads from a plugin child bypassing
+  `permissions.orbit_tools`.
+- [ORB-12879] — repaired the callback schema v2 bump's tests and v1
+  leftovers.
+- [ORB-13115] — added task and run identity to the plugin call context.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -557,7 +557,7 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
             "both-unknown",
             "unknown failure",
             Some("unknown failure"),
-            "inconclusive",
+            "reproduced",
         ),
     ] {
         let root = tempfile::tempdir_in(canonical_temp_dir()).unwrap();
@@ -629,6 +629,23 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
                     "{case}: {:?}",
                     check.verdict
                 ),
+                "reproduced" => {
+                    let BaseFailureVerdict::Reproduced { failures } = &check.verdict else {
+                        panic!("{case}: {:?}", check.verdict);
+                    };
+                    assert_eq!(failures.len(), 1);
+                    assert!(failures[0].starts_with("diagnostic fingerprint sha256:"));
+                    assert!(
+                        check.candidate_log["failures"]
+                            .as_array()
+                            .unwrap()
+                            .is_empty()
+                    );
+                    assert_eq!(
+                        check.candidate_log["diagnostic_fingerprint"],
+                        check.base_log["diagnostic_fingerprint"]
+                    );
+                }
                 "contradicted" => assert!(
                     matches!(check.verdict, BaseFailureVerdict::Contradicted(_)),
                     "{case}: a full comparison still requires equal exit status"
@@ -665,6 +682,46 @@ fn a_candidate_only_failure_yields_base_passes_and_completed_result_is_cached() 
                 );
                 assert_eq!(check.base_log["failures"], json!(["test suite::broken"]));
             }
+        }
+        if case == "both-unknown" {
+            // Persisted caches from before diagnostic fingerprints remain
+            // readable, but their bounded output cannot establish reproduction.
+            let mut edited = 0;
+            for entry in fs::read_dir(repo.join(".git/orbit-baseline")).unwrap() {
+                let path = entry.unwrap().path();
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+                {
+                    let mut record: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    if record["command"] == "./check.sh" {
+                        record
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("diagnostic_fingerprint");
+                        fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+                        edited += 1;
+                    }
+                }
+            }
+            assert_eq!(edited, 1);
+            let legacy = verify_base_failure(
+                &Host,
+                &repo,
+                base.trim(),
+                "./check.sh",
+                &[],
+                "jrun-legacy-cache",
+                ReplayBudget::new(COMPARISON_WINDOW),
+            )
+            .unwrap();
+            assert!(matches!(
+                legacy.verdict,
+                BaseFailureVerdict::Inconclusive(_)
+            ));
+            assert_eq!(legacy.base_log["cached"], true);
+            assert!(legacy.base_log["diagnostic_fingerprint"].is_null());
         }
     }
 }

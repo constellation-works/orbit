@@ -1,0 +1,32 @@
+Show a condition's matches, closest misses and clause tree over live state, or a job's auto-task steps
+
+Usage: orbit automation explain [OPTIONS] <DEFINITION>
+
+Arguments:
+  <DEFINITION>
+          Routine or auto-task name (routine:<name> or auto-task:<name> when both exist), or job:<name> for a job's auto-task steps
+
+Options:
+      --subject <SUBJECT>
+          Subject whose clause tree to show (a task ID, or workspace)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+Explain reads the task store, the drain's eligibility view, open runs and the
+condition's stored state, and writes nothing. A task-scope condition is evaluated over
+the tasks its status or tag prefilter selects, at most 200 per explain. Tracking shows
+arm states and holds, any stall, recent fires with their upstream chain, and `self`.
+job:<name> shows a job's auto-task steps as checked at load, with each named auto-task
+resolved; such jobs cannot run yet.
+Examples:
+  orbit automation explain release-prep
+  orbit automation explain routine:release-on-prep-done --subject <task-id> --json
+  orbit automation explain job:release-readiness

@@ -49,6 +49,9 @@ pub struct PrSettings {
     /// Normalized forge logins whose PRs count as Orbit-authored; empty means
     /// the forge CLI's authenticated login (`pr.delivery_authors`).
     pub delivery_authors: Vec<String>,
+    /// The `pr.*`, `commit.*` and `branch.*` templates and switches that
+    /// shape what a delivery publishes.
+    pub conventions: orbit_types::workflow::DeliveryConventions,
 }
 
 /// Every setting a runtime consumer needs, admitted and defaulted.
@@ -70,12 +73,10 @@ pub struct ResolvedConfig {
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     /// Delivery defaults prefer the registered workspace base branch.
     pub workflow_base_branch: String,
-    /// Opt-in for unattended ship dispatch (`[workflow] auto_ship`; defaults
-    /// to `false`).
-    pub workflow_auto_ship: bool,
     /// Host pressure thresholds and the throttle enable switch.
     pub resource_throttle: crate::registry::ResourceThrottleSettings,
-    /// Host-wide forecast thresholds and profile bounds; currently settings only.
+    /// Host-wide forecast thresholds and profile bounds; gap-fit admission
+    /// reads them in shadow and enforce modes.
     pub auto_concurrency: crate::registry::AutoConcurrencySettings,
     /// Named provider-model assignments from `[crews.<name>]`, disabled crews
     /// included (see [`Crew::enabled`]).
@@ -105,6 +106,11 @@ pub struct ResolvedConfig {
     /// `[workflow.tag_instructions.<tag>]`: which file, if any, replaces
     /// Orbit's shipped default instruction for a tag and role.
     pub tag_instructions: crate::TagInstructionSettings,
+    /// `[workflow.review_skip_tags.<tag>]`: path allow-list and optional
+    /// guard under which a candidate carrying `<tag>` skips agent review.
+    pub review_skip_tags: crate::ReviewSkipSettings,
+    /// `[visual_review]`: view manifests and the default mock width.
+    pub visual_review: crate::VisualReviewSettings,
 }
 
 impl ResolvedConfig {
@@ -121,10 +127,10 @@ impl ResolvedConfig {
                 task_url_template: snapshot.pr_task_url_template.clone(),
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
+                conventions: snapshot.delivery_conventions(),
             },
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
-            workflow_auto_ship: snapshot.workflow_auto_ship,
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
             crews: default_crews(),
@@ -141,6 +147,8 @@ impl ResolvedConfig {
             plugins: BTreeMap::new(),
             plugin_enablement: BTreeMap::new(),
             tag_instructions: crate::TagInstructionSettings::default(),
+            review_skip_tags: crate::ReviewSkipSettings::default(),
+            visual_review: crate::VisualReviewSettings::default(),
             snapshot,
         }
     }
@@ -343,6 +351,10 @@ impl ResolvedConfig {
             crate::plugin_enablement::plugin_enablement_from_document(&document, config_path)?;
         let tag_instructions =
             crate::tag_instructions::tag_instructions_from_document(&document, config_path)?;
+        let review_skip_tags =
+            crate::review_skip_tags::review_skip_tags_from_document(&document, config_path)?;
+        let visual_review =
+            crate::visual_review::visual_review_from_document(&document, config_path)?;
 
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot)
@@ -353,10 +365,10 @@ impl ResolvedConfig {
                 task_url_template: snapshot.pr_task_url_template.clone(),
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
+                conventions: snapshot.delivery_conventions(),
             },
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
-            workflow_auto_ship: snapshot.workflow_auto_ship,
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
             crews,
@@ -373,6 +385,8 @@ impl ResolvedConfig {
             plugins,
             plugin_enablement,
             tag_instructions,
+            review_skip_tags,
+            visual_review,
             snapshot,
         })
     }

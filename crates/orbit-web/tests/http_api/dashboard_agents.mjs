@@ -1,11 +1,10 @@
-// Observe › Agents through contract-shaped `/api/agents` payloads: the role
+// Analytics › Agents through contract-shaped `/api/agents` payloads: the role
 // tabs and their ranked-row counts, the attribution strip, ranking selection
-// driving the detail column (breakdown, biggest-penalty tasks linking to the
-// task, shown-not-scored stats), "How the score works" keeping its state
-// across polls, a newer scan re-reading the open detail, the empty and
-// not_computed states, the Reviewers provisional banner, `accepts often` tag
-// and verdict-outcome bars, the aggregate placeholder, and the router sending
-// `#analytics/orchestrators` to `#agents/orchestrators`.
+// driving the detail column (rank, score, breakdown, shown-not-scored stats),
+// "How the score works" keeping its state across polls, the empty and
+// not_computed states, the Reviewers provisional banner, `accepts often` tag,
+// unjudged row and verdict-outcome bars, the aggregate placeholder, and the router sending
+// `#analytics/orchestrators` and old `#agents/<role>` to `#analytics/agents/<role>`.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -117,23 +116,26 @@ const make = (tag, id, parent, className = '') => {
 const ROLES = ['orchestrators', 'implementers', 'reviewers', 'pilots'];
 const body = new Node('body');
 const tabs = make('div', 'tabs', body, 'tabs');
-for (const tab of ['tasks', 'analytics', 'agents']) make('button', null, tabs, 'tab').dataset.tab = tab;
+for (const tab of ['tasks', 'analytics']) make('button', null, tabs, 'tab').dataset.tab = tab;
+const analyticsSubtabs = make('nav', 'analytics-subtabs', body, 'subtabs rail-subtabs');
+for (const sub of ['metrics', 'reliability', 'codebase', 'resources', 'cost', 'agents']) make('button', null, analyticsSubtabs, 'subtab').dataset.subtab = sub;
 make('div', 'topbar-crumb', body);
-const panes = Object.fromEntries(['tasks', 'analytics', 'agents'].map(tab => {
+const panes = Object.fromEntries(['tasks', 'analytics'].map(tab => {
   const pane = make('section', null, body, 'tab-pane');
   pane.dataset.tab = tab;
   return [tab, pane];
 }));
-const roleTabs = make('nav', 'agents-roles', panes.agents, 'subtabs view-tabs');
+const roleTabs = make('nav', 'agents-roles', panes.analytics, 'subtabs view-tabs');
 for (const role of ROLES) {
   const button = make('button', null, roleTabs, 'subtab');
   button.dataset.view = role;
   make('span', `agents-count-${role}`, button, 'agents-role-count');
 }
-const layout = make('main', 'agents-main', panes.agents);
+const layout = make('main', 'agents-main', panes.analytics);
 for (const id of ['agents-title', 'agents-count', 'agents-meta', 'agents-body']) make('div', id, layout);
 const windows = make('div', 'agents-window-selector', layout);
-for (const value of ['1h', '24h', '7d', '30d', 'all']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
+windows.dataset.fallbackWindow = 'last500';
+for (const value of ['last500', 'last1000', '7d', '30d']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
 
 const document = {
   activeElement: null,
@@ -141,6 +143,7 @@ const document = {
   title: '',
   hidden: false,
   createElement: tag => new Node(tag),
+  createElementNS: (_namespace, tag) => new Node(tag),
   createDocumentFragment: () => new Node('#fragment'),
   createTextNode: text => { const node = new Node('#text'); node.own = String(text); return node; },
   getElementById: id => byId[id] || null,
@@ -199,7 +202,7 @@ const answer = (requests, route) => {
 // Contract-shaped payloads (docs/design/agent-scorecards/2_design.md §6).
 const TERMS = [
   { key: 'landed', label: 'Landed', weight: 1, definition: 'Landed tasks, one each whatever their complexity.', group: 'credit' },
-  { key: 'spec_defects', label: 'Spec defects', weight: -1, definition: 'Edits after the first run, criteria blocks and escalations.', group: 'problem' },
+  { key: 'spec_defects', label: 'Spec defects', weight: -1, definition: 'Description or criteria edited after the first run started (once per task), agent blocks naming the criteria, final-recovery escalations citing them, regressions with escape spec_ambiguous, and confirmed task-pilot holds on validation-tool, ADR-conflict, surface or utility findings. Pilot holds count at most once per task and add no charge when their confirming event already counts as a spec edit, criteria block or criteria escalation; prerequisite-only holds and unconfirmed warnings add none.', group: 'problem' },
   { key: 'spec_rework', label: 'Spec-caused rework', weight: -1, definition: 'Rework whose cause is spec.', group: 'problem' },
 ];
 const stats = (rework) => [
@@ -235,17 +238,13 @@ const attribution = {
   owners: { orchestrators: 12, implementers: 5, reviewers: 0, pilots: 0, not_scored: { count: 3, reasons: { infrastructure: 2, unattributed: 1 } } },
   charged: { orchestrators: [{ crew: 'opus', model: 'model unknown', problems: 8 }], implementers: [], reviewers: [], pilots: [] },
 };
-const task = (id, count, detail) => ({ task_id: id, title: `Task ${id}`, status: 'done', count, occurrences: [{ at: '2026-10-11T09:00:00Z', detail, run_id: null }] });
-const detailFor = (scorecard, crew, tasks) => {
-  const selected = scorecard.rows.find(entry => entry.crew === crew);
-  return {
-    ...header('orchestrators', scorecard.computed_at), fleet_average: scorecard.fleet_average, row: selected,
-    terms: TERMS.map(term => ({
-      key: term.key, label: term.label, weight: term.weight, group: term.group,
-      count: selected.counts[term.key], per_100: selected.per_100[term.key], contribution: term.weight * selected.per_100[term.key],
-      tasks: tasks[term.key] || [],
-    })),
-  };
+const routeV1 = url => {
+  const requested = url.searchParams.get('window') || '30d';
+  const served = requested === 'all' ? '90d' : requested;
+  if (url.pathname === '/api/agents/attribution') return response({ ...attribution, window: served, requested_window: requested });
+  const role = url.pathname.split('/')[3];
+  const payload = role === 'orchestrators' ? orchestrators() : notComputed(role);
+  return response({ ...payload, window: served, requested_window: requested });
 };
 
 common.setMultiWorkspace(true);
@@ -253,7 +252,35 @@ common.setWorkspace('ws-a');
 common.setWindow('30d');
 await settle();
 agents.wireAgentControls();
+common.syncWindowSelectors();
 assert.equal(agents.getAgentsRole(), 'orchestrators', 'Orchestrators is the default role');
+// The panel opens on its own count window; a calendar tab hands it back to
+// the shared window.
+assert.deepEqual(windows.children.map(tab => tab.dataset.window), ['last500', 'last1000', '7d', '30d'], 'the selector offers only the four supported windows');
+assert.equal(windows.dataset.panelWindow, 'last500', 'the panel defaults to the newest 500 delivery attempts');
+assert.equal(windows.children.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.window, 'last500', 'Last 500 is selected by default');
+const thirtyDays = windows.children.find(tab => tab.dataset.window === '30d');
+thirtyDays.closest = () => thirtyDays;
+for (const listener of windows.listeners.click) listener({ target: thirtyDays });
+assert.equal(windows.dataset.panelWindow, '', 'a calendar tab leaves the count window');
+
+// Shared windows that the selector no longer offers use Last 500 for both its
+// selected tab and the scorecard and attribution requests.
+for (const sharedWindow of ['1h', '24h', 'all']) {
+  common.setWindow(sharedWindow);
+  common.syncWindowSelectors();
+  assert.equal(windows.children.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.window, 'last500', `${sharedWindow} selects the Last 500 fallback`);
+  const loading = agents.fetchAndRenderAgents();
+  const requests = takeAll();
+  assert.ok(requests.length > 0, `${sharedWindow} fetches panel data`);
+  assert.ok(requests.every(request => request.url.searchParams.get('window') === 'last500'), `${sharedWindow} requests Last 500 data`);
+  answer(requests, routeV1);
+  await loading;
+  await settle();
+  assert.ok(rowNamed('opus'), `${sharedWindow} renders scorecard data`);
+}
+common.setWindow('30d');
+common.syncWindowSelectors();
 
 // One refresh reads the role's scorecard and the attribution strip together,
 // and every other role's scorecard for its tab count.
@@ -272,17 +299,13 @@ for (const request of requests) {
 }
 const scorecardRequest = requests.find(request => request.url.pathname === '/api/agents/orchestrators/scorecard');
 assert.equal(scorecardRequest.url.searchParams.get('min_support'), '10');
-const routeV1 = url => {
-  if (url.pathname === '/api/agents/attribution') return response(attribution);
-  const role = url.pathname.split('/')[3];
-  return response(role === 'orchestrators' ? orchestrators() : notComputed(role));
-};
 answer(requests, routeV1);
 await loading;
 await settle();
 
-// The tabs count ranked rows; a role not computed yet reads as a dash.
-assert.equal(byId['agents-count-orchestrators'].textContent, '2', 'two ranked rows; the below-support row is not counted');
+// Tab badges name ranked rows; the panel count names all rows and the ranked subset.
+assert.equal(byId['agents-count-orchestrators'].textContent, '2 ranked', 'the tab count names its ranked-row population');
+assert.equal(byId['agents-count'].textContent, '3 rows · 2 ranked', 'the panel names all rows and the ranked subset');
 for (const role of ['implementers', 'reviewers', 'pilots']) assert.equal(byId[`agents-count-${role}`].textContent, '—');
 assert.equal(byId['agents-title'].textContent, 'Orchestrators');
 assert.match(byId['agents-meta'].textContent, /63 owned tasks in 30d · fleet average 71\.4/);
@@ -293,7 +316,7 @@ assert.match(strip.textContent, /20 problems in 30d/);
 const legend = strip.querySelectorAll('li');
 assert.deepEqual(legend.map(item => item.dataset.owner), [...ROLES, 'not_scored']);
 assert.ok(legend[0].classList.contains('is-current'), 'the current role is highlighted');
-assert.equal(legend[1].querySelector('a').href, '#agents/implementers?window=30d', 'a legend entry links to its role');
+assert.equal(legend[1].querySelector('a').href, '#analytics/agents/implementers?window=30d', 'a legend entry links to its role');
 assert.equal(legend[4].querySelector('a'), null, 'Not scored is no role to open');
 assert.match(strip.textContent, /2 rework caused by infrastructure · 1 no orchestrator attribution/);
 const segments = strip.querySelectorAll('span.agents-strip-seg');
@@ -315,36 +338,23 @@ assert.ok(rowNamed('haiku').querySelector('span.agents-bar-fill.negative') === n
 assert.equal(rowNamed('sonnet').querySelector('td.agents-score-col span.agents-score-note').textContent, '3 unclassified');
 assert.equal(rowNamed('opus').querySelector('span.agents-score-note'), null, 'no note without unclassified problems');
 
-// The top row is selected and its detail asked for.
+// The top row is selected by default, with detail rendered from its scorecard row.
 assert.equal(selectButton('opus').getAttribute('aria-pressed'), 'true', 'the top row is selected by default');
 requests = takeAll();
-assert.equal(requests.length, 1);
-assert.equal(requests[0].url.pathname, '/api/agents/orchestrators/detail');
-assert.equal(requests[0].url.searchParams.get('crew'), 'opus');
-assert.equal(requests[0].url.searchParams.get('model'), 'model unknown');
-assert.match(part('detail').textContent, /Loading the tasks/);
-// The breakdown and the stats come from the ranking row before the detail lands.
+assert.deepEqual(requests, [], 'the dashboard does not fetch agent detail');
+assert.equal(part('detail').querySelector('section.agents-penalty'), null, 'the detail column has no penalty section');
+// The breakdown and stats come from the ranking row.
 const breakdown = () => part('detail').querySelectorAll('ul.agents-breakdown li').map(item => [item.dataset.term, item.querySelector('span.agents-term-value').textContent]);
 assert.deepEqual(breakdown(), [['landed', '+95'], ['spec_defects', '−15'], ['spec_rework', '−5']]);
 assert.match(part('detail').textContent, /raw 75, pulled down toward the fleet average 71\.4 over 40 units/);
 assert.equal(part('detail').querySelector('p.agents-detail-note'), null);
-requests[0].resolve(response(detailFor(orchestrators(), 'opus', {
-  spec_defects: [task('ORB-1', 4, 'spec_edit: acceptance_criteria edited'), task('ORB-2', 2, 'criteria_block: acceptance-criterion-unmet')],
-  spec_rework: [task('ORB-3', 2, 'repeat_run: spec')],
-})));
-await settle();
-let penalty = part('detail').querySelector('section.agents-penalty');
-assert.equal(penalty.dataset.term, 'spec_defects', 'the biggest penalty is the largest negative term');
-assert.deepEqual(penalty.querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-1', 'ORB-2']);
-assert.ok(penalty.querySelector('a.agents-task-id').href.includes('open=ORB-1'), 'a penalty task links to the task');
-assert.match(penalty.textContent, /spec_edit: acceptance_criteria edited/);
 assert.match(part('detail').textContent, /Active hours30\.3/, 'shown-not-scored stats sit in the detail column');
 
 // The role panel shows each orchestrator's rework by cause.
 const panel = part('panel');
 assert.equal(panel.querySelector('h3').textContent, 'Rework by cause');
 assert.deepEqual(panel.querySelectorAll('li.agents-cause-row').map(item => item.querySelector('span.agents-cause-total').textContent), ['8 rework', '4 rework', 'no rework']);
-assert.equal(panel.querySelector('a.agents-cause-note').href, '#agents/implementers?window=30d', 'crew rework points at Implementers');
+assert.equal(panel.querySelector('a.agents-cause-note').href, '#analytics/agents/implementers?window=30d', 'crew rework points at Implementers');
 
 // Selecting another row moves the detail column to it.
 click(selectButton('sonnet'));
@@ -355,17 +365,11 @@ assert.match(part('detail').querySelector('header').textContent, /#2sonnet/);
 assert.deepEqual(breakdown(), [['landed', '+75'], ['spec_defects', '−5'], ['spec_rework', '−5']]);
 assert.match(part('detail').textContent, /raw 65, not above the fleet average 71\.4, so not pulled/, 'a row below the average keeps its raw score');
 assert.match(part('detail').querySelector('p.agents-detail-note').textContent, /^3 .*20 owned tasks .*\(15 per 100\)/, 'the detail states the unclassified rate');
-requests = takeAll();
-assert.equal(requests.length, 1);
-assert.equal(requests[0].url.searchParams.get('crew'), 'sonnet');
-requests[0].resolve(response({ error: "no orchestrators row for crew 'sonnet' in the 30d window" }, 400));
-await settle();
-assert.match(part('detail').querySelector('p.agents-error').textContent, /Unable to load the tasks: no orchestrators row/);
+assert.deepEqual(takeAll(), [], 'selecting another row does not request agent detail');
 
-// Back to the first row: its cached detail answers without a request.
+// Back to the first row: the ranking row still drives the detail column.
 click(selectButton('opus'));
-assert.equal(pending.length, 0, 'the cached detail of this scan is reused');
-assert.deepEqual(part('detail').querySelector('section.agents-penalty').querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-1', 'ORB-2']);
+assert.deepEqual(takeAll(), [], 'returning to a row does not request agent detail');
 
 // "How the score works" lists every term and the smoothing formula, and its
 // open state survives a poll.
@@ -378,18 +382,17 @@ how().open = true;
 for (const listener of how().listeners.toggle) listener();
 const howBefore = how();
 
-// A poll with the same scan keeps the selection, the detail and the disclosure.
+// A poll with the same scan keeps the selection, detail and disclosure.
 loading = agents.fetchAndRenderAgents();
 answer(takeAll(), routeV1);
 await loading;
 await settle();
-assert.equal(pending.length, 0, 'an unchanged scan reads no detail');
+assert.deepEqual(takeAll(), [], 'an unchanged scan reads no agent detail');
 assert.equal(selectButton('opus').getAttribute('aria-pressed'), 'true', 'the selection survives a poll');
 assert.equal(how(), howBefore, 'the unchanged disclosure node is kept');
 assert.equal(how().open, true);
 
-// A newer scan re-reads the selected row's detail and keeps its tasks on
-// screen meanwhile; the rebuilt disclosure stays open.
+// A newer scan refreshes the scorecard-driven detail; the disclosure stays open.
 const routeV2 = url => {
   if (url.pathname === '/api/agents/attribution') return response(attribution);
   const role = url.pathname.split('/')[3];
@@ -403,14 +406,9 @@ answer(takeAll(), routeV2);
 await loading;
 await settle();
 requests = takeAll();
-assert.equal(requests.length, 1, 'a newer scan re-reads the open detail');
-assert.equal(requests[0].url.searchParams.get('crew'), 'opus');
-assert.deepEqual(part('detail').querySelector('section.agents-penalty').querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-1', 'ORB-2'], 'the previous tasks stay while the newer ones load');
+assert.deepEqual(requests, [], 'a newer scan does not read agent detail');
 assert.notEqual(how(), howBefore, 'changed terms rebuild the disclosure');
 assert.equal(how().open, true, 'the rebuilt disclosure keeps its open state');
-requests[0].resolve(response(detailFor(orchestrators('2026-10-19T08:05:00.000Z'), 'opus', { spec_defects: [task('ORB-9', 6, 'spec_edit: description edited')] })));
-await settle();
-assert.deepEqual(part('detail').querySelector('section.agents-penalty').querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-9']);
 
 // A role that is not computed yet shows an empty state that says so, with
 // its terms in the disclosure and no ranking, detail or panel.
@@ -428,7 +426,7 @@ assert.equal(part('panel'), undefined, 'a role without a panel module shows none
 assert.equal(how().querySelectorAll('dt').length, 2, 'the not-computed role still lists its terms');
 assert.equal(how().open, true, 'the disclosure keeps its state across roles');
 assert.ok(part('strip').querySelectorAll('li')[1].classList.contains('is-current'), 'the strip highlights the role on screen');
-assert.equal(byId['agents-count-orchestrators'].textContent, '2', 'the other tabs keep their counts');
+assert.equal(byId['agents-count-orchestrators'].textContent, '2 ranked', 'the other tabs keep their ranked-row counts');
 assert.equal(pending.length, 0, 'a not-computed role reads no detail');
 
 // A computed role with no rows in the window says so.
@@ -444,12 +442,13 @@ await settle();
 assert.ok(part('state').classList.contains('agents-state-empty'));
 assert.match(part('state').textContent, /No owned tasks in the 30d window/);
 assert.match(part('strip').textContent, /No problem was recorded in this window/);
-assert.equal(byId['agents-count-orchestrators'].textContent, '0');
+assert.equal(byId['agents-count-orchestrators'].textContent, '0 ranked');
+assert.equal(byId['agents-count'].textContent, '0 rows · 0 ranked');
 takeAll();
 
 // Reviewers: a banner while any review is younger than the miss lookback,
-// the `accepts often` tag beside a row, yes/no stats and each reviewer's
-// verdict outcomes.
+// the `accepts often` tag beside a row, an unjudged row listed last without
+// a score, yes/no stats and each reviewer's verdict outcomes.
 const REVIEWER_TERMS = [
   { key: 'findings_held', label: 'Findings that held', weight: 1, definition: 'Findings that held, weighted by severity.', group: 'credit' },
   { key: 'false_rejects', label: 'False rejects', weight: -2, definition: 'Rejects the next run proved wrong.', group: 'problem' },
@@ -472,12 +471,13 @@ const reviewers = (provisional, computedAt) => ({
   rows: [
     reviewerRow('vega', 1, 20, { findings_held: 30, false_rejects: 1, missed_regressions: 0 }, 95, 12, [40, 70, false], [8, 6, 1, 0, 5]),
     reviewerRow('lyra', 2, 12, { findings_held: 4, false_rejects: 0, missed_regressions: 1 }, 2.3, 4, [92, 70, true], [9, 1, 0, 1, 1]),
+    { ...reviewerRow('nova', null, 11, { findings_held: 0, false_rejects: 0, missed_regressions: 0 }, null, 11, [null, null, false], [0, 0, 0, 0, 11]),
+      below_support: false, unjudged: true },
   ],
 });
 const routeReviewers = (provisional, computedAt) => url => {
   if (url.pathname === '/api/agents/attribution') return response(attribution);
   if (url.pathname === '/api/agents/reviewers/scorecard') return response(reviewers(provisional, computedAt));
-  if (url.pathname === '/api/agents/reviewers/detail') return response({ error: 'no detail in this fixture' }, 400);
   return response(notComputed(url.pathname.split('/')[3]));
 };
 agents.setAgentsRole('reviewers');
@@ -487,10 +487,19 @@ await loading;
 await settle();
 answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
 await settle();
-assert.equal(byId['agents-count-reviewers'].textContent, '2');
+assert.equal(byId['agents-count-reviewers'].textContent, '2 ranked');
 assert.deepEqual(view().children.map(node => node.dataset.key).filter(Boolean), ['strip', 'banner', 'ranking', 'detail', 'how', 'panel'], 'the banner sits under the strip');
-assert.match(part('banner').textContent, /Provisional\. 16 of 32 reviews in this window are younger than the 30-day miss lookback/);
-assert.deepEqual(rankingRows().map(entry => entry.querySelector('span.agents-tag')?.dataset.tag ?? null), [null, 'accepts_often'], 'only the row well above its peers is tagged');
+assert.match(part('banner').textContent, /Provisional\. 16 of 43 reviews in this window are younger than the 30-day miss lookback/);
+assert.deepEqual(rankingRows().map(entry => entry.querySelector('span.agents-tag')?.dataset.tag ?? null), [null, 'accepts_often', 'unjudged'], 'only the row well above its peers is tagged accepts often, and the unjudged row is marked');
+const nova = rowNamed('nova');
+assert.equal(rankingRows().at(-1), nova, 'the unjudged row is listed last');
+assert.ok(nova.classList.contains('agents-row-unjudged') && nova.classList.contains('agents-row-below'), 'the unjudged row is greyed');
+assert.equal(nova.querySelector('td.agents-rank').textContent, '—', 'an unjudged row has no rank');
+assert.equal(nova.querySelector('span.agents-score-value').textContent, 'unjudged', 'an unjudged row shows no numeric score');
+assert.equal(nova.querySelector('span.agents-bar'), null, 'nor a score bar');
+assert.match(byId['agents-meta'].textContent, /unjudged rows are listed last, without a score/);
+assert.match(part('how').textContent, /no filed finding with a verdict or a landed or dropped task\) is unjudged: it has no score or rank/);
+assert.match(part('how').textContent, /Without a verdict its task's outcome judges it: a task that landed held/);
 assert.match(rowNamed('lyra').querySelector('span.agents-tag').title, /92%.*70%/);
 assert.match(part('detail').textContent, /Accepts oftenno/, 'a boolean stat reads as yes or no');
 assert.match(part('detail').textContent, /Provisional12/);
@@ -498,9 +507,16 @@ click(selectButton('lyra'));
 answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
 await settle();
 assert.match(part('detail').textContent, /Accepts oftenyes/);
+click(selectButton('nova'));
+answer(takeAll(), routeReviewers(16, '2026-10-19T08:10:00.000Z'));
+await settle();
+assert.equal(part('detail').querySelector('span.agents-detail-rank').textContent, 'unjudged');
+assert.equal(part('detail').querySelector('div.agents-detail-score').querySelector('strong').textContent, '—');
+assert.match(part('detail').textContent, /Not judged yet: no unit of this row has an outcome/);
 const outcomes = part('panel');
 assert.equal(outcomes.querySelector('h3').textContent, 'How verdicts turned out');
-assert.deepEqual(outcomes.querySelectorAll('li.agents-cause-row').map(item => item.querySelector('span.agents-cause-total').textContent), ['20 reviews', '12 reviews']);
+assert.deepEqual(outcomes.querySelectorAll('li.agents-cause-row').map(item => item.querySelector('span.agents-cause-total').textContent), ['20 reviews', '12 reviews', '11 reviews']);
+assert.ok(outcomes.querySelectorAll('li.agents-cause-row')[2].classList.contains('agents-row-below'), 'the unjudged row is greyed in the outcomes too');
 const lyraBar = outcomes.querySelectorAll('li.agents-cause-row')[1].querySelectorAll('span.agents-cause-seg');
 assert.deepEqual(lyraBar.map(segment => [segment.dataset.outcome, segment.style.width]),
   [['outcome_held_up', '45%'], ['outcome_caught', '5%'], ['outcome_missed', '5%'], ['outcome_unresolved', '5%']], 'segments scale to the busiest reviewer and skip empty outcomes');
@@ -522,35 +538,45 @@ assert.equal(byId['agents-count'].textContent, '—');
 assert.equal(pending.length, 0);
 common.setWorkspace('ws-a');
 
-// Router: `#analytics/orchestrators` opens `#agents/orchestrators` in place,
-// keeping the window, and a role tab routes to its role.
+// Router: `#analytics/orchestrators` and old `#agents/<role>` open
+// `#analytics/agents/<role>` in place, keeping the window, and a role tab
+// routes to its role.
 await load('router.js').link(specifier => load(specifier.replace(/^\.\//, '')));
 await load('router.js').evaluate();
 const router = modules.get('router.js').namespace;
 let tab = 'tasks';
 let fetches = 0;
+let analyticsSubtab = 'metrics';
+let reliabilityView = 'pipeline';
 router.initRouter({
   getTab: () => tab, setTab: value => { tab = value; },
+  getAnalyticsSubtab: () => analyticsSubtab, setAnalyticsSubtab: value => { analyticsSubtab = value; },
+  getReliabilityView: () => reliabilityView, setReliabilityView: value => { reliabilityView = value; },
   getAgentsRole: agents.getAgentsRole, setAgentsRole: agents.setAgentsRole,
   fetchAgents: () => { fetches += 1; },
   refreshDashboard: () => {},
 });
 window.location.hash = '#analytics/orchestrators?window=7d';
 router.setActiveTab('analytics/orchestrators?window=7d');
-assert.equal(tab, 'agents', 'the legacy route opens Agents');
-assert.equal(replaced.at(-1).split('#')[1], 'agents/orchestrators?window=7d', 'the legacy hash is rewritten in place');
+assert.equal(tab, 'analytics', 'the legacy route opens Analytics');
+assert.equal(analyticsSubtab, 'agents', 'the legacy route opens Analytics > Agents');
+assert.equal(replaced.at(-1).split('#')[1], 'analytics/agents/orchestrators?window=7d', 'the legacy hash is rewritten in place');
 assert.equal(common.getWindow(), '7d', 'the redirect keeps the window');
-assert.ok(panes.agents.classList.contains('active'));
+assert.ok(panes.analytics.classList.contains('active'));
 assert.ok(roleTabs.children[0].classList.contains('active'));
 assert.equal(fetches, 1, 'opening a role reads it at once');
-router.setActiveTab('agents/reviewers');
+router.setActiveTab('agents/pilots');
+assert.equal(tab, 'analytics', 'the old Agents route opens Analytics');
+assert.equal(agents.getAgentsRole(), 'pilots', 'the old Agents route keeps its role');
+assert.equal(replaced.at(-1).split('#')[1], 'analytics/agents/pilots?window=7d', 'the old Agents hash is rewritten in place');
+router.setActiveTab('analytics/agents/reviewers');
 assert.equal(agents.getAgentsRole(), 'reviewers');
 assert.ok(roleTabs.children[2].classList.contains('active'));
 assert.equal(roleTabs.children[0].classList.contains('active'), false);
-assert.equal(window.location.hash, '#agents/reviewers?window=7d');
-router.setActiveTab('agents/nobody');
+assert.equal(window.location.hash, '#analytics/agents/reviewers?window=7d');
+router.setActiveTab('analytics/agents/nobody');
 assert.equal(agents.getAgentsRole(), 'reviewers', 'an unknown role keeps the role on screen');
-assert.equal(window.location.hash, '#agents/reviewers?window=7d', 'and names it in the hash');
+assert.equal(window.location.hash, '#analytics/agents/reviewers?window=7d', 'and names it in the hash');
 takeAll();
 console.log('dashboard agents ok');
 

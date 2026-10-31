@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-mod test_support;
+pub(crate) mod test_support;
 
 mod handlers;
 mod log;

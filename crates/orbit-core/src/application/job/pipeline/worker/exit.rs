@@ -19,6 +19,11 @@
 //!   and counters, or that the scope is gone.
 //! - A supervisor that reaps after reconciliation already wrote "no exit
 //!   status was observed" appends what it observed to that diagnostic.
+//! - Waiting reveals no sender. So on Linux the worker catches its own
+//!   terminating signals for its lifetime, writes the sender another process
+//!   gave the kernel to its log, and dies from the same signal. The
+//!   supervisor reads that line from the log before it records the exit
+//!   [ORB-18166]. With no such line the exit says the sender is unknown.
 
 use std::process::ExitStatus;
 use std::thread;
@@ -66,7 +71,53 @@ pub(crate) struct WorkerExit {
     pub(crate) core_dumped: bool,
     #[serde(default)]
     pub(crate) scope: Option<ScopeEvidence>,
+    /// Who sent the terminating `signal`, when the worker captured it.
+    #[serde(default)]
+    pub(crate) signal_sender: Option<SignalSender>,
     pub(crate) observed_at: DateTime<Utc>,
+}
+
+/// The process another process's terminating signal came from, as the
+/// worker's handler read it from the kernel's `siginfo`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SignalSender {
+    pub(crate) pid: u32,
+    pub(crate) uid: u32,
+    /// `/proc/<pid>/comm` while the handler ran; `None` once it was gone.
+    #[serde(default)]
+    pub(crate) command: Option<String>,
+}
+
+impl SignalSender {
+    /// The sender the worker `worker_pid` wrote to its log, if its last such
+    /// line names that worker and `signal`.
+    fn from_worker_log(log_tail: &str, worker_pid: u32, signal: i32) -> Option<Self> {
+        let line = log_tail
+            .lines()
+            .rev()
+            .find_map(|line| line.trim().strip_prefix(SIGNAL_SENDER_MARKER))?;
+        let (fields, command) = line.split_once(" sender_comm=").unwrap_or((line, ""));
+        let mut values = (None, None, None, None);
+        for field in fields.split_whitespace() {
+            match field.split_once('=') {
+                Some(("signal", value)) => values.0 = value.parse::<i32>().ok(),
+                Some(("worker_pid", value)) => values.1 = value.parse::<u32>().ok(),
+                Some(("sender_pid", value)) => values.2 = value.parse().ok(),
+                Some(("sender_uid", value)) => values.3 = value.parse().ok(),
+                _ => {}
+            }
+        }
+        let (Some(sent), Some(receiver), Some(pid), Some(uid)) = values else {
+            return None;
+        };
+        (sent == signal && receiver == worker_pid).then(|| Self {
+            pid,
+            uid,
+            command: Some(command.trim())
+                .filter(|command| !command.is_empty())
+                .map(str::to_string),
+        })
+    }
 }
 
 /// What a worker scope reported when it was read.
@@ -118,11 +169,13 @@ impl ScopeEvidence {
 }
 
 impl WorkerExit {
-    /// The exit `status` of `worker_pid`, with what its scope reports now.
+    /// The exit `status` of `worker_pid`, with what its scope reports now
+    /// and the signal sender its log names.
     pub(crate) fn observe(
         worker_pid: u32,
         status: &ExitStatus,
         scope: Option<&WorkerScopeCgroup>,
+        worker_log_tail: Option<&str>,
     ) -> Self {
         #[cfg(unix)]
         let (signal, core_dumped) = {
@@ -139,21 +192,43 @@ impl WorkerExit {
             signal_name: signal.and_then(signal_name).map(str::to_string),
             core_dumped,
             scope: scope.map(|scope| ScopeEvidence::read(scope, false)),
+            signal_sender: signal.and_then(|signal| {
+                SignalSender::from_worker_log(worker_log_tail?, worker_pid, signal)
+            }),
             observed_at: Utc::now(),
         }
+    }
+
+    /// Who sent a terminating signal, or that nobody is known to have:
+    /// `None` for an exit no signal ended.
+    pub(crate) fn sender_clause(&self) -> Option<String> {
+        self.signal?;
+        Some(match &self.signal_sender {
+            Some(sender) => format!(
+                "sent by pid {} (uid {}, command {})",
+                sender.pid,
+                sender.uid,
+                sender.command.as_deref().map_or_else(
+                    || "unreadable".to_string(),
+                    |command| format!("'{command}'")
+                ),
+            ),
+            None => "sender unknown: the worker captured none".to_string(),
+        })
     }
 
     /// The operator-facing account of this exit.
     pub(crate) fn describe(&self) -> String {
         let how = match (self.signal, self.exit_code) {
             (Some(signal), _) => format!(
-                "killed by signal {signal} ({}){}",
+                "killed by signal {signal} ({}){}, {}",
                 self.signal_name.as_deref().unwrap_or("unknown"),
                 if self.core_dumped {
                     ", core dumped"
                 } else {
                     ""
                 },
+                self.sender_clause().unwrap_or_default(),
             ),
             (None, Some(code)) => format!("exited with code {code}"),
             (None, None) => format!("exited with {}", self.exit_status),
@@ -304,6 +379,186 @@ pub(crate) fn note_exit_after_reconciliation(
             },
         )?;
         return Ok(());
+    }
+}
+
+/// Prefix of the line the worker's handler writes for a signal another
+/// process sent it.
+const SIGNAL_SENDER_MARKER: &str = "orbit pipeline worker terminating signal:";
+
+/// Catch SIGTERM, SIGINT and SIGHUP for the rest of this worker process's
+/// life, where each still has its default disposition, to name the sender of
+/// the one that ends it. The handler writes one line to stderr, the worker
+/// log, then restores the default disposition and re-raises, so the worker
+/// still dies from that signal with the same exit status. A signal this
+/// process raised itself (a supervised step's signal guard forwarding one
+/// it intercepted) names no sender. Other platforms capture none.
+pub(crate) fn capture_terminating_signal_senders() {
+    #[cfg(target_os = "linux")]
+    sender_capture::install();
+}
+
+#[cfg(target_os = "linux")]
+mod sender_capture {
+    use std::sync::Once;
+
+    use super::SIGNAL_SENDER_MARKER;
+
+    const SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
+    static INSTALL: Once = Once::new();
+
+    pub(super) fn install() {
+        INSTALL.call_once(|| {
+            for signal in SIGNALS {
+                // SAFETY: `sigaction` only reads and replaces this process's
+                // disposition of `signal`. An ignored signal, or one another
+                // handler owns, is left as it is.
+                unsafe {
+                    let mut current: libc::sigaction = std::mem::zeroed();
+                    if libc::sigaction(signal, std::ptr::null(), &mut current) != 0
+                        || current.sa_sigaction != libc::SIG_DFL
+                    {
+                        continue;
+                    }
+                    let mut action: libc::sigaction = std::mem::zeroed();
+                    action.sa_sigaction = record_sender_and_terminate as *const () as usize;
+                    action.sa_flags = libc::SA_SIGINFO;
+                    libc::sigfillset(&mut action.sa_mask);
+                    if libc::sigaction(signal, &action, std::ptr::null_mut()) != 0 {
+                        tracing::warn!(
+                            signal,
+                            error = %std::io::Error::last_os_error(),
+                            "pipeline worker cannot capture its terminating signal's sender",
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    /// Async-signal-safe: only `getpid`, `open`, `read`, `close`, `write`,
+    /// `sigaction` and `raise`, with no allocation or lock.
+    extern "C" fn record_sender_and_terminate(
+        signal: libc::c_int,
+        info: *mut libc::siginfo_t,
+        _context: *mut libc::c_void,
+    ) {
+        // SAFETY: the kernel passes a valid `siginfo_t` to an `SA_SIGINFO`
+        // handler; `si_pid`/`si_uid` are meaningful for the user-sent codes
+        // checked first.
+        unsafe {
+            let own_pid = libc::getpid();
+            if let Some(info) = info.as_ref()
+                && matches!(
+                    info.si_code,
+                    libc::SI_USER | libc::SI_QUEUE | libc::SI_TKILL
+                )
+                && info.si_pid() > 0
+                && info.si_pid() != own_pid
+            {
+                write_sender(signal, own_pid, info.si_pid(), info.si_uid());
+            }
+            // A freshly zeroed action, so `SIG_DFL` keeps no `SA_SIGINFO`.
+            let mut default: libc::sigaction = std::mem::zeroed();
+            default.sa_sigaction = libc::SIG_DFL;
+            libc::sigemptyset(&mut default.sa_mask);
+            libc::sigaction(signal, &default, std::ptr::null_mut());
+            // Blocked until this handler returns, then delivered with the
+            // default action, which terminates the process.
+            libc::raise(signal);
+        }
+    }
+
+    /// One fixed-format line, built on the stack.
+    fn write_sender(
+        signal: libc::c_int,
+        worker_pid: libc::pid_t,
+        sender_pid: libc::pid_t,
+        sender_uid: libc::uid_t,
+    ) {
+        let mut line = Line::default();
+        line.push(b"\n");
+        line.push(SIGNAL_SENDER_MARKER.as_bytes());
+        line.push(b" signal=");
+        line.push_number(signal as u64);
+        line.push(b" worker_pid=");
+        line.push_number(worker_pid as u64);
+        line.push(b" sender_pid=");
+        line.push_number(sender_pid as u64);
+        line.push(b" sender_uid=");
+        line.push_number(u64::from(sender_uid));
+        line.push(b" sender_comm=");
+        let mut path = Line::default();
+        path.push(b"/proc/");
+        path.push_number(sender_pid as u64);
+        path.push(b"/comm\0");
+        let mut comm = [0u8; 64];
+        // SAFETY: `path` is NUL-terminated and `comm` outlives the read.
+        let read = unsafe {
+            let fd = libc::open(
+                path.bytes().as_ptr().cast(),
+                libc::O_RDONLY | libc::O_CLOEXEC,
+            );
+            if fd < 0 {
+                0
+            } else {
+                let read = libc::read(fd, comm.as_mut_ptr().cast(), comm.len());
+                libc::close(fd);
+                read.max(0) as usize
+            }
+        };
+        for byte in comm[..read].iter_mut() {
+            if !(0x20..0x7f).contains(byte) {
+                *byte = b' ';
+            }
+        }
+        line.push(&comm[..read]);
+        line.push(b"\n");
+        // SAFETY: fd 2 is the worker log; a failed write is ignored.
+        unsafe {
+            libc::write(2, line.bytes().as_ptr().cast(), line.bytes().len());
+        }
+    }
+
+    struct Line {
+        bytes: [u8; 192],
+        len: usize,
+    }
+
+    impl Default for Line {
+        fn default() -> Self {
+            Self {
+                bytes: [0; 192],
+                len: 0,
+            }
+        }
+    }
+
+    impl Line {
+        fn push(&mut self, bytes: &[u8]) {
+            let room = self.bytes.len() - self.len;
+            let take = bytes.len().min(room);
+            self.bytes[self.len..self.len + take].copy_from_slice(&bytes[..take]);
+            self.len += take;
+        }
+
+        fn push_number(&mut self, mut value: u64) {
+            let mut digits = [0u8; 20];
+            let mut start = digits.len();
+            loop {
+                start -= 1;
+                digits[start] = b'0' + (value % 10) as u8;
+                value /= 10;
+                if value == 0 {
+                    break;
+                }
+            }
+            self.push(&digits[start..]);
+        }
+
+        fn bytes(&self) -> &[u8] {
+            &self.bytes[..self.len]
+        }
     }
 }
 

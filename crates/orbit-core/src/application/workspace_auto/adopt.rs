@@ -3,7 +3,7 @@
 //! a conflicting or red Orbit pull request whose task has no live run back to
 //! its delivery for a repair. What qualifies is
 //! `application::job::orphan_adoption`'s and
-//! `application::job::pr_repair_adoption`'s decision; this step only supplies
+//! `application::job::pr_repair::adoption`'s decision; this step only supplies
 //! the drain's authority and its free leaf slots. Only a malformed step input
 //! or a failed checkpoint write fails it; candidate store or forge errors
 //! are reported in the completed pass instead.

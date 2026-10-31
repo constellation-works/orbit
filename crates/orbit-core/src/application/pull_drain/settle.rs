@@ -57,10 +57,8 @@ use super::drain::{
     leaf_failure_settlement, operator_cancel_release, recorded_base_no_longer_red,
 };
 use crate::OrbitRuntime;
-use crate::application::distributed::{
-    PULL_DRAIN_JOB, PendingPullSettlements, PullSettlementEntry, PullSettlementOutcome,
-    is_owner_transport_failure,
-};
+use crate::application::contracts::{PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome};
+use crate::application::distributed::{PendingPullSettlements, is_owner_transport_failure};
 use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, run_worktree_has_reclaim_output};
 use orbit_store::contracts::{

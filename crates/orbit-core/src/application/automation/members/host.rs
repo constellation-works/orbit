@@ -60,6 +60,7 @@ pub(crate) fn evaluate_with_cache(
 
     let mut host = Host::new(runtime, &definition.name, &effective, dry_run);
     host.inspection_cache = cache;
+    host.guard = definition.trigger.when.clone();
     members::evaluate(
         runtime.automation_store()?.as_ref(),
         &host,
@@ -95,6 +96,8 @@ impl<'a> Host<'a> {
             head: RefCell::new(None),
             inspection_cache: None,
             pilot_hold: RefCell::new(None),
+            guard: None,
+            guard_verdict: RefCell::new(None),
         }
     }
 

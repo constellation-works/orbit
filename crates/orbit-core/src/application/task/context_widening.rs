@@ -16,6 +16,7 @@ use orbit_types::task::{
 
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 impl OrbitRuntime {
     /// Append `file:<path>` to `task_id` for each of `paths` no selector of
@@ -91,7 +92,7 @@ impl OrbitRuntime {
 fn uncovered_selectors(context_files: &[String], paths: &[String]) -> Vec<String> {
     let mut added: Vec<String> = Vec::new();
     for path in paths {
-        let path = path.trim().trim_start_matches("./");
+        let path = path.strip_prefix("./").unwrap_or(path);
         if path.is_empty() {
             continue;
         }

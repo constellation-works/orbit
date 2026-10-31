@@ -51,7 +51,11 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
             blocking: false,
             attempt: 1,
             scheduled_at: Utc::now(),
-            input: Some(json!({ "task_ids": ["T-1"] })),
+            input: Some(json!({
+                "task_ids": ["T-1", 13, null, {}, "", " T-1 "],
+                "task_id": "T-2",
+                "nested": {"task_ids": ["T-3"]},
+            })),
         })
         .unwrap()
     else {
@@ -77,11 +81,48 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
         .list_job_runs_filtered(&Default::default())
         .expect("list runs");
     assert_eq!(listed.len(), 2);
+    let projected = jobs
+        .job_run_task_ids(&orbit_store::contracts::JobRunQuery {
+            job_id: Some("task_pr_pipeline".into()),
+            states: vec![JobRunState::Cancelled],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(
+        projected,
+        ["T-1".to_string(), "T-2".to_string()].into_iter().collect(),
+        "task binding projection must not depend on large checkpoints"
+    );
+    for query in [
+        orbit_store::contracts::JobRunQuery {
+            job_id: Some("task_auto_pipeline".into()),
+            ..Default::default()
+        },
+        orbit_store::contracts::JobRunQuery {
+            states: vec![JobRunState::Failed],
+            ..Default::default()
+        },
+        orbit_store::contracts::JobRunQuery {
+            limit: Some(0),
+            ..Default::default()
+        },
+    ] {
+        assert!(jobs.job_run_task_ids(&query).unwrap().is_empty());
+    }
+    assert!(
+        workspace_job_run_store(store.clone(), "foreign")
+            .job_run_task_ids(&Default::default())
+            .unwrap()
+            .is_empty()
+    );
 
     // Deleting a run deletes its state.
     jobs.delete_job_run(&child.run_id).unwrap();
     assert!(jobs.read_run_state(&child.run_id).unwrap().is_none());
-    assert_eq!(count_job_rows(&store, "SELECT COUNT(*) FROM job_run_states"), 1);
+    assert_eq!(
+        count_job_rows(&store, "SELECT COUNT(*) FROM job_run_states"),
+        1
+    );
 }
 
 /// A run that recorded a plain step, a fan-out with a fan-in alias, a nested
@@ -229,4 +270,60 @@ fn stored_step_wait_is_updated_and_hydrated_by_single_and_batched_reads() {
             expected
         );
     }
+}
+
+// [ORB-20120] A queued-only cancel and a start decide in the same immediate
+// transaction: whichever commits first wins, and the loser writes nothing.
+#[test]
+fn pending_only_cancel_and_start_never_both_win() {
+    use orbit_store::contracts::PendingJobRunCancellation;
+    use orbit_types::workflow::JobRunStartOutcome;
+
+    let store = Store::open_in_memory().expect("memory store");
+    let jobs = workspace_job_run_store(store, "ws_a");
+    let owner = std::process::id();
+
+    let started = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    assert_eq!(
+        jobs.mark_job_run_running(&started.run_id, Utc::now(), owner)
+            .unwrap(),
+        JobRunStartOutcome::Started
+    );
+    let before = jobs.get_job_run(&started.run_id).unwrap().unwrap();
+    assert_eq!(
+        jobs.cancel_pending_job_run(&started.run_id, Utc::now())
+            .unwrap(),
+        PendingJobRunCancellation::NotPending(JobRunState::Running)
+    );
+    assert_eq!(
+        jobs.get_job_run(&started.run_id).unwrap().unwrap(),
+        before,
+        "a cancel that lost to the start leaves the running run untouched"
+    );
+
+    let queued = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    assert_eq!(
+        jobs.cancel_pending_job_run(&queued.run_id, Utc::now())
+            .unwrap(),
+        PendingJobRunCancellation::Cancelled
+    );
+    let cancelled = jobs.get_job_run(&queued.run_id).unwrap().unwrap();
+    assert_eq!(cancelled.state, JobRunState::Cancelled);
+    assert!(cancelled.finished_at.is_some() && cancelled.started_at.is_none());
+    assert!(
+        matches!(
+            jobs.mark_job_run_running(&queued.run_id, Utc::now(), owner),
+            Err(OrbitError::JobRunStartConflict(_))
+        ),
+        "a start that lost to the cancel gets no execution authority"
+    );
+    assert_eq!(
+        jobs.cancel_pending_job_run("jrun-missing", Utc::now())
+            .unwrap(),
+        PendingJobRunCancellation::Missing
+    );
 }

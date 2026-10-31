@@ -15,14 +15,15 @@
 //! scope — only jobs that run itself reported unsuccessful, so a job that
 //! passed can never be returned as failed-step evidence.
 
-use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
+use orbit_common::{OrbitError, ProviderReadThrottle};
 use orbit_exec::{ExecRequest, NoSandbox, run_process, run_process_streaming_stdout};
 use serde_json::{Value, json};
 
-use crate::{TIMEOUT_LONG_MS, check_exec_result};
+use crate::TIMEOUT_LONG_MS;
 
-use super::{StreamedLog, StreamedLogCollector};
+use super::throttle::{check_read_result, throttle_of};
+use super::{LogSelection, StreamedLog, StreamedLogCollector};
 
 /// Cap on returned checkout-evidence lines. Evidence is a handful of lines per
 /// job; a much larger match set means the pattern caught noise, not evidence.
@@ -125,6 +126,100 @@ pub struct RunLogRequests {
     /// `owner/name`, or gh's `{owner}/{repo}` placeholders, for the job log
     /// endpoint.
     pub repository: String,
+    /// Optional step/window selection applied to the log excerpt.
+    pub selection: Option<LogSelection>,
+}
+
+fn optional_usize(input: &Value, key: &str) -> Result<Option<usize>, OrbitError> {
+    let Some(value) = input.get(key) else {
+        return Ok(None);
+    };
+    let raw = match value {
+        Value::Null => return Ok(None),
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.trim().parse::<u64>().ok(),
+        _ => None,
+    }
+    .ok_or_else(|| OrbitError::InvalidInput(format!("`{key}` must be a non-negative integer")))?;
+    usize::try_from(raw)
+        .map(Some)
+        .map_err(|_| OrbitError::InvalidInput(format!("`{key}` must be a non-negative integer")))
+}
+
+/// Parse the optional `step` / byte-window / line-window selection.
+///
+/// Byte offsets are 0-based and end-exclusive. Line numbers are 1-based and
+/// end-exclusive (`line_start: 2, line_end: 4` returns lines 2 and 3). A
+/// byte window and a line window cannot be combined; either may be combined
+/// with `step`, in which case it applies within the step section.
+pub fn log_selection_from_input(input: &Value) -> Result<Option<LogSelection>, OrbitError> {
+    let step = match input.get("step") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => {
+            let step = text.trim();
+            if step.is_empty() || step.contains(['\t', '\n', '\r']) {
+                return Err(OrbitError::InvalidInput(
+                    "`step` must be a non-empty step name without tabs or newlines".to_string(),
+                ));
+            }
+            Some(step.to_string())
+        }
+        Some(_) => {
+            return Err(OrbitError::InvalidInput(
+                "`step` must be a string".to_string(),
+            ));
+        }
+    };
+    let byte_start = optional_usize(input, "byte_start")?;
+    let byte_end = optional_usize(input, "byte_end")?;
+    let line_start_raw = optional_usize(input, "line_start")?;
+    let line_end_raw = optional_usize(input, "line_end")?;
+    if (byte_start.is_some() || byte_end.is_some())
+        && (line_start_raw.is_some() || line_end_raw.is_some())
+    {
+        return Err(OrbitError::InvalidInput(
+            "`byte_start`/`byte_end` cannot be combined with `line_start`/`line_end`".to_string(),
+        ));
+    }
+    let byte_window = if byte_start.is_some() || byte_end.is_some() {
+        let start = byte_start.unwrap_or(0);
+        if let Some(end) = byte_end
+            && end <= start
+        {
+            return Err(OrbitError::InvalidInput(
+                "`byte_end` must be greater than `byte_start`".to_string(),
+            ));
+        }
+        Some((start, byte_end))
+    } else {
+        None
+    };
+    let line_window = if line_start_raw.is_some() || line_end_raw.is_some() {
+        let start = line_start_raw.unwrap_or(1);
+        if start == 0 {
+            return Err(OrbitError::InvalidInput(
+                "`line_start` must be at least 1".to_string(),
+            ));
+        }
+        if let Some(end) = line_end_raw
+            && end <= start
+        {
+            return Err(OrbitError::InvalidInput(
+                "`line_end` must be greater than `line_start`".to_string(),
+            ));
+        }
+        Some((start - 1, line_end_raw.map(|end| end - 1)))
+    } else {
+        None
+    };
+    if step.is_none() && byte_window.is_none() && line_window.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(LogSelection {
+        step,
+        byte_window,
+        line_window,
+    }))
 }
 
 impl RunLogRequests {
@@ -140,6 +235,7 @@ impl RunLogRequests {
             job,
             scope: LogScope::from_input(input)?,
             repository: super::repository_path(input)?,
+            selection: log_selection_from_input(input)?,
         })
     }
 
@@ -196,6 +292,12 @@ pub struct RunLogRead {
     /// Why the fallback recovered nothing, already redacted. Set only when the
     /// read ends with no text: a fallback that found evidence reports none.
     pub fallback_error: Option<String>,
+    /// The provider throttled a fallback read, so `fallback_error` is a read
+    /// the caller's policy may repeat, not a refusal. Set only beside it.
+    pub fallback_throttle: Option<ProviderReadThrottle>,
+    /// The requested step could not be mapped in a raw job log (see
+    /// `StreamedLog::selection_unsupported`).
+    pub selection_unsupported: bool,
 }
 
 /// Read one bounded log excerpt, recovering from per-job logs when the
@@ -234,28 +336,65 @@ pub fn read_run_log_guarded(
         bounds,
         ExcerptShape::EvenSplit,
         "gh run view --log",
+        requests.selection.clone(),
     ) {
         Ok(log) => log,
         Err(error) if is_parent_run_log_readiness_error(&error, &requests.run_id) => {
-            let empty =
-                StreamedLogCollector::new(bounds.max_bytes, bounds.max_evidence_lines).finish();
-            return Ok(recover_from_job_logs(
+            let empty = match &requests.selection {
+                Some(selection) => StreamedLogCollector::scoped(
+                    bounds.max_bytes,
+                    bounds.max_evidence_lines,
+                    selection.clone(),
+                )
+                .finish(),
+                None => {
+                    StreamedLogCollector::new(bounds.max_bytes, bounds.max_evidence_lines).finish()
+                }
+            };
+            let read = recover_from_job_logs(
                 requests,
                 bounds,
                 empty,
                 Some(&error.to_string()),
                 cached_run_view,
                 guard,
-            ));
+            );
+            return ensure_selection_found(requests, read);
         }
         Err(error) => return Err(error),
     };
+    if requests.selection.is_some() {
+        if log.selection_found {
+            return Ok(RunLogRead {
+                log,
+                source: SOURCE_RUN_LOG,
+                source_jobs: Vec::new(),
+                fallback_error: None,
+                fallback_throttle: None,
+                selection_unsupported: false,
+            });
+        }
+        if log.total_bytes > 0 {
+            return Err(selection_not_found_error(
+                requests,
+                &log,
+                None,
+                log.selection_unsupported,
+            ));
+        }
+        // An empty run-scoped read is the known blind spot: the scoped
+        // selection may still be present in a verified job log.
+        let read = recover_from_job_logs(requests, bounds, log, None, cached_run_view, guard);
+        return ensure_selection_found(requests, read);
+    }
     if !log.text.trim().is_empty() {
         return Ok(RunLogRead {
             log,
             source: SOURCE_RUN_LOG,
             source_jobs: Vec::new(),
             fallback_error: None,
+            fallback_throttle: None,
+            selection_unsupported: false,
         });
     }
     Ok(recover_from_job_logs(
@@ -266,6 +405,76 @@ pub fn read_run_log_guarded(
         cached_run_view,
         guard,
     ))
+}
+
+fn ensure_selection_found(
+    requests: &RunLogRequests,
+    read: RunLogRead,
+) -> Result<RunLogRead, OrbitError> {
+    if requests.selection.is_none() || read.log.selection_found {
+        return Ok(read);
+    }
+    Err(selection_not_found_error(
+        requests,
+        &read.log,
+        read.fallback_error.as_deref(),
+        read.selection_unsupported || read.log.selection_unsupported,
+    ))
+}
+
+fn selection_not_found_error(
+    requests: &RunLogRequests,
+    log: &StreamedLog,
+    fallback_error: Option<&str>,
+    selection_unsupported: bool,
+) -> OrbitError {
+    let Some(selection) = &requests.selection else {
+        return OrbitError::InvalidInput("log selection not found".to_string());
+    };
+    let job = match &requests.job {
+        Some(job) => format!(" job {job}"),
+        None => String::new(),
+    };
+    let detail = if let Some(step) = &selection.step {
+        if selection_unsupported {
+            format!(
+                "log step selection unsupported: \"{step}\" in run {}{job}: raw job logs name steps only by their `Run <command>` display group, not by workflow step name, so this step's identity and runtime boundaries cannot be reliably established in the raw log",
+                requests.run_id
+            )
+        } else {
+            format!(
+                "log step not found: \"{step}\" in run {}{job}",
+                requests.run_id
+            )
+        }
+    } else if let Some((start, end)) = selection.byte_window {
+        format!(
+            "byte window {start}..{} matched no log bytes in run {}{job} ({} bytes read)",
+            end.map(|end| end.to_string())
+                .unwrap_or_else(|| "end".to_string()),
+            requests.run_id,
+            log.total_bytes
+        )
+    } else if let Some((start, end)) = selection.line_window {
+        format!(
+            "line window {}..{} matched no log lines in run {}{job} ({} bytes read)",
+            start + 1,
+            end.map(|end| (end + 1).to_string())
+                .unwrap_or_else(|| "end".to_string()),
+            requests.run_id,
+            log.total_bytes
+        )
+    } else {
+        format!(
+            "log selection matched nothing in run {}{job}",
+            requests.run_id
+        )
+    };
+    let detail = match fallback_error {
+        Some(error) => format!("{detail}; {error}"),
+        None => detail,
+    };
+    OrbitError::InvalidInput(format!("{detail}; no log bytes returned"))
 }
 
 /// GitHub CLI's exact readiness response for a parent workflow that has not
@@ -288,6 +497,7 @@ fn stream_bounded_log(
     bounds: LogReadBounds,
     shape: ExcerptShape,
     label: &str,
+    selection: Option<LogSelection>,
 ) -> Result<StreamedLog, OrbitError> {
     let LogReadBounds {
         max_bytes,
@@ -297,9 +507,17 @@ fn stream_bounded_log(
     let (result, log) = run_process_streaming_stdout(request, &NoSandbox, move |mut stdout| {
         use std::io::Read;
 
-        let mut collector = match shape {
-            ExcerptShape::EvenSplit => StreamedLogCollector::new(max_bytes, max_evidence_lines),
-            ExcerptShape::TailWeighted => {
+        let mut collector = match (shape, selection) {
+            (ExcerptShape::EvenSplit, Some(selection)) => {
+                StreamedLogCollector::scoped(max_bytes, max_evidence_lines, selection)
+            }
+            (ExcerptShape::TailWeighted, Some(selection)) => {
+                StreamedLogCollector::tail_weighted_scoped(max_bytes, max_evidence_lines, selection)
+            }
+            (ExcerptShape::EvenSplit, None) => {
+                StreamedLogCollector::new(max_bytes, max_evidence_lines)
+            }
+            (ExcerptShape::TailWeighted, None) => {
                 StreamedLogCollector::tail_weighted(max_bytes, max_evidence_lines)
             }
         };
@@ -322,7 +540,7 @@ fn stream_bounded_log(
             collector.push(&chunk[..read]);
         }
     })?;
-    check_exec_result(&result, label)?;
+    check_read_result(&result, label)?;
     Ok(log)
 }
 
@@ -362,11 +580,15 @@ fn recover_from_job_logs(
     cached_run_view: Option<&Value>,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> RunLogRead {
-    let unrecovered = |reason: String| RunLogRead {
+    let unrecovered = |reason: String,
+                       selection_unsupported: bool,
+                       throttle: Option<ProviderReadThrottle>| RunLogRead {
         log: empty,
         source: SOURCE_RUN_LOG,
         source_jobs: Vec::new(),
         fallback_error: Some(redact_all(&reason)),
+        fallback_throttle: throttle,
+        selection_unsupported,
     };
 
     let qualify = |reason: String| match primary_error {
@@ -375,20 +597,31 @@ fn recover_from_job_logs(
     };
     let jobs = match fallback_jobs(requests, cached_run_view, guard) {
         Ok(jobs) => jobs,
-        Err(reason) => return unrecovered(qualify(reason)),
+        Err(gap) => {
+            return unrecovered(
+                qualify(gap.reason),
+                false,
+                gap.throttle.map(|throttle| *throttle),
+            );
+        }
     };
     let considered = jobs.len();
     let mut attempts: Vec<String> = Vec::new();
+    let mut selection_unsupported = false;
+    let mut throttle = None;
     for job in jobs.iter().take(bounds.max_fallback_jobs) {
         let request = match guard(&requests.job_log_request(job.id)) {
             Ok(request) => request,
-            Err(error) => return unrecovered(qualify(error.to_string())),
+            Err(error) => {
+                return unrecovered(qualify(error.to_string()), selection_unsupported, throttle);
+            }
         };
         match stream_bounded_log(
             &request,
             bounds,
             ExcerptShape::TailWeighted,
             "gh api job logs",
+            requests.selection.clone(),
         ) {
             Ok(log) if !log.text.trim().is_empty() => {
                 return RunLogRead {
@@ -396,10 +629,26 @@ fn recover_from_job_logs(
                     source: SOURCE_JOB_API_LOG,
                     source_jobs: vec![job.to_json()],
                     fallback_error: None,
+                    fallback_throttle: None,
+                    selection_unsupported: false,
                 };
             }
+            Ok(log) if requests.selection.is_some() => {
+                selection_unsupported |= log.selection_unsupported;
+                attempts.push(if log.selection_unsupported {
+                    format!(
+                        "{}: raw log step mapping unsupported for the requested step",
+                        job.label()
+                    )
+                } else {
+                    format!("{} did not contain the requested step/window", job.label())
+                })
+            }
             Ok(_) => attempts.push(format!("{} returned no log text", job.label())),
-            Err(error) => attempts.push(format!("{}: {error}", job.label())),
+            Err(error) => {
+                throttle = throttle.or_else(|| throttle_of(&error));
+                attempts.push(format!("{}: {error}", job.label()));
+            }
         }
     }
     let skipped = considered.saturating_sub(bounds.max_fallback_jobs);
@@ -414,7 +663,7 @@ fn recover_from_job_logs(
             bounds.max_fallback_jobs
         ));
     }
-    unrecovered(qualify(reason))
+    unrecovered(qualify(reason), selection_unsupported, throttle)
 }
 
 /// The jobs whose logs may be read for this request, from verified run
@@ -423,7 +672,7 @@ fn recover_from_job_logs(
 /// Every rejection here is deliberate: unverifiable metadata must end the
 /// fallback rather than widen it. The failure is returned as prose because it
 /// is evidence about *this run's* collection, not a fault the caller can
-/// retry differently.
+/// retry differently, except that a provider throttle behind it stays typed.
 ///
 /// `cached_run_view` skips the self-query below entirely when the caller
 /// already holds an equivalent, freshly projected payload — identity is still
@@ -432,7 +681,7 @@ fn fallback_jobs(
     requests: &RunLogRequests,
     cached_run_view: Option<&Value>,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
-) -> Result<Vec<FallbackJob>, String> {
+) -> Result<Vec<FallbackJob>, FallbackGap> {
     let owned;
     let view = match cached_run_view {
         Some(view) => view,
@@ -440,7 +689,10 @@ fn fallback_jobs(
             let request = guard(&requests.run_view).map_err(|error| error.to_string())?;
             let result = run_process(&request, &NoSandbox)
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
-            check_exec_result(&result, "gh run view").map_err(|error| error.to_string())?;
+            check_read_result(&result, "gh run view").map_err(|error| FallbackGap {
+                reason: error.to_string(),
+                throttle: throttle_of(&error).map(Box::new),
+            })?;
             owned = super::parse_gh_json(&result.stdout, "gh run view")
                 .map(|parsed| super::run::view::project_run_view(&parsed))
                 .map_err(|error| error.to_string())?;
@@ -456,13 +708,15 @@ fn fallback_jobs(
             return Err(format!(
                 "gh run view reported run {reported}, not run {}; refusing its job metadata",
                 requests.run_id
-            ));
+            )
+            .into());
         }
         None => {
             return Err(format!(
                 "gh run view reported no run id for run {}; refusing its job metadata",
                 requests.run_id
-            ));
+            )
+            .into());
         }
     }
 
@@ -480,7 +734,7 @@ fn fallback_jobs(
         }
     };
     if jobs.is_empty() {
-        return Err(match (&requests.job, requests.scope) {
+        return Err(FallbackGap::from(match (&requests.job, requests.scope) {
             (Some(job), LogScope::Failed) => format!(
                 "job {job} is not a job of run {} that this run reported unsuccessful",
                 requests.run_id
@@ -498,9 +752,25 @@ fn fallback_jobs(
                     requests.run_id
                 )
             }
-        });
+        }));
     }
     Ok(jobs)
+}
+
+/// Why the fallback found no job to read, already rendered, and the provider
+/// throttle behind it when one answered.
+struct FallbackGap {
+    reason: String,
+    throttle: Option<Box<ProviderReadThrottle>>,
+}
+
+impl From<String> for FallbackGap {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            throttle: None,
+        }
+    }
 }
 
 /// Read one job array out of a projected run view, keeping only jobs this

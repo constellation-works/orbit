@@ -3,8 +3,10 @@
 //! create-or-reuse, `promote` owns the explicit Review handoff, `merge` owns
 //! approved-PR merge, remote cleanup, and Done reconciliation, and `delivery`
 //! owns the candidate identity and merge evidence completion runs behind.
+//! `merge_state` classifies the forge's merge guards and typed parked outcomes.
 //! `answers` parses the provider's PR answers once into the types every
-//! reader takes.
+//! reader takes. `screenshots` publishes a task's screenshots to its evidence
+//! ref and renders the body's table of them.
 
 mod answers;
 mod attribution;
@@ -13,11 +15,16 @@ mod body;
 mod complete;
 mod delivery;
 pub(in crate::executor::automation::vcs) mod diagnostics;
+pub(in crate::executor::automation::vcs) mod draft_recovery;
 mod head_lag;
 mod infrastructure;
+mod labels;
 mod merge;
+mod merge_state;
 mod open;
 mod promote;
+mod recovery;
+mod screenshots;
 pub(in crate::executor::automation::vcs) mod source_identity;
 
 pub use answers::PullRequestStatus;
@@ -27,8 +34,14 @@ pub(in crate::executor::automation::vcs) use answers::{
 };
 pub(in crate::executor::automation::vcs) use answers::{read_pr_status, read_pr_status_before};
 pub(in crate::executor::automation) use attribution::ship_done_attribution;
-pub(crate) use auto_fix::recovery_published_head;
-pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;
+pub(crate) use auto_fix::{
+    AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
+    provider_authenticated_published_head, recovery_published_head,
+};
+pub(in crate::executor::automation::vcs) use body::{
+    meaningful_execution_summary, render_acceptance_criteria, task_url,
+};
+pub(crate) use complete::forge_observation_hold_message;
 pub(in crate::executor::automation) use complete::pr_complete;
 pub(in crate::executor::automation::vcs) use delivery::{
     BlockedCheckWait, DeliveryPin, OwedHostedChecks, PrMergeState, UnreportedChecks,
@@ -41,3 +54,4 @@ pub(in crate::executor::automation::vcs) use open::{
     close_earlier_task_pull_requests, open_or_reuse_unchecked,
 };
 pub(in crate::executor::automation) use promote::pr_promote;
+pub(crate) use recovery::{CompletionRecoveryChecks, completion_recovery_checks};

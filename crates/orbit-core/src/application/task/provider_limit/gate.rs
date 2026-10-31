@@ -42,9 +42,11 @@ use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold, provider_
 
 use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{
-    CapturedCrewPools, CrewCandidate, PURPOSE_SOURCE_PREFIX, automatic_crew_source,
+use crate::application::contracts::{
+    CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, TYPE_SOURCE_PREFIX,
+    auto_task_minted, automatic_crew_source,
 };
+use crate::application::task::{CrewPools, TaskJobPort};
 use crate::runtime::run_input::non_empty;
 use crate::runtime::task::provider_hold::{base_backoff, same_provider};
 
@@ -264,11 +266,41 @@ impl OrbitRuntime {
         }
     }
 
+    /// Whether an operator crew change after a provider-limit reassignment
+    /// superseded that reassignment [ORB-17638]: a `crew_assigned` entry
+    /// later than the latest reassignment warning. The reassignment's own
+    /// history entry shares the warning's timestamp, so it never counts.
+    pub(crate) fn provider_limit_reassignment_overridden(
+        &self,
+        task: &Task,
+    ) -> Result<bool, OrbitError> {
+        let comments = self.get_task_comments(&task.id)?;
+        let Some(last_warning) = comments
+            .iter()
+            .filter(|comment| {
+                comment
+                    .message
+                    .starts_with(PROVIDER_LIMIT_REASSIGNMENT_PREFIX)
+            })
+            .map(|comment| comment.at)
+            .max()
+        else {
+            return Ok(false);
+        };
+        let history = self.get_task_history(&task.id)?;
+        Ok(history
+            .iter()
+            .any(|entry| entry.event == "crew_assigned" && entry.at > last_warning))
+    }
+
     /// Whether `task`'s crew is its own choice — an explicit assignment or a
     /// legacy pin — rather than a purpose pool's, a complexity pool's, or the
     /// default's.
     pub(crate) fn explicit_task_crew(&self, task: &Task) -> Result<bool, OrbitError> {
-        let source = self.task_crew_source(task)?;
+        if self.experiment_crew_pool(&task.id)?.is_some() {
+            return Ok(false);
+        }
+        let source = self.recorded_crew_source(task)?;
         if source.as_deref().is_some_and(automatic_crew_source) {
             return Ok(false);
         }
@@ -280,10 +312,10 @@ impl OrbitRuntime {
 
     /// What `gate` leaves of `task`'s draw over `candidates`, which `source`
     /// produced and a standing `hold` has already narrowed.
-    pub(crate) fn provider_limited_candidates(
+    pub(in crate::application) fn provider_limited_candidates(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
         hold: Option<&ProviderFailureHold>,
         gate: &ProviderLimitGate,
         candidates: &[CrewCandidate],
@@ -317,12 +349,12 @@ impl OrbitRuntime {
                 format!("{source}; provider limit: {}", gate.skipped(&skipped)),
             ));
         }
-        // A collapsed `purpose:` assignment names only the chosen member.
-        // Retry that pool's other enabled members, weights included, before
-        // the complexity pool. A draw that already lists the pool is left
-        // alone. The run allowlist is applied by the caller.
-        if source.starts_with(PURPOSE_SOURCE_PREFIX)
-            && let Some((pool, pool_source)) = self.purpose_assignment_candidates(task)?
+        // A collapsed `purpose:` or `type:` assignment names only the chosen
+        // member. Retry that pool's other enabled members, weights included,
+        // before the complexity pool. A draw that already lists the pool is
+        // left alone. The run allowlist is applied by the caller.
+        if (source.starts_with(PURPOSE_SOURCE_PREFIX) || source.starts_with(TYPE_SOURCE_PREFIX))
+            && let Some((pool, pool_source)) = self.assigned_pool_candidates(task)?
         {
             let permitted = pool
                 .into_iter()
@@ -347,10 +379,16 @@ impl OrbitRuntime {
         }
         // No default fallback: the default is usually the most expensive
         // crew and often shares a provider with the pool.
-        if (gate.explicit_crews == ProviderLimitExplicitCrews::Pool
-            || !self.explicit_task_crew(task)?)
+        // [ORB-17638] An auto-task task's explicit crew is reassigned from
+        // its complexity pool even under the `wait` policy, unless an
+        // operator crew change after an earlier reassignment superseded it.
+        let explicit = self.explicit_task_crew(task)?;
+        let auto_reassign = explicit
+            && auto_task_minted(&task.tags)
+            && !self.provider_limit_reassignment_overridden(task)?;
+        if (gate.explicit_crews == ProviderLimitExplicitCrews::Pool || !explicit || auto_reassign)
             && let Some((pool, pool_source)) =
-                self.complexity_pool_candidates(task.complexity, pools)?
+                self.complexity_pool_members(task.complexity, pools)?
         {
             let permitted = pool.into_iter().filter(drawable).collect::<Vec<_>>();
             skipped.extend(
@@ -378,10 +416,10 @@ impl OrbitRuntime {
     /// none, [`Self::provider_backoff_deferral`] or
     /// [`Self::provider_limit_deferral`] reports why, and the draw stays as
     /// it was, so an operator's explicit ship still runs.
-    pub(crate) fn admissible_crew_candidates(
+    pub(in crate::application) fn admissible_crew_candidates(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
         let (candidates, source, hold) = self.held_crew_candidates(task, pools)?;
         let gate = self.provider_limit_gate(Utc::now());
@@ -402,10 +440,10 @@ impl OrbitRuntime {
 
     /// Why `task` waits out a provider limit at this admission: `Some` when
     /// every crew it may run as is limited, `None` when it may be drawn.
-    pub(crate) fn provider_limit_deferral(
+    pub(in crate::application) fn provider_limit_deferral(
         &self,
         task: &Task,
-        pools: &CapturedCrewPools,
+        pools: &CrewPools,
     ) -> Result<Option<String>, OrbitError> {
         let gate = self.provider_limit_gate(Utc::now());
         if gate.is_empty() {

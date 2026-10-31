@@ -1,3 +1,22 @@
+// Strip credentials before any page module starts requests or updates history.
+// Exchange only against the serving origin, never the selected remote host.
+const sessionFragment = window.location.hash || "";
+if (sessionFragment.startsWith("#orbit-session=")) {
+  window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+  try {
+    const response = await fetch("/api/session", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "text/plain" },
+      body: sessionFragment.slice("#orbit-session=".length),
+    });
+    if (!response.ok) console.warn("Browser session unavailable; open a fresh dashboard URL.");
+  } catch {
+    console.warn("Browser session unavailable; open a fresh dashboard URL.");
+  }
+}
+
 const params = new URLSearchParams(window.location.search);
 
 // ORB-00030: the dashboard can serve multiple workspaces. `currentWorkspace`
@@ -32,6 +51,7 @@ export function getWorkspace() {
 let currentHost = params.get("host") || null;
 let servingHost = null;
 let registeredHosts = [];
+const registeredHostListeners = new Set();
 let hostWrites = null;
 let hostRevision = 0;
 
@@ -55,7 +75,13 @@ export function setRegisteredHosts(rows) {
   const hosts = Array.isArray(rows) ? rows.filter((row) => row && row.name) : [];
   const local = hosts.find((row) => row.local);
   servingHost = local ? { name: local.name, machine_id: local.machine_id } : null;
+  const previous = registeredHosts;
   registeredHosts = hosts;
+  for (const listener of registeredHostListeners) listener(previous, hosts);
+}
+
+export function onRegisteredHostsChange(listener) {
+  registeredHostListeners.add(listener);
 }
 
 export function getRegisteredHosts() {
@@ -242,6 +268,7 @@ export function rememberWorkspace() {
 // hash query so reload and shared links restore the same cutoff.
 export const DASHBOARD_WINDOWS = ["1h", "24h", "7d", "30d", "all"];
 export const RELIABILITY_WINDOWS = ["1h", "24h", "7d", "30d"];
+export const TOOLS_WINDOWS = ["24h", "7d", "30d"];
 export const DEFAULT_DASHBOARD_WINDOW = "24h";
 export const INDEPENDENT_RELIABILITY_WINDOW = "7d";
 
@@ -281,6 +308,14 @@ export function reliabilityWindowFor(selected = currentWindow) {
     return { window: selected, independent: false };
   }
   return { window: INDEPENDENT_RELIABILITY_WINDOW, independent: true };
+}
+
+// Tools summaries support only these bounded windows. Derive the fallback
+// from the shared selection without keeping a second window state.
+export function toolsWindowFor(selected = currentWindow) {
+  return TOOLS_WINDOWS.includes(selected)
+    ? { window: selected, independent: false }
+    : { window: DEFAULT_DASHBOARD_WINDOW, independent: true };
 }
 
 /// True only when the payload's reported window matches the active selection.
@@ -347,21 +382,52 @@ function syncWindowTabState(selector, target) {
 export function syncWindowSelectors() {
   const selected = currentWindow;
   const rel = reliabilityWindowFor(selected);
+  const tools = toolsWindowFor(selected);
   for (const [id, target] of [
     ["scoreboard-window-selector", selected],
     ["metrics-window-selector", selected],
     ["agents-window-selector", selected],
     ["reliability-window-selector", rel.window],
+    ["tools-window-selector", tools.window],
   ]) {
     const selector = document.getElementById(id);
     if (!selector) continue;
-    syncWindowTabState(selector, target);
+    // A panel holding its own count window (last N) shows that instead.
+    const panelTarget = selector.dataset.panelWindow || target;
+    const targetExists = windowTabs(selector).some((tab) => tab.dataset.window === panelTarget);
+    syncWindowTabState(selector, targetExists ? panelTarget : selector.dataset.fallbackWindow || panelTarget);
+  }
+  const toolsMeta = document.getElementById("tools-meta");
+  if (toolsMeta) {
+    toolsMeta.textContent = tools.independent
+      ? `Using an independent ${tools.window} window · Analytics: ${selected}`
+      : `${tools.window} window`;
   }
 }
 
-function activateWindowTab(tab, allowed) {
+// `opts.panelWindows` are a panel's own windows (a count of recent units)
+// that never become the shared calendar window; `opts.onPanelWindow(value)`
+// stores one (null leaves it for the shared window) and says if it changed.
+function activateWindowTab(tab, allowed, opts) {
   const next = tab && tab.dataset.window;
-  if (!next || !allowed.includes(next) || next === currentWindow) return;
+  if (!next) return;
+  const onPanelWindow = opts.onPanelWindow;
+  if (onPanelWindow && (opts.panelWindows || []).includes(next)) {
+    if (onPanelWindow(next)) {
+      syncWindowSelectors();
+      notifyScopeChange();
+    }
+    return;
+  }
+  if (!allowed.includes(next)) return;
+  const leftPanelWindow = onPanelWindow ? onPanelWindow(null) : false;
+  if (next === currentWindow) {
+    if (leftPanelWindow) {
+      syncWindowSelectors();
+      notifyScopeChange();
+    }
+    return;
+  }
   setWindow(next);
   persistScopeToUrl();
   syncWindowSelectors();
@@ -372,11 +438,11 @@ export function wireWindowSelector(selectorId, opts = {}) {
   const selector = document.getElementById(selectorId);
   if (!selector || selector.dataset.wired === "true") return;
   selector.dataset.wired = "true";
-  const allowed = opts.allowAll === false ? RELIABILITY_WINDOWS : DASHBOARD_WINDOWS;
+  const allowed = opts.windows || (opts.allowAll === false ? RELIABILITY_WINDOWS : DASHBOARD_WINDOWS);
   selector.addEventListener("click", (event) => {
     const tab = event.target && event.target.closest(".scoreboard-window-seg");
     if (!tab || !selector.contains(tab)) return;
-    activateWindowTab(tab, allowed);
+    activateWindowTab(tab, allowed, opts);
   });
   selector.addEventListener("keydown", (event) => {
     const tab = event.target && event.target.closest(".scoreboard-window-seg");
@@ -393,7 +459,7 @@ export function wireWindowSelector(selectorId, opts = {}) {
     event.preventDefault();
     const nextTab = tabs[nextIndex];
     nextTab.focus();
-    activateWindowTab(nextTab, allowed);
+    activateWindowTab(nextTab, allowed, opts);
   });
 }
 
@@ -447,18 +513,37 @@ export function renderPanelPlaceholder(bodyId) {
 // responses and overlapping refreshes, even when their URLs happen to match.
 const panelRequests = new Map();
 
+// A message area lists its notices newest first: the slot that last took new
+// text moves to the top through its flex order, so its live region stays put.
+let messageSlotOrder = 0;
+export function raiseMessageSlot(node) {
+  if (node && node.style) node.style.order = String(-(++messageSlotOrder));
+}
+
+// A panel whose body names a message area (`data-messages`, the Tasks list)
+// keeps its status note there, so a load error never moves its rows.
+function panelStatusHost(body) {
+  const id = body.dataset ? body.dataset.messages : null;
+  return (id && document.getElementById(id)) || body;
+}
+
 function panelMessage(bodyId, state) {
   const body = document.getElementById(bodyId);
   if (!body) return;
-  body.setAttribute("aria-busy", state.pending ? "true" : "false");
-  let note = Array.from(body.children).find(node => node.dataset.panelStatus);
+  // A poll's re-read of a panel that already shows data is quiet: the panel
+  // keeps reading as settled, so a tick that changes nothing writes nothing.
+  const busy = state.pending && !(state.loaded && state.poll) ? "true" : "false";
+  if (body.getAttribute("aria-busy") !== busy) body.setAttribute("aria-busy", busy);
+  const host = panelStatusHost(body);
+  let note = Array.from(host.children).find(node => node.dataset.panelStatus);
   if (!note) {
     note = el("div", { class: "panel-placeholder" });
     note.dataset.panelStatus = "true";
     note.setAttribute("role", "status");
     note.setAttribute("aria-live", "polite");
-    body.insertBefore(note, body.children[0] || null);
+    host.insertBefore(note, host.children[0] || null);
   }
+  const previousText = note.textContent;
   // Only a cold load and an error need to take up room in the panel. "Updated"
   // and "Refreshing" stay in the live region for assistive tech but are not
   // painted, so a 30s poll never shifts the rows under the reader.
@@ -468,13 +553,18 @@ function panelMessage(bodyId, state) {
     : quiet ? "panel-placeholder quiet" : "panel-placeholder";
   if (state.error) {
     const label = state.loaded ? "Refresh failed; showing stale data" : "Unable to load";
-    const remedy = state.error.remedy || "Use Refresh to retry.";
-    note.textContent = `${label}: ${state.error.message}. ${remedy}`;
+    // Refresh cannot reach a route the host lacks, so the note names the upgrade
+    // instead of the API path and the retry advice.
+    const { message, remedy } = state.error.routeMissing
+      ? { message: "This host's Orbit does not offer this view yet", remedy: "Upgrade it to see this view." }
+      : { message: state.error.message, remedy: state.error.remedy || "Use Refresh to retry." };
+    note.textContent = `${label}: ${message}. ${remedy}`;
   } else if (state.pending) {
     note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
   } else {
     note.textContent = "Updated.";
   }
+  if (host !== body && !quiet && note.textContent !== previousText) raiseMessageSlot(note);
 }
 
 export function panelCanRender(bodyId) {
@@ -517,11 +607,25 @@ onWorkspaceChange(() => {
   for (const [bodyId, state] of panelRequests) resetPanel(bodyId, state.countId);
 });
 
+// Set while the visible tab's poll starts its panel requests (runPanelPoll).
+let pollingPanels = false;
+
+/// Start a refresh's panel requests; `poll` marks them as the background tick.
+export function runPanelPoll(poll, start) {
+  const previous = pollingPanels;
+  pollingPanels = Boolean(poll);
+  try {
+    return start();
+  } finally {
+    pollingPanels = previous;
+  }
+}
+
 export async function requestPanel(bodyId, scope, request, render, countId) {
   const revision = getWorkspaceRevision();
   const previous = panelRequests.get(bodyId);
   if (!previous || previous.scope !== scope) resetPanel(bodyId, countId);
-  const state = { ...panelRequests.get(bodyId), scope, pending: true, error: null };
+  const state = { ...panelRequests.get(bodyId), scope, pending: true, error: null, poll: pollingPanels };
   panelRequests.set(bodyId, state);
   panelMessage(bodyId, state);
   const current = () => revision === getWorkspaceRevision() && panelRequests.get(bodyId) === state;
@@ -574,6 +678,12 @@ function scopedHref(hash, { host, workspace }) {
   query.set("window", currentWindow);
   const search = query.toString();
   return `${search ? `?${search}` : ""}${hash}`;
+}
+
+/// The dashboard address of `hash` in the selected host and workspace, for an
+/// in-dashboard link that should survive a new tab, a copy or a reload.
+export function scopedHashHref(hash) {
+  return scopedHref(hash, { host: selectedRunHost(), workspace: currentWorkspace });
 }
 
 /// The dashboard address of run `runId`, on `host` in `workspace`. Every run
@@ -788,7 +898,9 @@ function syncRovingRows(container) {
   const current = rows.find((row) => state.key !== null && rowIdentity(row) === state.key) || rows[0];
   for (const row of rows) {
     const tabIndex = row === current ? 0 : -1;
-    for (const control of row.querySelectorAll(ROW_CONTROLS)) control.tabIndex = tabIndex;
+    for (const control of row.querySelectorAll(ROW_CONTROLS)) {
+      if (control.tabIndex !== tabIndex) control.tabIndex = tabIndex;
+    }
   }
 }
 
@@ -963,14 +1075,22 @@ export async function fetchJsonPage(path) {
       const text = await res.text();
       let message = `${path}: HTTP ${res.status}`;
       let code = null;
+      // Orbit's own 404s name what is missing. A route this host's Orbit does not
+      // serve answers with no error text (an empty body, or `{"error":""}` from
+      // json_client_error), so it is read as a host without the view.
+      let routeMissing = res.status === 404;
       try {
         const body = JSON.parse(text);
-        if (body && body.error) message = body.error;
+        if (body && body.error) {
+          message = body.error;
+          routeMissing = false;
+        }
         if (body && typeof body.code === "string") code = body.code;
       } catch (_) {}
       const error = new Error(message);
       error.status = res.status;
       if (code) error.code = code;
+      if (routeMissing) error.routeMissing = true;
       throw error;
     }
     return { body: await res.json(), header: (name) => res.headers.get(name) };
@@ -1151,7 +1271,7 @@ export function syncNodes(container, newNodesArr) {
   if (state) {
     panelMessage(container.id, state);
     const note = Array.from(container.children).find(node => node.dataset.panelStatus);
-    newNodesArr = [note, ...newNodesArr];
+    if (note) newNodesArr = [note, ...newNodesArr];
   }
   const oldNodes = Array.from(container.children);
   const oldMap = new Map();
@@ -1166,8 +1286,7 @@ export function syncNodes(container, newNodesArr) {
     teardownNode(node);
   };
 
-  for (let i = 0; i < newNodesArr.length; i++) {
-    const newNode = newNodesArr[i];
+  const placed = newNodesArr.map((newNode) => {
     const key = newNode.dataset.key;
     let nodeToPlace = newNode;
 
@@ -1185,29 +1304,27 @@ export function syncNodes(container, newNodesArr) {
     if (newNode !== nodeToPlace) {
       teardownOnce(newNode);
     }
-    if (key) nodeToPlace.dataset.clockZone = clockZone;
+    if (key && nodeToPlace.dataset.clockZone !== clockZone) nodeToPlace.dataset.clockZone = clockZone;
+    return nodeToPlace;
+  });
 
-    if (container.children[i] !== nodeToPlace) {
-      if (container.children[i]) {
-        container.insertBefore(nodeToPlace, container.children[i]);
-      } else {
-        container.appendChild(nodeToPlace);
-      }
-    }
-  }
-
-  while (container.children.length > newNodesArr.length) {
-    const removed = container.lastElementChild;
-    container.removeChild(removed);
-    teardownOnce(removed);
-  }
-
-  const currentChildren = new Set(container.children);
+  // Nodes leaving the list, a replaced row's old node among them, go first.
+  // Placing then moves only nodes whose order changed, so one changed row is
+  // one swap in place rather than a shift of every sibling after it.
+  const kept = new Set(placed);
   for (const node of oldNodes) {
-    if (!currentChildren.has(node)) {
+    if (!kept.has(node)) {
+      container.removeChild(node);
       teardownOnce(node);
     }
   }
+
+  placed.forEach((node, i) => {
+    const current = container.children[i];
+    if (current === node) return;
+    if (current) container.insertBefore(node, current);
+    else container.appendChild(node);
+  });
 
   if (state) panelMessage(container.id, state);
   syncRovingRows(container);
@@ -1243,7 +1360,7 @@ const SETTLEMENT_CLAUSES = [
   { outcomes: ["owner_unreachable"], attention: true, text: (n) => `${n} waiting for the owner (unreachable) — run Stop again once it is reachable` },
   { outcomes: ["pending_delivery", "pending"], attention: true, text: (n) => `${n} recorded but not delivered — run Stop again once the owner is reachable` },
   { outcomes: ["no_owner_route"], attention: true, text: (n) => `${n} without a route to the owner — check the workspace's owner connection` },
-  { outcomes: ["launch_uncertain"], attention: true, text: (n) => `${n} launch uncertain — needs manual recovery, see the distributed drain runbook` },
+  { outcomes: ["launch_uncertain"], attention: true, text: (n) => `${n} launch uncertain — the leaf may still be running; recover the claim on the owner's dashboard and do not start another attempt` },
 ];
 const SETTLEMENT_TASKS_SHOWN = 3;
 
@@ -1435,12 +1552,53 @@ export function formatDateTime(value, { seconds = false } = {}) {
   return `${dateTimeText(dateParts(date, clockIsUtc()), seconds)} ${activeZoneName(date)}`;
 }
 
+/// "23 min ago", "in 2 h", "just now"; null for a missing or unparseable time.
+export function relativeTime(value, now = Date.now()) {
+  if (!value) return null;
+  const at = new Date(value).getTime();
+  if (Number.isNaN(at)) return null;
+  const diff = at - now;
+  const abs = Math.abs(diff);
+  if (abs < 45_000) return diff > 0 ? "in under a minute" : "just now";
+  let text;
+  if (abs < 86_400_000) {
+    // Round the total once; rounding the remainder can carry into a "60 min".
+    const totalMinutes = Math.round(abs / 60_000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours === 0) text = `${minutes} min`;
+    else text = minutes ? `${hours} h ${minutes} min` : `${hours} h`;
+  } else {
+    text = `${Math.round(abs / 86_400_000)} d`;
+  }
+  return diff > 0 ? `in ${text}` : `${text} ago`;
+}
+
 /// "2026-10-07" on the dashboard clock's calendar.
 export function formatDate(value) {
   const date = toDate(value);
   if (!date) return value == null || value === "" ? "-" : String(value);
   const parts = dateParts(date, clockIsUtc());
   return `${parts.y}-${pad2(parts.mo)}-${pad2(parts.d)}`;
+}
+
+/// A day heading on the dashboard clock's calendar, "Sat, Oct 24"; a day in
+/// another year carries it ("Sat, Oct 24, 2025").
+export function formatDayHeading(value) {
+  const date = toDate(value);
+  if (!date) return value == null || value === "" ? "-" : String(value);
+  const utc = clockIsUtc();
+  const parts = dateParts(date, utc);
+  const thisYear = dateParts(new Date(), utc).y;
+  // The calendar day is already resolved on the dashboard clock, so it is
+  // spelled from a UTC date built from those parts.
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...(parts.y === thisYear ? {} : { year: "numeric" }),
+  }).format(new Date(Date.UTC(parts.y, parts.mo - 1, parts.d)));
 }
 
 /// A wall-clock time on the dashboard clock, "06:32:57 UTC"; `zone: false`

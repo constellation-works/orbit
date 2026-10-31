@@ -17,6 +17,7 @@ use crate::context::RuntimeHost;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedAgentSettings {
+    pub crew_name: Option<String>,
     pub provider: Provider,
     pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -25,6 +26,8 @@ pub struct ResolvedAgentSettings {
     pub env: Vec<CrewEnvVar>,
     /// The crew's own provider account, when it sets `env`.
     pub account: Option<String>,
+    /// The crew sets `vision = false`.
+    pub vision_disabled: bool,
 }
 
 /// A run-scoped restriction on the crews this run may launch [ORB-11242]. The
@@ -91,18 +94,22 @@ fn non_empty_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
 
 fn resolve_from_config(config: &CrewConfig, inline: &AgentLoopSpec) -> ResolvedAgentSettings {
     ResolvedAgentSettings {
+        crew_name: config.name.clone(),
         provider: config.provider.unwrap_or(inline.provider),
         model: config.model.clone().or_else(|| inline.model.clone()),
         reasoning_effort: config.reasoning_effort.or(inline.reasoning_effort),
         env: config.env.clone(),
         account: config.account.clone(),
+        vision_disabled: config.vision_disabled,
     }
 }
 
 pub fn apply_resolved_settings(spec: &mut AgentLoopSpec, resolved: &ResolvedAgentSettings) {
+    spec.crew_name = resolved.crew_name.clone();
     spec.provider = resolved.provider;
     spec.model = resolved.model.clone();
     spec.reasoning_effort = resolved.reasoning_effort;
     spec.crew_env.clone_from(&resolved.env);
     spec.crew_account.clone_from(&resolved.account);
+    spec.crew_vision_disabled = resolved.vision_disabled;
 }

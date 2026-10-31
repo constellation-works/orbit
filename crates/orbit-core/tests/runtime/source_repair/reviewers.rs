@@ -208,12 +208,17 @@ fn tampered_reviewer_publications_refuse_before_reservation() {
                 .write_run_state(&f.source.run_id, &f.state)
                 .unwrap();
             std::fs::write(&job_path, serde_yaml::to_string(&job).unwrap()).unwrap();
-            for input in [f.request("inspect"), f.submit(binding.clone())] {
+            for (action, input) in [
+                ("inspect", f.request("inspect")),
+                ("submit", f.submit(binding.clone())),
+            ] {
+                let error = f
+                    .runtime
+                    .run_tool_as_human("orbit.workflow.run.resume", input)
+                    .expect_err(&format!("landing={landing}, {case}, action={action}"));
                 assert!(
-                    f.runtime
-                        .run_tool_as_human("orbit.workflow.run.resume", input)
-                        .is_err(),
-                    "landing={landing}, {case}"
+                    error.to_string().contains("source repair refused"),
+                    "landing={landing}, {case}, action={action}: {error}"
                 );
             }
             assert!(

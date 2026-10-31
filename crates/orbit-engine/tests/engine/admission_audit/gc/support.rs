@@ -55,6 +55,8 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeTaskHost {
 pub(super) fn task_fixture(id: &str, status: TaskStatus) -> Task {
     let now = Utc::now();
     Task {
+        granted_tools: Vec::new(),
+        requires_labels: Vec::new(),
         job_run_machine: None,
         id: id.to_string(),
         title: "fixture task".to_string(),
@@ -81,9 +83,12 @@ pub(super) fn task_fixture(id: &str, status: TaskStatus) -> Task {
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
+        created_by_model: None,
         origin: None,
+        rule_fingerprint: None,
         created_at: now,
         updated_at: now,
+        not_before: None,
     }
 }
 

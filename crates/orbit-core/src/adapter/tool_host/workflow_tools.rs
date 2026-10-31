@@ -98,6 +98,8 @@ fn ship(
         // Strict worker containment is a CLI-only flag.
         false,
         review,
+        // The schedule override is a CLI-only operator flag.
+        false,
     )?;
     let mut shipped = json!({
         "workflow": "ship",
@@ -380,7 +382,14 @@ fn run_json_enriched(
             .collect_run_audit_steps(&run.run_id)
             .unwrap_or_default()
     });
-    value["steps"] = steps.to_json();
+    let effort_evidence = evidence.unwrap_or_default();
+    value["steps"] = json!(
+        steps
+            .records
+            .iter()
+            .map(|step| step.to_json_with_agent_execution(state, effort_evidence))
+            .collect::<Vec<_>>()
+    );
     value["steps_source"] = json!(steps.source.as_str());
     // [ORB-13901] A drain's last admission pass, including the host resource
     // throttle that held it; null for every run that is not a drain.

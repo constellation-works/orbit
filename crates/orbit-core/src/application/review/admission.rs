@@ -19,13 +19,15 @@ use orbit_common::OrbitError;
 use orbit_config::{PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY};
 use orbit_types::workflow::{
     REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REQUEST_KEY, REVIEW_RUN_OPTION_SOURCE,
-    ReviewAdmission, ReviewLayer, ReviewTiming,
+    ReviewAdmission, ReviewLayer, ReviewTiming, SelectiveBeforeLandingMode,
 };
 use serde_json::Value;
 
+use super::REVIEW_ADMITTED_JOBS;
 use super::crew::pre_landing_review_crew_unset;
-use super::{LOCAL_ROUTE_JOB, REVIEW_ADMITTED_JOBS};
 use crate::OrbitRuntime;
+use crate::application::contracts::{LOCAL_ROUTE_JOB, review_layer_json};
+use crate::application::job::ReviewAdmissionHook;
 
 /// Whether caller-shaped run input names the reserved review key.
 fn declares_review_admission(input: &Value) -> bool {
@@ -37,7 +39,7 @@ fn declares_review_admission(input: &Value) -> bool {
 /// Install the review admission a delivery submission carries, or refuse a
 /// submission that tries to supply one. `parent_run_id` is set for the
 /// parent-authorized child path; `resuming` keeps persisted input as is.
-pub(crate) fn install_review_admission(
+fn install_review_admission(
     runtime: &OrbitRuntime,
     job_name: &str,
     input: &mut Value,
@@ -61,7 +63,7 @@ pub(crate) fn install_review_admission(
         }
         return Ok(());
     }
-    if request.is_some() && job_name == crate::application::distributed::PULL_DRAIN_JOB {
+    if request.is_some() && job_name == crate::application::contracts::PULL_DRAIN_JOB {
         return Err(OrbitError::InvalidInput(
             pull_review_request_refusal().to_string(),
         ));
@@ -88,6 +90,16 @@ pub(crate) fn install_review_admission(
             layer,
             &admission.timing_source,
         )));
+    }
+    if job_name == LOCAL_ROUTE_JOB && admission.selective_policy().is_some() {
+        return Err(OrbitError::InvalidInput(
+            "review.selective_before_landing selects review of an open pull request before \
+             it lands and is unsupported on the local-only delivery route, which opens none; \
+             ship through the PR route or set review.selective_before_landing.mode = off for \
+             local delivery (local-only work is never silently unreviewed or observed at an \
+             invented landing point)"
+                .to_string(),
+        ));
     }
 
     let object = input.as_object_mut().ok_or_else(|| {
@@ -205,7 +217,7 @@ pub fn pull_review_request_refusal() -> &'static str {
 /// run exists when it could not be admitted [ORB-16572]: on the local-only
 /// route (`local_route`), against the other workspace layer, or without a
 /// reviewer crew. Submission resolves the recorded request again.
-pub(crate) fn admit_review_request(
+fn admit_review_request(
     runtime: &OrbitRuntime,
     input: &mut Value,
     review: Option<ReviewLayer>,
@@ -242,11 +254,40 @@ pub(crate) fn resolve(
     request: Option<ReviewLayer>,
 ) -> Result<ReviewAdmission, OrbitError> {
     let mut admission = snapshot(runtime)?;
+    if let Some(policy) = admission.selective_policy().cloned() {
+        policy
+            .validate()
+            .map_err(|error| OrbitError::InvalidInput(format!("selective review: {error}")))?;
+        if policy.mode == SelectiveBeforeLandingMode::Enforce {
+            if request == Some(ReviewLayer::BeforePr) {
+                return Err(OrbitError::InvalidInput(
+                    "--review before-pr is incompatible with active selective before-landing \
+                     enforcement (review.selective_before_landing.mode = enforce): the \
+                     deprecated before-PR layer cannot relocate or evade a mandatory \
+                     selective rule; submit without --review, or strengthen with \
+                     --review before-landing"
+                        .to_string(),
+                ));
+            }
+            // Enforce mode needs a resolvable pre-landing reviewer pool
+            // before dispatch, even though no diff exists yet.
+            if admission.crew.is_none() && admission.crew_pool.is_empty() {
+                let unset = pre_landing_review_crew_unset();
+                return Err(OrbitError::InvalidInput(format!(
+                    "review.selective_before_landing.mode = enforce requires a reviewer crew \
+                     before dispatch, but {unset}; configure {PRE_LANDING_REVIEW_CREW_KEY} or \
+                     {REVIEW_CREW_KEY} (automatic review never inherits the implementer's crew)"
+                )));
+            }
+        }
+    }
     let Some(layer) = request else {
+        warn_before_pr_policy(&admission);
         return Ok(admission);
     };
     if admission.timing == layer.timing() {
         require_reviewer_crew(&admission, layer, Some(&admission.timing_source))?;
+        warn_before_pr_request(&admission, layer, true);
         return Ok(admission);
     }
     if let Some(applied) = ReviewLayer::from_timing(admission.timing) {
@@ -264,7 +305,52 @@ pub(crate) fn resolve(
     require_reviewer_crew(&admission, layer, None)?;
     admission.timing = layer.timing();
     admission.timing_source = REVIEW_RUN_OPTION_SOURCE.to_string();
+    warn_before_pr_request(&admission, layer, false);
     Ok(admission)
+}
+
+/// Bounded deprecation warning for a before-PR admission [ORB-20099].
+///
+/// Emitted once per fresh submission through `tracing` (stderr/log), never in
+/// stdout JSON or MCP envelopes. Effective behavior stays before-PR; the
+/// warning names the deciding key/request and its source so an operator can
+/// migrate with an explicit config write or a `--review before-landing`
+/// request.
+fn warn_before_pr_policy(admission: &ReviewAdmission) {
+    if admission.timing != ReviewTiming::BeforePr {
+        return;
+    }
+    tracing::warn!(
+        key = "review.timing",
+        value = "before_pr",
+        source = %admission.timing_source,
+        note = "review.timing = before_pr is deprecated but still holds PR creation for a reviewer; new setups use off or before_landing (`orbit config set review.timing before_landing`)",
+        "review timing is deprecated but still honoured as before-PR",
+    );
+}
+
+/// Bounded deprecation warning for an explicit old `--review before-pr`
+/// request [ORB-20099]. `policy_match` when the workspace already applies
+/// before-PR and the request only restates it.
+fn warn_before_pr_request(admission: &ReviewAdmission, layer: ReviewLayer, policy_match: bool) {
+    if !layer.is_deprecated() || admission.timing != ReviewTiming::BeforePr {
+        return;
+    }
+    if policy_match {
+        tracing::warn!(
+            request = "--review before-pr",
+            source = %admission.timing_source,
+            note = "--review before-pr is deprecated but still holds PR creation for a reviewer; new requests use --review before-landing",
+            "review request is deprecated but still honoured as before-PR",
+        );
+    } else {
+        tracing::warn!(
+            request = "--review before-pr",
+            source = %REVIEW_RUN_OPTION_SOURCE,
+            note = "--review before-pr is deprecated but still holds PR creation for a reviewer; new requests use --review before-landing",
+            "review request is deprecated but still honoured as before-PR",
+        );
+    }
 }
 
 /// Refuse a requested layer when neither a reviewer crew nor a reviewer pool
@@ -314,6 +400,17 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitE
     if crew.is_some() {
         crew_pool.clear();
     }
+    let mut selective = policy.selective_before_landing_policy();
+    if let Some(selective) = &mut selective
+        && selective.risk_threshold.is_some()
+    {
+        selective.freeze_risk_model(
+            runtime
+                .task_riskiness_model()
+                .map(|model| model.diff_model_identity())
+                .unwrap_or_else(|_| "owner-risk-model/unknown".to_string()),
+        );
+    }
     Ok(ReviewAdmission {
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: policy.version,
@@ -339,6 +436,10 @@ pub(crate) fn snapshot(runtime: &OrbitRuntime) -> Result<ReviewAdmission, OrbitE
         ),
         baseline_commands: runtime.review_baseline_commands().to_vec(),
         host_evidence: policy.review_host_evidence.value.clone(),
+        // Freeze the owner-resolved selective policy with its per-field
+        // provenance and digest; candidate configuration edits and agent
+        // run input cannot supply or weaken it.
+        selective_before_landing: selective,
         captured_at: Utc::now(),
     })
 }
@@ -358,17 +459,6 @@ pub(crate) fn run_review_admission(
         .transpose()
         .map_err(OrbitError::from)
         .map(Option::flatten)
-}
-
-/// The review layer an admission captured and what decided it, as run
-/// surfaces show it [ORB-16572]: `source` is `run-option` when the run's
-/// `--review` added it, else the policy layer (`workspace`, `global`,
-/// `built-in`) or `claim` for a claimed leaf.
-pub(crate) fn review_layer_json(admission: &ReviewAdmission) -> Value {
-    serde_json::json!({
-        "timing": admission.timing.as_str(),
-        "source": admission.timing_source,
-    })
 }
 
 impl OrbitRuntime {
@@ -403,21 +493,126 @@ pub(crate) fn input_run_review_admission(
 /// installing today's admission into its input would not rerun an already
 /// successful review gate. The clock therefore resumes only when the captured
 /// admission still matches today's contract.
-pub(crate) fn upgrade_resume_admission_mismatch(
+fn upgrade_resume_admission_mismatch(
     runtime: &OrbitRuntime,
     run: &orbit_types::workflow::JobRun,
 ) -> Option<String> {
     if !super::REVIEW_ADMITTED_JOBS.contains(&run.job_id.as_str()) {
         return None;
     }
-    let Some(input) = run.input.as_ref() else {
-        return Some("run has no captured review admission".to_string());
+    let (mut previous, current) = match resume_admissions(runtime, run) {
+        Ok(pair) => pair,
+        Err(reason) => return Some(reason),
     };
-    let previous = match ReviewAdmission::from_run_input(input) {
-        Ok(Some(admission)) => admission,
-        Ok(None) => return Some("run has no captured review admission".to_string()),
-        Err(error) => return Some(error.to_string()),
+    previous.captured_at = current.captured_at;
+    adopt_unchanged_selective_policy(&mut previous, &current);
+    (previous != current).then(|| {
+        "the captured review admission differs from the current review policy; submit a new run to capture it"
+            .to_string()
+    })
+}
+
+/// Drop the drift a captured selective policy shows against today's resolved
+/// one when the operator's predicates are unchanged. The captured policy
+/// freezes the owner's risk model: a fitted identity embeds when and from
+/// what landed history it was fitted, so it can differ across captures as
+/// time or history changes, while an unavailable/no-fit identity may repeat
+/// with the same digest. Only mode, risk threshold, paths and unknown-risk
+/// behavior count as a policy change; their provenance does not, matching the
+/// policy digest. The comparison copy adopts today's policy, never the
+/// captured admission the run keeps.
+fn adopt_unchanged_selective_policy(previous: &mut ReviewAdmission, current: &ReviewAdmission) {
+    if let (Some(captured), Some(resolved)) = (
+        &previous.selective_before_landing,
+        &current.selective_before_landing,
+    ) && captured.same_predicates(resolved)
+    {
+        previous
+            .selective_before_landing
+            .clone_from(&current.selective_before_landing);
+    }
+}
+
+/// Unlike ordinary checkpoint resume, completion observation only needs the
+/// obligations that apply to this unchanged candidate. Provenance-only drift
+/// and the retired after-landing state cannot add a pre-landing gate.
+fn completion_admission_mismatch(
+    runtime: &OrbitRuntime,
+    run: &orbit_types::workflow::JobRun,
+) -> Option<String> {
+    let (mut previous, current) = match resume_admissions(runtime, run) {
+        Ok(pair) => pair,
+        Err(reason) => return Some(reason),
     };
+    adopt_unchanged_selective_policy(&mut previous, &current);
+    let gated = |timing| matches!(timing, ReviewTiming::BeforePr | ReviewTiming::BeforeLanding);
+    let same = if !gated(previous.timing)
+        && !gated(current.timing)
+        && previous.selective_before_landing == current.selective_before_landing
+    {
+        previous.contract_version == current.contract_version
+            && previous.policy_version == current.policy_version
+            && previous.required_validation_commands == current.required_validation_commands
+    } else {
+        previous.captured_at = current.captured_at;
+        previous.timing_source.clone_from(&current.timing_source);
+        previous.crew_source.clone_from(&current.crew_source);
+        previous == current
+    };
+    if same {
+        return None;
+    }
+    let changed = [
+        (previous.timing != current.timing, "timing"),
+        (
+            previous.contract_version != current.contract_version
+                || previous.policy_version != current.policy_version,
+            "contract version",
+        ),
+        (
+            previous.crew != current.crew || previous.crew_pool != current.crew_pool,
+            "reviewer crew/pool",
+        ),
+        (previous.budget != current.budget, "review budget"),
+        (
+            previous.required_validation_commands != current.required_validation_commands,
+            "required validation commands",
+        ),
+        (
+            previous.baseline_commands != current.baseline_commands,
+            "baseline commands",
+        ),
+        (
+            previous.host_evidence != current.host_evidence,
+            "host evidence",
+        ),
+        (
+            previous.selective_before_landing != current.selective_before_landing,
+            "selective review policy",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(different, name)| different.then_some(name))
+    .collect::<Vec<_>>();
+    Some(format!(
+        "candidate review obligations changed: {} (captured {}, current {}); require current-policy candidate recovery",
+        changed.join(", "),
+        previous.timing.as_str(),
+        current.timing.as_str(),
+    ))
+}
+
+fn resume_admissions(
+    runtime: &OrbitRuntime,
+    run: &orbit_types::workflow::JobRun,
+) -> Result<(ReviewAdmission, ReviewAdmission), String> {
+    let input = run
+        .input
+        .as_ref()
+        .ok_or("run has no captured review admission")?;
+    let previous = ReviewAdmission::from_run_input(input)
+        .map_err(|error| error.to_string())?
+        .ok_or("run has no captured review admission")?;
     // A run that captured its layer from `--review` resolves today's policy
     // with the same request, so the option alone is never a mismatch.
     let request = match ReviewLayer::from_run_input(input) {
@@ -426,19 +621,10 @@ pub(crate) fn upgrade_resume_admission_mismatch(
                 .then(|| ReviewLayer::from_timing(previous.timing))
                 .flatten()
         }),
-        Err(error) => return Some(error.to_string()),
+        Err(error) => return Err(error.to_string()),
     };
-    let current = match resolve(runtime, request) {
-        Ok(current) => current,
-        Err(error) => return Some(error.to_string()),
-    };
-    let mut comparable_previous = previous;
-    // Capture time is provenance, not part of the admission contract.
-    comparable_previous.captured_at = current.captured_at;
-    (comparable_previous != current).then(|| {
-        "the captured review admission differs from the current review policy; submit a new run to capture it"
-            .to_string()
-    })
+    let current = resolve(runtime, request).map_err(|error| error.to_string())?;
+    Ok((previous, current))
 }
 
 fn reserved_review_key_error(job_name: &str) -> OrbitError {
@@ -447,4 +633,47 @@ fn reserved_review_key_error(job_name: &str) -> OrbitError {
          effective review.timing is captured from configuration at submission and cannot be \
          requested through ordinary job input"
     ))
+}
+
+impl ReviewAdmissionHook for OrbitRuntime {
+    fn install_review_admission(
+        &self,
+        job_name: &str,
+        input: &mut Value,
+        parent_run_id: Option<&str>,
+        resuming: bool,
+    ) -> Result<(), OrbitError> {
+        install_review_admission(self, job_name, input, parent_run_id, resuming)
+    }
+
+    fn admit_review_request(
+        &self,
+        input: &mut Value,
+        review: Option<ReviewLayer>,
+        local_route: bool,
+    ) -> Result<(), OrbitError> {
+        admit_review_request(self, input, review, local_route)
+    }
+
+    fn local_route_review_refusal(&self, layer: ReviewLayer) -> String {
+        local_route_run_option_refusal(layer)
+    }
+
+    fn captured_review_admission(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<ReviewAdmission>, OrbitError> {
+        run_review_admission(self, run_id)
+    }
+
+    fn upgrade_resume_review_mismatch(
+        &self,
+        run: &orbit_types::workflow::JobRun,
+    ) -> Option<String> {
+        upgrade_resume_admission_mismatch(self, run)
+    }
+
+    fn completion_review_mismatch(&self, run: &orbit_types::workflow::JobRun) -> Option<String> {
+        completion_admission_mismatch(self, run)
+    }
 }

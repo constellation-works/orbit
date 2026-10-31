@@ -1,5 +1,5 @@
 ---
-title: Agents and Crews
+title: Agents and crews
 description: "How Orbit runs coding agents through provider CLIs, which executors ship, and how to write a crew."
 sidebar:
   order: 6
@@ -78,13 +78,11 @@ head:
       }
       .orbit-setup-explorer:has(#ose-p-claude:checked) #ose-panel-claude,
       .orbit-setup-explorer:has(#ose-p-codex:checked) #ose-panel-codex,
+      .orbit-setup-explorer:has(#ose-p-muse:checked) #ose-panel-muse,
       .orbit-setup-explorer:has(#ose-p-antigravity:checked) #ose-panel-antigravity,
       .orbit-setup-explorer:has(#ose-p-gemini:checked) #ose-panel-gemini,
       .orbit-setup-explorer:has(#ose-p-grok:checked) #ose-panel-grok,
-      .orbit-setup-explorer:has(#ose-p-copilot:checked) #ose-panel-copilot,
-      .orbit-setup-explorer:has(#ose-p-cursor:checked) #ose-panel-cursor,
-      .orbit-setup-explorer:has(#ose-p-pi:checked) #ose-panel-pi,
-      .orbit-setup-explorer:has(#ose-p-opencode:checked) #ose-panel-opencode { display: block; }
+      .orbit-setup-explorer:has(#ose-p-copilot:checked) #ose-panel-copilot { display: block; }
       .ose-facts {
         display: grid;
         grid-template-columns: max-content minmax(0, 1fr);
@@ -198,10 +196,7 @@ Every provider id, and what it can run today:
 | `antigravity` | `agy` | `low`, `medium`, `high`, via `--effort` | Active |
 | `grok` | `grok` | Model-specific, via `--reasoning-effort` | Active |
 | `copilot` | `copilot` | Not supported | Active |
-| `cursor` | `cursor-agent` | Not supported | Active |
-| `pi` | `pi` | `low`–`max`, via `--thinking` | Active |
-| `opencode` | `opencode run` | `high`, `max`, via `--variant` | Active |
-| `muse` | `muse exec` | `low`–`max`, via `--reasoning-effort` | Active on macOS only |
+| `muse` | `muse exec` | `low`–`max`, via `--reasoning-effort` | Active on macOS and Linux |
 | `gemini` | `gemini` | Not supported | Legacy |
 | `ollama` | — | Not supported | No shipped crew or executor |
 | `openai_compat` | — | Not supported | No CLI runtime; dispatch fails |
@@ -211,9 +206,9 @@ and `orbit init` never seeds one. A crew that names either id still loads, but
 dispatch refuses it. Orbit never re-points the run at a family that has an
 executor.
 
-Muse Code is the `muse` lane. On macOS, a crew can name `provider = "muse"`
+Muse Code is the `muse` lane. On macOS and Linux, a crew can name `provider = "muse"`
 and `model = "muse-spark-1.3"`; `orbit init` detects its `muse` binary. Orbit
-does not dispatch this executor on Linux or native Windows.
+does not ship a native Windows executor.
 
 Orbit ships one more executor, **`local-shell`**, which is not a provider. It
 runs deterministic local commands for `local_shell` steps. It carries no model,
@@ -234,10 +229,11 @@ working. Each is deprecated and emits a warning:
 | `xai` | `grok` |
 
 `openai-compat` is an accepted, non-deprecated spelling of `openai_compat`.
-Any other string is an unknown provider and is rejected, not guessed at. The
-model vendor named *inside* a Pi or OpenCode run (`pi --provider anthropic`,
-`opencode --model anthropic/...`) is not an Orbit provider id and never moves
-the run to another lane.
+Any other string is an unknown provider and is rejected, not guessed at.
+
+### Retired providers
+
+The `cursor`, `pi` and `opencode` lanes were retired. A crew naming one fails to load, naming the crew, the retired provider and the remedy: pick a supported provider (`claude`, `codex`, `gemini`, `grok`, `copilot`, `antigravity`, `muse`). `orbit doctor` reports the same refusal. Persisted records naming them still read and display. The Cursor editor MCP client (`orbit mcp init --cursor`) is a separate surface and is unaffected.
 
 ## Set up an executor
 
@@ -258,12 +254,10 @@ JavaScript.
 <div class="ose-choices">
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-claude" value="claude" checked><label for="ose-p-claude">claude</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-codex" value="codex"><label for="ose-p-codex">codex</label></span>
+<span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-muse" value="muse"><label for="ose-p-muse">muse</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-antigravity" value="antigravity"><label for="ose-p-antigravity">antigravity</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-grok" value="grok"><label for="ose-p-grok">grok</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-copilot" value="copilot"><label for="ose-p-copilot">copilot</label></span>
-<span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-cursor" value="cursor"><label for="ose-p-cursor">cursor</label></span>
-<span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-pi" value="pi"><label for="ose-p-pi">pi</label></span>
-<span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-opencode" value="opencode"><label for="ose-p-opencode">opencode</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-gemini" value="gemini"><label for="ose-p-gemini">gemini <span class="ose-choice-note">legacy</span></label></span>
 </div>
 </fieldset>
@@ -339,6 +333,42 @@ model = "gpt-6.1-sol"
 </div>
 <div class="ose-note"><p>Codex sandbox mode and approval policy are separate settings — see <a href="../../reference/config/#settable-keys"><code>execution.codex.*</code></a>.</p></div>
 </div>
+<div class="ose-panel" id="ose-panel-muse">
+<dl class="ose-facts">
+<dt>Binary on <code>PATH</code></dt><dd><code>muse</code></dd>
+<dt>Example model</dt><dd><code>muse-spark-1.3</code></dd>
+<dt>Reasoning effort</dt><dd>Supported — the full crew vocabulary, rendered as <code>muse exec --reasoning-effort &lt;value&gt;</code>.</dd>
+</dl>
+<fieldset class="ose-field">
+<legend>2. Reasoning effort (optional)</legend>
+<div class="ose-choices">
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-none" value="none" checked><label for="ose-e-muse-none">omit</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-low" value="low"><label for="ose-e-muse-low">low</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-medium" value="medium"><label for="ose-e-muse-medium">medium</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-high" value="high"><label for="ose-e-muse-high">high</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-xhigh" value="xhigh"><label for="ose-e-muse-xhigh">xhigh</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-max" value="max"><label for="ose-e-muse-max">max</label></span>
+</div>
+</fieldset>
+<div class="ose-snippet">
+
+<pre class="ose-code"><code>[workflow]
+default_crew = "muse-spark"
+
+[crews.muse-spark]
+provider = "muse"
+model = "muse-spark-1.3"
+<span class="ose-eff" data-effort="low">effort = "low"
+</span><span class="ose-eff" data-effort="medium">effort = "medium"
+</span><span class="ose-eff" data-effort="high">effort = "high"
+</span><span class="ose-eff" data-effort="xhigh">effort = "xhigh"
+</span><span class="ose-eff" data-effort="max">effort = "max"
+</span></code></pre>
+
+<div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
+</div>
+<div class="ose-note"><p>Muse Code runs on macOS and Linux. Omit <code>effort</code> to keep the model's default; Orbit then passes no reasoning-effort argument.</p></div>
+</div>
 <div class="ose-panel" id="ose-panel-antigravity">
 <dl class="ose-facts">
 <dt>Binary on <code>PATH</code></dt><dd><code>agy</code></dd>
@@ -357,9 +387,9 @@ model = "gpt-6.1-sol"
 <div class="ose-snippet">
 
 <pre class="ose-code"><code>[workflow]
-default_crew = "antigravity"
+default_crew = "gemini-flash"
 
-[crews.antigravity]
+[crews.gemini-flash]
 provider = "antigravity"
 model = "gemini-3.8-flash-high"
 <span class="ose-eff" data-effort="low">effort = "low"
@@ -369,7 +399,7 @@ model = "gemini-3.8-flash-high"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p><code>xhigh</code> and <code>max</code> are absent because <code>agy --effort</code> does not define them. Orbit ignores them with a warning instead of downgrading to <code>high</code>.</p><p>Antigravity model ids carry their own effort suffix and must come from <code>agy models</code>. A bare Gemini CLI id such as <code>gemini-3.8-flash</code> is rejected at config load, not rewritten into a suffixed id.</p></div>
+<div class="ose-note"><p><code>xhigh</code> and <code>max</code> are not accepted by Orbit for this lane: Orbit validates Antigravity effort to <code>low</code>, <code>medium</code> or <code>high</code> only, even though <code>agy --effort</code> advertises <code>low|medium|high|xhigh|max</code>. Orbit ignores them with a warning instead of downgrading to <code>high</code>.</p><p>Antigravity model ids carry their own effort suffix and must come from <code>agy models</code>. A bare Gemini CLI id such as <code>gemini-3.8-flash</code> is rejected at config load, not rewritten into a suffixed id.</p><p>When <code>agy</code> is detected, <code>orbit init</code> also seeds a built-in <code>argon</code> crew on this lane (<code>gemini-4-argon-high</code>, enabled) and adds it to the <code>hard</code> complexity pool. Argon seeding never changes <code>default_crew</code>: <code>init</code> picks the first detected family's default, so this is <code>gemini-flash</code> only when Antigravity is the first detected family.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-grok">
 <dl class="ose-facts">
@@ -424,92 +454,6 @@ model = "claude-sonnet-5"
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
 <div class="ose-note"><p>Orbit has no verified Copilot effort contract, so there is no effort picker. An <code>effort</code> on this crew is ignored with a warning (<em>provider 'copilot' does not support configured reasoning effort</em>). It does not take the workspace down or get remapped.</p><p>The retired <code>gh-copilot</code> gh extension is a different tool and is not an Orbit executor.</p></div>
-</div>
-<div class="ose-panel" id="ose-panel-cursor">
-<dl class="ose-facts">
-<dt>Binary on <code>PATH</code></dt><dd><code>cursor-agent</code></dd>
-<dt>Example model</dt><dd><code>gpt-5</code></dd>
-<dt>Reasoning effort</dt><dd>Not supported.</dd>
-</dl>
-<div class="ose-snippet">
-
-<pre class="ose-code"><code>[workflow]
-default_crew = "cursor"
-
-[crews.cursor]
-provider = "cursor"
-model = "gpt-5"
-</code></pre>
-
-<div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
-</div>
-<div class="ose-note"><p>An <code>effort</code> on this crew is ignored with a warning, not remapped to a nearby value.</p><p>Orbit runs the standalone headless <code>cursor-agent</code> binary. Having the Cursor editor installed does not mean this binary is on <code>PATH</code>.</p></div>
-</div>
-<div class="ose-panel" id="ose-panel-pi">
-<dl class="ose-facts">
-<dt>Binary on <code>PATH</code></dt><dd><code>pi</code> (npm <code>@earendil-works/pi-coding-agent</code>)</dd>
-<dt>Example model</dt><dd><code>sonnet</code></dd>
-<dt>Reasoning effort</dt><dd>Supported — the full crew vocabulary, rendered as <code>pi --thinking &lt;value&gt;</code>.</dd>
-</dl>
-<fieldset class="ose-field">
-<legend>2. Reasoning effort (optional)</legend>
-<div class="ose-choices">
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-none" value="none" checked><label for="ose-e-pi-none">omit</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-low" value="low"><label for="ose-e-pi-low">low</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-medium" value="medium"><label for="ose-e-pi-medium">medium</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-high" value="high"><label for="ose-e-pi-high">high</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-xhigh" value="xhigh"><label for="ose-e-pi-xhigh">xhigh</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-max" value="max"><label for="ose-e-pi-max">max</label></span>
-</div>
-</fieldset>
-<div class="ose-snippet">
-
-<pre class="ose-code"><code>[workflow]
-default_crew = "pi"
-
-[crews.pi]
-provider = "pi"
-model = "sonnet"
-<span class="ose-eff" data-effort="low">effort = "low"
-</span><span class="ose-eff" data-effort="medium">effort = "medium"
-</span><span class="ose-eff" data-effort="high">effort = "high"
-</span><span class="ose-eff" data-effort="xhigh">effort = "xhigh"
-</span><span class="ose-eff" data-effort="max">effort = "max"
-</span></code></pre>
-
-<div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
-</div>
-<div class="ose-note"><p>Pi's <code>--thinking</code> values are model-independent and include every crew value, so all of them are accepted.</p><p>Pi's own <code>--provider</code> flag names the model vendor <em>inside</em> a Pi run. It is not an Orbit provider: <code>provider = "pi"</code> selects this lane.</p></div>
-</div>
-<div class="ose-panel" id="ose-panel-opencode">
-<dl class="ose-facts">
-<dt>Binary on <code>PATH</code></dt><dd><code>opencode</code></dd>
-<dt>Example model</dt><dd><code>anthropic/claude-sonnet-4-5</code></dd>
-<dt>Reasoning effort</dt><dd>Supported for <code>high</code> and <code>max</code> only, rendered as <code>opencode run --variant &lt;value&gt;</code>.</dd>
-</dl>
-<fieldset class="ose-field">
-<legend>2. Reasoning effort (optional)</legend>
-<div class="ose-choices">
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-opencode" id="ose-e-opencode-none" value="none" checked><label for="ose-e-opencode-none">omit</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-opencode" id="ose-e-opencode-high" value="high"><label for="ose-e-opencode-high">high</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-opencode" id="ose-e-opencode-max" value="max"><label for="ose-e-opencode-max">max</label></span>
-</div>
-</fieldset>
-<div class="ose-snippet">
-
-<pre class="ose-code"><code>[workflow]
-default_crew = "opencode"
-
-[crews.opencode]
-provider = "opencode"
-model = "anthropic/claude-sonnet-4-5"
-<span class="ose-eff" data-effort="high">effort = "high"
-</span><span class="ose-eff" data-effort="max">effort = "max"
-</span></code></pre>
-
-<div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
-</div>
-<div class="ose-note"><p><code>low</code>, <code>medium</code>, and <code>xhigh</code> are missing because <code>opencode run --variant</code> forwards the value to whichever model provider <code>--model</code> selected, and OpenCode publishes no provider-independent vocabulary. Orbit accepts only the two values OpenCode's help text names, and rejects the rest instead of remapping them to <code>minimal</code> or <code>high</code>.</p><p>The vendor prefix in <code>anthropic/claude-sonnet-4-5</code> is OpenCode's own model addressing. It does not make this an Anthropic lane: Orbit dispatches through <code>provider = "opencode"</code>.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-gemini">
 <dl class="ose-facts">
@@ -635,8 +579,13 @@ effort = "high"
 ```
 
 A task created without a crew gets one at creation: a draw from the pool for
-its complexity (`workflow.<complexity>_complexity_crews`), else
-`default_crew`. The task's history records which.
+its purpose when configured, otherwise its complexity
+(`workflow.<complexity>_complexity_crews`), else `default_crew`. The task's
+history records which.
+
+A crew with an `env` list has its own provider account for usage limits,
+holds and budgets. Crews without one share the provider's default account.
+Allowlisting a crew on that account does not also allow an environment-backed crew.
 
 `effort` is passed through each provider's own argument and validated against
 the provider **and** model at config load. An invalid or unsupported value is
@@ -664,8 +613,142 @@ reach later managed prompts. A bounded checkpoint holds promotion while new
 guidance is undelivered. Both exploration and steering are off by default;
 see [Configuration](../../reference/config/).
 
-Moving work to another provider is always explicit: `orbit task update <id>
---crew <name>`. Orbit never moves a task to a different provider on its own.
+Use `orbit task update <id> --crew <name>` to select a crew explicitly.
+Automatic admission can redraw pool assignments and reassign an auto-task's
+crew when a provider limit excludes it; a later operator crew change is
+preserved. The run records its selection; see
+[crew pools](../../reference/config/#crews).
+
+With `workflow.crew_selection = "usage_pressure"`, pool draws favour crews
+whose weekly allowance would otherwise go unused. The optional
+`workflow.crew_performance` setting also weights draws by per-task-type
+implementer performance; it is off by default. Inspect the cells with
+`orbit agents scorecard --role implementers --by-type`, or add `--shadow` to
+compare recorded shares with the performance-weighted shares. See
+[Configuration](../../reference/config/#crews) for both settings.
+
+## Crew ladder
+
+The crew ladder tests whether a cheaper crew would hold up for a complexity
+tier. It is opt-in. In this release it runs only shadow trials: it records
+which tasks would go to the cheaper crew, and no task's crew changes.
+
+### Rungs, floor and candidate
+
+`workflow.crew_ladder.rungs` orders your crews from cheapest to most capable.
+For each complexity tier, the ladder reads that tier's pool
+(`workflow.<tier>_complexity_crews`):
+
+- The **floor** is the cheapest rung that is an enabled, weighted member of the
+  pool.
+- The **candidate** is the rung directly below the floor: the cheaper crew the
+  trial tests.
+
+A tier has no candidate when no rung is in its pool, or when its floor is the
+bottom rung.
+
+### Turn on shadow mode
+
+Nothing runs until `mode` is `shadow` and `tiers` names at least one tier.
+`mode` accepts only `off` and `shadow`; `propose` and `auto` are refused at
+load because later releases add them. A tier runs a trial only when you list
+it, so `xhard` runs one only when you name it.
+
+```toml
+[workflow]
+default_crew = "sonnet"
+low_complexity_crews = ["sonnet"]
+medium_complexity_crews = ["opus"]
+
+[workflow.crew_ladder]
+mode = "shadow"
+rungs = ["haiku", "sonnet", "opus"]
+tiers = ["low", "medium"]
+
+[crews.haiku]
+provider = "claude"
+model = "haiku"
+
+[crews.sonnet]
+provider = "claude"
+model = "sonnet"
+
+[crews.opus]
+provider = "claude"
+model = "opus"
+```
+
+With this config, the `low` trial tests `haiku` against `sonnet`, and the
+`medium` trial tests `sonnet` against `opus`. Each crew in `rungs` must be
+defined and enabled, and named once.
+
+### What a shadow trial does
+
+Each listed tier that has a candidate keeps one standing experiment owned by
+`system:crew-ladder`. It runs in shadow mode and is named
+`crew-ladder-<tier>-<n>`.
+
+- The **control** arm has no overlay, so tasks keep their usual crew.
+- The **candidate** arm overlays the tier's pool with the candidate crew.
+- The arms are weighted `1 − explore_rate` and `explore_rate`. `explore_rate`
+  is the share of the tier's tasks assigned to the candidate arm: `0.02` to
+  `0.25`, default `0.10`.
+- The population is the tier's tasks, minus any types in `exclude_types`
+  (`feature`, `bug`, `refactor`, `chore`). Excluding all four is refused.
+
+Assignments are recorded as for any shadow experiment. No task's crew, crew
+source or run changes.
+
+The ladder reconciles trials at each delivery admission, before the task is
+assigned, while `experiments.enabled` is true:
+
+- A tier without a trial starts one. Trials count toward
+  `experiments.max_running`, and free slots go to tiers in the order `tiers`
+  lists them.
+- A trial ends with no winner and files no promotion task when:
+  - its candidate, arm weights or population no longer match the ladder, for
+    example after a change to the pool, `rungs`, `explore_rate` or
+    `exclude_types`. A new trial then starts in its place.
+  - a running operator crew experiment covers the tier. Operator experiments
+    come first.
+  - `mode` is `off`. No trial starts either.
+
+The `margin`, `look_every`, `max_sample`, `watch_window`, `retry_after_days`,
+`quality_grade_margin` and `min_grade_coverage` keys are validated now and
+recorded for later phases, which will act on them. This release acts on none of
+them. `margin` takes quality points above 0 and at most 100, default `5`.
+`delivery_quality` accepts only `off`.
+
+### Read the ladder
+
+```bash
+orbit crew ladder
+orbit crew ladder --json
+```
+
+The report is read-only. It never starts or concludes a trial; those happen at
+delivery admission. For each tier it shows the pool, floor and candidate, then
+the trial with its status and its **would-be count**: the number of tasks
+assigned to the candidate arm. Those tasks still ran on their own crew, so the
+count shows how much work the candidate would have taken. The same payload is
+available as the read-only MCP tool `orbit.crew.ladder`.
+
+When a tier has no trial, the report gives the reason:
+
+| Reason | Meaning |
+|---|---|
+| `mode_off` | `mode` is `off`. |
+| `tier_not_listed` | The tier is not in `tiers`. |
+| `no_ladder_rung` | No rung in `rungs` is an enabled, weighted member of the tier's pool. |
+| `floor_is_bottom_rung` | The floor is the cheapest rung, so no candidate is left. |
+| `operator_experiment` | A running operator crew experiment covers the tier. |
+| `experiments_disabled` | `experiments.enabled` is `false`, so no trial can start. |
+| `max_running` | `experiments.max_running` has no free slot. |
+| `pending` | The trial starts at the next delivery admission. |
+
+Would-be counts build up as tasks pass delivery admission, so read the report
+after deliveries have run. A change to `rungs` or a pool can change the
+candidate; the current trial then concludes and a new one starts.
 
 ## Platform support
 
@@ -673,14 +756,21 @@ Orbit wraps each spawned agent CLI in an OS sandbox scoped by the activity's
 resolved filesystem profile. `orbit init` writes the right backend for your
 host into the shipped executors:
 
-- **macOS**: `sandbox-exec`, with the profile compiled to SBPL.
+- **macOS**: `sandbox-exec`, with the profile compiled to SBPL. Dispatch fails
+  closed if the trusted `sandbox-exec` executable is missing, unless the
+  executor sets `allow_fallback: true` (a read-only explorer takes the same
+  provider read-only mode as on Linux). If the executable exists but cannot
+  apply the profile (exit 71, `sandbox_apply: Operation not permitted`), the run
+  fails and no fallback applies.
 - **Linux**: Bubblewrap, from a trusted `/usr/bin/bwrap` or, when that is
   missing or too old, Orbit's root-owned bundled build. It confines writes to
   the resolved profile and hides well-known credential locations such as
   `~/.ssh` and `~/.aws`. Other host reads and network access stay open, so it
   is not a read-rule or network boundary. Dispatch **fails closed** if `bwrap`
   is missing or its namespace-and-mount probe fails, unless the executor sets
-  `allow_fallback: true`.
+  `allow_fallback: true`. The one exception is a read-only explorer: it does
+  not need `allow_fallback`, and instead runs under its provider's own
+  read-only mode (Codex), while a provider without one is refused.
 - **Other platforms**: release binaries ship for macOS and Linux only (x64 and
   arm64). A source build on any other OS seeds its executors with no OS
   sandbox. Process supervision, tool policy, and Orbit's in-process guards for
@@ -689,3 +779,8 @@ host into the shipped executors:
 The bundled `local-shell` executor declares no sandbox on any platform, by
 design. See [Install Orbit](../../getting-started/install/#prepare-the-sandbox)
 for the Linux prerequisites.
+
+To override a shipped executor's own definition — its sandbox backend and
+fallback, the hosts it may run on (`host_os`), its inspection arguments or an
+authentication probe — edit its machine-level YAML instead of the crew. See
+[Executor YAML](../../reference/executor-yaml/).

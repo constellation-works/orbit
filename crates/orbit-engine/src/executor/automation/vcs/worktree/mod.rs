@@ -15,6 +15,7 @@ use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::identity::lower_hex;
+use orbit_types::workflow::DEFAULT_BRANCH_PREFIX;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -85,7 +86,6 @@ pub use rescue::WorktreeGcRecovery;
 pub(in crate::executor::automation) use setup::setup_worktree;
 
 const SHARED_WORKTREE_NAME_PREFIX: &str = "parallel-batch";
-const DEFAULT_BRANCH_PREFIX: &str = "orbit";
 
 /// What a run's worktree is: the tasks it serves, the branch prefix that
 /// names it, and the run token that makes its directory unique.
@@ -108,6 +108,18 @@ pub(in crate::executor::automation) struct WorktreeIdentity {
     /// The token that names the directory alongside the prefix.
     pub(in crate::executor::automation) run_id: String,
 }
+
+/// Every top-level input key worktree identity derivation
+/// (`WorktreeIdentity::from_input`) reads, so a run inventory for worktree GC
+/// can hydrate only these (`JobRunQuery::input_keys`). Keep it in step with
+/// that derivation.
+pub const WORKTREE_IDENTITY_INPUT_KEYS: &[&str] = &[
+    "task_ids",
+    "task_id",
+    "epic_task_id",
+    "run_id",
+    "branch_prefix",
+];
 
 impl WorktreeIdentity {
     /// Derive the identity from a `setup_worktree`-shaped input.

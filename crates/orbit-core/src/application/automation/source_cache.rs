@@ -4,7 +4,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use orbit_automation::AutomationError;
+use orbit_automation::{AutomationError, DeferredReason};
+use orbit_common::OrbitError;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::SourceRevision;
 
 type HeadKey = (PathBuf, String, String);
@@ -12,17 +14,36 @@ type LookupKey = (String, String, String);
 type InspectionKey = (PathBuf, String, bool);
 /// `None` records that libgit2 cannot open the checkout, so Git commands run.
 type InspectionHead = Option<(String, SourceRevision)>;
-type Cached<T> = Result<T, String>;
+type Cached<T> = Result<T, DeferredReason>;
 
 /// A fetched head belongs to one Git object store; local inspection heads are
 /// scoped to a checkout and request. Provider responses can be
 /// reused across independent clones of the same provider repository. Failures
 /// are shared too, so an unavailable source is attempted only once per tick.
+type Preparations = std::collections::BTreeMap<String, std::collections::BTreeSet<String>>;
+
 #[derive(Default)]
 pub(crate) struct SourceCache {
     heads: RefCell<BTreeMap<HeadKey, Cached<SourceRevision>>>,
     lookups: RefCell<BTreeMap<LookupKey, Cached<String>>>,
     inspections: RefCell<BTreeMap<InspectionKey, Cached<InspectionHead>>>,
+    // Request-scoped task snapshot shared by the state routines inspected in
+    // one status request: the same workspace population and hydrated tasks
+    // serve every routine instead of one scan and hydration per routine.
+    // Only a status inspection populates it; it lives for one request, so a
+    // later request re-reads the store.
+    task_snapshots: RefCell<BTreeMap<String, std::rc::Rc<Vec<orbit_types::task::TaskEnvelopeV2>>>>,
+    // The workspace status index (`task_status_index_for` with no targets
+    // already projects every indexed task of the workspace), read once per
+    // workspace per request instead of once per state routine: pages and
+    // observability checks of every routine in the request share it.
+    status_indexes: RefCell<BTreeMap<String, std::rc::Rc<BTreeMap<String, TaskStatus>>>>,
+    // Hydrated tasks and active-preparation scans are workspace-scoped: the
+    // status report shares one cache across every discovered workspace, so
+    // the workspace key keeps one checkout's tasks from serving another's
+    // routines.
+    tasks: RefCell<BTreeMap<(String, String), Task>>,
+    preparations: RefCell<BTreeMap<(String, &'static str), Preparations>>,
 }
 
 impl SourceCache {
@@ -48,6 +69,74 @@ impl SourceCache {
             (git_dir, repository.into(), branch.into()),
             fetch,
         )
+    }
+
+    /// Task envelopes of one workspace in the observed statuses, fetched once
+    /// per request; each routine's page is derived from this snapshot. The
+    /// snapshot is shared by reference: deriving a page must not copy the
+    /// workspace population per routine.
+    pub(super) fn task_snapshot(
+        &self,
+        workspace: &str,
+        fetch: impl FnOnce() -> Result<Vec<orbit_types::task::TaskEnvelopeV2>, OrbitError>,
+    ) -> Result<std::rc::Rc<Vec<orbit_types::task::TaskEnvelopeV2>>, OrbitError> {
+        if let Some(snapshot) = self.task_snapshots.borrow().get(workspace) {
+            return Ok(snapshot.clone());
+        }
+        let snapshot = std::rc::Rc::new(fetch()?);
+        self.task_snapshots
+            .borrow_mut()
+            .insert(workspace.to_string(), snapshot.clone());
+        Ok(snapshot)
+    }
+
+    /// One workspace's indexed task statuses, fetched once per request and
+    /// shared by reference, like [`Self::task_snapshot`].
+    pub(super) fn status_index(
+        &self,
+        workspace: &str,
+        fetch: impl FnOnce() -> Result<BTreeMap<String, TaskStatus>, OrbitError>,
+    ) -> Result<std::rc::Rc<BTreeMap<String, TaskStatus>>, OrbitError> {
+        if let Some(index) = self.status_indexes.borrow().get(workspace) {
+            return Ok(index.clone());
+        }
+        let index = std::rc::Rc::new(fetch()?);
+        self.status_indexes
+            .borrow_mut()
+            .insert(workspace.to_string(), index.clone());
+        Ok(index)
+    }
+
+    pub(super) fn task(
+        &self,
+        workspace: &str,
+        id: &str,
+        fetch: impl FnOnce() -> Result<Task, OrbitError>,
+    ) -> Result<Task, OrbitError> {
+        let key = (workspace.to_string(), id.to_string());
+        if let Some(task) = self.tasks.borrow().get(&key) {
+            return Ok(task.clone());
+        }
+        let task = fetch()?;
+        self.tasks.borrow_mut().insert(key, task.clone());
+        Ok(task)
+    }
+
+    pub(super) fn preparations(
+        &self,
+        workspace: &str,
+        kind: &'static str,
+        fetch: impl FnOnce() -> Result<Preparations, OrbitError>,
+    ) -> Result<Preparations, OrbitError> {
+        let key = (workspace.to_string(), kind);
+        if let Some(preparations) = self.preparations.borrow().get(&key) {
+            return Ok(preparations.clone());
+        }
+        let preparations = fetch()?;
+        self.preparations
+            .borrow_mut()
+            .insert(key, preparations.clone());
+        Ok(preparations)
     }
 
     pub(super) fn lookup(
@@ -77,7 +166,7 @@ fn cached<K: Ord, T: Clone>(
     // own bounded deadline; a cache never extends or shares that budget.
     let result = query().map_err(|error| match error {
         AutomationError::Deferred(reason) => reason,
-        other => other.to_string(),
+        other => DeferredReason::CachedFailure(other.into()),
     });
     entries.borrow_mut().insert(key, result.clone());
     result.map_err(AutomationError::Deferred)

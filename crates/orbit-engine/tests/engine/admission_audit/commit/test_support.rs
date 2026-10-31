@@ -282,6 +282,8 @@ pub fn initialized_git_repo() -> tempfile::TempDir {
 pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -> Task {
     let now = Utc::now();
     Task {
+        granted_tools: Vec::new(),
+        requires_labels: Vec::new(),
         job_run_machine: None,
         id: id.to_string(),
         title: title.to_string(),
@@ -310,8 +312,11 @@ pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
+        created_by_model: None,
         origin: None,
+        rule_fingerprint: None,
         created_at: now,
         updated_at: now,
+        not_before: None,
     }
 }

@@ -6,7 +6,10 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{ReviewTiming, ReviewVerdict, automation::SourceRevision};
+use super::{
+    ReviewTiming, ReviewVerdict, SelectiveReviewReceipt, SelectiveReviewResult,
+    automation::SourceRevision,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +103,12 @@ pub struct HandoffReviewEvidence {
 pub struct HandoffReview {
     pub policy: ReviewTiming,
     pub disposition: HandoffReviewDisposition,
+    /// The leaf gate's host-authored selective-selection receipt, when the
+    /// claim captured an active selective policy. The owner verifies its
+    /// policy digest and pinned base/head against the candidate; a
+    /// `not_required` receipt is selection evidence, never review evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_receipt: Option<SelectiveReviewReceipt>,
 }
 
 impl HandoffReview {
@@ -108,7 +117,16 @@ impl HandoffReview {
         Self {
             policy: ReviewTiming::None,
             disposition: HandoffReviewDisposition::NotRequired,
+            selective_receipt: None,
         }
+    }
+
+    /// Whether this handoff carries a selective decision that no review
+    /// was required for its candidate.
+    pub fn selective_not_required(&self) -> bool {
+        self.selective_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.result == SelectiveReviewResult::NotRequired)
     }
 
     /// The review evidence this handoff carries, before-PR or
@@ -161,6 +179,13 @@ pub struct TaskHandoff {
     /// accepts the handoff.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regression_from: Vec<String>,
+    /// The capture of record (`visual/capture.json`) a `verify-mock-ui`
+    /// claim returns, already attached on the owner by the system writer.
+    /// The owner checks it, and every image it names, against the claim's
+    /// visual review contract (`visual_capture_mismatch`). Absent when the
+    /// claim captured no visual review contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual: Option<HandoffArtifactRef>,
 }
 
 /// Captured command output in an owner-accessible task artifact, never an agent reply.
@@ -266,8 +291,8 @@ pub enum LandingStartState {
 }
 
 /// Durable outbox consumed by the owner landing job. A pending request survives
-/// restart without a drain or ship sweep; only verified completion or explicit
-/// revocation settles it.
+/// restart without a drain; only verified completion or explicit revocation
+/// settles it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LandingStartRequest {
     pub handoff_id: String,
@@ -325,6 +350,10 @@ pub const LANDING_REPAIR_REQUEUED_EVENT: &str = "landing_repair_requeued";
 /// journal records it too, when it settles a revoked handoff's claim in the
 /// same commit.
 pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
+
+/// History event of an owner landing that waits for its base branch to
+/// recover from a failure inherited from it, before the landing deadline.
+pub const LANDING_WAITING_FOR_BASE_EVENT: &str = "landing_waiting_for_base";
 
 /// History event of the landing stop that found the task's landing repair
 /// budget spent and blocked it. Requeues before it no longer count.
@@ -400,6 +429,31 @@ pub struct NoDiffEvidence {
     pub tested_head: String,
     pub reason: String,
     pub validation: Vec<NoDiffCheck>,
+}
+
+/// A run's report that the review finding it picked up does not exist at its
+/// pinned HEAD: the code does not do what the finding claims, or the claimed
+/// consequence cannot happen. It changes nothing and runs no workspace gates;
+/// its `path:line` citations at `tested_head` are its evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindingInvalidReport {
+    pub schema_version: u32,
+    pub task_id: String,
+    pub run_id: String,
+    pub tested_head: String,
+    /// Why the defect as described does not exist at `tested_head`.
+    pub reasoning: String,
+    pub evidence: Vec<FindingInvalidCitation>,
+}
+
+/// One cited location of a [`FindingInvalidReport`]: a repository-relative
+/// `path:line` at its `tested_head`, and what that line shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindingInvalidCitation {
+    pub location: String,
+    pub note: String,
 }
 
 /// One validation command the no-diff run executed, with its exit status and

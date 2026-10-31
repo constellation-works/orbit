@@ -1406,6 +1406,31 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
     assert_eq!(gate["footprint_deferred"], true);
     assert_eq!(gate["reserved_files"], json!([]), "the grant holds no file");
     assert_eq!(gate["deferred_conflicts"][0]["held_by_id"], holder);
+    assert_eq!(
+        gate,
+        json!({
+            "reserved": true,
+            "reservation_id": gate["reservation_id"],
+            "expires_at": gate["expires_at"],
+            "reserved_files": [],
+            "conflicts": [],
+            "waiting_on_deps": [],
+            "footprint_deferred": true,
+            "deferred_conflicts": [{"file": "file:source.txt", "held_by": "task", "held_by_id": holder}],
+            "published_delivery": {"source_run_id": f.source.run_id, "pull_request": "17"},
+        }),
+        "deferred grants preserve publication metadata and gate defaults"
+    );
+    let open = f
+        .runtime
+        .run_deterministic(
+            "gate_starvation_defer",
+            &json!({}),
+            &json!({"task_ids": [f.task], "reservation": gate}),
+            Default::default(),
+        )
+        .unwrap();
+    assert_eq!(open, json!({"deferred": false, "reservation": gate}));
 
     let (run, setup) = next_with(
         &f,

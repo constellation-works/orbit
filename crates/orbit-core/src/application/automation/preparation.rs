@@ -2,9 +2,10 @@
 
 use super::source::{BudgetClock, LISTING_LIMIT, OUTPUT_LIMIT, SOURCE_DEADLINE, Source};
 use crate::OrbitRuntime;
-use orbit_automation::AutomationError;
+use crate::application::contracts::PilotFingerprints;
 use orbit_automation::members::preparation::{self, MaterialEvidence};
 use orbit_automation::routines::loader::declared_routine_names;
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::Selector;
 use orbit_common::protocol::yaml::parse_routine_yaml;
@@ -159,7 +160,7 @@ fn instructions_in_process(
     let mut listed_bytes = 0u64;
     let walked = tree.walk(git2::TreeWalkMode::PreOrder, |root, entry| {
         if started.elapsed() >= SOURCE_DEADLINE {
-            failure = Some(AutomationError::Deferred("source_deadline".into()));
+            failure = Some(AutomationError::Deferred(DeferredReason::SourceDeadline));
             return git2::TreeWalkResult::Abort;
         }
         let Ok(name) = entry.name() else {
@@ -174,7 +175,7 @@ fn instructions_in_process(
         // `ls-tree -r -z --name-only` lists each non-tree path and a NUL.
         listed_bytes += (root.len() + name.len() + 1) as u64;
         if listed_bytes > LISTING_LIMIT {
-            failure = Some(AutomationError::Deferred("source_budget".into()));
+            failure = Some(AutomationError::Deferred(DeferredReason::SourceBudget));
             return git2::TreeWalkResult::Abort;
         }
         if matches!(name, "AGENTS.md" | "CLAUDE.md") {
@@ -190,15 +191,17 @@ fn instructions_in_process(
     let mut instructions = Vec::new();
     for (path, oid) in paths {
         if instructions.len() >= 50 {
-            return Err(AutomationError::Deferred("instruction_scan_budget".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::InstructionScanBudget,
+            ));
         }
         let blob = repo.find_blob(oid).map_err(local_git_error)?;
         // `git show` output above one command's evidence cap defers.
         if blob.size() as u64 > OUTPUT_LIMIT {
-            return Err(AutomationError::Deferred("source_budget".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
         }
         let content = std::str::from_utf8(blob.content())
-            .map_err(|_| AutomationError::Deferred("stream did not contain valid UTF-8".into()))?;
+            .map_err(|_| AutomationError::Deferred(DeferredReason::SourceInvalidUtf8))?;
         instructions.push((path, content.to_owned()));
     }
     Ok(instructions)
@@ -230,7 +233,9 @@ fn instructions_with_git(
 
     for path in &paths {
         if instructions.len() >= 50 {
-            return Err(AutomationError::Deferred("instruction_scan_budget".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::InstructionScanBudget,
+            ));
         }
         instructions.push((
             path.to_string(),
@@ -251,16 +256,6 @@ pub(crate) fn fingerprint_with_instructions(
 ) -> Result<String, AutomationError> {
     let evidence = evidence(runtime, task, Some(revision), instructions, policy)?;
     preparation::fingerprint(task, &evidence, policy)
-}
-
-/// Both task-pilot hashes and the per-field digests behind a `material_changed`
-/// refusal, from one instruction and dependency read. The hashes differ only
-/// in the normalized status fields even when a dependency is updated
-/// concurrently with preparation.
-pub(crate) struct PilotFingerprints {
-    pub(crate) material: String,
-    pub(crate) status_neutral: String,
-    pub(crate) components: BTreeMap<String, String>,
 }
 
 pub(crate) fn fingerprints(
@@ -413,7 +408,9 @@ fn selector_objects(
         return Ok(json!({".": tree}));
     }
     if paths.len() > 50 {
-        return Err(AutomationError::Deferred("selector_scan_budget".into()));
+        return Err(AutomationError::Deferred(
+            DeferredReason::SelectorScanBudget,
+        ));
     }
     // A path under another selected directory is already covered by that
     // directory's tree id; listing both would make git expand the directory.
@@ -474,7 +471,9 @@ fn revision_tree<'r>(
 }
 
 fn local_git_error(error: git2::Error) -> AutomationError {
-    AutomationError::Deferred(format!("evidence_unavailable: local Git material: {error}"))
+    AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
+        "local Git material: {error}"
+    )))
 }
 
 fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Vec<Value>, AutomationError> {
@@ -483,7 +482,9 @@ fn dependency_evidence(runtime: &OrbitRuntime, task: &Task) -> Result<Vec<Value>
 
     for id in task.dependencies().iter().take(51) {
         if dependencies.len() + resolved.len() == 50 {
-            return Err(AutomationError::Deferred("dependency_scan_budget".into()));
+            return Err(AutomationError::Deferred(
+                DeferredReason::DependencyScanBudget,
+            ));
         }
         match runtime.resolve_dependency_task(id)? {
             RegisteredTaskResolution::Resolved(dependency) => resolved.push(dependency),
@@ -564,7 +565,38 @@ pub(crate) fn active_task_pilot_preparations(
 pub(crate) fn active_finding_verifications(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
-    active_preparations(runtime, crate::application::task::FINDING_VERIFICATION_JOB)
+    active_preparations(
+        runtime,
+        crate::application::contracts::FINDING_VERIFICATION_JOB,
+    )
+}
+
+pub(crate) fn active_escalation_triages(
+    runtime: &OrbitRuntime,
+) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+    active_preparations(
+        runtime,
+        crate::application::contracts::ESCALATION_TRIAGE_JOB,
+    )
+}
+
+/// The prepared checkpoint of each live escalation triage run that holds
+/// `task_id`, by run id.
+pub(crate) fn escalation_triage_checkpoints_holding(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+) -> Result<BTreeMap<String, Value>, OrbitError> {
+    let mut holding = BTreeMap::new();
+    for_each_active_preparation(
+        runtime,
+        crate::application::contracts::ESCALATION_TRIAGE_JOB,
+        |run_id, output, task_ids| {
+            if task_ids.iter().any(|id| id == task_id) {
+                holding.insert(run_id.to_string(), output.clone());
+            }
+        },
+    )?;
+    Ok(holding)
 }
 
 /// The tasks each live run of `job_id` holds by a successful preparation
@@ -573,8 +605,26 @@ fn active_preparations(
     runtime: &OrbitRuntime,
     job_id: &str,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
-    let workspace_root = runtime.paths().repo_root.canonicalize()?;
     let mut prepared_by_task = BTreeMap::<String, BTreeSet<String>>::new();
+    for_each_active_preparation(runtime, job_id, |run_id, _, task_ids| {
+        for task_id in task_ids {
+            prepared_by_task
+                .entry(task_id)
+                .or_default()
+                .insert(run_id.to_string());
+        }
+    })?;
+    Ok(prepared_by_task)
+}
+
+/// Visit each live run of `job_id` that holds tasks by a successful
+/// preparation checkpoint, with that checkpoint and the tasks it holds.
+fn for_each_active_preparation(
+    runtime: &OrbitRuntime,
+    job_id: &str,
+    mut visit: impl FnMut(&str, &Value, Vec<String>),
+) -> Result<(), OrbitError> {
+    let workspace_root = runtime.paths().repo_root.canonicalize()?;
     for state in [
         JobRunState::Pending,
         JobRunState::Running,
@@ -599,22 +649,20 @@ fn active_preparations(
             let Some(state) = runtime.read_run_state(&run.run_id)? else {
                 continue;
             };
-            let Some(task_ids) = state.step_outputs.iter().find_map(|(step_index, output)| {
-                (state.step_states.get(step_index) == Some(&JobRunState::Success))
-                    .then(|| prepared_task_ids(output, &workspace_root))
-                    .flatten()
-            }) else {
+            let Some((output, task_ids)) =
+                state.step_outputs.iter().find_map(|(step_index, output)| {
+                    (state.step_states.get(step_index) == Some(&JobRunState::Success))
+                        .then(|| prepared_task_ids(output, &workspace_root))
+                        .flatten()
+                        .map(|task_ids| (output, task_ids))
+                })
+            else {
                 continue;
             };
-            for task_id in task_ids {
-                prepared_by_task
-                    .entry(task_id)
-                    .or_default()
-                    .insert(run.run_id.clone());
-            }
+            visit(&run.run_id, output, task_ids);
         }
     }
-    Ok(prepared_by_task)
+    Ok(())
 }
 
 /// The enabled state-triggered task pilots this host evaluates, read once per
@@ -659,15 +707,6 @@ impl FootprintPilots {
             .filter(|(eligibility, _)| preparation::eligible(task, eligibility))
             .map(|(_, wait)| task.updated_at + *wait)
             .max()
-    }
-}
-
-impl OrbitRuntime {
-    /// IDs of the tasks an active task-pilot run is preparing; admission holds
-    /// them until the run settles, and read surfaces show them as preparing
-    /// rather than by their readiness gaps.
-    pub fn tasks_in_pilot_preparation(&self) -> Result<BTreeSet<String>, OrbitError> {
-        Ok(active_task_pilot_preparations(self)?.into_keys().collect())
     }
 }
 

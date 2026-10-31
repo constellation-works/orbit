@@ -5,7 +5,7 @@ tags: [operations, backup, recovery, git, task-publication]
 paths: ["crates/orbit-cli/src/command/task/publication.rs", "crates/orbit-cli/src/command/workspace/publication.rs", "crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-store/src/workflow/task/**"]
 related_features: [task-publication, task-artifacts, host-registry]
 related_artifacts: [ORB-11077, ORB-11142, ORB-11145, ORB-11426]
-last_validated: 2026-10-19
+last_validated: 2026-10-25
 ---
 
 # Publish Orbit Tasks to a Dedicated Repository
@@ -24,7 +24,7 @@ global-root and database backups described in [Inventory and Protect Orbit State
 Before binding a workspace, prepare:
 
 - a registered local **owner** checkout, not a replica;
-- one empty, dedicated Git repository for exactly one Orbit workspace;
+- one Git repository dedicated to task publication; it may be shared by several Orbit workspaces, each bound to its own branch and publication ID (the bound branch for this workspace must not exist yet, or must already carry this lineage);
 - provider-side private visibility, collaborators, retention, and branch protection;
 - working SSH or HTTPS credentials for that repository; and
 - the logical workspace selector returned by `orbit workspace list --all --format json`.
@@ -67,11 +67,21 @@ remote. A missing binding is expected during first setup.
 When the source repository itself moves, do not edit the binding fingerprint or registry by
 hand. `workspace source-remote rebind` refuses a changed source identity while a publication
 binding exists. Capture this command's JSON output, remove the binding explicitly, perform and
-verify the source rebind, then use `workspace publication bind` with the reviewed captured
-remote, branch, and publication ID. The new local binding starts without last-success metadata;
-the operation does not migrate or rewrite any existing publication snapshot. See
+verify the source rebind, then use `workspace publication rebind` with the reviewed captured
+remote, a new publication ID, and an empty publication branch. The new local binding starts
+without last-success metadata; the operation does not migrate or rewrite any existing
+publication snapshot. See
 [Rebind the source remote after a repository move](./state-and-backup.md#rebind-the-source-remote-after-a-repository-move)
 for the full inspection, dry-run, verification, and rollback sequence.
+
+Source rebinding also reconciles the task-registry source pairing. Existing raw-URL rows
+remain compatible: pairing comparisons use portable host/owner/repository identity, so SSH
+and HTTPS URLs for the same repository compare equal. A different owner or repository still
+requires the audited source rebind. If an older version already moved the registered source
+but left a stale task pairing, repeat `workspace source-remote rebind --remote <registered-source-url>`
+before binding publication. It repairs the pairing even when the source reports `unchanged`.
+The workspace registration is saved first; repeat that command after an interruption or a
+task-pairing write failure. Dry runs change neither pairing. Never edit either store by hand.
 
 ## Choose durable authentication
 
@@ -87,38 +97,70 @@ git ls-remote "$ORBIT_PUBLICATION_REMOTE"
 
 An empty result with exit status 0 is valid for a new empty repository.
 
-### HTTPS and a short-lived askpass bridge
+### HTTPS with a persistent askpass bridge
 
-Publication Git runs non-interactively with system and global Git configuration disabled. In
-particular, `GIT_CONFIG_GLOBAL=/dev/null` means a credential helper installed only in the
-ordinary global Git config—including one installed by `gh auth setup-git`—is not read.
-Environment-level mechanisms such as `GIT_ASKPASS` remain available. Never add a token to the
-remote URL or write one into a helper script.
+Publication deliberately ignores system and global Git configuration, including
+helpers installed by `gh auth setup-git`. The supported HTTPS path is an explicit
+`GIT_ASKPASS` executable. Orbit passes through `GIT_ASKPASS`, `PATH`, `HOME`,
+`XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, `GH_TOKEN` and `GITHUB_TOKEN` when set, so the
+bridge can use the service account's existing GitHub CLI authentication. SSH
+publication can instead use `SSH_AUTH_SOCK`, `GIT_SSH` or `GIT_SSH_COMMAND` and
+that account's SSH configuration. Orbit sets `GIT_TERMINAL_PROMPT=0` and
+`GCM_INTERACTIVE=never`; neither path may require a TTY or an unlock prompt.
 
-For GitHub, the following temporary helper asks the authenticated `gh` CLI for the token at
-invocation time. The helper file itself contains no credential:
+For GitHub HTTPS, authenticate `gh` once as the account that runs Orbit, with
+write access to the dedicated publication repository. Replace `OWNER/WORKSPACE-tasks`
+with your empty repository. If already bound, verify the remote with
+`orbit workspace publication show` and skip `bind`:
 
 ```sh
-ORBIT_PUBLICATION_ASKPASS="$(mktemp)"
-chmod 700 "$ORBIT_PUBLICATION_ASKPASS"
-trap 'rm -f "$ORBIT_PUBLICATION_ASKPASS"' EXIT HUP INT TERM
-
-printf '%s\n' \
-  '#!/bin/sh' \
-  'case "$1" in' \
-  '  *Username*|*username*) printf "%s\n" x-access-token ;;' \
-  '  *Password*|*password*) exec gh auth token ;;' \
-  '  *) exit 1 ;;' \
-  'esac' >"$ORBIT_PUBLICATION_ASKPASS"
-
-GIT_ASKPASS="$ORBIT_PUBLICATION_ASKPASS" \
-  git ls-remote "$ORBIT_PUBLICATION_REMOTE"
+orbit workspace publication bind \
+  --remote https://github.com/OWNER/WORKSPACE-tasks.git \
+  --publication-id pub_my_tasks
+gh auth login --hostname github.com
+gh auth status --hostname github.com
+mkdir -p "$HOME/.local/libexec"
+cat > "$HOME/.local/libexec/orbit-publication-askpass" <<'ASKPASS'
+#!/bin/sh
+case "$1" in
+  *"Username for 'https://github.com'"*) printf '%s\n' x-access-token ;;
+  *"Password for 'https://x-access-token@github.com'"*)
+    exec gh auth token --hostname github.com ;;
+  *) exit 1 ;;
+esac
+ASKPASS
+chmod 700 "$HOME/.local/libexec/orbit-publication-askpass"
+export GIT_ASKPASS="$HOME/.local/libexec/orbit-publication-askpass"
+export LC_ALL=C
+orbit task publication publish
+orbit task publication status
 ```
 
-Keep `GIT_ASKPASS="$ORBIT_PUBLICATION_ASKPASS"` on every Orbit command that fetches or pushes
-the HTTPS publication remote. The shell trap removes the bridge when the shell exits; remove it
-manually when working in a shell without trap support. Use the provider's equivalent
-credential command when the remote is not GitHub.
+The bridge contains no token and sends the token only through Git's credential
+pipe. Keep credentials out of URLs, command arguments and diagnostic output;
+do not enable shell tracing in the bridge. It only answers prompts for
+`github.com`; use a separate host-scoped bridge for another provider.
+Publication disables Git tracing and withholds transport stderr because helpers
+and servers can echo credentials there. A transport failure should be diagnosed
+by checking `gh auth status`, repository access and the service environment.
+
+For a clock-tick/systemd run, keep this bridge at its persistent absolute path
+and set `GIT_ASKPASS` and `LC_ALL=C` in the **Orbit service's** environment, not
+just an interactive shell. For example, a user-service drop-in can contain:
+
+```ini
+[Service]
+Environment=GIT_ASKPASS=%h/.local/libexec/orbit-publication-askpass
+Environment=LC_ALL=C
+```
+
+Reload and restart the installed service after applying its drop-in. Ensure its
+`PATH` includes `gh` (or use its absolute executable path in the bridge), and its
+`HOME`/`GH_CONFIG_DIR` and credential store are accessible without an interactive
+keyring unlock. If using a token environment variable, provision it through the
+service's private credential mechanism rather than putting its value in a unit
+file or command line. Verify `publish` and `status` from that same service
+account/environment with stdin closed before relying on a scheduled run.
 
 ## Bind the publication repository
 
@@ -137,7 +179,7 @@ orbit --workspace "$ORBIT_WORKSPACE" workspace publication show --json
 The binding is machine-local and records logical workspace, portable source identity,
 publication remote, branch, publication lineage, and authority machine. It must not contain
 credentials or checkout paths. The bind and show operations do not contact the remote; add the
-temporary `GIT_ASKPASS` environment assignment later to publish, status, inspect, and restore
+persistent `GIT_ASKPASS` environment assignment later to publish, status, inspect, and restore
 commands that use HTTPS.
 
 Use `workspace publication rebind` only to deliberately replace the lineage. Use `workspace
@@ -205,7 +247,7 @@ Success has all of these properties:
 - local and remote commit IDs match; and
 - `incomplete_attachments` matches the selected attachment policy (`true` after `omit`).
 
-The first publish creates generation 1 and the configured branch in an empty repository.
+The first publish creates generation 1 and the configured branch when that branch is absent — including in a repository that already holds other workspaces' publication branches, whose tips it never reads or moves. Branch creation is a compare-and-swap that fails if the branch appears first.
 Later publishes advance the same linear lineage with compare-and-swap semantics.
 
 ## Inspect and recover a publication
@@ -260,11 +302,11 @@ unrelated authorities.
 
 | Symptom | Check and response |
 | --- | --- |
-| Git reports that it cannot read a username, password, or terminal prompt. | Global credential helpers are intentionally isolated. Use SSH or pass a short-lived `GIT_ASKPASS` helper explicitly to the Orbit command. |
+| Git reports that it cannot read a username, password, or terminal prompt. | Global credential helpers are intentionally isolated. Use SSH or pass a persistent `GIT_ASKPASS` bridge explicitly to the Orbit command. |
 | A binding appears missing or belongs to another checkout. | Run `orbit workspace list --all --format json`, then repeat `workspace publication show` with the intended logical `--workspace` selector before changing the binding. |
 | The logical `ws_*` ID differs from an internal runtime task partition. | This is supported after ORB-11142. Keep selecting the logical workspace; do not rebind or rewrite task storage to make the IDs match. |
 | The publication remote is rejected during bind. | Remove credentials from the URL, confirm it differs from the source remote, and use a dedicated repository. |
-| First publication finds an unrelated or non-publication branch. | Stop. Provision an empty dedicated repository; Orbit will not adopt or overwrite unrelated history. |
+| First publication finds an unrelated or non-publication commit on its bound branch. | Stop. Orbit will not adopt or overwrite that branch; bind an unused branch instead. Other branches in the same repository do not block a first publish. |
 | `--attachments fail` names one or more files. | Review the named files. Use `omit` for a core-record snapshot, or use `include` only after explicit exposure approval. |
 | Status reports a moved branch or authority conflict. | Stop publishing and identify the unexpected writer or stale binding. Orbit will not merge or force-push the branch. |
 | The registered checkout path is genuinely stale or invalid. | Restore or re-point the checkout and run `orbit workspace init --force` from the intended repository. A different runtime partition alone is not evidence of stale registration. |

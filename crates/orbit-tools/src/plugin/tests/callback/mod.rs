@@ -42,3 +42,25 @@ fn present_descriptor(
 }
 
 mod credential;
+
+/// A mint whose credential cannot be opened must not leave its record behind:
+/// the sweep skips a `pid: 0` record as a mint in progress, forever.
+#[cfg(unix)]
+#[test]
+fn a_failed_credential_open_removes_the_minted_record() {
+    let root = tempfile::tempdir().expect("global root");
+    let error = PluginCallbackSession::mint_with(
+        root.path(),
+        &provenance("failing"),
+        &["orbit.task.list".to_string()],
+        |_| Err(orbit_common::OrbitError::Io("descriptor limit".into())),
+    )
+    .expect_err("the open failure is reported");
+    assert!(error.to_string().contains("descriptor limit"), "{error}");
+    let leftovers = std::fs::read_dir(root.path().join("state/plugin-callbacks"))
+        .expect("session directory")
+        .count();
+    assert_eq!(leftovers, 0, "the unowned record must be removed");
+
+    mint(root.path(), "recovered");
+}

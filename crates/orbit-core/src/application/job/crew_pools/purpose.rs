@@ -9,28 +9,16 @@
 
 use orbit_common::OrbitError;
 use orbit_config::canonical_crew_pool;
+use orbit_types::identity::Crew;
 use orbit_types::task::{Task, TaskComplexity};
 use orbit_types::workflow::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose};
 
 use crate::OrbitRuntime;
-use crate::application::review::reconciliation::FOLLOW_UP_TAG_PREFIX;
-use crate::application::sweep_filing::ci_failure::filing::CI_FAILURE_TAG;
-use crate::application::sweep_filing::dependabot::filing::{CODE_TAG, DEPENDABOT_TAG};
+use crate::application::contracts::{
+    CI_FAILURE_TAG, CODE_SCANNING_TAG, CrewCandidate, DEPENDABOT_TAG, PURPOSE_SOURCE_PREFIX,
+    RECONCILIATION_FOLLOW_UP_TAG_PREFIX,
+};
 use crate::application::task::BASELINE_RED_REPAIR_TAG;
-
-use super::draw::can_inspect;
-use super::types::CrewCandidate;
-
-/// Prefix of the provenance a task records when its crew was drawn from its
-/// purpose's pool, as `purpose:<purpose>`.
-pub(crate) const PURPOSE_SOURCE_PREFIX: &str = "purpose:";
-
-/// Whether `source` is a system assignment — a purpose pool, a complexity
-/// pool, or the default — rather than an explicit pin or a legacy crew with
-/// no assignment evidence.
-pub(crate) fn automatic_crew_source(source: &str) -> bool {
-    source == "default" || source.starts_with("pool:") || source.starts_with(PURPOSE_SOURCE_PREFIX)
-}
 
 /// The purpose `tags` name for a task's crew: an explicit
 /// `crew-purpose:<purpose>` tag naming a `workflow.purpose_crews` purpose,
@@ -46,8 +34,8 @@ pub(crate) fn task_crew_purpose(tags: &[String]) -> Option<CrewPurpose> {
 fn system_tag_purpose(tag: &str) -> Option<CrewPurpose> {
     match tag {
         BASELINE_RED_REPAIR_TAG => Some(CrewPurpose::BaselineRedRepair),
-        CI_FAILURE_TAG | DEPENDABOT_TAG | CODE_TAG => Some(CrewPurpose::SweepTasks),
-        _ if tag.starts_with(FOLLOW_UP_TAG_PREFIX) => Some(CrewPurpose::SweepTasks),
+        CI_FAILURE_TAG | DEPENDABOT_TAG | CODE_SCANNING_TAG => Some(CrewPurpose::SweepTasks),
+        _ if tag.starts_with(RECONCILIATION_FOLLOW_UP_TAG_PREFIX) => Some(CrewPurpose::SweepTasks),
         _ => None,
     }
 }
@@ -119,10 +107,12 @@ impl OrbitRuntime {
         if !inspection {
             return Ok(Some((candidates, key.to_string())));
         }
-        let (capable, unable): (Vec<_>, Vec<_>) = candidates
-            .into_iter()
-            .filter(|candidate| candidate.weight > 0)
-            .partition(|candidate| can_inspect(&candidate.crew));
+        let (capable, unable) = self.partition_inspecting(
+            candidates
+                .into_iter()
+                .filter(|candidate| candidate.weight > 0)
+                .collect(),
+        )?;
         if capable.is_empty() {
             tracing::warn!(
                 pool = %key,
@@ -163,5 +153,71 @@ impl OrbitRuntime {
             return Ok(None);
         };
         self.purpose_pool_candidates(purpose, false)
+    }
+
+    /// The image-capable candidates of one visual-review pool
+    /// (§9.4): members whose executor declares `image_input`, whose
+    /// crew does not set `vision = false`, and who hold no visual
+    /// (canary) hold. Each survivor keeps its executor's declaration,
+    /// whose `max_images` the budget also reads.
+    pub(crate) fn visual_image_candidates(
+        &self,
+        candidates: Vec<CrewCandidate>,
+    ) -> Result<Vec<(CrewCandidate, orbit_types::workflow::ExecutorImageInput)>, OrbitError> {
+        let mut capable = Vec::new();
+        for candidate in candidates {
+            if candidate.weight == 0 {
+                continue;
+            }
+            let Some(declared) = self.can_take_images(&candidate.crew)? else {
+                continue;
+            };
+            // A crew held after consecutive canary misses is passed
+            // over while the hold stands (§9.3); a hold lookup that
+            // cannot run does not disqualify it.
+            if matches!(self.visual_hold(&candidate.crew.name), Ok(Some(_))) {
+                continue;
+            }
+            capable.push((candidate, declared));
+        }
+        Ok(capable)
+    }
+
+    /// The pool visual review draws from before the image filter:
+    /// `workflow.purpose_crews.visual_review` when configured, else
+    /// the task's complexity pool (`tier`), as §9.4 names, with the
+    /// draw source. Empty when neither pool has an enabled member.
+    pub(crate) fn visual_review_pool(
+        &self,
+        tier: TaskComplexity,
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        if let Some((candidates, source)) =
+            self.purpose_pool_candidates(CrewPurpose::VisualReview, false)?
+        {
+            return Ok((candidates, source));
+        }
+        let source = super::draw::complexity_crews_key(tier);
+        Ok((
+            self.configured_complexity_pool(tier)?.unwrap_or_default(),
+            source,
+        ))
+    }
+
+    /// Draw one crew from `candidates`, seeded by task and candidate
+    /// so a retried step draws the same crew (§9.4). `None` for an
+    /// empty pool.
+    pub(crate) fn visual_seeded_draw(
+        &self,
+        candidates: Vec<CrewCandidate>,
+        source: &str,
+        seed: &str,
+    ) -> Result<Option<Crew>, OrbitError> {
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        let mut ticket = super::draw::seeded_crew_ticket(seed.to_string());
+        Ok(Some(
+            self.draw_crew_pool(candidates, source, &mut ticket)?.crew,
+        ))
     }
 }

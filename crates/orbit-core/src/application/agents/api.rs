@@ -1,0 +1,340 @@
+use std::time::Duration;
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_common::OrbitError;
+use serde_json::{Value, json};
+
+use super::{AgentFacts, AgentQuery, AgentRole, attribution, facts, roles, score, shadow};
+use crate::OrbitRuntime;
+
+impl OrbitRuntime {
+    /// Scan the workspace once for every agent scorecard. A task whose
+    /// history cannot be read keeps its envelope facts.
+    pub fn agent_scan(&self) -> Result<AgentFacts, OrbitError> {
+        facts::scan(self)
+    }
+
+    /// Scan, then rank one role for `query`. For callers that keep no scan
+    /// (the CLI and the `orbit.agents.*` tools), so the response reports a
+    /// cache period of zero.
+    pub fn agent_role_scorecard(
+        &self,
+        role: AgentRole,
+        query: &AgentQuery,
+    ) -> Result<Value, OrbitError> {
+        Ok(agent_scorecard(
+            &self.agent_scan()?,
+            role,
+            query,
+            Duration::ZERO,
+        ))
+    }
+
+    /// Scan, then report the implementer by-type cell matrix, with a cache
+    /// period of zero as on [`Self::agent_role_scorecard`].
+    pub fn agent_by_type_scorecard(&self, query: &AgentQuery) -> Result<Value, OrbitError> {
+        Ok(agent_by_type_scorecard(
+            &self.agent_scan()?,
+            query,
+            self.crew_performance_types(),
+            Duration::ZERO,
+        ))
+    }
+
+    /// Scan, then export one row per implemented task, with a cache period
+    /// of zero as on [`Self::agent_role_scorecard`]. Read-only: it writes no
+    /// snapshot and refreshes no cache beyond that scan.
+    pub fn agent_per_task_export(&self, query: &AgentQuery) -> Result<Value, OrbitError> {
+        Ok(agent_per_task_export(
+            &self.agent_scan()?,
+            query,
+            self.crew_performance_types(),
+            Duration::ZERO,
+        ))
+    }
+
+    /// The implementer shadow share report for `query`: each crew's static,
+    /// drawn and would-be share per pool and type, from recorded draws in
+    /// the window. This does not scan tasks.
+    pub fn agent_shadow_scorecard(&self, query: &AgentQuery) -> Result<Value, OrbitError> {
+        shadow::report(self, query)
+    }
+
+    /// Scan, then report one row of a role with the tasks behind each term,
+    /// with a cache period of zero as on [`Self::agent_role_scorecard`].
+    pub fn agent_role_detail(
+        &self,
+        role: AgentRole,
+        query: &AgentQuery,
+        crew: &str,
+        model: Option<&str>,
+    ) -> Result<Value, OrbitError> {
+        agent_detail(
+            &self.agent_scan()?,
+            role,
+            query,
+            crew,
+            model,
+            Duration::ZERO,
+        )
+    }
+}
+
+/// A role's scorecard header: selection, unit, terms and status.
+pub(super) fn role_header(
+    facts: &AgentFacts,
+    role: AgentRole,
+    query: &AgentQuery,
+    since: DateTime<Utc>,
+    cache_ttl: Duration,
+) -> Value {
+    let spec = roles::spec(role);
+    let mut payload = query.header(facts, since, cache_ttl);
+    payload["role"] = json!(role.as_str());
+    payload["effort_breakdown"] = json!(orbit_store::contracts::agent_effort_usage(
+        facts.invocations.iter().filter(|fact| fact.ts >= since)
+    ));
+    payload["effort_population"] = json!("completed_workspace_invocations");
+    payload["unit"] = json!(spec.unit);
+    payload["status"] = json!(if spec.rows.is_some() {
+        "ok"
+    } else {
+        "not_computed"
+    });
+    payload["terms"] = json!(score::terms_json(spec.terms, spec.term_units));
+    if let Some(header) = spec.header {
+        for (key, value) in header(facts, since) {
+            payload[key] = value;
+        }
+    }
+    payload
+}
+
+/// One role's ranking for `query`: one row per crew and model, best first,
+/// rows below the minimum support last without a rank. A role not computed
+/// yet answers `not_computed` with its terms and no rows. `cache_ttl` is how
+/// long the caller keeps `facts`, reported as `cache_ttl_seconds`.
+pub fn agent_scorecard(
+    facts: &AgentFacts,
+    role: AgentRole,
+    query: &AgentQuery,
+    cache_ttl: Duration,
+) -> Value {
+    let since = query.since(facts);
+    let spec = roles::spec(role);
+    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    let (fleet_average, scored) = match spec.rows {
+        Some(rows) => score::score(
+            spec.terms,
+            rows(facts, since, query.min_support),
+            query.min_support,
+        ),
+        None => (None, Vec::new()),
+    };
+    payload["fleet_average"] = json!(fleet_average.map(score::number));
+    payload["provisional"] = json!(score::provisional(role, &scored));
+    payload["rows"] = scored
+        .iter()
+        .map(|row| {
+            let mut value = row.row(spec.terms);
+            value["effort_breakdown"] =
+                row_effort_breakdown(facts, role, since, &row.input.crew, &row.input.model);
+            value
+        })
+        .collect();
+    payload
+}
+
+/// The implementer cell matrix for `query`: one cell per `(crew, model,
+/// tier, type)` with its `n`, `raw`, `crew_mean` and shrunk `score`, plus
+/// the type list the tasks were classified with.
+pub fn agent_by_type_scorecard(
+    facts: &AgentFacts,
+    query: &AgentQuery,
+    types: &[orbit_config::CrewPerformanceType],
+    cache_ttl: Duration,
+) -> Value {
+    let since = query.since(facts);
+    let role = AgentRole::Implementers;
+    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    payload["by_type"] = json!(true);
+    payload["types"] = json!(
+        types
+            .iter()
+            .map(|entry| json!({
+                "name": entry.name,
+                "tags": entry.tags,
+                "paths": entry.paths,
+            }))
+            .collect::<Vec<_>>()
+    );
+    payload["cells"] = json!(roles::implementer_by_type_cells(facts, since, types));
+    payload
+}
+
+/// The per-task implementer export for `query`: one row per implemented
+/// task and the crew and model that worked it, with the type list the
+/// tasks were classified with. The offline counterpart of the cell
+/// matrix; summed per `(crew, model, tier, type)` it reproduces it.
+pub fn agent_per_task_export(
+    facts: &AgentFacts,
+    query: &AgentQuery,
+    types: &[orbit_config::CrewPerformanceType],
+    cache_ttl: Duration,
+) -> Value {
+    let since = query.since(facts);
+    let role = AgentRole::Implementers;
+    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    payload["per_task"] = json!(true);
+    payload["types"] = json!(
+        types
+            .iter()
+            .map(|entry| json!({
+                "name": entry.name,
+                "tags": entry.tags,
+                "paths": entry.paths,
+            }))
+            .collect::<Vec<_>>()
+    );
+    payload["tasks"] = json!(roles::implementer_per_task_rows(facts, since, types));
+    payload
+}
+
+/// One row of a role's ranking and, for each term, its count, contribution
+/// and the tasks behind it. `model` may be omitted when the crew has one row.
+/// A missing crew, or a row the window does not contain, is invalid input.
+/// `cache_ttl` is reported as on [`agent_scorecard`].
+pub fn agent_detail(
+    facts: &AgentFacts,
+    role: AgentRole,
+    query: &AgentQuery,
+    crew: &str,
+    model: Option<&str>,
+    cache_ttl: Duration,
+) -> Result<Value, OrbitError> {
+    let crew = crew.trim();
+    if crew.is_empty() {
+        return Err(OrbitError::InvalidInput("crew is required".to_string()));
+    }
+    let model = model.map(str::trim).filter(|model| !model.is_empty());
+    let since = query.since(facts);
+    let spec = roles::spec(role);
+    let (fleet_average, scored) = match spec.rows {
+        Some(rows) => score::score(
+            spec.terms,
+            rows(facts, since, query.min_support),
+            query.min_support,
+        ),
+        None => (None, Vec::new()),
+    };
+    let matching: Vec<_> = scored
+        .iter()
+        .filter(|row| row.input.crew == crew && model.is_none_or(|model| row.is(crew, model)))
+        .collect();
+    let row = match matching.as_slice() {
+        [row] => row,
+        [] => {
+            // Core cannot tell which surface called, so the refusal names each
+            // surface's scorecard and window selectors, as the ambiguous-row
+            // branch below names each surface's model selector.
+            return Err(OrbitError::InvalidInput(format!(
+                "no {} row for crew '{crew}'{} in the {} window; list the {} rows with orbit agents scorecard --role {} (CLI), orbit.agents.scorecard with role {} (orbit tool run), orbit_agents_scorecard with role {} (MCP) or the {} scorecard endpoint (dashboard API), or retry with a wider window via --window (CLI), window (MCP and orbit tool run) or the window query parameter (dashboard API). A crew with no work in the window has no row",
+                role.as_str(),
+                model
+                    .map(|model| format!(" and model '{model}'"))
+                    .unwrap_or_default(),
+                query.window,
+                role.as_str(),
+                role.as_str(),
+                role.as_str(),
+                role.as_str(),
+                role.as_str(),
+            )));
+        }
+        _ => {
+            // Core cannot tell which surface called, so the refusal names each
+            // surface's selector: `--model` on the CLI, `row_model` over MCP and
+            // `orbit tool run`, and the dashboard's detail `model` query parameter.
+            let candidates: Vec<&str> = matching
+                .iter()
+                .map(|row| row.input.model.as_str())
+                .collect();
+            return Err(OrbitError::InvalidInput(format!(
+                "crew '{crew}' has {} {} rows in the {} window; name one with --model (CLI), row_model (MCP and orbit tool run) or the model query parameter (dashboard API). Candidate models: {}",
+                matching.len(),
+                role.as_str(),
+                query.window,
+                candidates.join(", "),
+            )));
+        }
+    };
+    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    payload["fleet_average"] = json!(fleet_average.map(score::number));
+    payload["provisional"] = json!(score::provisional(role, &scored));
+    payload["row"] = row.row(spec.terms);
+    payload["row"]["effort_breakdown"] =
+        row_effort_breakdown(facts, role, since, &row.input.crew, &row.input.model);
+    payload["terms"] = json!(row.terms(spec.terms));
+    Ok(payload)
+}
+
+/// The window's problems by owning role, plus Not scored by reason, and
+/// each role's problems by row. Its role totals are the problems behind the
+/// four scorecards.
+pub fn agent_attribution(facts: &AgentFacts, query: &AgentQuery, cache_ttl: Duration) -> Value {
+    let since = query.since(facts);
+    let mut payload = attribution::strip(facts, since);
+    payload["window"] = json!(query.window);
+    payload["requested_window"] = json!(query.requested);
+    payload["computed_at"] = json!(
+        facts
+            .computed_at
+            .to_rfc3339_opts(SecondsFormat::Millis, true)
+    );
+    payload["cache_ttl_seconds"] = json!(cache_ttl.as_secs());
+    payload
+}
+
+fn row_effort_breakdown(
+    facts: &AgentFacts,
+    role: AgentRole,
+    since: DateTime<Utc>,
+    crew: &str,
+    model: &str,
+) -> Value {
+    // Authors are not execution crews. Task creation/orchestration does not
+    // record dispatch effort, so its historical population stays unknown.
+    if role == AgentRole::Orchestrators {
+        return json!([{"crew": crew, "model": model, "reasoning_effort": "unknown", "source": "task_authorship"}]);
+    }
+    let rows =
+        orbit_store::contracts::agent_effort_usage(facts.invocations.iter().filter(|fact| {
+            fact.ts >= since
+                && fact
+                    .execution
+                    .as_ref()
+                    .and_then(|execution| execution.crew.as_deref())
+                    == Some(crew)
+                && fact.model.as_deref() == Some(model)
+                && match role {
+                    AgentRole::Implementers => matches!(
+                        fact.activity_id.as_deref(),
+                        Some("implement_one" | "agent_implement")
+                    ),
+                    AgentRole::Reviewers => fact
+                        .activity_id
+                        .as_deref()
+                        .is_some_and(|id| id.contains("review")),
+                    AgentRole::Pilots => fact
+                        .activity_id
+                        .as_deref()
+                        .is_some_and(|id| id.contains("pilot")),
+                    AgentRole::Orchestrators => false,
+                }
+        }));
+    if rows.is_empty() {
+        json!([{"crew": crew, "model": model, "reasoning_effort": "unknown", "source": "no_dispatch_evidence"}])
+    } else {
+        json!(rows)
+    }
+}

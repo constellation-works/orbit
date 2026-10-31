@@ -2,17 +2,19 @@
 //! schedule interpretation, atomic edits and dispatch belong to their domain owners.
 use chrono::Utc;
 use orbit_common::{OrbitError, protocol::tool_input::required_string};
-use orbit_types::workflow::JobRunTrigger;
+use orbit_types::workflow::{JobRunTrigger, RoutineTrigger};
 use serde_json::{Value, json};
 
-use super::read::bounded_text;
+use crate::runtime::audit::run_logs::bounded_redacted_text;
 use crate::{
     OrbitRuntime,
     application::{
+        auto_tasks::AutoTaskToggleProfile,
         job::JobCatalogFilter,
         routines::{
-            FireField, RoutineField, RoutineToggleOutcome,
+            FireField, RoutineField, RoutineToggleOutcome, RoutineTriggerEditOutcome,
             status::{checkout_routine_statuses, toggle_checkout_routine},
+            trigger_edit::edit_checkout_routine_trigger,
         },
     },
 };
@@ -30,12 +32,16 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("paused_at", RoutineField::PausedAt),
     (
         "last_fire",
-        RoutineField::LastFire(&[("state", FireField::State), ("at", FireField::UpdatedAt)]),
+        RoutineField::LastFire(&[
+            ("run_id", FireField::RunId),
+            ("state", FireField::State),
+            ("at", FireField::UpdatedAt),
+        ]),
     ),
 ];
 
 fn text(value: &str) -> String {
-    let (value, truncated) = bounded_text(value, 4096);
+    let (value, truncated) = bounded_redacted_text(value, 4096);
     if truncated {
         format!("{value} [display truncated]")
     } else {
@@ -52,6 +58,7 @@ pub(super) fn read(
     let mut notes = Vec::new();
     // Only the auto-task scope reads the host cursor state.
     let mut cursor_state_error: Option<Option<String>> = None;
+    let mut load_errors = None;
     // Auto-task and job controls keep the general coordination guard, so a
     // replica projects them unavailable with the owner named.
     let coordination_refusal = runtime
@@ -82,9 +89,10 @@ pub(super) fn read(
             rows
         }
         "auto_tasks"=>{
-            let (rows,error)=auto_task_rows(runtime, coordination_refusal.as_deref())?;
-            cursor_state_error=Some(error);
-            rows
+            let listing=auto_task_rows(runtime, coordination_refusal.as_deref())?;
+            cursor_state_error=Some(listing.cursor_state_error);
+            load_errors=Some((listing.errors,listing.error_total));
+            listing.rows
         }
         "jobs"=>runtime.list_job_catalog_with_last_run(true,JobCatalogFilter::All)?.iter().map(|(j,last)|{
             let runnable=j.supports_no_input_submission();
@@ -115,13 +123,25 @@ pub(super) fn read(
     if let Some(error) = cursor_state_error {
         result["cursor_state_error"] = json!(error);
     }
+    if let Some((errors, total)) = load_errors {
+        result["load_errors_truncated"] = json!(total > errors.len());
+        result["load_errors_total"] = json!(total);
+        result["load_errors"] = json!(errors);
+    }
     Ok(result)
 }
-/// The shared listing's rows, plus why the host cursor state was unreadable.
+struct AutoTaskProjection {
+    rows: Vec<Value>,
+    cursor_state_error: Option<String>,
+    errors: Vec<Value>,
+    error_total: usize,
+}
+
+/// The shared listing's rows and bounded diagnostics.
 fn auto_task_rows(
     runtime: &OrbitRuntime,
     coordination_refusal: Option<&str>,
-) -> Result<(Vec<Value>, Option<String>), OrbitError> {
+) -> Result<AutoTaskProjection, OrbitError> {
     use crate::application::auto_tasks::AutoTaskSkip;
     use crate::application::routines::ScheduleDisplayState;
     let listing = runtime.auto_task_listing_state(true, Utc::now())?;
@@ -139,7 +159,22 @@ fn auto_task_rows(
             "control_reason":coordination_refusal,
             "updated_at":d.updated_at})
     }).collect();
-    Ok((rows, listing.cursor_state_error.map(|error| text(&error))))
+    let total = listing.load_errors.len();
+    let errors = listing
+        .load_errors
+        .iter()
+        .take(20)
+        .map(|error| {
+            json!({"path": error.path.as_ref().map(|path| text(&path.to_string_lossy())),
+            "message": text(&error.message)})
+        })
+        .collect();
+    Ok(AutoTaskProjection {
+        rows,
+        cursor_state_error: listing.cursor_state_error.map(|error| text(&error)),
+        errors,
+        error_total: total,
+    })
 }
 
 fn invalid(message: &str) -> OrbitError {
@@ -151,6 +186,14 @@ fn boolean(input: &Value, key: &str) -> Result<bool, OrbitError> {
         .ok_or_else(|| invalid(&format!("{key} must be a boolean")))
 }
 
+fn trigger_field(input: &Value, key: &str) -> Result<RoutineTrigger, OrbitError> {
+    let value = input
+        .get(key)
+        .ok_or_else(|| invalid(&format!("{key} is required")))?;
+    serde_json::from_value(value.clone())
+        .map_err(|error| invalid(&format!("{key} is not a valid routine trigger: {error}")))
+}
+
 pub(in crate::adapter::tool_host) fn control(
     runtime: &OrbitRuntime,
     input: Value,
@@ -159,13 +202,14 @@ pub(in crate::adapter::tool_host) fn control(
     let action = required_string(&input, &["action"], "action")?;
     let kind = required_string(&input, &["kind"], "kind")?;
     let name = required_string(&input, &["name"], "name")?;
-    // A routine toggle carries its own checkout-role authority; every other
+    // A routine edit carries its own checkout-role authority; every other
     // control is a coordination write.
-    if (kind.as_str(), action.as_str()) != ("routine", "toggle") {
+    if kind != "routine" {
         runtime.ensure_coordination_task_write_permitted()?;
     }
     let allowed = match (kind.as_str(), action.as_str()) {
         ("routine", "toggle") => vec!["expected_enabled", "enabled", "target"],
+        ("routine", "set_trigger") => vec!["expected_trigger", "trigger", "target"],
         ("auto_task", "toggle") => vec!["expected_enabled", "enabled"],
         ("auto_task", "mint") => vec!["acknowledge_unconditional"],
         ("job", "run") => vec![],
@@ -176,6 +220,8 @@ pub(in crate::adapter::tool_host) fn control(
         "enabled",
         "target",
         "acknowledge_unconditional",
+        "expected_trigger",
+        "trigger",
     ] {
         if input.get(key).is_some() && !allowed.contains(&key) {
             return Err(invalid(&format!("{key} is not valid for this action")));
@@ -198,12 +244,28 @@ pub(in crate::adapter::tool_host) fn control(
                 }
             }
         }
+        ("routine", "set_trigger") => {
+            let expected = trigger_field(&input, "expected_trigger")?;
+            let trigger = trigger_field(&input, "trigger")?;
+            let target = required_string(&input, &["target"], "target")?;
+            match edit_checkout_routine_trigger(runtime, &name, &target, &expected, trigger)? {
+                RoutineTriggerEditOutcome::Changed => json!({"changed":true}),
+                RoutineTriggerEditOutcome::Unchanged => json!({"changed":false}),
+                RoutineTriggerEditOutcome::TargetConflict { .. } => {
+                    return Err(invalid("routine target changed; refresh before retrying"));
+                }
+                RoutineTriggerEditOutcome::Conflict { .. } => {
+                    return Err(invalid("routine trigger changed; refresh before retrying"));
+                }
+            }
+        }
         ("auto_task", "toggle") => {
-            let d = runtime.auto_task_toggle_checked(
-                &name,
-                boolean(&input, "expected_enabled")?,
-                boolean(&input, "enabled")?,
-            )?;
+            let profile = AutoTaskToggleProfile::Checked {
+                expected_enabled: boolean(&input, "expected_enabled")?,
+            };
+            let d = runtime
+                .auto_task_toggle_command(&name, boolean(&input, "enabled")?, profile)?
+                .into_definition(&name)?;
             json!({"enabled":d.enabled,
                 "effective_enabled":runtime.auto_task_enabled(&d)})
         }

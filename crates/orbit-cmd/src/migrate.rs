@@ -141,7 +141,7 @@ pub trait MigrateCommands {
     /// Opening the runtime already applied everything pending — layout in
     /// the open pre-flight, schema inside `Store::open` — so this reports
     /// the resulting versions plus which layout migrations that open
-    /// auto-applied (see [`OrbitRuntime::layout_upgrade_report`]).
+    /// auto-applied (see [`OrbitRuntime::layout_upgrade_report`](orbit_core::runtime::RuntimeKernel::layout_upgrade_report)).
     fn migrate_status(&self) -> Result<MigrateStatus, OrbitError>;
 }
 

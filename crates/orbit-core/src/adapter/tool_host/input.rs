@@ -250,6 +250,25 @@ pub(super) fn parse_optional_task_origin(
         .transpose()
 }
 
+/// A `not_before` field: absent or `null` leaves it (`None`; the operation
+/// wire reads an explicit null as an omitted field), an empty string clears
+/// it (`Some(None)`), and an RFC 3339 instant with an offset sets it.
+/// Anything else is refused naming the input.
+pub(super) fn parse_optional_not_before(
+    input: &Value,
+) -> Result<Option<Option<chrono::DateTime<chrono::Utc>>>, OrbitError> {
+    let field = orbit_types::task::NOT_BEFORE_FIELD;
+    match input.get(field) {
+        // An explicit null is an omitted field on the operation wire.
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(raw)) if raw.trim().is_empty() => Ok(Some(None)),
+        Some(Value::String(raw)) => Ok(Some(Some(orbit_types::task::parse_not_before(raw)?))),
+        Some(other) => Err(OrbitError::InvalidInput(format!(
+            "`{field}` must be an RFC 3339 string, or an empty string to clear it; got `{other}`"
+        ))),
+    }
+}
+
 pub(super) fn require_object_field<'a>(
     input: &'a Value,
     field: &str,

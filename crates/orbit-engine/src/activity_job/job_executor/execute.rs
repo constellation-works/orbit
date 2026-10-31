@@ -25,6 +25,19 @@ pub fn resolve_job_catalog_refs_for_execution(
         .map_err(|err| DispatchError::JobValidation(err.to_string()))
 }
 
+/// [`resolve_job_catalog_refs_for_execution`] for a caller that loaded the
+/// workspace's script catalog, so `target: script:<name>` steps resolve
+/// (and are granted and run by the host at dispatch) instead of failing to
+/// load.
+pub fn resolve_job_catalog_refs_with_scripts_for_execution(
+    job: &mut JobV2,
+    catalog: &V2ActivityCatalog,
+    scripts: &crate::activity_job::V2ScriptCatalog,
+) -> Result<(), DispatchError> {
+    crate::activity_job::resolve_job_target_refs_with_scripts(job, catalog, scripts)
+        .map_err(|err| DispatchError::JobValidation(err.to_string()))
+}
+
 /// [ORB-10002] Execute a v2 Job, optionally resuming from a persisted
 /// checkpoint state.
 ///
@@ -277,6 +290,9 @@ pub fn execute_job_with_resume(
                 child_cancelled = true;
                 break;
             }
+            // A parked delivery already recorded its stop. Neither repair nor
+            // failure handoff may change its task or candidate on this run.
+            Err((error @ DispatchError::DeliveryRefused { .. }, _)) => return Err(error),
             Err((error, unsuccessful)) => {
                 let verdict = attempt_final_recovery(job, &ctx, index, &error, &mut final_recovery);
                 if let FinalRecoveryVerdict::Resume(target, context) = verdict {
@@ -285,6 +301,23 @@ pub fn execute_job_with_resume(
                     rerunning = true;
                     index = target;
                     continue;
+                }
+                // [ORB-19430] A read-only completion observation whose bounded
+                // retry is spent, or that has none, holds: nothing changed on
+                // the forge, so the held run resumes completion once it answers.
+                if let (
+                    FinalRecoveryVerdict::Skipped,
+                    DispatchError::CompletionObservationUnavailable { action, message },
+                ) = (&verdict, &error)
+                {
+                    return Err(DispatchError::DeliveryRefused {
+                        action: action.clone(),
+                        refusal:
+                            orbit_types::workflow::DeliveryRefusal::ForgeObservationUnavailable,
+                        message: crate::executor::automation::vcs::forge_observation_hold_message(
+                            message,
+                        ),
+                    });
                 }
                 if verdict.runs_failure_activity() {
                     attempt_failure_activity(step, &ctx, &error);

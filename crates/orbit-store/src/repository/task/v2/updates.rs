@@ -3,8 +3,44 @@ use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
 use orbit_types::task::{
     ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
-    TASK_FIELDS_UPDATED_EVENT, task_fields_updated_note,
+    TAGS_CHANGED_EVENT, TASK_FIELDS_UPDATED_EVENT, TagsChanged, TaskDecision,
+    task_fields_updated_note,
 };
+
+/// The `tags_changed` event a write appends when it leaves different tags
+/// than it found, carrying both lists so a reader can replay the tags in
+/// force at any earlier time.
+fn tags_changed_event(
+    bundle: &TaskBundleV2,
+    actor: &str,
+    at: chrono::DateTime<Utc>,
+    previous: Vec<String>,
+    tags: Vec<String>,
+) -> TaskEventRowV2 {
+    let render = |list: &[String]| {
+        if list.is_empty() {
+            "(none)".to_string()
+        } else {
+            list.join(", ")
+        }
+    };
+    TaskEventRowV2 {
+        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+        event_id: next_event_id(&bundle.events),
+        at,
+        by: actor.to_string(),
+        event_type: TAGS_CHANGED_EVENT.to_string(),
+        note: Some(format!(
+            "tags changed: {} → {}",
+            render(&previous),
+            render(&tags)
+        )),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: Some(TaskDecision::TagsChanged(TagsChanged { previous, tags })),
+    }
+}
 
 impl TaskV2Store {
     pub(crate) fn apply_atomic_task_mutation(
@@ -116,6 +152,17 @@ impl TaskV2Store {
                 }
             }
             if let Some(tags) = tags {
+                if tags != bundle.envelope.tags {
+                    let event = tags_changed_event(
+                        &bundle,
+                        &fields.actor,
+                        now,
+                        bundle.envelope.tags.clone(),
+                        tags.clone(),
+                    );
+                    self.bundle_store.append_event(id, &event)?;
+                    bundle.events.push(event);
+                }
                 bundle.envelope.tags = tags;
             }
             bundle.envelope.status = fields.status;
@@ -125,7 +172,7 @@ impl TaskV2Store {
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             pending.finish();
-            self.replace_index_best_effort(&bundle.envelope, &fields.event_note);
+            self.publish_task_index_and_lease_notices(&bundle.envelope, &fields.event_note)?;
             Ok(AtomicTaskMutationOutcome::Applied)
         })
     }
@@ -174,6 +221,22 @@ impl TaskV2Store {
                 let tags = normalize_task_tags(value.clone());
                 validate_os_tags(&tags)?;
                 bundle.envelope.tags = tags;
+                envelope_changed = true;
+            }
+            if let Some(value) = &fields.granted_tools {
+                bundle.envelope.granted_tools =
+                    orbit_types::task::normalize_required_tools(value.clone());
+                envelope_changed = true;
+            }
+            if let Some(value) = &fields.requires_labels {
+                bundle.envelope.requires_labels = orbit_types::task::normalize_host_labels(
+                    value.clone(),
+                    orbit_types::task::REQUIRES_LABELS_FIELD,
+                )?;
+                envelope_changed = true;
+            }
+            if let Some(value) = fields.not_before {
+                bundle.envelope.not_before = value;
                 envelope_changed = true;
             }
             if let Some(value) = &fields.context_files {
@@ -233,7 +296,8 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.source_task_id {
-                // Re-setting the same culprit keeps the link's classification.
+                // Re-setting the same culprit keeps the link's classification,
+                // including its recorded sites.
                 let replacements = value
                     .iter()
                     .cloned()
@@ -246,7 +310,7 @@ impl TaskV2Store {
                                 relation.relation_type == TaskRelationType::RegressionFrom
                                     && relation.target == target
                             })
-                            .and_then(|relation| relation.regression);
+                            .and_then(|relation| relation.regression.clone());
                         TaskRelation {
                             relation_type: TaskRelationType::RegressionFrom,
                             target,
@@ -355,6 +419,18 @@ impl TaskV2Store {
                 bundle.events.push(event);
             }
 
+            if bundle.envelope.tags != original_envelope.tags {
+                let event = tags_changed_event(
+                    &bundle,
+                    &fields.actor,
+                    Utc::now(),
+                    original_envelope.tags.clone(),
+                    bundle.envelope.tags.clone(),
+                );
+                self.bundle_store.append_event(id, &event)?;
+                bundle.events.push(event);
+            }
+
             // Drain approval snapshots use task history to distinguish a real
             // operator edit from the creation-grant row that merely re-seals
             // unchanged intent. Record content and scope changes alongside
@@ -453,7 +529,10 @@ impl TaskV2Store {
                 bundle.envelope.updated_at = updated_at;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
-                self.replace_index_best_effort(&bundle.envelope, "task document update");
+                self.publish_task_index_and_lease_notices(
+                    &bundle.envelope,
+                    "task document update",
+                )?;
             } else {
                 pending.finish();
             }
@@ -598,7 +677,7 @@ impl TaskV2Store {
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
-                self.replace_index_best_effort(&bundle.envelope, "task history update");
+                self.publish_task_index_and_lease_notices(&bundle.envelope, "task history update")?;
             } else {
                 pending.finish();
             }

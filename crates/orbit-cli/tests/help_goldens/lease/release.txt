@@ -1,0 +1,18 @@
+Release a path lease early
+
+Usage: orbit lease release [OPTIONS] <LEASE_ID>
+
+Arguments:
+  <LEASE_ID>
+          Lease identifier returned by request
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

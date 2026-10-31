@@ -24,9 +24,11 @@
 use std::path::PathBuf;
 
 use orbit_engine::activity_job::{
-    ResolveError, V2ActivityCatalog, load_job_asset, resolve_job_target_refs,
+    ResolveError, V2ActivityCatalog, V2ScriptCatalog, load_job_asset, resolve_job_target_refs,
 };
-use orbit_engine::{DispatchError, resolve_job_catalog_refs_for_execution, validate_job};
+use orbit_engine::{
+    DispatchError, resolve_job_catalog_refs_with_scripts_for_execution, validate_job,
+};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, FanInSpec, FanOutBlock, JobKind, JobV2, JobV2Step, JobV2StepBody,
@@ -47,14 +49,39 @@ fn name_resolution_regressions() -> Result<(), Box<dyn std::error::Error>> {
 fn every_shipped_job_resolves_and_passes_execution_validation()
 -> Result<(), Box<dyn std::error::Error>> {
     let catalog = load_reference_catalog()?;
+    let workspace = tempfile::tempdir()?;
+    let scripts_dir = workspace.path().join(".orbit/resources/scripts");
+    std::fs::create_dir_all(&scripts_dir)?;
+    std::fs::write(workspace.path().join("stub.sh"), "#!/bin/sh\n")?;
     let mut validated = 0;
+    let mut sources = Vec::new();
     for entry in std::fs::read_dir(repo_root().join("crates/orbit-core/assets/jobs"))? {
         let path = entry?.path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
             continue;
         }
-        let mut job = load_job_asset(&std::fs::read_to_string(&path)?)?.spec;
-        resolve_job_catalog_refs_for_execution(&mut job, &catalog)
+        let source = std::fs::read_to_string(&path)?;
+        // A shipped `script:` step names an operator-created workspace
+        // manifest; stub each one so validation sees a resolvable script.
+        for name in source
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("target: script:"))
+        {
+            std::fs::write(
+                scripts_dir.join(format!("{}.yaml", name.trim())),
+                format!(
+                    "schemaVersion: 1\nkind: Script\nmetadata:\n  name: {}\nspec:\n  description: stub\n  entry: stub.sh\n",
+                    name.trim()
+                ),
+            )?;
+        }
+        sources.push((path, source));
+    }
+    let mut scripts = V2ScriptCatalog::new(scripts_dir, workspace.path().to_path_buf());
+    scripts.load_dir()?;
+    for (path, source) in sources {
+        let mut job = load_job_asset(&source)?.spec;
+        resolve_job_catalog_refs_with_scripts_for_execution(&mut job, &catalog, &scripts)
             .and_then(|()| validate_job(&job))
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         validated += 1;
@@ -369,10 +396,15 @@ fn validate_job_checks_quorum_bounds() {
 fn validation_step(id: &str, when: Option<&str>, body: JobV2StepBody) -> JobV2Step {
     JobV2Step {
         id: id.to_string(),
+        stage: None,
         when: when.map(str::to_string),
         retry: None,
         recovery_activity: None,
         resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
         body,
     }
 }
@@ -542,6 +574,7 @@ fn load_reference_catalog() -> Result<V2ActivityCatalog, Box<dyn std::error::Err
 
 fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
     JobV2 {
+        schema_version: 2,
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
         task_delivery: None,
@@ -555,12 +588,18 @@ fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
         steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
+        expire_when: None,
         steps: vec![JobV2Step {
             id: "the_step".to_string(),
+            stage: None,
             when: None,
             retry: None,
             recovery_activity: None,
             resolved_recovery_activity: None,
+            wait_until: None,
+            expire_when: None,
+            reuse_when: None,
+            require_result: None,
             body: JobV2StepBody::TargetRef(TargetRef {
                 target: format!("activity:{}", target_name),
                 default_input: None,
@@ -586,6 +625,44 @@ fn stub_deterministic_activity(name: &str) -> ActivityV2 {
     }
 }
 
+/// [ORB-20157] An `auto-task:` ref survives resolution for Core to inspect,
+/// and execution validation, which runs before any step, refuses the job
+/// for as long as it declares schemaVersion 3 [ORB-20237].
+fn auto_task_steps_resolve_but_never_run() {
+    let catalog = load_reference_catalog().unwrap();
+    let mut job = load_job_asset(
+        "schemaVersion: 3\nkind: Job\nmetadata:\n  name: readiness\nspec:\n  state: disabled\n  \
+         expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n    \
+         - id: assess\n      target: activity:agent_assess_diff\n    \
+         - id: qa\n      target: auto-task:full-qa-sweep\n      wait_until: board.empty\n",
+    )
+    .unwrap()
+    .spec;
+    resolve_job_target_refs(&mut job, &catalog).unwrap();
+    assert!(matches!(&job.steps[0].body, JobV2StepBody::Target(_)));
+    let JobV2StepBody::TargetRef(reference) = &job.steps[1].body else {
+        panic!("auto-task ref was rewritten: {:?}", job.steps[1].body);
+    };
+    assert_eq!(reference.target, "auto-task:full-qa-sweep");
+    assert!(
+        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
+        "an auto-task job must fail execution validation"
+    );
+
+    job.steps.truncate(1);
+    assert!(
+        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
+        "a job `expire_when` must fail execution validation"
+    );
+    job.expire_when = None;
+    assert!(
+        matches!(validate_job(&job), Err(DispatchError::JobValidation(_))),
+        "a schemaVersion 3 job with no auto-task field left must still fail [ORB-20237]"
+    );
+    job.schema_version = 2;
+    validate_job(&job).unwrap();
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn catalog_contracts_1() {
@@ -609,6 +686,10 @@ fn catalog_contracts_1() {
             (
                 "validate_job_checks_quorum_bounds",
                 validate_job_checks_quorum_bounds,
+            ),
+            (
+                "auto_task_steps_resolve_but_never_run",
+                auto_task_steps_resolve_but_never_run,
             ),
         ]);
     });

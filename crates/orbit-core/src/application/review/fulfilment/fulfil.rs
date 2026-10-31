@@ -2,17 +2,19 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::text::floor_char_boundary;
 use orbit_engine::DispatchError;
 use orbit_engine::review_gate::run_host_sandbox_test;
-use orbit_types::task::{Task, TaskArtifact, TaskStatus};
+use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskStatus};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    EvidenceHostOs, HostSandboxCommand, ReviewEvidenceHold, ReviewEvidenceKind,
-    ReviewEvidenceRequirement, ReviewExternalEvidence, ValidationOutcome,
+    EvidenceHostOs, HostSandboxCommand, REVIEW_EVIDENCE_FINDINGS_ARTIFACT, ReviewEvidenceFindings,
+    ReviewEvidenceHold, ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewExternalEvidence,
+    ValidationOutcome,
 };
 use serde_json::{Value, json};
 
-use super::super::evidence::evidence_artifact_path;
+use super::super::evidence::{evidence_artifact_path, route_evidence_findings};
 use super::codeql::admitted_codeql_args;
 use crate::OrbitRuntime;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskUpdateParams, recovery_checkout_path};
@@ -22,6 +24,12 @@ use super::{
     DEFAULT_FULFILMENT_MIN_FREE_MIB, EVIDENCE_FULFILMENT_AUDIT, EvidenceRun, FulfilmentRefusal,
     HOLD_KEY_FIELD,
 };
+
+/// Bytes of the findings summary a task comment carries; the artifact has
+/// every summarized result.
+const MAX_FINDINGS_COMMENT_BYTES: usize = 4 * 1024;
+/// Results retained across all requirements; serialized bytes may lower this.
+const MAX_COMBINED_FINDINGS_RESULTS: usize = 50;
 
 /// A requirement's command as fulfilment admitted it.
 enum AdmittedCommand {
@@ -147,6 +155,10 @@ impl OrbitRuntime {
                     Some(EvidenceRun::refused(requirement, refusal, detail))
                 })
                 .collect());
+        }
+        #[cfg(feature = "test-support")]
+        if let Some(runs) = super::test_support::completed_findings(hold) {
+            return Ok(runs);
         }
         if let Some((refusal, reason)) = self.fulfilment_host_refusal() {
             return Err((refusal, reason));
@@ -284,7 +296,10 @@ impl OrbitRuntime {
 
     /// Attach each run's log, and every result when all of them passed, in
     /// one write: receipt then requeues the task for a fresh review. A refused
-    /// fulfilment attaches only logs, so nothing is accepted.
+    /// fulfilment attaches only logs, so nothing is accepted. [ORB-18660]
+    /// When the only refusals are reported findings, it also attaches them as
+    /// [`REVIEW_EVIDENCE_FINDINGS_ARTIFACT`] and queues the task to repair
+    /// its kept candidate from them instead of leaving the hold in place.
     fn attach_fulfilment(
         &self,
         task: &Task,
@@ -317,6 +332,12 @@ impl OrbitRuntime {
             });
             if let Some(log) = log.as_object_mut() {
                 log.extend(run.log.clone());
+                if !run.findings.is_empty() {
+                    log.insert(
+                        "findings_artifact".to_string(),
+                        json!(REVIEW_EVIDENCE_FINDINGS_ARTIFACT),
+                    );
+                }
             }
             artifacts.push(json_artifact(&log_artifact, &log)?);
             if refusal.is_none() {
@@ -334,14 +355,49 @@ impl OrbitRuntime {
                 artifacts.push(json_artifact(&artifact, &evidence)?);
             }
         }
+        let mut findings = runs.iter().any(|run| !run.findings.is_empty()).then(|| {
+            let results = runs
+                .iter()
+                .flat_map(|run| &run.findings)
+                .take(MAX_COMBINED_FINDINGS_RESULTS)
+                .cloned()
+                .collect::<Vec<_>>();
+            let omitted = runs
+                .iter()
+                .map(|run| run.omitted_findings + run.findings.len())
+                .sum::<usize>()
+                - results.len();
+            ReviewEvidenceFindings {
+                schema_version: 1,
+                hold_run_id: hold.run_id.clone(),
+                run_id: run_id.to_string(),
+                attempt_id: hold.attempt_id.clone(),
+                candidate: hold.candidate.clone(),
+                results,
+                omitted,
+            }
+        });
+        if let Some(findings) = &mut findings {
+            artifacts.push(bounded_findings_artifact(&task.id, findings)?);
+        }
+        // Findings are a verdict on the candidate, not a missing check: when
+        // every refusal is one, the implementer repairs the kept candidate.
+        let repair = findings.filter(|_| {
+            runs.iter().all(|run| {
+                run.refusal
+                    .is_none_or(|refusal| refusal == FulfilmentRefusal::FindingsReported)
+            })
+        });
         let comment = match refusal {
-            None => format!(
+            // Written once the task is requeued, naming what happened.
+            _ if repair.is_some() => None,
+            None => Some(format!(
                 "Owner evidence fulfilment run={run_id} ran every named check at held candidate \
                  `{}` on this Linux host and attached the results and logs. A fresh review \
                  verifies them; nothing was approved.",
                 hold.candidate.commit
-            ),
-            Some(refusal) => format!(
+            )),
+            Some(refusal) => Some(format!(
                 "Owner evidence fulfilment run={run_id} did not attach a result for held \
                  candidate `{}`: `{}`{}. The evidence hold stays in place{}.",
                 hold.candidate.commit,
@@ -356,19 +412,78 @@ impl OrbitRuntime {
                 } else {
                     ""
                 },
-            ),
+            )),
         };
         self.update_task_as_system(
             &task.id,
             TaskUpdateParams {
                 upsert_artifacts: artifacts,
-                comment: Some(comment),
+                comment,
+                ..TaskUpdateParams::default()
+            },
+            Some(run_id.to_string()),
+        )?;
+        let Some(findings) = repair else {
+            return Ok(());
+        };
+        // The findings artifact is written before the requeue, so the next
+        // run's candidate resume always finds it.
+        let results = findings.results.len() + findings.omitted;
+        let next = if route_evidence_findings(self, &task.id, hold, results)? {
+            "The task is queued to repair the kept candidate: its next run starts the \
+             implementer from these findings."
+        } else {
+            "The hold is no longer the task's latest decision, so the task was not requeued."
+        };
+        self.update_task_as_system(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some(format!(
+                    "Owner evidence fulfilment run={run_id} ran every named check at held \
+                     candidate `{}` on this Linux host and the analysis reported findings \
+                     ({detail}). They are in `{REVIEW_EVIDENCE_FINDINGS_ARTIFACT}`, with each \
+                     check's log. {next}\n\n{}",
+                    hold.candidate.commit,
+                    bounded_comment(&findings.summary_text()),
+                )),
                 ..TaskUpdateParams::default()
             },
             Some(run_id.to_string()),
         )?;
         Ok(())
     }
+}
+
+/// Keep the combined record readable through the public artifact tool. Measure
+/// the actual pretty JSON, including escaped text, metadata and omitted count.
+fn bounded_findings_artifact(
+    task_id: &str,
+    findings: &mut ReviewEvidenceFindings,
+) -> Result<TaskArtifact, OrbitError> {
+    loop {
+        let artifact = json_artifact(REVIEW_EVIDENCE_FINDINGS_ARTIFACT, findings)?;
+        if artifact.content.len() as u64 <= MAX_TASK_ARTIFACT_CONTENT_BYTES
+            || findings.results.is_empty()
+        {
+            // Oversized metadata alone must also never reach the store.
+            artifact.validate_inline_size(task_id)?;
+            return Ok(artifact);
+        }
+        findings.results.pop();
+        findings.omitted += 1;
+    }
+}
+
+/// The first [`MAX_FINDINGS_COMMENT_BYTES`] of a findings summary.
+fn bounded_comment(summary: &str) -> String {
+    if summary.len() <= MAX_FINDINGS_COMMENT_BYTES {
+        return summary.trim_end().to_string();
+    }
+    let end = floor_char_boundary(summary, MAX_FINDINGS_COMMENT_BYTES);
+    format!(
+        "{}\n[… cut; the artifact lists every summarized result]",
+        summary[..end].trim_end()
+    )
 }
 
 /// `fulfil_review_evidence`: the only step of

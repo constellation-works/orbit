@@ -27,6 +27,14 @@ update it in the same pull request.
 Internal design records under `docs/design/` and runbooks under `docs/runbooks/` are **not**
 published on this site. Link to them on GitHub when a contributor genuinely needs one.
 
+Mermaid fences render to inline SVG at build time through `plugins/mermaid.mjs`
+and `beautiful-mermaid`; no browser, client renderer or external service is needed
+to build or view them. The optional fence metadata names the accessible diagram.
+Declare each node's label on its first mention. Keep graph data in the fence:
+the plugin preserves it in a collapsible source alternative. `custom.css`
+supplies local fonts and theme colors, with keyboard
+and touch scrolling for diagrams wider than the content column.
+
 ## Generated assets
 
 `public/og-image.*`, the logo SVGs in `src/assets/` and `public/favicon.svg` are generated
@@ -38,3 +46,15 @@ outside this repository. Do not edit them by hand. The dashboard screenshots in
 Follow the [website validation runbook](../docs/runbooks/website-validation.md) before
 handing off a website change. It covers the local checks, the rendered-page evidence, the
 `security.txt` and response-header policy, and manual publication.
+
+After building and starting a local preview, check the crate dependency graph
+with the host browser kit (writes screenshots and a JSON report):
+
+```bash
+. "$ORBIT_BROWSER_KIT_ENV"
+node website/scripts/check-crate-diagram.mjs "$PLAYWRIGHT_MODULE" http://127.0.0.1:4321 .orbit/tmp/crate-diagram
+```
+
+Run this command from the repository root. It checks both themes at 1440px and
+375px, the complete source alternative, keyboard scrolling, page containment,
+and rendering without JavaScript or third-party requests.

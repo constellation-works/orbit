@@ -7,16 +7,16 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::OrbitRuntime;
-use crate::application::job::delivery::{PrForgeCheck, tags_route_through_pr_pipeline};
 use crate::application::task::TaskListFilter;
+use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::input::{bounded_usize, requested_workspace_root, string_array};
 use super::persist::{no_target_assessment_marker, source_superseded};
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
 use super::{
-    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, VALIDATION_TOOL_WARNINGS,
-    requested_base_branch,
+    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, EXPLORE_BRIEF_REQUESTED,
+    EXPLORE_BRIEF_TASK_IDS, VALIDATION_TOOL_WARNINGS, requested_base_branch,
 };
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
@@ -40,7 +40,8 @@ pub(crate) fn prepare(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
-    let claim = crate::application::automation::members::claim(runtime, input)
+    let claim = runtime
+        .state_claim(input)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
     if let Some(claim) = &claim
@@ -75,9 +76,9 @@ pub(crate) fn prepare(
     }
     let explicit_mode = !explicit_task_ids.is_empty();
     let run_id = pilot_run_id(input);
-    let mut active_preparations =
-        crate::application::automation::preparation::active_task_pilot_preparations(runtime)
-            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    let mut active_preparations = runtime
+        .pilot_preparation_holders()
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     // A retried prepare is not held by its own run.
     if let Some(run_id) = run_id {
         active_preparations.retain(|_, holders| {
@@ -85,31 +86,30 @@ pub(crate) fn prepare(
             !holders.is_empty()
         });
     }
-    let policy = crate::application::automation::preparation::claim_policy(runtime, claim.as_ref())
+    let policy = runtime
+        .claim_preparation_policy(claim.as_ref())
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     // A claimed task the branch already changed under is not piloted against
     // the frozen source: it settles superseded, and its member is claimed
     // afresh at the head [ORB-14476]. Apply carries these outcomes.
     let superseded = match &claim {
-        Some(claim) => crate::application::automation::members::stale_tasks(
-            runtime,
-            claim,
-            &policy,
-            &Value::Null,
-            &claim.task_ids(),
-            &BTreeMap::new(),
-        )
-        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
+        Some(claim) => runtime
+            .stale_claimed_tasks(
+                claim,
+                &policy,
+                &Value::Null,
+                &claim.task_ids(),
+                &BTreeMap::new(),
+            )
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?,
         None => BTreeMap::new(),
     };
 
     // Shared with delivery admission: the workspace's own ship mode decides
     // whether a task would take the PR route.
     let ship_mode = runtime.automatic_delivery_ship_mode();
-    let forge = PrForgeCheck::default();
-    let forge_refused = |tags: &[String]| {
-        tags_route_through_pr_pipeline(tags, ship_mode) && forge.require(runtime).is_err()
-    };
+    let forge = <OrbitRuntime as TaskJobPort>::PrForge::default();
+    let forge_refused = |tags: &[String]| runtime.pr_route_lacks_forge(&forge, tags, ship_mode);
 
     // Apply proves that a newer owner superseded preparation from the history
     // past each task's `history_len`, so that boundary must not follow the
@@ -164,7 +164,7 @@ pub(crate) fn prepare(
         // status changes after valid preparation and their audited outcomes.
         let unsupported = selected
             .iter()
-            .filter(|task| !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog))
+            .filter(|task| !super::pilot_assessable_status(task.status))
             .map(|task| format!("{} (status {})", task.id, task.status))
             .collect::<Vec<_>>();
         if !unsupported.is_empty() {
@@ -305,6 +305,7 @@ pub(crate) fn prepare(
     #[cfg(test)]
     hydration_test_hook::run(runtime);
     let lane = ImplementationLane::resolve(runtime);
+    let explore_brief = runtime.explore_brief_settings();
     let mut retained = Vec::with_capacity(task_ids.len());
     let mut superseded_during_preparation = Vec::new();
     for (task_id, mut snapshot) in task_ids.into_iter().zip(task_snapshots) {
@@ -340,15 +341,19 @@ pub(crate) fn prepare(
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         snapshot[CONTEXT_CREATION_SELECTORS] = json!(creation.selectors());
         snapshot[CONTEXT_CREATION_IDENTITY] = json!(creation.identity());
+        // A brief is keyed to the pinned revision, so a non-Git workspace
+        // never requests one. Tags are read now: a task tagged after its
+        // pilot gets a brief only when it is piloted again. The mark is
+        // written only when set, so a workspace without briefs keeps its
+        // prepared shape.
+        if source.is_some() && explore_brief.requested_for(&task.tags) {
+            snapshot[EXPLORE_BRIEF_REQUESTED] = json!(true);
+        }
 
         if let Some(source) = &source {
-            let fingerprints = crate::application::automation::preparation::fingerprints(
-                runtime,
-                &task,
-                &source.source_revision,
-                &policy,
-            )
-            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+            let fingerprints = runtime
+                .task_pilot_fingerprints(&task, &source.source_revision, &policy)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             // Each task is checked against the batch member that claimed it.
             // A member edited since the claim is set aside alone, as apply
             // supersedes per member [ORB-14476]: it is claimed afresh while
@@ -388,17 +393,17 @@ pub(crate) fn prepare(
     // Selection read the holders before any work. This re-check and this
     // run's reservation are one critical section of the commit boundary, so
     // of two runs preparing one task at once exactly one keeps it.
-    let held = crate::application::automation::pilot_reservation::reserve(
-        runtime,
-        run_id,
-        &retained
-            .iter()
-            .map(|(task_id, _, _)| task_id.clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|error| {
-        DispatchError::action_failed(action, format!("reserve pilot tasks: {error}"))
-    })?;
+    let held = runtime
+        .reserve_pilot_tasks(
+            run_id,
+            &retained
+                .iter()
+                .map(|(task_id, _, _)| task_id.clone())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| {
+            DispatchError::action_failed(action, format!("reserve pilot tasks: {error}"))
+        })?;
     let held_reason = if explicit_mode {
         "already_preparing"
     } else {
@@ -431,15 +436,28 @@ pub(crate) fn prepare(
             groups.push(vec![task_id.clone()]);
         }
     }
+    let brief_requested = task_snapshots
+        .iter()
+        .filter(|snapshot| snapshot[EXPLORE_BRIEF_REQUESTED] == json!(true))
+        .filter_map(|snapshot| snapshot["task_id"].as_str())
+        .collect::<BTreeSet<_>>();
     let partitions = groups
         .iter()
         .flat_map(|ids| ids.chunks(max_partition_size))
         .enumerate()
         .map(|(partition_index, ids)| {
-            json!({
+            let mut partition = json!({
                 "partition_index": partition_index,
                 "task_ids": ids,
-            })
+            });
+            let requested = ids
+                .iter()
+                .filter(|id| brief_requested.contains(id.as_str()))
+                .collect::<Vec<_>>();
+            if !requested.is_empty() {
+                partition[EXPLORE_BRIEF_TASK_IDS] = json!(requested);
+            }
+            partition
         })
         .collect::<Vec<_>>();
 
@@ -460,6 +478,8 @@ pub(crate) fn prepare(
         // Callable tools of the activity that will implement the task, plus
         // both artifact-attachment paths. Null when that activity cannot be read.
         "implementation_lane": lane.prompt_input(),
+        // Results of this run must carry the observed-revision proof.
+        crate::application::task::pilot::source::INSPECTION_PROOF_KEY: true,
         "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {
             json!({
                 "base_branch": requested_base_branch(runtime, input),
@@ -552,15 +572,15 @@ fn fresh_no_target_assessment(
     if task.status != assessed_status {
         return Ok(false);
     }
-    let current = crate::application::automation::preparation::pilot_fingerprint(
-        runtime,
-        &task,
-        source.map(|source| source.source_revision.as_str()),
-        policy,
-    )
-    .map_err(|error| {
-        DispatchError::action_failed(action, format!("fingerprint task {task_id}: {error}"))
-    })?;
+    let current = runtime
+        .task_pilot_fingerprint(
+            &task,
+            source.map(|source| source.source_revision.as_str()),
+            policy,
+        )
+        .map_err(|error| {
+            DispatchError::action_failed(action, format!("fingerprint task {task_id}: {error}"))
+        })?;
     Ok(current == assessed_fingerprint)
 }
 

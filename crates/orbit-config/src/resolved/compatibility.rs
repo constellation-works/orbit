@@ -5,7 +5,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::workflow::activity_job::{RETIRED_BACKEND_MIGRATION, check_retired_backend_value};
+use orbit_types::workflow::activity_job::{
+    RETIRED_BACKEND_MIGRATION, RETIRED_PROVIDER_MIGRATION, check_retired_backend_value,
+    retired_provider_id,
+};
 
 use crate::layering::value_at_path;
 use crate::raw::RawTaskSection;
@@ -38,6 +41,24 @@ pub(super) fn reject_retired_backend_overrides(
     })?;
     check_retired_backend_value(raw)
         .map_err(|error| OrbitError::InvalidInput(format!("[runtime] {error}")))
+}
+
+/// A crew naming a retired provider (`cursor`, `pi`, `opencode`) fails to
+/// load naming the crew, the retired provider and the remedy — never a
+/// generic unknown-provider error (ORB-18096).
+pub(super) fn reject_retired_crew_provider(
+    crew: &str,
+    raw: Option<&str>,
+) -> Result<(), OrbitError> {
+    let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    match retired_provider_id(value) {
+        Some(retired) => Err(OrbitError::InvalidInput(format!(
+            "[crews.{crew}] provider '{retired}' is retired and no longer supported; {RETIRED_PROVIDER_MIGRATION}"
+        ))),
+        None => Ok(()),
+    }
 }
 
 pub(super) fn reject_stale_agent_tables(
@@ -130,6 +151,36 @@ pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path
         deprecated_keys: deprecated_keys_present(document),
     }
     .warn(config_path);
+    warn_deprecated_review_timing_value(document, config_path);
+}
+
+/// Bounded deprecation warning for an explicit `review.timing = before_pr`
+/// value (canonical `before_pr` or alias `before-pr`) [ORB-20099].
+///
+/// The value keeps before-PR semantics; the warning names the deciding key,
+/// the written value, and the physical file so an operator can migrate it
+/// with an explicit `orbit config set review.timing before_landing`.
+/// Invalid values fail load elsewhere, so they never warn here.
+fn warn_deprecated_review_timing_value(document: &toml::Value, config_path: &Path) {
+    let Some(raw) = value_at_path(document, crate::operation::REVIEW_TIMING_KEY)
+        .and_then(|value| value.as_str())
+    else {
+        return;
+    };
+    let Ok(timing) = crate::operation::ReviewTimingSetting::parse(raw) else {
+        return;
+    };
+    if !timing.is_deprecated() {
+        return;
+    }
+    let path = redact_home_dir(&config_path.display().to_string());
+    tracing::warn!(
+        config = %path,
+        key = crate::operation::REVIEW_TIMING_KEY,
+        value = raw,
+        note = crate::operation::BEFORE_PR_VALUE_DEPRECATION_NOTE,
+        "review timing value is deprecated but still honoured as before-PR",
+    );
 }
 
 pub(super) fn removed_keys_present(document: &toml::Value) -> Vec<(&'static str, &'static str)> {

@@ -51,7 +51,7 @@ fn install_provider(workspace: &Workspace) -> std::path::PathBuf {
         &provider,
         format!(
             r#"#!/usr/bin/env python3
-import json, re, sys
+import json, re, subprocess, sys
 raw = sys.stdin.read()
 found = []
 for blob in re.findall(r'"task_ids"\s*:\s*(\[[^\]]*\])', raw):
@@ -85,11 +85,13 @@ tasks = [{{
     "duplicate_of": None,
     "already_landed": None,
 }} for task_id in found]
+head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+tree = subprocess.check_output(["git", "rev-parse", "HEAD^{{tree}}"], text=True).strip()
 sys.stdout.write(json.dumps({{
     "schemaVersion": 1,
     "status": "success",
     "error": None,
-    "result": {{"partition_index": partition, "task_ids": found, "tasks": tasks}},
+    "result": {{"partition_index": partition, "observed_revision": head, "observed_tree": tree, "task_ids": found, "tasks": tasks}},
 }}))
 with open({calls:?}, "a", encoding="utf-8") as handle:
     handle.write("call\n")

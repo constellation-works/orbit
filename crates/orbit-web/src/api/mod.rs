@@ -11,16 +11,20 @@ mod codebase;
 mod config;
 mod cost;
 mod crews;
+mod decisions;
 mod denials;
 mod diagnostics;
 mod distributed;
 mod doctor;
+mod events;
 mod forward;
 mod frictions;
 mod helpers;
 mod host;
 mod incidents;
 mod jobs;
+pub(crate) mod lease_notices;
+pub(crate) mod leases;
 mod log;
 mod metrics;
 mod origin;
@@ -31,8 +35,9 @@ mod resource_profiles;
 mod routes;
 pub(crate) mod routines;
 mod runs;
+mod schedule_edits;
 mod search;
-mod task_create;
+pub(crate) mod session;
 mod tasks;
 mod workspaces;
 
@@ -40,6 +45,7 @@ use helpers::*;
 pub(crate) use host::host_error_code;
 pub(crate) use origin::{nosniff_json_responses, require_localhost_origin};
 pub(super) use routes::{request_shutdown, router};
+pub(crate) use runs::failure_root_line;
 
 // Keep the API's shared error projection in the helpers module while adding
 // the structured response needed by the dashboard for a live resume conflict.
@@ -70,4 +76,4 @@ fn resume_run_in_flight_conflict(error: orbit_core::OrbitError) -> axum::respons
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -17,6 +17,7 @@ use orbit_common::fs::io::{atomic_write_text, open_read_only_no_follow};
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
+use crate::application::job::JobDrainPort;
 
 use super::preparation::active_task_pilot_preparations;
 
@@ -34,7 +35,7 @@ struct Reservations {
 }
 
 /// Tasks a live pilot run has reserved, with the reserving run IDs.
-pub(crate) fn live_reservations(
+pub(super) fn live_reservations(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
     let mut by_task = BTreeMap::<String, BTreeSet<String>>::new();
@@ -54,7 +55,7 @@ pub(crate) fn live_reservations(
 /// holders. Held tasks stay with their holder; the rest replace whatever this
 /// run reserved before, so a retried prepare keeps its own tasks. Without a
 /// run ID nothing is reserved, but holders are still reported.
-pub(crate) fn reserve(
+pub(super) fn reserve(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
     task_ids: &[String],
@@ -62,7 +63,7 @@ pub(crate) fn reserve(
     if task_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
-    runtime.admission_boundary()?.with_admission(|| {
+    runtime.owner_commit_boundary()?.with_admission(|| {
         let mut held = active_task_pilot_preparations(runtime)?;
         held.retain(|task_id, holders| {
             if let Some(run_id) = run_id {

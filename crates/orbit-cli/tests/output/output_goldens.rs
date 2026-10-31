@@ -30,7 +30,8 @@ use std::sync::OnceLock;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::governance::authorization::{
     CallerCapabilities, CallerEnvelope, GOVERNED_OPERATIONS, OperationSurface,
-    PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, authorize, governed_tool,
+    PLUGIN_TOOL_AGENT_CALLABLE, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, authorize,
+    governed_tool,
 };
 use orbit_common::test_env;
 use orbit_tools::ToolRegistry;
@@ -58,6 +59,10 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "task_list",
         args: &["task", "list"],
+    },
+    Command {
+        name: "task_list_scheduled",
+        args: &["task", "list", "--scheduled"],
     },
     Command {
         name: "skill_list",
@@ -611,23 +616,53 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.agent.invoke", Placement::Advertised),
     ("orbit.auto_task.delete", Placement::Unadvertised),
     ("orbit.auto_task.reset", Placement::Unadvertised),
+    ("orbit.automation.clear_stall", Placement::Unadvertised),
     ("orbit.command.exec", Placement::Advertised),
+    ("orbit.decision.digest", Placement::Advertised),
+    ("orbit.decision.submit", Placement::Advertised),
     ("orbit.drain.claim.bind", Placement::Unadvertised),
     ("orbit.drain.claim.settle", Placement::Unadvertised),
     ("orbit.drain.claims", Placement::Unadvertised),
     ("orbit.drain.probe", Placement::Unadvertised),
     ("orbit.drain.receipt.lookup", Placement::Unadvertised),
+    ("orbit.experiment.abandon", Placement::Advertised),
+    ("orbit.experiment.assign", Placement::Advertised),
+    ("orbit.experiment.clone", Placement::Advertised),
+    ("orbit.experiment.conclude", Placement::Advertised),
+    ("orbit.experiment.create", Placement::Advertised),
+    ("orbit.experiment.pause", Placement::Advertised),
+    ("orbit.experiment.resume", Placement::Advertised),
+    ("orbit.experiment.reweight", Placement::Advertised),
+    ("orbit.experiment.start", Placement::Advertised),
+    ("orbit.experiment.update", Placement::Advertised),
+    ("orbit.lease.check", Placement::Advertised),
+    ("orbit.lease.expand", Placement::Advertised),
+    ("orbit.lease.list", Placement::Advertised),
+    ("orbit.lease.release", Placement::Advertised),
+    ("orbit.lease.renew", Placement::Advertised),
+    ("orbit.lease.request", Placement::Advertised),
+    ("orbit.lease.show", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
+    // Script grants are reached via `orbit script grant|revoke`; phase 1
+    // registers no MCP tool for them, so the governed rows exist to make
+    // the names operator-only before any tool can be called.
+    ("orbit.script.grant", Placement::Unadvertised),
+    ("orbit.script.revoke", Placement::Unadvertised),
     ("orbit.task.delete", Placement::Unadvertised),
+    // Field-level: `orbit.task.add`/`update` with `granted_tools` check it.
+    ("orbit.task.grant_tools", Placement::Unadvertised),
     ("orbit.task.locks.release", Placement::Unadvertised),
     ("orbit.task.locks.reserve", Placement::Unadvertised),
     ("orbit.task.pull", Placement::Unadvertised),
     ("orbit.task.reconcile_review", Placement::Advertised),
     ("orbit.task.reject", Placement::Unadvertised),
     ("orbit.task.requeue", Placement::Advertised),
+    ("orbit.task.recover_claim", Placement::Advertised),
     ("orbit.task.retry_handoff", Placement::Advertised),
+    ("orbit.task.revoke_handoff", Placement::Advertised),
     ("orbit.task.review_reset", Placement::Advertised),
+    ("orbit.visual.accept_dispute", Placement::Unadvertised),
     ("orbit.workflow.auto", Placement::Advertised),
     ("orbit.workflow.run.list", Placement::Advertised),
     ("orbit.workflow.run.resume", Placement::Advertised),
@@ -678,6 +713,7 @@ fn authorization_matrix_matches_live_registry() {
             op.surface == OperationSurface::Tool
                 && op.id != PLUGIN_TOOL_READ_ONLY.id
                 && op.id != PLUGIN_TOOL_MUTATING.id
+                && op.id != PLUGIN_TOOL_AGENT_CALLABLE.id
         })
         .map(|op| {
             let placement = if advertised.contains(op.id) {
@@ -706,13 +742,25 @@ fn authorization_matrix_matches_live_registry() {
         .iter()
         .filter(|op| op.surface == OperationSurface::Tool && advertised.contains(op.id))
     {
-        assert!(
-            !operation.allowed.contains(&McpCapability::Agent),
-            "'{}' is advertised to MCP and governed, yet lists `agent` among its allowed \
-             capabilities — governing an operation an ordinary MCP caller already holds \
-             buys nothing and hides the entries that do refuse",
-            operation.id
-        );
+        if operation.id.starts_with("orbit.lease.") {
+            // Interactive agents coordinate their own paths. Lease governance
+            // is an identity floor, while owner placement and lease policy
+            // constrain their requests.
+            let unidentified = CallerCapabilities::resolve(&CallerEnvelope::default());
+            assert!(
+                authorize(operation, &unidentified).is_err(),
+                "{} must protect owner state from an unidentified caller",
+                operation.id
+            );
+        } else {
+            assert!(
+                !operation.allowed.contains(&McpCapability::Agent),
+                "'{}' is advertised to MCP and governed, yet lists `agent` among its allowed \
+                 capabilities — governing an operation an ordinary MCP caller already holds \
+                 buys nothing and hides the entries that do refuse",
+                operation.id
+            );
+        }
     }
     let mut operations = std::collections::BTreeMap::new();
     for schema in registry.all_schemas() {
@@ -753,6 +801,14 @@ fn plain_and_json_forms_match_their_goldens() {
     let fixture = Fixture::new();
 
     for command in COMMANDS {
+        if command.name == "task_list_scheduled" {
+            for (id, time) in [
+                ("ORB-00001", "2099-02-01T10:00:00Z"),
+                ("ORB-00000", "2099-02-02T10:00:00Z"),
+            ] {
+                fixture.run(&["task", "update", id, "--not-before", time], &[]);
+            }
+        }
         let plain = fixture.run(command.args, &[]);
         let mut plain_stdout = fixture.redact(&String::from_utf8_lossy(&plain.stdout));
 
@@ -781,7 +837,14 @@ fn task_show_relations_and_artifacts_match_golden() {
     let blocker_id = tasks[1]["id"].as_str().expect("blocker id");
     let update = serde_json::to_string(&json!({
         "id": task_id,
-        "relations": [{"type": "blocked_by", "target": blocker_id}],
+        "relations": [
+            {"type": "blocked_by", "target": blocker_id},
+            {
+                "type": "regression_from",
+                "target": blocker_id,
+                "regression": {"nature": "defect_in_new", "escape": "no_test", "severity": "high"},
+            },
+        ],
     }))
     .expect("serialize task update");
 

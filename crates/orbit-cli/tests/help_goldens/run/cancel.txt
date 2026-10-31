@@ -10,14 +10,8 @@ Options:
       --confirm
           Confirm process termination and irreversible run terminalization
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --reason <REASON>
           Optional reason recorded with the cancellation audit event
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --force
           Do not wait for a drain's in-flight leaves: stop them too, returning a pull drain's claims to the owner's backlog
@@ -25,30 +19,21 @@ Options:
       --block
           Keep a cancelled task leaf blocked instead of returning it to the backlog
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
 
 Stops a pending or running run, releases its task reservations and marks it `cancelled`;
 a finished run reports `already_terminal`. A cancelled task leaf returns its task to the
 backlog unless `--block`. A pull drain cancels gracefully, waiting for launched leaves
 unless `--force`; `--force` also stops a local drain's child runs. Exits 1 if a stop
-cannot be confirmed. Details: docs/runbooks/stuck-job-runs.md.
+cannot be confirmed.
 
 Examples:
   orbit run cancel jrun-20260706-0120-2 --confirm

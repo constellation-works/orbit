@@ -1,0 +1,695 @@
+//! Serving the intake socket: the peer check, handshake, frame bounds, and
+//! one audited runtime lease operation per request. An `events` request is
+//! audited once and then streams notice pages until either side closes.
+
+use std::future::Future;
+use std::io;
+use std::sync::Arc;
+use std::time::Duration;
+
+use orbit_auth::scope::{HardLeasePermission, LeasePriorityCeiling, PrincipalClass};
+use orbit_common::security::redaction::{redact_all, redact_all_json};
+use orbit_core::runtime::task::locks::lease::{
+    self, LeasePrincipalClass, LeasePriority, LeaseTokenGrant,
+};
+use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_types::telemetry::AuditEventStatus;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{Semaphore, mpsc};
+
+use super::protocol::version_mismatch_message;
+use super::socket::LeaseIntakeSocket;
+use super::{
+    LEASE_INTAKE_MAX_FRAME_BYTES, LEASE_INTAKE_PROTOCOL_VERSION, LeaseIntakeAuthority,
+    LeaseIntakeError, LeaseIntakeHello, LeaseIntakeOperation, LeaseIntakeRequest,
+    LeaseIntakeResponse,
+};
+use crate::api::lease_notices::follow_notice_pages;
+use crate::state::DashboardState;
+
+/// How long the server waits for each frame before closing the connection.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the server waits to write a frame.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Intake connections served at once; further ones are refused as busy.
+const MAX_CONNECTIONS: usize = 16;
+
+/// Per-connection bounds.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct IntakeLimits {
+    pub(crate) max_frame_bytes: u32,
+    pub(crate) read_timeout: Duration,
+    pub(crate) write_timeout: Duration,
+    pub(crate) max_connections: usize,
+}
+
+impl Default for IntakeLimits {
+    fn default() -> Self {
+        Self {
+            max_frame_bytes: LEASE_INTAKE_MAX_FRAME_BYTES,
+            read_timeout: READ_TIMEOUT,
+            write_timeout: WRITE_TIMEOUT,
+            max_connections: MAX_CONNECTIONS,
+        }
+    }
+}
+
+struct IntakeServer {
+    state: DashboardState,
+    peer_uid: libc::uid_t,
+    limits: IntakeLimits,
+    connections: Arc<Semaphore>,
+}
+
+impl LeaseIntakeSocket {
+    /// The accept loop, to spawn on the server's Tokio runtime; it runs until
+    /// the runtime drops it. Call from inside that runtime. The socket file
+    /// stays in place for as long as `self` lives.
+    pub(crate) fn serve(
+        &mut self,
+        state: DashboardState,
+        limits: IntakeLimits,
+    ) -> Result<impl Future<Output = ()> + Send + 'static, OrbitError> {
+        let limits = IntakeLimits {
+            max_frame_bytes: limits.max_frame_bytes.min(LEASE_INTAKE_MAX_FRAME_BYTES),
+            ..limits
+        };
+        let std_listener = self.listener.take().ok_or_else(|| {
+            OrbitError::Execution("the lease intake socket is already being served".to_string())
+        })?;
+        let listener = std_listener
+            .set_nonblocking(true)
+            .and_then(|()| UnixListener::from_std(std_listener))
+            .map_err(|error| OrbitError::Io(format!("lease intake socket: {error}")))?;
+        tracing::info!(
+            socket = %self.path.display(),
+            peer_user = %self.peer.name,
+            peer_uid = self.peer.uid,
+            "serving the lease intake socket"
+        );
+        let server = Arc::new(IntakeServer {
+            state,
+            peer_uid: self.peer.uid,
+            limits,
+            connections: Arc::new(Semaphore::new(limits.max_connections)),
+        });
+        Ok(async move {
+            loop {
+                let stream = match listener.accept().await {
+                    Ok((stream, _)) => stream,
+                    Err(error) => {
+                        tracing::warn!(%error, "lease intake accept failed");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+                let server = Arc::clone(&server);
+                tokio::spawn(async move { server.connection(stream).await });
+            }
+        })
+    }
+}
+
+impl IntakeServer {
+    async fn connection(self: Arc<Self>, mut stream: UnixStream) {
+        let peer_uid = match stream.peer_cred() {
+            Ok(credentials) => credentials.uid(),
+            Err(error) => {
+                tracing::warn!(%error, "lease intake refused a connection: no peer credentials");
+                return;
+            }
+        };
+        if peer_uid != self.peer_uid {
+            tracing::warn!(
+                peer_uid,
+                allowed_uid = self.peer_uid,
+                "lease intake refused a connection from a user other than lease.intake.peer_user"
+            );
+            self.refuse(
+                &mut stream,
+                LeaseIntakeError::new(
+                    "peer_refused",
+                    format!(
+                        "uid {peer_uid} may not use the lease intake socket; only \
+                         lease.intake.peer_user may"
+                    ),
+                ),
+            )
+            .await;
+            return;
+        }
+        let Ok(_permit) = Arc::clone(&self.connections).try_acquire_owned() else {
+            tracing::warn!(peer_uid, "lease intake refused a connection: too many open");
+            self.refuse(
+                &mut stream,
+                LeaseIntakeError::new("busy", "too many lease intake connections; retry"),
+            )
+            .await;
+            return;
+        };
+        let hello: LeaseIntakeHello = match self.read(&mut stream).await {
+            Ok(Some(hello)) => hello,
+            Ok(None) => return,
+            Err(error) => {
+                self.refuse(&mut stream, error).await;
+                return;
+            }
+        };
+        if hello.protocol_version != LEASE_INTAKE_PROTOCOL_VERSION {
+            let message = version_mismatch_message(
+                "Orbit Web",
+                LEASE_INTAKE_PROTOCOL_VERSION,
+                "the lease listener",
+                hello.protocol_version,
+            );
+            tracing::warn!(peer_uid, "{message}");
+            self.refuse(
+                &mut stream,
+                LeaseIntakeError::new("protocol_version_mismatch", message),
+            )
+            .await;
+            return;
+        }
+        let accepted = LeaseIntakeHello {
+            protocol_version: LEASE_INTAKE_PROTOCOL_VERSION,
+            error: None,
+        };
+        if self.write(&mut stream, &accepted).await.is_err() {
+            return;
+        }
+        loop {
+            let request: LeaseIntakeRequest = match self.read(&mut stream).await {
+                Ok(Some(request)) => request,
+                Ok(None) => return,
+                Err(error) => {
+                    let response = LeaseIntakeResponse::Error(error);
+                    let _ = self.write(&mut stream, &response).await;
+                    return;
+                }
+            };
+            if request.operation == LeaseIntakeOperation::Events {
+                self.stream_events(&mut stream, request).await;
+                return;
+            }
+            let (response, _) = self.dispatch_blocking(request).await;
+            if self.write(&mut stream, &response).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    async fn dispatch_blocking(
+        &self,
+        request: LeaseIntakeRequest,
+    ) -> (LeaseIntakeResponse, Option<Arc<OrbitRuntime>>) {
+        let state = self.state.clone();
+        let max_frame_bytes = self.limits.max_frame_bytes;
+        tokio::task::spawn_blocking(move || dispatch(&state, request, max_frame_bytes))
+            .await
+            .unwrap_or_else(|error| {
+                let response = LeaseIntakeResponse::Error(LeaseIntakeError::new(
+                    "operation_failed",
+                    format!("lease operation panicked: {error}"),
+                ));
+                (response, None)
+            })
+    }
+
+    /// Answer an `events` request with its first page, audited like any
+    /// operation, then with each later page until the listener closes the
+    /// connection, a read fails or Orbit Web shuts down. The connection
+    /// carries nothing else afterwards.
+    async fn stream_events(&self, stream: &mut UnixStream, request: LeaseIntakeRequest) {
+        let input = match &request.input {
+            Value::Object(map) => Value::Object(map.clone()),
+            _ => json!({}),
+        };
+        let (first, runtime) = match self.dispatch_blocking(request).await {
+            (LeaseIntakeResponse::Ok { result }, Some(runtime)) => (result, runtime),
+            (response, _) => {
+                let _ = self.write(stream, &response).await;
+                return;
+            }
+        };
+        let max_frame_bytes = self.limits.max_frame_bytes;
+        let (pages, mut receiver) = mpsc::channel(2);
+        let follow = follow_notice_pages(
+            first,
+            input,
+            move |input| read_notice_page(Arc::clone(&runtime), input, max_frame_bytes),
+            pages,
+        );
+        // Ends when a write fails, which drops `receiver` and so ends `follow`.
+        let forward = async move {
+            while let Some(page) = receiver.recv().await {
+                let (response, last) = match page {
+                    Ok(result) => (LeaseIntakeResponse::Ok { result }, false),
+                    Err(error) => (LeaseIntakeResponse::Error(error), true),
+                };
+                if self.write(stream, &response).await.is_err() || last {
+                    return;
+                }
+            }
+        };
+        tokio::join!(follow, forward);
+    }
+
+    /// Send a refusal as the server's hello and close.
+    async fn refuse(&self, stream: &mut UnixStream, error: LeaseIntakeError) {
+        let refusal = LeaseIntakeHello {
+            protocol_version: LEASE_INTAKE_PROTOCOL_VERSION,
+            error: Some(error),
+        };
+        let _ = self.write(stream, &refusal).await;
+    }
+
+    /// Read one frame. `Ok(None)` is a clean close before a frame began.
+    async fn read<T: for<'de> Deserialize<'de>>(
+        &self,
+        stream: &mut UnixStream,
+    ) -> Result<Option<T>, LeaseIntakeError> {
+        let limits = self.limits;
+        let frame = tokio::time::timeout(limits.read_timeout, async {
+            let mut header = [0u8; 4];
+            match stream.read_exact(&mut header).await {
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+                Err(error) => {
+                    return Err(LeaseIntakeError::new("io", format!("read failed: {error}")));
+                }
+            }
+            let declared = u32::from_be_bytes(header);
+            if declared > limits.max_frame_bytes {
+                return Err(LeaseIntakeError::new(
+                    "frame_too_large",
+                    format!(
+                        "a {declared}-byte frame exceeds the {}-byte limit",
+                        limits.max_frame_bytes
+                    ),
+                ));
+            }
+            let mut body = vec![0u8; declared as usize];
+            stream
+                .read_exact(&mut body)
+                .await
+                .map_err(|error| LeaseIntakeError::new("io", format!("read failed: {error}")))?;
+            Ok(Some(body))
+        })
+        .await
+        .map_err(|_| {
+            LeaseIntakeError::new(
+                "timeout",
+                format!(
+                    "no complete frame within {} seconds",
+                    limits.read_timeout.as_secs()
+                ),
+            )
+        })??;
+        let Some(body) = frame else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&body).map(Some).map_err(|error| {
+            LeaseIntakeError::new("malformed", format!("malformed frame: {error}"))
+        })
+    }
+
+    async fn write(&self, stream: &mut UnixStream, frame: &impl Serialize) -> Result<(), ()> {
+        let Ok(body) = serde_json::to_vec(frame) else {
+            return Err(());
+        };
+        // Check before writing even the header, including hello and error frames.
+        if body.len() > self.limits.max_frame_bytes as usize {
+            return Err(());
+        }
+        let Ok(declared) = u32::try_from(body.len()) else {
+            return Err(());
+        };
+        let written = tokio::time::timeout(self.limits.write_timeout, async {
+            stream.write_all(&declared.to_be_bytes()).await?;
+            stream.write_all(&body).await?;
+            stream.flush().await
+        })
+        .await;
+        match written {
+            Ok(Ok(())) => Ok(()),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Run one operation and audit it, returning the workspace runtime it used.
+fn dispatch(
+    state: &DashboardState,
+    request: LeaseIntakeRequest,
+    max_frame_bytes: u32,
+) -> (LeaseIntakeResponse, Option<Arc<OrbitRuntime>>) {
+    let LeaseIntakeRequest {
+        operation,
+        workspace,
+        authority,
+        input,
+    } = request;
+    let runtime = workspace_runtime(state, &workspace);
+    let outcome = run_operation(
+        runtime.as_ref(),
+        operation,
+        &workspace,
+        &authority,
+        input,
+        max_frame_bytes,
+    );
+    let lease_id = outcome
+        .as_ref()
+        .ok()
+        .and_then(|result| result.pointer("/lease/lease_id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let response = match outcome {
+        Ok(result) => LeaseIntakeResponse::Ok { result },
+        Err(mut error) => {
+            error.message = redact_all(&error.message);
+            LeaseIntakeResponse::Error(error)
+        }
+    };
+    let response =
+        bounded_operation_response(runtime.as_deref(), operation, response, max_frame_bytes);
+    let (status, outcome_label) = match &response {
+        LeaseIntakeResponse::Ok { result }
+            if result.get("granted") == Some(&Value::Bool(false)) =>
+        {
+            (AuditEventStatus::Denied, "refused")
+        }
+        LeaseIntakeResponse::Ok { .. } => (AuditEventStatus::Success, "ok"),
+        LeaseIntakeResponse::Error(error)
+            if matches!(error.code.as_str(), "scope_refused" | "lease_not_held") =>
+        {
+            (AuditEventStatus::Denied, "refused")
+        }
+        LeaseIntakeResponse::Error(_) => (AuditEventStatus::Failure, "error"),
+    };
+    let mut payload = json!({
+        "operation": operation.as_str(),
+        "workspace": workspace,
+        "principal": authority.scope.principal,
+        "principal_class": authority.scope.principal_class,
+        "token_id": authority.token_id,
+        "client_address": authority.client_address,
+        "outcome": outcome_label,
+        "lease_id": lease_id,
+    });
+    if let LeaseIntakeResponse::Error(error) = &response {
+        payload["error_code"] = json!(error.code);
+        payload["error"] = json!(error.message);
+    }
+    match &runtime {
+        Some(runtime) => {
+            if let Err(error) = lease::record_lease_intake_audit(
+                runtime,
+                operation.as_str(),
+                lease_id.as_deref(),
+                status,
+                payload,
+            ) {
+                tracing::error!(%error, "lease intake could not write its audit row");
+            }
+        }
+        None => {
+            tracing::warn!(payload = %redact_all_json(payload), "lease intake operation for an unknown workspace")
+        }
+    }
+    (response, runtime)
+}
+
+/// Replace an oversized response before auditing or sending it. A notice
+/// page is shortened instead. The runtime already sizes a request's or
+/// expansion's answer to the frame before writing anything, so releasing an
+/// oversized new grant here is only a backstop: it must still happen before
+/// its caller can observe the size failure.
+fn bounded_operation_response(
+    runtime: Option<&OrbitRuntime>,
+    operation: LeaseIntakeOperation,
+    response: LeaseIntakeResponse,
+    max_frame_bytes: u32,
+) -> LeaseIntakeResponse {
+    let body = match serde_json::to_vec(&response) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(%error, "lease intake could not encode its response");
+            return LeaseIntakeResponse::Error(LeaseIntakeError::new(
+                "operation_failed",
+                "could not encode the lease intake response",
+            ));
+        }
+    };
+    if body.len() <= max_frame_bytes as usize {
+        return response;
+    }
+    if matches!(
+        operation,
+        LeaseIntakeOperation::Notices | LeaseIntakeOperation::Events
+    ) && let LeaseIntakeResponse::Ok { result } = response
+    {
+        return match fit_notice_page(result, max_frame_bytes) {
+            Ok(result) => LeaseIntakeResponse::Ok { result },
+            Err(error) => LeaseIntakeResponse::Error(error),
+        };
+    }
+    if operation == LeaseIntakeOperation::Request
+        && let LeaseIntakeResponse::Ok { result } = &response
+        && result.get("granted") == Some(&Value::Bool(true))
+        && let Some(lease_id) = result.pointer("/lease/lease_id").and_then(Value::as_str)
+        && let Some(runtime) = runtime
+        && let Err(error) = lease::release(runtime, json!({"lease_id": lease_id}), None, None)
+    {
+        tracing::error!(%error, lease_id, "lease intake could not release an oversized grant");
+        return LeaseIntakeResponse::Error(LeaseIntakeError::new(
+            "operation_failed",
+            "could not release a lease whose intake response exceeded the frame limit",
+        ));
+    }
+    LeaseIntakeResponse::Error(LeaseIntakeError::new(
+        "frame_too_large",
+        format!(
+            "the {} response of {} bytes exceeds the {max_frame_bytes}-byte intake limit",
+            operation.as_str(),
+            body.len(),
+        ),
+    ))
+}
+
+/// A later page of an `events` stream, unaudited: the stream was audited
+/// when it opened.
+async fn read_notice_page(
+    runtime: Arc<OrbitRuntime>,
+    input: Value,
+    max_frame_bytes: u32,
+) -> Result<Value, LeaseIntakeError> {
+    let page = tokio::task::spawn_blocking(move || lease::notices(&runtime, input))
+        .await
+        .map_err(|error| {
+            LeaseIntakeError::new(
+                "operation_failed",
+                format!("lease notice read panicked: {error}"),
+            )
+        })?
+        .map_err(operation_error)?;
+    fit_notice_page(page, max_frame_bytes)
+}
+
+/// Shorten a notice page whose response frame would exceed `max_frame_bytes`
+/// to a prefix that fits, with the cursor at its last notice, so a client
+/// resuming from the cursor misses nothing. A single notice too large for a
+/// frame is refused as `frame_too_large`.
+fn fit_notice_page(mut page: Value, max_frame_bytes: u32) -> Result<Value, LeaseIntakeError> {
+    let max = max_frame_bytes as usize;
+    loop {
+        let size = serde_json::to_vec(&LeaseIntakeResponse::Ok {
+            result: page.clone(),
+        })
+        .map_err(|error| {
+            tracing::error!(%error, "lease intake could not encode a notice page");
+            LeaseIntakeError::new("operation_failed", "could not encode a lease notice page")
+        })?
+        .len();
+        if size <= max {
+            return Ok(page);
+        }
+        let Some(notices) = page
+            .get_mut("notices")
+            .and_then(Value::as_array_mut)
+            .filter(|notices| notices.len() > 1)
+        else {
+            return Err(LeaseIntakeError::new(
+                "frame_too_large",
+                format!("a lease notice of {size} bytes exceeds the {max}-byte intake limit"),
+            ));
+        };
+        let keep = (notices.len() * max / size).clamp(1, notices.len() - 1);
+        notices.truncate(keep);
+        let cursor = notices
+            .last()
+            .and_then(|notice| notice.get("seq"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        page["cursor"] = cursor;
+    }
+}
+
+/// The intake code for a failed runtime operation.
+fn operation_error(error: OrbitError) -> LeaseIntakeError {
+    let code = match error {
+        OrbitError::InvalidInput(_) => "invalid_input",
+        _ => "operation_failed",
+    };
+    LeaseIntakeError::new(code, error.to_string())
+}
+
+/// The runtime for the unique registered workspace whose id or name is
+/// `selector`; ambiguous selectors are refused.
+fn workspace_runtime(state: &DashboardState, selector: &str) -> Option<Arc<OrbitRuntime>> {
+    let pinned = state.pin();
+    let entries = pinned.entries();
+    let mut matches = entries
+        .iter()
+        .filter(|entry| entry.id == selector || entry.name == selector);
+    let entry = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    let id = entry.id.clone();
+    match pinned.runtime_for(&id) {
+        Ok(runtime) => Some(runtime),
+        Err(rejection) => {
+            tracing::warn!(workspace = %id, ?rejection, "lease intake could not open a workspace");
+            None
+        }
+    }
+}
+
+fn run_operation(
+    runtime: Option<&Arc<OrbitRuntime>>,
+    operation: LeaseIntakeOperation,
+    workspace: &str,
+    authority: &LeaseIntakeAuthority,
+    input: Value,
+    max_frame_bytes: u32,
+) -> Result<Value, LeaseIntakeError> {
+    let scope = authority
+        .scope
+        .clone()
+        .validated()
+        .map_err(|error| LeaseIntakeError::new("invalid_authority", error.to_string()))?;
+    if authority.token_id.trim().is_empty() {
+        return Err(LeaseIntakeError::new(
+            "invalid_authority",
+            "the authority names no token id",
+        ));
+    }
+    scope
+        .permits(workspace, operation.verb())
+        .map_err(|refusal| {
+            LeaseIntakeError::new(
+                "scope_refused",
+                format!(
+                    "the lease token does not allow `{}` in workspace `{workspace}` ({refusal})",
+                    operation.verb().as_str()
+                ),
+            )
+        })?;
+    let Some(runtime) = runtime else {
+        return Err(LeaseIntakeError::new(
+            "unknown_workspace",
+            format!("no active workspace `{workspace}` on this owner"),
+        ));
+    };
+    let mut input = match input {
+        Value::Null => json!({}),
+        Value::Object(map) => Value::Object(map),
+        _ => {
+            return Err(LeaseIntakeError::new(
+                "invalid_input",
+                "lease input must be a JSON object",
+            ));
+        }
+    };
+    if let Some(declared) = input.get("principal")
+        && declared.as_str() != Some(scope.principal.as_str())
+    {
+        return Err(LeaseIntakeError::new(
+            "invalid_input",
+            "the input's principal must be the token's principal",
+        ));
+    }
+    input["principal"] = json!(scope.principal);
+    let grant = LeaseTokenGrant {
+        principal: scope.principal.clone(),
+        principal_class: match scope.principal_class {
+            PrincipalClass::Human => LeasePrincipalClass::Human,
+            PrincipalClass::Agent => LeasePrincipalClass::Agent,
+        },
+        token_id: authority.token_id.clone(),
+        max_priority: match scope.max_priority {
+            LeasePriorityCeiling::Low => LeasePriority::Low,
+            LeasePriorityCeiling::Normal => LeasePriority::Normal,
+            LeasePriorityCeiling::High => LeasePriority::High,
+        },
+        hard_allowed: scope.hard == HardLeasePermission::Allow,
+        client_address: authority.client_address.clone(),
+        max_response_bytes: max_frame_bytes as usize,
+    };
+    let result = match operation {
+        LeaseIntakeOperation::Request => lease::request_with_token(runtime, input, &grant),
+        LeaseIntakeOperation::Renew => {
+            ensure_principal_holds(runtime, &input, &scope.principal)?;
+            lease::renew_with_token(runtime, input, &grant)
+        }
+        LeaseIntakeOperation::Expand => {
+            ensure_principal_holds(runtime, &input, &scope.principal)?;
+            lease::expand_with_token(runtime, input, &grant)
+        }
+        LeaseIntakeOperation::Release => {
+            ensure_principal_holds(runtime, &input, &scope.principal)?;
+            lease::release(runtime, input, None, None)
+        }
+        LeaseIntakeOperation::Show => lease::show(runtime, input),
+        LeaseIntakeOperation::List => lease::list(runtime),
+        LeaseIntakeOperation::Check => lease::check(runtime, input),
+        LeaseIntakeOperation::Notices | LeaseIntakeOperation::Events => {
+            lease::notices(runtime, input)
+        }
+    };
+    result.map_err(operation_error)
+}
+
+/// A token renews and releases only leases its own principal holds (design
+/// §7.2): it authorizes leases and nothing else, so it cannot end or extend a
+/// teammate's lease the way the operator session can. An unknown lease and
+/// another principal's lease get the same refusal, so the answer says nothing
+/// about who holds it. Principals never change on a lease, so checking before
+/// the write cannot race it.
+fn ensure_principal_holds(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    principal: &str,
+) -> Result<(), LeaseIntakeError> {
+    let not_held = || {
+        LeaseIntakeError::new(
+            "lease_not_held",
+            "no such lease is held by this token's principal in this workspace",
+        )
+    };
+    match lease::show(runtime, input.clone()) {
+        Ok(found)
+            if found.pointer("/lease/principal").and_then(Value::as_str) == Some(principal) =>
+        {
+            Ok(())
+        }
+        Ok(_) | Err(OrbitError::InvalidInput(_)) => Err(not_held()),
+        Err(error) => Err(LeaseIntakeError::new("operation_failed", error.to_string())),
+    }
+}

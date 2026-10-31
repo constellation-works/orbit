@@ -21,6 +21,10 @@ pub const ROUTINE_JOB_TARGET_PREFIX: &str = "job:";
 /// so activities are fired by wrapping them in a one-step job in the same
 /// source workspace.
 pub const ROUTINE_ACTIVITY_TARGET_PREFIX: &str = "activity:";
+/// Prefix reserved for script references. A routine never names a script
+/// directly: the script runs as a step of a job the routine targets, so
+/// the scheduler gains no execution surface of its own.
+pub const ROUTINE_SCRIPT_TARGET_PREFIX: &str = "script:";
 
 /// A parsed, validated routine definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,10 +70,36 @@ pub struct RoutineTrigger {
     pub cron: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deliveries_landed: Option<super::automation::DeliveryTrigger>,
+    /// A CEL predicate over workspace state; the routine's job runs once on
+    /// each subject's false-to-true edge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<super::automation::ConditionTrigger>,
+    /// An optional CEL guard beside `cron`, `deliveries_landed` or `state`:
+    /// a due fire waits while it is false or unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+    /// What a false or unknown guard does to a due cron slot. Cron only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_miss: Option<super::automation::ConditionGuardMiss>,
     /// What to do about scheduled slots that fell in a gap. Defaults to
     /// `skip` (wait for the next natural slot).
     #[serde(default)]
     pub missed_run: MissedRunPolicy,
+}
+
+impl RoutineTrigger {
+    /// Whether this is a cron trigger: no delivery, state or condition form.
+    pub fn is_cron(&self) -> bool {
+        self.deliveries_landed.is_none() && self.state.is_none() && self.condition.is_none()
+    }
+
+    /// The `when:` guard beside the typed kind, if any.
+    pub fn guard(&self) -> super::automation::ScheduleGuard {
+        super::automation::ScheduleGuard {
+            when: self.when.clone(),
+            guard_miss: self.guard_miss,
+        }
+    }
 }
 
 /// Missed-fire policy for gaps (sleep, downtime) between sweeps.
@@ -122,6 +152,14 @@ impl RoutineTarget {
             return Err(format!(
                 "target 'activity:{}' is not dispatchable in routines v1; wrap the \
                  activity in a one-step job in the same workspace and reference it \
+                 as 'job:<name>'",
+                name.trim()
+            ));
+        }
+        if let Some(name) = value.strip_prefix(ROUTINE_SCRIPT_TARGET_PREFIX) {
+            return Err(format!(
+                "target 'script:{}' is not dispatchable in routines; wrap the \
+                 script in a one-step job in the same workspace and reference it \
                  as 'job:<name>'",
                 name.trim()
             ));
@@ -236,6 +274,26 @@ impl RoutineDefinition {
                 self.name
             )));
         }
+        if let Some(condition) = &self.trigger.condition {
+            condition.validate("trigger.condition")?;
+            if !self.trigger.cron.is_empty()
+                || self.trigger.deliveries_landed.is_some()
+                || self.trigger.state.is_some()
+            {
+                return Err(WorkflowError::Invalid(
+                    "trigger.condition: a condition routine takes exactly one trigger".into(),
+                ));
+            }
+            if !self.trigger.guard().is_empty() {
+                return Err(WorkflowError::Invalid(
+                    "trigger.when: a condition takes no guard; its own `when` is the expression"
+                        .into(),
+                ));
+            }
+        }
+        self.trigger
+            .guard()
+            .validate("trigger", self.trigger.is_cron())?;
         if let Some(state) = &self.trigger.state {
             state.validate()?;
             if !self.trigger.cron.is_empty()
@@ -254,10 +312,7 @@ impl RoutineDefinition {
                 ));
             }
         }
-        if self.trigger.cron.trim().is_empty()
-            && self.trigger.deliveries_landed.is_none()
-            && self.trigger.state.is_none()
-        {
+        if self.trigger.cron.trim().is_empty() && self.trigger.is_cron() {
             return Err(WorkflowError::Invalid(format!(
                 "routine '{}' trigger.cron must not be empty",
                 self.name

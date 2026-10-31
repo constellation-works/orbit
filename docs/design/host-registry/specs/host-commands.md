@@ -9,6 +9,7 @@ feature: host-registry
 tags: [host-registry, federated-mcp, distributed-drain, spec]
 related_features: [host-registry, federated-mcp, distributed-drain]
 related_artifacts: [ORB-14448, ORB-14449, ORB-14451, ORB-14447, ORB-14261, ORB-12725]
+last_updated: 2026-10-26
 ---
 
 # Spec: Host commands
@@ -171,9 +172,10 @@ when the remote reports it; `--no-probe` uses the stored snapshot.
   marks), machine_id, ssh, prefix, reachable, version, protocol, workspaces and error.
   `--format json` and `--json` print the object `{host_file, legacy, hosts}`, and
   `--format ndjson` prints one host per line. A while-legacy notice goes to stderr.
-- `reachable` is whether the host answered, in every form. A host that answers with another
-  identity is reachable and carries `host_identity_mismatch` as its error. `error.message`
-  does not repeat `error.code`.
+- With a probe, `reachable` reports whether the host answered. With `--no-probe`, remote rows
+  have `reachable: null`; the local row stays `reachable: true`. A host that answers with
+  another identity is reachable and carries `host_identity_mismatch` as its error.
+  `error.message` does not repeat `error.code`.
 - Exit status is 0 when the file loads, whatever the hosts' reachability, because the
   command is a report. `orbit doctor` is the gate.
 
@@ -265,9 +267,14 @@ The view is Settings › Hosts (`#config/hosts`).
   The dashboard's periodic refresh lists with `probe=false` and keeps each row's last probed
   fields, so identity discovery is not repeated in the background. A row marked not probed has not been
   asked since the view opened.
-- While the view is open, each refresh separately reads host resources and each workspace's
-  drain capacity through `/api/on/<host>/host/resources` and
-  `/api/on/<host>/workflows/auto/readiness`. The serving host is answered locally. The Health
+- While the view is open, each refresh reads host resources and a single aggregate of every workspace's
+  drain state through `/api/on/<host>/host/resources` and
+  `/api/on/<host>/fleet/drains`. The selected host shares the topbar's in-flight
+  resource read or its result received within the last second; switching hosts clears it.
+  Other hosts read resources independently, and every panel refresh rereads drain state.
+  A missing workspace row shows drain unavailable rather than idle. Older remote
+  hosts without the aggregate or its independent drain/pull fields retain the
+  per-workspace readiness compatibility path until they are upgraded. The serving host is answered locally. The Health
   column shows load, memory, disk, drain state and the throttle verdict; Show switches the
   dashboard to that host. Unreachable or unprobed hosts are not asked for health readings,
   and a failed reading is shown without suppressing other hosts. These readings remain view
@@ -365,3 +372,16 @@ unrelated to this file.
 
 Specified by opus during on-call ORB-14441 at Daniel's direction (2026-10-07), for
 implementation in [ORB-14448] and [ORB-14451] (dashboard).
+
+## Task References
+
+- [DANI-10433] identified replica worktree GC querying the wrong host (historical incident citation).
+- [ORB-12725] moved local machine identity into global config and removed owner display-name projections.
+- [ORB-14261] added follower handoff repair after base conflicts.
+- [ORB-14441] coordinated the operator-approved host-registry specifications and delivery.
+- [ORB-14447] fixed replica GC lookup of locally owned task IDs.
+- [ORB-14448] implemented the host file and orbit host operations.
+- [ORB-14449] implemented task-prefix routing and --host selection.
+- [ORB-14451] implemented dashboard Settings › Hosts through shared registry operations.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

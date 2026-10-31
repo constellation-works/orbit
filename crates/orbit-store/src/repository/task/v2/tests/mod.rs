@@ -53,6 +53,8 @@ pub(super) fn bound_store_at(
 pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskCreateParams {
+        granted_tools: Vec::new(),
+        requires_labels: Vec::new(),
         actor: "codex:gpt-5.5".to_string(),
         parent_id: None,
         title: title.to_string(),
@@ -85,7 +87,9 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
+        created_by_model: None,
         origin: None,
+        rule_fingerprint: None,
         comments: vec![TaskComment {
             at: now,
             by: "daniel".to_string(),
@@ -93,6 +97,8 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
             operation_id: None,
         }],
         context_creation: Vec::new(),
+        creation_decision: None,
+        not_before: None,
     }
 }
 

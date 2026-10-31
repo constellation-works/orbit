@@ -11,8 +11,8 @@ use orbit_types::task::{
 };
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
-    DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
-    TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, ExploreBriefAdmission, JobRun, JobRunStartOutcome,
+    JobRunState, NamespaceProbe, PipelineState, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -26,10 +26,11 @@ use crate::activity_job::{
 
 use super::super::RuntimeHost;
 use super::super::{
-    ClaimExecutionContext, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, HandoffLandingContext, HandoffLandingUpdate,
-    PluginBrokerHandle, PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
-    RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
+    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
+    HandoffLandingContext, HandoffLandingUpdate, PluginBrokerHandle, PluginBrokerRun,
+    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
+    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
     StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
@@ -59,6 +60,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         request: &orbit_types::workflow::automation::DirectLandingRequest,
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::record_direct_landing_intent(self, request)
+    }
+    fn record_direct_landing(
+        &self,
+        request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_direct_landing(self, request)
     }
     fn accepted_automation_coverage(
         &self,
@@ -135,6 +142,15 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
         NullRuntimeHost::get_task_history(self, task_id)
     }
+    fn get_dependency_task(&self, task_id: &str) -> Result<Option<Task>, OrbitError> {
+        NullRuntimeHost::get_dependency_task(self, task_id)
+    }
+    fn get_dependency_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        NullRuntimeHost::get_dependency_history(self, task_id)
+    }
     fn list_tasks_filtered(
         &self,
         status: Option<TaskStatus>,
@@ -181,6 +197,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::apply_task_automation_update(self, task_id, update)
+    }
+    fn reject_invalid_finding(
+        &self,
+        report: &orbit_types::workflow::handoff::FindingInvalidReport,
+        base_branch: &str,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::reject_invalid_finding(self, report, base_branch)
     }
     fn widen_task_context_files(
         &self,
@@ -253,6 +276,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         NullRuntimeHost::admit_pr_base_update(self, task_ids, request)
     }
+    fn admit_ci_rerun(
+        &self,
+        task_ids: &[String],
+        handoff_id: Option<&str>,
+        plan: &orbit_types::workflow::CiRerunPlan,
+    ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
+        NullRuntimeHost::admit_ci_rerun(self, task_ids, handoff_id, plan)
+    }
     fn admit_pr_infrastructure(
         &self,
         execution: &str,
@@ -303,6 +334,21 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     }
     fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
         NullRuntimeHost::record_handoff_landing(self, update)
+    }
+    fn record_handoff_landing_wait(
+        &self,
+        handoff_id: &str,
+        reason: &str,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_handoff_landing_wait(self, handoff_id, reason)
+    }
+    fn record_handoff_landing_history(
+        &self,
+        handoff_id: &str,
+        event: &str,
+        note: &str,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_handoff_landing_history(self, handoff_id, event, note)
     }
     fn local_machine_id(&self) -> Option<String> {
         NullRuntimeHost::local_machine_id(self)
@@ -361,6 +407,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     }
     fn review_baseline_commands(&self) -> Vec<String> {
         NullRuntimeHost::review_baseline_commands(self)
+    }
+    fn workspace_base_branch(&self) -> String {
+        NullRuntimeHost::workspace_base_branch(self)
     }
     fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
         NullRuntimeHost::validation_gates(self)
@@ -514,6 +563,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
         NullRuntimeHost::resolve_cli_executor(self, provider)
     }
+    fn run_script_step(
+        &self,
+        request: &crate::context::ScriptStepRequest,
+    ) -> crate::context::ScriptStepRun {
+        NullRuntimeHost::run_script_step(self, request)
+    }
     fn resolve_local_shell_executor(
         &self,
         executor: &str,
@@ -563,6 +618,22 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         NullRuntimeHost::tag_instructions_for_activity(self, run_id, activity_name, input)
+    }
+    fn explore_brief_for_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Option<ExploreBriefAdmission> {
+        NullRuntimeHost::explore_brief_for_activity(self, run_id, activity_name, input)
+    }
+    fn experiment_overlays_for_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
+        NullRuntimeHost::experiment_overlays_for_activity(self, run_id, activity_name, input)
     }
     fn acquire_deferred_footprint(
         &self,
@@ -630,6 +701,15 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
             output,
         )
     }
+    fn completion_observation_admission(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+    ) -> Result<CompletionObservationAdmission, OrbitError> {
+        NullRuntimeHost::completion_observation_admission(self, run_id, task_id, step_id)
+    }
+
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
         NullRuntimeHost::final_recovery_log_tail(self, run_id)
     }
@@ -710,6 +790,17 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
             proc_allowed_programs,
         )
     }
+    fn begin_agent_execution(
+        &self,
+        run_id: &str,
+        activity_id: &str,
+        provider: &str,
+        model: Option<&str>,
+        identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<Option<i64>, OrbitError> {
+        NullRuntimeHost::begin_agent_execution(self, run_id, activity_id, provider, model, identity)
+    }
+
     fn persist_invocation_trace(
         &self,
         job_run_id: &str,

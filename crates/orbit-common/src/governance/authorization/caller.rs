@@ -3,7 +3,9 @@ use std::fmt::{Display, Formatter};
 
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
-use super::catalog::{GovernedOperation, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY};
+use super::catalog::{
+    GovernedOperation, PLUGIN_TOOL_AGENT_CALLABLE, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY,
+};
 use super::env::{OPERATOR_OVERRIDE_ENV, agent_declared_in_env, env_truthy, interactive_terminal};
 
 /// Where a caller's capabilities came from.
@@ -159,12 +161,14 @@ impl CallerCapabilities {
     /// Resolve a caller for one governed operation.
     ///
     /// An unmanaged local CLI caller gains agent identity only at the plugin
-    /// tool chokepoint. Both plugin rows use that identity; the mutating row
-    /// still requires operator or runner and therefore denies this caller.
+    /// tool chokepoint. All plugin rows use that identity; only read-only
+    /// tools and consented agent-callable mutations admit this caller.
     pub fn resolve_for_operation(envelope: &CallerEnvelope, operation: &GovernedOperation) -> Self {
         let mut caller = Self::resolve(envelope);
         if caller.provenance == CallerProvenance::LocalCli
-            && (operation.id == PLUGIN_TOOL_READ_ONLY.id || operation.id == PLUGIN_TOOL_MUTATING.id)
+            && (operation.id == PLUGIN_TOOL_READ_ONLY.id
+                || operation.id == PLUGIN_TOOL_MUTATING.id
+                || operation.id == PLUGIN_TOOL_AGENT_CALLABLE.id)
         {
             caller.grants.insert(McpCapability::Agent);
         }

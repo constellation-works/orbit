@@ -7,6 +7,42 @@
 
 use orbit_tools::github_cli::strip_ansi_sequences;
 
+/// File names cited as `path:line[:column]` in emitted failed-step output.
+///
+/// This deliberately has no extension list: lockfiles and generated files
+/// can carry diagnostics too. Callers must validate these untrusted tokens
+/// as repository paths and check that they name blobs at the observed head.
+pub(crate) fn cited_location_paths(log: &str) -> std::collections::BTreeSet<String> {
+    let mut paths = std::collections::BTreeSet::new();
+    for (kind, line) in classify_log_lines(log) {
+        if matches!(
+            kind,
+            LineKind::RunCommand | LineKind::CommandBody | LineKind::ParamDump | LineKind::EndGroup
+        ) {
+            continue;
+        }
+        let payload = strip_ansi_sequences(log_payload(line));
+        for token in payload.split_whitespace() {
+            let token = token.trim_start_matches(['\'', '"', '`', '(', '[']);
+            let Some((path, location)) = token.split_once(':') else {
+                continue;
+            };
+            let line_number = location
+                .split(':')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches([',', ')', ']', '\'', '"', '`']);
+            if !path.is_empty()
+                && !line_number.is_empty()
+                && line_number.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                paths.insert(path.strip_prefix("./").unwrap_or(path).to_string());
+            }
+        }
+    }
+    paths
+}
+
 /// Lines a runner emits when something breaks.
 pub const ERROR_MARKERS: &[&str] = &[
     "error",
@@ -29,13 +65,19 @@ pub const ERROR_MARKERS: &[&str] = &[
 /// Preference order, so a generic wrapper cannot fragment one evidenced
 /// failure or collapse distinct ones:
 /// 1. A coded compiler diagnostic (`error[E0062]: …`).
-/// 2. A concrete test/panic identity (`thread '…' panicked`, `test … FAILED`,
-///    nextest `FAIL […]`, a name listed after libtest `failures:`).
+/// 2. A concrete test/panic identity: first the harness verdict naming the
+///    failing test (`test … FAILED`, nextest `FAIL […]`, a name listed after
+///    libtest `failures:`), then that test's captured `thread '…' panicked`
+///    output, which is detail of the same failure rather than its identity.
 /// 3. A specific `##[error]` annotation.
-/// 4. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
-/// 5. The nearest unannotated content line with letters or digits before a generic trailer.
-/// 6. The failing step name, labelled as a fallback — used when the excerpt
+/// 4. A labelled diagnostic (`error[vulnerability]: …`).
+/// 5. Any remaining marker diagnostic (compiler `error:`, `assertion failed`).
+/// 6. The nearest unannotated content line with letters or digits before a generic trailer.
+/// 7. The failing step name, labelled as a fallback — used when the excerpt
 ///    only has wrappers, bookkeeping, or assertion payload.
+///
+/// Within one rank (and within the two concrete tiers) diagnostics prefer
+/// the last one before the process-exit trailer.
 ///
 /// Generic trailers include GitHub's process-completed / `The process '…'
 /// failed with exit code` / action-failed annotations, cargo's
@@ -66,17 +108,49 @@ pub fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
     {
         return None;
     }
+    // Cleanup output after the failing process exited is not its cause.
+    let end = lines
+        .iter()
+        .rposition(|(kind, line)| {
+            *kind == LineKind::GenericTrailer && {
+                let payload = signature_payload(line);
+                is_generic_runner_completion(&payload) || is_generic_process_failed(&payload)
+            }
+        })
+        .map_or(lines.len(), |index| index + 1);
+    let lines = &lines[..end];
+    if let Some(index) = lines
+        .iter()
+        .rposition(|(kind, _)| *kind == LineKind::CompilerDiagnostic)
+    {
+        return Some(index);
+    }
+    // A harness verdict names the failing test; a `thread '…' panicked` line
+    // below it is that same test's captured output. Preferring the verdict
+    // keeps one stable identity when both are emitted (for example nextest's
+    // `FAIL […]` line followed by the test's panic detail).
+    if let Some(index) = lines
+        .iter()
+        .rposition(|(kind, line)| *kind == LineKind::ConcreteDiagnostic && !is_captured_panic(line))
+    {
+        return Some(index);
+    }
+    if let Some(index) = lines
+        .iter()
+        .rposition(|(kind, _)| *kind == LineKind::ConcreteDiagnostic)
+    {
+        return Some(index);
+    }
     for wanted in [
-        LineKind::CompilerDiagnostic,
-        LineKind::ConcreteDiagnostic,
         LineKind::ErrorAnnotated,
+        LineKind::LabelledDiagnostic,
         LineKind::Marker,
     ] {
-        if let Some(index) = lines.iter().position(|(kind, _)| *kind == wanted) {
+        if let Some(index) = lines.iter().rposition(|(kind, _)| *kind == wanted) {
             return Some(index);
         }
     }
-    for (index, (kind, _)) in lines.iter().enumerate() {
+    for (index, (kind, _)) in lines.iter().enumerate().rev() {
         if *kind == LineKind::GenericTrailer
             && let Some(previous) = lines[..index]
                 .iter()
@@ -130,6 +204,20 @@ fn is_compiler_diagnostic(payload: &str) -> bool {
     code.len() == 4 && code.bytes().all(|byte| byte.is_ascii_digit()) && !message.trim().is_empty()
 }
 
+fn is_labelled_diagnostic(payload: &str) -> bool {
+    let Some((label, message)) = payload
+        .strip_prefix("error[")
+        .and_then(|rest| rest.split_once("]:"))
+    else {
+        return false;
+    };
+    label.bytes().any(|byte| byte.is_ascii_alphabetic())
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':'))
+        && !message.trim().is_empty()
+}
+
 fn is_cargo_status(payload: &str) -> bool {
     [
         "compiling ",
@@ -164,6 +252,8 @@ pub enum LineKind {
     CargoStatus,
     ConcreteDiagnostic,
     ErrorAnnotated,
+    /// A line-initial named diagnostic, for example cargo-deny's vulnerability.
+    LabelledDiagnostic,
     GenericTrailer,
     Marker,
     Bookkeeping,
@@ -232,6 +322,8 @@ pub fn classify_log_lines(log: &str) -> Vec<(LineKind, &str)> {
                 LineKind::Bookkeeping
             } else if is_concrete_diagnostic(&payload, lowered, after_failures_header) {
                 LineKind::ConcreteDiagnostic
+            } else if is_labelled_diagnostic(lowered) {
+                LineKind::LabelledDiagnostic
             } else if is_error_marker_line(lowered) && !is_assertion_payload(lowered) {
                 LineKind::Marker
             } else {
@@ -332,6 +424,16 @@ fn is_panic_line(lowered: &str) -> bool {
         && (lowered.contains("thread '") || lowered.contains("thread \""))
 }
 
+/// Captured `thread '…' panicked` output from the failing test itself, as
+/// opposed to the harness verdict lines that name that test. Partitioning
+/// concrete diagnostics this way is exact: a verdict line never contains a
+/// panic attribution, and a panic line always contains spaces, so it never
+/// matches the verdict shapes (`FAIL [`, `test … ... FAILED`, or a bare
+/// listed failure name).
+fn is_captured_panic(line: &str) -> bool {
+    is_panic_line(&signature_payload(line))
+}
+
 fn is_failed_test_result(lowered: &str) -> bool {
     let Some(rest) = lowered.strip_prefix("test ") else {
         return false;
@@ -421,7 +523,22 @@ pub fn is_error_marker_line(lowered: &str) -> bool {
     if is_libtest_non_diagnostic(lowered) {
         return false;
     }
-    ERROR_MARKERS.iter().any(|marker| lowered.contains(marker))
+    ERROR_MARKERS.iter().any(|marker| {
+        lowered.match_indices(marker).any(|(start, _)| {
+            !lowered[..start]
+                .chars()
+                .next_back()
+                .is_some_and(is_identifier_or_path_char)
+                && !lowered[start + marker.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(is_identifier_or_path_char)
+        })
+    })
+}
+
+fn is_identifier_or_path_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\')
 }
 
 fn is_libtest_non_diagnostic(lowered: &str) -> bool {
@@ -429,6 +546,33 @@ fn is_libtest_non_diagnostic(lowered: &str) -> bool {
     matches!(trimmed, "failures:" | "errors:" | "successes:")
         || trimmed.starts_with("test result:")
         || is_successful_test_result(trimmed)
+        || is_tap_non_diagnostic(trimmed)
+}
+
+/// TAP captions and successful result lines are status output even when their
+/// test names contain words such as `failed` or `error`.
+fn is_tap_non_diagnostic(lowered: &str) -> bool {
+    if lowered.starts_with("# subtest:") {
+        return true;
+    }
+
+    let Some(rest) = lowered.strip_prefix("ok ") else {
+        return false;
+    };
+    let Some((number, result)) = rest.split_once(' ') else {
+        return false;
+    };
+    if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+
+    if result.starts_with("- ") {
+        return true;
+    }
+    let Some(directive) = result.strip_prefix("# ") else {
+        return false;
+    };
+    matches!(directive.split_whitespace().next(), Some("skip" | "todo"))
 }
 
 /// `test <name> ... ok` / `ignored`, with an optional timing suffix.

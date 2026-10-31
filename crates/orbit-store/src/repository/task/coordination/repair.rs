@@ -66,6 +66,7 @@ impl TaskCommitBoundary {
         orbit_dir: &Path,
         tasks: &[Task],
         receipt: &mut AdmissionReceipt,
+        guidance_capture: &super::admission::AdmissionGuidanceCapture<'_>,
     ) -> Result<bool, OrbitError> {
         let candidates = self.repair_candidates(
             screen.identity,
@@ -76,7 +77,18 @@ impl TaskCommitBoundary {
         )?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {
-            if self.commit_repair_claim(screen, receipt_key, orbit_dir, receipt, &candidate)? {
+            let guidance = guidance_capture(candidate.task)?;
+            receipt.experiments = Some(guidance.experiments);
+            receipt.explore_brief = guidance.explore_brief;
+            receipt.visual_review = guidance.visual_review;
+            if self.commit_repair_claim(
+                screen,
+                receipt_key,
+                orbit_dir,
+                receipt,
+                &candidate,
+                &guidance.artifacts,
+            )? {
                 return Ok(true);
             }
         }
@@ -153,6 +165,10 @@ impl TaskCommitBoundary {
                 receipt.os_unavailable.push(diagnose(reason));
                 continue;
             }
+            if let Some(reason) = labels_unavailable(request.os, &request.labels, task) {
+                receipt.labels_unavailable.push(diagnose(reason));
+                continue;
+            }
             if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {
                 receipt.browser_kit_unavailable.push(diagnose(reason));
                 continue;
@@ -203,6 +219,7 @@ impl TaskCommitBoundary {
         orbit_dir: &Path,
         receipt: &mut AdmissionReceipt,
         candidate: &RepairCandidate<'_>,
+        guidance_artifacts: &[orbit_types::task::TaskArtifact],
     ) -> Result<bool, OrbitError> {
         let (identity, request) = (screen.identity, screen.request);
         let RepairCandidate {
@@ -299,6 +316,7 @@ impl TaskCommitBoundary {
                     title: task.title.clone(),
                     complexity: task.complexity,
                     crew: task.crew.clone(),
+                    crew_source: task.crew_source.clone(),
                     context_files: footprint.clone(),
                     // The repair carries its own candidate in `claim.repair`.
                     resume_candidate: None,
@@ -316,7 +334,10 @@ impl TaskCommitBoundary {
                 ])
             },
             &effects,
-            &ClaimEvidence::default(),
+            &ClaimEvidence {
+                artifacts: guidance_artifacts.to_vec(),
+                ..ClaimEvidence::default()
+            },
             None,
         )?;
         match outcome {

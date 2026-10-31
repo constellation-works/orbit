@@ -1,0 +1,18 @@
+Revoke a token; its next use is refused
+
+Usage: orbit lease token revoke [OPTIONS] <TOKEN_ID>
+
+Arguments:
+  <TOKEN_ID>
+          Token id, as `orbit lease token list` shows it
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

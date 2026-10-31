@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::model_defaults::{
-    ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK, CLAUDE_FABLE_MODEL,
-    CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
-    COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
-    MUSE_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
+    ANTIGRAVITY_ARGON_MODEL, ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK,
+    CLAUDE_FABLE_MODEL, CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
+    CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL, GROK_DEFAULT_MODEL, MUSE_DEFAULT_MODEL,
+    MUSE_WONDER_FULL_MODEL, MUSE_WONDER_MODEL,
 };
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
@@ -17,7 +17,7 @@ use orbit_types::identity::{
 use orbit_types::task::HostOs;
 use orbit_types::workflow::activity_job::Provider;
 
-use super::compatibility::reject_retired_crew_backend;
+use super::compatibility::{reject_retired_crew_backend, reject_retired_crew_provider};
 use super::config::ResolvedConfig;
 use crate::crew_pools::reject_unpoolable_crew_name_in_config;
 use crate::raw::RawCrewEntry;
@@ -160,16 +160,16 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("haiku", CLAUDE_HAIKU_MODEL, "claude"),
         ("fable", CLAUDE_FABLE_MODEL, "claude"),
         ("sol", CODEX_SOL_MODEL, "codex"),
+        ("terra", CODEX_TERRA_MODEL, "codex"),
         ("luna", CODEX_LUNA_MODEL, "codex"),
         ("astra", CODEX_ASTRA_MODEL, "codex"),
-        ("gemini", GEMINI_CREW_MODEL, "gemini"),
-        ("antigravity", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
+        ("gemini-flash", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
+        ("argon", ANTIGRAVITY_ARGON_MODEL, "antigravity"),
         ("grok", GROK_DEFAULT_MODEL, "grok"),
         ("copilot", COPILOT_DEFAULT_MODEL, "copilot"),
-        ("cursor", CURSOR_DEFAULT_MODEL, "cursor"),
-        ("pi", PI_DEFAULT_MODEL, "pi"),
-        ("opencode", OPENCODE_DEFAULT_MODEL, "opencode"),
-        ("muse", MUSE_DEFAULT_MODEL, "muse"),
+        ("muse-spark", MUSE_DEFAULT_MODEL, "muse"),
+        ("muse-wonder", MUSE_WONDER_MODEL, "muse"),
+        ("muse-wonder-full", MUSE_WONDER_FULL_MODEL, "muse"),
     ] {
         crews.insert(
             name.to_string(),
@@ -180,6 +180,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
                 tags: Vec::new(),
                 enabled: true,
                 env: Vec::new(),
+                vision: true,
             },
         );
     }
@@ -242,6 +243,7 @@ pub(crate) fn crews_from_raw(
             tags: normalized_crew_tags(&entry.tags),
             enabled: entry.enabled.unwrap_or(true),
             env: crew_env_from_raw(trimmed, entry.env.as_deref())?,
+            vision: entry.vision.unwrap_or(true),
         };
         if crews.insert(trimmed.to_string(), crew).is_some() {
             return Err(OrbitError::InvalidInput(format!(
@@ -304,6 +306,7 @@ fn crew_assignment_from_raw(
         )));
     }
     reject_retired_crew_backend(crew, raw.backend.as_deref())?;
+    reject_retired_crew_provider(crew, raw.provider.as_deref())?;
     let model = required_crew_field(crew, "model", raw.model.as_deref())?;
     let provider = required_crew_field(crew, "provider", raw.provider.as_deref())?;
     if Provider::parse(&provider).ok() == Some(Provider::Antigravity) {
@@ -388,13 +391,12 @@ fn crew_effort_from_raw(
 fn effort_accepted_values(provider: &str, model: Option<&str>) -> &'static str {
     match provider {
         "antigravity" => "low, medium, high",
-        "opencode" => "high, max",
         "grok" => match model.map(str::trim).filter(|model| !model.is_empty()) {
             Some("grok-4.7" | "grok-4.6") => "low, medium, high, xhigh",
             Some("grok-4.5") => "low, medium, high",
             _ => "omit the key",
         },
-        "claude" | "codex" | "pi" | "muse" => ReasoningEffort::VALUES,
+        "claude" | "codex" | "muse" => ReasoningEffort::VALUES,
         _ => "omit the key",
     }
 }

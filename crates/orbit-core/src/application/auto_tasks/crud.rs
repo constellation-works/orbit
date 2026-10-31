@@ -7,7 +7,7 @@
 //! are routed to the owner host before reaching this surface, so its
 //! `local_orbit_dir` is the registered checkout the host clock reads.
 //! Direct CLI writes from a linked worktree still use that worktree's root.
-//! Disabling is a `toggle`; removal is the separate audited delete in
+//! Disabling is a [`super::toggle`]; removal is the separate audited delete in
 //! [`super::delete`].
 //!
 //! Reads return the effective definition: the YAML body with its operator
@@ -54,7 +54,7 @@ pub struct AutoTaskAddParams {
 
 /// Present-field patch for updating a definition. Absent fields are unchanged.
 /// A checked `enabled` change goes through
-/// [`OrbitRuntime::auto_task_toggle_checked`] instead.
+/// [`OrbitRuntime::auto_task_toggle_command`] instead.
 #[derive(Debug, Clone, Default)]
 pub struct AutoTaskUpdateParams {
     pub waive_batch: Option<orbit_types::workflow::automation::WaiveBatchRequest>,
@@ -163,7 +163,9 @@ fn in_scope_lookup_name(name: &str) -> bool {
 /// that already names it stays allowed, so a not-yet-refreshed workspace copy
 /// does not fail every clock tick.
 fn reject_retired_delivery_coverage(schedule: &AutoTaskSchedule) -> Result<(), OrbitError> {
-    if let AutoTaskSchedule::Deliveries { deliveries_landed } = schedule
+    if let AutoTaskSchedule::Deliveries {
+        deliveries_landed, ..
+    } = schedule
         && deliveries_landed.coverage
             == orbit_types::workflow::automation::CoverageClass::IntegratedQaV1
     {
@@ -229,7 +231,13 @@ impl OrbitRuntime {
                 schema_version: AUTO_TASK_SCHEMA_VERSION,
                 name: params.name,
                 description: params.description,
-                enabled: !matches!(&params.schedule, AutoTaskSchedule::Deliveries { .. }),
+                // Delivery definitions start disabled until reviewed; a
+                // condition starts disabled so enabling it runs the enable
+                // dry run.
+                enabled: !matches!(
+                    &params.schedule,
+                    AutoTaskSchedule::Deliveries { .. } | AutoTaskSchedule::Condition { .. }
+                ),
                 schedule: params.schedule,
                 template: params.template,
                 dedupe: params.dedupe,
@@ -402,32 +410,25 @@ impl OrbitRuntime {
         }
     }
 
-    /// Enable or disable a definition (the kill-switch). Disabling pauses an
-    /// auto-task and preserves the definition; `auto_task_delete` removes it.
-    pub fn auto_task_toggle(
+    /// Compare and replace the schedule while holding the scheduler cursor
+    /// lock: the schedule half of [`Self::auto_task_update`], with the same
+    /// coverage and definition validation, for a caller that must not
+    /// overwrite a schedule it did not observe.
+    pub fn auto_task_set_schedule_checked(
         &self,
         name: &str,
-        enabled: bool,
+        expected: &AutoTaskSchedule,
+        schedule: AutoTaskSchedule,
     ) -> Result<AutoTaskDefinition, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        self.edit_auto_task(name, |definition| definition.enabled = enabled)
-    }
-
-    /// Compare and change the enabled flag while holding the scheduler cursor lock.
-    pub fn auto_task_toggle_checked(
-        &self,
-        name: &str,
-        expected: bool,
-        enabled: bool,
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
+        reject_retired_delivery_coverage(&schedule)?;
         self.try_edit_auto_task(name, |definition| {
-            if definition.enabled != expected {
+            if &definition.schedule != expected {
                 return Err(OrbitError::InvalidInput(
-                    "auto-task state changed; refresh before retrying".into(),
+                    "auto-task schedule changed; refresh before retrying".into(),
                 ));
             }
-            definition.enabled = enabled;
+            definition.schedule = schedule;
             Ok(())
         })
     }
@@ -625,7 +626,7 @@ impl OrbitRuntime {
         })
     }
 
-    fn try_edit_auto_task(
+    pub(super) fn try_edit_auto_task(
         &self,
         name: &str,
         edit: impl FnOnce(&mut AutoTaskDefinition) -> Result<(), OrbitError>,
@@ -633,14 +634,59 @@ impl OrbitRuntime {
         let state_path = cursor_state_path(&self.paths().state_dir);
         with_exclusive_file_lock(&state_path, "auto-task cursor", || {
             let mut definition = self.require_validated_auto_task(name)?;
+            let before = definition.clone();
             edit(&mut definition)?;
             definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
             definition.updated_at = chrono::Utc::now().to_rfc3339();
             self.validate_auto_task(&definition)?;
+            self.refuse_condition_enable_storm(&before, &definition)?;
             self.persist_auto_task_edit(&definition)?;
+            if before.enabled
+                && !definition.enabled
+                && matches!(definition.schedule, AutoTaskSchedule::Condition { .. })
+            {
+                crate::application::automation::condition::record_condition_disabled(
+                    self,
+                    orbit_automation::condition::ConditionCarrier::AutoTask,
+                    name,
+                );
+            }
             // Settings re-apply over the body on load; return what loads.
             self.require_validated_auto_task(name)
         })
+    }
+
+    /// Enabling a condition, changing an enabled condition's epoch, or
+    /// enabling under `fire_existing` runs the enable dry run first, and more
+    /// current matches than `max_matches` refuses the write (§8, §9).
+    fn refuse_condition_enable_storm(
+        &self,
+        before: &AutoTaskDefinition,
+        after: &AutoTaskDefinition,
+    ) -> Result<(), OrbitError> {
+        use crate::application::automation::condition::{ConditionDefinition, enable_preview};
+        let Some(condition) = ConditionDefinition::of_auto_task(after) else {
+            return Ok(());
+        };
+        if !after.enabled {
+            return Ok(());
+        }
+        let epoch_changed = match ConditionDefinition::of_auto_task(before) {
+            Some(previous) => previous.epoch()? != condition.epoch()?,
+            None => true,
+        };
+        if before.enabled && !epoch_changed {
+            return Ok(());
+        }
+        let preview = enable_preview(self, &condition, chrono::Utc::now())?;
+        match preview.refusal {
+            Some(refusal) => Err(OrbitError::InvalidInput(format!(
+                "auto-task '{}': {refusal} (sample: {})",
+                after.name,
+                preview.matches.join(", ")
+            ))),
+            None => Ok(()),
+        }
     }
 
     fn validate_auto_task(&self, definition: &AutoTaskDefinition) -> Result<(), OrbitError> {
@@ -650,6 +696,8 @@ impl OrbitRuntime {
         // here too means CRUD never persists a schedule the scheduler would
         // reject at fire time.
         validate_schedule(&definition.schedule)?;
+        orbit_automation::auto_tasks::loader::check_auto_task_conditions(definition)
+            .map_err(OrbitError::InvalidInput)?;
         // A definition still naming the retired `system` crew stays editable;
         // its mints route through the complexity pools [ORB-15663].
         if let Some(crew) = self.crew_unless_retired(definition.template.crew.as_deref()) {

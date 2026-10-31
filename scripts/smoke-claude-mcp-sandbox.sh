@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 # Sandboxed companion to smoke-claude-mcp.sh.
 #
-# Wraps `claude -p` in `sandbox-exec -f <profile>` using a profile that mirrors
-# crates/orbit-exec/src/macos_sandbox.rs::compile_macos_sandbox_profile() for an
-# implicit unrestricted fsProfile (read=./**, modify=./**) — the same shape an
-# activity gets when it omits `fsProfile:`. This reproduces the kernel
-# confinement orbit-engine applies to direct_agent steps so we can see what
-# breaks when `orbit tool run ...` is invoked from inside claude under sandbox.
+# Wraps `claude -p` in `sandbox-exec -f <profile>` using this script's own
+# hand-written profile. It checks that Claude can reach Orbit MCP while running
+# under that profile. The profile is not compiled from Orbit's production
+# policy, and its broad HOME/.orbit write allowance and missing credential-read
+# denials mean success does not establish production confinement equivalence or
+# prove kernel behavior beyond this `sandbox-exec` invocation.
 #
-# Pass criterion: at least one new audit row in ~/.orbit/orbit.db with
-# subcommand IN ('run','run-mcp') and tool_name LIKE 'orbit.%' is recorded
-# during the run. (The non-sandbox script forced the CLI path with the prompt
-# 'do not use mcp tools'; this one mirrors that — so we expect subcommand='run'
-# rows from `orbit tool run orbit.task.list ...` invoked via Bash.)
+# Pass criterion: a new successful run-mcp audit row for orbit.task.list
+# after this invocation's baseline. CLI or unrelated tool rows do not qualify.
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -22,15 +19,16 @@ cd "$REPO_ROOT"
 if [[ ! -f .mcp.json ]]; then
   echo "FAIL: .mcp.json missing in $REPO_ROOT" >&2; exit 2
 fi
-for bin in claude orbit sqlite3 sandbox-exec; do
+for bin in claude orbit sqlite3 sandbox-exec python3; do
   command -v "$bin" >/dev/null 2>&1 || { echo "FAIL: $bin not on PATH" >&2; exit 2; }
 done
 DB="$HOME/.orbit/orbit.db"
 [[ -f "$DB" ]] || { echo "FAIL: $DB missing" >&2; exit 2; }
 
-# --- compile sandbox profile (mirrors macos_sandbox.rs) ---
-PROFILE=$(mktemp -t orbit-smoke-XXXXXX.sb)
-trap 'rm -f "$PROFILE"' EXIT
+# --- write this diagnostic sandbox profile ---
+mkdir -p "$REPO_ROOT/.orbit/tmp"
+PROFILE=$(mktemp "$REPO_ROOT/.orbit/tmp/orbit-smoke-XXXXXX")
+trap 'python3 -c "from pathlib import Path; import sys; Path(sys.argv[1]).unlink()" "$PROFILE"' EXIT
 
 esc() { printf '%s' "$1" | sed 's/"/\\"/g'; }
 HOME_ESC="$(esc "$HOME")"
@@ -63,15 +61,16 @@ cat >"$PROFILE" <<EOF
 (allow file-write* (subpath "${REPO_ESC}"))
 EOF
 
-echo "--- compiled profile (${PROFILE}) ---"
+echo "--- diagnostic profile (${PROFILE}) ---"
+echo "Diagnostic only: this hand-written profile does not establish equivalence to Orbit's production confinement."
 cat "$PROFILE"
 echo "----------------------------------------"
 
 # --- baseline ---
-before=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE subcommand IN ('run','run-mcp') AND tool_name LIKE 'orbit.%';")
-echo "baseline orbit.* tool rows (CLI + MCP): $before"
+before_id=$(sqlite3 "$DB" "SELECT COALESCE(MAX(id), 0) FROM audit_events;")
+echo "baseline audit max id: $before_id (attributing only orbit.task.list rows after it)"
 
-prompt='Use the orbit.task.list orbit tool with input {"limit": 3} to list orbit tasks (do not use mcp tools!). After the tool returns, reply with a one-line summary: "tasks_returned=<N>" where N is the count of items in the result.'
+prompt='Use the Orbit MCP server to call orbit.task.list with input {"limit": 3}. Use its MCP tool, not Bash or the orbit CLI. After it returns, reply with a one-line summary: "tasks_returned=<N>" where N is the count of items in the result.'
 
 # --- run claude under sandbox-exec ---
 echo "--- invoking claude under sandbox-exec ---"
@@ -89,23 +88,22 @@ echo "--- claude exit=$rc ---"
 echo "$out"
 
 # --- verdict ---
-after=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE subcommand IN ('run','run-mcp') AND tool_name LIKE 'orbit.%';")
-delta=$((after - before))
-echo "--- audit delta: $delta new orbit.* tool rows ---"
+delta=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list' AND status='success' AND exit_code=0;")
+echo "--- audit delta: $delta new orbit.task.list rows after id $before_id ---"
 
 if [[ "$delta" -gt 0 ]]; then
   sqlite3 -header -column "$DB" \
     "SELECT timestamp, subcommand, tool_name, status, exit_code FROM audit_events
-     WHERE subcommand IN ('run','run-mcp') AND tool_name LIKE 'orbit.%'
+     WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list' AND status='success' AND exit_code=0
      ORDER BY id DESC LIMIT $delta;"
-  echo "PASS: claude reached orbit (CLI or MCP) under sandbox"
+  echo "PASS: claude reached orbit MCP under sandbox"
   exit 0
 fi
 
-echo "FAIL: no new orbit.* audit rows under sandbox." >&2
+echo "FAIL: no new successful run-mcp orbit.task.list audit rows under sandbox." >&2
 echo "  Likely causes:" >&2
 echo "  (1) PATH not propagated — claude's bash can't find 'orbit'" >&2
-echo "  (2) skills not auto-loaded under sandbox so claude doesn't know the CLI form" >&2
+echo "  (2) Orbit MCP tools not loaded from .mcp.json" >&2
 echo "  (3) sandbox blocks something the orbit child needs (check claude-debug.log under \$HOME/.claude)" >&2
 echo "  (4) Anthropic API auth failed (network ok, but ~/.claude credential read or env var)" >&2
 exit 1

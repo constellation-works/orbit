@@ -19,8 +19,9 @@
 //! - Gap fit: under `machine.auto_concurrency.mode` `enforce` a local drain
 //!   admits only what fits under the host load forecast; `shadow` records
 //!   those decisions and admits as `off`.
-//! - A drain admission pass held out by a busy task-store lock is deferred
-//!   and retried, up to a limit, instead of failing the drain.
+//! - A drain admission pass held out by a busy task-store lock, or by another
+//!   connection's SQLite writer lock, is deferred and retried, up to a limit,
+//!   instead of failing the drain.
 //! - Submission notices: what a drain or ship start reports as it proceeds
 //!   (throttle, validation environment, host-OS backlog, unset env-pass
 //!   names, the required-validation note), and the drain stop projection.
@@ -40,7 +41,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
-use orbit_core::application::distributed::DrainEntryPoint;
+use orbit_core::application::contracts::DrainEntryPoint;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::host_resource::{DiskSample, HostResourceProbe, HostResourceSample};
 use orbit_core::{
@@ -60,6 +61,7 @@ mod gap_fit;
 mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;
+mod sqlite_busy_pass;
 mod submission_notices;
 mod task_pilot_warning;
 mod unknown_footprint;
@@ -134,6 +136,61 @@ fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
     (root, runtime, repo)
 }
 
+/// Open a calm runtime with fixture configuration and workspace files in place.
+fn configured_runtime(config: &str, files: &[&str]) -> (TempDir, OrbitRuntime, Arc<PressureProbe>) {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    for file in files {
+        let path = repo.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "fn queued() {}\n").unwrap();
+    }
+    std::fs::write(global.join("config.toml"), config).unwrap();
+    let probe = PressureProbe::calm();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .expect("build runtime")
+        .with_host_resource_probe(probe.clone());
+    (root, runtime, probe)
+}
+
+/// The readiness view dispatch and ship share: no explicit tasks, the default
+/// page, and no tag filter.
+fn default_readiness(runtime: &OrbitRuntime) -> Value {
+    runtime
+        .workspace_auto_readiness(&[], None, 50, &[])
+        .expect("workspace auto readiness")
+}
+
+/// A calm host probe on a fresh runtime. [`CalmDrain::start`] leaves the
+/// running workspace-auto drain admission observes, so a scenario starts it
+/// at the same point it did before this fixture existed.
+struct CalmDrain {
+    _root: TempDir,
+    runtime: OrbitRuntime,
+    probe: Arc<PressureProbe>,
+}
+
+impl CalmDrain {
+    fn open() -> Self {
+        let probe = PressureProbe::calm();
+        let (root, runtime, _repo) = runtime();
+        let runtime = runtime.with_host_resource_probe(probe.clone());
+        Self {
+            _root: root,
+            runtime,
+            probe,
+        }
+    }
+
+    fn start(&self) -> String {
+        running_run(&self.runtime, "workspace_auto_pipeline", json!({}))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Backlog admission
 // ---------------------------------------------------------------------------
@@ -159,6 +216,45 @@ impl Default for Seed<'_> {
             dependencies: Vec::new(),
             context_files: None,
         }
+    }
+}
+
+impl<'a> Seed<'a> {
+    fn named(title: &'a str) -> Self {
+        Self {
+            title,
+            ..Self::default()
+        }
+    }
+
+    fn status(mut self, status: TaskStatus) -> Self {
+        self.status = status;
+        self
+    }
+
+    fn priority(mut self, priority: TaskPriority) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    fn kind(mut self, task_type: TaskType) -> Self {
+        self.task_type = task_type;
+        self
+    }
+
+    fn tags(mut self, tags: &'a [&'a str]) -> Self {
+        self.tags = tags;
+        self
+    }
+
+    fn files(mut self, context_files: &'a [&'a str]) -> Self {
+        self.context_files = Some(context_files);
+        self
+    }
+
+    fn depends(mut self, dependencies: Vec<String>) -> Self {
+        self.dependencies = dependencies;
+        self
     }
 }
 
@@ -221,27 +317,16 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
     let (_root, runtime, _repo) = runtime();
     seed(
         &runtime,
-        Seed {
-            status: TaskStatus::InProgress,
-            context_files: Some(&["dir:."]),
-            ..Seed::default()
-        },
+        Seed::default()
+            .status(TaskStatus::InProgress)
+            .files(&["dir:."]),
     );
-    let selector_free = seed(
-        &runtime,
-        Seed {
-            context_files: Some(&[]),
-            ..Seed::default()
-        },
-    );
+    let selector_free = seed(&runtime, Seed::default().files(&[]));
     let no_diff = seed(
         &runtime,
-        Seed {
-            title: "side effects only",
-            context_files: Some(&[]),
-            tags: &["no-diff-expected"],
-            ..Seed::default()
-        },
+        Seed::named("side effects only")
+            .files(&[])
+            .tags(&["no-diff-expected"]),
     );
     for input in [
         json!({}),
@@ -271,9 +356,7 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
     );
     let shown = as_operator(&runtime, "orbit.workflow.run.show", json!({"id": drain}));
     assert_eq!(shown["drain_last_pass"]["excluded_total"], 0, "{shown}");
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = default_readiness(&runtime);
     for id in [&selector_free.id, &no_diff.id] {
         let ready = readiness_task(&readiness, id);
         assert_eq!(ready["eligible"], true, "{ready}");
@@ -287,7 +370,16 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
 /// The shipped documentation chore mints with a locking scope, so a drain can
 /// admit it without pilot preparation and withhold overlapping work.
 fn doc_duties_mints_an_admissible_locking_context() {
-    let (_root, runtime, _repo) = runtime();
+    let (_root, runtime, repo) = runtime();
+    write_files(&repo, &["crates/foo/src/lib.rs"]);
+    // Unrelated work in flight: a whole-tree lock conflicts with it on every
+    // admission pass and starves the chore [ORB-18264].
+    let _holder = seed(
+        &runtime,
+        Seed::named("holder")
+            .status(TaskStatus::InProgress)
+            .files(&["file:crates/foo/src/lib.rs"]),
+    );
     let definitions = runtime.paths().local_dir.join("auto_tasks");
     std::fs::create_dir_all(&definitions).unwrap();
     std::fs::write(
@@ -296,9 +388,22 @@ fn doc_duties_mints_an_admissible_locking_context() {
     )
     .unwrap();
     let minted = runtime.auto_task_mint("doc-duties").unwrap();
+    assert_eq!(
+        minted.context_files,
+        vec![
+            "dir:docs".to_string(),
+            "file:README.md".to_string(),
+            "file:CONTRIBUTING.md".to_string(),
+        ],
+        "the documentation chore must lock only the paths its brief validates [ORB-18264]"
+    );
     assert!(
-        !minted.context_files.is_empty(),
-        "the documentation chore must reserve its edits"
+        !minted
+            .context_files
+            .iter()
+            .any(|selector| selector == "dir:."),
+        "a whole-tree lock starves on a busy drain [ORB-18264]: {:?}",
+        minted.context_files
     );
     assert_eq!(
         admitted(&list_backlog_tasks(&runtime, json!({}))),
@@ -317,63 +422,34 @@ fn doc_duties_mints_an_admissible_locking_context() {
 /// creation order and then the task id breaking every remaining tie.
 fn backlog_admission_orders_critical_then_corrective_then_priority_then_age() {
     let (_root, runtime, _repo) = runtime();
-    let medium_first = seed(
-        &runtime,
-        Seed {
-            title: "medium a",
-            ..Seed::default()
-        },
-    );
+    let medium_first = seed(&runtime, Seed::named("medium a"));
     let high = seed(
         &runtime,
-        Seed {
-            title: "high feature",
-            priority: TaskPriority::High,
-            task_type: TaskType::Feature,
-            ..Seed::default()
-        },
+        Seed::named("high feature")
+            .priority(TaskPriority::High)
+            .kind(TaskType::Feature),
     );
     let low_bug = seed(
         &runtime,
-        Seed {
-            title: "low bug",
-            priority: TaskPriority::Low,
-            task_type: TaskType::Bug,
-            ..Seed::default()
-        },
+        Seed::named("low bug")
+            .priority(TaskPriority::Low)
+            .kind(TaskType::Bug),
     );
     let review_finding = seed(
         &runtime,
-        Seed {
-            title: "review finding",
-            tags: &["code-review"],
-            ..Seed::default()
-        },
+        Seed::named("review finding").tags(&["code-review"]),
     );
     let near_miss_tag = seed(
         &runtime,
-        Seed {
-            title: "near-miss tag",
-            tags: &["code-review-sweep"],
-            ..Seed::default()
-        },
+        Seed::named("near-miss tag").tags(&["code-review-sweep"]),
     );
     let critical = seed(
         &runtime,
-        Seed {
-            title: "critical feature",
-            priority: TaskPriority::Critical,
-            task_type: TaskType::Feature,
-            ..Seed::default()
-        },
+        Seed::named("critical feature")
+            .priority(TaskPriority::Critical)
+            .kind(TaskType::Feature),
     );
-    let medium_second = seed(
-        &runtime,
-        Seed {
-            title: "medium b",
-            ..Seed::default()
-        },
-    );
+    let medium_second = seed(&runtime, Seed::named("medium b"));
 
     let expected = vec![
         critical.id.clone(),
@@ -397,19 +473,11 @@ fn backlog_admission_waits_for_every_dependency_to_be_done() {
     let (_root, runtime, _repo) = runtime();
     let done = seed(
         &runtime,
-        Seed {
-            title: "done dependency",
-            status: TaskStatus::Done,
-            ..Seed::default()
-        },
+        Seed::named("done dependency").status(TaskStatus::Done),
     );
     let ready = seed(
         &runtime,
-        Seed {
-            title: "ready dependent",
-            dependencies: vec![done.id.clone()],
-            ..Seed::default()
-        },
+        Seed::named("ready dependent").depends(vec![done.id.clone()]),
     );
     let mut blocked = BTreeSet::new();
     let mut unfinished = Vec::new();
@@ -421,19 +489,11 @@ fn backlog_admission_waits_for_every_dependency_to_be_done() {
     ] {
         let dependency = seed(
             &runtime,
-            Seed {
-                title: "unfinished dependency",
-                status,
-                ..Seed::default()
-            },
+            Seed::named("unfinished dependency").status(status),
         );
         let dependent = seed(
             &runtime,
-            Seed {
-                title: "blocked dependent",
-                dependencies: vec![done.id.clone(), dependency.id.clone()],
-                ..Seed::default()
-            },
+            Seed::named("blocked dependent").depends(vec![done.id.clone(), dependency.id.clone()]),
         );
         blocked.insert(dependent.id);
         unfinished.push(dependency.id);
@@ -459,35 +519,20 @@ fn backlog_admission_waits_for_every_dependency_to_be_done() {
 /// reported with the holder, while unrelated work is still admitted.
 fn backlog_admission_excludes_work_locked_by_an_active_task() {
     let (_root, runtime, repo) = runtime();
-    for file in ["crates/foo/src/lib.rs", "crates/bar/src/lib.rs"] {
-        let path = repo.join(file);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, "fixture\n").unwrap();
-    }
+    write_files(&repo, &["crates/foo/src/lib.rs", "crates/bar/src/lib.rs"]);
     let holder = seed(
         &runtime,
-        Seed {
-            title: "holder",
-            status: TaskStatus::InProgress,
-            context_files: Some(&["crates/foo/src/lib.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("holder")
+            .status(TaskStatus::InProgress)
+            .files(&["crates/foo/src/lib.rs"]),
     );
     let locked = seed(
         &runtime,
-        Seed {
-            title: "locked",
-            context_files: Some(&["crates/foo/src/lib.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("locked").files(&["crates/foo/src/lib.rs"]),
     );
     let free = seed(
         &runtime,
-        Seed {
-            title: "free",
-            context_files: Some(&["crates/bar/src/lib.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("free").files(&["crates/bar/src/lib.rs"]),
     );
 
     let output = list_backlog_tasks(&runtime, json!({}));
@@ -551,49 +596,26 @@ fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_f
     write_files(&repo, &["a.rs", "b.rs", "free.rs"]);
     let holder_a = seed(
         &runtime,
-        Seed {
-            title: "holder a",
-            status: TaskStatus::InProgress,
-            context_files: Some(&["a.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("holder a")
+            .status(TaskStatus::InProgress)
+            .files(&["a.rs"]),
     );
     let holder_b = seed(
         &runtime,
-        Seed {
-            title: "holder b",
-            status: TaskStatus::InProgress,
-            context_files: Some(&["b.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("holder b")
+            .status(TaskStatus::InProgress)
+            .files(&["b.rs"]),
     );
     // Older than the critical task, so age alone would put it first.
-    let overlapping = seed(
-        &runtime,
-        Seed {
-            title: "overlapping",
-            context_files: Some(&["b.rs"]),
-            ..Seed::default()
-        },
-    );
+    let overlapping = seed(&runtime, Seed::named("overlapping").files(&["b.rs"]));
     let critical = seed(
         &runtime,
-        Seed {
-            title: "critical",
-            priority: TaskPriority::Critical,
-            task_type: TaskType::Feature,
-            context_files: Some(&["a.rs", "b.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("critical")
+            .priority(TaskPriority::Critical)
+            .kind(TaskType::Feature)
+            .files(&["a.rs", "b.rs"]),
     );
-    let unrelated = seed(
-        &runtime,
-        Seed {
-            title: "unrelated",
-            context_files: Some(&["free.rs"]),
-            ..Seed::default()
-        },
-    );
+    let unrelated = seed(&runtime, Seed::named("unrelated").files(&["free.rs"]));
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
 
     // Both locks held: each waits on its holder, and the critical task's
@@ -638,13 +660,7 @@ fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_f
     assert!(reserving["detail"].is_string(), "{reserving}");
 
     // The drain's persisted pass and readiness report the same wait.
-    let pass = runtime
-        .read_run_state(&drain)
-        .unwrap()
-        .unwrap()
-        .pull_drain
-        .drain_last_pass
-        .expect("last pass");
+    let pass = last_pass(&runtime, &drain);
     let recorded = pass
         .excluded
         .iter()
@@ -652,9 +668,7 @@ fn a_lock_blocked_critical_task_is_admitted_ahead_of_overlapping_work_as_locks_f
         .expect("the pass records the withheld task");
     assert_eq!(recorded.reason.as_deref(), Some("surface_reserved"));
     assert_eq!(recorded.blocked_by, vec![critical.id.clone()]);
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = default_readiness(&runtime);
     let waiting = readiness_task(&readiness, &overlapping.id);
     assert_eq!(waiting["eligible"], false);
     assert_eq!(waiting["reason"], "surface_reserved");
@@ -697,23 +711,17 @@ fn surface_reservations_are_bounded_by_priority_count_and_rank() {
     );
     seed(
         &runtime,
-        Seed {
-            title: "holder",
-            status: TaskStatus::InProgress,
-            context_files: Some(&["dir:held"]),
-            ..Seed::default()
-        },
+        Seed::named("holder")
+            .status(TaskStatus::InProgress)
+            .files(&["dir:held"]),
     );
     let lock_blocked = |title, priority, files: &'static [&'static str]| {
         seed(
             &runtime,
-            Seed {
-                title,
-                priority,
-                task_type: TaskType::Feature,
-                context_files: Some(files),
-                ..Seed::default()
-            },
+            Seed::named(title)
+                .priority(priority)
+                .kind(TaskType::Feature)
+                .files(files),
         )
     };
     let high_1 = lock_blocked("high 1", TaskPriority::High, &["held/h1.rs", "h1.rs"]);
@@ -723,12 +731,7 @@ fn surface_reservations_are_bounded_by_priority_count_and_rank() {
     let low = |title, files: &'static [&'static str]| {
         seed(
             &runtime,
-            Seed {
-                title,
-                priority: TaskPriority::Low,
-                context_files: Some(files),
-                ..Seed::default()
-            },
+            Seed::named(title).priority(TaskPriority::Low).files(files),
         )
     };
     let behind_1 = low("behind high 1", &["h1.rs"]);
@@ -737,12 +740,9 @@ fn surface_reservations_are_bounded_by_priority_count_and_rank() {
     let behind_medium = low("behind medium", &["m.rs"]);
     let ahead = seed(
         &runtime,
-        Seed {
-            title: "critical ahead",
-            priority: TaskPriority::Critical,
-            context_files: Some(&["h2.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("critical ahead")
+            .priority(TaskPriority::Critical)
+            .files(&["h2.rs"]),
     );
 
     let output = list_backlog_tasks(&runtime, json!({}));
@@ -775,76 +775,51 @@ fn surface_reservations_are_bounded_by_priority_count_and_rank() {
 /// its own dependency and on that ordinary lock [ORB-14247].
 fn no_diff_expected_does_not_hold_a_context_lock() {
     let (_root, runtime, repo) = runtime();
-    for file in [
-        "crates/review/lib.rs",
-        "crates/ordinary/lib.rs",
-        "crates/elsewhere/lib.rs",
-    ] {
-        let path = repo.join(file);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, "fixture\n").unwrap();
-    }
+    write_files(
+        &repo,
+        &[
+            "crates/review/lib.rs",
+            "crates/ordinary/lib.rs",
+            "crates/elsewhere/lib.rs",
+        ],
+    );
     let review = seed(
         &runtime,
-        Seed {
-            title: "review holder",
-            status: TaskStatus::InProgress,
-            tags: &["no-diff-expected"],
-            context_files: Some(&["dir:crates/review"]),
-            ..Seed::default()
-        },
+        Seed::named("review holder")
+            .status(TaskStatus::InProgress)
+            .tags(&["no-diff-expected"])
+            .files(&["dir:crates/review"]),
     );
     let repair = seed(
         &runtime,
-        Seed {
-            title: "overlapping repair",
-            context_files: Some(&["file:crates/review/lib.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("overlapping repair").files(&["file:crates/review/lib.rs"]),
     );
     let ordinary = seed(
         &runtime,
-        Seed {
-            title: "ordinary holder",
-            status: TaskStatus::InProgress,
-            context_files: Some(&["file:crates/ordinary/lib.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("ordinary holder")
+            .status(TaskStatus::InProgress)
+            .files(&["file:crates/ordinary/lib.rs"]),
     );
     let ordinary_overlap = seed(
         &runtime,
-        Seed {
-            title: "ordinary overlap",
-            context_files: Some(&["file:crates/ordinary/lib.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("ordinary overlap").files(&["file:crates/ordinary/lib.rs"]),
     );
     let tagged_overlap = seed(
         &runtime,
-        Seed {
-            title: "tagged task still waits on an ordinary lock",
-            tags: &["no-diff-expected"],
-            context_files: Some(&["file:crates/ordinary/lib.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("tagged task still waits on an ordinary lock")
+            .tags(&["no-diff-expected"])
+            .files(&["file:crates/ordinary/lib.rs"]),
     );
     let unfinished = seed(
         &runtime,
-        Seed {
-            title: "unfinished dependency",
-            status: TaskStatus::InProgress,
-            ..Seed::default()
-        },
+        Seed::named("unfinished dependency").status(TaskStatus::InProgress),
     );
     let tagged_dependent = seed(
         &runtime,
-        Seed {
-            title: "tagged task still waits on its dependency",
-            tags: &["no-diff-expected"],
-            dependencies: vec![unfinished.id.clone()],
-            context_files: Some(&["file:crates/elsewhere/lib.rs"]),
-            ..Seed::default()
-        },
+        Seed::named("tagged task still waits on its dependency")
+            .tags(&["no-diff-expected"])
+            .depends(vec![unfinished.id.clone()])
+            .files(&["file:crates/elsewhere/lib.rs"]),
     );
 
     let output = list_backlog_tasks(&runtime, json!({}));
@@ -886,9 +861,7 @@ fn no_diff_expected_does_not_hold_a_context_lock() {
         ordinary.id
     );
 
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .expect("readiness");
+    let readiness = default_readiness(&runtime);
     let repair_ready = readiness_task(&readiness, &repair.id);
     assert_eq!(repair_ready["eligible"], true, "{repair_ready}");
     assert_eq!(repair_ready["reason"], "ready", "{repair_ready}");
@@ -1180,6 +1153,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
                 runtime.workflow_required_validation_commands().to_vec(),
             ),
             baseline_commands: runtime.review_baseline_commands().to_vec(),
+            selective_before_landing: None,
             captured_at: Utc::now(),
             host_evidence: Vec::new(),
         };
@@ -1227,6 +1201,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             std::fs::write(repo.join("coupled.txt"), "reviewer repair\n").unwrap();
             // ORB-13990: a repair no finding names still passes and widens.
             std::fs::write(repo.join("undeclared.txt"), "reviewer companion\n").unwrap();
+            std::fs::write(repo.join("trailing.txt "), "trailing whitespace\n").unwrap();
         }
         let report = json!({
             "schema_version": REVIEW_CONTRACT_VERSION,
@@ -1291,6 +1266,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             if repaired {
                 vec![
                     "file:coupled.txt".to_string(),
+                    "file:trailing.txt ".to_string(),
                     "file:undeclared.txt".to_string(),
                 ]
             } else {
@@ -1360,7 +1336,11 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             assert_eq!(widening.activity, "review_gate_settle");
             assert_eq!(
                 widening.selectors,
-                ["file:coupled.txt", "file:undeclared.txt"]
+                [
+                    "file:coupled.txt",
+                    "file:trailing.txt ",
+                    "file:undeclared.txt"
+                ]
             );
         } else {
             assert!(added.is_empty(), "{added:?}");
@@ -1368,7 +1348,12 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
         if repaired {
             assert_eq!(
                 runtime.get_task(&task.id).unwrap().context_files,
-                ["file:src.txt", "file:coupled.txt", "file:undeclared.txt"]
+                [
+                    "file:src.txt",
+                    "file:coupled.txt",
+                    "file:trailing.txt ",
+                    "file:undeclared.txt"
+                ]
             );
         }
     }
@@ -1488,6 +1473,16 @@ fn running_run(runtime: &OrbitRuntime, job: &str, input: Value) -> String {
     run.run_id
 }
 
+fn last_pass(runtime: &OrbitRuntime, drain: &str) -> orbit_types::workflow::DrainAdmissionPass {
+    runtime
+        .read_run_state(drain)
+        .unwrap()
+        .unwrap()
+        .pull_drain
+        .drain_last_pass
+        .expect("last pass")
+}
+
 fn classify(runtime: &OrbitRuntime, drain: &str) -> Value {
     runtime
         .run_deterministic(
@@ -1560,15 +1555,16 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         matches!(refused, OrbitError::PolicyDenied(ref reason) if reason.starts_with("resource_throttled:")),
         "fresh discovery must refuse before looking up/submitting its pipeline: {refused}"
     );
-    // Sweep opens its own runtime too, and shares history across workspace roots.
+    // Another workspace on the host shares the throttle history, so its
+    // discovery stands down too.
     let other_workspace = root.path().join("other/.orbit");
     std::fs::create_dir_all(&other_workspace).unwrap();
-    let sweep = open(&other_workspace);
-    let decision = sweep
-        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+    let other = open(&other_workspace);
+    let decision = other
+        .drain_entry_admission(DrainEntryPoint::ExplicitShip, &[])
         .unwrap();
     assert_eq!(decision.refusal.unwrap().code(), "resource_throttled");
-    for runtime in [&runtime, &sweep] {
+    for runtime in [&runtime, &other] {
         let jobs = orbit_store::compose::workspace_job_run_store(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
@@ -1588,7 +1584,6 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         .drain_entry_admission(
             DrainEntryPoint::ExplicitShip,
             std::slice::from_ref(&queued.id),
-            false,
         )
         .unwrap();
     assert!(explicit.refusal.is_none());
@@ -1634,7 +1629,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
     );
     assert!(
         runtime
-            .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+            .drain_entry_admission(DrainEntryPoint::ExplicitShip, &[])
             .unwrap()
             .refusal
             .is_none()
@@ -1656,146 +1651,174 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
     ));
 }
 
-/// Sustained memory pressure holds the local drain's wave, ship discovery
-/// and readiness until memory falls below its resume mark; a live child keeps
-/// running throughout, and unknown CPU telemetry never holds anything.
-fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
-    let probe = PressureProbe::calm();
-    let (_root, runtime, _repo) = runtime();
-    let runtime = runtime.with_host_resource_probe(probe.clone());
+/// Memory and disk-I/O pressure share one sequence: an unsustained spike
+/// admits, a sustained reading holds the wave until the value falls below
+/// the resume mark, and a live child keeps running. Memory also covers
+/// unknown CPU telemetry, ship discovery, and explicit selection.
+fn sustained_host_pressure(kind: HostPressure) {
+    let fx = CalmDrain::open();
+    let probe = &fx.probe;
+    let runtime = &fx.runtime;
     let running = seed(
-        &runtime,
-        Seed {
-            title: "running",
-            context_files: Some(&["file:src/running.rs"]),
-            ..Seed::default()
-        },
+        runtime,
+        Seed::named("running").files(&["file:src/running.rs"]),
     );
     let queued = seed(
-        &runtime,
-        Seed {
-            title: "queued",
-            context_files: Some(&["file:src/queued.rs"]),
-            ..Seed::default()
-        },
+        runtime,
+        Seed::named("queued").files(&["file:src/queued.rs"]),
     );
-    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+    let drain = fx.start();
     let child = running_run(
-        &runtime,
+        runtime,
         "task_auto_pipeline",
         json!({"task_ids": [running.id]}),
     );
+    let (resource, held_pct, band_pct, clear_pct, high, resume, detail_prefix) = match kind {
+        HostPressure::Memory => (
+            "memory",
+            95.0,
+            87.0,
+            70.0,
+            90,
+            85,
+            "memory 95% (throttled at \u{2265} 90% since ",
+        ),
+        HostPressure::Io => (
+            "io full",
+            47.0,
+            15.0,
+            5.0,
+            20,
+            10,
+            "io full 47% (throttled at \u{2265} 20% since ",
+        ),
+    };
+    let stamp = |percent: f64, at: chrono::DateTime<Utc>| match kind {
+        HostPressure::Memory => probe.memory(percent, at),
+        HostPressure::Io => probe.io(Some(percent), at),
+    };
 
-    // Unknown CPU telemetry fails open and is reported.
-    probe.cpu(None);
-    let open = classify(&runtime, &drain);
-    assert_eq!(open["loose_task_ids"], json!([queued.id]), "{open}");
-    assert_eq!(open["resource_throttle"], Value::Null, "{open}");
-    assert_eq!(
-        open["resource_telemetry_unknown"],
-        json!(["cpu unavailable"]),
-        "{open}"
-    );
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
-    assert_eq!(
-        readiness["capacity"]["resource_telemetry_unknown"],
-        json!(["cpu unavailable"])
-    );
-    probe.cpu(Some(10.0));
+    match kind {
+        HostPressure::Memory => {
+            // Unknown CPU telemetry fails open and is reported.
+            probe.cpu(None);
+            let open = classify(runtime, &drain);
+            assert_eq!(open["loose_task_ids"], json!([queued.id]), "memory: {open}");
+            assert_eq!(open["resource_throttle"], Value::Null, "memory: {open}");
+            assert_eq!(
+                open["resource_telemetry_unknown"],
+                json!(["cpu unavailable"]),
+                "memory: {open}"
+            );
+            let readiness = default_readiness(runtime);
+            assert_eq!(
+                readiness["capacity"]["resource_telemetry_unknown"],
+                json!(["cpu unavailable"])
+            );
+            probe.cpu(Some(10.0));
+        }
+        HostPressure::Io => {
+            // A host without PSI reports no I/O reading and is not unknown telemetry.
+            let open = classify(runtime, &drain);
+            assert_eq!(open["loose_task_ids"], json!([queued.id]), "io: {open}");
+            assert_eq!(open["resource_throttle"], Value::Null, "io: {open}");
+            assert_eq!(open["resource_telemetry_unknown"], json!([]), "io: {open}");
+        }
+    }
 
     // A spike that has not been sustained does not throttle.
-    probe.memory(95.0, Utc::now() - chrono::Duration::seconds(12));
-    let spike = classify(&runtime, &drain);
-    assert_eq!(spike["loose_task_ids"], json!([queued.id]), "{spike}");
+    stamp(held_pct, Utc::now() - chrono::Duration::seconds(12));
+    let spike = classify(runtime, &drain);
+    assert_eq!(
+        spike["loose_task_ids"],
+        json!([queued.id]),
+        "{resource}: {spike}"
+    );
 
-    probe.memory(95.0, Utc::now());
-    let held = classify(&runtime, &drain);
-    assert_eq!(held["loose_task_ids"], json!([]), "{held}");
-    assert_eq!(held["free_slots"], 0, "{held}");
+    stamp(held_pct, Utc::now());
+    let held = classify(runtime, &drain);
+    assert_eq!(held["loose_task_ids"], json!([]), "{resource}: {held}");
     let pressure = &held["resource_throttle"]["resources"][0];
-    assert_eq!(pressure["resource"], "memory", "{held}");
-    assert_eq!(pressure["percent"], 95.0, "{held}");
-    assert_eq!(pressure["high_percent"], 90, "{held}");
-    assert_eq!(pressure["resume_percent"], 85, "{held}");
-    assert!(pressure["since"].is_string(), "{held}");
-    assert_eq!(held["sleep_seconds"], 30, "a throttled drain polls: {held}");
-    let pass = runtime
-        .read_run_state(&drain)
-        .unwrap()
-        .unwrap()
-        .pull_drain
-        .drain_last_pass
-        .expect("last pass");
-    let recorded = pass
+    assert_eq!(pressure["resource"], resource, "{resource}: {held}");
+    assert_eq!(pressure["percent"], held_pct, "{resource}: {held}");
+    assert_eq!(pressure["high_percent"], high, "{resource}: {held}");
+    assert_eq!(pressure["resume_percent"], resume, "{resource}: {held}");
+    if matches!(kind, HostPressure::Memory) {
+        assert_eq!(held["free_slots"], 0, "{held}");
+        assert!(pressure["since"].is_string(), "{held}");
+        assert_eq!(held["sleep_seconds"], 30, "a throttled drain polls: {held}");
+    }
+    let recorded = last_pass(runtime, &drain)
         .resource_throttle
         .expect("the pass records the throttle");
-    assert_eq!(recorded.resources[0].resource, "memory");
-
-    // Readiness and MCP name the resource, value, threshold and since-when.
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
-    assert_eq!(readiness["capacity"]["free_slots"], 0);
+    assert_eq!(recorded.resources[0].resource, resource);
+    let readiness = default_readiness(runtime);
+    if matches!(kind, HostPressure::Memory) {
+        assert_eq!(readiness["capacity"]["free_slots"], 0);
+    }
     assert_eq!(
         readiness["capacity"]["resource_throttle"]["resources"][0]["resource"],
-        "memory"
+        resource
     );
     let waiting = readiness_task(&readiness, &queued.id);
-    assert_eq!(waiting["reason"], "resource_throttled", "{waiting}");
+    assert_eq!(
+        waiting["reason"], "resource_throttled",
+        "{resource}: {waiting}"
+    );
     assert!(
-        waiting["detail"].as_str().is_some_and(
-            |detail| detail.starts_with("memory 95% (throttled at \u{2265} 90% since ")
-        ),
-        "{waiting}"
-    );
-    let operator = ToolContext {
-        session_context: ToolSessionContext {
-            transport: Some(McpTransport::Local),
-            effective_capabilities: BTreeSet::from([McpCapability::Operator]),
-            ..ToolSessionContext::default()
-        },
-        ..ToolContext::default()
-    };
-    let status = runtime
-        .run_tool_with_context_and_role(
-            "orbit.workflow.auto",
-            json!({"workspace": runtime.workspace_id().unwrap(), "action": "status"}),
-            Role::Admin,
-            operator.clone(),
-        )
-        .expect("mcp status");
-    assert_eq!(
-        status["capacity"]["resource_throttle"]["resources"][0]["high_percent"], 90,
-        "{status:#}"
-    );
-    let shown = as_operator(&runtime, "orbit.workflow.run.show", json!({"id": drain}));
-    assert_eq!(
-        shown["drain_last_pass"]["resource_throttle"]["resources"][0]["resource"], "memory",
-        "{shown:#}"
+        waiting["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.starts_with(detail_prefix)),
+        "{resource}: {waiting}"
     );
 
-    // Ship discovery stands down; an explicit selection is admitted and warned.
-    let refused = ship(&runtime, None);
-    assert!(
-        matches!(&refused, OrbitError::PolicyDenied(reason) if reason.starts_with("resource_throttled: Admissions throttled: memory 95%")),
-        "{refused}"
-    );
-    let explicit = runtime
-        .drain_entry_admission(
-            DrainEntryPoint::ExplicitShip,
-            std::slice::from_ref(&queued.id),
-            false,
-        )
-        .unwrap();
-    assert!(explicit.refusal.is_none(), "{:?}", explicit.refusal);
-    assert!(explicit.resource_throttle.is_some());
+    if matches!(kind, HostPressure::Memory) {
+        // Readiness and MCP name the resource, value, threshold and since-when.
+        let operator = ToolContext {
+            session_context: ToolSessionContext {
+                transport: Some(McpTransport::Local),
+                effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                ..ToolSessionContext::default()
+            },
+            ..ToolContext::default()
+        };
+        let status = runtime
+            .run_tool_with_context_and_role(
+                "orbit.workflow.auto",
+                json!({"workspace": runtime.workspace_id().unwrap(), "action": "status"}),
+                Role::Admin,
+                operator,
+            )
+            .expect("mcp status");
+        assert_eq!(
+            status["capacity"]["resource_throttle"]["resources"][0]["high_percent"], 90,
+            "{status:#}"
+        );
+        let shown = as_operator(runtime, "orbit.workflow.run.show", json!({"id": drain}));
+        assert_eq!(
+            shown["drain_last_pass"]["resource_throttle"]["resources"][0]["resource"], "memory",
+            "{shown:#}"
+        );
+        // Ship discovery stands down; an explicit selection is admitted and warned.
+        let refused = ship(runtime, None);
+        assert!(
+            matches!(&refused, OrbitError::PolicyDenied(reason) if reason.starts_with("resource_throttled: Admissions throttled: memory 95%")),
+            "{refused}"
+        );
+        let explicit = runtime
+            .drain_entry_admission(
+                DrainEntryPoint::ExplicitShip,
+                std::slice::from_ref(&queued.id),
+            )
+            .unwrap();
+        assert!(explicit.refusal.is_none(), "{:?}", explicit.refusal);
+        assert!(explicit.resource_throttle.is_some());
+    }
 
     // Between the resume and high marks the hold continues.
-    probe.memory(87.0, Utc::now());
-    let band = classify(&runtime, &drain);
-    assert_eq!(band["loose_task_ids"], json!([]), "{band}");
+    stamp(band_pct, Utc::now());
+    let band = classify(runtime, &drain);
+    assert_eq!(band["loose_task_ids"], json!([]), "{resource}: {band}");
 
     // Running work was never touched.
     let jobs = orbit_store::compose::workspace_job_run_store(
@@ -1807,141 +1830,51 @@ fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
         JobRunState::Running
     );
 
-    probe.memory(70.0, Utc::now());
-    let resumed = classify(&runtime, &drain);
-    assert_eq!(resumed["loose_task_ids"], json!([queued.id]), "{resumed}");
-    assert_eq!(resumed["resource_throttle"], Value::Null, "{resumed}");
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
-    assert_eq!(readiness["capacity"]["resource_throttle"], Value::Null);
-    assert_eq!(readiness_task(&readiness, &queued.id)["reason"], "ready");
-    assert!(
-        runtime
-            .read_run_state(&drain)
-            .unwrap()
-            .unwrap()
-            .pull_drain
-            .drain_last_pass
-            .unwrap()
-            .resource_throttle
-            .is_none()
+    stamp(clear_pct, Utc::now());
+    let resumed = classify(runtime, &drain);
+    assert_eq!(
+        resumed["loose_task_ids"],
+        json!([queued.id]),
+        "{resource}: {resumed}"
     );
+    assert_eq!(
+        resumed["resource_throttle"],
+        Value::Null,
+        "{resource}: {resumed}"
+    );
+    if matches!(kind, HostPressure::Memory) {
+        let readiness = default_readiness(runtime);
+        assert_eq!(readiness["capacity"]["resource_throttle"], Value::Null);
+        assert_eq!(readiness_task(&readiness, &queued.id)["reason"], "ready");
+        assert!(last_pass(runtime, &drain).resource_throttle.is_none());
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HostPressure {
+    Memory,
+    Io,
+}
+
+/// Sustained memory pressure holds the local drain's wave, ship discovery
+/// and readiness until memory falls below its resume mark; a live child keeps
+/// running throughout, and unknown CPU telemetry never holds anything.
+fn sustained_pressure_holds_local_admission_until_it_clears_below_resume() {
+    sustained_host_pressure(HostPressure::Memory);
 }
 
 /// Sustained disk I/O stall holds the local drain's wave and readiness with a
 /// typed reason until `full avg60` falls below the resume mark; a live child
 /// keeps running throughout, and a host without PSI admits as before.
 fn sustained_io_pressure_holds_local_admission_until_it_clears_below_resume() {
-    let probe = PressureProbe::calm();
-    let (_root, runtime, _repo) = runtime();
-    let runtime = runtime.with_host_resource_probe(probe.clone());
-    let running = seed(
-        &runtime,
-        Seed {
-            title: "running",
-            context_files: Some(&["file:src/running.rs"]),
-            ..Seed::default()
-        },
-    );
-    let queued = seed(
-        &runtime,
-        Seed {
-            title: "queued",
-            context_files: Some(&["file:src/queued.rs"]),
-            ..Seed::default()
-        },
-    );
-    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
-    let child = running_run(
-        &runtime,
-        "task_auto_pipeline",
-        json!({"task_ids": [running.id]}),
-    );
-
-    // A host without PSI reports no I/O reading and is not unknown telemetry.
-    let open = classify(&runtime, &drain);
-    assert_eq!(open["loose_task_ids"], json!([queued.id]), "{open}");
-    assert_eq!(open["resource_throttle"], Value::Null, "{open}");
-    assert_eq!(open["resource_telemetry_unknown"], json!([]), "{open}");
-
-    // Pressure above the 20% mark that has not been sustained holds nothing.
-    probe.io(Some(47.0), Utc::now() - chrono::Duration::seconds(12));
-    let spike = classify(&runtime, &drain);
-    assert_eq!(spike["loose_task_ids"], json!([queued.id]), "{spike}");
-
-    probe.io(Some(47.0), Utc::now());
-    let held = classify(&runtime, &drain);
-    assert_eq!(held["loose_task_ids"], json!([]), "{held}");
-    let pressure = &held["resource_throttle"]["resources"][0];
-    assert_eq!(pressure["resource"], "io full", "{held}");
-    assert_eq!(pressure["percent"], 47.0, "{held}");
-    assert_eq!(pressure["high_percent"], 20, "{held}");
-    assert_eq!(pressure["resume_percent"], 10, "{held}");
-    let recorded = runtime
-        .read_run_state(&drain)
-        .unwrap()
-        .unwrap()
-        .pull_drain
-        .drain_last_pass
-        .expect("last pass")
-        .resource_throttle
-        .expect("the pass records the throttle");
-    assert_eq!(recorded.resources[0].resource, "io full");
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
-    assert_eq!(
-        readiness["capacity"]["resource_throttle"]["resources"][0]["resource"],
-        "io full"
-    );
-    let waiting = readiness_task(&readiness, &queued.id);
-    assert_eq!(waiting["reason"], "resource_throttled", "{waiting}");
-    assert!(
-        waiting["detail"].as_str().is_some_and(
-            |detail| detail.starts_with("io full 47% (throttled at \u{2265} 20% since ")
-        ),
-        "{waiting}"
-    );
-
-    // Between the resume and high marks the hold continues.
-    probe.io(Some(15.0), Utc::now());
-    let band = classify(&runtime, &drain);
-    assert_eq!(band["loose_task_ids"], json!([]), "{band}");
-
-    // Running work was never touched.
-    let jobs = orbit_store::compose::workspace_job_run_store(
-        runtime.sqlite_store().unwrap(),
-        runtime.workspace_id().unwrap(),
-    );
-    assert_eq!(
-        jobs.get_job_run(&child).unwrap().unwrap().state,
-        JobRunState::Running
-    );
-
-    probe.io(Some(5.0), Utc::now());
-    let resumed = classify(&runtime, &drain);
-    assert_eq!(resumed["loose_task_ids"], json!([queued.id]), "{resumed}");
-    assert_eq!(resumed["resource_throttle"], Value::Null, "{resumed}");
+    sustained_host_pressure(HostPressure::Io);
 }
 
 /// With `workflow.resource_throttle.enabled = false` admission is what it was
 /// before the throttle: no sample is taken for it and pressure holds nothing.
 fn a_disabled_throttle_admits_under_pressure_without_sampling() {
-    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let global = root.path().join("home/.orbit");
-    let workspace = root.path().join("repo/.orbit");
-    std::fs::create_dir_all(&global).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::write(
-        global.join("config.toml"),
-        "[workflow.resource_throttle]\nenabled = false\n",
-    )
-    .unwrap();
-    let probe = PressureProbe::calm();
-    let runtime = OrbitRuntime::from_roots(&global, &workspace)
-        .expect("build runtime")
-        .with_host_resource_probe(probe.clone());
+    let (_root, runtime, probe) =
+        configured_runtime("[workflow.resource_throttle]\nenabled = false\n", &[]);
     let task = seed(&runtime, Seed::default());
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
     probe.memory(99.0, Utc::now() - chrono::Duration::seconds(12));
@@ -1951,9 +1884,7 @@ fn a_disabled_throttle_admits_under_pressure_without_sampling() {
     assert_eq!(wave["loose_task_ids"], json!([task.id]), "{wave}");
     assert_eq!(wave["resource_throttle"], Value::Null);
     assert_eq!(wave["resource_telemetry_unknown"], json!([]));
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = default_readiness(&runtime);
     assert_eq!(readiness["capacity"]["resource_throttle"], Value::Null);
     assert_eq!(probe.samples(), 0, "a disabled throttle samples nothing");
 }
@@ -1971,39 +1902,24 @@ const LIGHT_TAGS: &[&str] = &["code-review", "no-diff-expected", "auto-task:code
 /// still waits; once the budget is taken a further light leaf waits too, and
 /// readiness names the light-budget reason.
 fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
-    let probe = PressureProbe::calm();
-    let (_root, runtime, _repo) = runtime();
-    let runtime = runtime.with_host_resource_probe(probe.clone());
+    let CalmDrain {
+        _root,
+        runtime,
+        probe,
+    } = CalmDrain::open();
     let implementation = seed(
         &runtime,
-        Seed {
-            title: "implementation",
-            priority: TaskPriority::High,
-            ..Seed::default()
-        },
+        Seed::named("implementation").priority(TaskPriority::High),
     );
     // Tagged `no-diff-expected` but filed by hand: the exemption is for
     // automated reading work, not for anything that promises no diff.
     let manual_no_diff = seed(
         &runtime,
-        Seed {
-            title: "manual no-diff",
-            tags: &["no-diff-expected"],
-            ..Seed::default()
-        },
+        Seed::named("manual no-diff").tags(&["no-diff-expected"]),
     );
     let light: Vec<Task> = ["review one", "review two", "review three"]
         .into_iter()
-        .map(|title| {
-            seed(
-                &runtime,
-                Seed {
-                    title,
-                    tags: LIGHT_TAGS,
-                    ..Seed::default()
-                },
-            )
-        })
+        .map(|title| seed(&runtime, Seed::named(title).tags(LIGHT_TAGS)))
         .collect();
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
 
@@ -2025,9 +1941,7 @@ fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
         "{wave}"
     );
 
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = default_readiness(&runtime);
     assert_eq!(readiness["capacity"]["free_slots"], 2, "{readiness:#}");
     let first = readiness_task(&readiness, &light[0].id);
     assert_eq!(first["reason"], "ready", "{first}");
@@ -2054,9 +1968,7 @@ fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
         json!({"reserved": 2, "active": 2, "remaining": 0, "applies": true}),
         "{full}"
     );
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = default_readiness(&runtime);
     assert_eq!(
         readiness["capacity"]["cpu_light_budget"]["remaining"], 0,
         "{readiness:#}"
@@ -2091,32 +2003,35 @@ fn a_cpu_only_throttle_admits_light_auto_tasks_within_the_reserved_budget() {
 /// brief builds or runs the product; under CPU-only pressure it is held while
 /// a review auto-task is admitted from the light reservation [ORB-15766].
 fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
-    let probe = PressureProbe::calm();
-    let (_root, runtime, _repo) = runtime();
-    let runtime = runtime.with_host_resource_probe(probe.clone());
+    let CalmDrain {
+        _root,
+        runtime,
+        probe,
+    } = CalmDrain::open();
 
     let definitions = runtime.paths().local_dir.join("auto_tasks");
     std::fs::create_dir_all(&definitions).unwrap();
-    std::fs::write(
-        definitions.join("qa-sweep.yaml"),
-        include_str!("../../assets/auto_tasks/qa-sweep.yaml"),
-    )
-    .unwrap();
-    std::fs::write(
-        definitions.join("qa-full-sweep.yaml"),
-        include_str!("../../assets/auto_tasks/qa-full-sweep.yaml"),
-    )
-    .unwrap();
-    std::fs::write(
-        definitions.join("code-review.yaml"),
-        include_str!("../../assets/auto_tasks/code-review.yaml"),
-    )
-    .unwrap();
-    std::fs::write(
-        definitions.join("friction-curation.yaml"),
-        include_str!("../../assets/auto_tasks/friction-curation.yaml"),
-    )
-    .unwrap();
+    for (name, definition) in [
+        (
+            "qa-sweep",
+            include_str!("../../assets/auto_tasks/qa-sweep.yaml"),
+        ),
+        (
+            "qa-full-sweep",
+            include_str!("../../assets/auto_tasks/qa-full-sweep.yaml"),
+        ),
+        (
+            "code-review",
+            include_str!("../../assets/auto_tasks/code-review.yaml"),
+        ),
+        (
+            "friction-curation",
+            include_str!("../../assets/auto_tasks/friction-curation.yaml"),
+        ),
+    ] {
+        std::fs::write(definitions.join(format!("{name}.yaml")), definition)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
 
     let qa_sweep = runtime.auto_task_mint("qa-sweep").unwrap();
     let qa_full_sweep = runtime.auto_task_mint("qa-full-sweep").unwrap();
@@ -2138,17 +2053,16 @@ fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
         "review and curation are admitted from the light reservation while QA sweeps wait: {wave}"
     );
 
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = default_readiness(&runtime);
 
-    let review_entry = readiness_task(&readiness, &code_review.id);
-    assert_eq!(review_entry["reason"], "ready", "{review_entry}");
-    assert_eq!(review_entry["cpu_light"], true, "{review_entry}");
-
-    let curation_entry = readiness_task(&readiness, &friction_curation.id);
-    assert_eq!(curation_entry["reason"], "ready", "{curation_entry}");
-    assert_eq!(curation_entry["cpu_light"], true, "{curation_entry}");
+    for (name, task) in [
+        ("code-review", &code_review),
+        ("friction-curation", &friction_curation),
+    ] {
+        let entry = readiness_task(&readiness, &task.id);
+        assert_eq!(entry["reason"], "ready", "{name}: {entry}");
+        assert_eq!(entry["cpu_light"], true, "{name}: {entry}");
+    }
 
     for qa_task in [&qa_sweep.id, &qa_full_sweep.id] {
         let entry = readiness_task(&readiness, qa_task);
@@ -2164,17 +2078,12 @@ fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
 /// Memory, disk and I/O pressure hold light leaves like any other: an agent
 /// session costs memory and its artifacts cost disk and I/O, whatever CPU does.
 fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
-    let probe = PressureProbe::calm();
-    let (_root, runtime, _repo) = runtime();
-    let runtime = runtime.with_host_resource_probe(probe.clone());
-    let light = seed(
-        &runtime,
-        Seed {
-            title: "review",
-            tags: LIGHT_TAGS,
-            ..Seed::default()
-        },
-    );
+    let CalmDrain {
+        _root,
+        runtime,
+        probe,
+    } = CalmDrain::open();
+    let light = seed(&runtime, Seed::named("review").tags(LIGHT_TAGS));
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
 
     let assert_held = |pressure: &str| {
@@ -2185,9 +2094,7 @@ fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
             wave["cpu_light_budget"]["applies"], false,
             "{pressure}: {wave}"
         );
-        let readiness = runtime
-            .workspace_auto_readiness(&[], None, 50, &[])
-            .unwrap();
+        let readiness = default_readiness(&runtime);
         let entry = readiness_task(&readiness, &light.id);
         assert_eq!(entry["reason"], "resource_throttled", "{pressure}: {entry}");
         assert_eq!(entry["cpu_light"], true, "{pressure}: {entry}");
@@ -2223,45 +2130,21 @@ fn memory_and_disk_pressure_still_hold_light_auto_tasks() {
 fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
     let (_root, runtime, _repo) = runtime();
     let runtime = runtime.with_automation_machine_identity(Some("hm_fixture".to_string()));
-    let older = seed(
-        &runtime,
-        Seed {
-            title: "older chore",
-            ..Seed::default()
-        },
-    );
-    let corrective = seed(
-        &runtime,
-        Seed {
-            title: "corrective",
-            task_type: TaskType::Bug,
-            ..Seed::default()
-        },
-    );
+    let older = seed(&runtime, Seed::named("older chore"));
+    let corrective = seed(&runtime, Seed::named("corrective").kind(TaskType::Bug));
     let high = seed(
         &runtime,
-        Seed {
-            title: "high priority",
-            priority: TaskPriority::High,
-            task_type: TaskType::Bug,
-            ..Seed::default()
-        },
+        Seed::named("high priority")
+            .priority(TaskPriority::High)
+            .kind(TaskType::Bug),
     );
     let expiring = seed(
         &runtime,
-        Seed {
-            title: "expiring full review",
-            tags: &["no-diff-expected", "auto-task:full-review"],
-            ..Seed::default()
-        },
+        Seed::named("expiring full review").tags(&["no-diff-expected", "auto-task:full-review"]),
     );
     let distant = seed(
         &runtime,
-        Seed {
-            title: "distant review",
-            tags: &["no-diff-expected", "auto-task:friction-curation"],
-            ..Seed::default()
-        },
+        Seed::named("distant review").tags(&["no-diff-expected", "auto-task:friction-curation"]),
     );
     admitted_frozen_batch(
         &runtime,
@@ -2289,9 +2172,7 @@ fn a_frozen_batch_near_its_deadline_sorts_ahead_of_same_priority_backlog() {
         "a higher priority still leads; the expiring batch leads its priority"
     );
 
-    let readiness = runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = default_readiness(&runtime);
     let listed: Vec<&str> = readiness["tasks"]
         .as_array()
         .unwrap()
@@ -2322,40 +2203,27 @@ fn surface_reservations_follow_frozen_batch_expiry_order() {
         write_files(&repo, &["held.rs", "foo/expiring.rs", "foo/ordinary.rs"]);
         let holder = seed(
             &runtime,
-            Seed {
-                title: "lock holder",
-                status: TaskStatus::InProgress,
-                context_files: Some(&["held.rs"]),
-                ..Seed::default()
-            },
+            Seed::named("lock holder")
+                .status(TaskStatus::InProgress)
+                .files(&["held.rs"]),
         );
         let reserver = seed(
             &runtime,
-            Seed {
-                title: "older high-priority reserver",
-                priority: TaskPriority::High,
-                task_type: reserver_type,
-                context_files: Some(&["held.rs", "dir:foo"]),
-                ..Seed::default()
-            },
+            Seed::named("older high-priority reserver")
+                .priority(TaskPriority::High)
+                .kind(reserver_type)
+                .files(&["held.rs", "dir:foo"]),
         );
         let expiring = seed(
             &runtime,
-            Seed {
-                title: "expiring overlapping work",
-                priority: expiring_priority,
-                task_type: TaskType::Feature,
-                context_files: Some(&["foo/expiring.rs"]),
-                ..Seed::default()
-            },
+            Seed::named("expiring overlapping work")
+                .priority(expiring_priority)
+                .kind(TaskType::Feature)
+                .files(&["foo/expiring.rs"]),
         );
         let ordinary = seed(
             &runtime,
-            Seed {
-                title: "ordinary overlapping work",
-                context_files: Some(&["foo/ordinary.rs"]),
-                ..Seed::default()
-            },
+            Seed::named("ordinary overlapping work").files(&["foo/ordinary.rs"]),
         );
         let before = list_backlog_tasks(&runtime, json!({}));
         assert_eq!(
@@ -2386,9 +2254,7 @@ fn surface_reservations_follow_frozen_batch_expiry_order() {
         let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
         let wave = classify(&runtime, &drain);
         assert_eq!(wave["loose_task_ids"], json!([expiring.id]), "{wave:#}");
-        let readiness = runtime
-            .workspace_auto_readiness(&[], None, 50, &[])
-            .unwrap();
+        let readiness = default_readiness(&runtime);
         let ready = readiness_task(&readiness, &expiring.id);
         assert_eq!(ready["eligible"], true, "{ready}");
         assert_eq!(ready["reason"], "ready", "{ready}");
@@ -2489,34 +2355,16 @@ pub(super) fn admitted_frozen_batch(
     assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }
 
-/// A shutdown inside the configured horizon holds a local wave, readiness, and
-/// an unattended entry. One minute past that horizon admits, while readiness
-/// and the entry decision still name the schedule.
+/// A shutdown inside the configured horizon holds a local wave and readiness.
+/// One minute past that horizon admits, while readiness and the entry decision
+/// still name the schedule.
 fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits() {
-    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let global = root.path().join("home/.orbit");
-    let repo = root.path().join("repo");
-    let workspace = repo.join(".orbit");
-    std::fs::create_dir_all(&global).unwrap();
-    std::fs::create_dir_all(repo.join("src")).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::write(repo.join("src/queued.rs"), "fn queued() {}\n").unwrap();
-    std::fs::write(
-        global.join("config.toml"),
+    let (_root, runtime, _probe) = configured_runtime(
         "[machine]\nhost_shutdown_hold_minutes = 30\n",
-    )
-    .unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &workspace)
-        .expect("runtime")
-        .with_host_resource_probe(PressureProbe::calm());
-    assert_eq!(runtime.host_shutdown_hold_minutes(), 30);
-    let queued = seed(
-        &runtime,
-        Seed {
-            context_files: Some(&["file:src/queued.rs"]),
-            ..Seed::default()
-        },
+        &["src/queued.rs"],
     );
+    assert_eq!(runtime.host_shutdown_hold_minutes(), 30);
+    let queued = seed(&runtime, Seed::default().files(&["file:src/queued.rs"]));
     let schedule = |minutes: i64| {
         orbit_core::runtime::host_signal::FixedHostSignals::scheduled(
             orbit_core::runtime::host_signal::ScheduledShutdown {
@@ -2532,67 +2380,51 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
             .with_host_signal_probe(Arc::new(schedule(minutes)))
     };
 
-    let holding = presented(30);
-    let drain = running_run(&holding, "workspace_auto_pipeline", json!({}));
-    let held = classify(&holding, &drain);
-    assert_eq!(held["loose_task_ids"], json!([]), "{held}");
-    assert_eq!(held["free_slots"], 0, "{held}");
-    assert_eq!(held["host_shutdown_holding"], true, "{held}");
-    assert!(held["host_shutdown"]["scheduled_at"].is_string(), "{held}");
-    let held_pass = holding
-        .read_run_state(&drain)
-        .unwrap()
-        .unwrap()
-        .pull_drain
-        .drain_last_pass
-        .expect("local pass");
-    assert_eq!(held_pass.admission_refusal, None, "{held_pass:?}");
-    let held_ready = holding
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
-    assert_eq!(held_ready["capacity"]["host_shutdown_holding"], true);
-    assert!(
-        held_ready["capacity"]["host_shutdown"]["scheduled_at"].is_string(),
-        "{held_ready}"
-    );
-    assert_eq!(
-        readiness_task(&held_ready, &queued.id)["reason"],
-        "host_shutdown_scheduled"
-    );
-    let refused = holding
-        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
-        .unwrap();
-    assert_eq!(refused.refusal.unwrap().code(), "host_shutdown_scheduled");
-    assert!(refused.host_shutdown.is_some());
-
-    let open = presented(31);
-    let drain = running_run(&open, "workspace_auto_pipeline", json!({}));
-    let wave = classify(&open, &drain);
-    assert_eq!(wave["loose_task_ids"], json!([queued.id]), "{wave}");
-    assert_eq!(wave["host_shutdown_holding"], false, "{wave}");
-    assert!(wave["host_shutdown"]["scheduled_at"].is_string(), "{wave}");
-    let open_pass = open
-        .read_run_state(&drain)
-        .unwrap()
-        .unwrap()
-        .pull_drain
-        .drain_last_pass
-        .expect("local pass");
-    assert_eq!(open_pass.admission_refusal, None, "{open_pass:?}");
-    let ready = open.workspace_auto_readiness(&[], None, 50, &[]).unwrap();
-    assert_eq!(ready["capacity"]["host_shutdown_holding"], false);
-    assert!(
-        ready["capacity"]["host_shutdown"]["scheduled_at"].is_string(),
-        "{ready}"
-    );
-    let admitted = readiness_task(&ready, &queued.id);
-    assert_ne!(admitted["reason"], "host_shutdown_scheduled", "{admitted}");
-    assert_eq!(admitted["reason"], "ready", "{admitted}");
-    let decision = open
-        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
-        .unwrap();
-    assert!(decision.refusal.is_none(), "{decision:?}");
-    assert!(decision.host_shutdown.is_some(), "{decision:?}");
+    // 30 minutes is inside the horizon and holds; 31 admits. Both still name the schedule.
+    for (minutes, holding) in [(30_i64, true), (31, false)] {
+        let runtime = presented(minutes);
+        let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+        let wave = classify(&runtime, &drain);
+        let case = format!("{minutes} minutes");
+        if holding {
+            assert_eq!(wave["loose_task_ids"], json!([]), "{case}: {wave}");
+            assert_eq!(wave["free_slots"], 0, "{case}: {wave}");
+        } else {
+            assert_eq!(wave["loose_task_ids"], json!([queued.id]), "{case}: {wave}");
+        }
+        assert_eq!(wave["host_shutdown_holding"], holding, "{case}: {wave}");
+        assert!(
+            wave["host_shutdown"]["scheduled_at"].is_string(),
+            "{case}: {wave}"
+        );
+        let pass = last_pass(&runtime, &drain);
+        assert_eq!(pass.admission_refusal, None, "{case}: {pass:?}");
+        let ready = default_readiness(&runtime);
+        assert_eq!(
+            ready["capacity"]["host_shutdown_holding"], holding,
+            "{case}"
+        );
+        assert!(
+            ready["capacity"]["host_shutdown"]["scheduled_at"].is_string(),
+            "{case}: {ready}"
+        );
+        let entry = readiness_task(&ready, &queued.id);
+        // An explicit entry is reported the schedule and proceeds past it.
+        let decision = runtime
+            .drain_entry_admission(DrainEntryPoint::ExplicitShip, &[])
+            .unwrap();
+        assert!(decision.host_shutdown.is_some(), "{case}: {decision:?}");
+        assert!(decision.refusal.is_none(), "{case}: {decision:?}");
+        if holding {
+            assert_eq!(
+                entry["reason"], "host_shutdown_scheduled",
+                "{case}: {entry}"
+            );
+        } else {
+            assert_ne!(entry["reason"], "host_shutdown_scheduled", "{entry}");
+            assert_eq!(entry["reason"], "ready", "{entry}");
+        }
+    }
 }
 
 // Related boundary scenarios share the isolated table fixture.

@@ -8,9 +8,9 @@
 //! This module is what consumes those requests: it reserves one landing attempt
 //! per handoff and submits the owner-local [`LANDING_JOB`] that carries it.
 //! Dispatch happens at the moment authority is recorded and again on demand, so
-//! landing never waits for a drain, a ship sweep or any schedule. A request that
-//! outlives its process stays pending and is picked up by the next dispatch pass,
-//! which is the recovery path for a crash between the two.
+//! landing never waits for a drain or any schedule. A request that outlives its
+//! process stays pending and is picked up by the next dispatch pass, which is
+//! the recovery path for a crash between the two.
 //!
 //! # What deduplicates work
 //!

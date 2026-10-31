@@ -11,7 +11,7 @@ use orbit_types::workflow::automation::recovery::{
     HistoryReplayRecord, RecoveryRecord, ReissuedAction,
 };
 use orbit_types::workflow::automation::{AutomationState, BatchAttempt, BatchState, Delivery};
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 
 pub(super) fn commit(
     store: &Store,
@@ -21,43 +21,14 @@ pub(super) fn commit(
 ) -> Result<bool, OrbitError> {
     validate(previous, next, record)?;
 
-    let record_json = encode(record)?;
-    let record_id = sha256_hex(record_json.as_bytes());
-
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
 
-        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
-            return Ok(false);
-        };
-
-        let changed = conn
-            .execute(
-                "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
-                params![
-                    next.generation,
-                    encode(next)?,
-                    previous.consumer,
-                    previous.generation,
-                    previous_json
-                ],
-            )
-            .map_err(sqlite_store_error)?;
-
-        if changed == 0 {
+        if !checkpoint::advance(conn, previous, next)? {
             return Ok(false);
         }
 
-        conn.execute(
-            "INSERT INTO automation_recoveries VALUES (?1,?2,?3,?4)",
-            params![
-                record_id,
-                previous.consumer,
-                record.at.to_rfc3339(),
-                record_json
-            ],
-        )
-        .map_err(sqlite_store_error)?;
+        write_record(conn, &previous.consumer, record)?;
 
         Ok(true)
     })
@@ -72,9 +43,6 @@ pub(super) fn reset(
     record: &RecoveryRecord,
 ) -> Result<bool, OrbitError> {
     validate_reset(previous, record)?;
-
-    let record_json = encode(record)?;
-    let record_id = sha256_hex(record_json.as_bytes());
 
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
@@ -94,19 +62,27 @@ pub(super) fn reset(
             return Ok(false);
         }
 
-        conn.execute(
-            "INSERT INTO automation_recoveries VALUES (?1,?2,?3,?4)",
-            params![
-                record_id,
-                previous.consumer,
-                record.at.to_rfc3339(),
-                record_json
-            ],
-        )
-        .map_err(sqlite_store_error)?;
+        write_record(conn, &previous.consumer, record)?;
 
         Ok(true)
     })
+}
+
+fn write_record(
+    conn: &Connection,
+    consumer: &str,
+    record: &RecoveryRecord,
+) -> Result<(), OrbitError> {
+    let record_json = encode(record)?;
+    let record_id = sha256_hex(record_json.as_bytes());
+
+    conn.execute(
+        "INSERT INTO automation_recoveries VALUES (?1,?2,?3,?4)",
+        params![record_id, consumer, record.at.to_rfc3339(), record_json],
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
 }
 
 /// A reset is the one recovery that forgets debt, so its record has to carry
@@ -169,22 +145,7 @@ pub(super) fn stall(
 
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
         let conn = tx.connection();
-        let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
-            return Ok(false);
-        };
-        conn
-            .execute(
-                "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
-                params![
-                    next.generation,
-                    encode(next)?,
-                    previous.consumer,
-                    previous.generation,
-                    previous_json
-                ],
-            )
-            .map(|changed| changed == 1)
-            .map_err(sqlite_store_error)
+        checkpoint::advance(conn, previous, next)
     })
 }
 

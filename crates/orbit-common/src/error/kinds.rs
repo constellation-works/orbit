@@ -25,9 +25,6 @@ pub enum NotFoundKind {
     Skill,
     Job,
     JobRun,
-    Activity,
-    DesignFeature,
-    AgentSession,
     Workspace,
 }
 
@@ -41,9 +38,6 @@ impl std::fmt::Display for NotFoundKind {
             Self::Skill => "skill",
             Self::Job => "job",
             Self::JobRun => "job run",
-            Self::Activity => "activity",
-            Self::DesignFeature => "design feature",
-            Self::AgentSession => "agent session",
             Self::Workspace => "workspace",
         };
         f.write_str(kind)
@@ -135,11 +129,13 @@ pub struct SqliteContention {
     pub detail: String,
 }
 
-/// The error family an [`crate::OrbitError::StorageAccessDenied`] reports as.
+/// The error family an [`crate::OrbitError::StorageAccessDenied`] or
+/// [`crate::OrbitError::StorageLockBusy`] reports as.
 ///
-/// A read-only or access-denied failure keeps the message prefix and the
-/// stable error code of the variant it would otherwise have been built as, so
-/// carrying the class changes no user-visible text and no wire code.
+/// A read-only, access-denied or lock-busy failure keeps the message prefix
+/// and the stable error code of the variant it would otherwise have been
+/// built as, so carrying the class changes no user-visible text and no wire
+/// code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageLayer {
@@ -280,6 +276,101 @@ impl std::fmt::Display for HostRegistryCode {
     }
 }
 
+/// The stable machine code of an [`OrbitError::RemoteTool`]: what a remote
+/// owner, plugin backend or broker answered with.
+///
+/// Named variants are exactly the codes Orbit decides on; any other code is
+/// kept verbatim in [`Self::Other`]. Parse a received code once with
+/// [`From`], which never yields `Other` for a named spelling, then match the
+/// variant. It serializes, displays and debug-prints as the received string,
+/// so every wire spelling round-trips byte-for-byte.
+///
+/// [`OrbitError::RemoteTool`]: super::OrbitError::RemoteTool
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum RemoteToolCode {
+    /// The call lost only to a lock-wait deadline; it can succeed unchanged
+    /// later.
+    LockBusy,
+    /// The requested record does not exist on the remote.
+    NotFound,
+    /// The remote's protocol contract differs from this build's.
+    ProtocolSkew,
+    /// The call could not reach the plugin broker.
+    PluginBrokerUnavailable,
+    /// The remote rejected the request's input; nothing was decided.
+    InvalidInput,
+    /// The remote's catalog role refused the call, before any capability
+    /// grant was consulted.
+    CapabilityRefused,
+    /// The caller's capability grant does not cover the call.
+    CapabilityDenied,
+    /// The remote's policy refused the call.
+    PolicyDenied,
+    /// Any other code, exactly as received.
+    Other(String),
+}
+
+impl RemoteToolCode {
+    const NAMED: [Self; 8] = [
+        Self::LockBusy,
+        Self::NotFound,
+        Self::ProtocolSkew,
+        Self::PluginBrokerUnavailable,
+        Self::InvalidInput,
+        Self::CapabilityRefused,
+        Self::CapabilityDenied,
+        Self::PolicyDenied,
+    ];
+
+    /// The wire spelling of this code.
+    pub const fn as_str(&self) -> &str {
+        match self {
+            Self::LockBusy => "lock_busy",
+            Self::NotFound => "not_found",
+            Self::ProtocolSkew => "protocol_skew",
+            Self::PluginBrokerUnavailable => "plugin_broker_unavailable",
+            Self::InvalidInput => "invalid_input",
+            Self::CapabilityRefused => "capability_refused",
+            Self::CapabilityDenied => "capability_denied",
+            Self::PolicyDenied => "policy_denied",
+            Self::Other(code) => code.as_str(),
+        }
+    }
+}
+
+impl From<String> for RemoteToolCode {
+    fn from(code: String) -> Self {
+        Self::NAMED
+            .into_iter()
+            .find(|named| named.as_str() == code)
+            .unwrap_or(Self::Other(code))
+    }
+}
+
+impl From<&str> for RemoteToolCode {
+    fn from(code: &str) -> Self {
+        Self::from(code.to_string())
+    }
+}
+
+impl std::fmt::Display for RemoteToolCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::fmt::Debug for RemoteToolCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.as_str(), f)
+    }
+}
+
+impl Serialize for RemoteToolCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 /// Facts certified when conflict recovery leaves a candidate on its covering base.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateAbsorbed {
@@ -342,4 +433,108 @@ pub struct PrivateVcsFailure {
     pub class: PrivateVcsFailureClass,
     /// The rendered message, without the `execution failed: ` prefix.
     pub message: String,
+    /// Set only when a provider adapter recognized an authenticated
+    /// throttling answer to a read. The class stays as read, so no transient
+    /// retry ever repeats it; whether and when the read may repeat is the
+    /// caller's policy.
+    pub read_throttle: Option<ProviderReadThrottle>,
+}
+
+/// What an authenticated provider throttling answer to a read made
+/// observable. Every field is optional: an absent field was not observed and
+/// must never be invented. None of them carries a credential.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderReadThrottle {
+    /// The provider's `Retry-After` wait, in seconds from the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_seconds: Option<u64>,
+    /// The provider's rate-limit reset instant, in Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_epoch_seconds: Option<u64>,
+    /// The rate-limit resource the provider named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// The throttled account as the provider named it, such as `user ID 1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    /// The provider's request identifier for the throttled answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+/// Stable decision-request and channel refusal codes shared by all transports.
+/// Deserialized where a refusal crosses a process boundary intact (a plugin
+/// backend's host route).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionRefusalCode {
+    ChannelNotRegistered,
+    ChannelRevoked,
+    CallerNotAllowed,
+    SenderNotAllowed,
+    AuthenticationFailed,
+    DkimVerificationFailed,
+    DkimVerificationUnavailable,
+    DkimVerificationRequired,
+    RawMessageTooLarge,
+    TokenInvalid,
+    TokenConsumed,
+    RequestExpired,
+    RequestSuperseded,
+    AnswerNotAllowed,
+    RequestNotFound,
+    AnswerNotApplicable,
+    DecisionChannelDisabled,
+}
+
+impl DecisionRefusalCode {
+    /// The protocol name exposed as the CLI and MCP structured error code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChannelNotRegistered => "channel_not_registered",
+            Self::ChannelRevoked => "channel_revoked",
+            Self::CallerNotAllowed => "caller_not_allowed",
+            Self::SenderNotAllowed => "sender_not_allowed",
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::DkimVerificationFailed => "dkim_verification_failed",
+            Self::DkimVerificationUnavailable => "dkim_verification_unavailable",
+            Self::DkimVerificationRequired => "dkim_verification_required",
+            Self::RawMessageTooLarge => "raw_message_too_large",
+            Self::TokenInvalid => "token_invalid",
+            Self::TokenConsumed => "token_consumed",
+            Self::RequestExpired => "request_expired",
+            Self::RequestSuperseded => "request_superseded",
+            Self::AnswerNotAllowed => "answer_not_allowed",
+            Self::RequestNotFound => "request_not_found",
+            Self::AnswerNotApplicable => "answer_not_applicable",
+            Self::DecisionChannelDisabled => "decision_channel_disabled",
+        }
+    }
+
+    /// Whether the same submission can be retried unchanged after a verifier outage.
+    pub fn is_retryable(self) -> bool {
+        matches!(self, Self::DkimVerificationUnavailable)
+    }
+
+    /// Whether this refusal retains the policy-denial audit classification.
+    pub fn is_policy_denial(self) -> bool {
+        matches!(
+            self,
+            Self::ChannelNotRegistered
+                | Self::ChannelRevoked
+                | Self::CallerNotAllowed
+                | Self::SenderNotAllowed
+                | Self::AuthenticationFailed
+                | Self::DkimVerificationFailed
+                | Self::DkimVerificationRequired
+                | Self::TokenInvalid
+                | Self::DecisionChannelDisabled
+        )
+    }
+}
+
+impl std::fmt::Display for DecisionRefusalCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }

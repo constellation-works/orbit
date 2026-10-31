@@ -23,28 +23,31 @@
 use orbit_common::OrbitError;
 
 mod admission;
+mod automation_port;
 mod coverage;
 pub(crate) mod crew;
+mod distributed_port;
 pub(crate) mod evidence;
 pub(crate) mod flaky;
 mod fulfilment;
+#[cfg(feature = "test-support")]
+pub(crate) use fulfilment::test_support as fulfilment_test_support;
 mod gate;
 mod handoff;
 mod landing;
 mod projection;
 pub(crate) mod reconciliation;
 mod switches;
+mod task_port;
 #[cfg(test)]
 mod tests;
 
 pub use admission::pull_review_request_refusal;
 pub(crate) use admission::{
-    admit_review_request, input_run_review_admission, install_review_admission,
-    local_route_before_landing_conflict, local_route_before_pr_conflict,
-    local_route_run_option_refusal, review_layer_json, run_review_admission,
-    upgrade_resume_admission_mismatch,
+    input_run_review_admission, local_route_before_landing_conflict,
+    local_route_before_pr_conflict, local_route_run_option_refusal, run_review_admission,
 };
-pub(crate) use coverage::exclusions;
+pub(in crate::application) use distributed_port::ReviewDistributedPort;
 pub(crate) use fulfilment::fulfil_review_evidence;
 pub use fulfilment::{
     EVIDENCE_FULFILMENT_AUDIT, EvidenceFulfilmentTick, REVIEW_EVIDENCE_FULFILMENT_JOB,
@@ -86,10 +89,6 @@ pub(crate) const REVIEW_ADMITTED_JOBS: &[&str] = &[
     "task_pr_pipeline",
     "task_local_pipeline",
 ];
-
-/// The job that delivers locally and therefore cannot honour `review.timing`
-/// as a final route.
-pub(crate) const LOCAL_ROUTE_JOB: &str = "task_local_pipeline";
 
 /// Longest resume chain followed back to its first run.
 const MAX_RESUME_CHAIN: usize = 64;

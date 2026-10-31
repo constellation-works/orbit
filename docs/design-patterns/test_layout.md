@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Per-Module Sibling tests/ Directory"
-last_validated: 2026-10-19
+last_validated: 2026-10-29
 ---
 # Per-Module Sibling tests/ Directory
 
@@ -68,7 +68,7 @@ After relocating a suite to a crate-root integration binary, remove its empty
 source test module and unused private test support. In `orbit-exec`, sandbox
 compiler/spawn fixtures are modules of `tests/sandbox/main.rs`; only admitted
 private injection and security seams retain sibling source tests. The
-[applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md)
+[applied audit](../dev/reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md)
 records the per-identity coverage and the qualifying seams.
 
 Where a crate had grown one integration binary per file, those files now share
@@ -119,7 +119,7 @@ This nests the test module as a *child* of the source module. Children can read 
 
 ## Reference: `orbit-mcp::adapter`
 
-The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schema`, and `structured`, plus `#[cfg(test)] mod tests;`. Its current sibling unit test, `adapter/tests/name_map.rs`, mirrors the `name_map` source module. The private SSH proxy argv case stays in `orbit-mcp/src/remote/tests/proxy.rs`. Destination-session fault injection stays in `orbit-mcp/src/federated/probe/tests/session.rs`, beside `probe/session.rs`, because that reader is not a public seam. Listener bind policy, capability classes, server identity, and federated routing run through the crate-root `tests/boundary/` binary. Registry's public identity, publication and persistence cases share the crate-root `orbit-registry/tests/registry/main.rs` binary. Only the two admitted migration writer-fault and read/lock-interleaving harnesses remain in `orbit-registry/src/tests/workspace_registry.rs`, with their private callbacks and exact child entry point intact. Each test file accesses its sibling source through the narrowest deliberate visibility.
+The MCP `adapter` module declares `dispatch`, `name_map`, `presentation`, `schema`, and `structured`, plus `#[cfg(test)] mod test_support;` and `#[cfg(test)] mod tests;`. Its current sibling unit test, `adapter/tests/name_map.rs`, mirrors the `name_map` source module. The private SSH proxy argv case stays in `orbit-mcp/src/remote/tests/proxy.rs`. Destination-session fault injection stays in `orbit-mcp/src/federated/probe/tests/session.rs`, beside `probe/session.rs`, because that reader is not a public seam. Listener bind policy, capability classes, server identity, and federated routing run through the crate-root `tests/boundary/` binary. Registry's public identity, publication and persistence cases share the crate-root `orbit-registry/tests/registry/main.rs` binary. Only the two admitted migration writer-fault and read/lock-interleaving harnesses remain in `orbit-registry/src/tests/workspace_registry.rs`, with their private callbacks and exact child entry point intact. Each test file accesses its sibling source through the narrowest deliberate visibility.
 
 ## Public contract tests in orbit-types
 
@@ -165,6 +165,15 @@ Tests assert what the code guarantees (parses, required fields present, ships di
 
 The cancellation and claimed-recovery fixtures share the test-only
 `application::test_support::{admission_request, admission_receipt}` constructors.
+`admission_request` lives in `crates/orbit-core/tests/support/admission.rs`, which
+`lib.rs` and the `runtime` integration binary both include with `#[path]`, because
+an integration test cannot import a `cfg(test)` library helper. The same file holds
+`admission_ship_contract` and `admission_review_contract`; the distributed-drain
+review fixtures set `before_pr`, `before_landing`, `review`, `crew` and the
+captured checks with struct update syntax. A minimal `TaskCreateParams` comes from
+`tests/support/task_params.rs` the same way (`task_create_params(title,
+description, status)`), with the scenario's context files, complexity and crew set
+by struct update.
 These deserialize the required wire fields and use the contract's serde defaults
 for unrelated optional capability and evidence metadata. The request helper uses
 the fixture caller version and current protocol schema; callers explicitly set
@@ -188,7 +197,7 @@ in an exact child with inherited authority cleared and a disposable home. A move
 case carries its platform `cfg` from both the original function and declaring
 module; native macOS cases remain macOS coverage.
 
-The [per-identity reconciliation](../reviews/unit-test-admission-orbit-core-2026-10-13.json)
+The [per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-core-2026-10-13.json)
 records relocations, retirements and corrected admissions. Private broker scope,
 worker scope/counters, keyed admission, injected stop/clock/probe behavior and raw
 confined writers retain their required child fixtures and seams. Copying a private
@@ -201,7 +210,7 @@ and shell actions, host push/PR operations, and public worktree collection. Empt
 source modules and unused resume/commit/collector fixture support are removed.
 Private inspection leases, CI query/clock injection, raw process observers and
 final-removal safety seams keep their sibling layout, as recorded in the
-[engine per-identity reconciliation](../reviews/unit-test-admission-orbit-engine-2026-10-13.json).
+[engine per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-engine-2026-10-13.json).
 
 ## Public API integration suites
 
@@ -224,12 +233,12 @@ snapshots used as fixture
 evidence deserialize exported persisted types; they do not copy the private
 bundle reader. Private builders, ledger prefixes, counters and publication stage
 hooks remain beside their source as documented in the
-[per-identity reconciliation](../reviews/unit-test-admission-orbit-store-2026-10-13.json).
+[per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-store-2026-10-13.json).
 
 Orbit-web's HTTP, log-rendering and dashboard Node cases share the existing
 `tests/http_api.rs` binary, with fixtures under `tests/http_api/`. Empty API
 `auto_tasks`, `distributed`, `origin`, `tasks` and `runs` source test modules are
 removed, together with unused request/seeding support and the gate's test-only
-permit getter. The [per-identity reconciliation](../reviews/unit-test-admission-orbit-web-2026-10-13.json)
+permit getter. The [per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-web-2026-10-13.json)
 records 32 relocations and the two corrected private SSH budget/probe admissions.
 The original 24 admitted cases and their child fixtures retain their sibling layout.

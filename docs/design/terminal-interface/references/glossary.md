@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Terminal Interface"
-last_validated: 2026-10-22
+last_validated: 2026-10-29
 ---
 
 # Glossary: Terminal Interface
@@ -20,4 +20,4 @@ Vocabulary specific to how `orbit` renders terminal output. Standard terminal an
 | **Role** | A semantic color token — `ok`, `warn`, `error`, `active`, `muted`, `neutral`. Attached to a value's meaning, mapped to ANSI only by the renderer, and never present in a payload. [specs/color-and-styling.md §1](../specs/color-and-styling.md). |
 | **Sink** | The resolved stdout target together with its capabilities (`is_tty`, `width`, `color_allowed`). The single place every environment question is answered. [specs/output-modes.md §1](../specs/output-modes.md). |
 | **Truncation indicator** | The single `…` marking a value cut to fit its column. Its presence is the promise that a detail command or `--format json` carries the value in full; a cut without one is silent loss. [specs/table-rendering.md §4](../specs/table-rendering.md). |
-| **Uniform-value suppression** | Omitting, in `auto` mode only, a column whose value is identical across every row of the current result set. Computed per invocation, so it varies with filters. [specs/table-rendering.md §5](../specs/table-rendering.md). |
+| **Uniform-value suppression** | Omitting, in the table form unless `--format table` asked for it, a column whose value is identical across every row of the current result set. Computed per invocation, so it varies with filters. [specs/table-rendering.md §5](../specs/table-rendering.md). |

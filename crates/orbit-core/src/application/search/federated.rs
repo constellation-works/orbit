@@ -195,7 +195,7 @@ fn query_one_workspace(
         };
 
     let runtime = match catalog.open(target) {
-        Ok(runtime) => runtime,
+        Ok(kernel) => OrbitRuntime::from_kernel(kernel),
         Err(error) => {
             record_note(&mut report, &mut notes, format!("skipped: {error}"));
             return WorkspaceOutcome {

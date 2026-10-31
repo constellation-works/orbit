@@ -140,6 +140,18 @@ impl OrbitRuntime {
                     now,
                 )
                 .map_err(|error| restore_after_failure(&path, &original, error))?;
+                // Deleting the definition drops its condition edge memory and
+                // `self` history (§2).
+                if matches!(
+                    definition.schedule,
+                    orbit_types::workflow::AutoTaskSchedule::Condition { .. }
+                ) {
+                    crate::application::automation::condition::forget_condition_state(
+                        self,
+                        orbit_automation::condition::ConditionCarrier::AutoTask,
+                        name,
+                    );
+                }
                 // The definition is gone; a leftover settings entry would only
                 // resurface on a later restore or same-named add, which both
                 // drop it again.
@@ -194,6 +206,13 @@ impl OrbitRuntime {
                     "auto-task '{name}' is not a shipped default; only shipped defaults can be restored"
                 ))
             })?;
+            // Sync would retire it again on its next pass.
+            if !self.workspace_seeding_policies()?.auto_tasks.includes(name) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "shipped auto-task '{name}' is left out by `seeding.auto_tasks`; add it to \
+                     that policy, then run `orbit workspace sync` to seed it"
+                )));
+            }
             let path = definition_path(&self.paths().local_dir, name);
             let collection = self.validated_auto_tasks(name)?;
             if path.exists()

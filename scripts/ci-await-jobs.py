@@ -12,6 +12,15 @@ and its conclusion stays the gate's result. It reads the run's jobs through
 the latest attempt of each job. A job that completes with any conclusion but
 success fails the wait at once. API errors are retried until the timeout.
 
+Single-page listings use ETag conditional requests at three-second intervals.
+Authenticated 304 responses do not consume GitHub's primary rate limit.
+Without an ETag, on API errors, with fewer than 100 primary requests left,
+or when pagination is needed, --poll-seconds (default 15) is the fallback
+interval. The server's X-Poll-Interval, Retry-After and, once the primary quota
+is exhausted, X-RateLimit-Reset minimums raise it. A 403 or 429 without
+Retry-After sets a 60-second minimum for single-page and paginated listings
+alike.
+
 --timeout-seconds is one absolute budget for the whole wait. Each `gh api`
 listing runs under the remaining budget, and the poll sleep is clipped to it. A
 listing still running at expiry is killed and reaped (at most
@@ -37,19 +46,18 @@ import time
 # Bound on reaping a listing killed at the deadline, added to --timeout-seconds.
 CLEANUP_SECONDS = 5
 
-FIELDS = (".jobs[] | {name, status, conclusion, started_at, completed_at, html_url,"
-          " steps: [.steps[]? | {name, status, conclusion}]}")
+FIELDS = (".jobs[] | {id, run_id, run_attempt, head_sha, name, status, conclusion, started_at, completed_at, html_url,"
+          " steps: [.steps[]? | {name, number, status, conclusion}]}")
 
 
 class ListingTimeout(Exception):
     """The job listing was still running when the wait budget ran out."""
 
 
-def list_jobs(repository, run_id, remaining):
-    """Return {name: job}, or None on an API error; raise ListingTimeout past `remaining` seconds."""
+def request_job_listing(arguments, remaining):
+    """Run a listing under the remaining deadline, killing and reaping it at expiry."""
     child = subprocess.Popen(
-        ["gh", "api", "--paginate", "--jq", FIELDS,
-         f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"],
+        ["gh", "api", *arguments],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         stdout, stderr = child.communicate(timeout=max(remaining, 0))
@@ -64,16 +72,149 @@ def list_jobs(repository, run_id, remaining):
     finally:
         if child.poll() is None:
             child.kill()
-    if child.returncode != 0:
-        print(f"ci-await: job listing failed (exit {child.returncode}): {stderr.strip()}",
+    status = child.returncode
+    # gh exits 1 for HTTP 304 even with --include. It is a successful
+    # conditional response, not a transport error that should slow polling.
+    status_line = stdout.partition("\n")[0].split()
+    if ("--include" in arguments and len(status_line) >= 2
+            and status_line[0].startswith("HTTP/") and status_line[1] == "304"):
+        status = 0
+    if status != 0:
+        print(f"ci-await: job listing failed (exit {status}): {stderr.strip()}",
               file=sys.stderr)
-        return None
-    jobs = {}
-    for line in stdout.splitlines():
-        if line.strip():
-            job = json.loads(line)
-            jobs[job["name"]] = job
-    return jobs
+    return status, stdout
+
+
+class JobListingPoller:
+    """Cache only a complete latest-attempt listing, never a partial page."""
+
+    def __init__(self, repository, run_id, poll_seconds):
+        self.endpoint = f"repos/{repository}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
+        self.fallback_seconds = poll_seconds
+        self.poll_seconds = poll_seconds
+        self.etag = None
+        self.jobs = None
+        self.paginated = False
+        self.requests = 0
+        self.not_modified = 0
+        self.server_minimum = 0
+        self.primary_remaining = 1000
+
+    def _backoff_minimum(self, headers, http_status):
+        """Fold one response's backoff headers into the poll interval floor."""
+        try:
+            self.server_minimum = float(headers.get("x-poll-interval", str(self.server_minimum)))
+            minimum = max(self.server_minimum, float(headers.get("retry-after", "0")))
+            self.primary_remaining = int(headers.get("x-ratelimit-remaining", str(self.primary_remaining)))
+            if self.primary_remaining == 0 and "x-ratelimit-reset" in headers:
+                minimum = max(minimum, float(headers["x-ratelimit-reset"]) - time.time())
+            if http_status in ("403", "429") and "retry-after" not in headers:
+                minimum = max(minimum, 60)
+        except ValueError:
+            minimum, self.primary_remaining = self.fallback_seconds, 0
+        return minimum
+
+    def _parse_paginated_listing(self, stdout):
+        """Split a --paginate --include --jq listing into per-page responses."""
+        pages = []
+        lines = stdout.splitlines()
+        index = 0
+        while index < len(lines):
+            if not lines[index].startswith("HTTP/"):
+                index += 1
+                continue
+            parts = lines[index].split()
+            http_status = parts[1] if len(parts) >= 2 else ""
+            index += 1
+            headers = {}
+            while index < len(lines) and lines[index].strip():
+                name, separator, value = lines[index].partition(":")
+                if separator:
+                    headers[name.strip().lower()] = value.strip()
+                index += 1
+            if index < len(lines) and not lines[index].strip():
+                index += 1
+            body = []
+            while index < len(lines) and not lines[index].startswith("HTTP/"):
+                body.append(lines[index])
+                index += 1
+            pages.append((http_status, headers, body))
+        return pages
+
+    def read_job_listing(self, remaining):
+        started = time.monotonic()
+        self.poll_seconds = max(self.server_minimum, self.fallback_seconds)
+        self.requests += 1
+        if self.paginated:
+            status, stdout = request_job_listing(
+                ["--include", "--paginate", "--jq", FIELDS, self.endpoint], remaining)
+            pages = self._parse_paginated_listing(stdout)
+            if not pages:
+                if status:
+                    return None
+                try:
+                    return {job["name"]: job for line in stdout.splitlines() if line.strip()
+                            for job in [json.loads(line)]}
+                except (ValueError, KeyError):
+                    return None
+            minimum = self.server_minimum
+            for http_status, headers, _ in pages:
+                minimum = max(minimum, self._backoff_minimum(headers, http_status))
+            self.poll_seconds = max(minimum, self.fallback_seconds)
+            if status:
+                return None
+            jobs = {}
+            try:
+                for http_status, _, body in pages:
+                    if http_status != "200":
+                        return None
+                    for line in body:
+                        if line.strip():
+                            job = json.loads(line)
+                            jobs[job["name"]] = job
+            except (ValueError, KeyError):
+                return None
+            return jobs
+        arguments = ["--include", self.endpoint]
+        if self.etag:
+            arguments += ["--header", f"If-None-Match: {self.etag}"]
+        status, stdout = request_job_listing(arguments, remaining)
+        head, _, body = stdout.partition("\n\n")
+        status_line = head.splitlines()[0].split() if head else []
+        http_status = status_line[1] if len(status_line) >= 2 else ""
+        headers = {name.lower(): value.strip() for line in head.splitlines()[1:]
+                   for name, separator, value in [line.partition(":")] if separator}
+        minimum = self._backoff_minimum(headers, http_status)
+        self.poll_seconds = max(minimum, self.fallback_seconds)
+        if status:
+            return None
+        if http_status == "304" and self.jobs is not None:
+            self.not_modified += 1
+        elif http_status == "200":
+            # A first-page ETag says nothing about later pages. Retain the
+            # original fully paginated listing and cadence for larger runs.
+            if 'rel="next"' in headers.get("link", ""):
+                self.paginated = True
+                first_minimum = minimum
+                remaining -= time.monotonic() - started
+                if remaining <= 0:
+                    raise ListingTimeout
+                jobs = self.read_job_listing(remaining)
+                self.poll_seconds = max(self.poll_seconds, first_minimum, self.fallback_seconds)
+                return jobs
+            payload = json.loads(body)
+            if payload.get("total_count") != len(payload["jobs"]):
+                return None
+            self.jobs = {job["name"]: job for job in payload["jobs"]}
+            if len(self.jobs) != len(payload["jobs"]):
+                return None
+            self.etag = headers.get("etag")
+        else:
+            print(f"ci-await: job listing returned unexpected HTTP status {http_status}", file=sys.stderr)
+            return None
+        if self.etag and self.primary_remaining >= 100:
+            self.poll_seconds = max(minimum, min(3, self.fallback_seconds))
+        return self.jobs
 
 
 def elapsed(started, completed):
@@ -85,6 +226,48 @@ def elapsed(started, completed):
     return str(int((end - start).total_seconds()))
 
 
+def dependency_failure_record(jobs, dependency, step=None):
+    """Emit evidence only for an identified dependency failure, never authority."""
+    try:
+        source = jobs[os.environ["ORBIT_DEPENDENCY_JOB_NAME"]]
+        if source["status"] != "in_progress" or source["conclusion"] is not None:
+            return
+        source_step = [item for item in source["steps"]
+                       if item["name"] == os.environ["ORBIT_DEPENDENCY_STEP"]]
+        if len(source_step) != 1 or source_step[0]["status"] != "in_progress":
+            return
+        run_id, attempt = int(os.environ["GITHUB_RUN_ID"]), int(os.environ["GITHUB_RUN_ATTEMPT"])
+        for item in (source, dependency):
+            if (item["run_id"] != run_id or item["run_attempt"] != attempt
+                    or not isinstance(item["id"], int) or item["id"] <= 0):
+                return
+        if source["id"] == dependency["id"] or source["head_sha"] != dependency["head_sha"]:
+            return
+        if step is None:
+            if dependency["status"] != "completed" or dependency["conclusion"] != "failure":
+                return
+        elif step["status"] != "completed" or step["conclusion"] != "failure":
+            return
+        record = {"schema_version": 1, "kind": "dependency_failed",
+                  "repository": os.environ["GITHUB_REPOSITORY"],
+                  "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+                  "execution_sha": os.environ["GITHUB_SHA"],
+                  "producer_sha": os.environ["ORBIT_DEPENDENCY_PRODUCER_SHA"],
+                  "execution_contract": os.environ["ORBIT_DEPENDENCY_EXECUTION"],
+                  "head_sha": source["head_sha"], "run_id": run_id, "run_attempt": attempt,
+                  "source": {"job_id": source["id"], "job_key": os.environ["GITHUB_JOB"],
+                             "job_name": source["name"], "step_name": source_step[0]["name"],
+                             "step_number": source_step[0]["number"]},
+                  "dependencies": [{"job_id": dependency["id"], "job_name": dependency["name"],
+                                    "status": dependency["status"], "conclusion": dependency["conclusion"],
+                                    "step": step}]}
+        if len(json.dumps(record)) <= 8192:
+            print("orbit-dependency-evidence:" + json.dumps(record, sort_keys=True), flush=True)
+    except (KeyError, TypeError, ValueError):
+        # Legacy/missing identity never changes the wait's ordinary failure.
+        return
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--job", action="append", required=True, dest="jobs")
@@ -94,6 +277,16 @@ def main():
     args = parser.parse_args()
     repository = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
+    poller = JobListingPoller(repository, run_id, args.poll_seconds)
+    try:
+        return await_workflow_jobs(args, poller)
+    finally:
+        print(f"ci-await-api: listings={poller.requests} not_modified={poller.not_modified} "
+              f"paginated={str(poller.paginated).lower()}")
+
+
+def await_workflow_jobs(args, poller):
+    """Keep the whole gate's original success, failure and absolute-deadline rules."""
 
     deadline = time.monotonic() + args.timeout_seconds
     reported = set()
@@ -105,19 +298,20 @@ def main():
         listing = "listing unavailable"
         if remaining > 0:
             try:
-                jobs = list_jobs(repository, run_id, remaining)
+                jobs = poller.read_job_listing(remaining)
             except ListingTimeout:
                 blocked = True
                 listing = "job listing still running at the deadline, killed"
-        if jobs is not None:
+        if jobs is not None and time.monotonic() < deadline:
             pending = []
             for name in args.jobs:
                 job = jobs.get(name, {"status": "missing"})
                 status, conclusion, url = job["status"], job.get("conclusion"), job.get("html_url")
                 started, completed = job.get("started_at") or "", job.get("completed_at") or ""
                 step = next((step for step in job.get("steps") or [] if step.get("name") == args.step), None)
-                if status != "completed" and step is not None and step.get("status") == "completed":
+                if step is not None and step.get("status") == "completed":
                     if step.get("conclusion") != "success":
+                        dependency_failure_record(jobs, job, step)
                         print(f"ci-await: {name} step '{args.step}' concluded "
                               f"{step.get('conclusion') or 'without a conclusion'}: {url}", file=sys.stderr)
                         return 1
@@ -129,6 +323,7 @@ def main():
                     pending.append(f"{name} ({status})")
                     continue
                 if conclusion != "success":
+                    dependency_failure_record(jobs, job)
                     print(f"ci-await: {name} concluded {conclusion or 'without a conclusion'}: {url}",
                           file=sys.stderr)
                     return 1
@@ -156,7 +351,7 @@ def main():
             print(f"ci-await: timed out after {args.timeout_seconds:g} s waiting for {waiting}",
                   file=sys.stderr)
             return 1
-        time.sleep(min(args.poll_seconds, remaining))
+        time.sleep(min(poller.poll_seconds, remaining))
 
 
 if __name__ == "__main__":

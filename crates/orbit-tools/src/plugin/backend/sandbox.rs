@@ -10,8 +10,9 @@ pub struct PluginSandboxProfile {
     /// rewrite.
     pub read: Vec<PathBuf>,
     /// Host-owned trees carved out of [`Self::read`] however it was composed:
-    /// the live callback sessions, the grant witnesses and every plugin's
-    /// state (`PLUGIN_GLOBAL_READ_DENY_DIRS`). Neither platform lets a
+    /// the live callback sessions, the grant witnesses, every plugin's state,
+    /// the plugin secret store and the decision-channel key store
+    /// (`PLUGIN_GLOBAL_READ_DENY_DIRS`). Neither platform lets a
     /// manifest buy them back: the carve-out is applied after the granted
     /// paths rather than beside them, and a manifest read root inside one of
     /// them never reaches [`Self::read`].
@@ -58,6 +59,10 @@ pub struct PluginSandboxProfile {
     /// callback credential. Borrowed from the [`PluginCallbackSession`], which
     /// owns it and must outlive the spawn.
     pub(crate) callback_fd: Option<i32>,
+    /// The host descriptor the child receives as [`PLUGIN_HOST_ROUTE_FD`]:
+    /// its route back to the host for the decision-channel callbacks. Borrowed
+    /// from the [`PluginCallbackSession`] like [`Self::callback_fd`].
+    pub(crate) host_route_fd: Option<i32>,
 }
 
 impl PluginSandboxProfile {
@@ -77,6 +82,7 @@ impl PluginSandboxProfile {
         #[cfg(unix)]
         {
             self.callback_fd = Some(session.credential_fd());
+            self.host_route_fd = session.host_route_fd();
         }
         self
     }
@@ -184,6 +190,9 @@ impl Sandbox for PluginSandboxProfile {
         // The callback credential reaches the child the same way under every
         // confinement: `sandbox-exec` execs the program it wraps and Landlock
         // governs paths, not descriptors, so an inherited number survives both.
+        // The credential is mapped first: both sources sit above
+        // [`PLUGIN_CALLBACK_FD`] and the route's above [`PLUGIN_HOST_ROUTE_FD`],
+        // so neither mapping overwrites a source still to be mapped.
         let inherited: Vec<InheritedFd> = self
             .callback_fd
             .map(|source| InheritedFd {
@@ -191,6 +200,10 @@ impl Sandbox for PluginSandboxProfile {
                 target: PLUGIN_CALLBACK_FD,
             })
             .into_iter()
+            .chain(self.host_route_fd.map(|source| InheritedFd {
+                source,
+                target: PLUGIN_HOST_ROUTE_FD,
+            }))
             .collect();
         if self.unsandboxed {
             return orbit_exec::spawn_with_inherited_fds(req, &inherited);

@@ -58,6 +58,11 @@ impl GovernedOperation {
     }
 }
 
+/// The governed operation an `orbit.task.add` or `orbit.task.update` whose
+/// input carries `granted_tools` additionally requires. It names no tool; the
+/// tool chokepoint checks it beside the write's own row.
+pub const TASK_GRANT_TOOLS_OPERATION_ID: &str = "orbit.task.grant_tools";
+
 /// Versioned routine-definition toggle exposed by the dashboard.
 pub const DASHBOARD_ROUTINE_TOGGLE: GovernedOperation = GovernedOperation {
     id: "routine.toggle",
@@ -66,12 +71,28 @@ pub const DASHBOARD_ROUTINE_TOGGLE: GovernedOperation = GovernedOperation {
     rationale: "changing a versioned routine definition changes unattended execution",
 };
 
+/// Routine trigger replacement from the dashboard.
+pub const DASHBOARD_ROUTINE_TRIGGER: GovernedOperation = GovernedOperation {
+    id: "routine.set_trigger",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "changing a versioned routine trigger changes when unattended execution runs",
+};
+
 /// Manual catalog job submission from the dashboard.
 pub const DASHBOARD_JOB_RUN: GovernedOperation = GovernedOperation {
     id: "job.run",
     surface: OperationSurface::Dashboard,
     allowed: &[McpCapability::Operator],
     rationale: "starting a job manually can execute workspace work outside its schedule",
+};
+
+/// Lease mutations exposed by the dashboard.
+pub const DASHBOARD_LEASE_WRITE: GovernedOperation = GovernedOperation {
+    id: "lease.write",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "changing path leases changes which workspace paths other callers may hold",
 };
 
 /// Native sweep-clock start/stop action exposed by the dashboard.
@@ -96,6 +117,14 @@ pub const DASHBOARD_AUTO_TASK_TOGGLE: GovernedOperation = GovernedOperation {
     surface: OperationSurface::Dashboard,
     allowed: &[McpCapability::Operator],
     rationale: "changing a versioned auto-task definition changes unattended task minting",
+};
+
+/// Auto-task schedule replacement from the dashboard.
+pub const DASHBOARD_AUTO_TASK_SCHEDULE: GovernedOperation = GovernedOperation {
+    id: "auto_task.set_schedule",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "changing a versioned auto-task schedule changes when unattended tasks are minted",
 };
 
 /// Unconditional on-demand auto-task mint exposed by the dashboard.
@@ -175,12 +204,77 @@ pub const DASHBOARD_HANDOFF_REVOKE: GovernedOperation = GovernedOperation {
     rationale: "revocation cancels a pending landing request for work already handed off; only an operator decides that",
 };
 
+/// Requeue a blocked task from the dashboard, keeping or discarding its candidate.
+pub const DASHBOARD_TASK_REQUEUE: GovernedOperation = GovernedOperation {
+    id: "task.requeue",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "requeuing a blocked task overrides a recorded escalation and preserves or discards its published candidate",
+};
+
+/// Settle a task whose delivery PR merged outside the pipeline, from the dashboard.
+pub const DASHBOARD_TASK_SETTLE_MERGED: GovernedOperation = GovernedOperation {
+    id: "task.settle_merged",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "settling a task from a merged pull request completes it without a run; only an operator decides that",
+};
+
+/// Record an operator decision on a task-pilot admission hold from the dashboard.
+pub const DASHBOARD_TASK_PILOT_ADMISSION: GovernedOperation = GovernedOperation {
+    id: "task.pilot_admission",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "clearing or overriding a task-pilot admission hold releases held work on an operator's evidenced decision; only an operator decides that",
+};
+
+/// Record an operator measurement of an owed post-deploy criterion from the dashboard.
+pub const DASHBOARD_TASK_POST_DEPLOY: GovernedOperation = GovernedOperation {
+    id: "task.post_deploy",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "recording a deployed-build measurement settles an owed acceptance criterion; only an operator decides that",
+};
+
 /// Configuration write from the dashboard's Config tab [ORB-12724].
 pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
     id: "config.set",
     surface: OperationSurface::Dashboard,
     allowed: &[McpCapability::Operator],
     rationale: "config.toml governs sandboxing, crews, and unattended delivery for every surface on this machine",
+};
+
+/// Define a draft experiment from the dashboard's Analytics › Experiments page.
+pub const DASHBOARD_EXPERIMENT_CREATE: GovernedOperation = GovernedOperation {
+    id: "experiment.create",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "defining an experiment decides which treatments tasks may be randomized into, so only an operator may do it",
+};
+
+/// Edit a draft experiment's definition from the dashboard.
+pub const DASHBOARD_EXPERIMENT_UPDATE: GovernedOperation = GovernedOperation {
+    id: "experiment.update",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "editing an experiment's definition changes the treatments tasks may be randomized into, so only an operator may do it",
+};
+
+/// Start a draft experiment from the dashboard.
+pub const DASHBOARD_EXPERIMENT_START: GovernedOperation = GovernedOperation {
+    id: "experiment.start",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "starting an experiment begins randomizing tasks into its treatments, and a live one changes how their runs dispatch, so only an operator may do it",
+};
+
+/// Conclude an experiment from the dashboard, recording the decision and
+/// filing a promotion task when an arm is chosen.
+pub const DASHBOARD_EXPERIMENT_CONCLUDE: GovernedOperation = GovernedOperation {
+    id: "experiment.conclude",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "concluding an experiment records the operator's decision, stops assignment and may file a promotion task, so only an operator may do it",
 };
 
 /// Add, rename or remove a host-file entry from the dashboard's Settings ›
@@ -228,12 +322,13 @@ pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
 /// Generic row for a `read_only` plugin tool.
 ///
 /// Plugin tools are not enumerable at compile time, so they enter the
-/// registry through one row per execution kind rather than one row per tool
+/// registry through generic rows rather than one row per tool
 /// (design `docs/design/plugins/1_scope.md` §4.1). The manifest chooses the
-/// execution kind; it never chooses who may call.
+/// execution kind and requests agent access; recorded operator consent is
+/// required before that declaration can activate.
 ///
 /// Its `id` is not a tool name and is never matched by [`governed_tool`]: the
-/// tool chokepoint resolves a plugin call to one of these two rows through
+/// tool chokepoint resolves a plugin call to one of these rows through
 /// [`governed_plugin_tool`].
 pub const PLUGIN_TOOL_READ_ONLY: GovernedOperation = GovernedOperation {
     id: "plugin.tool.read_only",
@@ -248,14 +343,26 @@ pub const PLUGIN_TOOL_READ_ONLY: GovernedOperation = GovernedOperation {
 
 /// Generic row for a `mutating` plugin tool.
 ///
-/// An agent reaches one only through the ordinary activity/`required_tools`
-/// allowlist, which is applied separately at the same chokepoint: this row is
-/// the capability floor, not the allowlist.
+/// Activity allowlists never confer this row's capability. A consented
+/// `agent_callable` declaration selects a separate row instead.
 pub const PLUGIN_TOOL_MUTATING: GovernedOperation = GovernedOperation {
     id: "plugin.tool.mutating",
     surface: OperationSurface::Tool,
     allowed: &[McpCapability::Operator, McpCapability::Runner],
-    rationale: "a mutating plugin tool runs an installed backend that changes state, so it is an                 operator or sanctioned-run operation unless the task's `required_tools` or the                 activity allowlist names it",
+    rationale: "a mutating plugin tool requires operator or runner capability unless its agent_callable declaration has operator consent; an activity allowlist alone confers no capability",
+};
+
+/// An append-only or proposal-only mutating plugin tool whose manifest
+/// requests agent access and whose `agent_tools` grant the host verified.
+pub const PLUGIN_TOOL_AGENT_CALLABLE: GovernedOperation = GovernedOperation {
+    id: "plugin.tool.agent_callable",
+    surface: OperationSurface::Tool,
+    allowed: &[
+        McpCapability::Agent,
+        McpCapability::Operator,
+        McpCapability::Runner,
+    ],
+    rationale: "an agent_callable mutating plugin tool has explicit operator consent through the agent_tools grant; activity allowlists, denials and sandbox restrictions still apply",
 };
 
 /// Guarded task edits require an identified caller, as distinct from the
@@ -282,10 +389,13 @@ pub const DESKTOP_TASK_COMPLETE: GovernedOperation = GovernedOperation {
 
 /// The generic row a plugin tool of this execution kind is authorized by.
 ///
-/// `mutating: true` selects [`PLUGIN_TOOL_MUTATING`]; a read-only tool gets
-/// [`PLUGIN_TOOL_READ_ONLY`].
-pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
-    if mutating {
+/// A mutating tool selects [`PLUGIN_TOOL_AGENT_CALLABLE`] only with the
+/// consented declaration; otherwise it selects [`PLUGIN_TOOL_MUTATING`].
+/// A read-only tool gets [`PLUGIN_TOOL_READ_ONLY`].
+pub fn governed_plugin_tool(mutating: bool, agent_callable: bool) -> &'static GovernedOperation {
+    if mutating && agent_callable {
+        &PLUGIN_TOOL_AGENT_CALLABLE
+    } else if mutating {
         &PLUGIN_TOOL_MUTATING
     } else {
         &PLUGIN_TOOL_READ_ONLY
@@ -322,11 +432,95 @@ pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
 ///    — only the chokepoint can see the process envelope a CLI caller's
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
+    // Identified people and agents may coordinate paths. This is an identity
+    // floor, while owner placement and lease policy constrain the operation.
+    GovernedOperation {
+        id: "orbit.lease.request",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.renew",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.expand",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.release",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.show",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.list",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.check",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
     GovernedOperation {
         id: "orbit.task.retry_handoff",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "retrying an authorized stopped landing is a deliberate owner operator decision",
+    },
+    GovernedOperation {
+        id: "orbit.task.recover_claim",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "recovery fences a live attempt on another host and moves its task; there is no heartbeat, so only an operator decides the attempt is over",
+    },
+    GovernedOperation {
+        id: "orbit.task.revoke_handoff",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "revocation cancels a pending landing request for work already handed off; only an operator decides that",
     },
     GovernedOperation {
         id: "orbit.task.reconcile_review",
@@ -339,6 +533,20 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "requeuing a blocked task overrides a recorded escalation and preserves its published candidate",
+    },
+    GovernedOperation {
+        id: "orbit.visual.accept_dispute",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "accepting a disputed visual finding overrides two crews' confirmation and lets the candidate land, so only an operator decides it",
+    },
+    // Field-level, not a tool: `orbit.task.add` and `orbit.task.update`
+    // additionally require it when their input carries `granted_tools`.
+    GovernedOperation {
+        id: TASK_GRANT_TOOLS_OPERATION_ID,
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "granting a task tools its implementing activity denies widens what that agent may do, so only an operator may set or change `granted_tools`",
     },
     GovernedOperation {
         id: "orbit.task.review_reset",
@@ -466,6 +674,13 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
                     state, and a deleted shipped default stays out of later reseeds",
     },
     GovernedOperation {
+        id: "orbit.automation.clear_stall",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "clearing a condition stall lets a storm, loop or oscillation fire again; \
+                    only an operator may decide it was looked at",
+    },
+    GovernedOperation {
         id: "orbit.auto_task.reset",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
@@ -504,6 +719,130 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "force-releasing a workspace claim displaces the operator currently driving dispatch",
+    },
+    // The delegated-human decision channel (design
+    // `docs/design/human-decision-channel/2_design.md` §3.3). The row is
+    // operator-only for every capability-resolved caller — an agent session
+    // is refused here. A plugin backend's callback session holds no
+    // capability this registry can name, so the runtime chokepoint admits
+    // an *identified* callback past this row instead, and the submit
+    // handler's channel-binding and token checks decide it: the callback
+    // allowlist (the plugin must be granted this tool) and the registration
+    // (this channel must be bound to that plugin) are both re-read per
+    // call, so the bypass never widens past the operator's registration.
+    GovernedOperation {
+        id: "orbit.decision.submit",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "submitting a decision applies a human's answer to held work, so only the operator testing a channel — or the registered channel's own plugin callback, which the handler binds to the registration — may call it; an agent session never answers for a human",
+    },
+    // The digest half of the same channel: it raises the approval
+    // requests a transport puts in front of a human. Same row shape and
+    // same callback admission as `orbit.decision.submit` — the handler
+    // re-reads the registration and binds the caller to it per call.
+    GovernedOperation {
+        id: "orbit.decision.digest",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "the decision digest raises approval requests for a human to answer, so only the operator — or the registered channel's own plugin callback, which the handler binds to the registration — may call it; an agent session never raises requests for a human",
+    },
+    // Experiments: every write is the operator's; agents may show and list.
+    GovernedOperation {
+        id: "orbit.experiment.create",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "defining an experiment decides which treatments tasks may be randomized into, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.update",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "editing an experiment's definition changes the treatments tasks may be randomized into, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.clone",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "cloning an experiment defines a new set of treatments tasks may be randomized into, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.start",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "starting an experiment begins randomizing tasks into its treatments, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.pause",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "pausing an experiment stops it enrolling tasks, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.resume",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "resuming an experiment restarts randomizing tasks into its treatments, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.assign",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "forcing an experiment arm chooses a task's treatment by hand, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.reweight",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "reweighting an experiment changes how tasks are randomized and opens a new segment, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.conclude",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "concluding an experiment records the operator's decision on its treatments, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.abandon",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "abandoning an experiment ends it without a decision, so only an operator may do it",
+    },
+    // Script grants (script steps phase 1): the operator's host-local
+    // consent to run one workspace script at one content digest. No Agent
+    // capability, so `classify_agent_tool_grant` makes both tools
+    // operator-only and an agent session or plugin callback is refused at
+    // the chokepoint; the witness under the global root is likewise only
+    // written by the granting command. List and show stay ungoverned
+    // reads, grantable to agents.
+    GovernedOperation {
+        id: "orbit.script.grant",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "granting a script authorizes running its exact bytes unattended on this host, so only an operator may grant one; an agent session never grants the code it can edit",
+    },
+    GovernedOperation {
+        id: "orbit.script.revoke",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "revoking a script grant withdraws an operator's consent to run it, so only an operator may revoke one",
+    },
+    GovernedOperation {
+        id: "script grant",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "granting a script authorizes running its exact bytes unattended on this host, so only an operator may grant one; an agent session never grants the code it can edit",
+    },
+    GovernedOperation {
+        id: "script revoke",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "revoking a script grant withdraws an operator's consent to run it, so only an operator may revoke one",
+    },
+    GovernedOperation {
+        id: "decision answer",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "answering a decision request applies the operator's choice to held work as a human write, so an agent session never answers for a human",
     },
     GovernedOperation {
         id: "workspace teardown",
@@ -561,10 +900,13 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "applying journal retention permanently deletes applied task commit decisions",
     },
     DASHBOARD_ROUTINE_TOGGLE,
+    DASHBOARD_ROUTINE_TRIGGER,
     DASHBOARD_JOB_RUN,
+    DASHBOARD_LEASE_WRITE,
     DASHBOARD_CLOCK_SERVICE,
     DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_AUTO_TASK_SCHEDULE,
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
     DASHBOARD_AUTO_DRAIN_MODE,
@@ -574,20 +916,29 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_HANDOFF_APPROVE,
     DASHBOARD_HANDOFF_REVOKE,
     DASHBOARD_HANDOFF_RETRY,
+    DASHBOARD_TASK_REQUEUE,
+    DASHBOARD_TASK_SETTLE_MERGED,
+    DASHBOARD_TASK_PILOT_ADMISSION,
+    DASHBOARD_TASK_POST_DEPLOY,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
+    DASHBOARD_EXPERIMENT_CREATE,
+    DASHBOARD_EXPERIMENT_UPDATE,
+    DASHBOARD_EXPERIMENT_START,
+    DASHBOARD_EXPERIMENT_CONCLUDE,
     DASHBOARD_HOST_EDIT,
     DASHBOARD_HOST_FORWARD,
     DASHBOARD_PLUGIN_ENABLE,
     DASHBOARD_PLUGIN_DISABLE,
     PLUGIN_TOOL_READ_ONLY,
     PLUGIN_TOOL_MUTATING,
+    PLUGIN_TOOL_AGENT_CALLABLE,
 ];
 
 /// Look up the governed tool operation for `tool_name`, if any.
 ///
-/// The two generic plugin rows are deliberately unreachable here: they are
-/// keyed on a manifest's execution kind, not on a tool name, and the
+/// The generic plugin rows are keyed on a manifest's execution kind and
+/// consented agent access, not on a tool name, and the
 /// chokepoint selects them with [`governed_plugin_tool`].
 pub fn governed_tool(tool_name: &str) -> Option<&'static GovernedOperation> {
     GOVERNED_OPERATIONS

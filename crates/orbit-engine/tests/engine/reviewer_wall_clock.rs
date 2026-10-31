@@ -57,6 +57,8 @@ impl orbit_engine::test_support::NullRuntimeHost for BoundingHost {
         Ok(ResolvedCliExecutor {
             command: self.command.to_string_lossy().into_owned(),
             args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
         })
     }
 
@@ -87,6 +89,7 @@ fn single_step_job(activity: &str) -> JobV2 {
     let mut spec = cli_agent_loop_spec(None);
     spec.wall_clock_timeout_seconds = ACTIVITY_WALL_CLOCK_SECONDS;
     JobV2 {
+        schema_version: 2,
         state: JobScheduleState::Enabled,
         owns_task_worktree: false,
         task_delivery: None,
@@ -100,12 +103,18 @@ fn single_step_job(activity: &str) -> JobV2 {
         steering_gate: None,
         max_active_runs: 1,
         kind: JobKind::Workflow,
+        expire_when: None,
         steps: vec![JobV2Step {
             id: "review".to_string(),
+            stage: None,
             when: None,
             retry: None,
             recovery_activity: None,
             resolved_recovery_activity: None,
+            wait_until: None,
+            expire_when: None,
+            reuse_when: None,
+            require_result: None,
             body: JobV2StepBody::Target(TargetStep {
                 spec: ActivityV2Spec::AgentLoop(spec),
                 activity_name: Some(activity.to_string()),

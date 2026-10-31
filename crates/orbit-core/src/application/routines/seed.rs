@@ -14,7 +14,8 @@
 //!   otherwise seed the same names on one host [ORB-12107].
 //! - `__ORBIT_OWNER_MACHINE__` and `__ORBIT_BASE_BRANCH__` — a state trigger
 //!   names the one machine that evaluates it and the branch it observes, so
-//!   the seeded `task_pilot` and `finding_verification` definitions render
+//!   the seeded `task_pilot`, `finding_verification`,
+//!   `pilot_warning_triage` and `blocked_task_triage` definitions render
 //!   this host's registered machine id and the workspace's registered base
 //!   branch [ORB-12745].
 //!
@@ -22,7 +23,10 @@
 //! same workspace name write byte-identical cron definitions, and differ only
 //! in the state trigger's owner. Seeded routines are disabled when written;
 //! they exist so a fresh workspace gets reviewable, opt-in schedules without
-//! silently enabling unattended work.
+//! silently enabling unattended work. The one exception is
+//! `crew_performance_refresh`, seeded enabled because, while
+//! `workflow.crew_performance` is `off`, its action skips the scan and
+//! writes no snapshot (it still records a job run each hour).
 //!
 //! Provenance is byte-exact first and shape-aware second. The manifest records
 //! the digest Orbit last wrote; a file that still matches is Orbit's. A file
@@ -65,16 +69,32 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/finding_verification.yaml"),
     ),
     (
-        "ship_sweep",
-        include_str!("../../../assets/routines/ship_sweep.yaml"),
+        "pilot_warning_triage",
+        include_str!("../../../assets/routines/pilot_warning_triage.yaml"),
+    ),
+    (
+        "blocked_task_triage",
+        include_str!("../../../assets/routines/blocked_task_triage.yaml"),
     ),
     (
         "worktree_gc",
         include_str!("../../../assets/routines/worktree_gc.yaml"),
     ),
     (
+        "task_publication",
+        include_str!("../../../assets/routines/task_publication.yaml"),
+    ),
+    (
         "store_gc",
         include_str!("../../../assets/routines/store_gc.yaml"),
+    ),
+    (
+        "crew_performance_refresh",
+        include_str!("../../../assets/routines/crew_performance_refresh.yaml"),
+    ),
+    (
+        "ux-rules",
+        include_str!("../../../assets/routines/ux-rules.yaml"),
     ),
 ];
 
@@ -95,13 +115,18 @@ pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
         "task_triage",
         include_str!("../../../assets/routines/retired/task_triage.yaml"),
     ),
+    (
+        "ship_sweep",
+        include_str!("../../../assets/routines/retired/ship_sweep.yaml"),
+    ),
 ];
 
-/// Earlier shapes of routines this Orbit still ships: every template whose
+/// Earlier shapes of routines this Orbit ships: every template whose
 /// template-owned fields differed from the current one. A workspace seeded by
 /// that release and since opted in (`enabled: true`) is refreshed onto the
 /// current template with its opt-in kept, instead of being reported as
-/// locally modified forever.
+/// locally modified forever. An earlier shape of a default since retired
+/// ([`RETIRED_ROUTINE_FILES`]) stays here and is judged retired.
 ///
 /// Changing a shipped template's fields (not its comments): copy the previous
 /// version here as `<stem>.<last-shipped-date>.yaml` in the same change.

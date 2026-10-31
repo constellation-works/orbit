@@ -78,10 +78,12 @@
   --ag-claude: #c97cf0;
   --ag-gemini: #f5b14a;
   --ag-grok:   #4cc38a;
+  --ag-muse:   #f08cc0;
   --ag-codex-low:  rgba(94, 200, 212, 0.12);
   --ag-claude-low: rgba(201, 124, 240, 0.12);
   --ag-gemini-low: rgba(245, 177, 74, 0.12);
   --ag-grok-low:   rgba(76, 195, 138, 0.12);
+  --ag-muse-low:   rgba(240, 140, 192, 0.12);
 
   /* Washes and control surfaces shared by the redesigned chrome. */
   --bg-sunk: #0f1216;

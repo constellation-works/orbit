@@ -4,9 +4,8 @@
 # server. Mirrors that yaml's args verbatim except `--debug-file`, which the
 # engine rewrites at spawn time.
 #
-# Pass criterion: at least one new audit row in ~/.orbit/orbit.db with
-# subcommand='run-mcp' and tool_name beginning with 'orbit.' is recorded
-# during the run.
+# Pass criterion: a new successful run-mcp audit row for orbit.task.list
+# after this invocation's baseline. CLI or unrelated tool rows do not qualify.
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -30,10 +29,10 @@ if [[ ! -f "$DB" ]]; then
   exit 2
 fi
 
-before=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE subcommand='run-mcp' AND tool_name LIKE 'orbit.%';")
-echo "baseline run-mcp orbit.* rows: $before"
+before_id=$(sqlite3 "$DB" "SELECT COALESCE(MAX(id), 0) FROM audit_events;")
+echo "baseline audit max id: $before_id (attributing only orbit.task.list rows after it)"
 
-prompt='Use the orbit.task.list orbit tool with input {"limit": 3} to list orbit  (do not use mcp tools!) tasks. After the tool returns, reply with a one-line summary: "tasks_returned=<N>" where N is the count of items in the result and list of skills available to you.'
+prompt='Use the Orbit MCP server to call orbit.task.list with input {"limit": 3}. Use its MCP tool, not Bash or the orbit CLI. After it returns, reply with a one-line summary: "tasks_returned=<N>" where N is the count of items in the result.'
 
 echo "--- invoking claude (this will hit the API and may take ~30-60s) ---"
 out=$(claude -p \
@@ -46,21 +45,20 @@ out=$(claude -p \
 echo "--- claude raw output ---"
 echo "$out"
 
-after=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE subcommand='run-mcp' AND tool_name LIKE 'orbit.%';")
-delta=$((after - before))
-echo "--- audit delta: $delta new run-mcp orbit.* rows ---"
+delta=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list' AND status='success' AND exit_code=0;")
+echo "--- audit delta: $delta new orbit.task.list rows after id $before_id ---"
 
 if [[ "$delta" -gt 0 ]]; then
   echo "--- new rows ---"
   sqlite3 -header -column "$DB" \
     "SELECT timestamp, tool_name, status, exit_code FROM audit_events
-     WHERE subcommand='run-mcp' AND tool_name LIKE 'orbit.%'
+     WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list' AND status='success' AND exit_code=0
      ORDER BY id DESC LIMIT $delta;"
   echo "PASS: claude reached orbit MCP server through the new args"
   exit 0
 fi
 
-echo "FAIL: no new run-mcp audit rows. claude did not reach orbit MCP." >&2
+echo "FAIL: no new successful run-mcp orbit.task.list audit rows. claude did not reach orbit MCP." >&2
 echo "  Likely causes: (1) --allowedTools wildcard not honored;" >&2
 echo "  (2) claude version doesn't recognize --mcp-config or --tools; " >&2
 echo "  (3) .mcp.json malformed or orbit binary not spawnable from cwd." >&2

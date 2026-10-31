@@ -1,0 +1,485 @@
+//! The automation CLI, derived from the automation operation registry.
+//!
+//! `explain` calls the read-only `orbit.automation.explain` tool and
+//! `clear-stall` the operator-only `orbit.automation.clear_stall` tool, so
+//! `--json` is each tool's payload. What is left here is the text rendering:
+//! the definition and its condition, the matches and closest misses, one
+//! subject's clause tree with the values each clause read, and the tracked
+//! state with recent fires and their chains; or, for `job:<name>`, the job's
+//! auto-task steps.
+
+use clap::Args;
+use orbit_common::governance::automation::AutomationVerb;
+use orbit_core::OrbitRuntime;
+use serde_json::Value;
+
+use super::operation_args::Invocation;
+use crate::command::{CommandOut, Execute, Payload};
+use crate::output::payload::Block;
+use crate::output::table::{Column, Table};
+
+#[derive(Args)]
+#[command(about = orbit_common::governance::automation::AUTOMATION.cli_about)]
+pub struct AutomationCommand {
+    #[command(subcommand)]
+    pub command: Invocation<AutomationVerb>,
+}
+
+impl Execute for AutomationCommand {
+    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let Invocation { spec, input } = self.command;
+        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let blocks = match spec.verb {
+            AutomationVerb::Explain if value["definition"]["kind"] == "job" => {
+                job_explain_blocks(&value)
+            }
+            AutomationVerb::Explain => explain_blocks(&value),
+            AutomationVerb::ClearStall => vec![Block::text(format!(
+                "Cleared {} stall on {} ({}); audited as {}",
+                text(&value["cleared"]["reason"]),
+                text(&value["consumer"]),
+                text(&value["cleared"]["detail"]),
+                text(&value["audit"]["actor"]),
+            ))],
+        };
+        Ok(Payload::blocks(value, blocks).into())
+    }
+}
+
+fn explain_blocks(value: &Value) -> Vec<Block> {
+    let definition = &value["definition"];
+    let ownership = &value["ownership"];
+    let subjects = &value["subjects"];
+    let mut header = format!(
+        "{} {} ({}), {}\nScope: {} · {} · owner: {}{}",
+        text(&definition["kind"]),
+        text(&definition["name"]),
+        text(&definition["path"]),
+        if definition["enabled"] == true {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        text(&value["scope"]),
+        text(&value["clause"]),
+        text(&ownership["verdict"]).replace('_', " "),
+        if ownership["replica"] == true {
+            " (replica checkout: never evaluates it)"
+        } else {
+            ""
+        },
+    );
+    if let Some(prefilter) = value.get("prefilter") {
+        header.push_str(&format!(
+            "\nPrefilter: statuses {} · tags {}",
+            list(&prefilter["statuses"], "any"),
+            list(&prefilter["tags"], "none"),
+        ));
+    }
+    let cross_reads = &value["cross_reads"];
+    if !is_empty(&cross_reads["tasks"]) || !is_empty(&cross_reads["tags"]) {
+        header.push_str(&format!(
+            "\nCross-reads: tasks {} · tags {}",
+            list(&cross_reads["tasks"], "none"),
+            list(&cross_reads["tags"], "none"),
+        ));
+    }
+    header.push_str(&format!("\nWhen: {}", text(&value["when"])));
+    if let Some(rearm) = value.get("rearm").and_then(Value::as_str) {
+        header.push_str(&format!("\nRearm: {rearm}"));
+    }
+    header.push_str(&format!(
+        "\nEvaluated {} at {}: {} matched, {} missed, {} unknown{}",
+        count(&subjects["evaluated"]),
+        text(&value["evaluated_at"]),
+        count(&subjects["matched"]),
+        count(&subjects["missed"]),
+        count(&subjects["unknown"]),
+        if subjects["truncated"] == true {
+            format!(
+                " (first {} of {} selected)",
+                count(&subjects["evaluated"]),
+                count(&subjects["selected"])
+            )
+        } else {
+            String::new()
+        },
+    ));
+    let mut blocks = vec![Block::text(header)];
+
+    for unavailable in rows(&value["unavailable"]) {
+        blocks.push(Block::text(format!("Unavailable: {}", text(unavailable))));
+    }
+
+    blocks.push(Block::text("\nMatches"));
+    let mut matches = Table::new(vec![
+        Column::new("SUBJECT").fixed(),
+        Column::new("ARM").fixed(),
+        Column::new("HOLD").fixed(),
+        Column::new("TITLE"),
+    ])
+    .empty_message("no subject matches");
+    for row in rows(&value["matches"]) {
+        matches.add_row(vec![
+            text(&row["subject"]),
+            text(&row["arm"]),
+            row["hold_remaining_minutes"]
+                .as_i64()
+                .map_or_else(|| "-".to_string(), |minutes| format!("{minutes}m left")),
+            text(&row["title"]),
+        ]);
+    }
+    blocks.push(Block::table(matches));
+
+    blocks.push(Block::text(
+        "\nClosest misses (one top-level clause not true)",
+    ));
+    let mut misses = Table::new(vec![
+        Column::new("SUBJECT").fixed(),
+        Column::new("VALUE").fixed(),
+        Column::new("CLAUSE"),
+    ])
+    .empty_message("no subject misses by exactly one clause");
+    for row in rows(&value["closest_misses"]) {
+        misses.add_row(vec![
+            text(&row["subject"]),
+            text(&row["value"]),
+            text(&row["clause"]),
+        ]);
+    }
+    blocks.push(Block::table(misses));
+
+    match value.get("subject") {
+        Some(subject) => {
+            let mut lines = vec![format!(
+                "\nSubject {}{}{}",
+                text(&subject["key"]),
+                subject["title"]
+                    .as_str()
+                    .map(|title| format!(" — {title}"))
+                    .unwrap_or_default(),
+                if subject["in_prefilter"] == false {
+                    " (outside the prefilter: never a subject)"
+                } else {
+                    ""
+                },
+            )];
+            clause_lines(&subject["when"], "", &mut lines);
+            lines.push(format!("→ {}{}", text(&subject["value"]), reason(subject)));
+            if let Some(rearm) = subject.get("rearm") {
+                lines.push("Rearm:".into());
+                clause_lines(rearm, "", &mut lines);
+            }
+            blocks.push(Block::text(lines.join("\n")));
+        }
+        None => blocks.push(Block::text(
+            "\nNo subject to explain: the prefilter selects no task.",
+        )),
+    }
+    blocks.extend(tracking_blocks(&value["tracking"]));
+    blocks
+}
+
+/// A job's auto-task steps: the outer bound, the revision pin, and per step
+/// its resolved target, guards, waits and reads.
+fn job_explain_blocks(value: &Value) -> Vec<Block> {
+    let definition = &value["definition"];
+    let expiry = &value["expire_when"];
+    let mut blocks = vec![Block::text(format!(
+        "job {} ({}), {}, schemaVersion {}\nExpire when: {} ({})\nPinned revision: {}",
+        text(&definition["name"]),
+        text(&definition["path"]),
+        text(&value["state"]),
+        text(&value["schema_version"]),
+        text(&expiry["source"]),
+        match expiry["at"].as_str() {
+            Some(at) => format!("at {at}"),
+            None => format!(
+                "{}s after job start",
+                expiry["after_start_seconds"].as_i64().unwrap_or_default()
+            ),
+        },
+        if value["pinned_revision"]["pinned"] == true {
+            "pinned at admission"
+        } else {
+            "not pinned"
+        },
+    ))];
+    for step in rows(&value["steps"]) {
+        let target = &step["target"];
+        let mut lines = vec![format!(
+            "\nStep {}{}{}",
+            text(&step["id"]),
+            step["parallel"]
+                .as_str()
+                .map(|parallel| format!(" (branch of {parallel})"))
+                .unwrap_or_default(),
+            step["prev"]
+                .as_str()
+                .map(|prev| format!(" · self.prev = {prev}"))
+                .unwrap_or_default(),
+        )];
+        let resolution = text(&target["resolution"]);
+        lines.push(format!(
+            "  Target: auto-task {} — {resolution}{}",
+            text(&target["auto_task"]),
+            match resolution.as_str() {
+                "resolved" => format!(
+                    " ({}, {}, digest {})",
+                    text(&target["path"]),
+                    if target["enabled"] == true {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
+                    text(&target["definition_digest"]),
+                ),
+                "missing" => " (admission would hold)".to_string(),
+                _ => format!(" ({})", text(&target["error"])),
+            },
+        ));
+        if let Some(when) = target["admission_guard"]["when"].as_str() {
+            lines.push(format!("  Admission guard: {when}"));
+        }
+        for (label, key) in [
+            ("When (skip)", "when"),
+            ("Wait until", "wait_until"),
+            ("Expire when", "expire_when"),
+            ("Reuse when", "reuse_when"),
+            ("Require result", "require_result"),
+        ] {
+            if let Some(field) = step[key].as_str() {
+                lines.push(format!("  {label}: {field}"));
+            }
+        }
+        let reads = &step["reads"];
+        if !is_empty(&reads["steps"]) || !is_empty(&reads["board"]) || !is_empty(&reads["tasks"]) {
+            lines.push(format!(
+                "  Reads: steps {} · board {} · tasks {}",
+                list(&reads["steps"], "none"),
+                list(&reads["board"], "none"),
+                list(&reads["tasks"], "none"),
+            ));
+        }
+        blocks.push(Block::text(lines.join("\n")));
+    }
+    blocks.push(Block::text(format!(
+        "\nNot evaluated: {}",
+        text(&value["runtime"]["note"])
+    )));
+    blocks
+}
+
+/// The durable state: ownership, arm states, the stall, the last pass and
+/// skip, `self`, and recent fires with their upstream chain.
+fn tracking_blocks(tracking: &Value) -> Vec<Block> {
+    if tracking["tracked"] != true {
+        return vec![Block::text(format!(
+            "\nState: not tracked yet (no pass recorded it); ownership {}",
+            text(&tracking["ownership"]).replace('_', " ")
+        ))];
+    }
+    let mut lines = vec![format!(
+        "\nState: {} armed, {} holding, {} waiting, {} fired, {} pending action(s); {}{}",
+        count(&tracking["armed"]),
+        count(&tracking["holding"]),
+        count(&tracking["waiting"]),
+        count(&tracking["fired"]),
+        count(&tracking["pending_intents"]),
+        if tracking["enabled_seen"] == true {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if tracking["epoch_current"] == true {
+            ""
+        } else {
+            "; definition changed: the next pass baselines"
+        },
+    )];
+    if let Some(stall) = tracking.get("stall") {
+        lines.push(format!(
+            "STALLED {} at {}: {} (clear with `orbit automation clear-stall`)",
+            text(&stall["reason"]),
+            text(&stall["at"]),
+            text(&stall["detail"]),
+        ));
+    }
+    if let Some(pass) = tracking.get("last_pass") {
+        lines.push(format!(
+            "Last pass {}: {} evaluated, {} matched, {} unknown, {} fired{}",
+            text(&pass["at"]),
+            count(&pass["evaluated"]),
+            count(&pass["matched"]),
+            count(&pass["unknown"]),
+            count(&pass["fired"]),
+            if pass["lap_complete"] == false {
+                " (lap continues next pass)"
+            } else {
+                ""
+            },
+        ));
+    }
+    if let Some(skip) = tracking.get("last_skip") {
+        lines.push(format!(
+            "Last skip {}: {}{}",
+            text(&skip["at"]),
+            text(&skip["reason"]),
+            skip["subject"]
+                .as_str()
+                .map(|subject| format!(" ({subject})"))
+                .unwrap_or_default(),
+        ));
+    }
+    let own = &tracking["self"];
+    lines.push(format!(
+        "Self: last fired {}, last minted {}{}, {} fire(s) in 24h",
+        own["last_fired"].as_str().unwrap_or("never"),
+        own["last_minted"].as_str().unwrap_or("never"),
+        own["last_minted_task"]
+            .as_str()
+            .map(|task| format!(" ({task})"))
+            .unwrap_or_default(),
+        count(&own["fires_24h"]),
+    ));
+    let mut blocks = vec![Block::text(lines.join("\n"))];
+    blocks.push(Block::text("\nRecent fires"));
+    let mut fires = Table::new(vec![
+        Column::new("SUBJECT").fixed(),
+        Column::new("STATE").fixed(),
+        Column::new("ACTION").fixed(),
+        Column::new("DEPTH").fixed(),
+        Column::new("CHAIN"),
+    ])
+    .empty_message("no fires recorded");
+    for fire in rows(&tracking["recent_fires"]) {
+        let chain = rows(&fire["chain"])
+            .iter()
+            .map(|link| {
+                if link["missing"] == true {
+                    format!("{} (gone)", short(&text(&link["fire_id"])))
+                } else {
+                    format!("{} on {}", text(&link["trigger"]), text(&link["subject"]))
+                }
+            })
+            .collect::<Vec<_>>();
+        fires.add_row(vec![
+            text(&fire["subject"]),
+            text(&fire["state"]),
+            fire["action_id"].as_str().unwrap_or("-").to_string(),
+            count(&fire["depth"]),
+            if chain.is_empty() {
+                "-".to_string()
+            } else {
+                chain.join(" ← ")
+            },
+        ]);
+    }
+    blocks.push(Block::table(fires));
+    blocks
+}
+
+fn short(id: &str) -> &str {
+    id.get(..12).unwrap_or(id)
+}
+
+/// One line per clause: a chain's operands joined by their operator, each
+/// leaf with its value and the operands it read.
+fn clause_lines(node: &Value, joiner: &str, lines: &mut Vec<String>) {
+    let operator = node["operator"].as_str();
+    let children = rows(&node["children"]);
+    if let Some(operator) = operator
+        && !children.is_empty()
+    {
+        let symbol = if operator == "and" { "&& " } else { "|| " };
+        for (index, child) in children.iter().enumerate() {
+            let prefix = if index == 0 { joiner } else { symbol };
+            if child["operator"].is_string() {
+                lines.push(format!(
+                    "{prefix}({})  {}{}",
+                    text(&child["text"]),
+                    text(&child["value"]),
+                    reason(child)
+                ));
+                let mut nested = Vec::new();
+                clause_lines(child, "", &mut nested);
+                lines.extend(nested.into_iter().map(|line| format!("    {line}")));
+            } else {
+                lines.push(leaf_line(child, prefix));
+            }
+        }
+        return;
+    }
+    lines.push(leaf_line(node, joiner));
+}
+
+fn leaf_line(node: &Value, prefix: &str) -> String {
+    let operands = rows(&node["operands"])
+        .iter()
+        .map(|operand| {
+            let shown = match operand["unavailable"].as_str() {
+                Some(why) => why.to_string(),
+                None => compact(&operand["value"]),
+            };
+            format!("{} = {shown}", text(&operand["path"]))
+        })
+        .collect::<Vec<_>>();
+    format!(
+        "{prefix}{}  {}{}{}",
+        text(&node["text"]),
+        text(&node["value"]),
+        if operands.is_empty() {
+            String::new()
+        } else {
+            format!("  ({})", operands.join(", "))
+        },
+        reason(node),
+    )
+}
+
+fn reason(node: &Value) -> String {
+    node["reason"]
+        .as_str()
+        .map(|reason| format!(" [{reason}]"))
+        .unwrap_or_default()
+}
+
+fn rows(value: &Value) -> &[Value] {
+    value.as_array().map_or(&[], Vec::as_slice)
+}
+
+fn is_empty(value: &Value) -> bool {
+    rows(value).is_empty()
+}
+
+fn list(value: &Value, none: &str) -> String {
+    let items = rows(value)
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        none.to_string()
+    } else {
+        items.join(", ")
+    }
+}
+
+fn count(value: &Value) -> String {
+    value.as_u64().unwrap_or_default().to_string()
+}
+
+fn text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// A value on one line: strings bare, everything else as JSON.
+fn compact(value: &Value) -> String {
+    match value {
+        Value::String(text) => format!("'{text}'"),
+        other => other.to_string(),
+    }
+}

@@ -54,6 +54,7 @@ pub(super) fn run_parallel(
     let mut successes = 0u32;
     let mut failures = 0u32;
     let mut first_error: Option<DispatchError> = None;
+    let mut first_failure: Option<String> = None;
     for (branch_id, res) in &results {
         let outcome_str = match res {
             Ok(o) if o.success => "success",
@@ -62,7 +63,18 @@ pub(super) fn run_parallel(
         };
         match res {
             Ok(o) if o.success => successes += 1,
-            Ok(_) => failures += 1,
+            Ok(o) => {
+                failures += 1;
+                let provider_failure = |message: Option<&str>| {
+                    orbit_types::workflow::ProviderFailureClass::of(None, message).is_some()
+                };
+                if first_failure.is_none()
+                    || (provider_failure(o.message.as_deref())
+                        && !provider_failure(first_failure.as_deref()))
+                {
+                    first_failure.clone_from(&o.message);
+                }
+            }
             Err(e) => {
                 failures += 1;
                 if first_error.is_none() {
@@ -113,7 +125,10 @@ pub(super) fn run_parallel(
     Ok(StepOutcome {
         success: block_ok,
         output: out,
-        message: None,
+        // A failed join keeps the first branch message, preferring a provider
+        // diagnostic, so provider-limit and blocker markers reach retry, final
+        // recovery and run finalization like a failed fan-out's.
+        message: (!block_ok).then_some(first_failure).flatten(),
     })
 }
 

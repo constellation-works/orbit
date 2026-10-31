@@ -32,7 +32,6 @@ use crate::repository::task::v2::TaskV2Store;
 
 const PARTITION: &str = "orbit-test-123456";
 const MACHINE: &str = "machine-a";
-const HELD_PAST_THRESHOLD: &str = "advisory file lock held past its threshold";
 
 /// One owner partition: its commit boundary and a task store inside it.
 pub(super) struct Owner {
@@ -98,6 +97,8 @@ impl Owner {
     fn create(&self, index: usize) {
         self.tasks
             .create_task(TaskCreateParams {
+                granted_tools: Vec::new(),
+                requires_labels: Vec::new(),
                 actor: "codex".into(),
                 parent_id: None,
                 title: format!("Task {index}"),
@@ -125,9 +126,13 @@ impl Owner {
                 orchestrator: None,
                 orchestrator_model: None,
                 orchestrator_model_source: None,
+                created_by_model: None,
                 origin: None,
+                rule_fingerprint: None,
                 comments: Vec::new(),
                 context_creation: Vec::new(),
+                creation_decision: None,
+                not_before: None,
             })
             .expect("create task");
     }
@@ -220,12 +225,14 @@ impl Admitted {
 
 fn request(id: &str) -> AdmissionRequest {
     AdmissionRequest {
+        labels: Vec::new(),
         request_id: id.into(),
         caller_version: "test".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
+        selective_review: false,
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "auto".into(),
@@ -306,6 +313,7 @@ fn a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit() {
                 comment: Some("released for another attempt".into()),
                 failure: Some(ClaimFailure {
                     class: ClaimFailureClass::Transient,
+                    review_decision_pending: false,
                     reason: "worker died".into(),
                     crew: None,
                     candidate: None,
@@ -414,7 +422,6 @@ fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
         .history
         .len();
 
-    let (released_tx, released) = mpsc::channel();
     let (applying_tx, applying) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
     let committer = std::thread::spawn(move || {
@@ -424,27 +431,14 @@ fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
                 .recv_timeout(HANDSHAKE_TIMEOUT)
                 .expect("release the apply after the reader contends");
         });
-        lock_events_observed(
-            || admitted.bind(&writer),
-            move |event| {
-                if event.get("message").map(String::as_str) == Some(HELD_PAST_THRESHOLD)
-                    && event
-                        .get("lock_path")
-                        .is_some_and(|path| path.ends_with("/.task-commit.lock"))
-                {
-                    let _ = released_tx.send(());
-                }
-            },
-        )
+        lock_events_observed(|| admitted.bind(&writer), |_| {})
     });
     applying
         .recv_timeout(HANDSHAKE_TIMEOUT)
         .expect("the commit reaches its apply");
-    released
-        .try_recv()
-        .expect("the admission section released the partition before its apply");
-
-    // The partition admits another decision while the apply is held.
+    // Prove release through another real admission while the apply is held.
+    // Release reports can be deferred until the retained bundle lock closes;
+    // their emission is no longer a handshake for partition release.
     other
         .with_admission(|| Ok(()))
         .expect("an admission passes a held apply");

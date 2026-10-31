@@ -6,9 +6,9 @@ use super::observe::{
 };
 use super::reconcile::reconcile;
 use super::{MemberAdmission, MemberEvaluation, MemberHost};
-use crate::AutomationError;
 use crate::checkpoint::{commit, diagnostic};
 use crate::delivery::definition_epoch;
+use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{members::*, *};
@@ -107,7 +107,9 @@ pub fn evaluate(
             };
 
             if !dry_run && !store.automation_initialize(&state)? {
-                return Err(AutomationError::Deferred("concurrent_evaluation".into()));
+                return Err(AutomationError::Deferred(
+                    DeferredReason::ConcurrentEvaluation,
+                ));
             }
 
             state
@@ -140,7 +142,7 @@ pub fn evaluate(
             member.key.is_empty() || member.fingerprint.is_empty() || member.task_ids.is_empty()
         })
     {
-        return Err(AutomationError::Deferred("source_page_invalid".into()));
+        return Err(AutomationError::Deferred(DeferredReason::SourcePageInvalid));
     }
 
     // A page that does not fit, or failed records that leave no room for a
@@ -167,7 +169,7 @@ pub fn evaluate(
     let members = state
         .members
         .as_ref()
-        .ok_or_else(|| AutomationError::Deferred("state_missing".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::StateMissing))?;
 
     // An attempt already in flight owns the slot; resume or report it, never start another.
     if let Some(active) = &members.active {
@@ -338,5 +340,5 @@ pub(super) fn member_state(
     state
         .members
         .as_mut()
-        .ok_or_else(|| AutomationError::Deferred("state_missing".into()))
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::StateMissing))
 }

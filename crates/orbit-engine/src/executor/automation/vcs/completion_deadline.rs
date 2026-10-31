@@ -1,6 +1,7 @@
 //! One absolute budget for prerequisite reads, rerun and reconciliation.
 use super::operations::{DEFAULT_TIMEOUT_MS, process};
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::Value;
 use std::path::Path;
 
@@ -22,6 +23,13 @@ fn error(reason: &str) -> OrbitError {
         "workflow prerequisite evidence is unavailable ({reason})"
     ))
 }
+fn expired() -> OrbitError {
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::CompletionBudgetExpired,
+        message: "workflow prerequisite evidence is unavailable (completion deadline expired)"
+            .to_string(),
+    }
+}
 #[derive(Clone, Copy)]
 pub(super) struct Deadline(pub(super) u64);
 impl Deadline {
@@ -36,7 +44,7 @@ impl Deadline {
             .0
             .checked_sub(now_ms()?)
             .filter(|ms| *ms > 0)
-            .ok_or_else(|| error("completion deadline expired"))?;
+            .ok_or_else(expired)?;
         Ok(remaining.min(DEFAULT_TIMEOUT_MS))
     }
     pub(super) fn execute(

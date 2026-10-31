@@ -3,8 +3,8 @@
 use super::evaluate::{active_batch, diagnostic_with_batch, member_state};
 use super::observe::{CAPACITY, retire_superseded};
 use super::{MemberAdmission, MemberHost};
-use crate::AutomationError;
 use crate::checkpoint::commit;
+use crate::{AutomationError, DeferredReason};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::{members::*, *};
 use std::collections::BTreeSet;
@@ -23,7 +23,7 @@ pub(super) fn admit(
         .members
         .as_ref()
         .and_then(|members| members.active.as_ref())
-        .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::ClaimMissing))?;
 
     let batch = batch.unwrap_or_else(|| active_batch(active));
 

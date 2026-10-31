@@ -61,7 +61,7 @@ impl OrbitRuntime {
         let listing = params.is_friction_listing();
         if query_owned.is_none() && !has_path && tag_filter.is_empty() && !listing {
             return Err(OrbitError::InvalidInput(
-                "search requires a query, --path, or --tag; only kind friction lists without one"
+                "search requires a `query` or a `tag`; with `kind` `friction` and neither, it lists friction records"
                     .to_string(),
             ));
         }

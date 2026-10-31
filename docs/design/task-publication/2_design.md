@@ -1,8 +1,8 @@
 ---
 title: Task Publication — Design
 owner: codex
-last_updated: 2026-10-04
-last_validated: 2026-10-18
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Accepted
 feature: task-publication
 doc_role: design
@@ -11,7 +11,7 @@ summary: Shipped contract for explicit owner publication, labelled inspection, a
 tags: [task-publication, task-artifacts, backup, git, multi-host]
 paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-registry/**"]
 related_features: [task-publication, task-artifacts, remote-access, federated-mcp, host-registry]
-related_artifacts: [ORB-11068, ORB-11072, ORB-11073, ORB-11074, ORB-11075, ORB-11076, ORB-11077, ORB-11110]
+related_artifacts: [ORB-11068, ORB-11072, ORB-11073, ORB-11074, ORB-11075, ORB-11076, ORB-11077, ORB-11110, ORB-18375]
 ---
 
 # Task Publication — Design
@@ -20,9 +20,12 @@ This document specifies the shipped v1 publication protocol. `orbit workspace
 publication` owns explicit binding lifecycle, while `orbit task publication`
 owns publish/status, read-only inspection, and deliberate same-authority
 recovery. V1 publishes one workspace's authority-owned task snapshots to one
-dedicated Git repository. Repository privacy remains operator-managed.
-Multi-workspace aggregation, unattended triggering, authority transfer, and
-multi-writer synchronization remain deferred to [3_vision.md](./3_vision.md).
+branch-scoped lineage in a Git repository. A repository may carry several
+workspaces' lineages on distinct branches; dedicating it to publication is the
+recommended setup. Repository privacy remains operator-managed.
+Cross-workspace aggregation, authority transfer, and multi-writer
+synchronization remain deferred to [3_vision.md](./3_vision.md). Unattended
+publication is limited to an optional weekly routine that ships disabled (§4).
 
 ## 1. Ownership Boundary
 
@@ -49,16 +52,22 @@ task-workspace partition when it enumerates or restores bundles.
 
 ## 2. Publication Repository and Binding
 
-V1 binds exactly one Orbit workspace to one dedicated publication repository.
-The repository contains no source code or other workspaces. This intentionally
-trades repository provisioning for the smallest access, ownership, and
-compare-and-swap boundary.
+V1 binds exactly one Orbit workspace to one publication lineage: a branch of a
+publication repository, identified by a distinct publication ID. A repository
+may hold several lineages, so several workspaces can share it. Each lineage is
+an independent authority stream. Publication reads, validates, initializes, and
+compare-and-swaps only its bound branch, and never reads or writes other
+branches. Repository collaborators and Git-host administrators see every
+lineage's branch. Dedicating a repository to publication keeps that visibility
+separate from source code and is the recommended setup; giving each workspace
+its own repository also isolates workspaces from one another.
 
-The operator provisions an empty private repository on the Git host. Orbit can
-verify that the publication repository differs from the source repository and
-that its contents match the publication protocol. Generic Git transport cannot
-prove provider-side visibility settings, so Orbit reports privacy as
-operator-managed unless a provider-specific integration can verify it.
+The operator provisions a private repository on the Git host. Orbit can verify
+that the publication remote differs from the source remote and, before
+publishing, that the bound branch carries this lineage's publication envelope or
+is absent. Generic Git transport cannot prove provider-side visibility settings,
+so Orbit reports privacy as operator-managed unless a provider-specific
+integration can verify it.
 
 The owner stores a machine-local binding with these logical fields:
 
@@ -91,11 +100,15 @@ not a local path. The fingerprint may need an explicit rebind when the source
 repository moves or changes canonical remote; it must never drift silently.
 
 The default publication branch is `refs/heads/main`, but the binding may select
-another ordinary branch to match repository policy. Because the repository is
-dedicated, no orphan branch is required. First initialization requires an empty
-repository and creates the branch's root publication commit. A non-empty
-repository without a valid matching publication envelope is refused rather than
-adopted or overwritten.
+another ordinary branch to match repository policy. Each workspace sharing a
+repository needs its own branch and publication ID. Binding validation checks
+publication-ID uniqueness, not branch uniqueness, so a second binding to a branch
+another lineage owns is accepted and then refused at publish, when the branch's
+envelope names a different workspace or publication ID. No orphan branch is
+required. First initialization requires the bound branch to be absent and
+creates that branch's root publication commit; other branches are never
+inspected. A bound branch that exists without a valid matching publication
+envelope is refused rather than adopted or overwritten.
 
 ### 2.1 Operator surface
 
@@ -178,9 +191,10 @@ detached snapshot self-describing during recovery.
 
 Publication is an explicit operator operation in v1. It is not part of
 task-write acknowledgement: a task update commits to the canonical local store
-even when the publication repository is unavailable. A future routine trigger
-must be separately configurable and invoke the same publication boundary; no
-post-task-write hook or seeded routine exists.
+even when the publication repository is unavailable. A routine trigger is
+separately configurable and invokes the same publication boundary: a weekly
+routine seeded disabled runs the `task_publication_pipeline` job. No post-task-write
+hook exists.
 
 The owner performs these phases:
 
@@ -190,7 +204,7 @@ The owner performs these phases:
    repository. Verify the repository/branch, publication ID, workspace ID,
    source-repository fingerprint, and authority lineage against the binding.
 3. Fetch the configured publication branch and record its observed object ID,
-   or confirm that the bound repository is empty during initialization.
+   or confirm that the bound branch is absent during initialization.
 4. Read canonical task bundles through `orbit-store` bundle APIs. Validate each
    envelope, JSONL tail, attachment manifest, size, and checksum before staging
    it.
@@ -200,7 +214,7 @@ The owner performs these phases:
    switched, staged, or dirtied by publication.
 7. Push the new commit as an exact compare-and-swap of the observed tip onto
    the configured branch. The update succeeds only when that ref still names the
-   observed object, or is still absent after a verified empty-repository
+   observed object, or is still absent after a verified absent-branch
    initialization. The refspec is not force-prefixed, so a matching expected
    object cannot replace non-fast-forward history.
 8. Record the successful generation and commit ID in owner-local publication
@@ -224,9 +238,10 @@ tip remains an authority conflict. Reconciliation keeps the records because
 the owner saves the reconciled outcome only afterwards. A later run whose
 last-success commit and generation match the remote tip removes records through
 that acknowledged generation, including losing attempts. Newer records survive.
-Observing a record's parent or an empty remote never deletes evidence: a push
-may still be in flight. Unacknowledged attempts accumulate until a subsequent
-success is durably recorded; deleting this cache during recovery loses that proof.
+Observing a record's parent or an absent remote branch never deletes evidence: a
+push may still be in flight. Unacknowledged attempts accumulate until a
+subsequent success is durably recorded; deleting this cache during recovery loses
+that proof.
 Git transport runs without the workspace catalog lock throughout.
 
 Task bundles have per-bundle durability rather than one workspace-wide read
@@ -247,7 +262,7 @@ the publication branch moved after it was fetched. Ordinary Git fast-forward is
 not that check: deleting or rewinding the branch after observation can still
 accept a descendant and recreate or advance the ref. The transport therefore
 compare-and-swaps the exact observed object ID, or requires the ref to stay
-absent when initialization observed an empty repository [ORB-11110].
+absent when initialization observed that the bound branch was absent [ORB-11110].
 
 A non-fast-forward rejection means one of the following:
 
@@ -349,8 +364,8 @@ deleting the current tree erased the data.
 | Failure | Required behavior |
 |---|---|
 | Publication repository unavailable or Git authentication fails | Leave canonical tasks and last good publication untouched; report publication failure. |
-| Publication remote equals the source-code remote | Refuse binding; v1 requires a dedicated repository. |
-| Repository is non-empty without a matching publication envelope | Refuse initialization, adoption, and overwrite. |
+| Publication remote equals the source-code remote | Refuse binding; the publication remote must differ from the source remote. |
+| Bound branch exists without a matching publication envelope | Refuse initialization, adoption, and overwrite. Other branches are not inspected. |
 | Workspace, source fingerprint, publication ID, or authority lineage differs | Stop with a binding conflict; do not import, publish, or rebind implicitly. |
 | Bundle, JSONL, manifest, size, or checksum validation fails | Create no commit and push nothing. Name the affected task/path without exposing content. |
 | Publication branch moved | Stop with authority conflict; never merge or force. |
@@ -361,9 +376,12 @@ deleting the current tree erased the data.
 
 ## 9. Concerns & Honest Limitations
 
-- V1 provisions one private repository per Orbit workspace. This avoids
-  shared-branch serialization and access leakage, but creates repository and credential
-  management overhead.
+- A shared publication repository exposes every lineage's branch to its
+  collaborators and Git-host administrators, so workspaces that share one
+  repository are not isolated from each other's task content. Branch-scoped
+  lineages keep each authority's compare-and-swap stream independent. Where that
+  isolation matters, one repository per workspace remains the recommended setup;
+  sharing trades it for fewer repositories to provision.
 - Git privacy is operator-managed unless a provider integration can verify it.
   A repository accidentally made public exposes every retained publication.
 - Publication improves remote durability but is not a complete Orbit backup.
@@ -388,9 +406,9 @@ deleting the current tree erased the data.
   `--allow-unscanned-attachments`; size limits and built-in plus operator deny
   patterns still apply. `fail` remains the default and `omit` records incomplete
   recovery state.
-- The operator CLI is the only mutation surface. MCP publication/restore,
-  authority transfer, multi-writer sync, and a separately configured routine
-  trigger are deferred.
+- The operator CLI and the disabled-by-default routine are the only publication
+  entry points. MCP publication/restore, authority transfer, and multi-writer
+  sync are deferred.
 
 ## Task References
 
@@ -399,5 +417,6 @@ deleting the current tree erased the data.
 - [ORB-11110] — publication push compare-and-swaps the exact observed object, so a deleted or rewound branch is an authority conflict rather than a recreate-or-advance.
 - [ORB-11076] — implemented fail-closed same-authority publication restore with rollback.
 - [ORB-11077] — shipped binding, publish/status, inspect/restore CLI contracts and network-free end-to-end validation.
+- [ORB-18375] — allowed several workspace lineages to share one publication repository; initialization and validation are scoped to the bound branch.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

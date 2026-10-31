@@ -16,8 +16,9 @@ use std::time::Duration;
 use orbit_common::OrbitError;
 use orbit_common::process::run_bounded_capped;
 
-/// Environment variable `install.sh` reads for the managed install directory.
-pub const INSTALL_DIR_ENV: &str = "ORBIT_INSTALL_DIR";
+/// The managed install directory (`$ORBIT_INSTALL_DIR`, else `$HOME/.orbit/bin`)
+/// and its environment variable, as `install.sh` reads them.
+pub use orbit_common::fs::generation::{INSTALL_DIR_ENV, managed_install_dir};
 
 /// The formula name every current install instruction and diagnostic names.
 /// Fully qualified so `brew` never has to guess between it and a retired tap.
@@ -249,17 +250,6 @@ pub fn homebrew_remediation(inventory: Result<Vec<String>, OrbitError>) -> Strin
              (could not confirm the installed formula: {error})"
         ),
     }
-}
-
-/// The managed install directory for this process: `$ORBIT_INSTALL_DIR`, else
-/// `$HOME/.orbit/bin`. Mirrors `install.sh`.
-pub fn managed_install_dir() -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os(INSTALL_DIR_ENV).filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(explicit));
-    }
-    std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(|home| PathBuf::from(home).join(".orbit").join("bin"))
 }
 
 /// The release target triple for the platform this binary was built for.

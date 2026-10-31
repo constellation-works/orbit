@@ -2,9 +2,9 @@ use serde::Serialize;
 use thiserror::Error;
 
 use super::{
-    ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal,
-    HostRegistryCode, NotFoundKind, PrivateVcsFailure, RecoverableVcsConflict, SqliteContention,
-    StorageLayer, WorkspaceClaimHeld,
+    ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
+    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, PrivateVcsFailure,
+    RecoverableVcsConflict, RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -15,8 +15,16 @@ use super::{
 pub enum OrbitError {
     #[error("policy denied: {0}")]
     PolicyDenied(String),
-    #[error("{kind} not found: {id}")]
-    NotFound { kind: NotFoundKind, id: String },
+    #[error(
+        "{kind} not found: {id}{guidance}",
+        guidance = .guidance.as_deref().unwrap_or_default()
+    )]
+    NotFound {
+        kind: NotFoundKind,
+        id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        guidance: Option<String>,
+    },
     /// A governed operation was refused because the caller lacked the required
     /// capability [ORB-10453]. Distinct from [`Self::PolicyDenied`], which is
     /// `orbit-policy`'s filesystem-scoping refusal: this one is about *who is
@@ -28,18 +36,6 @@ pub enum OrbitError {
     UnknownSelector(String),
     #[error("ambiguous federated destination: {0}")]
     AmbiguousDestination(String),
-    /// A destination's callers file names one caller twice, so the grant it
-    /// would serve that caller is undecidable. Fails the whole file closed at
-    /// load, mirroring [`Self::AmbiguousDestination`] [ORB-11052].
-    #[error("ambiguous MCP caller: {0}")]
-    AmbiguousCaller(String),
-    /// The authenticated key a destination observed does not match the one its
-    /// callers file pins that caller to, so the session is refused at
-    /// establishment rather than served at a lower ceiling [ORB-11053]. A
-    /// silent downgrade would make a key mismatch indistinguishable from a
-    /// caller that simply holds a smaller grant.
-    #[error("unauthorized MCP caller: {0}")]
-    UnauthorizedCaller(String),
     #[error("federated destination unreachable: {0}")]
     UnreachableDestination(String),
     #[error("stale federated route: {0}")]
@@ -55,6 +51,12 @@ pub enum OrbitError {
     #[error("{code}: {message}")]
     HostRegistry {
         code: HostRegistryCode,
+        message: String,
+    },
+    /// A decision refusal with a stable code, independent of its human explanation.
+    #[error("{code}: {message}")]
+    DecisionRefused {
+        code: DecisionRefusalCode,
         message: String,
     },
     /// The owner's pull request contract differs from this executor's build.
@@ -148,12 +150,19 @@ pub enum OrbitError {
     },
     #[error("remote tool failed ({code}): {message}")]
     RemoteTool {
-        code: String,
+        code: RemoteToolCode,
         message: String,
         payload: serde_json::Value,
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// A typed fail-closed completion or landing decision. Its message remains
+    /// diagnostic; the refusal value alone authorizes a held run outcome.
+    #[error("execution failed: {message}")]
+    DeliveryRefused {
+        refusal: orbit_types::workflow::DeliveryRefusal,
+        message: String,
+    },
     /// Conflict recovery certified that the base already carries the candidate.
     /// Keeps the execution error's display and serialized string for compatibility.
     #[error("execution failed: {0}")]
@@ -223,14 +232,11 @@ pub enum OrbitError {
         .0.path, .0.phase, .0.detail
     )]
     SqliteContention(Box<SqliteContention>),
-    #[error("invalid task status transition: {0}")]
-    TaskStatusTransition(String),
     #[error("cannot drop system identity tag '{tag}'; pass --allow-drop-system-tags to override")]
     SystemIdentityTagDropped { tag: String },
     /// A workflow run was refused because a dependency that reached `done` has
     /// not been delivered into the base the run would be cut from
-    /// [ORB-10464]. Distinct from [`Self::TaskStatusTransition`]: the
-    /// lifecycle transition is legal, the *baseline* is wrong.
+    /// [ORB-10464]. The lifecycle transition is legal, but the *baseline* is wrong.
     #[error(
         "task '{}' depends on '{}', which is done but not delivered into base '{}' ({}): {}",
         .0.task_id, .0.dependency_id, .0.base_ref, .0.base_sha, .0.detail
@@ -255,6 +261,15 @@ pub enum OrbitError {
          the task `delivery:task_local_pipeline` to deliver it locally"
     )]
     PrForgeRemoteMissing { remotes: String },
+    /// An explicit dispatch named a `backlog` task whose `not_before` is still
+    /// ahead. Raised by the shared workflow-entry check, so every surface
+    /// refuses it identically; `not_before` is the RFC 3339 UTC time.
+    #[error(
+        "task '{task_id}' is scheduled: not before {not_before}; it starts on the first \
+         admission pass after that time. An operator can start it now with \
+         `orbit run ship {task_id} --ignore-schedule`"
+    )]
+    TaskScheduled { task_id: String, not_before: String },
     /// GitHub has not finished calculating whether an open pull request can
     /// merge. Callers should defer that pull request without treating the
     /// answer as a forge failure.
@@ -337,6 +352,18 @@ pub enum OrbitError {
         layer: StorageLayer,
         message: String,
     },
+    /// A SQLite operation lost only to another connection's lock outlasting
+    /// its busy timeout (`SQLITE_BUSY` or `SQLITE_LOCKED`). Classified from
+    /// SQLite's result code where the error is translated, so callers answer
+    /// it with [`Self::is_lock_busy`] instead of reading message text.
+    /// Displays, reports and serializes exactly as the `layer` variant it
+    /// stands in for.
+    #[error("{layer}: {message}")]
+    #[serde(untagged, serialize_with = "serialize_as_storage_layer")]
+    StorageLockBusy {
+        layer: StorageLayer,
+        message: String,
+    },
 }
 
 const _: () = assert!(
@@ -356,4 +383,12 @@ fn serialize_private_vcs_failure<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&failure.message)
+}
+
+fn serialize_as_storage_layer<S: serde::Serializer>(
+    layer: &StorageLayer,
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::storage(*layer, false, message).serialize(serializer)
 }

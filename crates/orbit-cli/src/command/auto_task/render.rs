@@ -29,12 +29,19 @@ pub(super) fn render(
         AutoTaskVerb::List => list(value, filter),
         AutoTaskVerb::Show => show(value),
         AutoTaskVerb::Toggle => {
+            if value.get("would_baseline").is_some() {
+                let text = enable_preview_summary(&value, true);
+                return Ok(Payload::detail(value, text).into());
+            }
             let state = if value["enabled"].as_bool() == Some(true) {
                 "enabled"
             } else {
                 "disabled"
             };
-            let text = format!("{} {state}", text(&value, "name"));
+            let mut text = format!("{} {state}", text(&value, "name"));
+            if let Some(preview) = value.get("enable_preview") {
+                let _ = write!(text, "\n{}", enable_preview_summary(preview, false));
+            }
             Ok(Payload::detail(value, text).into())
         }
         AutoTaskVerb::Delete => {
@@ -60,6 +67,33 @@ pub(super) fn render(
             Ok(Payload::detail(value, text).into())
         }
     }
+}
+
+/// A condition enable dry run: what enabling baselines or fires, or why it
+/// is refused.
+fn enable_preview_summary(preview: &Value, dry_run: bool) -> String {
+    let name = text(preview, "name");
+    let matched = preview["matched"].as_u64().unwrap_or(0);
+    if let Some(refusal) = preview["refusal"].as_str() {
+        return format!("{name}: refused: {refusal}");
+    }
+    let (verb, subjects) = if preview["on_enable"].as_str() == Some("fire_existing") {
+        ("fire", strings(&preview["would_fire"]))
+    } else {
+        ("baseline", strings(&preview["would_baseline"]))
+    };
+    let lead = if dry_run {
+        format!("{name}: enabling would {verb}")
+    } else {
+        format!("the next clock pass will {verb}")
+    };
+    if subjects.is_empty() {
+        return format!("{lead} nothing ({matched} subjects match now)");
+    }
+    format!(
+        "{lead} {matched} matching subject(s): {}",
+        subjects.join(", ")
+    )
 }
 
 fn list(value: Value, filter: StateFilter) -> CommandOut {
@@ -91,6 +125,11 @@ fn list(value: Value, filter: StateFilter) -> CommandOut {
         ]);
     }
     for record in &records {
+        if let Some(condition) = record.get("condition").filter(|value| !value.is_null()) {
+            table = table.trailing_notice(condition_notice(&text(record, "name"), condition));
+        }
+    }
+    for record in &records {
         if let Some(reason) = record["skipped_reason"].as_str() {
             let label = if is_plugin_inactive(record) {
                 "inactive"
@@ -101,6 +140,57 @@ fn list(value: Value, filter: StateFilter) -> CommandOut {
         }
     }
     Ok(Payload::list(records, table).into())
+}
+
+/// One line for a condition definition: its arm counts, any stall, and the
+/// last fire and skip with its reason.
+fn condition_notice(name: &str, condition: &Value) -> String {
+    if let Some(error) = condition["unavailable"].as_str() {
+        return format!("condition [{name}]: state unavailable: {error}");
+    }
+    let count = |key: &str| condition[key].as_u64().unwrap_or(0);
+    let mut line = format!(
+        "condition [{name}]: {} armed, {} holding, {} waiting, {} fired",
+        count("armed"),
+        count("holding"),
+        count("waiting"),
+        count("fired"),
+    );
+    if let Some(stall) = condition.get("stall") {
+        let _ = write!(
+            line,
+            "; STALLED {} (orbit automation clear-stall {name})",
+            text(stall, "reason")
+        );
+    }
+    if let Some(fire) = condition.get("last_fire") {
+        let _ = write!(
+            line,
+            "; last fire {} {} on {}",
+            text(fire, "state"),
+            fire["action_id"].as_str().unwrap_or("-"),
+            text(fire, "subject")
+        );
+    }
+    if let Some(skip) = condition.get("last_skip") {
+        let _ = write!(
+            line,
+            "; last skip {} at {}",
+            text(skip, "reason"),
+            text(skip, "at")
+        );
+    }
+    if condition["ownership"]
+        .as_str()
+        .is_some_and(|ownership| ownership != "owned_here")
+    {
+        let _ = write!(
+            line,
+            "; never fires here ({})",
+            text(condition, "ownership")
+        );
+    }
+    line
 }
 
 /// The tool marks only an inactive or skipped definition; the CLI record
@@ -299,6 +389,12 @@ fn schedule_summary(schedule: &Value) -> String {
         )
     } else if let Some(cron) = schedule.get("cron") {
         format!("cron={}", cron.as_str().unwrap_or_default())
+    } else if let Some(condition) = schedule.get("condition") {
+        format!(
+            "condition scope={} when={}",
+            text(condition, "scope"),
+            text(condition, "when")
+        )
     } else {
         format!("every={}m", schedule["every_minutes"])
     }

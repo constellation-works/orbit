@@ -358,11 +358,11 @@ fn red_run_that_reproduced_on_the_previous_completed_run_is_not_held() {
     // not a failure to investigate.
     let reads = queries.log_reads.lock().expect("log reads").clone();
     assert_eq!(
-        reads.iter().filter(|job| **job == 9200).count(),
+        reads.iter().filter(|read| read.1 == 9200).count(),
         1,
         "{reads:?}"
     );
-    assert!(reads.contains(&9201), "{reads:?}");
+    assert!(reads.iter().any(|read| read.1 == 9201), "{reads:?}");
 }
 
 #[test]

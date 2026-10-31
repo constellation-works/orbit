@@ -4,6 +4,8 @@ use orbit_core::OrbitRuntime;
 use crate::command::{CommandOut, Execute, Payload};
 use crate::output::color::Domain;
 
+use super::support;
+
 use super::support::{host_state, plugin_record, state_reason};
 
 #[derive(Args)]
@@ -22,6 +24,7 @@ impl Execute for PluginListArgs {
             Column::new("HOST").fixed(),
             Column::new("STATUS").fixed(),
             Column::new("TOOLS").fixed(),
+            Column::new("AGENT TOOLS"),
             Column::new("DETAILS"),
         ])
         .empty_message("no plugins installed or pinned");
@@ -32,6 +35,7 @@ impl Execute for PluginListArgs {
                 Cell::new(host_state(plugin)),
                 crate::output::color::cell(plugin.status.as_str(), Domain::JobState),
                 Cell::new(plugin.tools.len().to_string()),
+                Cell::new(support::declared_agent_tool_names(plugin)),
                 Cell::new(state_reason(plugin).unwrap_or_default()),
             ]);
         }

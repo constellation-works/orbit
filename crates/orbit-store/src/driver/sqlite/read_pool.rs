@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use orbit_common::storage::sqlite::{apply_default_pragmas, sqlite_error};
+use orbit_common::storage::sqlite::{apply_default_pragmas, pragma, sqlite_error};
 use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::Connection;
 
@@ -95,7 +95,7 @@ impl ReadPool {
             )
         })?;
         apply_default_pragmas(&conn)?;
-        conn.pragma_update(None, "query_only", "ON").map_err(|e| {
+        pragma::set(&conn, "query_only", &"ON").map_err(|e| {
             sqlite_error(
                 StorageLayer::Store,
                 &e,

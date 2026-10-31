@@ -110,6 +110,7 @@ pub fn migrate_sidecars(
             // A v1 sidecar never said; the conservative kind keeps the tool
             // operator-gated until the author reviews the manifest.
             execution_kind: PluginExecutionKind::Mutating,
+            agent_callable: false,
             mcp_scope: PluginMcpScope::Workspace,
             input_schema: Some(input_schema_from_params(&sidecar.name, &sidecar.parameters)),
             output_schema: None,

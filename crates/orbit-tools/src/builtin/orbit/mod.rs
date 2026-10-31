@@ -1,15 +1,21 @@
 pub mod agent;
 mod agents;
 mod auto_task;
+mod automation;
 mod codebase;
 pub mod command;
+mod crew;
+mod decision;
 mod domain_control;
 pub mod drain;
+mod experiment;
+pub mod lease;
 pub mod operation;
 mod orchestrator;
 pub mod pipeline;
 pub mod search;
 pub mod task;
+mod visual;
 mod workflow;
 pub mod workspace_claim;
 

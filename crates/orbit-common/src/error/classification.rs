@@ -1,11 +1,29 @@
 use std::path::Path;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, FrictionNotLocal, HostRegistryCode, NotFoundKind, OrbitError,
-    PrivateVcsFailure, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, FrictionNotLocal, HostRegistryCode,
+    NotFoundKind, OrbitError, PrivateVcsFailure, RemoteToolCode, SqliteContention, StorageLayer,
+    WorkspaceClaimHeld,
 };
 
 impl OrbitError {
+    /// Construct a decision refusal without encoding its classification in prose.
+    pub fn decision_refused(code: DecisionRefusalCode, message: impl Into<String>) -> Self {
+        Self::DecisionRefused {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Whether this is a policy denial, including a typed decision-channel refusal.
+    pub fn is_policy_denial(&self) -> bool {
+        match self {
+            Self::PolicyDenied(_) => true,
+            Self::DecisionRefused { code, .. } => code.is_policy_denial(),
+            _ => false,
+        }
+    }
+
     pub fn host_registry(code: HostRegistryCode, message: impl Into<String>) -> Self {
         Self::HostRegistry {
             code,
@@ -25,6 +43,20 @@ impl OrbitError {
         Self::NotFound {
             kind,
             id: id.into(),
+            guidance: None,
+        }
+    }
+
+    /// Construct a typed not-found error with a next step for the caller.
+    pub fn not_found_with_guidance(
+        kind: NotFoundKind,
+        id: impl Into<String>,
+        guidance: impl Into<String>,
+    ) -> Self {
+        Self::NotFound {
+            kind,
+            id: id.into(),
+            guidance: Some(guidance.into()),
         }
     }
 
@@ -234,13 +266,15 @@ impl OrbitError {
 
     /// The storage family this error reports as — [`Self::Io`],
     /// [`Self::Store`] or [`Self::Migration`], whether or not it carries a
-    /// read-only or access class — or `None` for any other error.
+    /// read-only, access or lock-busy class — or `None` for any other error.
     pub fn storage_layer(&self) -> Option<StorageLayer> {
         match self {
             Self::Io(_) => Some(StorageLayer::Io),
             Self::Store(_) => Some(StorageLayer::Store),
             Self::Migration(_) => Some(StorageLayer::Migration),
-            Self::StorageAccessDenied { layer, .. } => Some(*layer),
+            Self::StorageAccessDenied { layer, .. } | Self::StorageLockBusy { layer, .. } => {
+                Some(*layer)
+            }
             _ => None,
         }
     }
@@ -274,14 +308,23 @@ impl OrbitError {
     /// Whether this failed only because a lock stayed held past its
     /// acquisition deadline: an advisory file lock or a SQLite database here,
     /// or either on a remote owner, which reports it as
-    /// [`LOCK_BUSY_ERROR_CODE`]. Nothing was decided under the lock, so the
-    /// same call can succeed once its holder lets go.
+    /// [`RemoteToolCode::LockBusy`]. Nothing was decided under the lock, so
+    /// the same call can succeed once its holder lets go.
+    ///
+    /// Answered from the variant alone, like
+    /// [`Self::is_readonly_or_access_failure`]: a SQLite busy or locked
+    /// result is classified where the `rusqlite::Error` is translated.
     pub fn is_lock_busy(&self) -> bool {
-        match self {
-            Self::FileLockTimeout(_) | Self::SqliteContention(_) => true,
-            Self::RemoteTool { code, .. } => code == LOCK_BUSY_ERROR_CODE,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::FileLockTimeout(_)
+                | Self::SqliteContention(_)
+                | Self::StorageLockBusy { .. }
+                | Self::RemoteTool {
+                    code: RemoteToolCode::LockBusy,
+                    ..
+                }
+        )
     }
 
     /// Whether a supervised operation exceeded its deadline: a process
@@ -297,7 +340,7 @@ impl OrbitError {
 /// The stable tool error code for a call that lost only to a lock-wait
 /// deadline ([`OrbitError::is_lock_busy`]). Retryable: unlike
 /// `internal_error`, it says the call can succeed unchanged later.
-pub const LOCK_BUSY_ERROR_CODE: &str = "lock_busy";
+pub const LOCK_BUSY_ERROR_CODE: &str = RemoteToolCode::LockBusy.as_str();
 
 /// Whether an error's text says it lost only to a lock-wait deadline, for an
 /// error that reached this process as text rather than as a typed

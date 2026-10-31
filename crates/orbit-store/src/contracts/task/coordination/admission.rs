@@ -8,6 +8,35 @@ use super::{ClaimCandidateRef, ExecutionClaim};
 
 pub use orbit_types::task::ExecutionLocation;
 
+/// The owner's current explore brief and the policy its pilot evaluated.
+/// Captured only for the admitted task; dispatch needs no owner artifact or
+/// pilot-run read. The follower recomputes material before classifying drift.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CapturedExploreBrief {
+    pub task_id: String,
+    /// The complete stored document, including its inspection revision.
+    pub document: String,
+    pub status_neutral_fingerprint: Option<String>,
+    pub eligibility: orbit_types::workflow::automation::members::PreparationEligibility,
+    pub freshness: orbit_types::workflow::automation::members::PreparationFreshness,
+    /// The owner's `enabled && deliver`, including shadow-mode captures.
+    pub deliver: bool,
+}
+
+/// Task-specific guidance captured immediately before claim persistence.
+#[derive(Debug, Clone)]
+pub struct AdmissionTaskGuidance {
+    pub experiments: orbit_types::workflow::CapturedExperiments,
+    pub explore_brief: Option<CapturedExploreBrief>,
+    /// System artifacts the owner publishes in the same commit as the
+    /// claim (for example the frozen `verify-mock-ui` mock digests). They
+    /// ride the claim commit's evidence because an ordinary task write is
+    /// refused once the claim protects the task.
+    pub artifacts: Vec<orbit_types::task::TaskArtifact>,
+    /// The admitted `verify-mock-ui` task's visual review contract.
+    pub visual_review: Option<orbit_types::task::VisualReviewContract>,
+}
+
 /// Owner-side facts admission reads, separate from the executor's wire
 /// request: how it orders candidates, and what its receipt captures.
 #[derive(Debug, Default)]
@@ -35,6 +64,13 @@ pub struct AdmissionOrdering {
     /// owner's own repair pull, which its `orbit run auto` drain starts once
     /// a repair's fallback window has passed.
     pub repairs_only: bool,
+    /// The owner's crew pools a candidate may draw from, by pool key: a
+    /// complexity tier (`hard`) or `purpose:<purpose>`, each naming its
+    /// member crews. Read only to score a candidate by the requester's
+    /// reported usage pressure [ORB-17773]; empty scores every candidate
+    /// neutral. Owner-side facts, like `executor_host_os`, so they do not
+    /// change the request fingerprint.
+    pub crew_pools: BTreeMap<String, Vec<String>>,
 }
 
 /// Authority supplied by the embedding runtime, never deserialized from tool input.
@@ -136,6 +172,12 @@ pub struct AdmissionReviewContract {
     /// synthesizes as requirements whatever its reviewer reports.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_evidence: Vec<orbit_types::workflow::HostEvidenceRule>,
+    /// The owner's frozen selective before-landing policy, when active.
+    /// The leaf evaluates its pinned candidate against it and the owner
+    /// verifies the receipt's digest and identities at acceptance. Absent
+    /// on contracts captured before the feature: no selective scan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selective_before_landing: Option<orbit_types::workflow::SelectiveBeforeLandingPolicy>,
 }
 
 impl AdmissionShipContract {
@@ -152,6 +194,15 @@ impl AdmissionShipContract {
         }
     }
 
+    /// The selective policy this contract captured, when active.
+    #[must_use]
+    pub fn selective_policy(&self) -> Option<&orbit_types::workflow::SelectiveBeforeLandingPolicy> {
+        self.review
+            .as_ref()
+            .and_then(|review| review.selective_before_landing.as_ref())
+            .filter(|policy| policy.is_active())
+    }
+
     /// Whether `review` matches the captured timing and is itself well
     /// formed.
     #[must_use]
@@ -159,13 +210,26 @@ impl AdmissionShipContract {
         match &self.review {
             None => !self.before_pr && !self.before_landing,
             Some(review) => {
-                self.before_pr != self.before_landing
+                let selective = review
+                    .selective_before_landing
+                    .as_ref()
+                    .filter(|policy| policy.is_active());
+                let timing_matches = if selective.is_some() {
+                    // Selective review is its own layer beside an off
+                    // timing, or strengthens under an explicit
+                    // before-landing capture; never beside before-PR.
+                    !self.before_pr
+                } else {
+                    self.before_pr != self.before_landing
+                };
+                timing_matches
                     && review.contract_version == orbit_types::workflow::REVIEW_CONTRACT_VERSION
                     && review
                         .crew
                         .as_deref()
                         .is_none_or(|crew| !crew.trim().is_empty())
                     && review.required_validation_commands.is_some()
+                    && selective.is_none_or(|policy| policy.validate().is_ok())
             }
         }
     }
@@ -257,6 +321,11 @@ pub enum AdmissionRefusal {
     /// landing.
     #[serde(alias = "review_policy_unsupported")]
     BeforePrUnsupported,
+    /// The owner captured an active selective before-landing policy and
+    /// the executor does not declare selective-review capability on the
+    /// PR route. An older executor must refuse the contract, never drop
+    /// the policy into an unreviewed path.
+    SelectiveUnsupported,
 }
 
 impl AdmissionRefusal {
@@ -268,6 +337,7 @@ impl AdmissionRefusal {
             Self::ProtocolMismatch => "protocol_mismatch",
             Self::ShipModeUnsupported => "ship_mode_unsupported",
             Self::BeforePrUnsupported => "before_pr_unsupported",
+            Self::SelectiveUnsupported => "selective_review_unsupported",
         }
     }
 }
@@ -278,6 +348,17 @@ impl AdmissionRefusal {
 /// executor — its own `task.crew`, or `default_crew` for a task naming none —
 /// is runnable here. A task the executor cannot run is skipped, not refused:
 /// it stays in the backlog for the owner or another follower.
+/// One crew's weekly usage pressure on the pulling executor, in
+/// milli-units (1000 = pressure 1.0) [ORB-17773]. An integer keeps the
+/// capability `Eq` and the ordering key exact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AdmissionCrewPressure {
+    /// Configured crew name.
+    pub crew: String,
+    /// Raw weekly pressure ×1000, rounded; higher expires sooner unused.
+    pub pressure_milli: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AdmissionCrewCapability {
     /// Crews the executor's window preflight found runnable, by registry
@@ -292,6 +373,12 @@ pub struct AdmissionCrewCapability {
     /// Crews never admitted to this executor for the rest of its window.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded: Vec<orbit_types::workflow::CrewExclusion>,
+    /// Per-crew weekly usage pressure from the executor's own readings
+    /// [ORB-17773]. Optional and additive: absent, or a crew it does not
+    /// name, reads as neutral pressure 1.0. The owner only orders by it;
+    /// it never gates admission.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_pressure: Vec<AdmissionCrewPressure>,
 }
 
 impl AdmissionCrewCapability {
@@ -333,6 +420,25 @@ impl AdmissionCrewCapability {
         self.runnable.iter().flatten().any(|name| blank(name))
             || self.default_crew.as_deref().is_some_and(blank)
             || self.excluded.iter().any(|exclusion| blank(&exclusion.crew))
+            || self.usage_pressure.iter().any(|entry| blank(&entry.crew))
+    }
+
+    /// `crew`'s reported weekly usage pressure in milli-units, or neutral
+    /// (1000 = 1.0) when this capability reports none for it [ORB-17773].
+    #[must_use]
+    pub fn pressure_milli_for(&self, crew: &str) -> u64 {
+        self.usage_pressure
+            .iter()
+            .find(|entry| entry.crew == crew)
+            .map_or(orbit_types::task::NEUTRAL_PRESSURE_MILLI, |entry| {
+                entry.pressure_milli
+            })
+    }
+
+    /// Whether this capability reports any usage pressure at all.
+    #[must_use]
+    pub fn has_pressure(&self) -> bool {
+        !self.usage_pressure.is_empty()
     }
 }
 
@@ -455,6 +561,12 @@ pub struct AdmissionRequest {
     /// `review.timing = before_pr` admits only an executor that declares it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub review_gate: bool,
+    /// Whether the executor's leaf evaluates a captured selective
+    /// before-landing policy and returns its selection receipt. Absent
+    /// (an older executor) reads as not capable: an owner with an active
+    /// selective policy refuses it rather than dropping the policy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub selective_review: bool,
     pub run_context: AdmissionRunContext,
     pub ship: AdmissionShipContract,
     /// What the executor can run. Absent for an owner-local admission and
@@ -473,6 +585,13 @@ pub struct AdmissionRequest {
     /// none, so no `ui` task is admitted to it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub browser_kit: bool,
+    /// The executor's `machine.labels`, normalized. Its `os` counts as an
+    /// implicit label beside them. A candidate whose `requires_labels` are
+    /// not all among them is skipped. Part of the request schema, so a peer
+    /// whose build predates labels fails the fingerprint check and is
+    /// refused rather than admitted to labelled work it would ignore.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     /// The work the executor's host load forecast has room for, under
     /// `machine.auto_concurrency.mode = "enforce"`. Absent otherwise, and from
     /// an executor with no resource profiles: then every work class and
@@ -507,6 +626,14 @@ pub struct AdmissionTaskSummary {
     pub title: String,
     pub complexity: Option<orbit_types::task::TaskComplexity>,
     pub crew: Option<String>,
+    /// How `crew` was assigned (`explicit`, `pool:<tier>`,
+    /// `purpose:<purpose>`, `default`), so a follower can tell an
+    /// automatic assignment it may re-draw under its own usage pressure
+    /// from an explicit pin it must keep [ORB-17773]. Absent on receipts
+    /// from an older owner and on legacy tasks with no recorded source:
+    /// both read as not automatic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<String>,
     pub context_files: Vec<String>,
     /// [ORB-14257] The candidate an earlier claim of the task preserved,
     /// for this claim's leaf to resume instead of implementing afresh. The
@@ -538,6 +665,11 @@ pub struct AdmissionReceipt {
     /// in the backlog for a host that has one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub browser_kit_unavailable: Vec<AdmissionDiagnostic>,
+    /// Ready candidates skipped because the executor lacks one of their
+    /// `requires_labels` ([`AdmissionRequest::labels`] plus its OS). They
+    /// stay in the backlog for a host that carries them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels_unavailable: Vec<AdmissionDiagnostic>,
     /// Ready candidates skipped because their work is outside the request's
     /// [`AdmissionRequest::admissible`] fit. They stay in the backlog until
     /// the executor's host has room, or for another host.
@@ -561,6 +693,23 @@ pub struct AdmissionReceipt {
     /// falls back to resolving on the replica with a warning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag_instructions: Option<orbit_types::workflow::CapturedTagInstructions>,
+    /// Owner's immutable shadow assignment capture. Missing is not an empty
+    /// capture: followers refuse claims without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiments: Option<orbit_types::workflow::CapturedExperiments>,
+    /// The admitted task's current brief, sealed material and pilot policy.
+    /// Older owners and tasks without a current brief carry none and run cold.
+    /// Like tag instructions, this is outside the request fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explore_brief: Option<CapturedExploreBrief>,
+    /// The owner's visual review contract for an admitted `verify-mock-ui`
+    /// task: its `visual_review` settings, manifests at the base revision
+    /// and the mock digests frozen at admission. The claimed leaf captures
+    /// against this, never its replica's settings, and the owner checks
+    /// the returned capture against it. Outside the request fingerprint,
+    /// like `gates`; absent when the visual phase does not apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual_review: Option<orbit_types::task::VisualReviewContract>,
     /// [ORB-17304] How the executor census the owner ordered against classes
     /// the admitted task, and the census's machine ids. Absent from an idle
     /// or repair receipt, from an order taken without a census, and from a
@@ -580,13 +729,29 @@ pub enum AdmissionLookup {
     NotFound,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AdmissionStorageUsage {
-    pub receipts: u64,
-    pub tombstones: u64,
-    /// Logical UTF-8 payload bytes; excludes SQLite page/index overhead.
-    pub receipt_bytes: u64,
-    pub tombstone_bytes: u64,
+/// Logical storage of one coordination receipt category. Payload bytes exclude
+/// keys, SQLite indexes, free pages and WAL; this is not filesystem usage.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptPayloadUsage {
+    pub count: u64,
+    pub logical_payload_bytes: u64,
+}
+
+/// Admission storage, with claim-mutation receipts accounted separately.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionReceiptStorage {
+    pub full_receipts: ReceiptPayloadUsage,
+    pub tombstones: ReceiptPayloadUsage,
+    /// Pruned independently on claim settlement after seven days, never by
+    /// admission receipt maintenance.
+    pub claim_mutation_receipts: ReceiptPayloadUsage,
+}
+
+/// Result of explicit owner admission receipt maintenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionReceiptMaintenance {
+    pub compacted_receipts: u64,
+    pub storage: AdmissionReceiptStorage,
 }
 
 /// One task an owner-local drain wave selected, with the canonical lock

@@ -28,12 +28,18 @@ impl TaskCommitBoundary {
         if file.sha256 != reference.sha256 {
             return Err(invalid("validation artifact changed"));
         }
-        let bytes = std::fs::read(
-            self.bundle_store
-                .bundle_path(task_id)?
-                .join(orbit_types::task::TASK_ARTIFACTS_DIR_NAME)
-                .join(&file.blob),
-        )?;
+        let artifacts_root = self
+            .bundle_store
+            .bundle_path(task_id)?
+            .join(orbit_types::task::TASK_ARTIFACTS_DIR_NAME);
+        let Some(bytes) =
+            crate::fs::path_safety::read_contained_artifact_blob(&artifacts_root, &file.blob)?
+        else {
+            return Err(OrbitError::Io(format!(
+                "artifact blob '{}' is missing",
+                artifacts_root.join(&file.blob).display()
+            )));
+        };
         if sha256_hex(&bytes) != reference.sha256 {
             return Err(invalid("validation artifact changed"));
         }
@@ -248,6 +254,30 @@ impl TaskCommitBoundary {
             .tags
             .iter()
             .any(|carried| carried == tag))
+    }
+
+    /// Whether any owner-judged review-skip decision (`skip-review` or a
+    /// mapped tag) applies to `handoff`'s candidate, and its copy of the
+    /// task still carries that tag.
+    pub(super) fn light_review_skip_applies(
+        &self,
+        handoff: &TaskHandoff,
+        light: &[LightDeliveryDecision],
+    ) -> Result<bool, OrbitError> {
+        let Some(decision) = light.iter().find(|decision| {
+            decision.skips_review()
+                && decision.applies()
+                && decision.candidate == handoff.candidate.candidate.commit
+        }) else {
+            return Ok(false);
+        };
+        Ok(self
+            .bundle_store
+            .read_bundle_lightweight(&handoff.task_id)?
+            .envelope
+            .tags
+            .iter()
+            .any(|carried| carried == &decision.tag))
     }
 
     pub(super) fn observe_handoff<'a>(

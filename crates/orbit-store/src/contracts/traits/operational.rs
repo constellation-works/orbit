@@ -90,6 +90,35 @@ pub trait RoutineStoreBackend: Send + Sync {
         routine_name: &str,
         limit: usize,
     ) -> Result<Vec<RoutineFireRecord>, OrbitError>;
+    /// Cursors for `names`, keyed by routine name; absent names are missing.
+    fn routine_cursors_for(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, RoutineCursor>, OrbitError> {
+        let mut cursors = BTreeMap::new();
+        for name in names {
+            if let Some(cursor) = self.routine_cursor(name)? {
+                cursors.insert(name.clone(), cursor);
+            }
+        }
+        Ok(cursors)
+    }
+    /// Recent fires for `names` (newest first, at most `limit` per routine),
+    /// keyed by routine name; routines without fires are missing.
+    fn routine_recent_fires_for(
+        &self,
+        names: &[String],
+        limit: usize,
+    ) -> Result<BTreeMap<String, Vec<RoutineFireRecord>>, OrbitError> {
+        let mut fires = BTreeMap::new();
+        for name in names {
+            let recent = self.routine_recent_fires(name, limit)?;
+            if !recent.is_empty() {
+                fires.insert(name.clone(), recent);
+            }
+        }
+        Ok(fires)
+    }
     fn routine_pause(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
     fn routine_resume(&self, routine_name: &str) -> Result<bool, OrbitError>;
     fn routine_pauses(&self) -> Result<BTreeMap<String, RoutinePauseRecord>, OrbitError>;
@@ -196,6 +225,23 @@ pub trait ProviderLimitStoreBackend: Send + Sync {
 }
 
 pub trait InvocationStoreBackend: Send + Sync {
+    /// Record immutable launch identity before a provider starts.
+    fn begin_agent_execution(
+        &self,
+        workspace: &str,
+        run_id: &str,
+        activity_id: &str,
+        provider: &str,
+        model: Option<&str>,
+        identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<i64, OrbitError>;
+    /// Launch identities of one workspace-qualified run in launch order.
+    fn agent_executions(
+        &self,
+        workspace: &str,
+        run_id: &str,
+    ) -> Result<Vec<crate::contracts::AgentExecutionRecord>, OrbitError>;
+
     /// Records one invocation under `workspace_id`, the workspace whose run
     /// produced it. The caller supplies it from its own runtime binding, never
     /// from `params`, which can arrive over the metrics ingest endpoint.
@@ -235,14 +281,25 @@ pub trait InvocationStoreBackend: Send + Sync {
         account: Option<&str>,
         since: DateTime<Utc>,
     ) -> Result<Vec<ProviderLedgerEntry>, OrbitError>;
+    /// Activity aggregates for one workspace partition, all time. Rows
+    /// recorded under another workspace, and legacy rows without an
+    /// attributed workspace, never match. The provider ledger
+    /// ([`Self::list_provider_ledger_entries`]) stays host-wide by contract.
     fn list_activity_invocation_metrics(
         &self,
+        workspace_id: &str,
     ) -> Result<Vec<ActivityInvocationMetrics>, OrbitError>;
     fn get_task_invocation_metrics(
         &self,
         task_id: &str,
     ) -> Result<TaskInvocationMetrics, OrbitError>;
-    fn list_tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError>;
+    /// Tool aggregates for one workspace partition, all time. Rows recorded
+    /// under another workspace, and legacy rows without an attributed
+    /// workspace, never match.
+    fn list_tool_invocation_metrics(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<ToolInvocationMetrics>, OrbitError>;
 }
 
 pub trait V2AuditStoreBackend: Send + Sync {

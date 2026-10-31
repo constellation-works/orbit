@@ -32,6 +32,7 @@ pub(crate) const CREW_CONFIG_FIELDS: &[&str] = &[
     "model",
     "provider",
     "tags",
+    "vision",
 ];
 
 /// One live field on a named crew, as used by `orbit config get`/`set`.
@@ -66,7 +67,7 @@ pub enum ConfigSection {
     /// flag, not a key.
     Review,
     /// Everything else: `automation.*`, `runtime.*`, `tasks.*`,
-    /// `pr.*`, `plugin.*`.
+    /// `pr.*`, `plugin.*`, `seeding.*`.
     Housekeeping,
 }
 
@@ -168,9 +169,9 @@ pub struct ConfigKeyDescriptor {
     pub section: ConfigSection,
     /// Visibility in the ordinary configuration overview.
     pub tier: ConfigKeyTier,
-    /// Relevance ordinal within the section; lower renders first. Registry
-    /// declaration order stays alphabetical (a store test enforces it), so
-    /// this is what puts the settings an operator reaches for at the top.
+    /// Relevance ordinal within the section; lower renders first. This is
+    /// what puts the settings an operator reaches for at the top, regardless
+    /// of registry declaration order.
     pub order: u16,
 }
 
@@ -178,17 +179,21 @@ mod keys;
 mod settings;
 
 pub(crate) use keys::{
-    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
-    is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
+    DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, LEASE_INTAKE_PEER_USER_KEY,
+    LEASE_LISTENER_KEY_PREFIX, REMOVED_CONFIG_KEYS, is_compatibility_config_key,
+    is_machine_identity_key, parse_crew_field_key,
 };
 pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,
     describe, immutable_key_note, is_global_only_key,
 };
-pub(crate) use settings::read_optional;
 pub(crate) use settings::resolve_percent;
 pub use settings::{
-    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, ExploreSettings, MachineSettings,
-    MidRunSteeringSettings, RegressionRiskSettings, ResourceThrottleSettings,
-    WorkerContainmentSettings,
+    AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, ExperimentSettings,
+    ExploreBriefSettings, ExploreSettings, MachineSettings, MidRunSteeringSettings,
+    RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings,
+};
+pub use settings::{LeaseListenerSettings, LeaseListenerTlsSettings};
+pub(crate) use settings::{
+    admit_lease_intake_peer_user, admit_lease_listener_settings, read_optional,
 };

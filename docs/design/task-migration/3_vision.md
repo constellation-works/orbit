@@ -1,8 +1,8 @@
 ---
 title: Task Migration — Vision
 owner: claude
-last_updated: 2026-10-10
-last_validated: 2026-10-19
+last_updated: 2026-10-28
+last_validated: 2026-10-30
 status: Draft
 feature: task-migration
 doc_role: vision
@@ -17,10 +17,10 @@ related_artifacts: [ORB-00034, ORB-10721, ORB-12126]
 # Task Migration — Vision
 
 Export/import was built for a one-time move ([ORB-00034]). Per-host prefixes
-([ORB-10721]) made a second live store safe to *create*; what is still missing
-is a way to keep two live stores mutually visible without hand-merging. This doc
-sketches that direction. Everything below the open questions is speculation
-unless it cites a task.
+([ORB-10721]) made a second live store safe to *create*. [ORB-12126] then
+shipped owner-wins import, so scripts can keep foreign-prefix mirrors current
+without hand-merging. A dedicated sync wrapper, automatic scheduling and the
+other extensions below remain open; the import policy itself is implemented.
 
 ## 1. Open Questions
 
@@ -111,8 +111,8 @@ authority.
 
 ## Task References
 
-- [ORB-00034] — task migration tooling: `orbit task export/import/reindex`.
-- [ORB-10721] — per-host `task_prefix` in global `~/.orbit/config.toml`.
-- [ORB-12126] — owner-wins cross-host sync: import policy that overwrites only foreign-prefix bundles.
+- [ORB-00034] introduced task export/import/reindex tooling.
+- [ORB-10721] introduced per-host `task_prefix` and its allocator projection.
+- [ORB-12126] implemented owner-wins import for foreign-prefix mirrors.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

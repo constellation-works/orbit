@@ -1,10 +1,11 @@
 //! A provider's own reading of its account's usage windows, taken after
 //! every run. [ORB-14696]
 //!
-//! Only Codex and Claude report one. Codex writes it to the session rollout
-//! under `CODEX_HOME`; Claude writes it to its message stream on stdout.
-//! Other providers' output formats carry no usage window, so they record
-//! nothing.
+//! Codex writes windows to its session rollout under `CODEX_HOME`; Claude
+//! reports them in stdout `rate_limit_event` frames, and Muse in stdout
+//! `status` or `run.usage` records whose payload kind is `run_usage`. Grok's
+//! windows come from its CLI billing API response; Antigravity's from its
+//! `/usage` command. Other providers record no usage windows.
 
 use std::path::Path;
 
@@ -12,13 +13,18 @@ use chrono::{DateTime, Utc};
 use orbit_types::telemetry::ProviderLimitObservation;
 use serde_json::Value;
 
+use super::antigravity::antigravity_usage_windows;
 use super::claude::claude_usage_windows;
 use super::codex::codex_usage_windows;
+use super::grok::grok_usage_windows;
+use super::muse::muse_usage_windows;
 
 /// The usage windows `provider` reported about its own account during one
 /// run, one observation per window with source `event`, read at `now`.
 ///
-/// `stdout` is the run's capture. `codex_home` is the `CODEX_HOME` the Codex
+/// `stdout` is the run's capture, except for Grok and Antigravity, where the
+/// caller supplies the CLI billing API or `/usage` command response instead.
+/// `codex_home` is the `CODEX_HOME` the Codex
 /// child ran with. Only frames the provider wrote at the top level of its
 /// own output are read, never assistant text or tool output, and a reading
 /// whose shape Orbit does not recognise records nothing. `run_id` and `crew`
@@ -33,6 +39,9 @@ pub fn provider_usage_windows(
     match provider {
         "claude" => claude_usage_windows(stdout, now),
         "codex" => codex_home.map_or_else(Vec::new, |home| codex_usage_windows(stdout, home, now)),
+        "muse" => muse_usage_windows(stdout, now),
+        "grok" => grok_usage_windows(stdout, now),
+        "antigravity" => antigravity_usage_windows(stdout, now),
         _ => Vec::new(),
     }
 }

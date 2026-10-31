@@ -49,6 +49,91 @@ fn registry_validated_task_tools_reject_unknown_and_mistyped_fields_at_dispatch(
     }
 }
 
+#[test]
+fn registry_validated_task_tools_accept_declared_input_aliases() {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let mut checked = 0;
+    for spec in orbit_common::governance::task::TASK_OPERATIONS {
+        for param in spec.wire_params().filter(|param| !param.aliases.is_empty()) {
+            for alias in param.aliases {
+                checked += 1;
+                // A mistyped alias is reported under the canonical name: the
+                // alias got past the unknown-field check and was type-checked.
+                let wrong = if matches!(
+                    param.param_type,
+                    orbit_common::governance::operation::ParamType::Boolean
+                        | orbit_common::governance::operation::ParamType::Switch
+                ) {
+                    serde_json::json!({ *alias: "not-a-boolean" })
+                } else {
+                    serde_json::json!({ *alias: false })
+                };
+                let error = registry
+                    .execute(spec.tool_name, &ToolContext::default(), wrong)
+                    .expect_err("a mistyped alias must be refused");
+                let message = error.to_string();
+                assert!(
+                    message.contains(param.name) && !message.contains("unknown"),
+                    "{} alias {alias}: {message}",
+                    spec.tool_name
+                );
+            }
+        }
+    }
+    assert!(checked > 0, "task operations declare input aliases");
+
+    let error = registry
+        .execute(
+            "orbit.task.artifact.get",
+            &ToolContext::default(),
+            serde_json::json!({"id": "X", "artifact_path": "a.txt"}),
+        )
+        .expect_err("no task host is attached");
+    assert!(
+        !error.to_string().contains("unknown"),
+        "an alias must not be refused as an unknown field: {error}"
+    );
+}
+
+#[test]
+fn task_add_retired_fields_keep_their_replacement_hints_at_dispatch() {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let add = orbit_common::governance::task::TASK_OPERATIONS
+        .iter()
+        .find(|spec| spec.tool_name == "orbit.task.add")
+        .expect("task add operation is declared");
+
+    for retired in add.retired_fields {
+        let mut input = serde_json::json!({"title": "task", "description": "description"});
+        input
+            .as_object_mut()
+            .expect("input is an object")
+            .insert(retired.name.to_string(), serde_json::Value::Null);
+        let error = registry
+            .execute("orbit.task.add", &ToolContext::default(), input)
+            .expect_err("retired fields must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains(retired.name) && message.contains(retired.replacement),
+            "retired field {} must retain its declared replacement, got {message}",
+            retired.name
+        );
+    }
+
+    let error = registry
+        .execute(
+            "orbit.task.add",
+            &ToolContext::default(),
+            serde_json::json!({"title": "task", "description": "description", "titel": "task"}),
+        )
+        .expect_err("unknown fields must still be refused");
+    let message = error.to_string();
+    assert!(message.contains("unknown field 'titel'"), "{message}");
+    assert!(message.contains("(did you mean 'title'?)"), "{message}");
+}
+
 const RETIRED_AGENT_TOOL_NAMES: &[&str] = &[
     "git.push",
     "github.pr.comment",
@@ -181,6 +266,7 @@ fn retired_agent_tools_are_absent_from_every_registry_surface_and_dispatch() {
                 orbit_common::OrbitError::NotFound {
                     kind: orbit_common::NotFoundKind::Tool,
                     id,
+                    ..
                 } if id == retired
             ),
             "retired tool must be refused as an unknown tool: {retired}: {error}"
@@ -277,6 +363,8 @@ fn workflow_critical_tools_remain_registered() {
         // surface; its inactive-classification is covered by
         // `inactive_ops_tools_*` and `INACTIVE_TOOL_NAMES` above.
         "orbit.task.retry_handoff",
+        "orbit.task.recover_claim",
+        "orbit.task.revoke_handoff",
         "orbit.task.artifact.get",
         "orbit.task.artifact.put",
         "proc.spawn",
@@ -503,3 +591,65 @@ fn folded_tools_are_gone_and_their_siblings_take_the_inputs() {
 
 #[path = "../github_log_goldens/mod.rs"]
 mod github_log_goldens;
+
+#[test]
+fn unknown_task_tools_only_suggest_active_visible_and_granted_replacements() {
+    use orbit_common::{NotFoundKind, OrbitError};
+    use orbit_types::workflow::ActivityToolDenyPolicy;
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    for (name, hint) in [
+        ("orbit.task.get", Some("orbit.task.show")),
+        (
+            "orbit.task.artifact.list",
+            Some("orbit.task.show with field: \"artifacts\""),
+        ),
+        ("orbit.workflow.run.get", None),
+        ("orbit.auto_task.get", None),
+        ("orbit.definitely.missing", None),
+    ] {
+        assert!(
+            !registry.has(name),
+            "the invented name must not be registered"
+        );
+        let error = registry
+            .execute(name, &ToolContext::default(), serde_json::json!({}))
+            .expect_err("unknown tools remain refused");
+        assert!(
+            matches!(&error, OrbitError::NotFound { kind: NotFoundKind::Tool, id, .. } if id == name)
+        );
+        let expected = match hint {
+            Some(hint) => format!("tool not found: {name} (did you mean {hint}?)"),
+            None => format!("tool not found: {name}"),
+        };
+        assert_eq!(error.to_string(), expected);
+    }
+    for context in [
+        ToolContext {
+            allowed_tools: vec!["orbit.task.get".into()],
+            ..Default::default()
+        },
+        ToolContext {
+            tool_deny_policy: Some(ActivityToolDenyPolicy {
+                activity: "fixture".into(),
+                disallow_list: vec!["orbit.task.show".into()],
+            }),
+            ..Default::default()
+        },
+    ] {
+        let error = registry
+            .execute("orbit.task.get", &context, serde_json::json!({}))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+    }
+    registry.unregister("orbit.task.show");
+    let error = registry
+        .execute(
+            "orbit.task.get",
+            &ToolContext::default(),
+            serde_json::json!({}),
+        )
+        .unwrap_err();
+    assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+}

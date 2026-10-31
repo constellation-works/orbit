@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::application::review::{DistributedClaimState, ExpectedCandidate};
+use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
+use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions, SweepOutcome};
 use orbit_core::application::task::{EXTERNAL_MERGE_SETTLED_EVENT, TaskAddParams};
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
@@ -35,6 +37,7 @@ use orbit_types::workflow::handoff::{
     HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
     LandingAttemptState, LandingStartState, TaskHandoff,
 };
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -53,6 +56,8 @@ enum Authority {
     Unapproved,
     /// Accepted under a `done` contract: the owner's landing job carries it.
     Authorized,
+    /// Its authorized landing stopped while its claim still holds completion authority.
+    Stopped,
     /// Authorized, its landing attempt stopped, then revoked by an operator:
     /// the observed release-prep case.
     Revoked,
@@ -69,6 +74,8 @@ struct Handoff {
 
 #[derive(Default)]
 struct ForgeState {
+    /// Fail the merged listing, as a forge outage would.
+    fail_merged: bool,
     /// What the most-recently-merged listing returns.
     recent: Vec<MergedPullRequest>,
     /// Merged PRs only a lookup by number reaches.
@@ -97,6 +104,7 @@ impl FakeForge {
                 author: author.to_string(),
             },
             base_branch: base.to_string(),
+            head_sha: "0dbd8e2000000000000000000000000000000000".to_string(),
             merge_commit: MERGE_COMMIT.to_string(),
         }
     }
@@ -122,7 +130,11 @@ impl TaskPrForge for FakeForge {
         &self,
         _repo_root: &Path,
     ) -> Result<Vec<MergedPullRequest>, OrbitError> {
-        Ok(self.0.lock().unwrap().recent.clone())
+        let state = self.0.lock().unwrap();
+        if state.fail_merged {
+            return Err(OrbitError::Execution("forge unavailable".into()));
+        }
+        Ok(state.recent.clone())
     }
 
     fn merged_pull_request(
@@ -166,6 +178,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_config("")
+    }
+
+    fn with_config(config: &str) -> Self {
         let root =
             TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
         let global_root = root.path().join("global");
@@ -174,6 +190,7 @@ impl Fixture {
         std::fs::create_dir_all(&global_root).expect("create global root");
         std::fs::create_dir_all(&workspace_root).expect("create workspace root");
         std::fs::write(repo_root.join("shared.txt"), "fixture\n").expect("write shared file");
+        std::fs::write(workspace_root.join("config.toml"), config).expect("write config");
         let forge = FakeForge::default();
         let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root)
             .expect("build test runtime")
@@ -211,6 +228,11 @@ impl Fixture {
 
     /// A running execution claim of `task_id` on `shared.txt`.
     fn claim(&self, task_id: &str, run_id: &str) {
+        self.claim_with_phase(task_id, run_id, "running");
+    }
+
+    /// A live execution claim in `phase` on `shared.txt`.
+    fn claim_with_phase(&self, task_id: &str, run_id: &str, phase: &str) {
         let claim_id = format!("claim-{run_id}");
         let claim = json!({
             "claim_id": claim_id,
@@ -221,7 +243,7 @@ impl Fixture {
             "footprint": ["file:shared.txt"],
             "reservation_id": format!("res-{run_id}"),
             "reservation_expires_at": (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
-            "phase": "running",
+            "phase": phase,
         });
         rusqlite::Connection::open(self.runtime.global_root().join("orbit.db"))
             .unwrap()
@@ -289,10 +311,20 @@ impl Fixture {
         landing: &str,
         done: bool,
     ) -> (String, String, ClaimInvocation) {
+        self.bound_claim_with_mode(number, landing, done, "pr")
+    }
+
+    fn bound_claim_with_mode(
+        &self,
+        number: u64,
+        landing: &str,
+        done: bool,
+        mode: &str,
+    ) -> (String, String, ClaimInvocation) {
         let task = self.add_task("Claimed delivery", TaskStatus::Backlog, &[]);
         let boundary = self.boundary();
         let ship = AdmissionShipContract {
-            mode: "pr".into(),
+            mode: mode.into(),
             base_branch: self.base.clone(),
             landing_branch: landing.into(),
             before_pr: false,
@@ -302,12 +334,14 @@ impl Fixture {
             review: None,
         };
         let request = AdmissionRequest {
+            labels: Vec::new(),
             request_id: format!("req-{number}"),
             caller_version: "test".into(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
             caller_fingerprint: None,
             caller_before_pr: false,
             review_gate: true,
+            selective_review: false,
             run_context: AdmissionRunContext {
                 run_id: format!("drain-{number}"),
                 job_name: "workspace_pull_pipeline".into(),
@@ -320,12 +354,18 @@ impl Fixture {
             admissible: None,
         };
         let repo = self._root.path().join("repo");
+        let location = ExecutionLocation {
+            machine_id: "follower".into(),
+            machine_name: None,
+        };
+        let identity = if mode == "local" {
+            AdmissionIdentity::trusted_local(location)
+        } else {
+            AdmissionIdentity::trusted_remote(location)
+        };
         let AdmissionLookup::Found { receipt, .. } = boundary
             .admit_task(
-                &AdmissionIdentity::trusted_remote(ExecutionLocation {
-                    machine_id: "follower".into(),
-                    machine_name: None,
-                }),
+                &identity,
                 &request,
                 &AdmissionOrdering::default(),
                 "test",
@@ -440,8 +480,55 @@ impl Fixture {
     /// goes as far as `authority` says, through the owner's own landing
     /// mutations and operator console.
     fn handed_off(&self, number: u64, authority: Authority) -> Handoff {
+        self.handed_off_with_delivery(number, authority, HandoffDelivery::PullRequest { number })
+    }
+
+    /// A follower's leaf hands off `delivery`, then follows `authority`.
+    fn handed_off_with_delivery(
+        &self,
+        number: u64,
+        authority: Authority,
+        delivery: HandoffDelivery,
+    ) -> Handoff {
         let authorized = authority != Authority::Unapproved;
-        let (task, claim_id, worker) = self.bound_claim(number, LANDING, authorized);
+        let mode = if matches!(&delivery, HandoffDelivery::LocalCandidate) {
+            "local"
+        } else {
+            "pr"
+        };
+        let (task, claim_id, worker) =
+            self.bound_claim_with_mode(number, LANDING, authorized, mode);
+        let (candidate_revision, base_revision) = if authority == Authority::Stopped {
+            let repo = self.runtime.paths().repo_root.clone();
+            settlement_git(&repo, &["init", "-q", "-b", &self.base]);
+            settlement_git(&repo, &["add", "shared.txt"]);
+            settlement_git(&repo, &["commit", "-qm", "base"]);
+            let base = settlement_revision(&repo, "HEAD");
+            if self.base != LANDING {
+                settlement_git(&repo, &["branch", LANDING]);
+            }
+            settlement_git(
+                &repo,
+                &["checkout", "-qb", &format!("orbit/{task}-47642870")],
+            );
+            std::fs::write(repo.join("delivery.txt"), "candidate\n").unwrap();
+            settlement_git(&repo, &["add", "delivery.txt"]);
+            settlement_git(&repo, &["commit", "-qm", "candidate"]);
+            let candidate = settlement_revision(&repo, "HEAD");
+            settlement_git(&repo, &["checkout", "-q", &self.base]);
+            (candidate, base)
+        } else {
+            (
+                SourceRevision {
+                    commit: "a".repeat(40),
+                    tree: "b".repeat(40),
+                },
+                SourceRevision {
+                    commit: "c".repeat(40),
+                    tree: "d".repeat(40),
+                },
+            )
+        };
         let handoff = TaskHandoff {
             schema_version: 1,
             workspace_id: self.runtime.workspace_id().unwrap(),
@@ -454,17 +541,12 @@ impl Fixture {
                 source_branch: format!("orbit/{task}-47642870"),
                 base_branch: self.base.clone(),
                 landing_branch: LANDING.into(),
-                candidate: SourceRevision {
-                    commit: "a".repeat(40),
-                    tree: "b".repeat(40),
-                },
-                base: SourceRevision {
-                    commit: "c".repeat(40),
-                    tree: "d".repeat(40),
-                },
-                delivery: HandoffDelivery::PullRequest { number },
+                candidate: candidate_revision,
+                base: base_revision,
+                delivery,
             },
             review: HandoffReview {
+                selective_receipt: None,
                 policy: ReviewTiming::None,
                 disposition: HandoffReviewDisposition::NotRequired,
             },
@@ -473,6 +555,7 @@ impl Fixture {
             footprint_widening: vec![],
             owed_criteria: vec![],
             regression_from: vec![],
+            visual: None,
         };
         let observation = HandoffObservation {
             footprint_widening: vec![],
@@ -506,7 +589,7 @@ impl Fixture {
         };
         if matches!(
             authority,
-            Authority::Revoked | Authority::RevokedWhileDispatched
+            Authority::Revoked | Authority::RevokedWhileDispatched | Authority::Stopped
         ) {
             landing(
                 "dispatch",
@@ -516,7 +599,7 @@ impl Fixture {
                 },
             );
         }
-        if authority == Authority::Revoked {
+        if matches!(authority, Authority::Revoked | Authority::Stopped) {
             landing(
                 "stop",
                 ClaimMutation::StopLanding {
@@ -934,6 +1017,142 @@ fn the_operator_settles_one_task_from_a_merge_older_than_the_listing() {
     assert!(refused.to_string().contains("'done'"), "{refused}");
 }
 
+crate::scenario_table!(
+    recovered_rescued_delivery,
+    a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle
+);
+
+fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
+    let fx = Fixture::new();
+    let (task, claim_id, worker) = fx.bound_claim(4940, LANDING, false);
+    let handoff = TaskHandoff {
+        schema_version: 1,
+        workspace_id: fx.runtime.workspace_id().unwrap(),
+        task_id: task.clone(),
+        claim_id: claim_id.clone(),
+        machine_id: "follower".into(),
+        run_id: "leaf-4940".into(),
+        candidate: HandoffCandidate {
+            repository: "owner/repository".into(),
+            source_branch: format!("orbit/{task}-47642870"),
+            base_branch: fx.base.clone(),
+            landing_branch: LANDING.into(),
+            candidate: SourceRevision {
+                commit: "42bfe17000000000000000000000000000000000".into(),
+                tree: "b".repeat(40),
+            },
+            base: SourceRevision {
+                commit: "c".repeat(40),
+                tree: "d".repeat(40),
+            },
+            delivery: HandoffDelivery::PullRequest { number: 4940 },
+        },
+        review: HandoffReview {
+            selective_receipt: None,
+            policy: ReviewTiming::None,
+            disposition: HandoffReviewDisposition::NotRequired,
+        },
+        execution_summary: "Follower candidate is complete".into(),
+        validation: vec![],
+        footprint_widening: vec![],
+        owed_criteria: vec![],
+        regression_from: vec![],
+        visual: None,
+    };
+    let observation = HandoffObservation {
+        candidate: handoff.candidate.clone(),
+        required_commands: vec!["newly-required-check".into()],
+        footprint_widening: vec![],
+        owner_completion_authority: None,
+        review: None,
+        known_red: vec![],
+        light_delivery: vec![],
+    };
+    let refusal = fx
+        .runtime
+        .mutate_execution_claim(
+            Some(&worker.with_handoff_observation(observation)),
+            "refused-handoff",
+            &ClaimMutation::AcceptHandoff(handoff),
+        )
+        .expect_err("the owner's newly required validation was not in the follower handoff");
+    assert!(refusal.to_string().contains("validation"), "{refusal}");
+    fx.runtime
+        .recover_claim_as_operator(
+            &claim_id,
+            "running",
+            TaskStatus::Blocked,
+            "operator",
+            "Follower stopped; its refused handoff's PR was rescued by hand",
+            "recover-rescued",
+        )
+        .unwrap();
+    fx.forge.merge_recent(4940, &task, BOT, LANDING);
+    assert!(fx.runtime.get_task(&task).unwrap().external_refs.is_empty());
+    assert!(
+        fx.boundary()
+            .find_accepted_handoff(&claim_id)
+            .unwrap()
+            .is_none()
+    );
+    let merged = fx.forge.0.lock().unwrap().recent[0].clone();
+    for case in [
+        "other-branch",
+        "other-base",
+        "other-author",
+        "other-task",
+        "missing-head",
+    ] {
+        let mut wrong = merged.clone();
+        match case {
+            "other-branch" => wrong.pull.head_branch = "unrelated-branch".into(),
+            "other-base" => wrong.base_branch = fx.base.clone(),
+            "other-author" => wrong.pull.author = "unrelated-author".into(),
+            "other-task" => wrong.pull.body = "Delivers some other task".into(),
+            _ => wrong.head_sha.clear(),
+        }
+        fx.forge.0.lock().unwrap().recent[0] = wrong;
+        fx.runtime
+            .settle_recovered_claim_merge(
+                &task,
+                &claim_id,
+                4940,
+                "42bfe17000000000000000000000000000000000",
+            )
+            .expect_err(case);
+        assert_eq!(fx.status(&task), TaskStatus::Blocked, "{case}");
+    }
+    fx.forge.0.lock().unwrap().recent[0] = merged;
+    fx.runtime
+        .settle_recovered_claim_merge(
+            &task,
+            &claim_id,
+            4940,
+            "42bfe17000000000000000000000000000000000",
+        )
+        .expect("an operator can settle the recovered delivery without force");
+    assert_eq!(fx.status(&task), TaskStatus::Done);
+    assert_eq!(fx.claim_phase(&claim_id), ExecutionClaimPhase::Revoked);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let note = history
+        .iter()
+        .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
+        .unwrap()
+        .note
+        .as_deref()
+        .unwrap();
+    for evidence in [
+        "operator-rescued",
+        &claim_id,
+        "42bfe17000000000000000000000000000000000",
+        "0dbd8e2000000000000000000000000000000000",
+        MERGE_COMMIT,
+        LANDING,
+    ] {
+        assert!(note.contains(evidence), "missing {evidence}: {note}");
+    }
+}
+
 #[test]
 fn a_revoked_handoff_and_its_claim_settle_from_its_candidate_pr_merged_outside_orbit() {
     for owner_pass in [false, true] {
@@ -1090,6 +1309,61 @@ fn a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merg
 }
 
 #[test]
+fn external_merge_recovery_suggestions_include_the_observed_claim_phase() {
+    for phase in ["claimed", "running", "repair_pending"] {
+        let fx = Fixture::new();
+        let task = fx.add_task("Live claim refusal", TaskStatus::InProgress, &[4935]);
+        let run_id = format!("live-{phase}");
+        fx.claim_with_phase(&task, &run_id, phase);
+        fx.forge.merge_recent(4935, &task, BOT, &fx.base);
+
+        let refusal = fx
+            .runtime
+            .settle_externally_merged_task(&task)
+            .expect_err("a live claim refuses settlement")
+            .to_string();
+        let expected = format!(
+            "orbit task recover-claim claim-{run_id} --phase {phase} --status blocked --reason <reason> --request <key>"
+        );
+        assert!(refusal.contains(&expected), "{phase}: {refusal}");
+    }
+
+    for (case, authority) in [
+        ("unapproved", Authority::Unapproved),
+        ("authorized-pending", Authority::Authorized),
+    ] {
+        let fx = Fixture::new();
+        let handoff = fx.handed_off(4936, authority);
+        fx.forge.merge_recent(4936, &handoff.task, BOT, LANDING);
+
+        let refusal = fx
+            .runtime
+            .settle_externally_merged_task(&handoff.task)
+            .expect_err(case)
+            .to_string();
+        let expected = format!(
+            "orbit task recover-claim {} --phase handed_off --status blocked --reason <reason> --request <key>",
+            handoff.claim_id
+        );
+        assert!(refusal.contains(&expected), "{case}: {refusal}");
+    }
+
+    let fx = Fixture::new();
+    let handoff =
+        fx.handed_off_with_delivery(4937, Authority::Revoked, HandoffDelivery::LocalCandidate);
+    let refusal = fx
+        .runtime
+        .settle_externally_merged_task(&handoff.task)
+        .expect_err("a revoked handoff without a pull request refuses settlement")
+        .to_string();
+    let expected = format!(
+        "orbit task recover-claim {} --phase handed_off --status blocked --reason <reason> --request <key>",
+        handoff.claim_id
+    );
+    assert!(refusal.contains(&expected), "{refusal}");
+}
+
+#[test]
 fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neither() {
     fn settle(
         fx: &Fixture,
@@ -1112,6 +1386,7 @@ fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neithe
                 base_branch: branch.into(),
                 merge_commit: MERGE_COMMIT.into(),
                 note: format!("settled from pull request #{number}"),
+                verified_candidate_head: None,
             },
         )
     }
@@ -1165,4 +1440,420 @@ fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neithe
         fx.claim_phase(&revoked.claim_id),
         ExecutionClaimPhase::Revoked
     );
+}
+
+/// A merged delivery whose body is a repository template with no task
+/// placeholder still settles, because of the generated identity comment.
+/// The same body from another author, on another branch, without the token,
+/// or naming only a longer id does not.
+#[test]
+fn a_template_body_without_a_task_placeholder_still_settles_an_external_merge() {
+    let fx = Fixture::new();
+    let task = fx.add_task("Fix the widget", TaskStatus::Review, &[61]);
+    let bare = fx.add_task("Template text only", TaskStatus::Review, &[62]);
+    let human = fx.add_task("Merged by a human", TaskStatus::Review, &[63]);
+    let other_base = fx.add_task("Merged elsewhere", TaskStatus::Review, &[64]);
+    let other_head = fx.add_task("Another branch", TaskStatus::Review, &[65]);
+    let lookalike = fx.add_task("Lookalike id", TaskStatus::Review, &[66]);
+
+    let identity = |id: &str| format!("<!-- orbit-delivery-task: {id} -->");
+    let body = format!("## Summary\n\nFix the widget\n\n{}", identity(&task));
+    let mut recent = fx.forge.0.lock().unwrap();
+    recent.recent.push(FakeForge::merged(
+        61,
+        format!("orbit/{task}-0123abcd"),
+        body.clone(),
+        BOT,
+        &fx.base,
+    ));
+    recent.recent.push(FakeForge::merged(
+        62,
+        format!("orbit/{bare}-0123abcd"),
+        "## Summary\n\nFix the widget".to_string(),
+        BOT,
+        &fx.base,
+    ));
+    recent.recent.push(FakeForge::merged(
+        63,
+        format!("orbit/{human}-0123abcd"),
+        format!("## Summary\n\nFix the widget\n\n{}", identity(&human)),
+        "alice",
+        &fx.base,
+    ));
+    recent.recent.push(FakeForge::merged(
+        64,
+        format!("orbit/{other_base}-0123abcd"),
+        format!("## Summary\n\nFix the widget\n\n{}", identity(&other_base)),
+        BOT,
+        "release",
+    ));
+    recent.recent.push(FakeForge::merged(
+        65,
+        format!("orbit/{other_head}0-0123abcd"),
+        format!("## Summary\n\nFix the widget\n\n{}", identity(&other_head)),
+        BOT,
+        &fx.base,
+    ));
+    recent.recent.push(FakeForge::merged(
+        66,
+        format!("orbit/{lookalike}-0123abcd"),
+        format!("## Summary\n\nFix the widget\n\n<!-- orbit-delivery-task: {lookalike}0 -->"),
+        BOT,
+        &fx.base,
+    ));
+    drop(recent);
+
+    let settlement = fx
+        .runtime
+        .settle_externally_merged_task(&task)
+        .expect("the template body names the task");
+    assert_eq!(settlement.pr_number, 61);
+    assert_eq!(settlement.task_id, task);
+    assert_eq!(fx.status(&task), TaskStatus::Done);
+
+    for (id, why) in [
+        (&bare, "the template text has no task token"),
+        (&human, "a human author is not the delivery identity"),
+        (&other_base, "it merged into another branch"),
+        (&other_head, "the head branch names a longer id"),
+        (&lookalike, "the body names only a longer id"),
+    ] {
+        assert!(
+            fx.runtime.settle_externally_merged_task(id).is_err(),
+            "{why}"
+        );
+        assert_eq!(fx.status(id), TaskStatus::Review, "{why}");
+    }
+}
+
+crate::scenario_table!(
+    sibling_delivery_contract,
+    external_merge_does_not_settle_a_sibling_delivery_named_in_an_external_ref
+);
+
+fn external_merge_does_not_settle_a_sibling_delivery_named_in_an_external_ref() {
+    let fx = Fixture::with_config(
+        "[branch]\nname_template = 'feature/{{ext.jira}}-{{task_id}}-{{hash}}'\n",
+    );
+    let sibling = fx.add_task("Mentioned task", TaskStatus::Review, &[61]);
+    let owner = fx.add_task("Merged task", TaskStatus::Review, &[61]);
+    fx.forge.0.lock().unwrap().recent.push(FakeForge::merged(
+        61,
+        format!("feature/X-{sibling}-{owner}-0123abcd"),
+        format!("Delivers {owner}; follows {sibling}."),
+        BOT,
+        &fx.base,
+    ));
+    assert!(fx.runtime.settle_externally_merged_task(&sibling).is_err());
+    assert_eq!(fx.status(&sibling), TaskStatus::Review);
+    let settlement = fx.runtime.settle_externally_merged_task(&owner).unwrap();
+    assert_eq!(settlement.pr_number, 61);
+    assert_eq!(settlement.task_id, owner);
+    assert_eq!(fx.status(&owner), TaskStatus::Done);
+}
+
+struct TickProvider {
+    runtime: OrbitRuntime,
+    replica: bool,
+}
+
+impl RoutineWorkspaceProvider for TickProvider {
+    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
+        let workspace = Workspace {
+            id: self.runtime.workspace_id()?,
+            name: "tick-workspace".into(),
+            owner_machine_id: None,
+            git_remote: None,
+            ship_mode: None,
+            base_branch: "main".into(),
+            status: WorkspaceStatus::Active,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let pair = (workspace, self.runtime.clone());
+        if self.replica {
+            Ok(DiscoveredWorkspaces {
+                replicas: vec![pair],
+                ..DiscoveredWorkspaces::default()
+            })
+        } else {
+            Ok(DiscoveredWorkspaces {
+                entries: vec![pair],
+                ..DiscoveredWorkspaces::default()
+            })
+        }
+    }
+}
+
+fn tick(fx: &Fixture, dry_run: bool, replica: bool) -> SweepOutcome {
+    orbit_core::test_support::run_sweep_at(
+        &fx.runtime.global_root(),
+        SweepOptions {
+            dry_run,
+            ..SweepOptions::default()
+        },
+        RoutineMachineIdentity {
+            machine_id: "tick-machine".into(),
+            machine_name: "tick-host".into(),
+        },
+        &TickProvider {
+            runtime: fx.runtime.clone(),
+            replica,
+        },
+        Utc::now(),
+    )
+    .expect("the tick runs")
+}
+
+#[test]
+fn clock_tick_settles_blocked_and_review_tasks_without_a_drain() {
+    let fx = Fixture::new();
+    let blocked = fx.add_task("Tick blocked", TaskStatus::Blocked, &[601]);
+    let reviewed = fx.add_task("Tick reviewed", TaskStatus::Review, &[602]);
+    fx.forge.merge_recent(601, &blocked, BOT, &fx.base);
+    fx.forge.merge_recent(602, &reviewed, BOT, &fx.base);
+
+    let dry = tick(&fx, true, false);
+    assert!(dry.external_merge_settlements.is_empty(), "{dry:?}");
+    assert_eq!(fx.status(&blocked), TaskStatus::Blocked);
+
+    let outcome = tick(&fx, false, false);
+    assert_eq!(fx.status(&blocked), TaskStatus::Done);
+    assert_eq!(fx.status(&reviewed), TaskStatus::Done);
+    let mut settled: Vec<(&str, u64)> = outcome
+        .external_merge_settlements
+        .iter()
+        .map(|row| (row.task_id.as_str(), row.pr_number))
+        .collect();
+    settled.sort();
+    let mut expected = vec![(blocked.as_str(), 601), (reviewed.as_str(), 602)];
+    expected.sort();
+    assert_eq!(settled, expected, "{outcome:?}");
+    assert!(
+        outcome
+            .external_merge_settlements
+            .iter()
+            .all(|row| row.source == "tick-workspace")
+    );
+    for task in [&blocked, &reviewed] {
+        let history = fx.runtime.get_task_history(task).unwrap();
+        let entry = history
+            .iter()
+            .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
+            .expect("settled event");
+        assert_eq!(entry.to_status, Some(TaskStatus::Done));
+        assert!(entry.note.as_deref().unwrap().contains(MERGE_COMMIT));
+    }
+}
+
+#[test]
+fn clock_tick_leaves_guarded_tasks_and_follower_hosts_unsettled() {
+    let fx = Fixture::new();
+    let live = fx.add_task("Tick live run", TaskStatus::InProgress, &[611]);
+    let claimed = fx.add_task("Tick claimed", TaskStatus::Blocked, &[612]);
+    fx.bind_live_run(&live);
+    fx.claim(&claimed, "jrun-tick-claim");
+    fx.forge.merge_recent(611, &live, BOT, &fx.base);
+    fx.forge.merge_recent(612, &claimed, BOT, &fx.base);
+
+    let outcome = tick(&fx, false, false);
+    assert!(outcome.external_merge_settlements.is_empty(), "{outcome:?}");
+    assert_eq!(fx.status(&live), TaskStatus::InProgress);
+    assert_eq!(fx.status(&claimed), TaskStatus::Blocked);
+
+    // A follower (replica) host settles nothing even for an eligible task.
+    let eligible = fx.add_task("Tick follower", TaskStatus::Blocked, &[613]);
+    fx.forge.merge_recent(613, &eligible, BOT, &fx.base);
+    let replica = tick(&fx, false, true);
+    assert!(replica.external_merge_settlements.is_empty(), "{replica:?}");
+    assert_eq!(fx.status(&eligible), TaskStatus::Blocked);
+}
+
+#[test]
+fn clock_tick_forge_failure_does_not_fail_the_tick() {
+    let fx = Fixture::new();
+    let task = fx.add_task("Tick forge down", TaskStatus::Blocked, &[621]);
+    fx.forge.merge_recent(621, &task, BOT, &fx.base);
+    fx.forge.0.lock().unwrap().fail_merged = true;
+
+    let outcome = tick(&fx, false, false);
+    assert!(outcome.external_merge_settlements.is_empty(), "{outcome:?}");
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+
+    fx.forge.0.lock().unwrap().fail_merged = false;
+    let outcome = tick(&fx, false, false);
+    assert_eq!(outcome.external_merge_settlements.len(), 1);
+    assert_eq!(fx.status(&task), TaskStatus::Done);
+}
+
+fn settlement_git(repo: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+        ])
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn settlement_revision(repo: &Path, reference: &str) -> SourceRevision {
+    SourceRevision {
+        commit: settlement_git(repo, &["rev-parse", reference]),
+        tree: settlement_git(repo, &["rev-parse", &format!("{reference}^{{tree}}")]),
+    }
+}
+
+#[test]
+fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
+    for foreign in [false, true] {
+        let fx = Fixture::with_config(
+            "[workflow]\nbase_branch = \"release-landing\"\ndistributed_completion = \"done\"\n",
+        );
+        let handoff = fx.handed_off(4938, Authority::Stopped);
+        let repo = fx.runtime.paths().repo_root.clone();
+        let accepted = fx.runtime.accepted_task_handoff(&handoff.claim_id).unwrap();
+        let candidate = &accepted.handoff.candidate;
+        let remote = fx._root.path().join("remote.git");
+        settlement_git(
+            &repo,
+            &["clone", "-q", "--bare", ".", remote.to_str().unwrap()],
+        );
+        let mut head = candidate.candidate.commit.clone();
+        for update in 1..=2 {
+            let base_tree = settlement_git(&remote, &["rev-parse", &format!("{LANDING}^{{tree}}")]);
+            let base = settlement_git(
+                &remote,
+                &[
+                    "commit-tree",
+                    &base_tree,
+                    "-p",
+                    LANDING,
+                    "-m",
+                    &format!("base update {update}"),
+                ],
+            );
+            settlement_git(
+                &remote,
+                &["update-ref", &format!("refs/heads/{LANDING}"), &base],
+            );
+            let tree = settlement_git(&remote, &["merge-tree", "--write-tree", &head, &base]);
+            head = settlement_git(
+                &remote,
+                &[
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &head,
+                    "-p",
+                    &base,
+                    "-m",
+                    "operator base update",
+                ],
+            );
+        }
+        if foreign {
+            let tree = settlement_git(&remote, &["rev-parse", &format!("{head}^{{tree}}")]);
+            head = settlement_git(
+                &remote,
+                &[
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &head,
+                    "-m",
+                    "foreign source commit",
+                ],
+            );
+        }
+        let tree = settlement_git(&remote, &["rev-parse", &format!("{head}^{{tree}}")]);
+        let merge = settlement_git(
+            &remote,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                LANDING,
+                "-m",
+                "external squash merge",
+            ],
+        );
+        settlement_git(
+            &remote,
+            &["update-ref", &format!("refs/heads/{LANDING}"), &merge],
+        );
+        settlement_git(&remote, &["update-ref", "refs/pull/4938/head", &head]);
+        settlement_git(
+            &remote,
+            &[
+                "update-ref",
+                "-d",
+                &format!("refs/heads/{}", candidate.source_branch),
+            ],
+        );
+        settlement_git(
+            &repo,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        let absent = std::process::Command::new("git")
+            .args(["cat-file", "-e", &head])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            !absent.status.success(),
+            "updated PR head starts outside the owner checkout"
+        );
+        fx.forge.merge_recent(4938, &handoff.task, "alice", LANDING);
+        {
+            let mut state = fx.forge.0.lock().unwrap();
+            state.recent[0].head_sha = head.clone();
+            state.recent[0].merge_commit = merge.clone();
+        }
+        let result = fx.runtime.settle_externally_merged_tasks();
+        if foreign {
+            assert!(result.unwrap().is_empty());
+            let error = fx
+                .runtime
+                .settle_externally_merged_task(&handoff.task)
+                .unwrap_err();
+            assert!(error.to_string().contains("reconcile_review"), "{error}");
+            assert_eq!(fx.status(&handoff.task), TaskStatus::Review);
+            assert_eq!(
+                fx.claim_phase(&handoff.claim_id),
+                ExecutionClaimPhase::HandedOff
+            );
+        } else {
+            assert_eq!(result.unwrap().len(), 1);
+            assert_eq!(fx.status(&handoff.task), TaskStatus::Done);
+            assert_eq!(
+                fx.claim_phase(&handoff.claim_id),
+                ExecutionClaimPhase::Landed
+            );
+            assert_eq!(
+                fx.runtime.landing_attempts().unwrap()[0].state,
+                LandingAttemptState::Merged
+            );
+            assert_eq!(
+                fx.runtime.landing_start_requests().unwrap()[0].state,
+                LandingStartState::Completed
+            );
+            let history = fx.runtime.get_task_history(&handoff.task).unwrap();
+            assert!(
+                history
+                    .iter()
+                    .any(|row| row.event == EXTERNAL_MERGE_SETTLED_EVENT
+                        && row.note.as_ref().is_some_and(|note| note.contains(&head)))
+            );
+        }
+    }
 }

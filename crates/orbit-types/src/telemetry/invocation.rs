@@ -23,6 +23,28 @@ pub struct TokenUsage {
     pub output: u64,
 }
 
+/// Smallest prompt, in tokens, of a model request whose usage an invocation
+/// trace keeps in [`InvocationTrace::long_prompt_requests`]. It is the lowest
+/// threshold of any prompt-size price tier, so a request below it can never
+/// reach one. The price table refuses a tier below it.
+pub const LONG_PROMPT_CAPTURE_FLOOR_TOKENS: u64 = 100_000;
+
+impl TokenUsage {
+    /// Whether this one request's prompt may reach
+    /// [`LONG_PROMPT_CAPTURE_FLOOR_TOKENS`]. The prompt is bounded from above
+    /// by every input-side bucket: exact where input excludes the cache
+    /// buckets, an overcount where a provider's input total already includes
+    /// them, so no request that reaches the floor is dropped.
+    #[must_use]
+    pub fn may_reach_long_prompt_floor(&self) -> bool {
+        self.input
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_create)
+            .saturating_add(self.cache_create_1h)
+            >= LONG_PROMPT_CAPTURE_FLOOR_TOKENS
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ToolCallTrace {
     #[serde(default)]
@@ -55,4 +77,41 @@ pub struct InvocationTrace {
     /// ground truth for monthly manual reconciliation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_cost_usd: Option<f64>,
+    /// Usage of each model request whose prompt may reach a prompt-size price
+    /// tier (see [`TokenUsage::may_reach_long_prompt_floor`]), one entry per
+    /// request, in the same buckets as [`Self::usage`]. Prompt-size tiers price
+    /// a whole request by its own prompt, so invocation totals cannot key them.
+    ///
+    /// `None` means the provider output exposed no per-request usage (and
+    /// every invocation recorded before it was captured); `Some` with no
+    /// entries means every request stayed below the floor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub long_prompt_requests: Option<Vec<TokenUsage>>,
+}
+
+/// The immutable identity actually rendered to an agent provider. An absent
+/// identity on a historical invocation means unknown, while a present identity
+/// with null effort means the provider default was used.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AgentExecutionIdentity {
+    /// Resolved crew at dispatch, absent for an inline agent without a crew.
+    pub crew: Option<String>,
+    /// Effective provider-mapped effort; null when no effort was rendered.
+    pub reasoning_effort: Option<crate::identity::ReasoningEffort>,
+}
+
+/// Completed invocation usage grouped by the actual crew, model and effort.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentEffortUsage {
+    pub crew: Option<String>,
+    pub model: Option<String>,
+    /// `unknown` for historical invocations, null for the provider default.
+    pub reasoning_effort: Option<String>,
+    pub invocations: u64,
+    pub tasks: u64,
+    pub duration_ms: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub provider_cost_usd: f64,
+    pub provider_cost_count: u64,
 }

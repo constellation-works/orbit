@@ -8,6 +8,7 @@ mod candidate_validate;
 pub mod claim;
 mod commit;
 mod completion_deadline;
+mod conventions;
 mod deferral_probe;
 mod deferred_sandbox;
 mod delivery_marker;
@@ -59,10 +60,18 @@ pub(crate) use freshness::refreshed_input;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;
 pub(super) use landing::handoff_land;
-pub use light_delivery::judge_light_delivery;
+pub use light_delivery::{
+    judge_light_delivery, judge_light_delivery_with_key, review_skip_decision,
+    run_review_skip_guard,
+};
 pub(crate) use owed_criteria::accept_implementer_owed_criteria;
 pub use pr::PullRequestStatus;
-pub(crate) use pr::recovery_published_head;
+pub(crate) use pr::forge_observation_hold_message;
+pub(crate) use pr::{
+    AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
+    provider_authenticated_published_head, recovery_published_head,
+};
+pub(crate) use pr::{CompletionRecoveryChecks, completion_recovery_checks};
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;
 pub(crate) use remote_probe::fixed_wait;
@@ -76,8 +85,8 @@ pub(super) use worktree::setup_worktree;
 ))]
 pub use worktree::with_host_target_removal_hook;
 pub use worktree::{
-    WorktreeGcOptions, WorktreeGcRecovery, WorktreeGcResult, WorktreeReclaimReport,
-    collect_worktrees, run_worktree_has_reclaim_output, run_worktree_paths,
+    WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcRecovery, WorktreeGcResult,
+    WorktreeReclaimReport, collect_worktrees, run_worktree_has_reclaim_output, run_worktree_paths,
 };
 
 /// Run one engine-private VCS/PR operation against the real `git` and `gh`,

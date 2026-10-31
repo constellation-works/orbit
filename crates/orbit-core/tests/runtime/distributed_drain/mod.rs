@@ -80,11 +80,14 @@ mod failure_class;
 mod flaky_validation;
 #[cfg(unix)]
 mod forge_hold;
+mod host_labels;
 mod host_os_executor;
 #[cfg(unix)]
 mod interrupted_review;
 mod landing_attribution;
 mod landing_repair;
+mod metadata;
+mod mock_pull;
 mod no_diff;
 mod ordering;
 #[cfg(unix)]
@@ -96,13 +99,17 @@ mod pilot;
 mod post_deploy;
 mod provider_limit;
 mod rebased_landing;
+mod receipt_retention;
 mod recovery;
 mod regression_attribution;
 mod requeue;
+mod scheduled;
 mod settlement;
 mod settlement_review;
 mod single_pass;
 mod unavailable_hold;
+mod usage_pressure;
+mod visual_capture;
 mod waiting;
 mod window_extension;
 #[cfg(unix)]
@@ -208,6 +215,8 @@ struct Wire {
     /// while it keeps the claim, as an owner whose configuration cannot
     /// accept a handoff does.
     refuse_settle: Mutex<Option<String>>,
+    /// Send handoffs to the real owner observation path.
+    observe_handoffs: Mutex<bool>,
     /// When set, the owner accepts a handoff into its claim journal, with
     /// the candidate the handoff names standing in for its provider read.
     accept_handoffs: Mutex<bool>,
@@ -359,8 +368,13 @@ impl DrainOwnerTransport for Wire {
         let local = *self.local.lock().unwrap();
         if name == "orbit.drain.claim.settle"
             && !local
+            && !*self.observe_handoffs.lock().unwrap()
             && let Some(handoff) = input["settlement"].get("AcceptHandoff")
             && handoff["candidate"]["delivery"]["kind"] != "no_diff"
+            && self.owner.inspect_execution_claims()?.iter().any(|state| {
+                state.claim.claim_id == input["claim_id"].as_str().unwrap_or_default()
+                    && state.claim.phase.is_unsettled()
+            })
         {
             if *self.accept_handoffs.lock().unwrap() {
                 self.accept(serde_json::from_value(handoff.clone()).unwrap())?;
@@ -429,7 +443,7 @@ impl DrainOwnerTransport for Wire {
         }
         if let Some((code, message)) = self.task_reads_remote_error.lock().unwrap().clone() {
             return Err(OrbitError::RemoteTool {
-                code: code.clone(),
+                code: code.as_str().into(),
                 message: message.clone(),
                 payload: json!({"code": code, "message": message}),
             });
@@ -721,6 +735,7 @@ impl Pair {
             fingerprint: Mutex::default(),
             gateless: Mutex::default(),
             refuse_settle: Mutex::default(),
+            observe_handoffs: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::default(),
             prefix_hosts: Mutex::default(),
@@ -1065,6 +1080,8 @@ fn follower_cli(runtime: &OrbitRuntime, provider: &str, command: &str) {
             executor_type: ExecutorType::DirectAgent,
             command: Some(command.to_string()),
             args: vec![],
+            inspection_args: None,
+            image_input: None,
             stdout_format: None,
             model_pair_override: None,
             model_flag: None,
@@ -1259,6 +1276,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
             delivery: HandoffDelivery::PullRequest { number: 42 },
         },
         review: HandoffReview {
+            selective_receipt: None,
             policy: ReviewTiming::None,
             disposition: HandoffReviewDisposition::NotRequired,
         },
@@ -1267,6 +1285,7 @@ fn handoff(record: &LocalPullAdmission) -> TaskHandoff {
         footprint_widening: vec![],
         owed_criteria: vec![],
         regression_from: vec![],
+        visual: None,
     }
 }
 

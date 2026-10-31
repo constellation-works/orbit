@@ -1,0 +1,390 @@
+schemaVersion: 1
+name: escape-to-guard
+description: Weekly classification and clustering of recent regressions, filing at most 3 proposed remedies for recurring regression mechanisms and at most 3 instruction-retirement tasks
+enabled: false
+schedule:
+  cron: 40 7 * * 1
+template:
+  title: Turn recurring regression classes into prevention
+  description: |-
+    Classify this workspace's recent regressions, cluster them by
+    nature, escape and layer plus one shared mechanism, and file at most
+    3 proposed remedy tasks for clusters of 3 or more regressions in
+    30 days, plus at most 3 instruction-retirement tasks. The durable
+    outputs are the classifications recorded on the regression links,
+    the filed tasks, and the
+    `escape-to-guard.json` artifact; the execution summary is the audit
+    trail. A workspace with no regression links is a successful no-op.
+
+    ## Rules and command surfaces
+
+    - Use only Orbit's own analytics, task and search tools, plus git.
+      Never read or edit Orbit state files, the Orbit database, or task
+      files by hand, and never change a task's status. Read regression
+      evidence with
+      `orbit tool run orbit.codebase.analytics --input '{"window":"7d","min_support":1,"model":"<agent-family>"}'`,
+      again with `"window":"30d"`, and once per escape value that needs
+      isolation with `"escape":"unclassified"` and `"escape":"absent"`
+      in the 30d call. Analytics ranks culprit tasks by their completion
+      window and caps path drill-downs; it is context, not a complete
+      census of regression tasks filed in the window. Inspect a task with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      Search with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"all","all":true,"model":"<agent-family>"}'`
+      (task search matches the query's terms in any order, and friction
+      search matches one case-insensitive substring: pass a single
+      distinctive token, never a multi-word phrase, and never treat a
+      0-hit multi-word query as proof that nothing covers a cluster).
+      Find the previous run with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["escape-to-guard","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
+      (tag filters use AND semantics) and read its artifact with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"escape-to-guard.json","model":"<agent-family>"}'`.
+    - Before filing a task, read the installed `orbit` skill's
+      task-authoring reference (`references/task-authoring.md`) and
+      follow it for task shape. Tool-created tasks start `proposed`;
+      leave them `proposed` and never approve one.
+    - Fail open. A window with no regression links, or with no cluster
+      at the bar below, is a successful no-op. Do not invent work to
+      justify the run.
+
+    ## Classify unclassified and absent escapes
+
+    Pin the scan timestamp before reading evidence. Build a complete link
+    ledger with
+    `orbit tool run orbit.task.list --full --input '{"fields":["id","created_at","relations","context_files","status"],"limit":200,"model":"<agent-family>"}'`.
+    Keep `--full`: the CLI's default compact output removes relations and
+    context files even when the tool input requests them. Direct MCP callers
+    request the same fields without this CLI flag. Verify every returned
+    record has an ID, creation timestamp, status, and array-valued `relations`
+    and `context_files`; a missing field is a read failure, never zero links.
+    When `truncated` is true, repeat this same read with `limit` at least the
+    returned `total`, increasing it again if new tasks arrived. The default list view
+    has no pagination cursor or offset. Proceed only when `truncated` is false
+    and the number of records equals `total`. If a complete read is unavailable,
+    record the evidence gap and stop without claiming a no-regression no-op or
+    filing guards. Do not treat truncated rankings or lists as complete.
+    Keep each `regression_from` link whose
+    regression task's `created_at` lies in the pinned 30d window, including
+    links to culprits that landed earlier. Deduplicate by regression task
+    ID plus culprit task ID. The 7d set is the subset filed in the pinned
+    last 7 days. Use the analytics payloads for context and cross-checks;
+    record their different population separately from this ledger.
+
+    Count ledger links by escape before any classification, showing
+    `unclassified` and `absent` separately. For every unclassified or
+    absent link in the 7d set:
+
+    1. Read the regression (fix) task and the culprit task it links to
+       with `orbit.task.show`. The regression task's description, its
+       landed paths, and its tags name what broke and where the fix
+       sits.
+    2. Read the culprit's landed diff. Resolve its landing commit with
+       `git log --all --oneline --grep=<culprit task ID>` and read the
+       diff with `git show <commit>`. When no commit names the culprit,
+       read the delivery record through
+       `orbit tool run orbit.task.show --input '{"id":"<culprit task ID>","field":"delivery","model":"<agent-family>"}'`
+       and show the landed SHA it names. Labelled example only: a diff
+       that changes a serialized field's default with no migration of
+       stored values points at a `contract_drift` nature and a
+       `no_test` escape when no test covers stored-value reads.
+    3. Pick one nature and one escape from the lists below, from that
+       evidence alone. Choose `unclassified` rather than guess.
+
+    `nature` is what kind of regression the link records:
+    - `broke_existing`: the culprit broke behavior that worked before it landed.
+    - `defect_in_new`: the defect is in code the culprit itself introduced.
+    - `incomplete`: the culprit shipped without part of what its task required.
+    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    - `unclassified`: the evidence does not settle the nature.
+    `escape` is why the delivery gates missed it:
+    - `no_test`: no test covered the broken behavior.
+    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `platform_only`: it shows only on a platform or host the gates did not exercise.
+    - `review_missed`: it was visible in the diff and review did not flag it.
+    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
+    - `unclassified`: the evidence does not settle the escape.
+    `severity` is how much the defect matters, on the one five-level scale
+    review issues and regression links share. A link that already has a `regression` payload
+    keeps its recorded severity: send its `severity` and `severity_source`
+    unchanged. An `absent` link is new to classification and is refused
+    without one, so rate it from the same evidence: the worst real impact, not
+    the size of the fix, taking the lower level when torn:
+    - `critical`: data loss or corruption, a security hole, every drain halted, or silently wrong results (a migration drops task history).
+    - `high`: a core workflow broken with no workaround (every `ui` delivery fails at handoff).
+    - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` drops a field the plain output shows).
+    - `low`: an edge case, a misleading message or a minor UX defect (an error names the wrong flag).
+    - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a reference doc).
+
+    Record each settled classification through the supported relation
+    write: read the regression task's current `relations`, then send
+    the full replacement list, preserving every existing relation and
+    adding `"regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>"}` to
+    its `regression_from` entry, sending its existing `sites` array and
+    severity unchanged, with
+    `orbit tool run orbit.task.update --input '{"id":"<regression task ID>","relations":[{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>","severity_source":"<existing source, or filer>","sites":<existing sites>}}],"model":"<agent-family>"}'`
+    (the payload shows the one classified entry; send every existing
+    relation, not only that entry; replace `<existing sites>` with the
+    link's current `sites` array verbatim, omitting the `sites` key when
+    the link lists none -- a replacement that omits `sites` clears them).
+    Read the task back and confirm the
+    classification took effect. If that write refuses, or the read-back
+    shows the stored classification did not change, record that link as
+    unsettled in `escape-to-guard.json` with the refusal or the read-back
+    value, proposed nature and escape, and supporting evidence. Never retry
+    a terminal-task refusal or change lifecycle state to permit a write.
+    A refusal alone does not prove a missing capability: inspect the
+    supported tool schema and refusal reason. When those establish that no
+    supported write can change an existing link (including an immutable
+    terminal task), retain its classification in the artifact and file
+    that capability gap once. Transient or link-specific failures stay
+    unsettled in the artifact, without a speculative gap task. Search first
+    with one distinctive token from
+    the gap (for example `re-classify`) and inspect every plausible
+    hit in every status; when no task already tracks it, file one
+    with
+    `orbit tool run orbit.task.add --input '{"title":"Support re-classifying an existing regression_from link","description":"<markdown naming the refused write, the read-back evidence, and the classifications held in escape-to-guard.json>","acceptance_criteria":["1 task update call changes the nature and escape stored on 1 named existing regression_from link and a task read-back shows the new values"],"context_files":["file:<verified path the write surface lives in>"],"complexity":"medium","tags":["escape-to-guard","no-auto-approve"],"type":"chore","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    File that gap at most once across all runs: a later run that finds
+    it already tracked records the tracking task ID in the artifact
+    and files nothing. The gap task does not count toward the guard
+    cap below.
+
+    After the classification loop, re-run `orbit.codebase.analytics` with
+    `{"window":"30d","min_support":1,"model":"<agent-family>"}`, then again
+    with `"escape":"unclassified"` and `"escape":"absent"`, to take the
+    analytics after counts for the artifact. Re-read the same ledger tasks'
+    relations to count stored classifications after the writes, keeping the
+    pinned population fixed. Record artifact-held classifications separately
+    from stored counts; never present an unpersisted choice as a stored
+    change. Cluster the refreshed ledger, using an evidence-backed
+    artifact-held classification where no supported write exists and
+    labelling its source, so every settled link counts under its new
+    nature and escape.
+
+    ## Cluster by nature, escape, layer and mechanism
+
+    Group every regression link in the pinned 30d ledger, classified or not,
+    by nature x escape x layer. The layer is the fix layer the
+    analytics payload reports for the regression task (its landed
+    paths, else its declared footprint, else `unknown`). To recover a
+    dimension missing from the capped analytics rows, use
+    `orbit tool run orbit.codebase.show --input '{"path":"<verified culprit footprint path>","window":"all","min_support":1,"model":"<agent-family>"}'`
+    and match the culprit and regression IDs. If no row reports the layer,
+    state a consistent repository module layer from the verified fix paths
+    and label that inference; use `unknown` when no fix paths exist. Inside each
+    group, split by mechanism: read enough of each regression task and
+    culprit diff to state the shared mechanism in one line, for
+    example (labelled examples only) a serialized default changed
+    without a migration, path normalization that differs on one host
+    operating system, or a command-output golden that was not
+    regenerated. A group whose members share no one-line mechanism is
+    several clusters, not one. Record every cluster in the artifact
+    with its nature, escape, layer, mechanism line, 7d and 30d counts,
+    and every regression task ID in it.
+
+    ## File remedies for clusters at the bar
+
+    A cluster qualifies when it holds 3 or more distinct regression tasks
+    in 30 days sharing one mechanism (several culprit links from one
+    regression count once). File at most 3 remedy tasks per run, including
+    strengthened guards. Rank by 30d count, then 7d count; record overflow.
+    Evaluate earlier remedies below before selecting this run's filings.
+
+    Pick the highest-reliability rung that can express the mechanism, in
+    this order. Each filed task names its rung and explains separately
+    why every higher rung cannot express the mechanism:
+    1. Mechanical guard (`remedy:guard`): a lint, type or compile-time
+       shape, static guard script, or generator check inside an existing
+       gate; or a public-boundary regression test only for `no_test`
+       (that task is a bug fix). Name the check, existing gate command
+       and violation it rejects. This is the default.
+    2. In-line comment (`remedy:comment`): at the hazard site in code an
+       agent must touch to repeat the mistake; name the hazard and safe
+       pattern. Existing comment-hygiene keeps it honest.
+    3. Nested directory guide (`remedy:nested-guide`): an
+       `AGENTS.md`/`CLAUDE.md` pair in the directory owning the hazard,
+       following the repository's existing pair convention. These are
+       loaded by Codex and Claude when working there; no Orbit delivery
+       machinery is needed.
+    4. Tag instruction (`remedy:tag-instruction`): a `docs/agents/<name>.md`
+       delivered through `workflow.tag_instructions`. The task must say
+       how affected tasks receive the tag (for example an authoring or
+       task-pilot rule). Host-config tag mapping is an operator step,
+       explicitly excluded from the remedy task's acceptance criteria.
+    5. Global instruction (`remedy:global`): root `AGENTS.md`/`CLAUDE.md`
+       or an activity prompt. Last resort: show that the mechanism spans
+       directories and task kinds, beyond what rungs 2–4 can cover.
+
+    A skill or review-instruction line remains available only for
+    `review_missed`, marked `remedy:review-instruction`. It is an instruction
+    remedy subject to the same budget and retirement rules. For ordering,
+    use its delivery surface (rung 3, 4 or 5) and reject every higher rung
+    separately, including mechanical and hazard-site remedies.
+    Use ordinary reviewed guidance, never a new learning-delivery subsystem.
+
+    For every rung 3–5 and review-instruction remedy, add one, remove one:
+    name at least one existing rule removed or merged in each edited file,
+    and give its before and proposed after word counts (whitespace-delimited)
+    with no net growth per file. Read the file and draft the replacement
+    to measure these counts. If nothing is removable in a file, say so,
+    record its current count and leave the choice to the operator; never
+    authorize growth through the task's acceptance criteria. New guide files
+    have a zero-word baseline, so require this operator choice. Rung 2
+    in-line comments are exempt. Never edit guidance during this run:
+    draft and file proposed tasks only.
+
+    Never propose a new required status check, merge gate, CI job a merge
+    waits on, or human-only step. Mechanical checks use existing gates;
+    instruction remedies use existing code, guide or review surfaces.
+
+    Before each filing, list open work with
+    `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"escape-to-guard","limit":200,"model":"<agent-family>"}'`,
+    then search one distinctive mechanism token and inspect every plausible
+    hit in every status. Record covering task IDs instead of duplicates.
+    Check rejected tasks too; refile only with materially changed evidence,
+    explaining the change. Exhaust truncated lists as for the link ledger.
+
+    File each remedy (tool-created tasks start `proposed`) with
+    `orbit tool run orbit.task.add --input '{"title":"Guard: <mechanism in one line>","description":"<markdown including remedy_metadata JSON>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"medium","tags":["escape-to-guard","no-auto-approve","remedy:<chosen rung>"],"type":"feature","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Use `bug` for a `no_test` regression-test guard, `chore` for instruction
+    remedies (including comments), and `feature` for other mechanical guards.
+    The description names at least 3 regression IDs and their culprit IDs,
+    the mechanism, rung, higher-rung rejections, precise remedy and verified
+    files (read `context_files` back after filing). Add a fenced JSON object
+    under the `remedy_metadata` key to the description, mirrored in the artifact:
+    `{"remedy_metadata":{"rung":"<marker suffix>","cluster_key":{"nature":"...","escape":"...","layer":"...","mechanism":"..."},"pre_landing_30d_count":3,"filing_scan_at":"<timestamp>"}}`.
+    Use the actual distinct-regression 30d count at filing, not the example
+    value. Preserve this baseline and stable cluster key in later artifacts;
+    never replace them with a later rolling count. The rung tag plus this
+    structured record lets later runs discover and judge remedies without
+    interpreting prose.
+
+    ## Follow up earlier remedies
+
+    Enumerate all `escape-to-guard` tasks without a status filter via
+    `orbit.task.list` (complete, `--full` for CLI), inspecting their tags
+    and `remedy_metadata`. Include every rung marker above, excluding scan
+    chores and capability-gap tasks. Do not require `done`: a delivered
+    task may still be in review. Resolve verified landing date and commit
+    using `orbit.task.show` with `field: "delivery"`, and check with git;
+    `done` timestamps are never landing evidence. Unavailable delivery or
+    baseline evidence is an explicit gap with null values and verdict,
+    never an invented date, zero count or effectiveness judgment.
+
+    Bootstrap pre-marker remedies too: inspect earlier `Guard:` tasks and
+    their originating run artifacts, including version 1. Recover the rung
+    from the verified remedy and the cluster key and filing count from
+    that run's cluster row; retain the normalized metadata and provenance
+    in this run's artifact for reuse. This includes the first run's
+    review-instruction remedy. Do not try to tag immutable terminal tasks.
+    Missing legacy metadata stays an evidence gap, not an ignored remedy.
+
+    For each verified landing L, count distinct regression tasks created
+    in [L, L + 30 days), capped at the pinned scan time while observing,
+    with the same nature, escape, layer and mechanism. Use the complete
+    task ledger retained before filtering to the current 30d scan window,
+    and inspect the matching tasks and diffs: an old remedy's first month
+    must remain measurable after it leaves the rolling window. Record the
+    exact bounds, recurring IDs and baseline count at filing (the
+    `pre_landing_30d_count`, not a recomputed pre-landing count).
+
+    Before a full 30 days have elapsed since L, verdict is `observing`;
+    no strengthening or retirement is triggered. After the full window:
+    zero recurrences means `effective`; fewer than the filing count means
+    `partial` (keep it and note the result); the same or more means
+    `ineffective`. An incomplete recurrence census is an evidence gap,
+    not a verdict. Keep effective and partial remedies.
+
+    An ineffective mechanical guard competes for the normal cap of 3 as
+    a strengthened guard, naming the earlier remedy. An ineffective
+    instruction remedy (comments, nested guides, tag instructions, global
+    instructions and review-instruction lines) instead gets one proposed
+    retirement task to remove the guidance. Where a higher-reliability
+    rung can now express the mechanism, propose that replacement in the
+    same retirement task, with its rung and higher-rung rejections; any
+    replacement instruction still obeys the budget. Do not file a separate
+    normal remedy for the same retirement replacement.
+
+    Retirement has its own cap of 3 per run, ranked by post-landing count
+    then filing count; record overflow for later runs. Deduplicate exactly
+    as for remedies, also searching all prior retirement tasks for the
+    original remedy ID: one retirement per remedy, even across runs.
+    Use `orbit.task.add` with `chore`, `proposed`, verified `context_files`,
+    `spawned_from` this run, `related_to` the original remedy, and tags
+    `escape-to-guard`, `no-auto-approve`, `remedy-retirement`. Record a
+    structured `retirement_metadata` JSON object with `remedy_task_id`,
+    `cluster_key` and optional replacement `rung` in its description and
+    artifact. Exclude retirement tasks from remedy discovery unless they
+    also install a replacement: those carry its rung tag and fresh
+    `remedy_metadata` with the count and timestamp at replacement filing.
+    A covered or already completed retirement gets no duplicate; rejected
+    retirements require materially changed evidence before refiling.
+
+    ## Record the run
+
+    Write `.orbit/tmp/escape-to-guard.json` (`$ORBIT_SCRATCH_DIR`) with:
+    - `schema_version: 2`, the scan timestamp, and the 7d and 30d window bounds;
+    - `classification_counts`: stored ledger links counted before classification and after it, per escape value, with `unclassified` and `absent` shown separately, plus separately labelled analytics counts;
+    - `classifications`: per-link before and after values, proposed nature and escape, evidence, persistence source, and any unsettled write refusal or read-back value;
+    - `clusters`: every cluster row (stable `cluster_key`, nature, escape, layer, one-line mechanism, 7d and 30d counts, regression IDs, disposition: filed ID, covering ID, overflow or below bar), plus `rung` and `higher_rung_rejections` (one rung/reason entry per rejected higher rung); use null rung and an explicit reason when no remedy was selected; include filed `remedy_metadata`;
+    - `guard_follow_up`: one row per earlier remedy, retaining the array name for continuity: `remedy_task_id`, `rung`, `cluster_key`, `landed_commit`, `landing_date`, `pre_landing_30d_count`, `post_landing_30d_count`, observation bounds/completeness, recurring regression IDs, `verdict` (`observing`, `effective`, `partial`, `ineffective`, or null with an evidence gap), metadata provenance, and `retirement_task_id` (filed or covering, else null);
+    - `filed_guard_ids` (all new remedies under the normal cap), `filed_retirement_ids`, retirement metadata and overflow, the gap task ID when filed or already tracked, and the normal overflow list;
+    - `previous_run_diff`: previous task ID or baseline reason, new and persistent clusters, those dropping below the bar, and the unclassified-plus-absent count change.
+
+    Exhaust `truncated` task lists used for duplicate checks and follow-up
+    too; a first page is not proof that no guard exists.
+
+    Accept a version-1 previous artifact without failing: compare its
+    existing cluster dimensions, counts and classification fields, deriving
+    cluster keys from nature, escape, layer and mechanism. Mark missing
+    rung, baseline and verdict fields as unavailable, never zero; recover
+    legacy remedy metadata as above where evidence permits. Diff this
+    run against the previous run's `escape-to-guard.json`
+    (found through the previous-instance query above; absent or
+    unreadable means this is the baseline run, so say so): name
+    clusters that are new, clusters that persisted, clusters that
+    dropped below the bar, and how the `unclassified` plus `absent`
+    count moved. Attach the file with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/escape-to-guard.json","path":"escape-to-guard.json","model":"<agent-family>"}'`.
+    Write and attach it on every completed run, including a no-op run.
+    The execution summary reports the window bounds, the before and
+    after classification counts, every cluster with its disposition,
+    each chosen rung and higher-rung rejections, every remedy follow-up
+    row (rung, landing date, both 30d counts, verdict and retirement ID),
+    evidence gaps, budget/operator choices, filed versus already-covered IDs,
+    and the diff against the previous run.
+  acceptance_criteria:
+  - The run read the 7d and 30d `orbit.codebase.analytics` windows, enumerated 1 complete task-link ledger for the pinned windows, and recorded per-escape counts before classification in `escape-to-guard.json`, with `unclassified` and `absent` shown separately and analytics populations labelled separately.
+  - Each `unclassified` or `absent` link from the last 7 days was classified from its regression task and the culprit landed diff shown by `git show`, and the classification was recorded by an `orbit.task.update` relations write read back on the regression task, or held in `escape-to-guard.json` with evidence and 1 deduplicated gap task when the supported surface cannot change an existing link; link-specific failures are recorded as unsettled.
+  - Regressions were clustered by nature x escape x layer plus a 1-line mechanism; new remedies require 3 or more distinct regressions in 30 days, and every task names at least 3 regression IDs and their culprit IDs, its durable rung tag, structured remedy_metadata cluster key and 30d count at filing.
+  - Each remedy chooses the highest-reliability expressive rung in order (mechanical guard, in-line hazard comment, nested AGENTS.md/CLAUDE.md pair, tag instruction, global instruction), names why every higher rung cannot express the mechanism, and obeys the ban on new required status checks, merge gates, merge-blocking CI jobs and human-only steps. Mechanical guards name the check, existing gate and rejected violation; regression-test guards are only for no_test; skill or review-instruction remedies remain available only for review_missed.
+  - Rungs 3–5 and review-instruction remedies name a removed or merged existing rule in each edited file and measured before/after word counts with no growth, or explicitly leave an unremovable file to the operator without authorizing growth; in-line comments are exempt. No guidance was edited by this run.
+  - Tag-instruction remedies explain how affected tasks receive the tag and identify host-config mapping as an operator step excluded from the remedy task acceptance criteria; global remedies demonstrate a mechanism spanning directories and task kinds that rungs 2–4 cannot cover.
+  - At most 3 normal remedy tasks and separately at most 3 instruction-retirement tasks were filed, left proposed with spawned_from this run and verified non-empty context_files; open, completed and rejected work was checked for duplicates and overflow recorded.
+  - Every earlier remedy was discovered by its rung marker and structured metadata (legacy guards bootstrapped from originating artifacts), with verified delivery landing evidence; before 30 days it is observing, then zero recurrences is effective, fewer than at filing is partial and kept, and the same or more is ineffective. Missing evidence is recorded as a gap without a verdict.
+  - Ineffective mechanical guards compete for strengthened guards under the normal cap; ineffective instruction remedies receive one deduplicated retirement proposal per remedy under the separate cap of 3, removing the guidance and proposing a higher-reliability replacement in the same task where possible.
+  - The schema_version 2 escape-to-guard.json artifact was attached on every completed run with cluster rungs and higher-rung rejection reasons, classification counts, and follow-up rung, landing date, pre/post 30d counts, verdict and retirement ID, all reported in the execution summary; a version-1 previous artifact was compared on shared fields without failing or inventing missing data.
+  - A workspace whose complete task ledger holds 0 regression links ended as a successful no-op with the zero-count `escape-to-guard.json` attached.
+  task_type: chore
+  tags:
+  - escape-to-guard
+  - no-diff-expected
+  required_tools:
+  - orbit.codebase.analytics
+  - orbit.codebase.show
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.task.update
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-25T00:00:00Z
+updated_by: system
+updated_at: 2026-10-25T00:00:00Z

@@ -6,6 +6,8 @@ mod git_test_support;
 
 #[path = "http_api/agents.rs"]
 mod agents;
+#[path = "http_api/agents_implementers.rs"]
+mod agents_implementers;
 #[path = "http_api/agents_orchestrators.rs"]
 mod agents_orchestrators;
 #[path = "http_api/agents_pilots.rs"]
@@ -22,18 +24,36 @@ mod audit_contracts;
 mod auto_tasks;
 #[path = "http_api/automation.rs"]
 mod automation;
+#[path = "http_api/backlog_forecast.rs"]
+mod backlog_forecast;
+#[path = "http_api/backlog_outcomes.rs"]
+mod backlog_outcomes;
+#[path = "http_api/backlog_rework.rs"]
+mod backlog_rework;
+#[path = "http_api/brief_accuracy.rs"]
+mod brief_accuracy;
 #[path = "http_api/codebase.rs"]
 mod codebase;
 #[path = "http_api/compression.rs"]
 mod compression;
+#[path = "http_api/crews.rs"]
+mod crews;
 #[path = "http_api/dashboard_assets.rs"]
 mod dashboard_assets;
+#[path = "http_api/decisions.rs"]
+mod decisions;
 #[path = "http_api/diagnostics_errors.rs"]
 mod diagnostics_errors;
 #[path = "http_api/distributed_contracts.rs"]
 mod distributed_contracts;
 #[path = "http_api/doctor.rs"]
 mod doctor;
+#[path = "http_api/embedded.rs"]
+mod embedded;
+#[path = "http_api/events.rs"]
+mod events;
+#[path = "http_api/experiments.rs"]
+mod experiments;
 #[path = "http_api/friction_writes.rs"]
 mod friction_writes;
 #[path = "http_api/guards.rs"]
@@ -43,8 +63,24 @@ mod host;
 #[path = "http_api/host_forward.rs"]
 #[cfg(unix)]
 mod host_forward;
+#[path = "http_api/incident_lists.rs"]
+mod incident_lists;
 #[path = "http_api/job_run_lists.rs"]
 mod job_run_lists;
+#[path = "http_api/lease_listener.rs"]
+#[cfg(unix)]
+mod lease_listener;
+#[path = "http_api/lease_listener_limits.rs"]
+#[cfg(unix)]
+mod lease_listener_limits;
+#[path = "http_api/lease_listener_notices.rs"]
+#[cfg(unix)]
+mod lease_listener_notices;
+#[path = "http_api/lease_listener_tls.rs"]
+#[cfg(unix)]
+mod lease_listener_tls;
+#[path = "http_api/leases.rs"]
+mod leases;
 #[path = "http_api/log.rs"]
 mod log;
 #[path = "http_api/log_render.rs"]
@@ -68,10 +104,20 @@ mod resource_profiles;
 mod runs;
 #[path = "http_api/support.rs"]
 mod support;
+#[path = "http_api/task_auto_fix.rs"]
+mod task_auto_fix;
 #[path = "http_api/task_contracts.rs"]
 mod task_contracts;
 #[path = "http_api/task_create.rs"]
 mod task_create;
+#[path = "http_api/task_hands.rs"]
+mod task_hands;
+#[path = "http_api/task_operator_records.rs"]
+mod task_operator_records;
+#[path = "http_api/task_pilot.rs"]
+mod task_pilot;
+#[path = "http_api/task_recovery.rs"]
+mod task_recovery;
 #[path = "http_api/task_writes.rs"]
 mod task_writes;
 #[path = "http_api/workflows.rs"]

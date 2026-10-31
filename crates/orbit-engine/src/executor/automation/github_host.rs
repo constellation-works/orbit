@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_all;
+use orbit_common::security::redaction::{redact_all, redact_all_error};
 use orbit_exec::{NoSandbox, run_process};
 use orbit_tools::{check_exec_result, github_cli};
 use serde_json::Value;
@@ -39,8 +39,8 @@ pub(super) fn run_gh(
     label: &str,
 ) -> Result<String, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-    let result = run_process(&request, &NoSandbox)?;
-    check_exec_result(&result, label)?;
+    let result = run_process(&request, &NoSandbox).map_err(redact_all_error)?;
+    check_exec_result(&result, label).map_err(redact_all_error)?;
     Ok(result.stdout)
 }
 

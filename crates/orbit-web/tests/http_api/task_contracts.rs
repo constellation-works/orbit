@@ -102,6 +102,29 @@ fn get_task_artifact_serves_subdirectory_bytes_and_media_type() {
             );
             let bytes = response.bytes().expect("read response body");
             assert_eq!(&bytes[..], br#"{"ok":true}"#);
+
+            // [ORB-17784] The download reads the artifact without resolving the
+            // task first, so a missing task and a missing artifact share the
+            // artifact-not-found response.
+            let prefix = task.id.split_once('-').map_or("ORB", |(prefix, _)| prefix);
+            for (uri, missing) in [
+                (
+                    format!("/tasks/{}/artifacts/subdir/nope.json", task.id),
+                    format!("{}/subdir/nope.json", task.id),
+                ),
+                (
+                    format!("/tasks/{prefix}-99999/artifacts/subdir/file.json"),
+                    format!("{prefix}-99999/subdir/file.json"),
+                ),
+            ] {
+                let response = request(&server, &uri);
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+                assert_eq!(
+                    body_json(response),
+                    json!({ "error": format!("artifact not found: {missing}") }),
+                    "{uri}"
+                );
+            }
         },
     );
 }
@@ -611,6 +634,368 @@ fn task_list_and_detail_carry_readiness_for_proposed_and_backlog_only() {
 
 fn body_json(response: Response) -> Value {
     response.json().expect("JSON body")
+}
+
+#[test]
+fn delivery_attention_survives_unrelated_run_history() {
+    isolated(
+        "task_contracts::delivery_attention_survives_unrelated_run_history",
+        || {
+            use orbit_core::JobRunState;
+            let fixture = Fixture::new();
+            let seed_task = |title: &str| {
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: "Delivery history regression".into(),
+                        status: Some(TaskStatus::Review),
+                        ..Default::default()
+                    })
+                    .expect("seed review task")
+            };
+            let tasks = [
+                seed_task("Failed review"),
+                seed_task("Timeout review"),
+                seed_task("Interrupted review"),
+            ];
+            let unrelated = seed_task("Healthy unrelated review");
+            let base = chrono::Utc::now();
+            let seed_run = |id: &str, task_ids: &[&str], state, offset| {
+                let mut run = fixture.seed_run(id, "task_pr_pipeline", state);
+                let at = base + chrono::Duration::seconds(offset);
+                run.input = Some(json!({"task_ids": task_ids}));
+                run.created_at = at;
+                run.started_at = Some(at);
+                run.finished_at = state.is_terminal().then_some(at);
+                fixture.save_run(&run);
+            };
+            for (task, state) in tasks.iter().zip([
+                JobRunState::Failed,
+                JobRunState::Timeout,
+                JobRunState::Interrupted,
+            ]) {
+                seed_run(&format!("jrun-old-{}", task.id), &[&task.id], state, 0);
+            }
+            let server = fixture.server(true);
+            let attention = |page: &Value, id: &str| {
+                page["items"]
+                    .as_array()
+                    .expect("items")
+                    .iter()
+                    .find(|row| row["id"] == id)
+                    .expect("task row")["delivery_attention"]
+                    .clone()
+            };
+            let before = body_json(request(&server, "/tasks"));
+            let expected: Vec<_> = tasks
+                .iter()
+                .map(|task| {
+                    let value = attention(&before, &task.id);
+                    assert!(value.is_object(), "old failure must be visible");
+                    value
+                })
+                .collect();
+            for index in 1..=500 {
+                seed_run(
+                    &format!("jrun-unrelated-{index:04}"),
+                    &[&unrelated.id],
+                    JobRunState::Success,
+                    index,
+                );
+            }
+            let check = |expected: &[Value]| {
+                for page in [body_json(request(&server, "/tasks")), tasks_all(&server)] {
+                    assert!(
+                        attention(&page, &unrelated.id).is_null(),
+                        "successful unrelated task stays healthy"
+                    );
+                    for (task, expected) in tasks.iter().zip(expected) {
+                        assert_eq!(
+                            attention(&page, &task.id),
+                            *expected,
+                            "list retains old delivery for {}",
+                            task.id
+                        );
+                        let detail = body_json(request(&server, &format!("/tasks/{}", task.id)));
+                        assert_eq!(
+                            detail["delivery_attention"], *expected,
+                            "detail/list parity"
+                        );
+                    }
+                }
+            };
+            check(&expected);
+            // A multi-task live repair must preserve detail/list repairing parity.
+            seed_run(
+                "jrun-live-repair",
+                &[&tasks[0].id, &unrelated.id],
+                JobRunState::Running,
+                501,
+            );
+            let mut repairing = expected.clone();
+            repairing[0]["repairing"] = json!(true);
+            check(&repairing);
+            // Updating a run's ownership and recency must update the lookup too.
+            seed_run(
+                "jrun-live-repair",
+                &[&unrelated.id],
+                JobRunState::Success,
+                502,
+            );
+            check(&expected);
+            for task in &tasks {
+                seed_run(
+                    &format!("jrun-recovered-{}", task.id),
+                    &[&task.id],
+                    JobRunState::Success,
+                    503,
+                );
+            }
+            check(&[Value::Null, Value::Null, Value::Null]);
+        },
+    );
+}
+
+#[test]
+fn delivery_attention_flags_failed_review_and_omits_healthy() {
+    isolated(
+        "task_contracts::delivery_attention_flags_failed_review_and_omits_healthy",
+        || {
+            use orbit_core::{JobRun, JobRunState};
+            use orbit_types::task::ExternalRef;
+            use orbit_types::workflow::PipelineState;
+
+            let fixture = Fixture::new();
+            let runtime = fixture.runtime.clone();
+            let seed = |title: &str, status: TaskStatus, pr: Option<&str>| {
+                runtime
+                    .add_task(TaskAddParams {
+                        title: title.to_string(),
+                        description: "Delivery attention fixture".to_string(),
+                        status: Some(status),
+                        external_refs: pr
+                            .map(|id| {
+                                vec![ExternalRef {
+                                    system: "github-pr".to_string(),
+                                    id: id.to_string(),
+                                    url: Some(format!("https://github.com/o/r/pull/{id}")),
+                                }]
+                            })
+                            .unwrap_or_default(),
+                        ..Default::default()
+                    })
+                    .expect("seed task")
+            };
+            let failed = seed("Failed review", TaskStatus::Review, Some("42"));
+            let healthy = seed("Healthy review", TaskStatus::Review, Some("43"));
+            let blocked = seed("Blocked with PR", TaskStatus::Blocked, Some("44"));
+            let recovered = seed("Recovered review", TaskStatus::Review, Some("45"));
+            let stale = seed("Stale success review", TaskStatus::Review, Some("46"));
+            let base = chrono::Utc::now();
+
+            let seed_run = |task_id: &str,
+                            run_id: &str,
+                            state: JobRunState,
+                            now: chrono::DateTime<chrono::Utc>| {
+                let input = json!({ "task_ids": [task_id] });
+                let run = JobRun {
+                    executed_on: None,
+                    run_id: run_id.to_string(),
+                    job_id: "task_pr_pipeline".to_string(),
+                    attempt: 1,
+                    state,
+                    scheduled_at: now,
+                    started_at: Some(now),
+                    finished_at: Some(now),
+                    duration_ms: None,
+                    created_at: now,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(input.clone()),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                };
+                fixture.save_run(&run);
+                let mut state_doc =
+                    PipelineState::new(run_id.to_string(), "task_pr_pipeline".to_string(), input);
+                state_doc.record_failure_activity(
+                    "pr_complete".to_string(),
+                    "complete_pr".to_string(),
+                    json!({}),
+                );
+                fixture
+                    .runtime
+                    .write_run_state(run_id, &state_doc)
+                    .expect("write run state");
+            };
+            seed_run(
+                &failed.id,
+                "jrun-delivery-failed",
+                JobRunState::Failed,
+                base,
+            );
+            seed_run(&healthy.id, "jrun-delivery-ok", JobRunState::Success, base);
+            seed_run(
+                &blocked.id,
+                "jrun-delivery-timeout",
+                JobRunState::Timeout,
+                base,
+            );
+            // Recovered: old failed delivery, admitted failed_checks repair,
+            // a published repaired head, then a newer successful delivery.
+            seed_run(
+                &recovered.id,
+                "jrun-delivery-old-failed",
+                JobRunState::Failed,
+                base - chrono::Duration::hours(4),
+            );
+            seed_run(
+                &recovered.id,
+                "jrun-recovered-success",
+                JobRunState::Success,
+                base,
+            );
+            // Stale: a successful delivery that predates a later conflict
+            // admission is not recovery from that admission.
+            seed_run(
+                &stale.id,
+                "jrun-stale-success",
+                JobRunState::Success,
+                base - chrono::Duration::hours(4),
+            );
+            {
+                use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+                use orbit_types::task::TaskHistoryEntry;
+                let entry = |at: chrono::DateTime<chrono::Utc>, event: &str, note: Value| {
+                    TaskHistoryEntry {
+                        at,
+                        by: "system".to_string(),
+                        event: event.to_string(),
+                        note: Some(note.to_string()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }
+                };
+                runtime
+                    .apply_task_automation_update(
+                        &recovered.id,
+                        TaskAutomationUpdate {
+                            append_history: vec![
+                                entry(
+                                    base - chrono::Duration::hours(3),
+                                    "pr_auto_fix_admitted",
+                                    json!({"pr_number":"45","head_sha":"old-failed-head","blocker":"failed_checks","attempt":1,"budget":3,"run_id":"jrun-delivery-old-failed","crew":"c","crew_source":"s"}),
+                                ),
+                                entry(
+                                    base - chrono::Duration::hours(2),
+                                    "pr_auto_fix_pushed",
+                                    json!({"pr_number":"45","from_head_sha":"old-failed-head","to_head_sha":"repaired-head","blocker":"failed_checks","run_id":"jrun-delivery-old-failed"}),
+                                ),
+                            ],
+                            ..Default::default()
+                        },
+                    )
+                    .expect("record recovered repair history");
+                runtime
+                    .apply_task_automation_update(
+                        &stale.id,
+                        TaskAutomationUpdate {
+                            append_history: vec![entry(
+                                base - chrono::Duration::hours(3),
+                                "pr_auto_fix_admitted",
+                                json!({"pr_number":"46","head_sha":"conflict-head","blocker":"conflict","attempt":1,"budget":3,"run_id":"jrun-stale-success","crew":"c","crew_source":"s"}),
+                            )],
+                            ..Default::default()
+                        },
+                    )
+                    .expect("record stale repair history");
+            }
+
+            let server = fixture.server(true);
+            let page = body_json(request(&server, "/tasks"));
+            let items = page["items"].as_array().expect("items");
+            let row = |id: &str| {
+                items
+                    .iter()
+                    .find(|item| item["id"] == id)
+                    .unwrap_or_else(|| panic!("row {id}"))
+            };
+            let attention = &row(&failed.id)["delivery_attention"];
+            assert_eq!(attention["run_id"], "jrun-delivery-failed", "{attention}");
+            assert_eq!(attention["run_state"], "failed", "{attention}");
+            assert_eq!(attention["failed_step_id"], "complete_pr", "{attention}");
+            assert_eq!(attention["pr_number"], "42", "{attention}");
+            assert_eq!(attention["repairing"], false, "{attention}");
+            assert!(
+                row(&healthy.id).get("delivery_attention").is_none(),
+                "healthy review row must omit delivery_attention"
+            );
+            let blocked_attention = &row(&blocked.id)["delivery_attention"];
+            assert_eq!(
+                blocked_attention["run_state"], "timeout",
+                "{blocked_attention}"
+            );
+
+            let detail = body_json(request(&server, &format!("/tasks/{}", failed.id)));
+            assert_eq!(
+                detail["delivery_attention"], *attention,
+                "detail matches list"
+            );
+            let healthy_detail = body_json(request(&server, &format!("/tasks/{}", healthy.id)));
+            assert!(healthy_detail.get("delivery_attention").is_none());
+
+            assert!(
+                row(&recovered.id).get("delivery_attention").is_none(),
+                "recovered review row must omit superseded delivery_attention: {}",
+                row(&recovered.id)
+            );
+            let recovered_detail = body_json(request(&server, &format!("/tasks/{}", recovered.id)));
+            assert!(
+                recovered_detail.get("delivery_attention").is_none(),
+                "recovered detail must omit superseded delivery_attention: {recovered_detail}"
+            );
+            // The retained ledger is unchanged: admission and push remain,
+            // with their original attempt and budget.
+            let history = runtime
+                .get_task_history(&recovered.id)
+                .expect("recovered history");
+            let admitted: Vec<_> = history
+                .iter()
+                .filter(|entry| entry.event == "pr_auto_fix_admitted")
+                .collect();
+            let pushed: Vec<_> = history
+                .iter()
+                .filter(|entry| entry.event == "pr_auto_fix_pushed")
+                .collect();
+            assert_eq!(admitted.len(), 1, "{history:?}");
+            assert_eq!(pushed.len(), 1, "{history:?}");
+            let attempt: Value =
+                serde_json::from_str(admitted[0].note.as_deref().expect("attempt note"))
+                    .expect("attempt json");
+            assert_eq!(attempt["head_sha"], "old-failed-head");
+            assert_eq!(attempt["attempt"], 1);
+            assert_eq!(attempt["budget"], 3);
+
+            let stale_attention = &row(&stale.id)["delivery_attention"];
+            assert_eq!(stale_attention["blocker"], "conflict", "{stale_attention}");
+            assert_eq!(
+                stale_attention["head_sha"], "conflict-head",
+                "{stale_attention}"
+            );
+            assert_eq!(
+                stale_attention["run_id"], "jrun-stale-success",
+                "{stale_attention}"
+            );
+            let stale_detail = body_json(request(&server, &format!("/tasks/{}", stale.id)));
+            assert_eq!(stale_detail["delivery_attention"], *stale_attention);
+        },
+    );
 }
 
 #[test]
@@ -1267,7 +1652,8 @@ fn regression_classification_round_trips_over_http() {
                 .to_string();
             let link = |nature: &str| {
                 json!([{"type": "regression_from", "target": culprit,
-                        "regression": {"nature": nature, "escape": "platform_only"}}])
+                        "regression": {"nature": nature, "escape": "platform_only",
+                                       "severity": "medium"}}])
             };
             let filed = super::support::json_ok(create("Regression", link("broke_existing")));
             let id = filed["id"].as_str().unwrap();
@@ -1277,7 +1663,8 @@ fn regression_classification_round_trips_over_http() {
             assert_eq!(
                 detail["relations"],
                 json!([{"type": "regression_from", "target": culprit,
-                        "regression": {"nature": "broke_existing", "escape": "platform_only"}}])
+                        "regression": {"nature": "broke_existing", "escape": "platform_only",
+                                       "severity": "medium", "severity_source": "filer"}}])
             );
 
             let refused = create("Bad nature", link("regressed"));
@@ -1447,4 +1834,44 @@ print(json.dumps({'first':samples[0],'samples':samples[1:],'p50_ms':warm[9],'p95
             "only the live/backlog population is hydrated, once"
         );
     });
+}
+
+#[test]
+fn scheduled_task_patch_sets_clears_and_reports_actual_start() {
+    isolated(
+        "task_contracts::scheduled_task_patch_sets_clears_and_reports_actual_start",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            let task = seed_backlog_task(&fixture.runtime, "Scheduled HTTP task");
+            let response = patch_task(
+                &server,
+                &task.id,
+                json!({"not_before":"2099-02-01T10:00:00+01:00"}),
+            );
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(body_json(response)["not_before"], "2099-02-01T09:00:00Z");
+            let preserved = patch_task(&server, &task.id, json!({"not_before":null}));
+            assert_eq!(preserved.status(), StatusCode::OK);
+            assert_eq!(body_json(preserved)["not_before"], "2099-02-01T09:00:00Z");
+            let bad = patch_task(&server, &task.id, json!({"not_before":"tomorrow"}));
+            assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+            let error = body_json(bad).to_string();
+            assert!(
+                error.contains("not_before") && error.contains("tomorrow"),
+                "{error}"
+            );
+            assert_eq!(
+                patch_task(&server, &task.id, json!({"not_before": ""})).status(),
+                StatusCode::OK
+            );
+            let shown = body_json(request(&server, &format!("/tasks/{}", task.id)));
+            assert!(shown["not_before"].is_null());
+            assert!(shown["started_at"].is_null());
+            let response = patch_task(&server, &task.id, json!({"status":"in-progress"}));
+            assert_eq!(response.status(), StatusCode::OK);
+            let shown = body_json(request(&server, &format!("/tasks/{}", task.id)));
+            assert!(shown["started_at"].as_str().is_some(), "{shown}");
+        },
+    );
 }

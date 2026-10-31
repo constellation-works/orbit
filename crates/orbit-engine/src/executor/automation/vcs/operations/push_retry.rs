@@ -7,6 +7,7 @@ use orbit_common::process::jitter::JitterRng;
 use orbit_types::workflow::ForgeUnavailableHold;
 use serde_json::{Value, json};
 
+use super::super::git::direct_remote_target;
 use super::input::{
     optional_string, reject_option_like, required_string, valid_expected_remote_sha,
 };
@@ -120,7 +121,7 @@ pub(super) fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
 /// claimed leaf sets it: its run cannot be resumed the way the clock resumes
 /// a held owner-local run, so it keeps its claim and retries in place.
 #[derive(Debug, Clone, Copy)]
-struct PushBackoff {
+pub(super) struct PushBackoff {
     attempts: u32,
     initial_ms: u64,
     cap_ms: u64,
@@ -128,7 +129,7 @@ struct PushBackoff {
 }
 
 impl PushBackoff {
-    fn from_input(input: &Value) -> Result<Self, OrbitError> {
+    pub(super) fn from_input(input: &Value) -> Result<Self, OrbitError> {
         let Some(retry) = input.get("forge_retry").filter(|value| !value.is_null()) else {
             return Ok(Self {
                 attempts: PUSH_TRANSIENT_ATTEMPTS,
@@ -186,7 +187,7 @@ impl PushBackoff {
 }
 
 /// A push that reached the remote, with what its retries cost.
-struct Pushed {
+pub(super) struct Pushed {
     result: orbit_exec::ExecutionResult,
     attempts: u32,
     waited_ms: u64,
@@ -204,14 +205,14 @@ impl Pushed {
 }
 
 /// Why a push did not reach the remote.
-enum PushFailure {
+pub(super) enum PushFailure {
     /// Not retried: a permanent refusal, a timeout, a failed confirmation.
     Error(OrbitError),
     /// Every attempt in the budget was refused for a transient reason.
     Exhausted(Box<PushExhausted>),
 }
 
-struct PushExhausted {
+pub(super) struct PushExhausted {
     target_ref: String,
     head_sha: String,
     attempts: u32,
@@ -223,7 +224,7 @@ struct PushExhausted {
 }
 
 impl PushFailure {
-    fn into_error(self) -> OrbitError {
+    pub(super) fn into_error(self) -> OrbitError {
         match self {
             Self::Error(error) => error,
             Self::Exhausted(exhausted) => exhausted.error,
@@ -287,10 +288,105 @@ fn bounded_diagnostic(text: &str) -> String {
     text[..end].to_string()
 }
 
+/// Whether every effective publication destination holds `head_sha` at
+/// `target_ref`. A failed remote read is an error, so it stops further
+/// mutations instead of reading as an unconfirmed push.
+fn confirmed_at_publication_destination(
+    repo_root: &Path,
+    target_ref: &str,
+    head_sha: &str,
+) -> Result<Option<orbit_exec::ExecutionResult>, OrbitError> {
+    let listed = execute(
+        "git",
+        vec![
+            "remote".into(),
+            "get-url".into(),
+            "--push".into(),
+            "--all".into(),
+            "origin".into(),
+        ],
+        Some(repo_root),
+        LONG_TIMEOUT_MS,
+        "push remote confirmation",
+    )?;
+    let mut urls: Vec<String> = Vec::new();
+    for url in listed
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        if !urls.iter().any(|seen| seen == url) {
+            urls.push(url.to_string());
+        }
+    }
+    if urls.is_empty() {
+        return Err(OrbitError::Execution(
+            "private automation VCS push remote confirmation found no effective push URL for 'origin'"
+                .to_string(),
+        ));
+    }
+    let mut confirmation = None;
+    for url in &urls {
+        let target = direct_remote_target(url);
+        let mut verify_args = target.prefix_args();
+        verify_args.extend([
+            "ls-remote".into(),
+            "--get-url".into(),
+            target.probe_url.clone(),
+        ]);
+        let expanded = execute(
+            "git",
+            verify_args,
+            Some(repo_root),
+            LONG_TIMEOUT_MS,
+            "push remote confirmation",
+        )?;
+        if expanded.stdout.trim() != url {
+            return Err(OrbitError::Execution(format!(
+                "git_push: effective push URL '{url}' would be rewritten to '{}' when probed \
+                 by URL, so it does not name the repository 'git push origin' writes; \
+                 refusing to confirm publication at a different repository",
+                expanded.stdout.trim()
+            )));
+        }
+        let mut args = target.prefix_args();
+        args.extend([
+            "ls-remote".into(),
+            "--refs".into(),
+            "--".into(),
+            target.probe_url.clone(),
+            target_ref.into(),
+        ]);
+        let remote = execute(
+            "git",
+            args,
+            Some(repo_root),
+            LONG_TIMEOUT_MS,
+            "push remote confirmation",
+        )?;
+        let holds = remote.stdout.lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            fields
+                .next()
+                .is_some_and(|sha| sha.eq_ignore_ascii_case(head_sha))
+                && fields.next() == Some(target_ref)
+                && fields.next().is_none()
+        });
+        if !holds {
+            return Ok(None);
+        }
+        if confirmation.is_none() {
+            confirmation = Some(remote);
+        }
+    }
+    Ok(confirmation)
+}
+
 /// Retry only transient push failures, confirming the exact remote ref before
 /// resending. A lost reply may hide a successful push, including one that
 /// consumed its force-with-lease. A failed remote read stops further mutations.
-fn execute_push_with_transient_retry(
+pub(super) fn execute_push_with_transient_retry(
     args: &[String],
     repo_root: &Path,
     target_ref: &str,
@@ -332,28 +428,14 @@ fn execute_push_with_transient_retry(
             no_thin = true;
         }
 
-        let remote = execute(
-            "git",
-            vec![
-                "ls-remote".into(),
-                "--refs".into(),
-                "--".into(),
-                "origin".into(),
-                target_ref.into(),
-            ],
-            Some(repo_root),
-            LONG_TIMEOUT_MS,
-            "push remote confirmation",
-        )
-        .map_err(PushFailure::Error)?;
-        if remote.stdout.lines().any(|line| {
-            let mut fields = line.split_whitespace();
-            fields
-                .next()
-                .is_some_and(|sha| sha.eq_ignore_ascii_case(head_sha))
-                && fields.next() == Some(target_ref)
-                && fields.next().is_none()
-        }) {
+        // Confirm at the publication destination `git push origin`
+        // wrote, not the fetch remote: a plain `ls-remote origin` reads
+        // the fetch URL, and probing the resolved push URL by URL would
+        // apply `insteadOf` to it a second time [ORB-17671, ORB-17686].
+        if let Some(confirmation) =
+            confirmed_at_publication_destination(repo_root, target_ref, head_sha)
+                .map_err(PushFailure::Error)?
+        {
             tracing::info!(target: "orbit_engine::executor::automation::vcs::operations",
                 operation,
                 attempt,
@@ -361,7 +443,7 @@ fn execute_push_with_transient_retry(
                 "confirmed push landed after a transient failure"
             );
             return Ok(Pushed {
-                result: remote,
+                result: confirmation,
                 attempts: attempt,
                 waited_ms,
             });
@@ -499,16 +581,21 @@ fn rejected_for_missing_necessary_objects(message: &str) -> bool {
 pub(crate) fn valid_candidate_ref(value: &str) -> bool {
     value
         .strip_prefix(CANDIDATE_REF_PREFIX)
-        .is_some_and(|rest| {
-            !rest.is_empty()
-                && rest.split('/').all(|segment| {
-                    !segment.is_empty()
-                        && !segment.starts_with('.')
-                        && !segment.ends_with(".lock")
-                        && segment.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-                        })
-                        && !segment.contains("..")
-                })
+        .is_some_and(plain_ref_segments)
+}
+
+/// Whether the rest of a ref after its namespace is one or more plain path
+/// segments: ASCII letters, digits, `-`, `_` and `.`, never `..`, a leading
+/// `.` or a `.lock` suffix.
+pub(super) fn plain_ref_segments(rest: &str) -> bool {
+    !rest.is_empty()
+        && rest.split('/').all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with('.')
+                && !segment.ends_with(".lock")
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+                && !segment.contains("..")
         })
 }

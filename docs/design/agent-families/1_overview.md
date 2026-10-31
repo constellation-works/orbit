@@ -4,8 +4,10 @@ type: design
 title: "Agent Families — Overview"
 owner: grok
 last_updated: 2026-08-09
-last_validated: 2026-10-19
+last_validated: 2026-10-30
 status: Draft
+stage: shipped
+next: "—"
 feature: agent-families
 doc_role: overview
 tags: ["agent-families"]
@@ -38,7 +40,7 @@ Family defaults were originally also used to pick activity role models, but that
 | Task-level crew field | `crates/orbit-types/src/task/model/task.rs` | [ORB-00058] |
 | Runtime config loading | `crates/orbit-config/src/resolved/config.rs` | [ORB-00058] |
 | Default config template | `crates/orbit-config/assets/default-config.toml` | [ORB-00058] |
-| Run-time crew resolution | `crates/orbit-core/src/runtime/engine/crew.rs` | [ORB-00058] |
+| Run-time crew resolution | `crates/orbit-runtime/src/engine/crew.rs` | [ORB-00058] |
 | Tool and CLI crew surfaces | `crates/orbit-tools/src/builtin/orbit/task/` | [ORB-00058] |
 | Grok family onboarding | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042] |
 

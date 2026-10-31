@@ -2,7 +2,8 @@
 
 use orbit_types::workflow::HostEvidenceReason;
 
-/// Why a fulfilment did not attach a result. The hold stays in place.
+/// Why a fulfilment did not attach a result. The hold stays in place, unless
+/// every refusal is [`Self::FindingsReported`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FulfilmentRefusal {
     /// The hold is gone, superseded, already satisfied, not this run's, or
@@ -42,7 +43,8 @@ pub(crate) enum FulfilmentRefusal {
     TimedOut,
     /// The run's SARIF could not be read.
     ResultsUnreadable,
-    /// The analysis reported results, which a fresh review must judge.
+    /// The analysis reported results. When every refusal is this one, the
+    /// task is queued to repair its kept candidate from them [ORB-18660].
     FindingsReported,
     /// A host sandbox test passed but reported that it skipped or deferred
     /// its confined path, so it is no evidence of that path.

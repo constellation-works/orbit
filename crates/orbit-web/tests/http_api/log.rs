@@ -67,7 +67,7 @@ fn gzip_requests_deliver_sse_frames_before_the_stream_ends() {
 /// The HTTP client's total request timeout bounds even a missing SSE delimiter/event.
 fn event(reader: &mut impl BufRead) -> (u64, Value) {
     let (id, value) = feed_event(reader);
-    (id.parse().unwrap(), value)
+    (id.split('@').next().unwrap().parse().unwrap(), value)
 }
 
 fn feed_event(reader: &mut impl BufRead) -> (String, Value) {
@@ -249,15 +249,22 @@ fn sse_replays_snapshot_gap_and_last_event_id_without_duplicates() {
             assert_eq!(snapshot["offset"], first.len() as u64);
             let second = line("snapshot-gap");
             append(&path, &second);
-            let mut reader = stream(server.get(&format!(
-                "/api/log/stream?target=orbit.job&from={}",
-                snapshot["offset"]
-            )));
-            let (cursor, received) = event(&mut reader);
+            let mut reader = stream(
+                server
+                    .request("GET", "/api/log/stream?target=orbit.job&from=0")
+                    .query(&[("cursor", snapshot["cursor"].as_str().unwrap())])
+                    .header("last-event-id", "999999@invalid!")
+                    .send()
+                    .unwrap(),
+            );
+            let (cursor, received) = feed_event(&mut reader);
             assert_step(&received, "snapshot-gap");
-            assert_eq!(cursor, (first.len() + second.len()) as u64);
+            assert_eq!(
+                cursor.split('@').next().unwrap().parse::<u64>().unwrap(),
+                (first.len() + second.len()) as u64
+            );
             append(&path, &line("after-open"));
-            let (cursor, received) = event(&mut reader);
+            let (cursor, received) = feed_event(&mut reader);
             assert_step(&received, "after-open");
             drop(reader);
 
@@ -265,7 +272,8 @@ fn sse_replays_snapshot_gap_and_last_event_id_without_duplicates() {
             let mut resumed = stream(
                 server
                     .request("GET", "/api/log/stream?target=orbit.job&from=0")
-                    .header("last-event-id", cursor.to_string())
+                    .query(&[("cursor", snapshot["cursor"].as_str().unwrap())])
+                    .header("last-event-id", cursor)
                     .send()
                     .unwrap(),
             );
@@ -327,6 +335,87 @@ fn sse_restarts_after_rotation_with_live_and_stale_cursors() {
 }
 
 #[test]
+fn disconnected_rotation_replays_larger_replacements_in_both_feeds() {
+    isolated(
+        "log::disconnected_rotation_replays_larger_replacements_in_both_feeds",
+        || {
+            for rotate_agent in [false, true] {
+                for use_event_id in [false, true] {
+                    let fixture = Fixture::new();
+                    let operational = fixture.path("orbit.jsonl");
+                    let agent = fixture.path("orbit-agent.jsonl");
+                    let old = format!("{}{}{}", line("old-1"), line("old-2"), line("old-3"));
+                    fs::write(&operational, &old).unwrap();
+                    fs::write(&agent, &old).unwrap();
+                    let server = fixture.split_log_server();
+                    let snapshot = json_ok(server.get("/api/log"));
+                    let mut cursor = snapshot["cursor"].as_str().map(str::to_owned);
+                    if use_event_id {
+                        let mut live = stream(server.get("/api/log/stream?from=0&agent_from=0"));
+                        for _ in 0..6 {
+                            cursor = Some(feed_event(&mut live).0);
+                        }
+                        drop(live);
+                    }
+                    let (rotated, unchanged) = if rotate_agent {
+                        (&agent, &operational)
+                    } else {
+                        (&operational, &agent)
+                    };
+                    fs::rename(rotated, rotated.with_extension("old")).unwrap();
+                    let prefix = line("replacement-prefix");
+                    let suffix = line(&format!("replacement-suffix-{}", "x".repeat(4096)));
+                    assert!(prefix.len() < old.len());
+                    assert!(prefix.len() + suffix.len() > old.len());
+                    fs::write(rotated, format!("{prefix}{suffix}")).unwrap();
+                    // Replacement is fully written before the new request, so no
+                    // live connection's remembered inode or shrink check can help.
+                    let mut request = server.request(
+                        "GET",
+                        &format!(
+                            "/api/log/stream?from={}&agent_from={}",
+                            if use_event_id {
+                                0
+                            } else {
+                                snapshot["offset"].as_u64().unwrap()
+                            },
+                            if use_event_id {
+                                0
+                            } else {
+                                snapshot["agent_offset"].as_u64().unwrap()
+                            }
+                        ),
+                    );
+                    if let Some(cursor) = cursor {
+                        request = if use_event_id {
+                            request.header("last-event-id", cursor)
+                        } else {
+                            request.query(&[("cursor", cursor)])
+                        };
+                    }
+                    let mut resumed = stream(
+                        request
+                            .timeout(std::time::Duration::from_secs(10))
+                            .send()
+                            .unwrap(),
+                    );
+                    let (_, value) = feed_event(&mut resumed);
+                    assert_step(&value, "replacement-prefix");
+                    let (_, value) = feed_event(&mut resumed);
+                    assert_step(&value, "replacement-suffix-");
+                    append(rotated, &line("replacement-sentinel"));
+                    let (_, value) = feed_event(&mut resumed);
+                    assert_step(&value, "replacement-sentinel");
+                    append(unchanged, &line("unchanged-sentinel"));
+                    let (_, value) = feed_event(&mut resumed);
+                    assert_step(&value, "unchanged-sentinel");
+                }
+            }
+        },
+    );
+}
+
+#[test]
 fn split_log_snapshot_stream_and_reconnect_preserve_agent_output() {
     isolated(
         "log::split_log_snapshot_stream_and_reconnect_preserve_agent_output",
@@ -360,13 +449,19 @@ fn split_log_snapshot_stream_and_reconnect_preserve_agent_output() {
             let (id, value) = feed_event(&mut live);
             assert_step(&value, "snapshot-gap");
             assert!(id.contains(':'));
+            // Byte-only compound IDs from older clients still seek both feeds.
+            let legacy_id = id
+                .split(':')
+                .map(|feed| feed.split('@').next().unwrap())
+                .collect::<Vec<_>>()
+                .join(":");
             drop(live);
             append(&path, &line("operational-gap"));
             append(&agent, &relay("agent-gap"));
             let mut resumed = stream(
                 server
                     .request("GET", "/api/log/stream?from=0&agent_from=0")
-                    .header("last-event-id", id)
+                    .header("last-event-id", legacy_id)
                     .send()
                     .unwrap(),
             );

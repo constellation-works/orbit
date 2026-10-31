@@ -21,6 +21,7 @@ use super::display_steps::RunDisplayStep;
 /// provider actually reported after an activity ran.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActivityInvocationEvidence {
+    pub execution: Option<orbit_types::telemetry::AgentExecutionIdentity>,
     pub activity_id: String,
     pub provider: String,
     pub model: Option<String>,
@@ -209,7 +210,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         .and_then(|input| orbit_types::workflow::ReviewAdmission::from_run_input(input).ok())
         .flatten()
     {
-        value["review_layer"] = crate::application::review::review_layer_json(&admission);
+        value["review_layer"] = crate::application::contracts::review_layer_json(&admission);
     }
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
     value["drain_window_extension"] = drain_window_extension;
@@ -313,6 +314,8 @@ pub fn job_run_to_json_with_activity_provenance(
                 .map(|record| {
                     json!({
                         "provider": record.provider,
+                        "crew": record.execution.as_ref().and_then(|identity| identity.crew.as_deref()),
+                        "reasoning_effort": record.execution.as_ref().map(|identity| identity.reasoning_effort.map(|effort| effort.to_string())).unwrap_or(Some("unknown".to_string())),
                         "model": record.model,
                     })
                 })
@@ -333,6 +336,11 @@ pub fn job_run_to_json_with_activity_provenance(
             })
         })
         .collect::<Vec<_>>();
+    value["agent_executions"] = json!(evidence.iter().map(|record| json!({
+        "activity_id": record.activity_id, "provider": record.provider, "model": record.model,
+        "crew": record.execution.as_ref().and_then(|identity| identity.crew.as_deref()),
+        "reasoning_effort": record.execution.as_ref().map(|identity| identity.reasoning_effort.map(|effort| effort.to_string())).unwrap_or(Some("unknown".to_string())),
+    })).collect::<Vec<_>>());
     value["activity_provenance"] = Value::Array(activities);
     value
 }

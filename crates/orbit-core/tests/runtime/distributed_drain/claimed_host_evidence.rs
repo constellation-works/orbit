@@ -37,6 +37,18 @@ fn leaf_with_probe(probe: &str) -> (ReviewedLeaf, String) {
 }
 
 fn leaf_with_probe_at(probe: &str, before_landing: bool) -> (ReviewedLeaf, String) {
+    leaf_with_probe_target_at(probe, before_landing, "probe")
+}
+
+fn leaf_with_probe_target(probe: &str, target: &str) -> (ReviewedLeaf, String) {
+    leaf_with_probe_target_at(probe, false, target)
+}
+
+fn leaf_with_probe_target_at(
+    probe: &str,
+    before_landing: bool,
+    target: &str,
+) -> (ReviewedLeaf, String) {
     let home = PathBuf::from(std::env::var("HOME").expect("the isolated child's HOME"));
     let bin = home.join("host-evidence-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -62,7 +74,7 @@ fn leaf_with_probe_at(probe: &str, before_landing: bool) -> (ReviewedLeaf, Strin
     };
     let repo = leaf.pair.follower_repo.clone();
     std::fs::create_dir_all(repo.join("tests/host")).unwrap();
-    std::fs::write(repo.join("tests/host/probe.sh"), probe).unwrap();
+    std::fs::write(repo.join(format!("tests/host/{target}.sh")), probe).unwrap();
     git(&repo, &["add", "tests"]);
     git(&repo, &["commit", "-q", "-m", "Add the sandbox probe"]);
     if before_landing {
@@ -77,6 +89,7 @@ fn leaf_with_probe_at(probe: &str, before_landing: bool) -> (ReviewedLeaf, Strin
 /// sandbox could not run, for `os`.
 fn reviewer_needs_host(leaf: &ReviewedLeaf, attempt_id: &str, command: &str, os: EvidenceHostOs) {
     leaf.put_report(&ReviewReport {
+        visual_resolutions: Vec::new(),
         external_evidence: vec![ReviewEvidenceRequirement {
             kind: ReviewEvidenceKind::HostSandboxTest,
             name: "Sandbox probe".into(),

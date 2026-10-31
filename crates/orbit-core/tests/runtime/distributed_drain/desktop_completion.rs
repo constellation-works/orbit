@@ -22,7 +22,7 @@ use orbit_core::application::review::ExpectedCandidate;
 use orbit_store::contracts::ClaimSettlementKind;
 use orbit_types::desktop::{
     DesktopCriterionOutcome, DesktopReviewDecision, DesktopReviewVerdict, DesktopTaskOperation,
-    DesktopTaskRequest,
+    DesktopTaskRequest, DesktopTaskSnapshot,
 };
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
@@ -141,6 +141,110 @@ fn back_to_review(owner: &OrbitRuntime, task: &str, summary: Option<&str>) {
         .expect("back to review");
 }
 
+/// A `contains` assertion that names the failing `case` and shows the text.
+fn assert_contains(haystack: &str, needle: &str, case: &str) {
+    assert!(
+        haystack.contains(needle),
+        "{case}: expected {haystack:?} to contain {needle:?}"
+    );
+}
+
+/// A recovered delivery whose merged head carries `verdict`/`findings` from
+/// the reviewer: the shared prefix of the scenarios that reconcile a
+/// handed-off command list.
+fn recovered_delivery(commands: &[&str], verdict: &str, findings: Value) -> Delivery {
+    let delivery = Delivery::handed_off(commands);
+    delivery.recover();
+    delivery.merged();
+    delivery.reviewer_reports(verdict, findings);
+    delivery
+}
+
+/// Submit `key` and run it to settlement, asserting `outcome`. Returns the
+/// submission and the settled reconciliation; `case` names the scenario.
+fn submit_and_settle(delivery: &Delivery, key: &str, outcome: &str, case: &str) -> (Value, Value) {
+    let submitted = delivery.submit(key);
+    let settled = delivery.run(&submitted);
+    assert_eq!(settled["outcome"], outcome, "{case}: {settled:#}");
+    (submitted, settled)
+}
+
+/// Completion stays refused. `case` names the scenario.
+fn assert_cannot_complete(delivery: &Delivery, case: &str) {
+    let snapshot = delivery.snapshot(McpCapability::Operator);
+    assert!(!snapshot.actions.complete.enabled, "{case}: {snapshot:?}");
+}
+
+/// Completion stays refused with `reason`. `case` names the scenario.
+fn assert_completion_refusal(snapshot: &DesktopTaskSnapshot, needle: &str, case: &str) {
+    assert!(
+        !snapshot.actions.complete.enabled,
+        "{case}: completion is unexpectedly enabled: {snapshot:?}"
+    );
+    assert_contains(
+        snapshot
+            .actions
+            .complete
+            .reason
+            .as_deref()
+            .unwrap_or_default(),
+        needle,
+        case,
+    );
+}
+
+/// The single desktop mutation every completion leaves behind. `case` names
+/// the scenario.
+fn assert_single_desktop_mutation(completed: &Value, case: &str) {
+    assert_eq!(
+        completed["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "desktop_mutation")
+            .count(),
+        1,
+        "{case}: {completed:#}"
+    );
+}
+
+/// Complete as the operator on the reconciled head evidence, then replay the
+/// lost response. `request_id` names the write and `case` the scenario.
+fn complete_on_reconciliation(delivery: &Delivery, request_id: &str, case: &str) {
+    let snapshot = delivery.snapshot(McpCapability::Operator);
+    assert!(snapshot.actions.complete.enabled, "{case}: {snapshot:?}");
+    let shown = delivery.pair.owner_task(&delivery.task);
+    let request = review(
+        &delivery.task,
+        &snapshot.revision,
+        verdict(&shown, &delivery.head, &delivery.leaf),
+        request_id,
+    );
+    let operator = session(McpCapability::Operator);
+    let done = delivery
+        .owner
+        .desktop_task_write(request.clone(), None, None, &operator)
+        .unwrap_or_else(|err| panic!("{case}: evidence-bound completion: {err}"));
+    assert!(!done.replayed, "{case}");
+    assert_eq!(done.snapshot.task.status, TaskStatus::Done, "{case}");
+    let replay = delivery
+        .owner
+        .desktop_task_write(request, None, None, &operator)
+        .unwrap_or_else(|err| panic!("{case}: lost-response replay: {err}"));
+    assert!(replay.replayed, "{case}");
+    assert_eq!(replay.snapshot.task.status, TaskStatus::Done, "{case}");
+}
+
+/// Write `content` as `name` under `$HOME/bin`, make it executable, and
+/// return its path: the shared shape of the required-command fixtures.
+fn bin_script(name: &str, content: &str) -> String {
+    std::fs::create_dir_all(home().join("bin")).unwrap();
+    let path = home().join(format!("bin/{name}"));
+    std::fs::write(&path, content).unwrap();
+    executable(&path);
+    path.to_string_lossy().into_owned()
+}
+
 fn rev(repo: &Path, spec: &str) -> String {
     git(repo, &["rev-parse", spec]).trim().to_string()
 }
@@ -175,18 +279,12 @@ struct Delivery {
 /// Owner configuration requiring `commands`, reviewing on `review_crew`, with
 /// each of `crews` defined on the stand-in provider.
 fn owner_config(commands: &[&str], review_crew: &str, crews: &[&str]) -> String {
-    let mut config = format!(
-        "[workflow]\ndefault_crew = \"{}\"\nrequired_validation_commands = {}\n\n\
-         [operation]\nreview_crew = \"{review_crew}\"\n",
-        crews[0],
-        serde_json::to_string(commands).unwrap()
-    );
-    for crew in crews {
-        config.push_str(&format!(
-            "\n[crews.{crew}]\nprovider = \"codex\"\nmodel = \"fixture-{crew}\"\n"
-        ));
-    }
-    config
+    owner_config_full(
+        commands,
+        crews,
+        &format!("[operation]\nreview_crew = \"{review_crew}\"\n"),
+        None,
+    )
 }
 
 /// Owner configuration using the canonical review-crew pool setting.
@@ -196,12 +294,27 @@ fn owner_config_with_review_pool(
     crews: &[&str],
     disabled_crew: Option<&str>,
 ) -> String {
+    owner_config_full(
+        commands,
+        crews,
+        &format!(
+            "[workflow.purpose_crews]\nreview = {}\n",
+            serde_json::to_string(review_pool).unwrap()
+        ),
+        disabled_crew,
+    )
+}
+
+fn owner_config_full(
+    commands: &[&str],
+    crews: &[&str],
+    review_section: &str,
+    disabled_crew: Option<&str>,
+) -> String {
     let mut config = format!(
-        "[workflow]\ndefault_crew = \"{}\"\nrequired_validation_commands = {}\n\n\
-         [workflow.purpose_crews]\nreview = {}\n",
+        "[workflow]\ndefault_crew = \"{}\"\nrequired_validation_commands = {}\n\n{review_section}",
         crews[0],
-        serde_json::to_string(commands).unwrap(),
-        serde_json::to_string(review_pool).unwrap()
+        serde_json::to_string(commands).unwrap()
     );
     for crew in crews {
         config.push_str(&format!(
@@ -630,10 +743,7 @@ fn a_completed_pr_read_survives_a_delayed_waiter() {
     ) {
         return;
     }
-    let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
-    delivery.recover();
-    delivery.merged();
-    delivery.reviewer_reports("accept", json!([]));
+    let delivery = recovered_delivery(&["test -f src/f0.rs"], "accept", json!([]));
     // Mark the child whose wait we delay, so this regression cannot silently
     // inject into an unrelated Git or process-identity probe instead.
     let gh = home().join("bin/gh");
@@ -672,11 +782,11 @@ fn a_completed_pr_read_survives_a_delayed_waiter() {
     };
     let submitted = with_supervision_clock(
         move || Instant::now() + clock_elapsed.get(),
-        || with_supervisor_seam(seam, || delivery.submit("delayed-pr-waiter")),
+        || with_supervisor_seam(seam, || delivery.submit("delayed")),
     );
     assert!(injected.get(), "the provider wait must be exercised");
     let settled = delivery.run(&submitted);
-    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+    assert_eq!(settled["outcome"], "accepted", "delayed: {settled:#}");
 }
 
 /// The recovered Mac delivery that motivated this: the follower handed off
@@ -694,10 +804,10 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
 
     // While the handoff holds its claim, the snapshot names the supported way
     // forward, and no reconciliation can bind the live claim.
-    let held = delivery.completion_refusal();
-    assert!(
-        held.contains("revoke the handoff and recover the claim"),
-        "{held}"
+    assert_contains(
+        &delivery.completion_refusal(),
+        "revoke the handoff and recover the claim",
+        "recovered",
     );
     delivery.merged();
     let live = delivery
@@ -718,25 +828,31 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
     // read by number: the stand-in provider refuses any listing.
     pull_request_is("OPEN", &candidate, &delivery.landing, None);
     let open = delivery.snapshot(McpCapability::Operator);
-    assert_eq!(open.reviewed_head.as_deref(), Some(candidate.as_str()));
+    assert_eq!(
+        open.reviewed_head.as_deref(),
+        Some(candidate.as_str()),
+        "recovered: {open:?}"
+    );
     assert!(open.actions.review.enabled, "{:?}", open.actions.review);
-    assert!(delivery.completion_refusal().contains("has not merged"));
+    assert_contains(
+        &delivery.completion_refusal(),
+        "has not merged",
+        "recovered",
+    );
     let unmerged = delivery
         .reconcile(json!({"action": "submit", "request_key": "open"}))
         .expect_err("an open pull request cannot be reconciled");
-    assert!(
-        unmerged.to_string().contains("has not merged"),
-        "{unmerged}"
-    );
+    assert_contains(&unmerged.to_string(), "has not merged", "recovered");
 
     // A provider failure names its cause.
     std::fs::write(home().join("pr.fail"), "HTTP 502: upstream unavailable").unwrap();
     let unreadable = delivery.completion_refusal();
-    assert!(
-        unreadable.contains("could not be read from the provider")
-            && unreadable.contains("HTTP 502"),
-        "{unreadable}"
+    assert_contains(
+        &unreadable,
+        "could not be read from the provider",
+        "recovered",
     );
+    assert_contains(&unreadable, "HTTP 502", "recovered");
     std::fs::remove_file(home().join("pr.fail")).unwrap();
 
     // A head changed after the handoff inherits none of its candidate's
@@ -748,24 +864,24 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
         .reconcile(json!({"action": "inspect"}))
         .expect("inspect incomplete provider evidence");
     assert_eq!(missing_merge["eligible"], false, "{missing_merge:#}");
-    assert!(
-        missing_merge["refusal"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("without its merge commit"),
-        "{missing_merge:#}"
+    assert_contains(
+        missing_merge["refusal"].as_str().unwrap_or_default(),
+        "without its merge commit",
+        "recovered",
     );
     delivery.merged();
     let changed = delivery.snapshot(McpCapability::Operator);
     assert_eq!(
         changed.reviewed_head.as_deref(),
-        Some(delivery.head.as_str())
+        Some(delivery.head.as_str()),
+        "recovered: {changed:?}"
     );
     let refusal = delivery.completion_refusal();
-    assert!(
-        refusal.contains("do not carry to a changed head")
-            && refusal.contains(&format!("orbit task reconcile-review submit {task}")),
-        "{refusal}"
+    assert_contains(&refusal, "do not carry to a changed head", "recovered");
+    assert_contains(
+        &refusal,
+        &format!("orbit task reconcile-review submit {task}"),
+        "recovered",
     );
     let operator = session(McpCapability::Operator);
     let refused = owner
@@ -781,11 +897,10 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
             &operator,
         )
         .expect_err("a changed head cannot complete on the candidate's evidence");
-    assert!(
-        refused
-            .to_string()
-            .contains("do not carry to a changed head"),
-        "{refused}"
+    assert_contains(
+        &refused.to_string(),
+        "do not carry to a changed head",
+        "recovered",
     );
 
     // Agents can neither produce the evidence nor complete.
@@ -801,13 +916,14 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
             },
         )
         .expect_err("an agent cannot reconcile its own delivery");
-    assert!(!denied.to_string().is_empty());
+    assert!(!denied.to_string().is_empty(), "recovered: {denied}");
     assert!(
         !delivery
             .snapshot(McpCapability::Agent)
             .actions
             .complete
-            .enabled
+            .enabled,
+        "recovered"
     );
 
     // The operator inspects, then submits: the run validates and reviews the
@@ -815,39 +931,45 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
     let inspected = delivery
         .reconcile(json!({"action": "inspect"}))
         .expect("inspect");
-    assert_eq!(inspected["eligible"], true, "{inspected:#}");
+    assert_eq!(inspected["eligible"], true, "recovered: {inspected:#}");
     assert_eq!(
         inspected["binding"]["pull_request"]["merged_head"]["commit"],
-        delivery.head.as_str()
+        delivery.head.as_str(),
+        "recovered: {inspected:#}"
     );
-    assert_eq!(inspected["required_commands"], json!(["test -f src/f0.rs"]));
+    assert_eq!(
+        inspected["required_commands"],
+        json!(["test -f src/f0.rs"]),
+        "recovered: {inspected:#}"
+    );
     delivery.reviewer_reports("accept", json!([]));
     let submitted = delivery.submit("final-head");
-    assert_eq!(submitted["replayed"], false, "{submitted:#}");
+    assert_eq!(submitted["replayed"], false, "recovered: {submitted:#}");
     let reconciliation = submitted["reconciliation_id"].as_str().unwrap().to_string();
     let replay = delivery.submit("final-head");
-    assert_eq!(replay["replayed"], true, "{replay:#}");
-    assert_eq!(replay["run_id"], submitted["run_id"]);
+    assert_eq!(replay["replayed"], true, "recovered: {replay:#}");
+    assert_eq!(replay["run_id"], submitted["run_id"], "recovered");
 
     let settled = delivery.run(&submitted);
-    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+    assert_eq!(settled["outcome"], "accepted", "recovered: {settled:#}");
     let record = &settled["record"];
     let execution = &record["binding"]["execution"];
-    assert_eq!(execution["run_id"], leaf.as_str());
-    assert_eq!(execution["machine_id"], FOLLOWER);
+    assert_eq!(execution["run_id"], leaf.as_str(), "recovered");
+    assert_eq!(execution["machine_id"], FOLLOWER, "recovered");
     assert_eq!(execution["candidate_commit"], candidate.as_str());
     let validation = &record["validation"];
-    assert_eq!(validation["complete"], true, "{record:#}");
-    assert_eq!(validation["run_id"], submitted["run_id"]);
+    assert_eq!(validation["complete"], true, "recovered: {record:#}");
+    assert_eq!(validation["run_id"], submitted["run_id"], "recovered");
     assert_eq!(
         validation["commands"][0]["head"]["commit"],
-        delivery.head.as_str()
+        delivery.head.as_str(),
+        "recovered: {record:#}"
     );
     assert_eq!(record["review"]["verdict"], "accept", "{record:#}");
-    assert_eq!(record["review"]["crew"], "sol");
-    assert!(record["follow_up_task_id"].is_null());
+    assert_eq!(record["review"]["crew"], "sol", "recovered: {record:#}");
+    assert!(record["follow_up_task_id"].is_null(), "recovered");
     let after = delivery.submit("final-head");
-    assert_eq!(after["replayed"], true);
+    assert_eq!(after["replayed"], true, "recovered");
     assert_eq!(after["record"]["attempts"].as_array().unwrap().len(), 1);
 
     // The accepted reconciliation lets the operator, and only the operator,
@@ -855,7 +977,7 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
     let reconciled = delivery.snapshot(McpCapability::Operator);
     assert!(
         reconciled.actions.complete.enabled,
-        "{:?}",
+        "recovered: {:?}",
         reconciled.actions.complete
     );
     assert!(
@@ -874,48 +996,27 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
             .is_err(),
         "an agent session cannot complete"
     );
-    let request = review(
-        task,
-        &reconciled.revision,
-        verdict(&shown, &delivery.head, leaf),
-        "complete",
-    );
-    let done = owner
-        .desktop_task_write(request.clone(), None, None, &operator)
-        .expect("evidence-bound completion");
-    assert!(!done.replayed);
-    assert_eq!(done.snapshot.task.status, TaskStatus::Done);
-    let replay = owner
-        .desktop_task_write(request, None, None, &operator)
-        .expect("replay");
-    assert!(replay.replayed);
+    complete_on_reconciliation(&delivery, "complete", "recovered");
 
     // Provenance and the retained records stay truthful.
     let completed = delivery.pair.owner_task(task);
-    assert_eq!(completed["job_run_id"], leaf.as_str());
+    assert_eq!(completed["job_run_id"], leaf.as_str(), "recovered");
     assert_eq!(completed["job_run_machine"]["machine_id"], FOLLOWER);
     let audit = comments_of(&completed);
-    assert!(
-        audit.contains(&format!("execution_machine={FOLLOWER}")),
-        "{audit}"
+    assert_contains(
+        &audit,
+        &format!("execution_machine={FOLLOWER}"),
+        "recovered",
     );
-    assert!(audit.contains(&format!("pull_request={PR_URL}")), "{audit}");
-    assert!(audit.contains(&reconciliation), "{audit}");
-    assert_eq!(
-        completed["history"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|entry| entry["event"] == "desktop_mutation")
-            .count(),
-        1,
-        "{completed:#}"
-    );
+    assert_contains(&audit, &format!("pull_request={PR_URL}"), "recovered");
+    assert_contains(&audit, &reconciliation, "recovered");
+    assert_single_desktop_mutation(&completed, "recovered");
     let retained = owner.distributed_claim_console().unwrap();
-    assert_eq!(retained["claims"][0]["phase"], "revoked");
+    assert_eq!(retained["claims"][0]["phase"], "revoked", "recovered");
     assert_eq!(
         retained["claims"][0]["handoff"]["handoff_id"].as_str(),
-        Some(delivery.handoff_id.as_str())
+        Some(delivery.handoff_id.as_str()),
+        "recovered"
     );
     // The merged pull request is never rewritten.
     assert_eq!(rev(&delivery.repo, &delivery.landing), delivery.merge);
@@ -924,10 +1025,8 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
 /// A reviewer's open finding refuses the merged head and becomes one
 /// follow-up task; the merged pull request stays as it landed.
 fn a_rejected_merged_head_files_a_follow_up_and_cannot_complete() {
-    let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
-    delivery.recover();
-    delivery.merged();
-    delivery.reviewer_reports(
+    let delivery = recovered_delivery(
+        &["test -f src/f0.rs"],
         "reject",
         json!([{
             "id": "F1",
@@ -937,27 +1036,22 @@ fn a_rejected_merged_head_files_a_follow_up_and_cannot_complete() {
             "disposition": "open",
         }]),
     );
-    let submitted = delivery.submit("reject");
-    let settled = delivery.run(&submitted);
-    assert_eq!(settled["outcome"], "refused", "{settled:#}");
+    let (_submitted, settled) = submit_and_settle(&delivery, "reject", "refused", "rejected");
     let follow_up = settled["record"]["follow_up_task_id"]
         .as_str()
         .expect("a follow-up task")
         .to_string();
     let filed = delivery.pair.owner_task(&follow_up);
-    assert!(
-        filed["description"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("drops the handed-off change's error handling"),
-        "{filed:#}"
+    assert_contains(
+        filed["description"].as_str().unwrap_or_default(),
+        "drops the handed-off change's error handling",
+        "rejected",
     );
-    let refusal = delivery.completion_refusal();
-    assert!(refusal.contains("was refused"), "{refusal}");
+    assert_contains(&delivery.completion_refusal(), "was refused", "rejected");
 
     // A refused reconciliation settles; resubmitting its key replays it.
     let replay = delivery.submit("reject");
-    assert_eq!(replay["replayed"], true);
+    assert_eq!(replay["replayed"], true, "rejected");
     assert_eq!(replay["record"]["follow_up_task_id"], follow_up.as_str());
     assert_eq!(rev(&delivery.repo, &delivery.landing), delivery.merge);
     assert_eq!(delivery.pair.owner_status(&delivery.task), "review");
@@ -967,11 +1061,7 @@ fn a_rejected_merged_head_files_a_follow_up_and_cannot_complete() {
 /// evidence-bound disposition naming a landed remediation; validation stays
 /// incomplete even after the disposition lets the task complete.
 fn a_baseline_failure_completes_only_on_an_operator_disposition() {
-    std::fs::create_dir_all(home().join("bin")).unwrap();
-    let command_path = home().join("bin/verify.sh");
-    std::fs::write(&command_path, "#!/bin/sh\ntest -f NOTICE\n").unwrap();
-    executable(&command_path);
-    let command = command_path.to_string_lossy().into_owned();
+    let command = bin_script("verify.sh", "#!/bin/sh\ntest -f NOTICE\n");
     let delivery = Delivery::handed_off(&[&command]);
     delivery.retain_protocol7_handoff(&command);
     delivery.recover();
@@ -979,15 +1069,14 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     let inspected = delivery
         .reconcile(json!({"action": "inspect"}))
         .expect("the retained protocol-7 handoff is readable through public inspect");
-    assert_eq!(inspected["eligible"], true, "{inspected:#}");
+    assert_eq!(inspected["eligible"], true, "baseline: {inspected:#}");
     delivery.reviewer_reports("accept", json!([]));
-    let submitted = delivery.submit("baseline");
-    let settled = delivery.run(&submitted);
-    assert_eq!(settled["outcome"], "awaiting_disposition", "{settled:#}");
+    let (_submitted, settled) =
+        submit_and_settle(&delivery, "baseline", "awaiting_disposition", "baseline");
     let reconciliation = settled["reconciliation_id"].as_str().unwrap().to_string();
     let recorded = &settled["record"]["validation"];
-    assert_eq!(recorded["complete"], false);
-    assert_eq!(recorded["commands"][0]["head"]["passed"], false);
+    assert_eq!(recorded["complete"], false, "baseline");
+    assert_eq!(recorded["commands"][0]["head"]["passed"], false, "baseline");
     assert_eq!(recorded["commands"][0]["baseline"]["passed"], false);
     assert_eq!(
         recorded["commands"][0]["command"], "~/bin/verify.sh",
@@ -1006,15 +1095,12 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     let head_log = head_log["content"]
         .as_str()
         .expect("text validation report");
-    assert!(
-        !head_log.contains(home().to_string_lossy().as_ref()),
-        "{head_log}"
-    );
-    assert!(head_log.contains("~/bin/verify.sh"), "{head_log}");
-    let refusal = delivery.completion_refusal();
-    assert!(
-        refusal.contains("orbit task reconcile-review accept-baseline"),
-        "{refusal}"
+    assert!(!head_log.contains(home().to_string_lossy().as_ref()));
+    assert_contains(head_log, "~/bin/verify.sh", "baseline");
+    assert_contains(
+        &delivery.completion_refusal(),
+        "orbit task reconcile-review accept-baseline",
+        "baseline",
     );
 
     let reason_secret = format!("ghp_{}", "A".repeat(36));
@@ -1029,44 +1115,26 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     };
     // The merged head itself remediates nothing.
     let head = dispose(&delivery.head).expect_err("the head is not a remediation");
-    assert!(!head.to_string().is_empty());
+    assert!(!head.to_string().is_empty(), "baseline");
 
-    std::fs::write(delivery.repo.join("unrelated.txt"), "unrelated\n").unwrap();
-    git(&delivery.repo, &["add", "unrelated.txt"]);
-    git(
-        &delivery.repo,
-        &["commit", "-q", "-m", "Unrelated landing change"],
-    );
-    let unrelated = rev(&delivery.repo, "HEAD");
+    let unrelated = delivery.land("unrelated.txt", "unrelated\n", "Unrelated landing change");
     let failed_remediation = dispose(&unrelated)
         .expect_err("a landed commit that does not fix the check cannot justify disposition");
-    assert!(
-        failed_remediation
-            .to_string()
-            .contains("did not pass at remediation"),
-        "{failed_remediation}"
+    assert_contains(
+        &failed_remediation.to_string(),
+        "did not pass at remediation",
+        "baseline",
     );
     let failed_check = delivery.status(&reconciliation);
-    assert_eq!(failed_check["outcome"], "awaiting_disposition");
+    assert_eq!(failed_check["outcome"], "awaiting_disposition", "baseline");
     assert_eq!(failed_check["record"]["validation"]["complete"], false);
     assert_eq!(
-        failed_check["record"]["remediation_checks"][0]["run"]["passed"],
-        false
+        failed_check["record"]["remediation_checks"][0]["run"]["passed"], false,
+        "baseline"
     );
-    assert!(
-        !delivery
-            .snapshot(McpCapability::Operator)
-            .actions
-            .complete
-            .enabled,
-        "{:?}",
-        delivery.snapshot(McpCapability::Operator).actions
-    );
+    assert_cannot_complete(&delivery, "baseline");
 
-    std::fs::write(delivery.repo.join("NOTICE"), "notice\n").unwrap();
-    git(&delivery.repo, &["add", "NOTICE"]);
-    git(&delivery.repo, &["commit", "-q", "-m", "Add NOTICE"]);
-    let remediation = rev(&delivery.repo, "HEAD");
+    let remediation = delivery.land("NOTICE", "notice\n", "Add NOTICE");
     let fake_secret = format!("ghp_{}", "B".repeat(36));
     let invalid_selector = format!("{command} --token={fake_secret}");
     let refusal = delivery
@@ -1079,20 +1147,89 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
         }))
         .expect_err("an unrecognized command selector cannot widen the disposition");
     let refusal = refusal.to_string();
-    assert!(refusal.contains("is not a baseline failure"), "{refusal}");
-    assert!(
-        !refusal.contains(home().to_string_lossy().as_ref()),
-        "{refusal}"
-    );
-    assert!(!refusal.contains(&fake_secret), "{refusal}");
+    assert_contains(&refusal, "is not a baseline failure", "baseline");
+    assert!(!refusal.contains(home().to_string_lossy().as_ref()));
+    assert!(!refusal.contains(&fake_secret), "baseline: {refusal}");
     let still_waiting = delivery.status(&reconciliation);
-    assert_eq!(still_waiting["outcome"], "awaiting_disposition");
+    assert_eq!(still_waiting["outcome"], "awaiting_disposition", "baseline");
     assert_eq!(still_waiting["record"]["validation"]["complete"], false);
+
+    // Owners previously persisted Option<String> here. Feed those bytes into
+    // the store and public reconciliation tool, including unknown strings:
+    // only candidate failures at both revisions permit a disposition.
+    let database = delivery.owner.global_root().join("orbit.db");
+    let connection = rusqlite::Connection::open(database).unwrap();
+    let original_json: String = connection
+        .query_row(
+            "SELECT record_json FROM review_reconciliations WHERE workspace_id=?1 AND reconciliation_id=?2",
+            rusqlite::params![delivery.owner.workspace_id().unwrap(), reconciliation],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for side in ["head", "baseline"] {
+        for kind in [
+            Some(json!("candidate")),
+            Some(json!("environment")),
+            Some(json!("future_failure")),
+            Some(json!("")),
+            Some(Value::Null),
+            None,
+        ] {
+            let mut historical: Value = serde_json::from_str(&original_json).unwrap();
+            let command_run = historical["validation"]["commands"][0][side]
+                .as_object_mut()
+                .unwrap();
+            match &kind {
+                Some(value) => {
+                    command_run.insert("failure_kind".into(), value.clone());
+                }
+                None => {
+                    command_run.remove("failure_kind");
+                }
+            }
+            let changed = connection.execute(
+                "UPDATE review_reconciliations SET record_json=?1 WHERE workspace_id=?2 AND reconciliation_id=?3",
+                rusqlite::params![serde_json::to_string(&historical).unwrap(), delivery.owner.workspace_id().unwrap(), reconciliation],
+            ).unwrap();
+            assert_eq!(changed, 1);
+            let status = delivery.status(&reconciliation);
+            let projected = &status["record"]["validation"]["commands"][0][side];
+            if let Some(value) = kind.as_ref().filter(|value| !value.is_null()) {
+                assert_eq!(&projected["failure_kind"], value, "{side}: {kind:?}");
+            } else {
+                assert!(projected.get("failure_kind").is_none(), "{side}: {kind:?}");
+            }
+            let candidate = kind == Some(json!("candidate"));
+            let stored = delivery.stored(&reconciliation);
+            assert_eq!(
+                stored.validation.unwrap().commands[0].reproduced_on_base(),
+                candidate,
+                "baseline-historical: {side}: {kind:?}"
+            );
+            if !candidate {
+                let refusal = dispose(&remediation)
+                    .expect_err("non-candidate historical failures cannot authorize a disposition");
+                assert_contains(
+                    &refusal.to_string(),
+                    "no recorded failure reproduced at the base",
+                    &format!("baseline-{side}-{kind:?}"),
+                );
+                assert!(
+                    delivery.stored(&reconciliation).dispositions.is_empty(),
+                    "baseline-historical: {side}: {kind:?}"
+                );
+            }
+        }
+    }
+    connection.execute(
+        "UPDATE review_reconciliations SET record_json=?1 WHERE workspace_id=?2 AND reconciliation_id=?3",
+        rusqlite::params![original_json, delivery.owner.workspace_id().unwrap(), reconciliation],
+    ).unwrap();
 
     let disposed = dispose(&remediation).expect("disposition");
     assert_eq!(
         disposed["outcome"], "accepted_with_disposition",
-        "{disposed:#}"
+        "baseline: {disposed:#}"
     );
     assert_eq!(
         inspected["contract"]["accepted_commands"],
@@ -1101,20 +1238,19 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     );
     assert_eq!(disposed["record"]["validation"]["complete"], false);
     let disposition = &disposed["record"]["dispositions"][0];
-    assert_eq!(disposition["command"], "~/bin/verify.sh");
+    assert_eq!(disposition["command"], "~/bin/verify.sh", "baseline");
     assert!(!disposition["reason"].as_str().unwrap().contains("ghp_"));
-    assert!(
-        disposition["reason"]
-            .as_str()
-            .unwrap()
-            .contains("[REDACTED_SECRET]")
+    assert_contains(
+        disposition["reason"].as_str().unwrap(),
+        "[REDACTED_SECRET]",
+        "baseline",
     );
     assert_eq!(disposition["remediation_commit"], remediation.as_str());
     assert_eq!(disposition["head_commit"], delivery.head.as_str());
     assert!(disposition["remediation_check"]["sha256"].is_string());
     assert_eq!(
-        disposed["record"]["remediation_checks"][1]["run"]["passed"],
-        true
+        disposed["record"]["remediation_checks"][1]["run"]["passed"], true,
+        "baseline"
     );
     let again = dispose(&remediation).expect("an identical disposition replays");
     assert_eq!(again["record"]["dispositions"].as_array().unwrap().len(), 1);
@@ -1127,17 +1263,14 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
         .unwrap()
         .expect("retained reconciliation");
     assert_eq!(stored.contract.required_commands, vec![command.clone()]);
-    assert_eq!(stored.dispositions[0].command, command);
+    assert_eq!(stored.dispositions[0].command, command, "baseline");
     let task_comments = comments_of(&delivery.pair.owner_task(&delivery.task));
     assert!(
         !task_comments.contains(home().to_string_lossy().as_ref()),
-        "{task_comments}"
+        "baseline: {task_comments}"
     );
     assert!(!task_comments.contains(&reason_secret), "{task_comments}");
-    assert!(
-        task_comments.contains("[REDACTED_SECRET]"),
-        "{task_comments}"
-    );
+    assert_contains(&task_comments, "[REDACTED_SECRET]", "baseline");
 
     let audit_events = delivery
         .owner
@@ -1170,61 +1303,31 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
         );
     }
 
-    let snapshot = delivery.snapshot(McpCapability::Operator);
-    assert!(snapshot.actions.complete.enabled, "{:?}", snapshot.actions);
-
     // The ordinary desktop write completes on the disposition, and a lost
     // response replays rather than completing twice.
-    let owner = &delivery.owner;
-    let task = &delivery.task;
-    let operator = session(McpCapability::Operator);
-    let shown = delivery.pair.owner_task(task);
-    let request = review(
-        task,
-        &snapshot.revision,
-        verdict(&shown, &delivery.head, &delivery.leaf),
-        "complete-disposed",
-    );
-    let done = owner
-        .desktop_task_write(request.clone(), None, None, &operator)
-        .expect("completion on an evidence-bound disposition");
-    assert!(!done.replayed);
-    assert_eq!(done.snapshot.task.status, TaskStatus::Done);
-    let replay = owner
-        .desktop_task_write(request, None, None, &operator)
-        .expect("lost-response replay");
-    assert!(replay.replayed);
-    assert_eq!(replay.snapshot.task.status, TaskStatus::Done);
+    complete_on_reconciliation(&delivery, "complete-disposed", "baseline");
 
     // The original run's identity is unchanged, and the failure stays a
     // failure: the disposition is recorded beside it, never instead of it.
-    let completed = delivery.pair.owner_task(task);
-    assert_eq!(completed["job_run_id"], delivery.leaf.as_str());
+    let completed = delivery.pair.owner_task(&delivery.task);
+    assert_eq!(completed["job_run_id"], delivery.leaf.as_str(), "baseline");
     assert_eq!(completed["job_run_machine"]["machine_id"], FOLLOWER);
-    assert_eq!(
-        completed["history"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|entry| entry["event"] == "desktop_mutation")
-            .count(),
-        1,
-        "{completed:#}"
-    );
+    assert_single_desktop_mutation(&completed, "baseline");
     let retained = delivery.status(&reconciliation);
-    assert_eq!(retained["outcome"], "accepted_with_disposition");
+    assert_eq!(retained["outcome"], "accepted_with_disposition", "baseline");
     let validation = &retained["record"]["validation"];
-    assert_eq!(validation["complete"], false, "{retained:#}");
+    assert_eq!(validation["complete"], false, "baseline: {retained:#}");
     assert_eq!(validation["commands"][0]["head"]["passed"], false);
     assert_eq!(validation["commands"][0]["baseline"]["passed"], false);
     assert_eq!(
         retained["record"]["dispositions"][0]["failure_log_sha256"],
-        validation["commands"][0]["head"]["log"]["sha256"]
+        validation["commands"][0]["head"]["log"]["sha256"],
+        "baseline"
     );
 
     // No ordinary review certificate was invented for the merged head.
     let merged = &retained["record"]["binding"]["pull_request"];
-    let store = owner.review_store().unwrap();
+    let store = delivery.owner.review_store().unwrap();
     assert!(
         store
             .review_certificates_for_tree(
@@ -1238,9 +1341,10 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     );
     assert!(
         store
-            .review_certificate(&owner.workspace_id().unwrap(), &reconciliation)
+            .review_certificate(&delivery.owner.workspace_id().unwrap(), &reconciliation)
             .unwrap()
-            .is_none()
+            .is_none(),
+        "baseline"
     );
 }
 
@@ -1252,25 +1356,20 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
 fn a_baseline_remediation_must_contain_the_landed_delivery() {
     // Test A: the landing branch lacks NOTICE. Test B: the delivery's hand
     // fix is a regression. One required command runs both.
-    std::fs::create_dir_all(home().join("bin")).unwrap();
-    let command_path = home().join("bin/suite.sh");
-    std::fs::write(
-        &command_path,
+    let command = bin_script(
+        "suite.sh",
         "#!/bin/sh\ntest -f NOTICE || exit 1\n! grep -q fixed_by_hand src/f0.rs\n",
-    )
-    .unwrap();
-    executable(&command_path);
-    let command = command_path.to_string_lossy().into_owned();
+    );
+    let command_path = home().join("bin/suite.sh");
     let delivery = Delivery::landed(&[&command], Landing::Merge, Some(("NOTICE", "notice\n")));
     delivery.recover();
     delivery.merged();
     delivery.reviewer_reports("accept", json!([]));
-    let submitted = delivery.submit("masked");
+    let (submitted, settled) =
+        submit_and_settle(&delivery, "masked", "awaiting_disposition", "remediation");
     let reconciliation = submitted["reconciliation_id"].as_str().unwrap().to_string();
-    let settled = delivery.run(&submitted);
-    assert_eq!(settled["outcome"], "awaiting_disposition", "{settled:#}");
     let record = &settled["record"];
-    assert_eq!(record["schema_version"], 4);
+    assert_eq!(record["schema_version"], 4, "remediation");
     assert_eq!(
         record["binding"]["pull_request"]["landed"]["commit"],
         delivery.merge.as_str(),
@@ -1278,7 +1377,7 @@ fn a_baseline_remediation_must_contain_the_landed_delivery() {
     );
     let original = record["validation"].clone();
     let original_stored = delivery.stored(&reconciliation).validation;
-    assert_eq!(original["complete"], false);
+    assert_eq!(original["complete"], false, "remediation");
     assert_eq!(original["commands"][0]["head"]["passed"], false);
     assert_eq!(original["commands"][0]["baseline"]["passed"], false);
 
@@ -1318,19 +1417,20 @@ fn a_baseline_remediation_must_contain_the_landed_delivery() {
         "{refused:?}"
     );
     let refused = refused.to_string();
-    assert!(
-        refused.contains(&format!("does not contain commit {}", delivery.merge))
-            && refused.contains("land the fix on"),
-        "{refused}"
+    assert_contains(
+        &refused,
+        &format!("does not contain commit {}", delivery.merge),
+        "remediation",
     );
+    assert_contains(&refused, "land the fix on", "remediation");
     let untouched = delivery.stored(&reconciliation);
     assert!(
         untouched.remediation_checks.is_empty(),
         "the command never ran at the pre-merge fix"
     );
-    assert!(untouched.dispositions.is_empty());
-    assert_eq!(untouched.validation, original_stored);
-    assert!(!delivery.completes());
+    assert!(untouched.dispositions.is_empty(), "remediation");
+    assert_eq!(untouched.validation, original_stored, "remediation");
+    assert!(!delivery.completes(), "remediation");
 
     // A remediation landed on top of the merge fixes test B as well.
     let remediation = delivery.land(
@@ -1367,22 +1467,22 @@ fn a_baseline_remediation_must_contain_the_landed_delivery() {
         "an infrastructure failure is not an input refusal: {failed:?}"
     );
     let failed = failed.to_string();
-    assert!(failed.contains("cannot populate ~/cache"), "{failed}");
+    assert_contains(&failed, "cannot populate ~/cache", "remediation");
     assert!(
         !failed.contains(home().to_string_lossy().as_ref()),
-        "{failed}"
+        "remediation: {failed}"
     );
-    assert!(!failed.contains(&token), "{failed}");
+    assert!(!failed.contains(&token), "remediation: {failed}");
     let still_waiting = delivery.stored(&reconciliation);
-    assert!(still_waiting.dispositions.is_empty());
-    assert!(still_waiting.remediation_checks.is_empty());
+    assert!(still_waiting.dispositions.is_empty(), "remediation");
+    assert!(still_waiting.remediation_checks.is_empty(), "remediation");
 
     let disposed = delivery
         .dispose(&reconciliation, &command, &remediation)
         .expect("a remediation containing the landed delivery disposes");
     assert_eq!(
         disposed["outcome"], "accepted_with_disposition",
-        "{disposed:#}"
+        "remediation: {disposed:#}"
     );
     let record = &disposed["record"];
     assert_eq!(record["validation"], original, "original failures stay");
@@ -1390,29 +1490,35 @@ fn a_baseline_remediation_must_contain_the_landed_delivery() {
     assert_eq!(disposition["remediation_commit"], remediation.as_str());
     assert_eq!(disposition["landed_commit"], delivery.merge.as_str());
     assert_eq!(
-        disposition["failure_log_sha256"],
-        original["commands"][0]["head"]["log"]["sha256"]
+        disposition["failure_log_sha256"], original["commands"][0]["head"]["log"]["sha256"],
+        "remediation"
     );
     assert_eq!(
         record["remediation_checks"][0]["landed_commit"],
-        delivery.merge.as_str()
+        delivery.merge.as_str(),
+        "remediation"
     );
-    assert!(delivery.completes());
+    assert!(delivery.completes(), "remediation");
     let again = delivery
         .dispose(&reconciliation, &command, &remediation)
         .expect("an identical disposition replays");
-    assert_eq!(again["replayed"], true);
+    assert_eq!(again["replayed"], true, "remediation");
     assert_eq!(again["record"]["dispositions"].as_array().unwrap().len(), 1);
 
     // A record persisted before the landed commit was bound keeps its
     // evidence, never grants completion and is never disposed again; a new
     // request key reconciles the same head with the landed commit bound.
     let legacy = delivery.retain_as_legacy(&reconciliation);
-    assert_eq!(legacy.dispositions.len(), 1);
-    let refusal = delivery.completion_refusal();
-    assert!(
-        refusal.contains(&reconciliation) && refusal.contains("submit a new request key"),
-        "{refusal}"
+    assert_eq!(legacy.dispositions.len(), 1, "remediation");
+    assert_contains(
+        &delivery.completion_refusal(),
+        &reconciliation,
+        "remediation",
+    );
+    assert_contains(
+        &delivery.completion_refusal(),
+        "submit a new request key",
+        "remediation",
     );
     let legacy_refusal = delivery
         .dispose(&reconciliation, &command, &remediation)
@@ -1421,32 +1527,31 @@ fn a_baseline_remediation_must_contain_the_landed_delivery() {
         matches!(legacy_refusal, OrbitError::InvalidInput(_)),
         "{legacy_refusal:?}"
     );
-    assert!(
-        legacy_refusal
-            .to_string()
-            .contains("predates binding the pull request's landed commit"),
-        "{legacy_refusal}"
+    assert_contains(
+        &legacy_refusal.to_string(),
+        "predates binding the pull request's landed commit",
+        "remediation",
     );
-    assert_eq!(delivery.stored(&reconciliation), legacy);
+    assert_eq!(delivery.stored(&reconciliation), legacy, "remediation");
 
     let fresh = delivery.submit("masked-landed");
     let fresh_id = fresh["reconciliation_id"].as_str().unwrap().to_string();
-    assert_ne!(fresh_id, reconciliation);
+    assert_ne!(fresh_id, reconciliation, "remediation");
     let fresh_settled = delivery.run(&fresh);
     assert_eq!(
         fresh_settled["outcome"], "awaiting_disposition",
-        "{fresh_settled:#}"
+        "remediation: {fresh_settled:#}"
     );
     let fresh_disposed = delivery
         .dispose(&fresh_id, &command, &remediation)
         .expect("the fresh reconciliation disposes");
     assert_eq!(fresh_disposed["outcome"], "accepted_with_disposition");
     assert_eq!(fresh_disposed["record"]["validation"]["complete"], false);
-    assert!(delivery.completes());
-    assert_eq!(delivery.stored(&reconciliation), legacy);
+    assert!(delivery.completes(), "remediation");
+    assert_eq!(delivery.stored(&reconciliation), legacy, "remediation");
     let execution = &fresh_disposed["record"]["binding"]["execution"];
-    assert_eq!(execution["run_id"], delivery.leaf.as_str());
-    assert_eq!(execution["machine_id"], FOLLOWER);
+    assert_eq!(execution["run_id"], delivery.leaf.as_str(), "remediation");
+    assert_eq!(execution["machine_id"], FOLLOWER, "remediation");
     assert_eq!(execution["claim_id"], delivery.claim_id.as_str());
     assert_eq!(execution["handoff_id"], delivery.handoff_id.as_str());
 }
@@ -1457,22 +1562,17 @@ fn a_baseline_remediation_must_contain_the_landed_delivery() {
 /// disposition, and completion binds the same landed commit.
 fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
     // The command can swap the provider's answer while it runs.
-    std::fs::create_dir_all(home().join("bin")).unwrap();
-    let command_path = home().join("bin/notice.sh");
     let swap = home().join("swap-provider");
     let swapped = home().join("pr.swapped.json");
-    std::fs::write(
-        &command_path,
-        format!(
+    let command = bin_script(
+        "notice.sh",
+        &format!(
             "#!/bin/sh\nif [ -f '{swap}' ]; then cp '{swapped}' '{answer}'; fi\ntest -f NOTICE\n",
             swap = swap.display(),
             swapped = swapped.display(),
             answer = home().join("pr.json").display(),
         ),
-    )
-    .unwrap();
-    executable(&command_path);
-    let command = command_path.to_string_lossy().into_owned();
+    );
     let delivery = Delivery::landed(&[&command], Landing::Squash, None);
     let squash = delivery.merge.clone();
     assert_eq!(
@@ -1488,13 +1588,13 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
     delivery.recover();
     delivery.merged();
     delivery.reviewer_reports("accept", json!([]));
-    let submitted = delivery.submit("squash");
+    let (submitted, settled) =
+        submit_and_settle(&delivery, "squash", "awaiting_disposition", "squash");
     let reconciliation = submitted["reconciliation_id"].as_str().unwrap().to_string();
-    let settled = delivery.run(&submitted);
-    assert_eq!(settled["outcome"], "awaiting_disposition", "{settled:#}");
     assert_eq!(
         settled["record"]["binding"]["pull_request"]["landed"]["commit"],
-        squash.as_str()
+        squash.as_str(),
+        "squash"
     );
     let original = settled["record"]["validation"].clone();
 
@@ -1521,14 +1621,15 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
     let moved = delivery
         .dispose(&reconciliation, &command, &remediation)
         .expect_err("a changed landed commit refuses before running");
-    assert!(moved.to_string().contains("delivery changed"), "{moved}");
+    assert_contains(&moved.to_string(), "delivery changed", "squash");
     assert!(
         delivery
             .stored(&reconciliation)
             .remediation_checks
-            .is_empty()
+            .is_empty(),
+        "squash"
     );
-    assert!(!delivery.completes());
+    assert!(!delivery.completes(), "squash");
 
     // The provider's answer changes while the command runs: the check is kept
     // as evidence, but no disposition is recorded.
@@ -1538,16 +1639,17 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
     let during = delivery
         .dispose(&reconciliation, &command, &remediation)
         .expect_err("a landed commit that changed during the run refuses");
-    assert!(during.to_string().contains("delivery changed"), "{during}");
+    assert_contains(&during.to_string(), "delivery changed", "squash");
     std::fs::remove_file(&swap).unwrap();
     let checked = delivery.stored(&reconciliation);
-    assert_eq!(checked.remediation_checks.len(), 1);
-    assert!(checked.remediation_checks[0].run.passed);
+    assert_eq!(checked.remediation_checks.len(), 1, "squash");
+    assert!(checked.remediation_checks[0].run.passed, "squash");
     assert_eq!(
         checked.remediation_checks[0].landed_commit.as_deref(),
-        Some(squash.as_str())
+        Some(squash.as_str()),
+        "squash"
     );
-    assert!(checked.dispositions.is_empty());
+    assert!(checked.dispositions.is_empty(), "squash");
 
     // With the provider's answer restored, the passing check is reused.
     delivery.merged();
@@ -1556,14 +1658,14 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
         .expect("a remediation containing the squash commit disposes");
     assert_eq!(
         disposed["outcome"], "accepted_with_disposition",
-        "{disposed:#}"
+        "squash: {disposed:#}"
     );
     let record = &disposed["record"];
-    assert_eq!(record["validation"], original);
-    assert_eq!(record["validation"]["complete"], false);
+    assert_eq!(record["validation"], original, "squash");
+    assert_eq!(record["validation"]["complete"], false, "squash");
     assert_eq!(record["remediation_checks"].as_array().unwrap().len(), 1);
     assert_eq!(record["dispositions"][0]["landed_commit"], squash.as_str());
-    assert!(delivery.completes());
+    assert!(delivery.completes(), "squash");
 
     // Completion binds the landed commit as the provider reports it now.
     pull_request_is(
@@ -1572,9 +1674,9 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
         &delivery.landing,
         Some(&remediation),
     );
-    assert!(!delivery.completes());
+    assert!(!delivery.completes(), "squash");
     delivery.merged();
-    assert!(delivery.completes());
+    assert!(delivery.completes(), "squash");
 }
 
 /// A command that fails as code at the merged head but cannot be judged at
@@ -1583,44 +1685,28 @@ fn a_squash_landing_disposes_on_a_remediation_containing_the_squash_commit() {
 fn a_baseline_environment_failure_is_not_misreported_as_head_only() {
     let command =
         "grep -q fixed_by_hand src/f0.rs && exit 1 || orbit-baseline-environment-probe-14175";
-    let delivery = Delivery::handed_off(&[command]);
-    delivery.recover();
-    delivery.merged();
-    delivery.reviewer_reports("accept", json!([]));
-    let submitted = delivery.submit("base-environment");
-    let settled = delivery.run(&submitted);
+    let delivery = recovered_delivery(&[command], "accept", json!([]));
+    let (_submitted, settled) = submit_and_settle(&delivery, "base-env", "refused", "base-env");
 
-    assert_eq!(settled["outcome"], "refused", "{settled:#}");
-    assert!(
-        settled["next_step"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("make the required check runnable at both revisions"),
-        "{settled:#}"
+    assert_contains(
+        settled["next_step"].as_str().unwrap_or_default(),
+        "make the required check runnable at both revisions",
+        "base-env",
     );
     let command_result = &settled["record"]["validation"]["commands"][0];
-    assert_eq!(command_result["head"]["passed"], false);
+    assert_eq!(command_result["head"]["passed"], false, "base-env");
     assert_eq!(command_result["head"]["failure_kind"], "candidate");
-    assert_eq!(command_result["baseline"]["passed"], false);
+    assert_eq!(command_result["baseline"]["passed"], false, "base-env");
     assert_eq!(command_result["baseline"]["failure_kind"], "environment");
     assert_eq!(settled["record"]["follow_up_task_id"], Value::Null);
-    assert!(settled["record"]["dispositions"].is_null());
-    assert!(
-        !delivery
-            .snapshot(McpCapability::Operator)
-            .actions
-            .complete
-            .enabled
-    );
+    assert!(settled["record"]["dispositions"].is_null(), "base-env");
+    assert_cannot_complete(&delivery, "base-env");
 }
 
 /// A canonical review pool refusal can be repaired through the operator tool.
 fn a_canonical_review_pool_refusal_can_be_repaired_and_retried() {
     let required = "test -f src/f0.rs";
-    let delivery = Delivery::handed_off(&[required]);
-    delivery.recover();
-    delivery.merged();
-    delivery.reviewer_reports("accept", json!([]));
+    let delivery = recovered_delivery(&[required], "accept", json!([]));
 
     let unavailable = delivery.reconfigured(&owner_config_with_review_pool(
         &[required],
@@ -1653,7 +1739,7 @@ fn a_canonical_review_pool_refusal_can_be_repaired_and_retried() {
         .expect("operator can retry after repairing the canonical review pool");
     assert_eq!(
         retry["record"]["contract"]["review_crew"], "sol",
-        "{retry:#}"
+        "pool: {retry:#}"
     );
     let reconciliation = retry["reconciliation_id"].as_str().unwrap();
     delivery.execute_on(&repaired, retry["run_id"].as_str().unwrap());
@@ -1664,7 +1750,7 @@ fn a_canonical_review_pool_refusal_can_be_repaired_and_retried() {
         )
         .unwrap()["reconciliations"][0]
         .clone();
-    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+    assert_eq!(settled["outcome"], "accepted", "pool: {settled:#}");
 }
 
 /// The validation commands and review crew are frozen when the operator
@@ -1673,20 +1759,17 @@ fn a_canonical_review_pool_refusal_can_be_repaired_and_retried() {
 /// frozen crew that no longer resolves refuses with the new-request path.
 fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
     let required = "test -f src/f0.rs";
-    let delivery = Delivery::handed_off(&[required]);
-    delivery.recover();
-    delivery.merged();
-    delivery.reviewer_reports("accept", json!([]));
+    let delivery = recovered_delivery(&[required], "accept", json!([]));
     let submitted = delivery.submit("frozen");
     let contract = &submitted["record"]["contract"];
     assert_eq!(
         contract["required_commands"],
         json!([required]),
-        "{contract:#}"
+        "frozen: {contract:#}"
     );
-    assert_eq!(contract["accepted_commands"], json!([required]));
-    assert_eq!(contract["commands_source"], "accepted_handoff");
-    assert_eq!(contract["review_crew"], "sol");
+    assert_eq!(contract["accepted_commands"], json!([required]), "frozen");
+    assert_eq!(contract["commands_source"], "accepted_handoff", "frozen");
+    assert_eq!(contract["review_crew"], "sol", "frozen");
 
     // After submission the owner requires a command this head fails and
     // reviews on another crew. The admitted run still validates and reviews
@@ -1698,8 +1781,8 @@ fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
             json!({"action": "submit", "request_key": "frozen"}),
         )
         .expect("replay under an edited configuration");
-    assert_eq!(replay["replayed"], true, "{replay:#}");
-    assert_eq!(replay["record"]["contract"], *contract);
+    assert_eq!(replay["replayed"], true, "frozen: {replay:#}");
+    assert_eq!(replay["record"]["contract"], *contract, "frozen");
     delivery.execute_on(&edited, submitted["run_id"].as_str().unwrap());
     let settled = delivery
         .reconcile_on(
@@ -1708,7 +1791,7 @@ fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
         )
         .unwrap()["reconciliations"][0]
         .clone();
-    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+    assert_eq!(settled["outcome"], "accepted", "frozen: {settled:#}");
     let record = &settled["record"];
     let commands: Vec<&str> = record["validation"]["commands"]
         .as_array()
@@ -1716,9 +1799,9 @@ fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
         .iter()
         .map(|command| command["command"].as_str().unwrap())
         .collect();
-    assert_eq!(commands, [required], "{record:#}");
-    assert_eq!(record["review"]["crew"], "sol", "{record:#}");
-    assert_eq!(record["contract"], *contract);
+    assert_eq!(commands, [required], "frozen: {record:#}");
+    assert_eq!(record["review"]["crew"], "sol", "frozen: {record:#}");
+    assert_eq!(record["contract"], *contract, "frozen");
 
     // Only a new request key adopts the edited review crew; the delivery's
     // own captured obligations stay whatever the configuration now says.
@@ -1727,10 +1810,11 @@ fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
         .unwrap();
     assert_eq!(
         inspected["contract"]["required_commands"],
-        json!([required])
+        json!([required]),
+        "frozen"
     );
     assert_eq!(inspected["contract"]["commands_source"], "accepted_handoff");
-    assert_eq!(inspected["contract"]["review_crew"], "luna");
+    assert_eq!(inspected["contract"]["review_crew"], "luna", "frozen");
 
     // A frozen crew the owner no longer defines fails the attempt instead of
     // substituting the current crew. Resubmitting the key says how to go on,
@@ -1742,20 +1826,21 @@ fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
     delivery.execute_on(&without_sol, crew_gone["run_id"].as_str().unwrap());
     let reconciliation = crew_gone["reconciliation_id"].as_str().unwrap();
     let failed = delivery.status(reconciliation);
-    assert!(failed["outcome"].is_null(), "{failed:#}");
-    assert_eq!(failed["run_state"], "failed", "{failed:#}");
-    assert!(failed["record"]["review"].is_null(), "{failed:#}");
+    assert!(failed["outcome"].is_null(), "frozen: {failed:#}");
+    assert_eq!(failed["run_state"], "failed", "frozen: {failed:#}");
+    assert!(failed["record"]["review"].is_null(), "frozen: {failed:#}");
     let blocked = delivery
         .reconcile_on(
             &without_sol,
             json!({"action": "submit", "request_key": "crew-gone"}),
         )
         .expect_err("the frozen crew is unavailable");
-    assert!(
-        blocked.to_string().contains("frozen when it was submitted")
-            && blocked.to_string().contains("new request key"),
-        "{blocked}"
+    assert_contains(
+        &blocked.to_string(),
+        "frozen when it was submitted",
+        "frozen",
     );
+    assert_contains(&blocked.to_string(), "new request key", "frozen");
     let restored = delivery.reconfigured(&owner_config(&["false"], "luna", &["sol", "luna"]));
     let retried = delivery
         .reconcile_on(
@@ -1772,11 +1857,11 @@ fn a_reconciliation_runs_under_the_contract_frozen_at_submission() {
         )
         .unwrap()["reconciliations"][0]
         .clone();
-    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
-    assert_eq!(settled["record"]["review"]["crew"], "sol");
+    assert_eq!(settled["outcome"], "accepted", "frozen: {settled:#}");
+    assert_eq!(settled["record"]["review"]["crew"], "sol", "frozen");
     assert_eq!(
-        settled["record"]["validation"]["commands"][0]["command"],
-        required
+        settled["record"]["validation"]["commands"][0]["command"], required,
+        "frozen"
     );
 }
 
@@ -1790,19 +1875,18 @@ fn an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract() {
     delivery.merged();
     let unvalidatable = delivery.reconcile(json!({"action": "inspect"})).unwrap();
     assert_eq!(unvalidatable["eligible"], false, "{unvalidatable:#}");
-    assert!(
-        unvalidatable["refusal"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("required no validation command"),
-        "{unvalidatable:#}"
+    assert_contains(
+        unvalidatable["refusal"].as_str().unwrap_or_default(),
+        "required no validation command",
+        "no-check",
     );
     let refused = delivery
         .reconcile(json!({"action": "submit", "request_key": "nothing"}))
         .expect_err("nothing to validate with");
-    assert!(
-        refused.to_string().contains("required_validation_commands"),
-        "{refused}"
+    assert_contains(
+        &refused.to_string(),
+        "required_validation_commands",
+        "no-check",
     );
 
     let required = "test -f src/f0.rs";
@@ -1816,10 +1900,10 @@ fn an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract() {
         .expect("operator submission");
     let contract = &submitted["record"]["contract"];
     assert_eq!(contract["accepted_commands"], json!([]), "{contract:#}");
-    assert_eq!(contract["required_commands"], json!([required]));
+    assert_eq!(contract["required_commands"], json!([required]), "no-check");
     assert_eq!(
-        contract["commands_source"],
-        "owner_configuration_at_submission"
+        contract["commands_source"], "owner_configuration_at_submission",
+        "no-check"
     );
     delivery.execute_on(&configured, submitted["run_id"].as_str().unwrap());
     let settled = delivery
@@ -1829,7 +1913,7 @@ fn an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract() {
         )
         .unwrap()["reconciliations"][0]
         .clone();
-    assert_eq!(settled["outcome"], "accepted", "{settled:#}");
+    assert_eq!(settled["outcome"], "accepted", "no-check: {settled:#}");
     assert_eq!(settled["record"]["validation"]["complete"], true);
 }
 
@@ -1837,10 +1921,7 @@ fn an_explicit_no_check_acceptance_adopts_a_labelled_owner_contract() {
 /// refuses the run, and no run outside the governed submission can produce
 /// a record.
 fn a_reconciliation_refuses_a_changed_head_and_forged_runs() {
-    let delivery = Delivery::handed_off(&["test -f src/f0.rs"]);
-    delivery.recover();
-    delivery.merged();
-    delivery.reviewer_reports("accept", json!([]));
+    let delivery = recovered_delivery(&["test -f src/f0.rs"], "accept", json!([]));
     let owner = &delivery.owner;
 
     // Ordinary submission cannot carry the reserved admission.
@@ -1862,11 +1943,10 @@ fn a_reconciliation_refuses_a_changed_head_and_forged_runs() {
             Some("operator"),
         )
         .expect_err("the admission key is reserved");
-    assert!(
-        forged
-            .to_string()
-            .contains("review_reconciliation_admission"),
-        "{forged}"
+    assert_contains(
+        &forged.to_string(),
+        "review_reconciliation_admission",
+        "moved-head",
     );
 
     let submitted = delivery.submit("moving-head");
@@ -1883,7 +1963,7 @@ fn a_reconciliation_refuses_a_changed_head_and_forged_runs() {
     git(&delivery.repo, &["checkout", "-q", &delivery.landing]);
     pull_request_is("MERGED", &moved, &delivery.landing, Some(&delivery.merge));
     let settled = delivery.run(&submitted);
-    assert_eq!(settled["outcome"], "refused", "{settled:#}");
+    assert_eq!(settled["outcome"], "refused", "moved-head: {settled:#}");
     assert!(settled["record"]["validation"].is_null(), "{settled:#}");
 
     // A run submitted without the admission cannot act on the record.
@@ -1898,10 +1978,10 @@ fn a_reconciliation_refuses_a_changed_head_and_forged_runs() {
     delivery.execute(&unadmitted.run_id);
     let untouched = delivery.status(&reconciliation);
     assert_eq!(untouched["record"], settled["record"], "{untouched:#}");
-    let refusal = delivery.completion_refusal();
-    assert!(
-        refusal.contains("orbit task reconcile-review submit"),
-        "{refusal}"
+    assert_contains(
+        &delivery.completion_refusal(),
+        "orbit task reconcile-review submit",
+        "moved-head",
     );
 }
 
@@ -1918,16 +1998,7 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
 
     // A live claim fences the task, and its reason says how to recover it.
     let live = owner.desktop_task_snapshot(&task, &operator).unwrap();
-    assert!(
-        live.actions
-            .complete
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("recover the claim"),
-        "{:?}",
-        live.actions.complete
-    );
+    assert_completion_refusal(&live, "recover the claim", "same-run");
 
     let claim = owner.distributed_claim_console().unwrap()["claims"][0].clone();
     owner
@@ -1974,12 +2045,7 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
 
     back_to_review(owner, &task, Some("Recovered."));
     let snapshot = owner.desktop_task_snapshot(&task, &operator).unwrap();
-    assert!(!snapshot.actions.complete.enabled);
-    let reason = snapshot.actions.complete.reason.clone().unwrap_or_default();
-    assert!(
-        reason.contains("recovered before the run handed off"),
-        "{reason}"
-    );
+    assert_completion_refusal(&snapshot, "recovered before the run handed off", "same-run");
     let shown = pair.owner_task(&task);
     let mut no_pr = verdict(&shown, "", &leaf);
     no_pr.expected_head = None;
@@ -1995,13 +2061,12 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
             &operator,
         )
         .expect_err("the owner's same-named run is not the follower's");
-    assert!(
-        refused
-            .to_string()
-            .contains("recovered before the run handed off"),
-        "{refused}"
+    assert_contains(
+        &refused.to_string(),
+        "recovered before the run handed off",
+        "same-run",
     );
-    assert_eq!(pair.owner_status(&task), "review");
+    assert_eq!(pair.owner_status(&task), "review", "same-run");
 }
 
 /// A held leaf gives its claim back through the authenticated follower route.
@@ -2036,24 +2101,24 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
         .finalize_job_run(&leaf, JobRunState::Held, Utc::now(), None)
         .unwrap();
     let pass = pair.pass_over(&drain, json!({"window_expired": true}));
-    assert!(pass["error"].is_null(), "{pass:#}");
+    assert!(pass["error"].is_null(), "release: {pass:#}");
     let claim = pair.owner_claim(&claim_id);
-    assert_eq!(claim["claim"]["phase"], "revoked", "{claim:#}");
-    assert_eq!(claim["bound_run"]["machine_id"], FOLLOWER);
-    assert_eq!(claim["bound_run"]["run_id"], leaf);
+    assert_eq!(claim["claim"]["phase"], "revoked", "release: {claim:#}");
+    assert_eq!(claim["bound_run"]["machine_id"], FOLLOWER, "release");
+    assert_eq!(claim["bound_run"]["run_id"], leaf, "release");
     let settlements = owner.leaf_settlements(None, false).unwrap();
     let settlement = &settlements[0];
     assert_eq!(settlement.kind, Some(ClaimSettlementKind::Release));
-    assert_eq!(settlement.evidence, "baseline_red");
-    assert_eq!(settlement.last_event, "baseline_red_hold");
+    assert_eq!(settlement.evidence, "baseline_red", "release");
+    assert_eq!(settlement.last_event, "baseline_red_hold", "release");
     assert_eq!(settlement.leaf_run_id.as_deref(), Some(leaf.as_str()));
-    assert_eq!(settlement.machine_id, FOLLOWER);
-    assert_eq!(pair.run_state(&leaf), JobRunState::Held);
+    assert_eq!(settlement.machine_id, FOLLOWER, "release");
+    assert_eq!(pair.run_state(&leaf), JobRunState::Held, "release");
     let owner_jobs = orbit_store::compose::workspace_job_run_store(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );
-    assert!(owner_jobs.get_job_run(&leaf).unwrap().is_none());
+    assert!(owner_jobs.get_job_run(&leaf).unwrap().is_none(), "release");
 
     back_to_review(
         owner,
@@ -2116,25 +2181,14 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
     ] {
         bind(run, location);
         let refused = owner.desktop_task_snapshot(&task, &operator).unwrap();
-        assert!(!refused.actions.complete.enabled);
-        assert!(
-            refused
-                .actions
-                .complete
-                .reason
-                .as_deref()
-                .unwrap_or_default()
-                .contains(reason),
-            "{:?}",
-            refused.actions.complete
-        );
+        assert_completion_refusal(&refused, reason, "release");
     }
     bind(original.job_run_id, original.job_run_machine);
     let shown = pair.owner_task(&task);
     let snapshot = owner.desktop_task_snapshot(&task, &operator).unwrap();
     assert!(
         snapshot.actions.complete.enabled,
-        "{:?}",
+        "release: {:?}",
         snapshot.actions.complete
     );
     // Release evidence proves only stopped execution. It does not make a PR
@@ -2195,8 +2249,8 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
                 &operator,
             )
             .unwrap_err();
-        assert!(refused.to_string().contains(reason), "{refused}");
-        assert_eq!(pair.owner_status(&task), "review");
+        assert_contains(&refused.to_string(), reason, "release");
+        assert_eq!(pair.owner_status(&task), "review", "release");
     }
     assert!(
         owner
@@ -2206,7 +2260,8 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
                 None,
                 &session(McpCapability::Agent)
             )
-            .is_err()
+            .is_err(),
+        "release: an agent session cannot complete"
     );
     let done = owner
         .desktop_task_write(
@@ -2216,14 +2271,15 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
             &operator,
         )
         .expect("the exact terminal release permits evidence-bound completion");
-    assert_eq!(done.snapshot.task.status, TaskStatus::Done);
+    assert_eq!(done.snapshot.task.status, TaskStatus::Done, "release");
     let completed = pair.owner_task(&task);
-    assert_eq!(completed["job_run_id"], leaf);
+    assert_eq!(completed["job_run_id"], leaf, "release");
     assert_eq!(completed["job_run_machine"]["machine_id"], FOLLOWER);
-    assert!(owner_jobs.get_job_run(&leaf).unwrap().is_none());
+    assert!(owner_jobs.get_job_run(&leaf).unwrap().is_none(), "release");
     assert_eq!(
         owner.leaf_settlements(None, false).unwrap()[0].kind,
-        Some(ClaimSettlementKind::Release)
+        Some(ClaimSettlementKind::Release),
+        "release"
     );
 }
 

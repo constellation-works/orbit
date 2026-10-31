@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""Run the dashboard browser-fixture guard against small synthetic trees."""
+
+from pathlib import Path
+import self_test_hang
+import sys
+import tempfile
+import unittest
+
+SCRIPTS = Path(__file__).resolve().parent
+CHECKER = SCRIPTS / "check-dashboard-browser-fixtures.py"
+
+ASSETS = '<div id="keep-id" class="keep-class" data-keep="1"></div>\n'
+ROUTES = 'fn router() { let _ = app.route("/tasks/{id}", get(show)); }\n'
+PASSING_FIXTURE = """\
+import assert from 'node:assert/strict';
+const panel = page.locator('#keep-id .keep-class[data-keep="1"]');
+const task = document.getElementById('keep-id');
+const kept = task.dataset.keep;
+await fetch('/api/tasks/ABC-1');
+assert.ok(panel && kept);
+"""
+
+
+class DashboardBrowserFixtureTests(unittest.TestCase):
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="dashboard-browser-fixtures-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def run_checker(self, fixture, assets=ASSETS):
+        web = self.root / "crates/orbit-web"
+        fixture_path = web / "src/tests/sample_browser.mjs"
+        fixture_path.parent.mkdir(parents=True, exist_ok=True)
+        fixture_path.write_text(fixture)
+        assets_path = web / "assets/dashboard/index.html"
+        assets_path.parent.mkdir(parents=True, exist_ok=True)
+        assets_path.write_text(assets)
+        routes_path = web / "src/api/routes.rs"
+        routes_path.parent.mkdir(parents=True, exist_ok=True)
+        routes_path.write_text(ROUTES)
+        return self_test_hang.run(
+            [sys.executable, str(CHECKER), "--root", str(self.root)],
+            step="dashboard browser fixtures",
+            capture_output=True, text=True,
+        )
+
+    def test_passing_tree_exits_zero(self):
+        result = self.run_checker(PASSING_FIXTURE)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_removed_hooks_fail_naming_fixture_line_and_hook(self):
+        cases = [
+            ("id", "page.locator('#gone-id');\n", "gone-id"),
+            ("class", "page.locator('.gone-class');\n", "gone-class"),
+            ("data attribute", "page.locator('[data-gone=\"1\"]');\n", "data-gone"),
+            ("data attribute", "const gone = node.dataset.gone;\n", "data-gone"),
+            ("api path", "await fetch('/api/gone-route');\n", "/api/gone-route"),
+        ]
+        for kind, line, hook in cases:
+            with self.subTest(kind=kind, hook=hook):
+                # The queried hook sits on line 2 of the fixture.
+                result = self.run_checker(f"const keep = 1;\n{line}")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(
+                    f"crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                    f"missing {kind} hook '{hook}'",
+                    result.stderr)
+
+    def test_positive_id_probes_are_queries(self):
+        probes = [
+            "assert.ok(Boolean(document.getElementById('{id}')));",
+            "assert.ok(!!document.getElementById('{id}'));",
+            "assert.ok(!document.getElementById('{id}').disabled);",
+            "assert.ok(!!document.getElementById('{id}'), 'present');",
+        ]
+        for probe in probes:
+            with self.subTest(probe=probe, id="keep-id"):
+                result = self.run_checker(probe.format(id="keep-id") + "\n")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            with self.subTest(probe=probe, id="gone-id"):
+                result = self.run_checker("const keep = 1;\n" + probe.format(id="gone-id") + "\n")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(
+                    "crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                    "missing id hook 'gone-id'",
+                    result.stderr)
+
+    def test_asserted_absent_ids_are_not_queries(self):
+        absent = [
+            "assert.equal(document.getElementById('gone-id'), null);",
+            "assert.strictEqual(document.getElementById('gone-id'), undefined);",
+            "assert.ok(document.getElementById('gone-id') === null);",
+            "assert(document.getElementById('gone-id') == undefined);",
+            "assert.equal(document.getElementById('gone-id') === null, true);",
+            "assert.ok(!document.getElementById('gone-id'));",
+            "assert.equal(!!document.getElementById('gone-id'), false);",
+            "assert.equal(Boolean(document.getElementById('gone-id')), false);",
+        ]
+        for line in absent:
+            with self.subTest(line=line):
+                result = self.run_checker(line + "\n")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_null_comparisons_need_an_absence_assertion(self):
+        probes = [
+            "if (document.getElementById('{id}') === null) throw new Error('required widget missing');",
+            "if (document.getElementById('{id}') == undefined) throw new Error('required widget missing');",
+            "assert.ok(!(document.getElementById('{id}') === null));",
+            "assert.equal(document.getElementById('{id}') === null, false);",
+            "assert.strictEqual(document.getElementById('{id}') == undefined, false);",
+            "const absent = document.getElementById('{id}') === null;",
+        ]
+        for probe in probes:
+            for hook, expected in [("keep-id", 0), ("gone-id", 1)]:
+                with self.subTest(probe=probe, hook=hook):
+                    result = self.run_checker("const keep = 1;\n" + probe.format(id=hook) + "\n")
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                    if expected:
+                        self.assertIn(
+                            "crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                            "missing id hook 'gone-id'", result.stderr)
+
+    def test_dynamic_hooks_exempt_only_what_the_template_builds(self):
+        assets = (
+            "<script>\n"
+            "const id = `doctor-${check.name}`;\n"
+            "node.dataset.key = `doctor-${index}-${row.check}`;\n"
+            "node.id = `panel-${task.id}-crew`;\n"
+            "el('div', { class: `chip chip-${tone}` });\n"
+            "</script>\n")
+        controls = [
+            "page.locator('#panel-ABC-1-crew');\n",
+            "page.locator('.chip-warn');\n",
+        ]
+        for line in controls:
+            with self.subTest(control=line):
+                result = self.run_checker(line, assets=assets)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        cases = [
+            ("class", "page.locator('.doctor-command');\n", "doctor-command"),
+            ("id", "page.locator('#chip-warn');\n", "chip-warn"),
+            ("id", "page.locator('#panel-ABC-1');\n", "panel-ABC-1"),
+        ]
+        for kind, line, hook in cases:
+            with self.subTest(kind=kind, hook=hook):
+                result = self.run_checker(f"const keep = 1;\n{line}", assets=assets)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(
+                    f"crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                    f"missing {kind} hook '{hook}'",
+                    result.stderr)
+
+    def test_empty_interpolations_are_accepted(self):
+        assets = (
+            "<script>\n"
+            "node.id = `panel-${task.id}-crew`;\n"
+            "node.className = `chip-${tone}-badge`;\n"
+            "node.id = `run-${a}-${b}-done`;\n"
+            "</script>\n")
+        for line in [
+            "page.locator('#panel--crew');\n",
+            "page.locator('#panel-ABC-1-crew');\n",
+            "page.locator('.chip--badge');\n",
+            "page.locator('.chip-warn-badge');\n",
+            "page.locator('#run---done');\n",
+            "page.locator('#run-A-B-done');\n",
+        ]:
+            with self.subTest(control=line):
+                result = self.run_checker(line, assets=assets)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        cases = [
+            ("id", "page.locator('#panel-ABC-1');\n", "panel-ABC-1"),
+            ("id", "page.locator('#panel--operator');\n", "panel--operator"),
+            ("class", "page.locator('.chip--other');\n", "chip--other"),
+            ("class", "page.locator('.panel--crew');\n", "panel--crew"),
+        ]
+        for kind, line, hook in cases:
+            with self.subTest(kind=kind, hook=hook):
+                result = self.run_checker(f"const keep = 1;\n{line}", assets=assets)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(
+                    f"crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                    f"missing {kind} hook '{hook}'",
+                    result.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -36,6 +36,8 @@ class GuardrailTests(unittest.TestCase):
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
                         GUARD_TEST_CALLS=str(self.guard_calls))
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "NEXTEST_SHARDS", "NEXTEST_PARTITIONS"):
+            self.env.pop(key, None)
         # Pin the guard pool's width and ignore any host build-budget file.
         self.env.update(ORBIT_CARGO_JOBS="4", ORBIT_BUILD_BUDGET_DIR=str(self.root / "budget"))
         self.targets = self.root / "targets.json"
@@ -112,6 +114,8 @@ elif sys.argv[1] == "test" and "--message-format" in sys.argv:
                               "profile": {"test": True}, "executable": target["binary"],
                               "target": {"name": target["name"], "kind": [target["kind"]]}}))
 elif sys.argv[1] == "test":
+    if "--doc" in sys.argv:
+        raise SystemExit(int(os.environ.get("GUARD_TEST_DOC_EXIT", "0")))
     args = sys.argv[2:]
     split = args.index("--") if "--" in args else len(args)
     for line in fixture_libtest.cargo_listing(fixture_libtest.load_targets(), args[:split], args[split:]):
@@ -921,7 +925,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(foreground["nice"], os.getpriority(os.PRIO_PROCESS, 0))
         background = [row for row in observed
                       if row["argv"][0] in ("check", "test", "doc")]
-        self.assertEqual(len(background), 3, observed)
+        self.assertEqual(len(background), 2, observed)
         for row in background:
             self.assertGreater(row["nice"], foreground["nice"], (row, foreground))
 
@@ -965,6 +969,15 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
                          ["--shards", "3", "--", "cargo", "nextest", "list", "--archive-file", archive,
                           "--workspace-remap", str(self.root)])
+        # Hosted CI has three shard jobs but four partitions: the build job
+        # runs one. An explicit partition count takes precedence over the
+        # legacy shard-count fallback exercised above.
+        result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
+                                env_overrides={"NEXTEST_SHARDS": "3", "NEXTEST_PARTITIONS": "4"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
+                         ["--shards", "4", "--", "cargo", "nextest", "list", "--archive-file", archive,
+                          "--workspace-remap", str(self.root)])
         self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
                          {"check-nextest-partitions.py"}, "no repository guard or self-test runs")
         phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
@@ -976,7 +989,26 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("ci-guardrails-phase: workspace-test-partitions wall_seconds=", result.stderr)
 
-        # --checks: everything else, with no test build and no nextest.
+        # Hosted doctests reuse the archive build's libraries on that runner,
+        # after upload, rather than compiling them again in the Check job.
+        self.log.write_text("")
+        env_log.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--test-doctests")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        doctest_call = ["test", "--no-fail-fast", "--workspace", "--doc"]
+        self.assertEqual([json.loads(line) for line in self.log.read_text().splitlines()],
+                         [doctest_call], "doctests must not trigger a separate production check or test build")
+        [doctests] = [json.loads(line) for line in env_log.read_text().splitlines()]
+        for key in ("RUSTC_WORKSPACE_WRAPPER", "CLIPPY_ARGS"):
+            self.assertEqual(doctests[key], archived[0][key],
+                             "doctests must reuse the folded build's Cargo fingerprint")
+        self.assertIn("ci-guardrails-phase: doctests wall_seconds=", result.stderr)
+        result = self.run_guard("ci-guardrails.sh", "--test-doctests",
+                                env_overrides={"GUARD_TEST_DOC_EXIT": "9"})
+        self.assertEqual(result.returncode, 9, result.stderr)
+        self.assertRegex(result.stderr, r"ci-guardrails-phase: doctests wall_seconds=\d+ exit=9")
+
+        # --checks: everything else, with no doctests, test build or nextest.
         for call in self.guard_calls.iterdir():
             call.unlink()
         self.log.write_text("")
@@ -989,10 +1021,11 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertNotIn(folded, calls)
         self.assertFalse(any(call[:1] == ["nextest"] for call in calls), calls)
         for expected in (["fmt", "--all", "--", "--check"], ["check", "--workspace", "--lib", "--bins"],
-                         ["test", "--no-fail-fast", "--workspace", "--doc"], ["doc", "--no-deps", "--workspace"]):
+                         ["doc", "--no-deps", "--workspace"]):
             self.assertIn(expected, calls)
+        self.assertFalse(any("--doc" in call for call in calls), calls)
         phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
-        for phase in ("fmt", "clippy-production", "doctests", "documentation", "repository-guards"):
+        for phase in ("fmt", "clippy-production", "documentation", "repository-guards"):
             self.assertEqual(phases.get(phase), "0", result.stderr)
         # The check chain shares the host with the exclusive suites, so it runs
         # lowered like the build it replaces there.
@@ -1284,9 +1317,9 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                 ["test", "-p", "orbit-exec", "--test", "sandbox_profile_goldens"],
                 ["test", "-p", "orbit-core", "--test", "sandbox_profile_goldens"],
                 ["test", "-p", "orbit-store", "--lib",
-                 "driver::sqlite::migration::tests::ledger::store_schema_prefix_goldens",
+                 "driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens",
                  "--", "--exact",
-                 "driver::sqlite::migration::tests::ledger::task_registry_schema_prefix_goldens"],
+                 "driver::sqlite::migration::tests::ledger::registry::task_registry_schema_prefix_goldens"],
             ],
         )
 
@@ -1323,6 +1356,103 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("check-goldens.sh", "--fast")
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
+
+    def use_real_ripgrep(self):
+        real_rg = shutil.which("rg")
+        self.assertIsNotNone(real_rg, "ripgrep not installed")
+        self.write_executable(self.bin / "rg", f'#!/bin/sh\nexec {shlex.quote(real_rg)} "$@"\n')
+
+    def redaction_fixture_targets(self):
+        # The targets block holds a parenthesised comment, so collect the
+        # array line by line up to its closing `)` rather than splitting on
+        # the first parenthesis.
+        text = (SCRIPTS / "check-artifact-redaction-guardrail.sh").read_text()
+        lines = text.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.strip() == "targets=(")
+        end = next(i for i in range(start, len(lines)) if lines[i].strip() == ")")
+        return re.findall(r'"([^"]+)"', "\n".join(lines[start + 1:end]))
+
+    def write_clean_redaction_tree(self, targets, skip=()):
+        for target in targets:
+            if target in skip:
+                continue
+            path = self.root / target
+            if target.endswith(".rs"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("// clean fixture\n")
+            else:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "clean.rs").write_text("// clean fixture\n")
+
+    def test_artifact_redaction_guard_fails_closed(self):
+        """A missing scan target must fail even when a violation is present."""
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep not installed")
+        self.use_real_ripgrep()
+        targets = self.redaction_fixture_targets()
+        self.assertGreaterEqual(len(targets), 2, "guard lists scan targets")
+        missing = targets[1]
+        present = next(t for t in targets if t != missing and t.endswith(".rs"))
+        self.write_clean_redaction_tree(targets, skip=(missing,))
+        (self.root / present).write_text("fn redact_local() {}\n")
+        result = self.run_guard("check-artifact-redaction-guardrail.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(missing, result.stderr)
+        # With every target present the violation still fails the guard.
+        missing_path = self.root / missing
+        missing_path.parent.mkdir(parents=True, exist_ok=True)
+        missing_path.write_text("// clean fixture\n")
+        result = self.run_guard("check-artifact-redaction-guardrail.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("redact", result.stdout + result.stderr)
+        # A clean tree with all targets present passes.
+        (self.root / present).write_text("// clean fixture\n")
+        result = self.run_guard("check-artifact-redaction-guardrail.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_artifact_redaction_guidance_names_existing_module(self):
+        """A rejected local helper must be pointed at a redaction module that exists."""
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep not installed")
+        self.use_real_ripgrep()
+        targets = self.redaction_fixture_targets()
+        self.write_clean_redaction_tree(targets)
+        present = next(t for t in targets if t.endswith(".rs"))
+        (self.root / present).write_text("fn redact_local() {}\n")
+        result = self.run_guard("check-artifact-redaction-guardrail.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        namespaces = re.findall(r"orbit_common::[\w:]+", result.stderr)
+        self.assertTrue(namespaces, f"guidance names no orbit_common namespace:\n{result.stderr}")
+        crate_src = SCRIPTS.parent / "crates/orbit-common/src"
+        for namespace in namespaces:
+            module = crate_src.joinpath(*namespace.removeprefix("orbit_common::").split("::"))
+            resolves = module.with_name(module.name + ".rs").is_file() or (module / "mod.rs").is_file()
+            self.assertTrue(resolves, f"guidance names a module that does not exist: {namespace}")
+
+    def write_clean_terminal_tree(self):
+        cli_src = self.root / "crates/orbit-cli/src"
+        (cli_src / "output/tests").mkdir(parents=True, exist_ok=True)
+        (cli_src / "output/sink.rs").write_text("pub fn sink() {}\n")
+        (cli_src / "output/tests/sink.rs").write_text("// clean fixture\n")
+        (cli_src / "lib.rs").write_text("// clean fixture\n")
+        return cli_src
+
+    def test_terminal_state_guard_fails_closed(self):
+        """A missing search root must fail instead of passing silently."""
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep not installed")
+        self.use_real_ripgrep()
+        result = self.run_guard("check-terminal-state-guard.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("missing search root", result.stderr)
+        cli_src = self.write_clean_terminal_tree()
+        result = self.run_guard("check-terminal-state-guard.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (cli_src / "bad.rs").write_text("fn f() { let _ = IsTerminal; }\n")
+        result = self.run_guard("check-terminal-state-guard.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("terminal state queried outside the output sink",
+                      result.stdout + result.stderr)
 
 
 class DocLinkGuardrailTests(unittest.TestCase):
@@ -1426,7 +1556,7 @@ class DocLinkGuardrailTests(unittest.TestCase):
 
     def test_excluded_documents_are_ignored_when_tracked_or_untracked(self):
         excluded = ("docs/design/demo/4_decisions.md", "docs/design/_templates/example.md",
-                    "docs/design/CONVENTIONS.md", "docs/rca/record.md", "CHANGELOG.md",
+                    "docs/design/CONVENTIONS.md", "docs/dev/rca/record.md", "CHANGELOG.md",
                     "crates/demo/tests/fixtures/example.md")
         for name in excluded:
             self.write(name, "[historical](missing.md)\n`crates/missing.rs`\n")

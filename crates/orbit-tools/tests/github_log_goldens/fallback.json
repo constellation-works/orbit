@@ -1670,5 +1670,3040 @@
     "registered": true,
     "tool": "github.run.list",
     "job_logs": {}
+  },
+  {
+    "name": "scoped_step_read_returns_a_middle_step_crowded_out_by_head_and_tail",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "scope": "all",
+      "step": "Download nextest archive"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 1024,
+    "registered": true,
+    "run_log": [
+      {
+        "text": "test\tSet up job\t2026-09-06T21:15:00.0000000Z setting up the runner\n",
+        "repeat": 100
+      },
+      "test\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z Downloading nextest archive\ntest\tDownload nextest archive\t2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER archive downloaded in 42s\ntest\tDownload nextest archive\t2026-09-06T21:16:02.0000000Z extracted archive\n",
+      {
+        "text": "test\tRun tests\t2026-09-06T21:20:00.0000000Z running the test suite\n",
+        "repeat": 100
+      }
+    ]
+  },
+  {
+    "name": "scoped_step_larger_than_the_cap_keeps_omission_markers",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "scope": "all",
+      "step": "Download nextest archive"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 256,
+    "registered": true,
+    "run_log": [
+      "test\tSet up job\t2026-09-06T21:15:00.0000000Z setup\n",
+      {
+        "text": "test\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z downloading archive chunk\n",
+        "repeat": 100
+      },
+      "test\tRun tests\t2026-09-06T21:20:00.0000000Z tests\n"
+    ]
+  },
+  {
+    "name": "scoped_step_absent_from_the_log_fails_without_log_bytes",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "scope": "all",
+      "step": "No such step"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "test\tDownload nextest archive\t2026-09-06T21:16:00.0000000Z Downloading nextest archive\ntest\tDownload nextest archive\t2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER archive downloaded in 42s\ntest\tDownload nextest archive\t2026-09-06T21:16:02.0000000Z extracted archive\n"
+    ]
+  },
+  {
+    "name": "scoped_read_for_an_absent_job_fails_without_log_bytes",
+    "input": {
+      "run": "34060485218",
+      "job": "424242",
+      "scope": "all",
+      "step": "Download nextest archive"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true
+  },
+  {
+    "name": "byte_window_returns_exactly_the_requested_bytes",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 10,
+      "byte_end": 20
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"
+    ]
+  },
+  {
+    "name": "line_window_returns_exactly_the_requested_lines",
+    "input": {
+      "run": "34060485218",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "line-one\nline-two\nline-three\nline-four\n"
+    ]
+  },
+  {
+    "name": "byte_window_keeps_failure_regions_from_the_full_log",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 0,
+      "byte_end": 5
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "HEAD\n2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:00.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z FAIL [ 0.123s] (1/10) suite failing_test\n2026-09-06T21:16:01.0000000Z ──────── STDOUT ────────\n2026-09-06T21:16:01.0000000Z captured output\n2026-09-06T21:16:01.0000000Z ──────── STDERR ────────\n2026-09-06T21:16:01.0000000Z thread 'failing_test' panicked at tests/sample.rs:12:3:\n2026-09-06T21:16:01.0000000Z expected a completed operation\n2026-09-06T21:16:02.0000000Z Summary [ 1.0s] 10 tests run: 1 failed\n2026-09-06T21:16:02.0000000Z ##[error]Process completed with exit code 100.\n"
+    ]
+  },
+  {
+    "name": "scoped_step_read_recovers_the_step_from_a_job_log_when_the_run_read_is_empty",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "step": "cargo nextest run"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:00.0000000Z ##[group]Run actions/checkout@v4\n2026-09-06T21:15:01.0000000Z ##[endgroup]\n2026-09-06T21:15:01.0000000Z checked out\n2026-09-06T21:16:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:16:00.0000000Z cargo nextest run\n2026-09-06T21:16:01.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z MIDDLE-STEP-MARKER nextest archive ready\n2026-09-06T21:16:02.0000000Z ##[group]Archive details\n2026-09-06T21:16:02.0000000Z nested archive output\n2026-09-06T21:16:03.0000000Z ##[endgroup]\n2026-09-06T21:16:03.0000000Z RUNTIME-OUTPUT: archive downloaded in 42s\n2026-09-06T21:16:04.0000000Z ##[error]Process completed with exit code 100.\n2026-09-06T21:20:00.0000000Z ##[group]Run cargo doc\n2026-09-06T21:20:00.0000000Z OTHER-STEP-MARKER trailing output\n2026-09-06T21:20:01.0000000Z ##[endgroup]\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true
+  },
+  {
+    "name": "scoped_step_by_workflow_name_in_a_raw_job_log_returns_an_unsupported_mapping_error",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "step": "Download nextest archive"
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:00.0000000Z ##[group]Run actions/checkout@v4\n2026-09-06T21:15:01.0000000Z ##[endgroup]\n2026-09-06T21:15:01.0000000Z checked out\n2026-09-06T21:16:00.0000000Z ##[group]Run curl -fsSL https://example.invalid/nextest.tar.gz -o nextest.tar.gz\n2026-09-06T21:16:00.0000000Z curl -fsSL https://example.invalid/nextest.tar.gz -o nextest.tar.gz\n2026-09-06T21:16:01.0000000Z ##[endgroup]\n2026-09-06T21:16:01.0000000Z RUNTIME-OUTPUT: archive downloaded in 42s\n2026-09-06T21:16:02.0000000Z ##[error]Process completed with exit code 100.\n2026-09-06T21:20:00.0000000Z ##[group]Run cargo nextest run\n2026-09-06T21:20:00.0000000Z OTHER-STEP-MARKER tests running\n2026-09-06T21:20:01.0000000Z ##[endgroup]\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true
+  },
+  {
+    "name": "byte_window_with_end_not_after_start_is_rejected",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 20,
+      "byte_end": 10
+    },
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "completed",
+      "conclusion": "failure",
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "test",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 2,
+              "name": "Download nextest archive",
+              "status": "completed",
+              "conclusion": "success"
+            },
+            {
+              "number": 3,
+              "name": "Run tests",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n"
+    ]
+  },
+  {
+    "name": "byte_window_hides_a_credential_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 7,
+      "byte_end": 27
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_a_credential_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 27,
+      "byte_end": 47
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_both_credential_edges",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 10,
+      "byte_end": 40
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_preserves_complete_credential_redaction",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 7,
+      "byte_end": 47
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": "[REDACTED_SECRET]"
+  },
+  {
+    "name": "step_byte_window_hides_a_credential_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 26,
+      "byte_end": 46,
+      "step": "Run tests",
+      "job": 101560010340
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "test\tRun tests\tbefore ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "step_byte_window_hides_a_credential_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 46,
+      "byte_end": 61,
+      "step": "Run tests",
+      "job": 101560010340
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "test\tRun tests\tbefore ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_a_prefix_at_a_stream_batch_boundary",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 4076,
+      "byte_end": 4096
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      {
+        "text": " ",
+        "repeat": 4076
+      },
+      "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_a_suffix_at_a_stream_batch_boundary",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 4096,
+      "byte_end": 4116
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      {
+        "text": " ",
+        "repeat": 4076
+      },
+      "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "capped_byte_window_hides_outer_credential_fragments",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 27,
+      "byte_end": 79
+    },
+    "job_logs": {},
+    "max_bytes": 16,
+    "registered": true,
+    "run_log": [
+      "before ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa safe middle ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": "\n[... 36 bytes omitted; raise the byte budget for more ...]\n"
+  },
+  {
+    "name": "byte_window_keeps_safe_text_before_a_cut_credential",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 0,
+      "byte_end": 27
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": "before "
+  },
+  {
+    "name": "byte_window_keeps_safe_text_after_a_cut_credential",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 27,
+      "byte_end": 54
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_a_credential_suffix_at_eof",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 27,
+      "byte_end": 47
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_drops_a_cut_token_exceeding_its_context_bound",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 17000,
+      "byte_end": 17020
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "ghp_",
+      {
+        "text": "a",
+        "repeat": 20000
+      },
+      " after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_bearer_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 14,
+      "byte_end": 30
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_bearer_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 30,
+      "byte_end": 47
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_bearer_value_both_edges",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 19,
+      "byte_end": 42
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_authorization_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 15,
+      "byte_end": 31
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Authorization: OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_authorization_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 31,
+      "byte_end": 48
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Authorization: OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_authorization_value_both_edges",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 20,
+      "byte_end": 43
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Authorization: OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_spaced_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 10,
+      "byte_end": 26
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_spaced_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 26,
+      "byte_end": 43
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_spaced_api_key_value_both_edges",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 15,
+      "byte_end": 38
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_value_after_cut_bearer_word",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 3,
+      "byte_end": 40
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_keeps_safe_text_after_contextual_credential",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 10,
+      "byte_end": 47
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_keeps_innocuous_cut_words",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 2,
+      "byte_end": 21
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "hello world ordinary text\n"
+    ],
+    "expected_log": "llo world ordinary "
+  },
+  {
+    "name": "byte_window_hides_value_after_cut_authorization_word",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 3,
+      "byte_end": 48
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Authorization: OPAQUESECRETVALUE1234567890abcdef\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_value_after_cut_api_key_word",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 3,
+      "byte_end": 43
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key = OPAQUESECRETVALUE1234567890abcdef\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_preserves_complete_bearer_context",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 7,
+      "byte_end": 47
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "before Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": "Bearer [REDACTED_AUTH]"
+  },
+  {
+    "name": "byte_window_hides_contextual_credential_suffix_at_eof",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 12,
+      "byte_end": 40
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Bearer OPAQUESECRETVALUE1234567890abcdef"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_a_value_after_newline_bearer",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 3,
+      "byte_end": 40
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Bearer\nOPAQUESECRETVALUE1234567890abcdef\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_a_value_after_newline_authorization",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 17,
+      "byte_end": 48
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Authorization:\nOPAQUESECRETVALUE1234567890abcdef\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_contextual_value_across_stream_batch_boundary",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 4096,
+      "byte_end": 4112
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      {
+        "text": " ",
+        "repeat": 4082
+      },
+      "Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "capped_byte_window_hides_value_after_cut_bearer_word",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 3,
+      "byte_end": 47
+    },
+    "job_logs": {},
+    "max_bytes": 16,
+    "registered": true,
+    "run_log": [
+      "Bearer OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": "\n[... 28 bytes omitted; raise the byte budget for more ...]\n after\n"
+  },
+  {
+    "name": "byte_window_hides_compact_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 8,
+      "byte_end": 23
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_compact_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 25,
+      "byte_end": 48
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_quoted_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 9,
+      "byte_end": 24
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key=\"OPAQUESECRETVALUE1234567890abcdef\" after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_quoted_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 26,
+      "byte_end": 50
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key=\"OPAQUESECRETVALUE1234567890abcdef\" after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_spaced_x_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 12,
+      "byte_end": 27
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "x-api-key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_spaced_x_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 29,
+      "byte_end": 52
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "x-api-key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_mixed_case_x_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 12,
+      "byte_end": 27
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "X-aPi-KeY = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_mixed_case_x_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 29,
+      "byte_end": 52
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "X-aPi-KeY = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_prefixed_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 13,
+      "byte_end": 28
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "my_api_key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_prefixed_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 30,
+      "byte_end": 53
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "my_api_key = OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_prefixed_apikey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 15,
+      "byte_end": 30
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "service-APIKEY=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_prefixed_apikey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 32,
+      "byte_end": 55
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "service-APIKEY=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_bracketed_quoted_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 17,
+      "byte_end": 32
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "[\"x-api-key\"] = \"OPAQUESECRETVALUE1234567890abcdef\" after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_bracketed_quoted_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 34,
+      "byte_end": 58
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "[\"x-api-key\"] = \"OPAQUESECRETVALUE1234567890abcdef\" after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_compact_api_dash_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 8,
+      "byte_end": 23
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api-key=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_compact_api_dash_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 25,
+      "byte_end": 48
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api-key=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_space_before_equals_api_key_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 9,
+      "byte_end": 24
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key =OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_space_before_equals_api_key_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 26,
+      "byte_end": 49
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key =OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_preserves_ordinary_assignment_fragment",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 11,
+      "byte_end": 21
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "build_id=ordinarybuildvalue after\n"
+    ],
+    "expected_log": "dinarybuil"
+  },
+  {
+    "name": "byte_window_preserves_similar_key_assignment_fragment",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 17,
+      "byte_end": 27
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_keyboard = ordinarybuildvalue after\n"
+    ],
+    "expected_log": "dinarybuil"
+  },
+  {
+    "name": "byte_window_hides_serviceApiKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 16,
+      "byte_end": 31
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "serviceApiKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_serviceApiKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 33,
+      "byte_end": 54
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "serviceApiKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_myApiKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 11,
+      "byte_end": 26
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "myApiKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_myApiKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 28,
+      "byte_end": 49
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "myApiKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_xApiKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 10,
+      "byte_end": 25
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "xApiKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_xApiKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 27,
+      "byte_end": 48
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "xApiKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_serviceAPIKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 16,
+      "byte_end": 31
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "serviceAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_serviceAPIKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 33,
+      "byte_end": 54
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "serviceAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_HTTPApiKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 13,
+      "byte_end": 28
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "HTTPApiKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_HTTPApiKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 30,
+      "byte_end": 51
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "HTTPApiKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_preserves_serviceApiKeyboard_assignment_fragment",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 21,
+      "byte_end": 31
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "serviceApiKeyboard=ordinarybuildvalue after\n"
+    ],
+    "expected_log": "dinarybuil"
+  },
+  {
+    "name": "byte_window_preserves_capiKey_assignment_fragment",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 10,
+      "byte_end": 20
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "capiKey=ordinarybuildvalue after\n"
+    ],
+    "expected_log": "dinarybuil"
+  },
+  {
+    "name": "byte_window_hides_HTTPAPIKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 13,
+      "byte_end": 28
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "HTTPAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_HTTPAPIKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 28,
+      "byte_end": 51
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "HTTPAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_SERVICEAPIKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 16,
+      "byte_end": 31
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "SERVICEAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_SERVICEAPIKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 31,
+      "byte_end": 54
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "SERVICEAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_databaseAPIKey_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 17,
+      "byte_end": 32
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "databaseAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_databaseAPIKey_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 32,
+      "byte_end": 55
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "databaseAPIKey=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "byte_window_hides_CLOUDAPIKEY_value_prefix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 14,
+      "byte_end": 29
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "CLOUDAPIKEY=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": ""
+  },
+  {
+    "name": "byte_window_hides_CLOUDAPIKEY_value_suffix",
+    "input": {
+      "run": "34060485218",
+      "byte_start": 29,
+      "byte_end": 52
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "CLOUDAPIKEY=OPAQUESECRETVALUE1234567890abcdef after\n"
+    ],
+    "expected_log": " after\n"
+  },
+  {
+    "name": "line_context_primary_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_bearer_full_control",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all"
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_bearer_step",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "step": "cargo test",
+      "line_start": 4,
+      "line_end": 6
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "##[group]Run cargo test\n##[endgroup]\n",
+      "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_authorization",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Authorization:\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_authorization_full_control",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all"
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Authorization:\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_authorization_step",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "step": "cargo test",
+      "line_start": 4,
+      "line_end": 6
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "##[group]Run cargo test\n##[endgroup]\n",
+      "Authorization:\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_api_key",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key:\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_api_key_full_control",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all"
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "api_key:\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_api_key_step",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "step": "cargo test",
+      "line_start": 4,
+      "line_end": 6
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "##[group]Run cargo test\n##[endgroup]\n",
+      "api_key:\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_eof",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Bearer\nSYNTHETICVALUE1234567890"
+    ]
+  },
+  {
+    "name": "line_context_primary_ordinary",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "ordinary\nline-two\nline-three\nline-four\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_capped",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16,
+    "registered": true,
+    "run_log": [
+      "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_batch",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      {
+        "text": " ",
+        "repeat": 4090
+      },
+      "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_overlong",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "Bearer",
+      {
+        "text": " ",
+        "repeat": 16384
+      },
+      "\nSYNTHETICVALUE1234567890\nsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_fallback_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_bearer_full_control",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all"
+    },
+    "job_logs": {
+      "101560010340": [
+        "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_bearer_step",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "step": "cargo test",
+      "line_start": 4,
+      "line_end": 6
+    },
+    "job_logs": {
+      "101560010340": [
+        "##[group]Run cargo test\n##[endgroup]\n",
+        "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_authorization",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "Authorization:\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_authorization_full_control",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all"
+    },
+    "job_logs": {
+      "101560010340": [
+        "Authorization:\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_authorization_step",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "step": "cargo test",
+      "line_start": 4,
+      "line_end": 6
+    },
+    "job_logs": {
+      "101560010340": [
+        "##[group]Run cargo test\n##[endgroup]\n",
+        "Authorization:\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_api_key",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "api_key:\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_api_key_full_control",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all"
+    },
+    "job_logs": {
+      "101560010340": [
+        "api_key:\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_api_key_step",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "step": "cargo test",
+      "line_start": 4,
+      "line_end": 6
+    },
+    "job_logs": {
+      "101560010340": [
+        "##[group]Run cargo test\n##[endgroup]\n",
+        "api_key:\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_eof",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2
+    },
+    "job_logs": {
+      "101560010340": [
+        "Bearer\nSYNTHETICVALUE1234567890"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_ordinary",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "ordinary\nline-two\nline-three\nline-four\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_capped",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_batch",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        {
+          "text": " ",
+          "repeat": 4090
+        },
+        "Bearer\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_overlong",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "Bearer",
+        {
+          "text": " ",
+          "repeat": 16384
+        },
+        "\nSYNTHETICVALUE1234567890\nsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_primary_step_gap",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "step": "cargo test",
+      "line_start": 1,
+      "line_end": 3
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "test\tcargo test\tsafe output\ntest\tother\tordinary\ntest\tcargo test\tstill safe\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_timestamp_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "2026-09-06T21:15:07.1234567Z Bearer\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_columns_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "job\tcargo test\tBearer\njob\tcargo test\tSYNTHETICVALUE1234567890\njob\tcargo test\tsafe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_columns_timestamp_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4,
+      "step": "cargo test"
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "job\tcargo test\t2026-09-06T21:15:07.1234567Z Bearer\njob\tcargo test\t2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\njob\tcargo test\t2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_timestamp_authorization",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "2026-09-06T21:15:07.1234567Z Authorization:\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_timestamp_api_key",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "2026-09-06T21:15:07.1234567Z api_key:\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_primary_timestamp_ordinary",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {},
+    "max_bytes": 16384,
+    "registered": true,
+    "run_log": [
+      "2026-09-06T21:15:07.1234567Z ordinary output\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+    ]
+  },
+  {
+    "name": "line_context_fallback_timestamp_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:07.1234567Z Bearer\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_columns_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "job\tcargo test\tBearer\njob\tcargo test\tSYNTHETICVALUE1234567890\njob\tcargo test\tsafe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_columns_timestamp_bearer",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4,
+      "step": "cargo test"
+    },
+    "job_logs": {
+      "101560010340": [
+        "job\tcargo test\t2026-09-06T21:15:07.1234567Z Bearer\njob\tcargo test\t2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\njob\tcargo test\t2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_timestamp_authorization",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:07.1234567Z Authorization:\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_timestamp_api_key",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:07.1234567Z api_key:\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_fallback_timestamp_ordinary",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 2,
+      "line_end": 4
+    },
+    "job_logs": {
+      "101560010340": [
+        "2026-09-06T21:15:07.1234567Z ordinary output\n2026-09-06T21:15:07.1234567Z SYNTHETICVALUE1234567890\n2026-09-06T21:15:07.1234567Z safe output\n"
+      ]
+    },
+    "max_bytes": 16384,
+    "registered": true,
+    "view": {
+      "databaseId": 34060485218,
+      "number": 12,
+      "workflowName": "CI",
+      "displayTitle": "CI on agent-main",
+      "status": "in_progress",
+      "conclusion": null,
+      "event": "push",
+      "headBranch": "agent-main",
+      "headSha": "1111111111111111111111111111111111111111",
+      "createdAt": "2026-09-06T21:15:00Z",
+      "url": "https://github.com/acme/orbit/actions/runs/34060485218",
+      "jobs": [
+        {
+          "databaseId": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "steps": [
+            {
+              "number": 1,
+              "name": "cargo test",
+              "status": "completed",
+              "conclusion": "failure"
+            }
+          ]
+        }
+      ]
+    },
+    "run_error": "run 34060485218 is still in progress; logs will be available when it is complete"
+  },
+  {
+    "name": "line_context_primary_capped_in_selection_bearer_cut",
+    "input": {
+      "run": "34060485218",
+      "job": "101560010340",
+      "repo": "acme/orbit",
+      "scope": "all",
+      "line_start": 1,
+      "line_end": 10
+    },
+    "job_logs": {},
+    "max_bytes": 86,
+    "registered": true,
+    "run_log": [
+      "filler0 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller1 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller2 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller3 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nfiller5 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nBearer\nSYNTHETICVALUE1234567890\ntailend1234567890\n"
+    ]
   }
 ]

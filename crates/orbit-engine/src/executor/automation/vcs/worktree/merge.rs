@@ -49,19 +49,16 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
     let base_sync_mode = base_sync_mode_from_input(input)?;
     let base_checkout = checkout_holding_branch(&repo_root, &base)?.unwrap_or(repo_root.clone());
     ensure_base_checkout_ready(&base_checkout, None)?;
-    merge_with_rebase_retry(
-        &|before, after| {
-            host.record_direct_landing_intent(
-                &orbit_types::workflow::automation::DirectLandingRequest {
-                    run_id: run_id.into(),
-                    branch: base.clone(),
-                    before_commit: before,
-                    after_commit: after,
-                    task_ids: vec![],
-                    handoff_id: None,
-                },
-            )
-        },
+    let request = |before, after| orbit_types::workflow::automation::DirectLandingRequest {
+        run_id: run_id.into(),
+        branch: base.clone(),
+        before_commit: before,
+        after_commit: after,
+        task_ids: vec![],
+        handoff_id: None,
+    };
+    let landed = merge_with_rebase_retry(
+        &|before, after| host.record_direct_landing_intent(&request(before, after)),
         &repo_root,
         &base_checkout,
         &workspace_path,
@@ -69,6 +66,13 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
         &workspace_branch,
         base_sync_mode,
     )?;
+    // The branch has moved: the landing is a fact now, so a failure to
+    // record its diff stats is logged and never fails the merge.
+    if let Some((before, after)) = landed
+        && let Err(error) = host.record_direct_landing(&request(before, after))
+    {
+        tracing::warn!(%error, run_id, "recording the local landing's diff stats failed");
+    }
 
     Ok(json!({
         "base": base,
@@ -106,7 +110,7 @@ fn merge_with_rebase_retry(
     base: &str,
     workspace_branch: &str,
     base_sync_mode: BaseSyncMode,
-) -> Result<(), OrbitError> {
+) -> Result<Option<(String, String)>, OrbitError> {
     for attempt in 0..=MAX_REBASE_RETRY_ATTEMPTS {
         let start_point = resolve_worktree_start_point(repo_root, base, base_sync_mode)?;
         if base_checkout == repo_root {
@@ -138,7 +142,9 @@ fn merge_with_rebase_retry(
         // recording: operator files can appear while the candidate is built.
         ensure_base_checkout_ready(base_checkout, Some(workspace_branch))?;
         if git_command_success(base_checkout, &["merge", "--ff-only", workspace_branch])? {
-            return Ok(());
+            // The commits the base moved over, when it moved.
+            let (before, after) = (before.trim(), after.trim());
+            return Ok((before != after).then(|| (before.to_string(), after.to_string())));
         }
         if attempt == MAX_REBASE_RETRY_ATTEMPTS {
             return Err(OrbitError::Execution(format!(
@@ -194,7 +200,7 @@ fn merge_with_rebase_retry(
         ensure_clean_checkout(workspace_path, "shared batch worktree")?;
     }
 
-    Ok(())
+    Ok(None)
 }
 
 /// Locate the linked worktree that already has `base` checked out. Git refuses

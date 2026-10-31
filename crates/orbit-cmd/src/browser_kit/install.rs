@@ -13,7 +13,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
 use orbit_core::bootstrap::browser_kit::{
     BROWSERS_PATH_ENV, KitInspection, KitLayout, MANAGED_ENV_SCRIPT_HEADER, MODULE_ENV,
-    PLAYWRIGHT_VERSION,
+    PIXEL_HELPER_PACKAGE, PIXEL_HELPER_VERSION, PLAYWRIGHT_VERSION,
 };
 use serde::Serialize;
 
@@ -102,6 +102,31 @@ pub fn install(
             steps.push(match installed {
                 Some(old) => format!("moved playwright {old} to the pinned {PLAYWRIGHT_VERSION}"),
                 None => format!("installed playwright {PLAYWRIGHT_VERSION}"),
+            });
+        }
+    }
+
+    // The visual capture driver's pixel-compare helper, pinned beside
+    // Playwright so every host compares pixels with the same code.
+    match before.pixel_helper_version.as_deref() {
+        Some(PIXEL_HELPER_VERSION) => steps.push(format!(
+            "kept {PIXEL_HELPER_PACKAGE} {PIXEL_HELPER_VERSION}"
+        )),
+        installed_helper => {
+            progress(&format!(
+                "Installing {PIXEL_HELPER_PACKAGE}@{PIXEL_HELPER_VERSION}"
+            ));
+            let mut command = Command::new(&npm);
+            command
+                .args(["install", "--no-fund", "--no-audit", "--save-exact"])
+                .arg(format!("{PIXEL_HELPER_PACKAGE}@{PIXEL_HELPER_VERSION}"))
+                .current_dir(layout.npm_project());
+            run_streaming(&mut command, "npm install pngjs")?;
+            steps.push(match installed_helper {
+                Some(old) => format!(
+                    "moved {PIXEL_HELPER_PACKAGE} {old} to the pinned {PIXEL_HELPER_VERSION}"
+                ),
+                None => format!("installed {PIXEL_HELPER_PACKAGE} {PIXEL_HELPER_VERSION}"),
             });
         }
     }

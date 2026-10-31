@@ -30,7 +30,7 @@ pub use crate::builtin::github::dependabot_alerts::{
 pub use crate::builtin::github::landing::commit_pull_requests as commit_pull_requests_request;
 pub use crate::builtin::github::logs::{
     LogReadBounds, LogScope, MAX_EVIDENCE_LINES, RunLogRead, RunLogRequests, SOURCE_JOB_API_LOG,
-    SOURCE_RUN_LOG, read_run_log, read_run_log_guarded,
+    SOURCE_RUN_LOG, log_selection_from_input, read_run_log, read_run_log_guarded,
 };
 pub use crate::builtin::github::pr_list::{
     build_closed_head_list_request as closed_pr_head_request,
@@ -54,6 +54,7 @@ pub use crate::builtin::github::run::view::{
 };
 pub use crate::builtin::github::task_prs::{
     authenticated_login as authenticated_login_request,
+    bound_branch_pull_request as bound_branch_pull_request_request,
     close_pull_request as close_pull_request_request,
     merged_pull_requests as merged_pull_requests_request,
     open_pull_requests as open_pull_requests_request,
@@ -61,5 +62,6 @@ pub use crate::builtin::github::task_prs::{
     view_pull_request as view_pull_request_request,
 };
 pub use crate::builtin::github::{
-    CheckoutEvidence, StreamedLog, StreamedLogCollector, parse_gh_json, strip_ansi_sequences,
+    CheckoutEvidence, LogSelection, StreamedLog, StreamedLogCollector, parse_gh_json,
+    strip_ansi_sequences,
 };

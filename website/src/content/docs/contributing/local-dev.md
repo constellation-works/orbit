@@ -1,5 +1,5 @@
 ---
-title: Local Development
+title: Local development
 description: "Commands and expectations for working on Orbit locally."
 sidebar:
   order: 2
@@ -21,8 +21,9 @@ make ci-lint
 make goldens
 ```
 
-There is no blanket local pre-handoff gate for a task that delivers a diff.
-Required PR checks gate formatting, guardrails, lint, goldens, and the full
+For a diff, the agent guide requires static guards, formatting, and lint and
+rustdoc checks for each changed crate before handoff. Required PR checks gate
+formatting, guardrails, lint, goldens, and the full
 test suite. `make ci-fast` runs no Rust tests. For the current validation
 policy and what each target covers, see [PR Workflow](../pr-workflow/#checks).
 

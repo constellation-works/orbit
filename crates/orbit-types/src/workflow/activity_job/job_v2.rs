@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::workflow::{JobScheduleState, ShipMode};
 
+use super::AUTO_TASK_REF_PREFIX;
 use super::activity_v2::{ActivityV2, ActivityV2Spec};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -26,6 +27,16 @@ impl std::fmt::Display for JobKind {
 /// v2 Job definition. Phase 3 adds first-class DAG constructs on each step.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobV2 {
+    /// The `schemaVersion` the job's envelope declares: 2, or 3 for the
+    /// auto-task step extension [ORB-20237]. The loader carries it from the
+    /// header rather than inferring it from the fields, so it survives
+    /// normalization and a serialized round trip; 2 is omitted when
+    /// serialized.
+    #[serde(
+        default = "default_job_schema_version",
+        skip_serializing_if = "is_default_job_schema_version"
+    )]
+    pub schema_version: u32,
     pub state: JobScheduleState,
     /// This job creates a task-scoped worktree and may collect it after a
     /// successful delivery. The collector still checks task and Git safety.
@@ -51,8 +62,11 @@ pub struct JobV2 {
     pub resolved_failure_activity: Option<ActivityV2>,
     /// Last automated look at a failed run [ORB-13907]: invoked at most once
     /// per run, after step recovery is exhausted and before
-    /// `failure_activity`. Its typed decision either resumes the run from an
-    /// earlier step or settles the task without the failure hook.
+    /// `failure_activity`. It returns one typed decision: `resume` (reruns the
+    /// run from an earlier step), a settled decision (`complete_no_diff`,
+    /// `reject`, `archive`, or `requeue`, which does not run
+    /// `failure_activity`), or `escalate` (which, like a missing or malformed
+    /// result, still runs `failure_activity`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_recovery_activity: Option<String>,
     #[serde(skip)]
@@ -71,11 +85,24 @@ pub struct JobV2 {
     pub max_active_runs: u32,
     #[serde(default)]
     pub kind: JobKind,
+    /// Finite outer CEL deadline of a job with `auto-task:` steps. Admitted
+    /// only on such a job, which must declare it; Core checks its shape and
+    /// bound at load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_when: Option<String>,
     pub steps: Vec<JobV2Step>,
 }
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+fn default_job_schema_version() -> u32 {
+    super::ASSET_SCHEMA_VERSION
+}
+
+fn is_default_job_schema_version(version: &u32) -> bool {
+    *version == super::ASSET_SCHEMA_VERSION
 }
 
 /// A job's `spec.steering_gate` declaration
@@ -121,6 +148,201 @@ impl JobV2 {
             .as_ref()
             .is_some_and(|delivery| delivery.modes.contains(&mode))
     }
+
+    /// Every step in file order — a step, then the steps nested in its
+    /// `parallel` / `fan_out` / `loop` body — paired with its effective
+    /// stage. A step without `stage:` inherits the nearest earlier step's
+    /// stage in its own list; a nested list starts from its parent step's
+    /// effective stage, and a stage declared inside a nested body does not
+    /// leak back to the steps after the parent.
+    pub fn step_stages(&self) -> Vec<(&str, Option<&JobStage>)> {
+        fn walk<'a>(
+            steps: &'a [JobV2Step],
+            inherited: Option<&'a JobStage>,
+            out: &mut Vec<(&'a str, Option<&'a JobStage>)>,
+        ) {
+            let mut current = inherited;
+            for step in steps {
+                let effective = step.stage.as_ref().or(current);
+                current = effective;
+                out.push((step.id.as_str(), effective));
+                match &step.body {
+                    JobV2StepBody::Parallel { parallel } => {
+                        walk(&parallel.branches, effective, out);
+                    }
+                    JobV2StepBody::FanOut { fan_out, .. } => {
+                        walk(std::slice::from_ref(&*fan_out.worker), effective, out);
+                    }
+                    JobV2StepBody::Loop { loop_ } => walk(&loop_.steps, effective, out),
+                    JobV2StepBody::TargetRef(_) | JobV2StepBody::Target(_) => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.steps, None, &mut out);
+        out
+    }
+
+    /// Every `auto-task:` step, nested ones included, in file order.
+    pub fn auto_task_steps(&self) -> Vec<&JobV2Step> {
+        fn walk<'a>(steps: &'a [JobV2Step], out: &mut Vec<&'a JobV2Step>) {
+            for step in steps {
+                if step.auto_task_name().is_some() {
+                    out.push(step);
+                }
+                match &step.body {
+                    JobV2StepBody::Parallel { parallel } => walk(&parallel.branches, out),
+                    JobV2StepBody::FanOut { fan_out, .. } => {
+                        walk(std::slice::from_ref(&*fan_out.worker), out);
+                    }
+                    JobV2StepBody::Loop { loop_ } => walk(&loop_.steps, out),
+                    JobV2StepBody::TargetRef(_) | JobV2StepBody::Target(_) => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.steps, &mut out);
+        out
+    }
+
+    /// Whether this job uses the auto-task step extension: an `auto-task:`
+    /// step, a job `expire_when`, or a step wait field, nested steps
+    /// included. No binary runs such a job yet.
+    pub fn declares_auto_task_steps(&self) -> bool {
+        fn any_step(steps: &[JobV2Step]) -> bool {
+            steps.iter().any(|step| {
+                step.auto_task_name().is_some()
+                    || step.declares_auto_task_wait_fields()
+                    || match &step.body {
+                        JobV2StepBody::Parallel { parallel } => any_step(&parallel.branches),
+                        JobV2StepBody::FanOut { fan_out, .. } => {
+                            any_step(std::slice::from_ref(&*fan_out.worker))
+                        }
+                        JobV2StepBody::Loop { loop_ } => any_step(&loop_.steps),
+                        JobV2StepBody::TargetRef(_) | JobV2StepBody::Target(_) => false,
+                    }
+            })
+        }
+        self.expire_when.is_some() || any_step(&self.steps)
+    }
+
+    /// Whether this job is under the auto-task step extension: it declares
+    /// schemaVersion 3, or uses one of the extension's fields. Phase 1 keeps
+    /// every such job disabled and refuses to submit or run it, even when
+    /// none of its fields remain.
+    pub fn is_auto_task_job(&self) -> bool {
+        self.schema_version == super::AUTO_TASK_JOB_SCHEMA_VERSION
+            || self.declares_auto_task_steps()
+    }
+
+    /// The stages this job declares, in first-appearance order. A stage id
+    /// declared again keeps its first label. Empty for a job with no
+    /// `stage:` keys.
+    pub fn ordered_stages(&self) -> Vec<&JobStage> {
+        let mut stages: Vec<&JobStage> = Vec::new();
+        for (_, stage) in self.step_stages() {
+            if let Some(stage) = stage
+                && !stages.iter().any(|seen| seen.id == stage.id)
+            {
+                stages.push(stage);
+            }
+        }
+        stages
+    }
+}
+
+/// A display stage a job step belongs to, declared with `stage:` in job
+/// YAML. The short form is a bare id (`stage: implement`); the long form
+/// adds a display label (`stage: { id: landing_review, label: Landing
+/// review }`). Stages are display metadata only: execution ignores them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobStage {
+    pub id: String,
+    pub label: Option<String>,
+}
+
+impl JobStage {
+    /// The text a stage indicator shows: the declared label, or the id.
+    pub fn display_label(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.id)
+    }
+
+    fn validate(id: &str, label: Option<&str>) -> Result<(), String> {
+        let id_ok = !id.is_empty()
+            && id.len() <= 64
+            && id.as_bytes()[0].is_ascii_lowercase()
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+        if !id_ok {
+            return Err(format!(
+                "invalid stage id `{id}` (want a lowercase letter then lowercase letters, digits, `_` or `-`, at most 64 bytes)"
+            ));
+        }
+        if let Some(label) = label
+            && (label.trim().is_empty() || label.len() > 80)
+        {
+            return Err("stage label must be non-empty and at most 80 bytes".to_string());
+        }
+        Ok(())
+    }
+
+    fn from_value(value: &Value) -> Result<Self, String> {
+        let stage = match value {
+            Value::String(id) => JobStage {
+                id: id.clone(),
+                label: None,
+            },
+            Value::Object(object) => {
+                for key in object.keys() {
+                    if key != "id" && key != "label" {
+                        return Err(format!("stage declares unknown key `{key}`"));
+                    }
+                }
+                let id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "stage mapping missing string `id`".to_string())?
+                    .to_string();
+                let label = match object.get("label") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(label)) => Some(label.clone()),
+                    Some(_) => return Err("stage `label` must be a string".to_string()),
+                };
+                JobStage { id, label }
+            }
+            _ => {
+                return Err(
+                    "stage must be a stage id string or a mapping with `id` and optional `label`"
+                        .to_string(),
+                );
+            }
+        };
+        JobStage::validate(&stage.id, stage.label.as_deref())?;
+        Ok(stage)
+    }
+}
+
+impl Serialize for JobStage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.label {
+            None => serializer.serialize_str(&self.id),
+            Some(label) => {
+                use serde::ser::SerializeMap as _;
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("id", &self.id)?;
+                map.serialize_entry("label", label)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for JobStage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        JobStage::from_value(&value).map_err(serde::de::Error::custom)
+    }
 }
 
 /// A step in a v2 job. Carries `id`, optional `when` / `retry` modifiers,
@@ -128,6 +350,10 @@ impl JobV2 {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct JobV2Step {
     pub id: String,
+    /// Display stage this step starts. A step without one inherits the
+    /// nearest earlier step's stage; a nested step inherits its parent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<JobStage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -136,17 +362,62 @@ pub struct JobV2Step {
     pub recovery_activity: Option<String>,
     #[serde(skip)]
     pub resolved_recovery_activity: Option<ActivityV2>,
+    /// CEL readiness predicate of an `auto-task:` step: false or unknown
+    /// waits. Unlike `when`, it never skips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_until: Option<String>,
+    /// CEL terminal predicate of an `auto-task:` step: true ends the
+    /// unfinished step as `timeout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expire_when: Option<String>,
+    /// CEL predicate over a candidate `result` that lets an `auto-task:`
+    /// step reuse accepted evidence instead of minting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reuse_when: Option<String>,
+    /// Typed result contract an `auto-task:` step's evidence must satisfy,
+    /// such as `release-readiness/v1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_result: Option<String>,
     #[serde(flatten)]
     pub body: JobV2StepBody,
 }
+
+impl JobV2Step {
+    /// Whether this step sets `wait_until`, `expire_when`, `reuse_when` or
+    /// `require_result`.
+    pub fn declares_auto_task_wait_fields(&self) -> bool {
+        self.wait_until.is_some()
+            || self.expire_when.is_some()
+            || self.reuse_when.is_some()
+            || self.require_result.is_some()
+    }
+
+    /// The auto-task this step names with `target: auto-task:<name>`.
+    pub fn auto_task_name(&self) -> Option<&str> {
+        match &self.body {
+            JobV2StepBody::TargetRef(reference) => {
+                reference.target.strip_prefix(AUTO_TASK_REF_PREFIX)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Step keys only an `auto-task:` step admits.
+pub const AUTO_TASK_WAIT_KEYS: [&str; 4] =
+    ["wait_until", "expire_when", "reuse_when", "require_result"];
 
 /// One-of body for a v2 step. Picked by exactly one of the `target`, `spec`,
 /// `parallel`, `fan_out`, or `loop` body keys.
 ///
 /// `TargetRef` and `Target` are distinct variants so the executor only ever
 /// sees `Target` after `resolve_job_target_refs` runs at
-/// load time. A `TargetRef` that survives into dispatch is a caller bug —
-/// the job executor should never have to look up an activity by name.
+/// load time. An `activity:` `TargetRef` that survives into dispatch is a
+/// caller bug — the job executor should never have to look up an activity
+/// by name. A `script:` ref is the one deliberate exception: resolution
+/// validates it against the workspace's script catalog and retains the
+/// ref, and dispatch hands it to the host, which checks the grant and runs
+/// the script under the script profile.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 // The resolved Target carries the activity snapshot inline in persisted job
 // steps. Boxing it would churn every executor reader for a size heuristic;
@@ -181,6 +452,13 @@ impl<'de> Deserialize<'de> for JobV2Step {
             .remove("id")
             .and_then(|x| x.as_str().map(String::from))
             .ok_or_else(|| D::Error::custom("step missing `id`"))?;
+        let stage = match obj.remove("stage") {
+            Some(value) => Some(
+                JobStage::from_value(&value)
+                    .map_err(|error| D::Error::custom(format!("step `{id}`: stage: {error}")))?,
+            ),
+            None => None,
+        };
         let when = deserialize_optional_string::<D::Error>("when", obj.remove("when"))?;
         let retry = match obj.remove("retry") {
             Some(rv) => Some(
@@ -194,10 +472,37 @@ impl<'de> Deserialize<'de> for JobV2Step {
             obj.remove("recovery_activity"),
         )?;
 
+        let [wait_until, expire_when, reuse_when, require_result] = AUTO_TASK_WAIT_KEYS
+            .map(|key| deserialize_optional_string::<D::Error>(key, obj.remove(key)));
+        let (wait_until, expire_when, reuse_when, require_result) =
+            (wait_until?, expire_when?, reuse_when?, require_result?);
+
         if obj.contains_key("role") {
             return Err(D::Error::custom(
                 "step declares retired `role`; remove it and pass `crew` in the activity input to select a non-default crew",
             ));
+        }
+
+        let auto_task_target = obj
+            .get("target")
+            .and_then(Value::as_str)
+            .filter(|target| target.starts_with(AUTO_TASK_REF_PREFIX));
+        if let Some(target) = auto_task_target {
+            admit_auto_task_step::<D::Error>(
+                &id,
+                target,
+                obj,
+                retry.is_some(),
+                recovery_activity.is_some(),
+            )?;
+        } else if let Some((key, _)) = AUTO_TASK_WAIT_KEYS
+            .iter()
+            .zip([&wait_until, &expire_when, &reuse_when, &require_result])
+            .find(|(_, value)| value.is_some())
+        {
+            return Err(D::Error::custom(format!(
+                "step `{id}`: `{key}` is admitted only on a `target: auto-task:<name>` step"
+            )));
         }
 
         let has_parallel = obj.contains_key("parallel");
@@ -266,12 +571,54 @@ impl<'de> Deserialize<'de> for JobV2Step {
 
         Ok(JobV2Step {
             id,
+            stage,
             when,
             retry,
             recovery_activity,
             resolved_recovery_activity: None,
+            wait_until,
+            expire_when,
+            reuse_when,
+            require_result,
             body,
         })
+    }
+}
+
+/// Admit an `auto-task:` step's shape. Its keys are a closed set, so a key
+/// this binary does not know is refused rather than dropped; the per-step
+/// activity knobs do not apply to a step that binds a task.
+fn admit_auto_task_step<E: serde::de::Error>(
+    id: &str,
+    target: &str,
+    rest: &serde_json::Map<String, Value>,
+    has_retry: bool,
+    has_recovery_activity: bool,
+) -> Result<(), E> {
+    let name = target.strip_prefix(AUTO_TASK_REF_PREFIX).unwrap_or(target);
+    if !crate::workflow::is_valid_auto_task_name(name) {
+        return Err(E::custom(format!(
+            "step `{id}`: target `{target}` does not name an auto-task; a name is lowercase \
+             letters, digits, `-` and `_`, starting with a letter or digit"
+        )));
+    }
+    // `timeout_seconds: 0` is what a serialized ref carries for "no timeout",
+    // so a step re-reads its own serialization.
+    let refused = rest
+        .iter()
+        .filter(|(key, value)| {
+            *key != "target" && !(*key == "timeout_seconds" && value.as_u64() == Some(0))
+        })
+        .map(|(key, _)| key.as_str())
+        .chain(has_retry.then_some("retry"))
+        .chain(has_recovery_activity.then_some("recovery_activity"))
+        .min();
+    match refused {
+        Some(key) => Err(E::custom(format!(
+            "step `{id}`: an `auto-task:` step does not admit `{key}`; it admits id, stage, \
+             when, target, wait_until, expire_when, reuse_when and require_result"
+        ))),
+        None => Ok(()),
     }
 }
 
@@ -322,9 +669,9 @@ pub struct TargetStep {
 /// `timeout_seconds`, `session`) carry through unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TargetRef {
-    /// Reference string — currently `activity:<name>`. Namespace-prefixed so
-    /// future kinds (`job:<name>` for nested-job refs, etc.) land without a
-    /// breaking shape change.
+    /// Reference string — `activity:<name>` or `script:<name>`.
+    /// Namespace-prefixed so future kinds (`job:<name>` for nested-job
+    /// refs, etc.) land without a breaking shape change.
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_input: Option<Value>,

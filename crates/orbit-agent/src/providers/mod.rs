@@ -8,20 +8,19 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 mod common;
 pub(crate) mod copilot;
-pub(crate) mod cursor;
 pub(crate) mod gemini;
 pub(crate) mod grok;
+mod long_prompt;
 pub(crate) mod mock_agent;
 pub(crate) mod muse;
 pub(crate) mod ollama;
-pub(crate) mod opencode;
-pub(crate) mod pi;
 mod usage_window;
 
 pub use antigravity::{
     antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
 };
+pub use long_prompt::provider_long_prompt_requests;
 pub use muse::muse_terminal_failure_diagnostic;
 pub use usage_window::provider_usage_windows;
 
@@ -71,10 +70,7 @@ pub fn normalize_cli_stdout<'a>(provider: &str, stdout: &'a [u8]) -> Cow<'a, [u8
         "claude" => claude::project_claude_response(stdout)
             .map_or_else(|| Cow::Borrowed(stdout), Cow::Owned),
         "copilot" => Cow::Owned(copilot::normalize_copilot_stdout(stdout)),
-        "cursor" => Cow::Owned(cursor::normalize_cursor_stdout(stdout)),
-        "pi" => Cow::Owned(pi::normalize_pi_stdout(stdout)),
         "antigravity" | "agy" => Cow::Owned(antigravity::normalize_antigravity_stdout(stdout)),
-        "opencode" => Cow::Owned(opencode::normalize_opencode_stdout(stdout)),
         "muse" => Cow::Owned(muse::normalize_muse_stdout(stdout)),
         _ => Cow::Borrowed(stdout),
     }

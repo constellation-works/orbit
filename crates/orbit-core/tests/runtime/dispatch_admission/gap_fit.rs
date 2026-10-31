@@ -141,6 +141,8 @@ impl Fixture {
                     cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
                     memory_bytes: memory,
                     samples: 12,
+                    crew_model: None,
+                    orbit_version: None,
                 })
                 .unwrap();
         }

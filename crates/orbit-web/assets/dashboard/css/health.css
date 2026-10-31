@@ -80,6 +80,17 @@ td .rel-rate { font-size: 12px; }
 }
 .rel-table { width: 100%; }
 .rel-card .card-body { padding: 0; overflow-x: auto; }
+/* ORB-19694 — bounded attribution tables. The footer states how many of the
+   ordered rows are visible and holds the Show all / Show top toggle, so the
+   initial card stays short while every row remains one gesture away. */
+.rel-table-wrap { min-width: 0; }
+.rel-table-footer {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px 12px; padding: 10px 16px;
+  border-top: 1px solid var(--border); background: var(--bg-elev);
+}
+.rel-table-meta { font: 12px var(--font-sans); color: var(--fg-dim); }
+.rel-card button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rel-role {
   font-family: var(--font-mono); font-size: 10px;
   padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border);
@@ -174,12 +185,11 @@ td .rel-rate { font-size: 12px; }
   background: var(--bg-elev); color: var(--fg); font: 13px var(--font-sans);
 }
 .incident-search:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px rgba(122, 167, 255, 0.2); }
-.incident-toggle, .incident-action {
+.incident-action {
   min-height: 40px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px;
   background: var(--bg-elev); color: var(--fg); font: 500 13px var(--font-sans); white-space: nowrap; cursor: pointer;
 }
-.incident-toggle:hover, .incident-action:hover { border-color: #3a424d; }
-.incident-toggle[aria-pressed="true"] { background: #2a1513; border-color: #7a3a33; color: #ffb3aa; }
+.incident-action:hover { border-color: #3a424d; }
 
 /* One grid for the axis header, every cause header and every row, so a bar
    and its labels line up. */
@@ -326,7 +336,7 @@ td .rel-rate { font-size: 12px; }
 .incident-evidence td.stderr { min-width: 14rem; white-space: normal; overflow-wrap: anywhere; }
 .incident-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .incident-seg:focus-visible, .incident-tile:focus-visible, .incident-insight:focus-visible,
-.incident-toggle:focus-visible, .incident-action:focus-visible, .incident-related-item:focus-visible,
+.incident-action:focus-visible, .incident-related-item:focus-visible,
 .incident-link-button:focus-visible, .incident-copy:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
@@ -385,7 +395,14 @@ td .rel-rate { font-size: 12px; }
 }
 
 /* Errors: one card per failed event on phones (see `.card-table`). */
+.diag-cell-label, .diag-empty-phone { display: none; }
 @media (max-width: 600px) {
+  table.diag-table td .diag-cell-label {
+    display: block; margin-bottom: 2px; color: var(--fg-mute);
+    font: 600 9px/1.3 var(--font-sans); letter-spacing: .06em; text-transform: uppercase;
+  }
+  table.diag-table td .diag-empty-desktop { display: none; }
+  table.diag-table td .diag-empty-phone { display: inline; color: var(--fg-dim); }
   table.diag-table tbody tr {
     grid-template-areas:
       "source ts"
@@ -481,6 +498,8 @@ td .rel-rate { font-size: 12px; }
   --mx-medium: #f2b24c;
   --mx-hard: #ff7a6b;
   --mx-other: #3a414b;
+  --mx-xhard: #9085e9;
+  --mx-unset: #e7eaee;
 }
 .panel > .body.metrics-body,
 .panel > .body.resources-body {
@@ -492,6 +511,9 @@ td .rel-rate { font-size: 12px; }
 .mx-s-medium { --mx-c: var(--mx-medium); }
 .mx-s-hard { --mx-c: var(--mx-hard); }
 .mx-s-other { --mx-c: var(--mx-other); }
+/* Tokens per task also draws xhard and unassessed lines (ORB-18364). */
+.mx-s-xhard { --mx-c: var(--mx-xhard); }
+.mx-s-unset { --mx-c: var(--mx-unset); }
 /* Defects: lineage (orange marks fixes that broke something) and origin
    (seven finders in categorical order, the rest folded into Other). Both
    palettes pass the dataviz validator on the dark card surface. */
@@ -505,6 +527,18 @@ td .rel-rate { font-size: 12px; }
 .mx-s-qa-full-sweep { --mx-c: #d55181; }
 .mx-s-security-review { --mx-c: #008300; }
 .mx-s-ci-failure-sweep { --mx-c: #9085e9; }
+/* Lines changed (ORB-18383): code blue and tests green, deletions dashed;
+   crews take the origin palette in rank order, the rest folded into Other. */
+.mx-s-code_added, .mx-s-code_deleted { --mx-c: #3987e5; }
+.mx-s-tests_added, .mx-s-tests_deleted { --mx-c: #199e70; }
+.mx-s-c1 { --mx-c: #3987e5; }
+.mx-s-c2 { --mx-c: #d95926; }
+.mx-s-c3 { --mx-c: #199e70; }
+.mx-s-c4 { --mx-c: #c98500; }
+.mx-s-c5 { --mx-c: #d55181; }
+.mx-s-c6 { --mx-c: #008300; }
+.mx-s-c7 { --mx-c: #9085e9; }
+.mx-s-crew-other { --mx-c: #4a525d; }
 .mx-muted { color: var(--fg-mute); }
 .mx-card {
   display: flex; flex-direction: column; gap: 12px; min-width: 0;
@@ -524,6 +558,7 @@ td .rel-rate { font-size: 12px; }
 }
 .mx-link-btn:hover { color: var(--accent-hover); }
 .mx-card button:focus-visible,
+.mx-card select:focus-visible,
 .mx-chart-frame:focus-visible,
 .mx-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -547,6 +582,8 @@ td .rel-rate { font-size: 12px; }
   display: inline-flex; gap: 2px; padding: 3px; border-radius: 8px;
   background: var(--bg-sunk); box-shadow: inset 0 0 0 1px var(--border);
 }
+/* Delivery friction's seven-family picker wraps instead of widening the row. */
+.mx-seg-wrap { flex-wrap: wrap; max-width: 100%; }
 .mx-seg-btn {
   appearance: none; border: 0; background: transparent; cursor: pointer;
   min-height: 30px; padding: 0 12px; border-radius: 6px;
@@ -555,6 +592,20 @@ td .rel-rate { font-size: 12px; }
 .mx-seg-btn:hover { color: var(--fg); }
 .mx-seg-btn.on { background: var(--bg-selected); color: var(--fg); box-shadow: inset 0 0 0 1px #2e343c; }
 .mx-trend-view { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* Tokens per task filters: model select and tag cohort picker. */
+.mx-select {
+  min-height: 36px; max-width: 240px; padding: 0 10px; border-radius: 8px;
+  background: var(--bg-sunk); color: var(--fg); border: 1px solid var(--border);
+  font: 500 13px var(--font-sans);
+}
+.mx-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mx-chip {
+  appearance: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  min-height: 30px; padding: 0 10px; border-radius: 999px;
+  background: var(--bg-selected); color: var(--fg); border: 1px solid #2e343c;
+  font: 12px var(--font-mono);
+}
+.mx-chip:hover { border-color: var(--accent); }
 .mx-blurb { margin: -4px 0 0; color: var(--fg-mute); font: 13px var(--font-sans); }
 
 /* Series cards double as the legend and the series toggles. */
@@ -566,6 +617,8 @@ td .rel-rate { font-size: 12px; }
 }
 .mx-sc:hover, .mx-sc.on { border-color: #2e343c; }
 .mx-sc.off { opacity: 0.42; }
+.mx-sc-static { cursor: default; }
+.mx-sc-static:hover { border-color: var(--hair); }
 .mx-sc-label { display: flex; align-items: center; gap: 8px; color: #c9d0d9; font: 13px var(--font-sans); }
 .mx-sc-tag { color: var(--fg-mute); font: 11px var(--font-mono); }
 .mx-sc-value { color: var(--fg); font: 600 26px var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
@@ -577,6 +630,9 @@ td .rel-rate { font-size: 12px; }
 .mx-card .flat { color: var(--fg-mute); }
 .mx-swatch { display: inline-block; flex: 0 0 auto; width: 16px; height: 3px; border-radius: 2px; background: var(--mx-c); }
 .mx-swatch.bar { width: 10px; height: 10px; }
+.mx-swatch.dashed, .mx-sc .mx-swatch.dashed {
+  background: repeating-linear-gradient(90deg, var(--mx-c) 0 5px, transparent 5px 8px);
+}
 .mx-sc .mx-swatch { background: var(--mx-c); }
 
 /* Chart: y axis | plot (gridlines, bars, lines, dots, tooltip) over the
@@ -613,6 +669,8 @@ td .rel-rate { font-size: 12px; }
 .mx-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; z-index: 1; }
 .mx-line { fill: none; stroke: var(--mx-c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .mx-line.mx-s-all { stroke-width: 3; }
+/* A tag cohort's "without" line. */
+.mx-line.mx-dashed { stroke-dasharray: 6 5; }
 .mx-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: #2e343c; z-index: 1; }
 .mx-pt {
   position: absolute; z-index: 2; pointer-events: none;
@@ -634,6 +692,8 @@ td .rel-rate { font-size: 12px; }
   position: absolute; transform: translateX(-50%);
   color: var(--fg-mute); font: 11px var(--font-mono); white-space: nowrap;
 }
+/* Tokens, turns, lines and friction rows carry more than one figure. */
+.mx-chart-tokens .mx-tip, .mx-chart-turns .mx-tip, .mx-chart-diff .mx-tip, .mx-chart-friction .mx-tip { width: 340px; }
 .mx-hover { position: absolute; left: 0; right: 0; top: 0; bottom: 24px; display: flex; z-index: 3; }
 .mx-hover-col { flex: 1 1 0; height: 100%; }
 .mx-tip {
@@ -738,7 +798,7 @@ td .rel-rate { font-size: 12px; }
   .mx-chart-body { gap: 6px; }
   .mx-y-wrap { flex-basis: 32px; }
   .mx-notes { padding-left: 0; }
-  .mx-tip { width: 200px; }
+  .mx-tip, .mx-chart-tokens .mx-tip, .mx-chart-turns .mx-tip, .mx-chart-diff .mx-tip, .mx-chart-friction .mx-tip { width: 200px; }
 }
 
 /* Analytics › Resources: this host's delivery resource profiles. CPU, memory

@@ -99,6 +99,8 @@ const ids = [
   'audit-body', 'codebase-body', 'audit-count', 'audit-search',
   'plugins-body', 'plugins-count',
   'scoreboard-orchestration', 'scoreboard-orchestration-count',
+  'scoreboard-exploration', 'scoreboard-explore-count',
+  'forecast-body', 'forecast-count',
 ];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 const document = {
@@ -112,7 +114,7 @@ const document = {
 const window = { location: { search: '?window=24h', hash: '' }, confirm: () => true };
 const pending = [];
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => payload, text: async () => JSON.stringify(payload) });
-const fetch = (path, options = {}) => new Promise(resolve => pending.push({ url: new URL(path, 'http://dashboard.test'), options, resolve }));
+const fetch = (path, options = {}) => new Promise((resolve, reject) => pending.push({ url: new URL(path, 'http://dashboard.test'), options, resolve, reject }));
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch, document, window, Node,
 });
@@ -144,6 +146,10 @@ const pluginsModule = load('plugins.js');
 await pluginsModule.link(specifier => load(specifier.replace(/^\.\//, '')));
 await pluginsModule.evaluate();
 const plugins = pluginsModule.namespace;
+const forecastModule = load('forecast.js');
+await forecastModule.link(specifier => load(specifier.replace(/^\.\//, '')));
+await forecastModule.evaluate();
+const forecast = forecastModule.namespace;
 const ctx = {};
 const text = id => document.getElementById(id).textContent;
 const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise(resolve => setTimeout(resolve, 0)); };
@@ -157,10 +163,12 @@ function analytics(marker) {
   return { window: '90d', rollup: 'file', min_support: 1, regressions: { rows: [row], below_support: 0 } };
 }
 function summary(marker) {
+  const cohort = { runs: 1, priced_runs: 1, footprint_known_runs: 1, footprint_miss_rate: 0, footprint_miss_runs: 0, explore_calls: 1, explore_cost_usd: 1, mean_duration_ms: 60000, mean_cost_usd: 1 };
   return {
     window: '24h',
     agents: { claude: { tasks_created: 12, tasks_planned: 1, tasks_completed: 1, tool_calls: 4 } },
-    orchestration: { since: marker, until: 'cutoff', as_of: 'now', buckets: [], normalized_tokens: { normalized_token_total: 10, invocation_count: 1, linked_task_count: 1 } },
+    orchestration: { since: 'start', until: 'cutoff', as_of: 'now', buckets: [{ kind: 'orchestrator', orchestrator: marker }], normalized_tokens: { normalized_token_total: 10, invocation_count: 1, linked_task_count: 1 } },
+    explore_comparison: { crews: [{ crew: marker, with_explore: cohort, without_explore: { ...cohort, explore_calls: 0 } }] },
   };
 }
 
@@ -258,8 +266,11 @@ shows('scoreboard-orchestration', 'score-workspace-b', 'score-workspace-a');
 common.setWorkspace(null);
 scoreboard.placeholdScoreboardAggregate();
 assert.ok(placeheld('scoreboard-orchestration'), 'cost panel is placeheld in aggregate view');
+assert.ok(placeheld('scoreboard-exploration'), 'exploration panel is placeheld in aggregate view');
 assert.ok(!text('scoreboard-orchestration').includes('score-workspace-b'), `cost panel still shows the previous workspace in aggregate view: ${text('scoreboard-orchestration')}`);
+assert.ok(!text('scoreboard-exploration').includes('score-workspace-b'), `exploration panel still shows the previous workspace in aggregate view: ${text('scoreboard-exploration')}`);
 assert.equal(text('scoreboard-orchestration-count'), '—', 'cost count keeps a previous-workspace count in aggregate view');
+assert.equal(text('scoreboard-explore-count'), '—', 'exploration count keeps a previous-workspace count in aggregate view');
 
 common.setWorkspace('ws-a');
 const crossing = scoreboard.fetchAndRenderScoreboard();
@@ -270,7 +281,55 @@ pending.at(-1).resolve(response(summary('score-after-aggregate')));
 await settle();
 await crossing;
 assert.ok(placeheld('scoreboard-orchestration'), 'cost panel stays placeheld after a late response');
+assert.ok(placeheld('scoreboard-exploration'), 'exploration panel stays placeheld after a late response');
 assert.ok(!text('scoreboard-orchestration').includes('score-after-aggregate'), 'cost panel painted a late workspace response in aggregate view');
+assert.ok(!text('scoreboard-exploration').includes('score-after-aggregate'), 'exploration panel painted a late workspace response in aggregate view');
+
+// Exploration status: a held cold GET shows Loading in the exploration
+// body, a failed cold load shows Unable to load there, one GET fills both
+// bodies, and a failed same-window refresh keeps crew rows with the
+// stale-data note in the visible exploration body.
+common.setWorkspace('ws-a');
+await settle();
+{
+  const before = pending.length;
+  const cold = scoreboard.fetchAndRenderScoreboard();
+  assert.equal(pending.length, before + 1, 'one GET feeds both cost bodies on a cold load');
+  assert.ok(text('scoreboard-exploration').includes('Loading…'), `exploration should show Loading while cold load is in flight: ${text('scoreboard-exploration')}`);
+  assert.ok(text('scoreboard-orchestration').includes('Loading…'), `spend should show Loading while cold load is in flight: ${text('scoreboard-orchestration')}`);
+  pending.at(-1).resolve(response({ error: 'cost unavailable' }, 500));
+  await assert.rejects(cold);
+  await settle();
+  assert.ok(text('scoreboard-exploration').includes('Unable to load'), `exploration should show Unable to load after a failed cold load: ${text('scoreboard-exploration')}`);
+  assert.ok(!text('scoreboard-exploration').includes('No implement runs in this window.'), 'exploration must not keep its static empty copy after a failed cold load');
+  assert.ok(text('scoreboard-orchestration').includes('Unable to load'), `spend should show Unable to load after a failed cold load: ${text('scoreboard-orchestration')}`);
+
+  const beforeSuccess = pending.length;
+  const success = scoreboard.fetchAndRenderScoreboard();
+  assert.equal(pending.length, beforeSuccess + 1, 'one GET feeds both cost bodies on success');
+  pending.at(-1).resolve(response(summary('explore-crew')));
+  await success;
+  await settle();
+  shows('scoreboard-orchestration', 'explore-crew', 'score-after-aggregate');
+  shows('scoreboard-exploration', 'explore-crew', 'score-after-aggregate');
+  assert.equal(text('scoreboard-explore-count'), '1 crew', 'exploration count follows the successful response');
+
+  const beforeRefresh = pending.length;
+  const refresh = scoreboard.fetchAndRenderScoreboard();
+  assert.equal(pending.length, beforeRefresh + 1, 'one GET feeds both cost bodies on refresh');
+  assert.ok(text('scoreboard-exploration').includes('explore-crew'), 'exploration keeps crew rows while a refresh is in flight');
+  pending.at(-1).resolve(response({ error: 'cost refresh unavailable' }, 500));
+  await assert.rejects(refresh);
+  await settle();
+  assert.ok(text('scoreboard-exploration').includes('Refresh failed; showing stale data'), `exploration should show the stale-data note after a failed refresh: ${text('scoreboard-exploration')}`);
+  assert.ok(text('scoreboard-exploration').includes('explore-crew'), 'exploration keeps crew rows after a failed refresh');
+  assert.ok(text('scoreboard-orchestration').includes('Refresh failed; showing stale data'), `spend should show the stale-data note after a failed refresh: ${text('scoreboard-orchestration')}`);
+
+  common.setWorkspace(null);
+  scoreboard.placeholdScoreboardAggregate();
+  assert.ok(placeheld('scoreboard-exploration'), 'exploration panel is placeheld when aggregate view follows a failed refresh');
+  assert.ok(!text('scoreboard-exploration').includes('explore-crew'), 'exploration drops crew rows in aggregate view');
+}
 await audit.fetchAndRenderAudit(ctx);
 await codebase.fetchAndRenderCodebase();
 assert.ok(placeheld('audit-body') && !text('audit-body').includes('audit-workspace-b'), 'aggregate audit drops the previous workspace');
@@ -340,4 +399,89 @@ for (const [certified, host, behind] of [
   assert.equal(Boolean(chip), Boolean(certified), 'uncertified plugins have no certification chip');
 }
 
-console.log('audit, codebase, cost, and plugin panel behaviors passed');
+// Analytics › Forecast on a host whose Orbit predates the route. A 404 with no
+// error text is a route miss: the panel names the host's Orbit and the upgrade,
+// with no API path and no Refresh advice. A 404 that carries its own message
+// keeps it, and a transient failure (5xx or network) still offers Refresh.
+const forecastBody = () => text('forecast-body');
+const bodiless = status => ({ ok: false, status, headers: { get: () => null }, text: async () => '' });
+common.setWorkspace('ws-a');
+await settle();
+for (const [label, answer] of [
+  ['an empty 404', () => bodiless(404)],
+  ['a 404 with an empty error', () => response({ error: '' }, 404)],
+]) {
+  const forecastLoad = forecast.fetchAndRenderForecast();
+  pending.at(-1).resolve(answer());
+  await assert.rejects(forecastLoad);
+  await settle();
+  assert.equal(forecastBody(), 'Unable to load: This host\'s Orbit does not offer this view yet. Upgrade it to see this view.',
+    `${label} should read as a host without the view: ${forecastBody()}`);
+}
+{
+  const forecastLoad = forecast.fetchAndRenderForecast();
+  pending.at(-1).resolve(response({ error: 'forecast for this workspace not found' }, 404));
+  await assert.rejects(forecastLoad);
+  await settle();
+  assert.equal(forecastBody(), 'Unable to load: forecast for this workspace not found. Use Refresh to retry.',
+    `a 404 with its own message keeps it: ${forecastBody()}`);
+}
+for (const [label, fail] of [
+  ['a 500', () => pending.at(-1).resolve(response({ error: 'forecast store busy' }, 500))],
+  ['a network failure', () => pending.at(-1).reject(vm.runInContext('new TypeError("Failed to fetch")', context))],
+]) {
+  const forecastLoad = forecast.fetchAndRenderForecast();
+  fail();
+  await assert.rejects(forecastLoad);
+  await settle();
+  assert.ok(forecastBody().includes('Use Refresh to retry.'), `${label} should still offer Refresh: ${forecastBody()}`);
+  assert.ok(!forecastBody().includes('does not offer this view'), `${label} must not read as a host without the view: ${forecastBody()}`);
+}
+
+const forecastPayload = unfinished => ({
+  inputs: { concurrency: 2, concurrency_source: 'requested', history_deliveries: 5, iterations: 100, lookback_days: 30 },
+  backlog: { backlog: 2, in_progress: 0 },
+  forecast: {
+    tasks: 2,
+    time_to_drain_hours: { p50: 1, p90: 2 },
+    usd: { p50: 1, p90: 2 },
+    tokens: { p50: 1, p90: 2 },
+    effective_parallelism: { p50: 1, p90: 2 },
+    critical_path_hours: { p50: 1, p90: 2 },
+    drain_probability: 0.75,
+    completion_probability: 0.25,
+    not_expected_to_drain: unfinished,
+  },
+  arrivals: {},
+  coverage: {},
+  calibration: {},
+});
+const renderForecast = async unfinished => {
+  const before = pending.length;
+  const loadForecast = forecast.fetchAndRenderForecast();
+  assert.equal(pending.length, before + 1, 'forecast summary requests its payload');
+  assert.equal(pending.at(-1).url.pathname, '/api/diagnostics/backlog_forecast');
+  pending.at(-1).resolve(response(forecastPayload(unfinished)));
+  await loadForecast;
+  await settle();
+  return forecastBody();
+};
+
+const forecastWithUnfinishedTasks = await renderForecast(1.5);
+assert.ok(forecastWithUnfinishedTasks.includes('1.50 tasks unfinished on average'),
+  `unfinished tasks render as a two-decimal count: ${forecastWithUnfinishedTasks}`);
+assert.ok(!forecastWithUnfinishedTasks.includes('150%'),
+  `unfinished-task count is not rendered as a percentage: ${forecastWithUnfinishedTasks}`);
+assert.ok(forecastWithUnfinishedTasks.includes('75% of runs'),
+  `drain probability remains a percentage of runs: ${forecastWithUnfinishedTasks}`);
+assert.ok(forecastWithUnfinishedTasks.includes('the initial tasks all finish in 25%'),
+  `completion probability remains a percentage of runs: ${forecastWithUnfinishedTasks}`);
+
+const forecastWithNoUnfinishedTasks = await renderForecast(0);
+assert.ok(!forecastWithNoUnfinishedTasks.includes('unfinished on average'),
+  `a zero unfinished count omits the clause: ${forecastWithNoUnfinishedTasks}`);
+assert.ok(forecastWithNoUnfinishedTasks.includes('75% of runs')
+  && forecastWithNoUnfinishedTasks.includes('the initial tasks all finish in 25%'),
+`zero-count drain odds keep both probability percentages: ${forecastWithNoUnfinishedTasks}`);
+
+console.log('audit, codebase, cost, plugin, and forecast panel behaviors passed');

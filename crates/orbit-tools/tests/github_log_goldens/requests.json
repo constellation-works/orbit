@@ -513,5 +513,49 @@
       "repo": "--repo"
     },
     "raw": null
+  },
+  {
+    "name": "dependabot_alert_request_rejects_dot_only_repository_segments",
+    "op": "dependabot",
+    "input": {
+      "repo": "acme/.."
+    },
+    "raw": null
+  },
+  {
+    "name": "dependabot_alert_request_rejects_a_dot_only_owner",
+    "op": "dependabot",
+    "input": {
+      "repo": "../orbit"
+    },
+    "raw": null
+  },
+  {
+    "name": "run_jobs_request_rejects_dot_only_repository_segments",
+    "op": "run_jobs",
+    "input": {
+      "run": "123",
+      "repo": "acme/.."
+    },
+    "raw": null
+  },
+  {
+    "name": "job_annotations_request_rejects_dot_only_repository_segments",
+    "op": "job_annotations",
+    "input": {
+      "job": "912",
+      "repo": "acme/..."
+    },
+    "raw": null
+  },
+  {
+    "name": "run_logs_normalises_leading_zeros_in_run_and_job_ids",
+    "op": "logs",
+    "input": {
+      "run": "0123",
+      "job": "0456",
+      "scope": "all"
+    },
+    "raw": null
   }
 ]

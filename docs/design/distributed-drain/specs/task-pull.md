@@ -1,7 +1,8 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-10-19
+last_validated: 2026-10-28
+last_updated: 2026-10-28
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
@@ -16,15 +17,23 @@ related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-1
 `orbit.task.pull` creates at most one claim for an intended admission. The owner selects the first
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
-receipt. The internal store foundation now implements admission receipts, claims and replay,
-though tombstone compaction is not yet written, and [ORB-12495] exposed the owner's read-only half — the
-[preflight probe](../2_design.md#41-read-only-admission-probe) and the
-[receipt lookup](#read-only-receipt-reconciliation) below — on the managed MCP and registered CLI
-surfaces. [ORB-13625] registered the executor's mutating half — `orbit.task.pull`,
-`orbit.drain.claim.bind` and `orbit.drain.claim.settle` — and opened the one named gate
-(`orbit-core`'s `application::distributed`) that every mutating entry point still names, so the
-feature is closed again only by a source change. Approval, revocation and recovery are not
-registered tools.
+receipt. The internal store foundation implements admission receipts, claims and replay.
+Operational admission-receipt compaction and storage accounting are available on the owner
+through `orbit doctor admission-receipts [--compact]` ([ORB-19424]). The retention
+requirements below remain the contract.
+For follower execution, the five protocol
+operations — the
+[preflight probe](../2_design.md#41-read-only-admission-probe),
+[receipt lookup](#read-only-receipt-reconciliation), `orbit.task.pull`,
+`orbit.drain.claim.bind` and `orbit.drain.claim.settle` — use the deterministic owner/follower
+internal runtime route ([ORB-12495], [ORB-13625]). Their handlers remain active in the CLI/runtime
+tool registry, while the MCP adapter omits all five from ordinary discovery and refuses public
+calls under both dotted and underscore names, including in operator sessions. The owner-side
+probe and receipt diagnostics remain available through `orbit tool run`; operators also use
+`orbit tool run orbit.drain.claims` for the separate claim inspection, which is off MCP. Handoff
+approval is dashboard-only. Recovery and revocation remain operator-only CLI commands and
+matching MCP tools — `orbit.task.revoke_handoff` and `orbit.task.recover_claim` — which managed
+runs cannot call.
 
 ## Why This Exists
 
@@ -227,7 +236,8 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
 A pull drain also records what its owner kept off this host. When a request is answered idle,
 the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier does: `queued` is
 the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
-in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
+in `blocked_by`), tasks scheduled ahead (`scheduled`, the time in `detail`) and other owner
+holds (`owner_hold`); `excluded` lists unmet dependencies
 (`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`),
 browser-kit waits for `ui` tasks (`browser_kit_missing`), unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
 `waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's
@@ -248,7 +258,7 @@ for a pull drain as for a local one.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
 2. Begin the owner store transaction. Its substrate is the task/reservation commit boundary
-   [ORB-12528]: `with_admission` covers the readiness reads and `commit_task_transition`
+   [ORB-12528]; `with_admission` covers the readiness reads and `commit_task_transition`
    publishes the transition, history, reservation, and dependent coordination rows as one
    durable decision ([design pattern](../../../design-patterns/task_commit_boundary.md)).
    Receipts and claims are its dependent rows; their schema and replay rules are defined here,
@@ -377,7 +387,8 @@ is an advisory read of its original run, even after settlement; it grants no new
 
 For an already accepted handoff, retry and landing share the provider
 base-update proof: exact repository/PR/branches, fresh successful base fetch,
-base ancestry, two exact parents and the computed clean merge tree. The owner
+base ancestry, and a first-parent chain of two-parent base merges whose trees
+equal the clean merge of each hop's parents [ORB-19393]. The owner
 observes the stored acceptance and its original evidence; it never substitutes
 a certificate for the provider head. Initial settlement still requires the
 exact submitted head. Unknown or edited source, a foreign or rewound base,
@@ -419,12 +430,16 @@ run on the old head that no policy requires does not stop the path. The
 workflow scan authenticates path-filtered (`paths` or `paths-ignore`) PR
 workflows but derives no guaranteed contexts from them; they cannot justify
 a base update or prevent a sibling workflow from proving its own emission. The
-inherited-failure and absent-context paths share one durable owner-task
-reservation and absolute deadline across attempts and runs. Reservation
-precedes the expected-head provider update; an unknown outcome is observed,
-never repeated. Current effective policy and every exact new-head required and
-owner-owed success gate the ordinary merge. Other conditional/dynamic or incomplete
-emission evidence refuses; it grants no source-repair or policy-bypass authority.
+inherited-failure and absent-context paths use durable owner-task reservations.
+Inherited recovery admits up to three updates per handoff, each onto a distinct
+base, while absent-context refresh and auto-fix retain their one-update limits
+[ORB-19393]. A later retry that reuses an existing reservation remains bounded
+by that reservation's original absolute deadline; if the deadline has expired,
+the retry is refused. Reservation precedes the expected-head provider update;
+an unknown outcome is observed, never repeated. Current effective policy and
+every exact new-head required and owner-owed success gate the ordinary merge.
+Other conditional/dynamic or incomplete emission evidence refuses; it grants no
+source-repair or policy-bypass authority.
 A legacy status cannot stand in for the positive workflow CheckRun proof in
 absent-context refresh or prerequisite-rerun recovery.
 
@@ -521,6 +536,13 @@ store schema are implementation choices; their atomic behavior is required:
 | Release | Executor gives back unfinished work it did not fail: never launched, or a launched leaf whose typed failure class does not block (`operator_cancel`, `provider` including a model at capacity, `environment`, `owner_route`, `baseline_red`, `transient`, `base_conflict`). Revoke the claim, return the task to `backlog`, release only this reservation atomically. A blocking class, or any typed failure class after two such releases of the task within 24 hours, blocks the task instead, with one comment listing every counted reason |
 | Deliberate recovery | Reconcile any uncertain landing intent; revoke old claim, invalidate pending handoff, release reservation, and apply an authorized task transition atomically |
 
+A before-landing review refusal whose diagnostic carries the pending-decision marker adds
+`failure.review_decision_pending: true` to its `Fail` evidence. The owner keeps that flag on the
+settlement record; `orbit run settlements --json` exposes it beside `failure_class: "candidate"`.
+The claim still fails and the task stays blocked for a recorded decision, without a release or
+release-budget charge. Scans count it separately from failures. Missing flags read as false,
+and older readers ignore the added field, preserving the existing enum values.
+
 `stale_claim` rejects obsolete attempt mutations even when the task has since returned to
 `in-progress`. Replay of a previously committed mutation may return its recorded outcome without
 performing it again. A settled claim's receipts are pruned 7 days after its last mutation; a later
@@ -558,7 +580,7 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
 - Pull and task promotion do not grant merge authority; explicit handoff approval does.
 - The handoff's captured `review` contract sets any required before-PR or before-landing
   evidence; task status `review` alone is not review evidence.
-- Existing ship-sweep routines, wrapper, CLI, and owner-local drains cannot bypass this admission
+- Explicit ship runs and owner-local drains cannot bypass this admission
   contract; queued/bound leaf runs and unrepresented admissions consume capacity exactly once.
 
 ## Required failure coverage
@@ -593,11 +615,35 @@ executor crew capability and provider-unavailable release under [ORB-13941], 202
 
 ## Internal storage accounting
 
-`TaskCommitBoundary::admission_storage_usage` reports full-receipt and permanent-tombstone
-counts and logical UTF-8 payload bytes. SQLite page and index overhead is additional. An
-idle receipt is eligible to compact immediately; a claim in claimed, running, or handed-off phase
-retains its full receipt. At the default 60-second idle sleep, one idle drain leaves 1,440 request
+An idle receipt is eligible to compact immediately; claimed, running, handed-off and
+repair-pending claims retain full receipts, as do failed or revoked claims with a preserved
+PR. At the default 60-second idle sleep, one idle drain leaves 1,440 request
 identities per day even after compaction. No age-based tombstone deletion is supported.
+
+Run `orbit doctor admission-receipts` on the owner for a read-only snapshot. It reports
+`full_receipts`, `tombstones` and, separately, `claim_mutation_receipts`, each with a
+`count` and `logical_payload_bytes`. Bytes are the UTF-8 JSON payload lengths; they do
+not include row keys, indexes, free pages or WAL and are not filesystem usage.
+A pending journal recovery refuses this inspection rather than mutating state.
+
+Add `--compact` for explicit runtime maintenance. Under the exclusive admission boundary,
+it recovers pending commits, then replaces idle receipts, landed claim receipts and receipts
+of failed or revoked claims without a preserved PR with permanent tombstones. Failed and
+revoked claims with a preserved PR retain full receipts to authorize later external-merge
+settlement, even if no handoff was accepted. Claimed, running, handed-off and repair-pending
+claims retain full receipts, as does a receipt whose current claim is missing.
+Reservation expiry and age never establish settlement. The tombstone preserves the original
+machine ID, request ID and digest of the original input using the same persisted encoding
+as replay. Exact replay returns `request_expired`, changed-input replay returns
+`request_mismatch`, and neither can admit again. Repeated maintenance is idempotent.
+The command reports `compacted_receipts` and the resulting storage snapshot, including
+unchanged claim-mutation receipts; it does not invoke their separate seven-day pruning
+on settlement. Operators schedule or run this command periodically: admission itself does
+not scan receipt history, so idle full payloads accumulate until maintenance runs.
+An already-recorded landing completion on a settled claim replays its retained claim-mutation
+receipt before candidate observation; compaction of a NoDiff claim's admission receipt does
+not prevent that replay. Changed completion input is still refused, and a settled claim
+cannot perform a fresh landing mutation.
 
 Execution provenance is optional on persisted records for backward reading. Run origin is
 captured from the trusted runtime backend at insertion and is not updated by run upserts.
@@ -685,7 +731,7 @@ older executors refuse schema 2 rather than silently applying a transition witho
 ### Owner landing consumer
 
 Recording completion authority dispatches the owner-local `task_landing_pipeline` from the outbox in
-the same call, so authorized work lands with no drain, ship sweep, routine or schedule running.
+the same call, so authorized work lands with no drain, routine or schedule running.
 Handoff identity keys one durable landing attempt and the dispatch key: a merged handoff refuses
 re-dispatch, a live owner job is not dispatched twice, and a pending request whose job was never submitted
 or whose exact owner job is durably terminal is recovered as the next attempt by an explicit dispatch pass.
@@ -739,9 +785,10 @@ change.
 The job-store caller checkpoint preserves request identity, unique leaf
 binding, launch uncertainty and disconnected settlement. Its refill loop is the
 follower's pull drain: `orbit run auto --pull <selector>` runs it as the
-`workspace_pull_pipeline` job against the registered `orbit.task.pull`,
-`orbit.drain.claim.bind` and `orbit.drain.claim.settle` tools (see
-[ORB-13625] below). The owner exposes no other pull endpoint.
+`workspace_pull_pipeline` job, invoking the owner's `orbit.task.pull`,
+`orbit.drain.claim.bind` and `orbit.drain.claim.settle` operations over the runtime-owned
+internal route (see [ORB-13625] below). These handlers are absent from ordinary MCP; the owner
+exposes no other pull endpoint.
 
 [ORB-12616] made the owner-local half executable. A claim's leaf is one of two
 internal handoff-only definitions chosen by the owner-resolved ship mode —
@@ -841,3 +888,40 @@ transport, and `orbit run auto --pull <selector>` runs the refill loop as the
 `workspace_pull_pipeline` job. A local request the owner refused and holds no
 receipt for closes as `Refused` (a new terminal phase that releases its slot);
 see the caller-side implementation status in design §3.
+
+## Task References
+
+- [ORB-12488] — authored this design folder.
+- [ORB-12495] — added the probe, receipt lookup and claim listing.
+- [ORB-12500] — added published-PR observation and the shared entry-point admission decision.
+- [ORB-12528] — landed the task/reservation commit boundary.
+- [ORB-12616] — made the owner-local claimed leaf executable.
+- [ORB-13625] — enabled follower pull, routed owner coordination and the mutating runtime entry points.
+- [ORB-13895] — prepared [V1 review policy is none](../4_decisions.md#v1-review-policy-is-none) for before-PR review on claims and handoffs.
+- [ORB-13908] — enabled the before-PR review gate on claimed leaves.
+- [ORB-13918] — prevented pull from admitting a task already carried by an owner-local delivery run.
+- [ORB-13941] — filtered pull admission by runnable executor crews and provider availability.
+- [ORB-13992] — narrowed review admission to the captured `review.before_pr`; after-landing review never refuses a pull.
+- [ORB-14192] — bound required review validation evidence to the owner-admitted command list.
+- [ORB-14247] — stopped `no-diff-expected` tasks holding context locks.
+- [ORB-14257] — typed claimed-leaf failure classes; only candidate and task-input failures block, others release within a per-task budget; host failures suppress the host for the window; a claimed PR leaf continues a kept candidate it can fetch.
+- [ORB-14259] — added the verified NoDiff handoff for claimed work.
+- [ORB-14474] — enabled remote admission of no-diff-expected tasks through the NoDiff handoff.
+- [ORB-14684] — made captured baseline commands binding on claimed review settlement.
+- [ORB-14724] — moved candidate discovery outside the exclusive admission section and revalidated inside it.
+- [ORB-14791] — added a verified clean-base checkpoint for claimed no-diff-expected tasks.
+- [ORB-14849] — added before-landing review against the published PR head.
+- [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
+- [ORB-15192] — made before-landing review selectable by executor machine.
+- [ORB-15332] — removed the unused admission compaction helper without changing runtime behavior.
+- [ORB-15514] — reserved owner-admitted wave footprints before leaf dispatch.
+- [ORB-15573] — settled provider refusals as provider holds rather than candidate failures.
+- [ORB-15747] — replayed already-resolved test selectors on the claim host for clean-base native evidence.
+- [ORB-15764] — exempted no-diff-expected claimed deliveries from required validation, matching owner delivery.
+- [ORB-15774] — filtered pull admission by the executor host forecast’s admissible work profiles.
+- [ORB-17304] — ordered pull and owner-local admission against the live executor census (§2, §9).
+- [ORB-17641] — removed the unused admission receipt accounting API.
+- [ORB-19393] — verified base-merge chains, bounded inherited recovery and reconciliation of externally merged handoffs.
+- [ORB-19424] — connected admission receipt compaction and separate logical storage accounting to `orbit doctor admission-receipts [--compact]`.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

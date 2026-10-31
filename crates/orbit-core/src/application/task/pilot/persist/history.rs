@@ -7,6 +7,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 
 use super::super::apply::admission::PreparedTaskSnapshot;
 
@@ -59,10 +60,9 @@ pub(super) fn status_only_fingerprint(
 ) -> Option<String> {
     let (_, revision) = snapshot.material.as_ref()?;
     let neutral = snapshot.status_neutral_fingerprint.as_ref()?;
-    let fresh = crate::application::automation::preparation::fingerprints(
-        runtime, current, revision, policy,
-    )
-    .ok()?;
+    let fresh = runtime
+        .task_pilot_fingerprints(current, revision, policy)
+        .ok()?;
     if &fresh.status_neutral != neutral {
         return None;
     }
@@ -88,9 +88,7 @@ pub(super) fn material_change_detail(
     let Some((_, revision)) = snapshot.material.as_ref() else {
         return MATERIAL_CHANGED_DETAIL.to_string();
     };
-    let Ok(fresh) = crate::application::automation::preparation::component_digests(
-        runtime, current, revision, policy,
-    ) else {
+    let Ok(fresh) = runtime.task_freshness_digests(current, revision, policy) else {
         return MATERIAL_CHANGED_DETAIL.to_string();
     };
     let mut drifted = BTreeSet::new();

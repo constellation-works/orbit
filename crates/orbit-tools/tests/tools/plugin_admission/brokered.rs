@@ -128,3 +128,28 @@ fn an_unsandboxed_backend_is_refused_to_an_agent_but_still_runs_for_the_operator
         "overwritten\n"
     );
 }
+
+/// A wildcard that starts inside the last component of a kept write root names
+/// siblings of the root, so the macOS profile must not replay it.
+#[test]
+fn a_replayed_write_wildcard_never_reaches_siblings_of_a_kept_root() {
+    let fixture = Fixture::new(&[], &["{{workspace}}/build"]);
+    let caller = fixture.caller(&["**"], &["./**", "!.env", "build*", "build/out*"]);
+    let profile = fixture
+        .spec
+        .brokered_sandbox_profile(&caller)
+        .expect("the caller may write the plugin's root");
+    let root = fixture.worktree.join("build");
+    let rules = profile.macos_fs_rules().modify;
+    let sibling = format!("{}*", root.display());
+    assert!(
+        !rules.contains(&sibling),
+        "a wildcard matching {}.sh must not be replayed: {rules:?}",
+        root.display()
+    );
+    let inside = format!("{}/out*", root.display());
+    assert!(
+        rules.contains(&inside),
+        "a wildcard confined to the root is still replayed: {rules:?}"
+    );
+}

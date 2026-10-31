@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-10-11
+last_updated: 2026-10-30
 last_validated: 2026-10-14
 status: Draft
 feature: activity-job
@@ -33,6 +33,8 @@ Activity/job correctness depends on making authoring conveniences disappear befo
 
 ### Decision
 Treat `schemaVersion: 2` as the only activity/job asset family, load seeded and workspace catalogs with explicit layer precedence, resolve authoring sugar (`target: activity:<name>`, object-valued defaults, and workflow admission) before dispatch, and keep seeded activities/jobs as executable reference contracts for that normalized surface.
+
+**Superseded in part by [Auto-task jobs declare schemaVersion 3](#auto-task-jobs-declare-schemaversion-3) ([ORB-20237]).** A job using the auto-task step extension declares `schemaVersion: 3`; every activity and every other job stays `schemaVersion: 2`.
 
 **Amended by [ORB-10801].** `backend: auto` is no longer resolved — agent backend selection was retired. The load-time normalization pass now *rejects* the retired declarations (`backend: http | auto`, any `session:` binding) instead of concretizing them, so nothing is silently reinterpreted. See [specs/backend-resolution.md](./specs/backend-resolution.md). Direct task-workflow admission remains a workflow-specific normalization path rather than a generic task-update rule.
 
@@ -902,6 +904,8 @@ Use `orbit run ship` as the only public shipment command. Omitted task IDs run b
 
 **Recorded:** 2026-08-01 19:14:39.899572Z · [ORB-00374], [ORB-00363], [ORB-10479]
 
+**Superseded by:** [Granted script steps run under the script profile](#granted-script-steps-run-under-the-script-profile) ([ORB-19985]) takes this entry's recorded alternative for operator-granted, digest-bound `target: script:<name>` job steps. `type: shell` and inline command text stay load errors.
+
 **Context.** The v2 `shell` activity (`ActivityV2Spec::Shell`) dispatched `Command::new(program)` with no OS sandbox, no cwd confinement, and no policy consultation — unlike the `backend: cli` agent path. Its only guard was a `program ∈ allowed_programs` check where both fields came from the same workspace-supplied YAML, so the allowlist was a tautology ([ORB-00363]). The real alternatives were to retrofit the sandbox/policy/cwd pipeline onto `run_shell`, or to remove the surface entirely.
 
 **Decision.** Remove the `shell` activity surface end to end: drop `ShellSpec`, `ActivityV2Spec::Shell`, `run_shell`, the `Shell*` `DispatchError` variants, and every match arm, re-export, demo asset, and doc reference. A workspace activity/job declaring `type: shell` now fails to deserialize at load (the `#[serde(tag = "type")]` enum has no matching variant) instead of executing. Narrow subprocess needs are served by registered `deterministic` actions and the policy-gated `backend: cli` agent path, which enforces `proc_allowed_programs` outside the workspace-supplied spec.
@@ -1358,7 +1362,7 @@ Declare one orbit-engine RuntimeHost capability boundary with one OrbitRuntime i
 ## Track bundled activity and job ownership by content digest before retirement
 
 **Recorded:** 2026-08-09 22:01:13.919070Z · [ORB-10684]
-**Paths:** `crates/orbit-core/src/application/mod.rs`, `crates/orbit-core/src/bootstrap/activity.rs`, `crates/orbit-core/src/application/job/catalog.rs`, `crates/orbit-core/src/bootstrap/init.rs`
+**Paths:** `crates/orbit-core/src/application/mod.rs`, `crates/orbit-core/src/bootstrap/activity.rs`, `crates/orbit-core/src/application/job/catalog/loading.rs`, `crates/orbit-core/src/bootstrap/init.rs`
 
 ### Context
 Embedded activity and job assets are materialized into the global resource catalog, but an additive refresh cannot distinguish a retired bundled file from an operator-authored file by name alone. Filename-only pruning would deactivate stale shipped subsystems, but it could also destroy legitimate local resources on legacy installations.
@@ -1719,6 +1723,67 @@ A gate's 14400-second wait on its delivery child expired while the child was sti
 - `Cost:` the stopped step is the first top-level step whose output the child had not recorded. A step skipped by `when:` records nothing either, so it can name an earlier step than the one running; a resume then redoes work rather than skipping it.
 - `Cost:` a cancel that fails leaves the child live, the one case where a terminal gate outlives its child. The parent says so in its error and reports `child_live: true`, and the gate's terminal cleanup still releases its reservation.
 
+## Granted script steps run under the script profile
+
+**Recorded:** 2026-10-29 · [ORB-19985], [ORB-19983], [ORB-19294]
+**Supersedes:** [The v2 shell activity surface is removed, not sandboxed](#the-v2-shell-activity-surface-is-removed-not-sandboxed), for `target: script:<name>` job steps only
+**Paths:** `crates/orbit-exec/src/build_sandbox/script.rs`, `crates/orbit-core/src/application/job/script_step.rs`, `crates/orbit-engine/src/activity_job/job_executor/script.rs`, `crates/orbit-runtime/src/audit/run/scripts.rs`
+
+### Context
+
+ORB-00374 removed the v2 `shell` activity because it spawned workspace-named programs with no sandbox, no cwd confinement and an allowlist the same YAML supplied. It recorded the alternative, retrofitting a sandbox and policy, and the cost: the `Ok(success = false)` audit-message path lost its only coverage. [Scope: Script steps](../script-steps/1_scope.md) designs that alternative for routine chores. Phase 1 ([ORB-19983]) added manifests, `target: script:` parsing and host-local grants bound to a content digest, with dispatch refusing every script step.
+
+### Decision
+
+1. A `target: script:<name>` step runs through a new `RuntimeHost::run_script_step` capability. Core re-reads the manifest and entry from the run's worktree (or the workspace root, read-only), snapshots both, and refuses before spawning when the grant is missing, expired, stale or narrower than the request, the interpreter it recorded moved, a pull follower holds an owner-only grant, the cwd is unusable, or the host cannot apply the profile. Each refusal is a non-retryable `DispatchError::ScriptRefused` carrying its typed code.
+2. The snapshot runs under `linux-bwrap-script-v1`: a Bubblewrap constructed root with every namespace unshared (no network beyond the namespace's own loopback), the build profile's runtime table, the cwd (a run worktree read-write, the workspace root read-only), its Git metadata read-only, granted roots, and a scratch directory at `/orbit-script`. `.orbit/`, the global root and the credential paths are never mounted. A nested-sandbox start refuses with `script_sandbox_unavailable`. The script gets its own `orbit-script-*` systemd scope where one can be created; `strict` worker containment refuses without it.
+3. Stdin is the input validated against `input_schema_json`. Exit 0 must answer with one JSON document within 1 MiB matching `output_schema_json`, or the step fails without retry (`script_output_invalid`). A nonzero exit, a signal, a timeout (`SIGTERM`, 10 s, `SIGKILL`) or a scratch breach is `Ok(success = false)` with `{exit_code, signal, timed_out}` as output, retried per the step's `retry`.
+4. Every attempt, refusals included, writes one `script.execution` audit event with the script name, digests, grant, redacted argv, cwd mode, profile, exit, duration and the capped, redacted log blob. `orbit run show` lists them and `orbit script history <name>` reads them across runs.
+5. `network: https|any`, `env_pass` and `files.inputs` are refused with `script_sandbox_unavailable` until their phases ship. macOS refuses every script step.
+
+### Rejected alternatives
+
+- *Run the script in the worker's own process tree with Landlock only.* No mount or pid namespace, so neither a read-deny of the host nor a kill-everything timeout.
+- *Resolve the interpreter on the worker's `PATH` at run time.* The grant records the canonical path the operator approved; a different `PATH` must not change what runs.
+- *Map a nonzero exit to `Err` as `local_shell` does.* A chore's nonzero exit is a result, not an executor fault, and the retry loop treats both alike.
+
+### Consequences
+
+- A workspace can run a reviewed program again, but only the bytes an operator granted, in a sandbox that denies the store, the global root and credentials. Editing the script in a worktree makes the next run refuse with `grant_stale` and both digests.
+- The `Ok(success = false)` leaf is back, with its audit-message path covered at the engine boundary: the message names the exit or signal and the log tail.
+- `Cost:` loopback services on the host (a dashboard on `127.0.0.1`) are unreachable from a `network: none` script, because its network namespace holds only its own loopback.
+- `Cost:` on a host where systemd cannot create the per-script scope, `warn` and `off` containment run the script in the worker's cgroup with no limits of its own.
+
+## Auto-task jobs declare schemaVersion 3
+
+**Recorded:** 2026-10-30 · [ORB-20237], [ORB-20157], [ORB-20132]
+**Supersedes:** the "`schemaVersion: 2` is the only activity/job asset family" clause of [Canonical v2 assets normalize into one execution contract](#canonical-v2-assets-normalize-into-one-execution-contract), for jobs using the auto-task step extension only
+**Paths:** `crates/orbit-engine/src/activity_job/asset_loader.rs`, `crates/orbit-types/src/workflow/activity_job/job_v2.rs`, `crates/orbit-store/src/workflow/layout/registry.rs`
+
+### Context
+
+Phase 1 of [auto-task steps](./specs/auto-task-step.md) ([ORB-20157]) added `target: auto-task:<name>`, the step keys `wait_until`, `expire_when`, `reuse_when` and `require_result`, and a job `expire_when`, all under `schemaVersion: 2`. A binary that predates them reads such a file without error: its step parser ignores keys it does not know, so it shows the steps without their waits, accepts an enabled copy, and fails only in the worker at target resolution. The delivery review rejected that as a silent drop. The only load-time refusal every older loader already has is its schemaVersion check, which refuses any version other than 2. Daniel approved the breaking change in [ORB-20132].
+
+### Decision
+
+1. A job that uses the extension, in any step and at any nesting (`parallel` branches, `fan_out` workers, `loop` bodies), declares `schemaVersion: 3`. Under `schemaVersion: 2` the loader refuses the mere presence of any of those keys, a null value or a nested step included, because an older binary drops it either way. Omitting `schemaVersion` is not an option the envelope has; an omitted `JobV2.schema_version` is 2. Activities stay 2-only.
+2. The declared version is an explicit carrier, `JobV2.schema_version`, set from the header and never inferred from the remaining fields: a present null normalizes to no field at all, so inference would quietly downgrade a job its author marked 3. The carrier is serialized when it is 3 and omitted when it is 2, so ordinary jobs serialize as before. Catalog load, `orbit job show`, `orbit automation explain` and their JSON report it as `schema_version`, and a run snapshot keeps the submitted YAML verbatim and is re-read through the same loader on resume.
+3. Breaking workspace layout migration 5, `auto-task-job-schema`, fences every binary without it, and through the generation guard every live client without it. That covers binaries before [ORB-20157], which drop the fields, and binaries after it, which accept the `schemaVersion: 2` form this one refuses. It rewrites nothing.
+4. Phase 1 stays disabled for every `schemaVersion: 3` job, including one with no extension field left. Load refuses `state: enabled`, submission refuses before a run record exists, and `validate_job` refuses before the first step. Only an explicit downgrade to `schemaVersion: 2`, after removing every extension key, makes the job ordinary again.
+
+### Rejected alternatives
+
+- *Record the older-binary gap as an acceptance exception.* An enabled copy would still load as an ordinary job on every binary in service.
+- *A new `JobKind` value as the older-reader sentinel.* An older binary refuses an unknown kind, but every workflow and subroutine classification would have to carry a kind that means "auto-task job".
+- *Infer the version from the fields.* It loses the author's 3 whenever normalization erases a field, such as a present null, and a job would silently become runnable.
+- *The layout fence alone.* It protects a workspace's own state, not a job file copied into another workspace or passed to `orbit job run <path>`. The schemaVersion protects the file wherever it goes.
+
+### Consequences
+
+- Orbit 0.39.0 (`sha256 2151dbf2…e926f2`) skips each `schemaVersion: 3` specimen in its catalog and refuses `orbit job run <path>` with `unsupported schemaVersion: 3`. Disabled, enabled and nested specimens all leave no run and no task.
+- A workspace opened by this binary refuses older binaries until they upgrade, even if it holds no auto-task job.
+- `Cost:` an author must change the header to 3 with the first auto-task field, and back to 2 by hand to run the job once the last one is gone; the load error names the key that needs 3.
+
 ## Task References
 
 - [T20260418-2018] — add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
@@ -1819,6 +1884,10 @@ A gate's 14400-second wait on its delivery child expired while the child was sti
 - [ORB-13315] — add deny mode (`tool_disallow_list`) beside the tool allowlist with an explicit policy envelope; allowlists stay for custom jobs.
 - [ORB-13897] — final recovery: the `final_recovery` activity, its typed decision contract and deterministic applier, the `workflow.final_recovery_crews` pool, and the `step_failure_recovery` resume fix.
 - [ORB-13898] — final-recovery backstop: `blocked_task_recovery_pipeline` and the owner's sweep trigger for tasks blocked outside delivery pipelines.
+- [ORB-19985] — run granted script steps on Linux under `linux-bwrap-script-v1`, record each attempt as `script.execution`, and supersede ORB-00374's removal for script steps.
+- [ORB-20132] — operator approval of the breaking schemaVersion 3 change for auto-task jobs.
+- [ORB-20157] — define and explain disabled auto-task job steps (phase 1).
+- [ORB-20237] — require `schemaVersion: 3` for auto-task jobs and fence older clients with layout migration 5.
 - [ORB-14685] — backstop lane contract: offer only the decisions the backstop applies and name the failed run's retained candidate.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::application::contracts::RetryKey;
+use crate::application::job::{JobDrainPort, ReviewAdmissionHook};
 use crate::runtime::run_input::recorded_task_ids;
 
 /// [ORB-10544] Cap on the run history scanned by the in-flight ship guard.
@@ -30,16 +32,6 @@ pub(crate) struct PipelineSubmission<'a> {
     pub(crate) reconciliation: bool,
     /// How this run was submitted [ORB-12255].
     pub(crate) trigger: JobRunTrigger,
-}
-
-/// Where a keyed submission's retry key lives and how far back it is matched.
-///
-/// The key is the string at `input[field]`; it is matched against the job's
-/// newest `scan_limit` runs in the same store transaction that would insert.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RetryKey<'a> {
-    pub(crate) field: &'a str,
-    pub(crate) scan_limit: usize,
 }
 
 /// What a parent-authorized child submission produced.
@@ -120,10 +112,9 @@ impl OrbitRuntime {
     /// Submit a `ship` workflow run (the `task_auto_pipeline` job).
     ///
     /// Shared entry point for every non-interactive submission surface
-    /// (dashboard HTTP endpoint, MCP `orbit.workflow.ship`, `orbit run
-    /// ship-sweep`). `base_branch` falls back to the workspace's `[workflow]
-    /// base_branch`; an empty `task_ids` slice selects auto
-    /// (backlog-discovery) mode. One-shot: returns as soon as the run is
+    /// (dashboard HTTP endpoint, MCP `orbit.workflow.ship`). `base_branch`
+    /// falls back to the workspace's `[workflow] base_branch`; an empty
+    /// `task_ids` slice selects auto (backlog-discovery) mode. One-shot: returns as soon as the run is
     /// persisted and its worker spawned.
     ///
     /// [ORB-10544] An explicit task selection is guarded against duplicate
@@ -183,6 +174,7 @@ impl OrbitRuntime {
             trigger,
             false,
             None,
+            false,
         )
     }
 
@@ -195,6 +187,14 @@ impl OrbitRuntime {
     /// refused here, before any run exists, on the local route, against the
     /// other workspace layer, or without a reviewer crew; the layer workspace
     /// policy already applies is accepted unchanged.
+    ///
+    /// A named `backlog` task whose `not_before` is still ahead is refused
+    /// with [`OrbitError::TaskScheduled`]. `ignore_schedule` is the CLI-only
+    /// operator override (`orbit run ship --ignore-schedule`): once every
+    /// other check passes, it records a `schedule_overridden` history event
+    /// for each such task before the run is submitted, which lifts the hold
+    /// on every admission route for that scheduled time. The tool and
+    /// dashboard surfaces always pass `false`.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_ship_run_with_containment(
         &self,
@@ -208,7 +208,14 @@ impl OrbitRuntime {
         trigger: JobRunTrigger,
         strict_containment: bool,
         review: Option<orbit_types::workflow::ReviewLayer>,
+        ignore_schedule: bool,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        if ignore_schedule && task_ids.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "`--ignore-schedule` starts named scheduled tasks; pass the task ids to ship"
+                    .to_string(),
+            ));
+        }
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
         // [ORB-12500] Explicit shipment converges on the same admission
@@ -217,12 +224,10 @@ impl OrbitRuntime {
         // already executing is settled or recovered, never shipped beside
         // itself. Saturation does not stand an operator's explicit invocation
         // down — the leaf definition's own `max_active_runs` bounds it.
-        self.drain_entry_admission(
-            crate::application::distributed::DrainEntryPoint::ExplicitShip,
+        self.admit_explicit_drain_entry(
+            crate::application::contracts::DrainEntryPoint::ExplicitShip,
             task_ids,
-            false,
-        )?
-        .into_result()?;
+        )?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::SHIP_WORKFLOW_ALIAS,
         )
@@ -240,8 +245,7 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
-        crate::application::review::admit_review_request(
-            self,
+        self.admit_review_request(
             &mut input,
             review,
             mode == crate::application::workflow::ShipMode::Local,
@@ -250,16 +254,22 @@ impl OrbitRuntime {
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
         let forge = crate::application::job::delivery::PrForgeCheck::default();
+        let mut overridden = Vec::new();
         for task_id in task_ids {
             // A task the pipeline cannot start from (`blocked`, `review`,
             // `done`, `proposed`, ...) would only be discovered after the
             // run was accepted, reported `submitted`, and then failed or
             // no-oped at the gate. Refuse it here, naming the status and the
-            // way back into the backlog.
-            let task = self.ensure_task_can_enter_workflow_as_system(
+            // way back into the backlog. A task scheduled ahead is refused
+            // the same way unless the operator overrides its schedule.
+            let task = self.ensure_task_can_enter_workflow_honouring_schedule(
                 task_id,
                 crate::application::workflow::SHIP_WORKFLOW_ALIAS,
+                !ignore_schedule,
             )?;
+            if ignore_schedule && let Some(hold) = self.schedule_hold(&task)? {
+                overridden.push((task.id.clone(), hold.not_before));
+            }
             // A task whose effective OS requirement this host cannot satisfy is
             // never started here; it would only fail on a platform it cannot
             // run on. Check its tags and assigned crew, and the actual
@@ -276,6 +286,14 @@ impl OrbitRuntime {
                         .map_or(std::env::consts::OS, orbit_types::task::HostOs::as_str)
                 )));
             }
+            // Nor a task requiring a capability label this host lacks.
+            if let Some(wait) = self.task_host_labels_wait(&task) {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "explicit ship task '{task_id}' {wait}; ship it on a host whose \
+                     `machine.labels` carry them (a pull-drain follower that does claims it \
+                     from the backlog) or change its `requires_labels`"
+                )));
+            }
             // Nor a `ui` task on a host whose browser kit is not verified: its
             // worker could not render the change it must screenshot.
             if orbit_types::task::requires_browser_kit(&task.tags) && !self.browser_kit_verified() {
@@ -283,6 +301,16 @@ impl OrbitRuntime {
                     "explicit ship task '{task_id}' {}; this host has no verified kit (a pull-drain \
                      follower with one claims it from the backlog)",
                     orbit_types::task::browser_kit_wait()
+                )));
+            }
+            // A `verify-mock-ui` task's mocks are validated again at
+            // delivery admission (visual-review §2.3, §2.4). Their digests
+            // are frozen only once admission is granted (below, past the
+            // in-flight guard), so a refused duplicate cannot rewrite the
+            // running delivery's baseline.
+            if let Err(detail) = self.mock_admission_check(&task) {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "explicit ship task '{task_id}' is not admitted: {detail}"
                 )));
             }
             if let Some(allowlist) = allowlist.as_ref() {
@@ -303,12 +331,53 @@ impl OrbitRuntime {
             {
                 return Err(OrbitError::InvalidInput(format!(
                     "explicit ship task '{task_id}' is routed to local-only delivery: {}",
-                    crate::application::review::local_route_run_option_refusal(layer)
+                    self.local_route_review_refusal(layer)
                 )));
             }
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);
+        }
+        // The worker starts as soon as the run is submitted, so the override
+        // is on record before then.
+        let overrider = actor.unwrap_or(&self.actor().label).to_string();
+        for (task_id, not_before) in &overridden {
+            self.record_schedule_override(task_id, *not_before, &overrider)?;
+        }
+        // Freeze each named `verify-mock-ui` task's mock digests now that
+        // admission has been granted: every refusal above, including the
+        // in-flight duplicate guard, returns before this point, so a
+        // rejected submission can never rewrite the active delivery's
+        // baseline. Like the schedule override, the freeze lands before
+        // submission because the worker starts as soon as the run is
+        // persisted. Each freeze is keyed to a token carried in this run's
+        // input, so the leaf's workflow admission recognises the record as
+        // this delivery's and keeps it instead of re-freezing.
+        let mut mock_admissions = serde_json::Map::new();
+        for task_id in task_ids {
+            let task = self.get_task(task_id)?;
+            if !orbit_types::task::has_verify_mock_ui_tag(&task.tags) {
+                continue;
+            }
+            let admission_id = format!(
+                "ship:{}",
+                orbit_types::task::mock_sha256_hex(
+                    format!(
+                        "{task_id}|{}|{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |duration| duration.as_nanos()),
+                        std::process::id()
+                    )
+                    .as_bytes()
+                )
+            );
+            let mode = Self::mock_freeze_mode_for_ship(&task);
+            self.record_admitted_mock_digests(&task, Some(admission_id.clone()), mode)?;
+            mock_admissions.insert(task_id.clone(), json!(admission_id));
+        }
+        if !mock_admissions.is_empty() {
+            input["__mock_admissions"] = Value::Object(mock_admissions);
         }
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }
@@ -373,13 +442,11 @@ impl OrbitRuntime {
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
         // [ORB-12500] An explicit owner drain is owner coordination work; a
         // replica executes through pull instead of running one locally.
-        self.drain_entry_admission(
-            crate::application::distributed::DrainEntryPoint::OwnerDrain,
+        self.admit_explicit_drain_entry(
+            crate::application::contracts::DrainEntryPoint::OwnerDrain,
             &[],
-            false,
-        )?
-        .into_result()?;
-        self.preflight_git_protection()?;
+        )?;
+        self.drain_git_protection_preflight()?;
         let crews = self.drain_crews_runnable_here(self.canonical_allowed_crews(allowed_crews)?)?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
@@ -400,8 +467,7 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
-        crate::application::review::admit_review_request(
-            self,
+        self.admit_review_request(
             &mut input,
             review,
             self.automatic_delivery_ship_mode() == crate::application::workflow::ShipMode::Local,
@@ -454,7 +520,7 @@ impl OrbitRuntime {
     /// coordinators, the delivery leaves, and any plugin delivery job. The
     /// workspace drain and preparation jobs may list task IDs without holding
     /// it; their dispatched children do.
-    fn in_flight_ship_run_for_tasks(
+    pub(crate) fn in_flight_ship_run_for_tasks(
         &self,
         task_ids: &[String],
     ) -> Result<Option<OrbitError>, OrbitError> {

@@ -23,6 +23,10 @@ impl Roots {
         self.workspace.path().join("config.toml")
     }
 
+    fn global_config(&self) -> PathBuf {
+        self.global.path().join("config.toml")
+    }
+
     fn config_roots(&self) -> ConfigRoots {
         ConfigRoots::new(self.global.path(), self.workspace.path())
     }
@@ -98,7 +102,7 @@ fn a_store_opened_before_another_save_refuses_to_replace_it() {
 
     let mut first = open(&path);
     let mut second = open(&path);
-    set_key(&mut first, global, "workflow.auto_ship", "true");
+    set_key(&mut first, global, "decision_channel.enabled", "true");
     set_key(&mut second, global, "workflow.base_branch", "agent-main");
 
     first.save().expect("first save lands");
@@ -117,7 +121,10 @@ fn a_store_opened_before_another_save_refuses_to_replace_it() {
     );
 
     let config = roots.load();
-    assert!(config.workflow_auto_ship, "first edit survives");
+    assert!(
+        config.snapshot.decision_channel_enabled,
+        "first edit survives"
+    );
     assert_eq!(config.workflow_base_branch, "main");
 
     // Reapplied to the current file, the second edit keeps the first.
@@ -125,7 +132,10 @@ fn a_store_opened_before_another_save_refuses_to_replace_it() {
     set_key(&mut reopened, global, "workflow.base_branch", "agent-main");
     reopened.save().expect("reapplied save lands");
     let config = roots.load();
-    assert!(config.workflow_auto_ship, "first edit still holds");
+    assert!(
+        config.snapshot.decision_channel_enabled,
+        "first edit still holds"
+    );
     assert_eq!(config.workflow_base_branch, "agent-main");
 }
 
@@ -136,7 +146,7 @@ fn a_store_saves_again_after_its_own_save() {
     let global = roots.global.path();
 
     let mut store = open(&path);
-    set_key(&mut store, global, "workflow.auto_ship", "true");
+    set_key(&mut store, global, "decision_channel.enabled", "true");
     store.save().expect("first save");
     set_key(&mut store, global, "workflow.base_branch", "agent-main");
     store
@@ -144,7 +154,7 @@ fn a_store_saves_again_after_its_own_save() {
         .expect("its own earlier save is not someone else's edit");
 
     let config = roots.load();
-    assert!(config.workflow_auto_ship);
+    assert!(config.snapshot.decision_channel_enabled);
     assert_eq!(config.workflow_base_branch, "agent-main");
 }
 
@@ -157,7 +167,12 @@ fn plugin_toggle_and_config_writers_refuse_each_others_stale_saves() {
     // A config edit opened before a toggle write is refused...
     let mut config_writer = open(&path);
     let mut toggle_writer = open(&path);
-    set_key(&mut config_writer, global, "workflow.auto_ship", "true");
+    set_key(
+        &mut config_writer,
+        global,
+        "decision_channel.enabled",
+        "true",
+    );
     set_toggle(&mut toggle_writer, global, "alpha", false);
     toggle_writer.save().expect("toggle save lands");
     config_writer
@@ -182,7 +197,10 @@ fn plugin_toggle_and_config_writers_refuse_each_others_stale_saves() {
 
     let config = roots.load();
     assert_eq!(config.workflow_base_branch, "agent-main");
-    assert!(!config.workflow_auto_ship, "the refused edit never landed");
+    assert!(
+        !config.snapshot.decision_channel_enabled,
+        "the refused edit never landed"
+    );
     assert_eq!(roots.toggles().get("alpha"), Some(&false));
     assert_eq!(roots.toggles().get("beta"), None);
 }
@@ -199,7 +217,7 @@ fn writers_under_the_write_lock_serialize_and_keep_both_edits() {
     let (started_tx, started_rx) = mpsc::channel();
     let second = ConfigStore::with_write_lock(&path, || {
         let mut store = open(&path);
-        set_key(&mut store, &global, "workflow.auto_ship", "true");
+        set_key(&mut store, &global, "decision_channel.enabled", "true");
 
         let second = std::thread::spawn({
             let path = path.clone();
@@ -226,7 +244,10 @@ fn writers_under_the_write_lock_serialize_and_keep_both_edits() {
         .expect("second writer reads the first's save and lands");
 
     let config = roots.load();
-    assert!(config.workflow_auto_ship, "first edit survives");
+    assert!(
+        config.snapshot.decision_channel_enabled,
+        "first edit survives"
+    );
     assert_eq!(config.workflow_base_branch, "agent-main");
     assert_eq!(roots.toggles().get("alpha"), Some(&false));
 }
@@ -283,6 +304,160 @@ mod admission {
                 .to_string()
                 .contains("config path must not be a symlink"),
             "{error}"
+        );
+    }
+}
+
+#[test]
+fn review_timing_writes_remain_readable_by_previous_readers() {
+    let roots = Roots::new();
+    let path = roots.workspace_config();
+    for (alias, canonical) in [
+        ("off", "off"),
+        ("none", "off"),
+        ("after_landing", "off"),
+        ("after-landing", "off"),
+        ("before_pr", "before_pr"),
+        ("before-pr", "before_pr"),
+        ("before_landing", "before_landing"),
+        ("before-landing", "before_landing"),
+    ] {
+        // Cover deliberate CLI/subsystem writes and an unrelated doctor's
+        // edit to a file already carrying an alias.
+        for existing in [false, true] {
+            let original = format!("[review]\n# operator note\ntiming = {alias:?} # keep this\n");
+            std::fs::write(&path, if existing { &original } else { "" })
+                .expect("review timing write round trip");
+            let mut store = open(&path);
+            if !existing {
+                store
+                    .set_value("review.timing", &format!("{alias:?}"))
+                    .expect("review timing write round trip");
+            }
+            store
+                .set_document_value("review.minutes", "45")
+                .expect("review timing write round trip");
+            store
+                .validate_workspace_with_global(roots.global.path())
+                .expect("review timing write round trip");
+            store.save().expect("review timing write round trip");
+            let text = std::fs::read_to_string(&path).expect("review timing write round trip");
+            let document: toml::Value =
+                toml::from_str(&text).expect("review timing write round trip");
+            assert_eq!(
+                document["review"]["timing"].as_str(),
+                Some(canonical),
+                "{alias}"
+            );
+            if existing {
+                assert!(text.contains("# operator note") && text.contains("# keep this"));
+            }
+            assert_eq!(roots.load().snapshot.review_timing, canonical);
+            let saved = std::fs::read(&path).expect("review timing write round trip");
+            store.save().expect("review timing write round trip");
+            assert_eq!(
+                std::fs::read(&path).expect("review timing write round trip"),
+                saved,
+                "idempotent save"
+            );
+        }
+    }
+}
+
+#[test]
+fn partial_assistance_limits_and_budget_tables_use_defaults_and_validate() {
+    let roots = Roots::new();
+    std::fs::write(
+        roots.global_config(),
+        "[assistance.limits]\nconcurrency = 4\n\
+         [assistance.budget]\nepoch = \"allocation_1\"\ntoken_ceiling = 500\n",
+    )
+    .expect("write partial assistance tables");
+
+    let config = roots.load();
+    let settings = &config.snapshot.assistance_settings;
+    let expected_limits = orbit_types::assistance::AssistanceLimits {
+        concurrency: 4,
+        ..Default::default()
+    };
+    assert_eq!(settings.limits, expected_limits);
+
+    let expected_budget = orbit_types::assistance::AssistanceBudget {
+        epoch: "allocation_1".into(),
+        token_ceiling: 500,
+        ..Default::default()
+    };
+    assert_eq!(settings.budget, expected_budget);
+    settings
+        .validate_assistance_settings()
+        .expect("partial settings with built-in defaults remain valid");
+}
+
+#[test]
+fn partial_assistance_tables_still_reject_unknown_fields() {
+    let roots = Roots::new();
+    for (unknown_key, table) in [
+        (
+            "future_limit",
+            "[assistance.limits]\nconcurrency = 4\nfuture_limit = 1\n",
+        ),
+        (
+            "future_budget",
+            "[assistance.budget]\nepoch = \"allocation_1\"\ntoken_ceiling = 500\nfuture_budget = 1\n",
+        ),
+    ] {
+        std::fs::write(roots.global_config(), table).expect("write unknown assistance field");
+        let error = ResolvedConfig::load(&roots.config_roots())
+            .expect_err("unknown assistance fields must be refused");
+        assert!(
+            error.to_string().contains(unknown_key),
+            "the unknown field should cause the refusal: {error}"
+        );
+    }
+}
+
+#[test]
+fn malformed_contract_digest_names_field_and_expected_format() {
+    fn settings_with_digest(digest: &str) -> orbit_config::assistance::AssistanceSettings {
+        orbit_config::assistance::AssistanceSettings {
+            policies: vec![orbit_config::assistance::AssistancePolicy {
+                workspace_id: "workspace_1".into(),
+                use_case: "task_quality".into(),
+                mode: orbit_types::assistance::AssistanceMode::Off,
+                model: "gpt-6-luna".into(),
+                model_revision: "rev_1".into(),
+                policy_version: "v1".into(),
+                contract_digest: digest.into(),
+                evidence_fields: vec!["title".into()],
+                evidence_ref_prefixes: vec!["task:".into()],
+                credential_env: "ORBIT_ASSISTANCE_KEY".into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    // [ORB-19819]: the prefixed lowercase digest is the only accepted shape.
+    const VALID_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    settings_with_digest(VALID_DIGEST)
+        .validate_assistance_settings()
+        .expect("prefixed lowercase digest is valid");
+
+    for malformed in [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+    ] {
+        let error = settings_with_digest(malformed)
+            .validate_assistance_settings()
+            .expect_err("malformed digest must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("contract_digest"),
+            "digest refusal names the field: {message}"
+        );
+        assert!(
+            message.contains("sha256:") && message.contains("64") && message.contains("lowercase"),
+            "digest refusal names the expected format: {message}"
         );
     }
 }

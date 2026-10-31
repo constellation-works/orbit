@@ -12,9 +12,11 @@ public `tools/call`, including their formerly advertised spellings. Client names
 and initialize metadata grant no internal access. Both endpoints must support
 the internal protocol; preflight fails closed without a public fallback. A
 replica runs `orbit run auto --pull <selector>` to use that route. Supported
-operator diagnostics remain owner-side CLI commands; approval, revocation and
-recovery remain owner-dashboard actions. Do not invent tools for them, write a
-callers file, or start a second owner store.
+operator diagnostics remain owner-side CLI commands. Handoff approval is an
+owner-dashboard action with no CLI verb or tool. Revocation and claim recovery
+are supported operator commands (`orbit task revoke-handoff` and
+`orbit task recover-claim`) with matching operator tools; see Recovery. Do not
+invent tools for approval, write a callers file, or start a second owner store.
 
 Owner/replica registration lives in
 [multi-host.md](../../../orbit-setup/references/multi-host.md). SSH federation
@@ -38,8 +40,6 @@ routing is in [tool-surface.md](../tool-surface.md).
   is on the task's `review-gate.json`.
 - Age, reservation TTL, and a missing local run are diagnostics, not proof of
   death.
-- Seeded `ship_sweep`, `workspace_ship_pipeline`, and `orbit run ship-sweep`
-  stay at their current enablement. This setup does not turn them on.
 - Remote machine labels (`--remote-caller-machine-id`) supply audit attribution,
   the receipt namespace and the machine fence for claim bind/settle. The journal
   compares the session label with the claim's execution machine, bound run and
@@ -262,8 +262,10 @@ returns.
   receipt for closes as `Refused`; a committed one is carried forward.
 - A settlement the owner refuses while it still holds the claim (for example a
   footprint widening onto a path the owner protects) stays
-  recorded, holds new requests, and is retried with a backoff of at most 15
-  minutes rather than every pass. `orbit run show <drain-run>` prints it once
+  recorded and is retried with a backoff of at most 15 minutes rather than
+  every pass. A non-delivery refusal holds new requests; a delivery refusal,
+  such as a changed PR head, holds only its own settlement and permits
+  unrelated pulls. `orbit run show <drain-run>` prints it once
   as `Settlement refused:` with the owner's reason and remedy; fix the owner,
   and the next due attempt settles it, or `orbit run auto --stop` retries it
   at once.
@@ -396,14 +398,37 @@ Inspect the claim, task, locks, and the run on the execution machine named by
 `job_run_machine`. Reconcile an uncertain merge intent before any reassignment — a
 revocation or recovery is refused with `uncertain_merge_intent` until it is.
 
-Approve, revoke and recover are owner-operator actions on the owner's dashboard
-(`handoff.approve`, `handoff.revoke`, `claim.recover`). They carry the exact
-candidate or phase the operator was shown and are refused with `stale_claim`
-when the owner moved on. There is still no registered tool and no CLI verb for
-them: do not invent one, do not ship the same task again, and do not treat
-`--complete` on a follower as landing. Followers never merge, and a replica
-refuses all three with `replica_checkout`. A returning worker after revocation
-receives `stale_claim`.
+Handoff approval is an owner-operator action on the owner's dashboard
+(`handoff.approve`). It has no CLI verb and no registered tool. It records one
+candidate-scoped authorization and a landing-start request for the exact
+candidate and base the operator was shown, and it never merges. A stale page is
+refused with `stale_claim`. Do not substitute a status write on the handed-off
+review, `--complete` on a follower, or `orbit job resume`: a plain status write
+is refused while the claim is active.
+
+Revocation and recovery are supported operator commands with matching operator
+tools. Both require trusted operator authority, are unavailable to managed runs,
+take a required reason, and replay when the same `--request` key is resubmitted
+with the same input:
+
+```bash
+orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --reason <reason> --request <key>
+orbit task recover-claim <claim-id> --phase <phase> --status blocked|backlog --reason <reason> --request <key>
+```
+
+- `revoke-handoff` (`orbit.task.revoke_handoff`) cancels the pending landing
+  request for the accepted candidate and base you name. The task stays in
+  `review`.
+- `recover-claim` (`orbit.task.recover_claim`) revokes the live claim,
+  invalidates pending landing authority and releases its reservation in one
+  transaction. It moves the task to `blocked` to diagnose or `backlog` to retry.
+  Pass the claim phase you observed; a claim that moved on is refused.
+
+Both refuse with `stale_claim` when the owner moved on, and a replica refuses
+them with `replica_checkout`. A returning worker after revocation receives
+`stale_claim`. Managed agents cannot call either command or tool. Do not invent
+a workaround, do not ship the same task again while the old claim is unfenced,
+and do not treat `--complete` on a follower as landing. Followers never merge.
 
 A recovered follower pull request that merged at a head other than its
 handed-off candidate completes only after an operator reconciles that merged

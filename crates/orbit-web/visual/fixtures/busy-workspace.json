@@ -1,0 +1,16 @@
+{
+  "fixture": "busy-workspace",
+  "frozen_instant": "2026-01-01T12:00:00Z",
+  "tasks": [
+    { "title": "Fixture task with a deliberately long title that must ellipsize inside its row without widening the page at any width", "complexity": "medium", "status": "proposed" },
+    { "title": "Repair the flaky scheduler sweep", "complexity": "hard", "status": "backlog" },
+    { "title": "Ship the dashboard polish pass", "complexity": "medium", "status": "in-progress" },
+    { "title": "Review the release notes draft", "complexity": "low", "status": "review" },
+    { "title": "Migrate the legacy store layout", "complexity": "hard", "status": "blocked" },
+    { "title": "Backfill provider usage readings", "complexity": "medium", "status": "done" },
+    { "title": "UnbreakableToken0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 overflow probe", "complexity": "low", "status": "proposed" },
+    { "title": "Quarterly dependency sweep", "complexity": "low", "status": "backlog" },
+    { "title": "Investigate implementer scoreboard drift across crews with very long agent names", "complexity": "medium", "status": "backlog" },
+    { "title": "Document the recovery runbook", "complexity": "low", "status": "proposed" }
+  ]
+}

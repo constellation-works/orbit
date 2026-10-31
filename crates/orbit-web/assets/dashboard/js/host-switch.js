@@ -21,6 +21,7 @@ import {
   hostDisplayName,
   hostLabel,
   hostWriteRefusal,
+  onRegisteredHostsChange,
   setHost,
   setHostUnavailable,
   setHostWrites,
@@ -53,6 +54,16 @@ const FAILURE_HEADLINES = {
 let failure = null;
 let connection = null;
 let onSelect = () => {};
+onRegisteredHostsChange((previous, hosts) => {
+  const selected = getHost();
+  const old = previous.find((row) => row.name === selected);
+  const renamed = old && hosts.find((row) => row.machine_id === old.machine_id && !row.local);
+  buildPicker();
+  renderHostChrome();
+  if (renamed && renamed.name !== selected) {
+    queueMicrotask(() => { if (getHost() === selected) onSelect(renamed.name); });
+  }
+});
 
 function rememberedHost() {
   try {
@@ -116,7 +127,11 @@ export function chooseHost(name) {
 function buildPicker() {
   const container = $("rail-host");
   if (!container) return;
-  const select = el("select", { class: "workspace-select host-select", title: "Host" });
+  // ORB-17652: the visible "Host" label below is hidden on phones, so the
+  // select also carries its name directly — the same mechanism as the
+  // workspace picker's "Workspace" name, keeping the two pickers labelled
+  // consistently at every width.
+  const select = el("select", { class: "workspace-select host-select", title: "Host", "aria-label": "Host" });
   select.id = "host-select";
   const serving = getServingHost();
   const servingOption = el("option", { text: `${serving ? serving.name : "This host"} (serving host)` });
@@ -141,20 +156,19 @@ function buildPicker() {
   container.replaceChildren(label, select);
 }
 
-/// Name the selected host on the top-bar chip group and the rail connection
-/// line, and keep the picker in step with it.
+/// Name the selected host on the provider-usage group, the resource dialog
+/// and the rail connection line, and keep the picker in step with it.
 export function renderHostChrome() {
   const name = hostDisplayName();
   const group = $("host-resource-group");
   if (group) {
-    group.setAttribute("aria-label", `Live resources of ${name}`);
+    group.setAttribute("aria-label", `Provider usage of ${name}`);
     group.classList.toggle("remote", !!getHost());
   }
-  const chipName = $("host-resource-name");
-  if (chipName) {
-    chipName.textContent = name;
-    chipName.title = getHost() ? `Readings from ${name}` : `Readings from ${name}, which serves this dashboard`;
-  }
+  const detailName = $("host-detail-name");
+  if (detailName) detailName.textContent = name;
+  const panel = $("host-detail");
+  if (panel) panel.setAttribute("aria-label", `${name} resources`);
   const conn = $("conn-host");
   if (conn) conn.textContent = name;
   const select = $("host-select");

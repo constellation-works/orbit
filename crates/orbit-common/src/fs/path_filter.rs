@@ -24,6 +24,15 @@ impl PathFilter {
                 Some(glob) => (true, glob),
                 None => (false, pattern.as_str()),
             };
+            // A bare `**` names every path; `RelativePathGlob` refuses an
+            // all-globstar pattern (it would name the root for filesystem
+            // traversal), so spell it as the equivalent `**/*` here, where
+            // matching every changed path is the point.
+            let glob = if glob.split('/').all(|part| part == "**") && !glob.is_empty() {
+                "**/*"
+            } else {
+                glob
+            };
             let glob = RelativePathGlob::new(glob)
                 .map_err(|error| OrbitError::InvalidInput(format!("{key}: {error}")))?;
             if excluded {

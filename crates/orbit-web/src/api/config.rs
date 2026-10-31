@@ -26,7 +26,7 @@ use super::routines::{
     action_capability, authorization_denied, authorized_caller, record_operation_audit,
 };
 use super::{bad_request, blocking, map_runtime_error, server_error, workspace_label};
-use crate::state::{DashboardState, Ws};
+use crate::state::{ConfigFileWs, DashboardState, Ws};
 
 /// Audit operation name for every config write, accepted or refused.
 const CONFIG_AUDIT_OPERATION: &str = "config.set";
@@ -85,9 +85,14 @@ pub(super) async fn get_effective_config(
 }
 
 /// `GET /api/config/file?scope=global|workspace` — one file in isolation.
+///
+/// Uses the stale-tolerant workspace resolution so a broken layered config
+/// stays repairable here (400 naming the file), while fleet and aggregate
+/// endpoints report the same breakage as `unavailable` through the strict
+/// resolver.
 pub(super) async fn get_config_file(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ConfigFileWs(runtime): ConfigFileWs,
     Query(query): Query<ConfigFileQuery>,
 ) -> Response {
     let scope = match query.scope.as_deref() {

@@ -25,6 +25,18 @@ pub const TASK_ARTIFACTS_DIR_NAME: &str = "artifacts";
 pub const TASK_ARTIFACT_MANIFEST_FILE_NAME: &str = "manifest.yaml";
 pub const TASK_ARTIFACT_FILES_DIR_NAME: &str = "files";
 
+/// Task artifact holding the task-pilot's explore brief: a bounded,
+/// revision-keyed map of the change. Only the pilot's apply step writes it,
+/// as the system writer; agent and operator writes to the name are refused.
+pub const EXPLORE_BRIEF_ARTIFACT: &str = "explore-brief.json";
+
+/// Whether a canonical task artifact path names the explore brief. Callers
+/// must first use [`canonical_artifact_path`]; ASCII case folding protects
+/// owners on case-insensitive filesystems.
+pub fn is_explore_brief_artifact(path: &str) -> bool {
+    path.eq_ignore_ascii_case(EXPLORE_BRIEF_ARTIFACT)
+}
+
 pub fn is_valid_orb_task_id(id: &str) -> bool {
     let Some((prefix, suffix)) = id.split_once('-') else {
         return false;
@@ -87,7 +99,7 @@ pub struct TaskEnvelopeV2 {
     pub pr_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<String>,
-    /// [ORB-12725] `job_run_host` is read for one release; see
+    /// Permanent read alias [ORB-12725, ORB-18313]: `job_run_host`; see
     /// [`crate::task::Task::job_run_machine`].
     #[serde(
         default,
@@ -114,6 +126,10 @@ pub struct TaskEnvelopeV2 {
     /// Why the task was filed; absent on legacy and unstated filings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::task::TaskOrigin>,
+    /// Stable rule-result fingerprint this task owns, written by the
+    /// rule-findings filer at filing; absent on every other task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relations: Vec<TaskRelation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -125,12 +141,29 @@ pub struct TaskEnvelopeV2 {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub required_tools: Vec<String>,
+    /// Operator-granted tools; see [`crate::task::Task::granted_tools`].
+    #[serde(
+        default,
+        deserialize_with = "crate::task::deserialize_required_tools",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub granted_tools: Vec<String>,
+    /// Capability labels a host must all carry to run the task (normalized).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_labels: Vec<String>,
+    /// Scheduled start; see [`crate::task::Task::not_before`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_refs: Vec<ExternalRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
+    /// Creator's full model id, recorded once at creation; see
+    /// [`crate::task::Task::created_by_model`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planned_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,6 +259,9 @@ pub fn validate_task_relations_for_source(
                 "task relation {:?} -> '{}' must not carry a `regression` classification; only regression_from accepts one",
                 relation.relation_type, relation.target
             )));
+        }
+        if let Some(regression) = &relation.regression {
+            regression.validate_sites().map_err(TaskError::Invalid)?;
         }
         if relation.target == source_id {
             return Err(TaskError::Invalid(format!(

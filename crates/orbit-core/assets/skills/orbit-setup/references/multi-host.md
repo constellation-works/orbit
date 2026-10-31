@@ -102,12 +102,19 @@ legacy migration are in [remote-access.md](remote-access.md).
 ## Scheduling and claims
 
 Cron routine definitions have no machine pin: every host with a registered owner
-checkout and an enabled clock evaluates them against its own store. The two
-state routines, `task-pilot` and `finding-verification`, declare
-`trigger.state.owner_machine` and `trigger.state.branch`, rendered from the
-seeding host's stable machine id and the registered base branch. Only that
+checkout and an enabled clock evaluates them against its own store. These four
+seeded state routines declare `trigger.state.owner_machine` and
+`trigger.state.branch`:
+
+- `task-pilot`
+- `finding-verification`
+- `pilot-warning-triage`
+- `blocked-task-triage`
+
+The pins are rendered from the seeding host's stable machine id and the
+registered base branch. Only that
 machine evaluates their state triggers; copy those definitions with their pins
-in mind. See [automation.md](automation.md#the-seven-seeded-routines). Inspect
+in mind. See [automation.md](automation.md#the-ten-seeded-routines). Inspect
 their seeded names with `orbit routine list`. Definitions and enablement are
 per-user, gitignored checkout state; copy changes deliberately. Last-fire timestamps and pauses stay host-local. Two hosts running the same
 cron routine each evaluate it independently, and `overlap: forbid` is local — pause

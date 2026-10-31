@@ -6,8 +6,20 @@ mod auto_task;
 pub use auto_concurrency::AutoConcurrencyMode;
 mod child_dispatch;
 mod crew_purpose;
+mod delivery_conventions;
 mod error;
+mod experiments;
+pub use experiments::{
+    CapturedExperiment, CapturedExperimentInstruction, CapturedExperiments,
+    ExperimentActivityOverlay, ExperimentOverlayRecord, ExperimentSkillBundle, ExperimentSkillFile,
+    experiment_skill_provider_supported,
+};
 mod executor_def;
+mod explore_brief;
+mod image_input;
+pub use explore_brief::{
+    ExploreBriefAdmission, ExploreBriefDropReason, ExploreBriefOutcome, ExploreBriefRecord,
+};
 mod final_recovery;
 pub mod handoff;
 mod host_evidence;
@@ -21,10 +33,19 @@ mod run;
 mod ship;
 mod skill;
 mod tag_instructions;
+pub use delivery_conventions::{
+    BRANCH_HASH_LEN, COMMIT_SUBJECT_BUDGET, ConventionTemplate, DEFAULT_BRANCH_PREFIX,
+    DEFAULT_BRANCH_TEMPLATE, DeliveryConventions, EVIDENCE_REF_PREFIX, MissingSectionPolicy,
+    PR_DRAFT_RECOVERY_EVENT, PR_SECTION_GAP_EVENT, PR_SECTIONS_ARTIFACT, Placeholder,
+    PrBodyTemplateSource, PrDraftRecovery, PrDraftRecoveryOutcome, REPO_PR_BODY_TEMPLATE,
+    REPO_PR_TEMPLATE_LOCATIONS, SCREENSHOT_ARTIFACT_PREFIX, SCREENSHOTS_SECTION, SUBJECT_ELLIPSIS,
+    ScreenshotSection, TemplateSurface, UI_TASK_TAG, default_branch_template, same_section_name,
+    unsafe_branch_name_reason,
+};
 pub use error::{
-    FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
-    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, TagInstructionError,
-    WorkflowError,
+    ConventionTemplateError, FinalRecoveryError, JobRunStateError, ProviderSandboxError,
+    RetiredBackendError, ReviewAdmissionError, ReviewHistoryError, ReviewReportError,
+    TagInstructionError, WorkflowError,
 };
 
 pub use activity_job::{
@@ -32,18 +53,19 @@ pub use activity_job::{
     ActivityV2Spec, AgentLoopSpec, BackoffStrategy, BranchOutcome, CODEX_LEAST_RESTRICTIVE_SANDBOX,
     CODEX_PROVIDER_SANDBOX_MODES, CoreDeterministicAction, DEFAULT_PROVIDER_SANDBOX,
     DeterministicAction, DeterministicSpec, EngineDeterministicAction, FanInSpec, FanOutBlock,
-    JobActivityRoles, JobKind, JobTaskDelivery, JobV2, JobV2Step, JobV2StepBody, JoinMode,
-    LoopBlock, OnDenial, ParallelBlock, PipelineRef, Provider, ProviderAlias, ProviderDeprecation,
-    ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity, ProviderParseError,
-    ProviderResolution, ProviderResolveRequest, ProviderSource, RETIRED_BACKEND_MIGRATION,
+    JobActivityRoles, JobKind, JobStage, JobTaskDelivery, JobV2, JobV2Step, JobV2StepBody,
+    JoinMode, LoopBlock, OnDenial, ParallelBlock, PipelineRef, Provider, ProviderAlias,
+    ProviderDeprecation, ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity,
+    ProviderParseError, ProviderResolution, ProviderResolveRequest, ProviderSource,
+    RETIRED_BACKEND_MIGRATION, RETIRED_PROVIDER_IDS, RETIRED_PROVIDER_MIGRATION,
     RetiredAgentBackend, RetiredFeatureError, RetrySpec, SchemaHeader, SteeringGateSpec, TargetRef,
     TargetStep, ToolAllowlistError, V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED,
-    V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED,
+    V2_EVENT_TYPE_SCRIPT_EXECUTION, V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED,
     V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS, V2AuditEnvelope,
     V2AuditEvent, V2AuditEventKind, activity_tool_policy_deprecation, admit_provider_sandbox_mode,
     check_retired_backend_value, format_provider_sandbox, is_least_restrictive_provider_sandbox,
     least_restrictive_provider_sandbox, least_restrictive_provider_sandbox_warning,
-    parse_provider_sandbox_label, provider_sandbox_modes, tool_allowed,
+    parse_provider_sandbox_label, provider_sandbox_modes, retired_provider_id, tool_allowed,
     tools_allowed_by_disallow_list, validate_activity_tool_allowlist,
     validate_activity_tool_allowlist_against_registered_tools, validate_job_retired_sessions,
     validate_tool_allowlist, validate_tool_allowlist_against_registered_tools,
@@ -59,7 +81,7 @@ pub use auto_task::{
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
-pub use crew_purpose::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose, PURPOSE_CREWS_KEY_PREFIX};
+pub use crew_purpose::{CREW_PURPOSE_TAG_PREFIX, CrewPurpose};
 pub use executor_def::{
     AuthProbe, AuthProbeSuccess, ExecutorDef, ExecutorSandboxKind, ExecutorType, ModelPairOverride,
     StdoutFormat, deserialize_executor_host_os,
@@ -74,6 +96,12 @@ pub use host_evidence::{
     HostEvidenceRefusal, HostSandboxCommand, PS_DENIED_DEFERRAL_PREFIX, PS_EXEC_REFUSAL,
     SEATBELT_APPLY_REFUSAL, SEATBELT_APPLY_REFUSAL_EXIT, SEATBELT_DEFERRAL_PREFIX,
     is_bubblewrap_namespace_refusal, judge_host_test_output,
+};
+pub use image_input::{
+    ExecutorImageInput, IMAGE_CANARY_RESULT_FIELD, IMAGE_INPUT_FIELD,
+    IMAGE_INPUT_UNAVAILABLE_ERROR_CODE, IMAGE_NOT_SEEN_ERROR_CODE, IMAGE_NOT_SEEN_MARKER,
+    IMAGE_PATH_PLACEHOLDER, ImageFormat, ImageInputMode, VISUAL_HOLD_CONSECUTIVE_MISSES,
+    is_image_not_seen, requested_images,
 };
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,
@@ -96,7 +124,7 @@ pub use reconciliation::{
     ReconciledCommandRun, ReconciledExecution, ReconciledPullRequest, ReconciledReview,
     ReconciledValidation, ReconciliationAdmission, ReconciliationAttempt, ReconciliationBinding,
     ReconciliationCommandSource, ReconciliationContract, ReconciliationLog, ReconciliationOutcome,
-    ReviewReconciliation, run_input_declares_review_reconciliation,
+    RequiredValidationFailureKind, ReviewReconciliation, run_input_declares_review_reconciliation,
     strip_review_reconciliation_admission,
 };
 pub use review::{
@@ -105,21 +133,28 @@ pub use review::{
     REVIEW_ADMISSION_KEY, REVIEW_BASELINE_ARTIFACT, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
     REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
     REVIEW_REPORT_HISTORY_ARTIFACT, REVIEW_REPORT_HISTORY_LIMIT, REVIEW_REPORT_HISTORY_VERSION,
-    REVIEW_REQUEST_KEY, REVIEW_RUN_OPTION_SOURCE, RecordGap, RetainedObligation, RetiredValidation,
-    ReviewAdmission, ReviewAssurance, ReviewAttempt, ReviewAttemptState, ReviewBaselineClaim,
-    ReviewBudget, ReviewCertificate, ReviewConsumption, ReviewCrewPoolMember, ReviewFinding,
-    ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision, ReviewGateHistoryNote,
-    ReviewGateNotApplicable, ReviewGateRefusal, ReviewGateReviewer, ReviewInvalidation,
-    ReviewLanding, ReviewLayer, ReviewLedger, ReviewManifest, ReviewReport, ReviewReportHistory,
-    ReviewReportRevision, ReviewReservation, ReviewResetDecision, ReviewTiming, ReviewValidation,
-    ReviewVerdict, ReviewerIdentity, ReviewerInvocation, ReviewerInvocationEvent,
-    ValidationOutcome, ValidationRole, is_reserved_review_artifact, record_gap, seconds_between,
+    REVIEW_REQUEST_KEY, REVIEW_RUN_OPTION_SOURCE, REVIEW_SELECTION_ARTIFACT, RecordGap,
+    RetainedObligation, RetiredValidation, ReviewAdmission, ReviewAssurance, ReviewAttempt,
+    ReviewAttemptState, ReviewBaselineClaim, ReviewBudget, ReviewCertificate, ReviewConsumption,
+    ReviewCrewPoolMember, ReviewFinding, ReviewGateAdmissionOutput, ReviewGateAdmitted,
+    ReviewGateDecision, ReviewGateHistoryNote, ReviewGateNotApplicable, ReviewGateRefusal,
+    ReviewGateReviewer, ReviewInvalidation, ReviewLanding, ReviewLayer, ReviewLedger,
+    ReviewManifest, ReviewReport, ReviewReportHistory, ReviewReportRevision, ReviewReservation,
+    ReviewResetDecision, ReviewTiming, ReviewValidation, ReviewVerdict, ReviewVisualFinding,
+    ReviewVisualResolution, ReviewerIdentity, ReviewerInvocation, ReviewerInvocationEvent,
+    SELECTIVE_RECEIPT_MATCH_LIMIT, SELECTIVE_REVIEW_RECEIPT_VERSION, SelectiveBeforeLandingMode,
+    SelectiveBeforeLandingPolicy, SelectiveEvaluationInputs, SelectiveMatchedPath,
+    SelectiveReviewReceipt, SelectiveReviewResult, SelectiveTaskRisk, SelectiveUnknownRisk,
+    ValidationOutcome, ValidationRole, evaluate_selective_review, is_reserved_review_artifact,
+    record_gap, seconds_between, selective_path_matches, validate_risk_threshold,
+    validate_selective_path_glob,
 };
 pub use review_evidence::{
-    HostEvidenceRule, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
-    ReviewEvidenceCandidateCarry, ReviewEvidenceCarried, ReviewEvidenceHold, ReviewEvidenceKind,
-    ReviewEvidenceRequirement, ReviewEvidenceRerequestReason, ReviewExternalEvidence,
-    owed_requirements,
+    HostEvidenceRule, REVIEW_EVIDENCE_FINDINGS_ARTIFACT, REVIEW_EVIDENCE_FINDINGS_EVENT,
+    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceCandidateCarry,
+    ReviewEvidenceCarried, ReviewEvidenceFinding, ReviewEvidenceFindings, ReviewEvidenceFlowStep,
+    ReviewEvidenceHold, ReviewEvidenceKind, ReviewEvidenceRequirement,
+    ReviewEvidenceRerequestReason, ReviewExternalEvidence, owed_requirements,
 };
 pub use routine::{
     MissedRunPolicy, OverlapPolicy, ROUTINE_SCHEMA_VERSION, RoutineDefinition, RoutinePolicy,
@@ -130,14 +165,14 @@ pub use run::{
     BASELINE_RED_ERROR_CODE, BASELINE_RED_HOLD_EVENT, BASELINE_RED_MARKER,
     BUBBLEWRAP_NAMESPACE_PROBE, BaselineRedFailures, BaselineRedHold, CANDIDATE_HELD_EVENT,
     CANDIDATE_HELD_MARKER, CHILD_CANCELLED_ERROR_CODE, CHILD_TIMEOUT_ERROR_CODE,
-    CLI_STDERR_TAIL_SEPARATOR, CONTRACT_REFUSAL_MARKER, ClaimFailureClass, CommentLogMark,
-    CommitObservation, CommitObservationStatus, CrewEnvUnset, CrewExclusion, CrewExclusionSource,
-    DEFERRED_SANDBOX_ARTIFACT, DeferralHandoff, DeferralLane, DeferralProbe,
-    DeferredSandboxArtifact, DeferredSandboxValidation, DeliveryEvidenceGap,
-    DeliveryEvidenceProvenance, DrainAdmissionForecast, DrainAdmissionPass, DrainAdmissionsStop,
-    DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainHoldFinding, DrainPassCounters,
-    DrainPassObservation, DrainPassOutcome, DrainWaitingTask, DrainWindowExtension,
-    DrainWorkerLimit, FLAKY_VALIDATION_EVENT, FORGE_UNAVAILABLE_ERROR_CODE,
+    CLI_STDERR_TAIL_SEPARATOR, CONTRACT_REFUSAL_MARKER, CandidateCarry, CandidateCarryOutput,
+    ClaimFailureClass, CommentLogMark, CommitObservation, CommitObservationStatus, CrewEnvUnset,
+    CrewExclusion, CrewExclusionSource, DEFERRED_SANDBOX_ARTIFACT, DeferralHandoff, DeferralLane,
+    DeferralProbe, DeferredSandboxArtifact, DeferredSandboxValidation, DeliveryEvidenceGap,
+    DeliveryEvidenceProvenance, DeliveryRefusal, DrainAdmissionForecast, DrainAdmissionPass,
+    DrainAdmissionsStop, DrainApprovalReport, DrainCancelRequest, DrainCapacity, DrainHoldFinding,
+    DrainPassCounters, DrainPassObservation, DrainPassOutcome, DrainWaitingTask,
+    DrainWindowExtension, DrainWorkerLimit, FLAKY_VALIDATION_EVENT, FORGE_UNAVAILABLE_ERROR_CODE,
     FORGE_UNAVAILABLE_EXPIRED_EVENT, FORGE_UNAVAILABLE_MARKER, FailureActivityCheckpoint,
     FinalRecoveryCheckpoint, FinalRecoveryKey, FinalRecoveryObservedTask,
     FinalRecoveryRepairCommit, FinalRecoveryResume, FlakyValidation, ForecastBuckets, ForecastPeak,
@@ -154,26 +189,27 @@ pub use run::{
     PullAuthExclusion, PullAuthRecovery, PullBreaker, PullCrewPreflight, PullDrainState,
     PullSinglePass, PullUnfitWork, PullWindowClose, REGRESSION_FROM_FIELD,
     REVIEW_DECISION_PENDING_ERROR_CODE, RUN_DELIVERY_EVIDENCE_SOURCE, RUN_DELIVERY_SCHEMA_VERSION,
-    ResourcePressure, ResourceThrottle, RunDeliveryObservation, RunDeliveryStatus, RunIdRole,
-    RunRootCause, SEATBELT_APPLY_PROBE, STALLED_ERROR_CODE, STALLED_MARKER,
-    STEERING_DELIVERED_EVENT, STEERING_UNCONSUMED_EVENT, STEERING_UNCONSUMED_MARKER, SteeringRound,
-    SteeringWatermark, StepSteeringSnapshot, TASK_BLOCKED_BY_AGENT_ERROR_CODE,
-    TASK_BLOCKED_BY_AGENT_EVENT, TASK_BLOCKED_BY_AGENT_MARKER, TRANSIENT_FAILURE_ERROR_CODE,
-    TRANSIENT_FAILURE_MARKER, TRANSIENT_INFRA_BLOCKED_EVENT,
+    ResourcePressure, ResourceThrottle, RunCancellationProvenance, RunDeliveryObservation,
+    RunDeliveryStatus, RunIdRole, RunRootCause, SEATBELT_APPLY_PROBE, STALLED_ERROR_CODE,
+    STALLED_MARKER, STEERING_DELIVERED_EVENT, STEERING_UNCONSUMED_EVENT,
+    STEERING_UNCONSUMED_MARKER, SteeringRound, SteeringWatermark, StepSteeringSnapshot,
+    TASK_BLOCKED_BY_AGENT_ERROR_CODE, TASK_BLOCKED_BY_AGENT_EVENT, TASK_BLOCKED_BY_AGENT_MARKER,
+    TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER, TRANSIENT_INFRA_BLOCKED_EVENT,
     TRANSIENT_INFRA_REQUEUE_DEFERRED_EVENT, TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT,
     TRANSIENT_INFRA_REQUEUED_EVENT, TaskCancellationPolicy, TransientInfraBlock,
     TransientInfraRequeue, TransientInfrastructure, UPGRADE_PENDING_ERROR_CODE,
     UPGRADE_PENDING_MARKER, UPGRADE_PENDING_REQUEUED_EVENT, VALIDATION_ENVIRONMENT_ERROR_CODE,
-    VALIDATION_ENVIRONMENT_MARKER, ValidationGateSource, ValidationGates,
+    VALIDATION_ENVIRONMENT_MARKER, VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE,
+    VALIDATION_ROUTE_UNAVAILABLE_MARKER, ValidationGateSource, ValidationGates,
     agent_blocker_from_output, deferral_handoff, failed_account, failed_provider,
     failure_classification_text, implementer_regression_from, is_baseline_red_failure,
     is_contract_refusal, is_forge_unavailable, is_owner_busy, is_owner_route_unavailable,
     is_provider_capacity_exhausted, is_provider_failure, is_provider_limit, is_provider_refusal,
     is_provider_unavailable, is_task_blocked_by_agent, is_upgrade_pending,
-    is_validation_environment_failure, normalize_unfiled_findings, provider_account_label,
-    provider_failure_text, run_id_candidate, run_id_minute_stem, run_id_role,
-    task_blocked_by_agent_kind, task_blocked_by_agent_message, unfiled_findings_shape_error,
-    upgrade_pending_kind, with_failed_account,
+    is_validation_environment_failure, is_validation_route_unavailable, normalize_unfiled_findings,
+    provider_account_label, provider_failure_text, run_id_candidate, run_id_minute_stem,
+    run_id_role, task_blocked_by_agent_kind, task_blocked_by_agent_message,
+    unfiled_findings_shape_error, upgrade_pending_kind, with_failed_account,
 };
 pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
@@ -195,8 +231,9 @@ pub use pr_recovery::{
 
 mod source_repair;
 pub use source_repair::{
-    SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
-    SourceRepairBinding, SourceRepairOwner, SourceRepairSuccessor, source_repair_reservations,
+    SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RECONCILED, SOURCE_REPAIR_RESERVED,
+    SourceRepairAdmission, SourceRepairBinding, SourceRepairOwner, SourceRepairReconciliation,
+    SourceRepairSuccessor, source_repair_authorizations, source_repair_reservations,
 };
 
 mod post_deploy;
@@ -207,6 +244,10 @@ pub use post_deploy::{
 };
 
 pub use pr_recovery::{
-    PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateReservation,
-    decide_pr_base_update, pr_base_update_reservations,
+    PR_BASE_UPDATE_BUDGET_SPENT, PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission,
+    PrBaseUpdateReservation, decide_pr_base_update, pr_base_update_reservations,
+};
+
+pub use pr_recovery::{
+    CI_RERUN_RESERVED_EVENT, CiRerunAdmission, CiRerunPlan, CiRerunRoot, decide_ci_rerun,
 };

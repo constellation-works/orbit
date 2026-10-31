@@ -3,7 +3,7 @@
 // the work-class selector, complexity series ending at their horizons, the
 // sparse marking, hover and keyboard tooltips, series toggles, the % of host
 // toggle with admit thresholds, the empty state, the aggregate placeholder
-// and a 390px phone.
+// the bounded history selection and a 375px phone.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -53,22 +53,36 @@ const profiles = [
   profile('auto-task:qa-sweep', null, 6, false, 20, 24, 3, 2),
   profile('change', 'hard', 2, true, 60, 60, 6, 6),
   profile('change', 'low', 12, false, 30, 40, 2, 2),
-  profile('change', 'medium', 8, false, 45, 50, 4, 4),
+  {
+    // A union over a mixed crew pool: two models have enough deliveries of
+    // their own to price their tasks, the third falls back to the union.
+    ...profile('change', 'medium', 8, false, 45, 50, 4, 4),
+    crew_model: null,
+    crews: [
+      { crew_model: 'model-luna', deliveries: 2, profile_deliveries: 2 },
+      { crew_model: 'model-sol', deliveries: 1, profile_deliveries: 4 },
+      { crew_model: 'model-terra', deliveries: 5, profile_deliveries: 5 },
+    ],
+  },
   profile('no-diff', 'medium', 5, false, 15, 18, 0.8, 1),
 ];
-const report = (workspace, list) => ({
+const report = (workspace, list, last) => ({
   workspace_id: workspace,
   built_at: '2026-10-17T12:00:00Z',
   host: { cpu_count: 16, memory_total_bytes: 64 * GIB },
   admit_cpu_percent: 90,
   admit_memory_percent: 75,
   profile_window: 50,
+  last,
+  delivery_limit: last == null ? 50 : (last === 'all' ? 1000 : Number(last)),
+  max_last: 1000,
   min_profile_deliveries: 3,
   horizon_cap_minutes: 120,
   profiles: list,
 });
 
 const requests = [];
+const histories = [];
 function payloadFor(url) {
   switch (url.pathname) {
     case '/api/workspaces': return [
@@ -80,7 +94,9 @@ function payloadFor(url) {
     case '/api/resource-profiles': {
       const workspace = url.searchParams.get('workspace');
       requests.push(workspace);
-      return workspace === 'ws_fixture' ? report(workspace, profiles) : report(workspace, []);
+      const last = url.searchParams.get('last');
+      histories.push(last);
+      return report(workspace, workspace === 'ws_fixture' ? profiles : [], last);
     }
     default: return { items: [], total: 0, limit: 100, truncated: false };
   }
@@ -133,7 +149,7 @@ try {
   assert.equal(classes[0].pressed, 'true');
   const cards = await body.locator('.mx-sc').evaluateAll(nodes => nodes.map(node => node.textContent));
   assert.equal(cards.length, 3);
-  assert.match(cards[0], /^Easylow2\.0 cores.*12 deliveries · to \+30m$/);
+  assert.match(cards[0], /^Low2\.0 cores.*12 deliveries · to \+30m$/);
   assert.match(cards[2], /^Hard6\.0 cores.*2 deliveriessparse · to \+60m$/);
   assert.match(await page.locator('#resources-count').textContent(), /5 profiles · host 16 cores · 64 GiB/);
   pass('change series cards', { cards });
@@ -148,7 +164,7 @@ try {
   assert.equal(await body.locator('.rp-end.hollow').count(), 3, 'and ends hollow');
   // Each series ends at its horizon, on a 60-minute axis set by the longest.
   const lastX = await body.locator('.rp-area-cpu g.rp-s-low .rp-line').evaluate(node => Number(node.getAttribute('d').trim().split(/[ML]/).filter(Boolean).at(-1).trim().split(' ')[0]));
-  assert.equal(lastX, 500, 'easy stops at +30m of 60 although its deliveries ran to +40m');
+  assert.equal(lastX, 500, 'low stops at +30m of 60 although its deliveries ran to +40m');
   assert.equal(await body.locator('.rp-area-cpu .rp-end.rp-s-low').evaluate(node => node.style.left), '50%');
   assert.deepEqual(await body.locator('.rp-x-axis .mx-x-tick').allTextContents(), ['0', '10m', '20m', '30m', '40m', '50m', '1h']);
   await shot('resources-change-1440.png');
@@ -161,7 +177,7 @@ try {
   await tip.waitFor({ state: 'visible' });
   const tipText = await tip.textContent();
   assert.match(tipText, /^\+40m since admission/);
-  assert.match(tipText, /Easy×12ended \+30m/);
+  assert.match(tipText, /Low×12ended \+30m/);
   assert.match(tipText, /Hard×2alive \d+%cpu 3\.6 cores ± 1\.1mem p90 6\.0 GiB · mean 4\.2 GiB/);
   assert.equal(await tip.locator('.mx-tip-n.low').count(), 1);
   assert.match(tipText, /Amber counts: sparse, fewer than 3 deliveries/);
@@ -225,8 +241,27 @@ try {
   const rows = await body.locator('.mx-table tbody tr').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, dim: node.classList.contains('mx-dim') })));
   assert.equal(rows.length, 3);
   assert.deepEqual(rows.map(row => row.dim), [false, false, true], 'the sparse row is dimmed');
-  assert.match(rows[2].text, /Hard2 \(sparse\)60m6\.0 cores @ \+4m6\.0 GiB @ \+5m/);
-  pass('work classes and table', { rows });
+  assert.match(rows[2].text, /Hard2 \(sparse\)—60m6\.0 cores @ \+4m6\.0 GiB @ \+5m/);
+  assert.match(rows[1].text, /Medium83 · 2 own45m/, 'the union counts its crew models and those priced by their own profile');
+  const crewTitle = await body.locator('.mx-table tbody tr').nth(1).locator('td').nth(1).getAttribute('title');
+  assert.equal(crewTitle, [
+    'model-luna: 2 in this window · own profile 2, sparse: priced by the union',
+    'model-sol: 1 in this window · own profile 4',
+    'model-terra: 5 in this window · own profile 5',
+  ].join('\n'));
+  pass('work classes and table', { rows, crewTitle });
+
+  // The legacy all request is bounded, including its label and tooltip.
+  const history = body.getByRole('group', { name: 'Deliveries per profile' });
+  assert.deepEqual(await history.getByRole('button').allTextContents(), ['Last 50', 'Last 200', 'Last 1,000']);
+  const capped = history.getByRole('button', { name: 'Last 1,000', exact: true });
+  assert.match(await capped.getAttribute('title'), /Up to 1,000 retained completed deliveries.*newest crew model and Orbit version/);
+  await capped.click();
+  await page.waitForFunction(() => document.querySelector('.rp-history [data-history="all"]')?.getAttribute('aria-pressed') === 'true');
+  assert.equal(histories.at(-1), 'all');
+  assert.match(await body.locator('.rp-meta').textContent(), /each profile: up to 1,000 retained completed deliveries/);
+  await shot('resources-history-dark-1440.png');
+  pass('history cap disclosure', { title: await capped.getAttribute('title'), summary: await body.locator('.rp-meta').textContent() });
 
   // The dashboard is dark-only: an OS light preference changes nothing.
   await page.emulateMedia({ colorScheme: 'light' });
@@ -236,20 +271,25 @@ try {
   pass('dark-only under a light preference');
 
   // Phone width: no sideways page scroll; plots keep most of the width.
-  await page.setViewportSize({ width: 390, height: 1500 });
+  await page.setViewportSize({ width: 375, height: 1500 });
   const phone = await page.evaluate(() => ({
     overflow: document.documentElement.scrollWidth > window.innerWidth,
     plot: document.querySelector('#resources-body .rp-area-cpu').getBoundingClientRect().width,
     table: getComputedStyle(document.querySelector('#resources-body .mx-table-wrap')).overflowX,
   }));
-  assert.equal(phone.overflow, false, `no page overflow at 390px: ${JSON.stringify(phone)}`);
-  assert.ok(phone.plot > 240, `plots keep most of the phone width: ${phone.plot}`);
+  assert.equal(phone.overflow, false, `no page overflow at 375px: ${JSON.stringify(phone)}`);
+  assert.ok(phone.plot > 375 * 0.6, `plots keep most of the phone width: ${phone.plot}`);
   await body.locator('.rp-frame').focus();
   await page.keyboard.press('End');
-  await shot('resources-390.png');
+  assert.equal(await capped.getAttribute('aria-pressed'), 'true');
+  await shot('resources-history-dark-375.png');
   await page.keyboard.press('Escape');
   pass('phone layout', phone);
   await page.setViewportSize({ width: 1440, height: 1700 });
+
+  await history.getByRole('button', { name: 'Last 50', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.rp-history [data-history="window"]')?.getAttribute('aria-pressed') === 'true');
+  assert.equal(histories.at(-1), null);
 
   // A workspace whose host has no profiles yet says so.
   await page.goto(`${base}?workspace=ws_empty#analytics/resources`);

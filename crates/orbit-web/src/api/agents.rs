@@ -64,6 +64,32 @@ pub(super) async fn agent_scorecard(
     }
 }
 
+/// The implementer tier/type matrix, sliced from the same cached scan.
+pub(super) async fn agent_by_type(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(query): Query<AgentScorecardQuery>,
+) -> Response {
+    let selection = match selection(&query) {
+        Ok(selection) => selection,
+        Err(error) => return error_response(error),
+    };
+    let types = runtime.crew_performance_types().to_vec();
+    match facts(&state, runtime).await {
+        Ok(served) => (
+            served.age_header(),
+            Json(agents::agent_by_type_scorecard(
+                &served.body,
+                &selection,
+                &types,
+                AGENT_SCAN_TTL,
+            )),
+        )
+            .into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
 pub(super) async fn agent_detail(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,

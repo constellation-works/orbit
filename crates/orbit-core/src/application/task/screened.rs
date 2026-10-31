@@ -9,7 +9,11 @@
 //! about to create, and they have no one to warn.
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, backlog_footprint_warning};
+use orbit_common::fs::selector::canonical_selector_in_workspace;
+use orbit_types::task::{
+    RegressionClassification, SeveritySource, Task, TaskRelation, TaskRelationType,
+    backlog_footprint_warning,
+};
 
 use crate::OrbitRuntime;
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
@@ -119,6 +123,7 @@ impl OrbitRuntime {
         digest: Option<&str>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        self.admit_regression_sites(Some(&mut params.relations), None)?;
         params.context_creation = if screen.allow_missing_context {
             self.authorize_missing_context(&params.context_files)?
         } else {
@@ -265,6 +270,10 @@ impl OrbitRuntime {
         write: impl FnOnce(TaskUpdateParams) -> Result<Task, OrbitError>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        if let Some(relations) = params.relations.as_mut() {
+            let stored = self.get_task(id)?;
+            self.admit_regression_sites(Some(relations), Some(&stored.relations))?;
+        }
         let mut context_files_unverified = Vec::new();
         if let Some(candidates) = params.context_files.as_deref() {
             params.context_creation = if screen.allow_missing_context {
@@ -286,15 +295,75 @@ impl OrbitRuntime {
             .map(|dependencies| self.unreadable_dependency_warnings(dependencies))
             .unwrap_or_default();
 
+        // Only readiness-field writes repeat the footprint warning. Comments
+        // and other metadata edits still project the task's readiness, but
+        // do not ask the writer to fix an unchanged gap again.
+        let updates_readiness = params.status.is_some()
+            || params.tags.is_some()
+            || params.context_files.is_some()
+            || params.complexity.is_some();
         let task = write(params)?;
-        // [ORB-15191] A write that leaves the task in the backlog with no
-        // footprint says so as loudly as an add does.
-        warnings.extend(backlog_footprint_warning(&task));
+        if updates_readiness {
+            warnings.extend(backlog_footprint_warning(&task));
+        }
         Ok(ScreenedTaskWrite {
             task,
             warnings,
             context_files_unverified,
         })
+    }
+
+    /// Canonicalize and validate the `regression.sites` of `relations`,
+    /// keeping them on the stored links, and admit each classified
+    /// `regression_from` link's severity. Sites are always recorded: a
+    /// malformed or over-limit site, or one outside the workspace, refuses
+    /// the write.
+    ///
+    /// A new classified link must rate `regression.severity`. A link the task
+    /// already holds (`stored`, same culprit) may be re-sent without one and
+    /// keeps its recorded severity and source; re-sent at its recorded
+    /// severity it keeps the recorded source unless the write names
+    /// `operator` or `backfill`. Only finding verification records
+    /// `verified`.
+    fn admit_regression_sites(
+        &self,
+        relations: Option<&mut Vec<TaskRelation>>,
+        stored: Option<&[TaskRelation]>,
+    ) -> Result<(), OrbitError> {
+        let Some(relations) = relations else {
+            return Ok(());
+        };
+        let root = &self.paths().repo_root;
+        for relation in relations.iter_mut() {
+            let target = relation.target.to_string();
+            let is_regression_from = relation.relation_type == TaskRelationType::RegressionFrom;
+            let Some(regression) = relation.regression.as_mut() else {
+                continue;
+            };
+            for site in &mut regression.sites {
+                let canonical = canonical_selector_in_workspace(site, root).map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "invalid `regression.sites` entry `{site}`: {error}"
+                    ))
+                })?;
+                *site = canonical;
+            }
+            regression
+                .validate_sites()
+                .map_err(OrbitError::InvalidInput)?;
+            if is_regression_from {
+                let recorded = stored
+                    .into_iter()
+                    .flatten()
+                    .find(|link| {
+                        link.relation_type == TaskRelationType::RegressionFrom
+                            && link.target.as_str() == target
+                    })
+                    .and_then(|link| link.regression.as_ref());
+                admit_regression_severity(regression, recorded, &target)?;
+            }
+        }
+        Ok(())
     }
 
     /// A dependency may legitimately be recorded before its target exists
@@ -327,4 +396,41 @@ impl OrbitRuntime {
             context_files_unverified: Vec::new(),
         }
     }
+}
+
+/// Admit `regression`'s severity against the link's `recorded` payload, if
+/// the task already holds one to `target`.
+fn admit_regression_severity(
+    regression: &mut RegressionClassification,
+    recorded: Option<&RegressionClassification>,
+    target: &str,
+) -> Result<(), OrbitError> {
+    if regression.severity_unrated() {
+        let recorded = recorded.ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "`regression.severity` is required on a new classified `regression_from` link to `{target}`: rate it critical, high, medium, low or nit"
+            ))
+        })?;
+        regression.severity = recorded.severity;
+        regression.severity_source = recorded.severity_source;
+        return Ok(());
+    }
+    let same_severity = recorded.is_some_and(|recorded| recorded.severity == regression.severity);
+    let recorded_verified =
+        recorded.is_some_and(|recorded| recorded.severity_source == SeveritySource::Verified);
+    match regression.severity_source {
+        SeveritySource::Operator | SeveritySource::Backfill => {}
+        SeveritySource::Verified if same_severity && recorded_verified => {}
+        SeveritySource::Verified => {
+            return Err(OrbitError::InvalidInput(format!(
+                "`regression.severity_source` verified on the `regression_from` link to `{target}` is recorded only by finding verification; rate it as the filer or name `operator`"
+            )));
+        }
+        SeveritySource::Filer | SeveritySource::Default => {
+            if let Some(recorded) = recorded.filter(|_| same_severity) {
+                regression.severity_source = recorded.severity_source;
+            }
+        }
+    }
+    Ok(())
 }

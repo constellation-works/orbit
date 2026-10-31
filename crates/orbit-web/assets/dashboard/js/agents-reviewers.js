@@ -2,8 +2,9 @@
 // reviews turned out, plus the provisional banner and the `accepts often`
 // row tag. The outcomes are the rows' shown-not-scored `outcome_*` stats; the
 // tag reads the `accepts_often` stat, an accept rate 10 or more points above
-// the other reviewers on the same tiers. Neither enters the score. Every node
-// is built with `el()`.
+// the other reviewers on the same tiers. Neither enters the score. `how` adds
+// how a review job's filed findings are judged and what an unjudged row is
+// to "How the score works". Every node is built with `el()`.
 
 import { el } from './common.js';
 
@@ -12,7 +13,7 @@ const OUTCOMES = [
   { key: "outcome_caught", label: "Caught a real problem" },
   { key: "outcome_false_alarm", label: "False alarm" },
   { key: "outcome_missed", label: "Missed a regression" },
-  { key: "outcome_unresolved", label: "Unresolved", note: "not judged yet, incomplete or failed fixes" },
+  { key: "outcome_unresolved", label: "Unresolved", note: "not judged yet, incomplete, failed fixes or findings dropped unverified" },
 ];
 // Reviews younger than this can still be charged a `review_missed`
 // regression (`roles/reviewers.rs`).
@@ -56,7 +57,7 @@ function render({ rows }) {
       segment.dataset.outcome = outcome.key;
       bar.append(segment);
     }
-    const item = el("li", { class: row.below_support ? "agents-cause-row agents-row-below" : "agents-cause-row" }, [
+    const item = el("li", { class: row.below_support || row.unjudged ? "agents-cause-row agents-row-below" : "agents-cause-row" }, [
       el("span", { class: "agents-cause-name", text: row.crew, title: `${row.crew} · ${row.model}` }),
       bar,
       el("span", { class: "agents-cause-total", text: plural(total, "review") }),
@@ -99,4 +100,9 @@ function rowTags(row) {
   return [tag];
 }
 
-export const reviewersPanel = { title: "How verdicts turned out", render, banner, rowTags };
+const how = [
+  "A finding a review job files as a task is judged by finding verification's verdict when there is one: CONFIRMED holds, REJECTED counts against the reviewer. Without a verdict its task's outcome judges it: a task that landed held, and a task still open is not judged yet. A task rejected or archived without landing costs nothing, since no task record says whether it was dropped as wrong, a duplicate, won't-fix or superseded.",
+  "A row none of whose units is judged yet (no review gate settlement, and no filed finding with a verdict or a landed or dropped task) is unjudged: it has no score or rank, is tagged unjudged, is listed after every other row, and stays out of the fleet average.",
+];
+
+export const reviewersPanel = { title: "How verdicts turned out", render, banner, rowTags, how };

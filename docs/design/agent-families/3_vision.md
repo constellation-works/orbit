@@ -4,7 +4,7 @@ type: design
 title: "Agent Families — Vision"
 owner: human
 last_updated: 2026-08-09
-last_validated: 2026-10-19
+last_validated: 2026-10-29
 status: Draft
 feature: agent-families
 doc_role: vision
@@ -45,7 +45,7 @@ The distinction between family and crew also lets future workflows ask two diffe
 
 - Orbit internal: [1_overview.md](./1_overview.md), [2_design.md](./2_design.md), [4_decisions.md](./4_decisions.md)
 - Orbit internal: `crates/orbit-types/src/identity/agent_pair.rs`
-- Orbit internal: `crates/orbit-core/src/runtime/engine/crew.rs`
+- Orbit internal: `crates/orbit-runtime/src/engine/crew.rs`
 
 ## Task References
 

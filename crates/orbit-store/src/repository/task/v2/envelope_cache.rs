@@ -28,6 +28,9 @@
 //! alone: the caller still compares every reused envelope's indexed scalar
 //! fields, tags and `child_of` targets against the generated index, and `reindex_workspace` re-reads and
 //! re-validates every bundle from disk with no reference to this cache.
+//! A successful in-process comparison carries a weak reference to its immutable
+//! index row. While that same row and the file stamp survive, the comparison
+//! still holds without rebuilding the envelope's scalar and set projections.
 //!
 //! Entries are bounded by the tasks registered to the workspace, which the
 //! freshness scan already materializes in full; a deleted task's entry is
@@ -51,12 +54,13 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, Metadata};
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use orbit_types::task::TaskEnvelopeV2;
 
-use crate::contracts::TaskBundleBinding;
+use crate::contracts::{EnvelopeStampRecord, TaskBundleBinding};
+use crate::driver::sqlite::task_registry::TaskIndexProofRow;
 
 /// Filesystem evidence that an envelope file is the one a cached parse came
 /// from. See the module docs for the guarantees this does and does not carry.
@@ -100,7 +104,39 @@ fn file_stamp(path: &Path) -> Option<EnvelopeStamp> {
 
 #[derive(Default)]
 pub(super) struct EnvelopeCache {
-    entries: Mutex<HashMap<String, (EnvelopeStamp, TaskEnvelopeV2)>>,
+    entries: Mutex<HashMap<String, CachedEnvelope>>,
+}
+
+struct CachedEnvelope {
+    stamp: EnvelopeStamp,
+    envelope: TaskEnvelopeV2,
+    matched_index: Option<CachedIndexProof>,
+}
+
+struct CachedIndexProof {
+    row: Weak<TaskIndexProofRow>,
+    pending: Option<EnvelopeStampRecord>,
+}
+
+/// A proof absent from the immutable registry snapshot. Retrying the same
+/// pending proof on later scans preserves best-effort recording under contention.
+pub(super) fn pending_envelope_proof(
+    stamp: &EnvelopeStamp,
+    row: &TaskIndexProofRow,
+) -> Option<EnvelopeStampRecord> {
+    let stamp = stamp.persisted()?;
+    if row
+        .recorded
+        .as_ref()
+        .is_some_and(|recorded| recorded.stamp == stamp && recorded.fingerprint == row.fingerprint)
+    {
+        return None;
+    }
+    Some(EnvelopeStampRecord {
+        task_id: row.task_id.clone(),
+        stamp,
+        fingerprint: row.fingerprint.clone(),
+    })
 }
 
 impl EnvelopeCache {
@@ -112,19 +148,38 @@ impl EnvelopeCache {
         file_stamp(path)
     }
 
-    /// Run `inspect` on the envelope parsed from the file this stamp
-    /// describes, if it is still the file the entry was taken from. The
-    /// freshness scan compares a few fields per task this way instead of
-    /// cloning every envelope it does not go on to select.
-    pub(super) fn inspect_fresh<T>(
+    /// Compare a current parse with an immutable index row. Reuse a successful
+    /// comparison only while both the file stamp and that exact row allocation
+    /// remain unchanged. A refreshed registry snapshot always gets new rows,
+    /// so even index-only edits with unchanged timestamps are compared again.
+    pub(super) fn cached_index_match(
         &self,
         task_id: &str,
         stamp: &EnvelopeStamp,
-        inspect: impl FnOnce(&TaskEnvelopeV2) -> T,
-    ) -> Option<T> {
-        let entries = self.entries();
-        let (cached, envelope) = entries.get(task_id)?;
-        (cached == stamp).then(|| inspect(envelope))
+        row: &Arc<TaskIndexProofRow>,
+    ) -> Option<(bool, Option<EnvelopeStampRecord>)> {
+        let mut entries = self.entries();
+        let cached = entries.get_mut(task_id)?;
+        if cached.stamp != *stamp {
+            return None;
+        }
+        // The weak reference keeps the allocation from being reused even
+        // after its snapshot is dropped; pointer identity cannot accept an
+        // unrelated later row at the same address. No pointer is dereferenced.
+        if let Some(previous) = &cached.matched_index
+            && std::ptr::eq(previous.row.as_ptr(), Arc::as_ptr(row))
+        {
+            return Some((true, previous.pending.clone()));
+        }
+        let matches = row.indexed.matches(&cached.envelope);
+        let pending = matches
+            .then(|| pending_envelope_proof(stamp, row))
+            .flatten();
+        cached.matched_index = matches.then(|| CachedIndexProof {
+            row: Arc::downgrade(row),
+            pending: pending.clone(),
+        });
+        Some((matches, pending))
     }
 
     /// The most recent parse remembered for `task_id`, without re-proving its
@@ -133,12 +188,18 @@ impl EnvelopeCache {
     pub(super) fn cached(&self, task_id: &str) -> Option<TaskEnvelopeV2> {
         self.entries()
             .get(task_id)
-            .map(|(_, envelope)| envelope.clone())
+            .map(|cached| cached.envelope.clone())
     }
 
     pub(super) fn remember(&self, task_id: &str, stamp: EnvelopeStamp, envelope: &TaskEnvelopeV2) {
-        self.entries()
-            .insert(task_id.to_string(), (stamp, envelope.clone()));
+        self.entries().insert(
+            task_id.to_string(),
+            CachedEnvelope {
+                stamp,
+                envelope: envelope.clone(),
+                matched_index: None,
+            },
+        );
     }
 
     pub(super) fn forget(&self, task_id: &str) {
@@ -164,7 +225,7 @@ impl EnvelopeCache {
     /// A poisoned lock only means some thread panicked while holding it. Every
     /// entry is re-proved against the filesystem before it is reused, so the
     /// cache keeps serving rather than failing an unrelated read.
-    fn entries(&self) -> MutexGuard<'_, HashMap<String, (EnvelopeStamp, TaskEnvelopeV2)>> {
+    fn entries(&self) -> MutexGuard<'_, HashMap<String, CachedEnvelope>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }

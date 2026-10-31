@@ -12,9 +12,10 @@ use orbit_core::application::agents::{AgentRole, Owner, Problem};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRun, JobRunState, TaskStatus};
 use orbit_types::task::{
-    DESCRIPTION_DOCUMENT, RegressionClassification, RegressionEscape, RegressionNature,
-    TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskComplexity, TaskEventRowV2,
-    TaskOrigin, TaskRelation, TaskRelationType, task_fields_updated_note,
+    DESCRIPTION_DOCUMENT, DefectSeverity, RegressionClassification, RegressionEscape,
+    RegressionNature, SeveritySource, TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME,
+    TaskComplexity, TaskEventRowV2, TaskOrigin, TaskRelation, TaskRelationType,
+    task_fields_updated_note,
 };
 use serde_json::{Value, json};
 
@@ -70,6 +71,16 @@ pub(super) fn regression(
     nature: RegressionNature,
     escape: RegressionEscape,
 ) -> String {
+    rated_regression(fixture, culprit, nature, escape, DefectSeverity::Low)
+}
+
+pub(super) fn rated_regression(
+    fixture: &Fixture,
+    culprit: &str,
+    nature: RegressionNature,
+    escape: RegressionEscape,
+    severity: DefectSeverity,
+) -> String {
     add(
         fixture,
         Owned {
@@ -81,7 +92,13 @@ pub(super) fn regression(
             relations: vec![TaskRelation {
                 relation_type: TaskRelationType::RegressionFrom,
                 target: culprit.parse().unwrap(),
-                regression: Some(RegressionClassification { nature, escape }),
+                regression: Some(RegressionClassification {
+                    nature,
+                    escape,
+                    severity,
+                    severity_source: SeveritySource::Filer,
+                    sites: Vec::new(),
+                }),
             }],
         },
     )
@@ -168,7 +185,23 @@ pub(super) fn implementation_run(
     });
 }
 
-fn comment(fixture: &Fixture, task_id: &str, message: &str) {
+/// Replace a fixture task's tags through the public update path, as an
+/// operator retagging it now — after any attempt the fixture started.
+pub(super) fn retag(fixture: &Fixture, task_id: &str, tags: Vec<String>) {
+    fixture
+        .runtime
+        .update_task_as_human(
+            task_id,
+            TaskUpdateParams {
+                tags: Some(tags),
+                ..Default::default()
+            },
+            "fixture".into(),
+        )
+        .unwrap();
+}
+
+pub(super) fn comment(fixture: &Fixture, task_id: &str, message: &str) {
     fixture
         .runtime
         .update_task_as_human(
@@ -195,7 +228,7 @@ pub(super) fn as_f64(value: &Value) -> f64 {
         .unwrap_or_else(|| panic!("a number: {value}"))
 }
 
-/// Costs and tier comparisons describe work without changing its score;
+/// Costs and durations describe work without changing its score;
 /// the same crew's models remain separate through runtime and HTTP reads.
 #[test]
 fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cost() {
@@ -258,6 +291,26 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                 fixture
                     .runtime
                     .insert_invocation_trace_record(&InvocationInsertParams {
+                        agent_execution_id: Some(
+                            fixture
+                                .runtime
+                                .sqlite_store()
+                                .unwrap()
+                                .begin_agent_execution(
+                                    fixture.runtime.stores().jobs().workspace_id(),
+                                    &run,
+                                    "implement_one",
+                                    "codex",
+                                    Some(&model),
+                                    &orbit_types::telemetry::AgentExecutionIdentity {
+                                        crew: Some("crew".into()),
+                                        reasoning_effort: (index == 0).then_some(
+                                            orbit_types::identity::ReasoningEffort::High,
+                                        ),
+                                    },
+                                )
+                                .unwrap(),
+                        ),
                         job_run_id: run,
                         account: None,
                         activity_id: "implement_one".into(),
@@ -306,22 +359,33 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                 let weighted = as_f64(&row["counts"]["weighted_landed"]);
                 assert_eq!(stat(row, "cost_per_weighted_landed"), json!(6.0 / weighted));
                 assert_eq!(stat(row, "median_run_seconds"), 3600);
-                let tiers = stat(row, "tier_comparison");
-                assert_eq!(tiers[0]["tasks"], 1);
-                assert_eq!(tiers[0]["first_reviews"], 1);
-                assert_eq!(tiers[0]["fleet_needing_changes_percent"], 50);
+                assert_eq!(row["counts"]["weighted_landed"], 1);
+                assert_eq!(row["expected"]["first_pass_accepts"], json!(0.5));
+                assert_eq!(row["expected"]["reviewer_repairs"], json!(0.5));
             }
-            assert_eq!(
-                stat(accepted, "tier_comparison")[0]["needing_changes_percent"],
-                0
-            );
-            assert_eq!(
-                stat(repaired, "tier_comparison")[0]["needing_changes_percent"],
-                100
-            );
             fixture
                 .runtime
                 .insert_invocation_trace_record(&InvocationInsertParams {
+                    agent_execution_id: Some(
+                        fixture
+                            .runtime
+                            .sqlite_store()
+                            .unwrap()
+                            .begin_agent_execution(
+                                fixture.runtime.stores().jobs().workspace_id(),
+                                "jrun-model-0",
+                                "implement_one",
+                                "codex",
+                                Some("model-0"),
+                                &orbit_types::telemetry::AgentExecutionIdentity {
+                                    crew: Some("crew".into()),
+                                    reasoning_effort: Some(
+                                        orbit_types::identity::ReasoningEffort::Xhigh,
+                                    ),
+                                },
+                            )
+                            .unwrap(),
+                    ),
                     job_run_id: "jrun-model-0".into(),
                     account: None,
                     activity_id: "implement_one".into(),
@@ -359,6 +423,272 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
             )));
             assert_eq!(http["status"], "ok");
             assert_eq!(http["row"], detail["row"]);
+            let efforts: std::collections::BTreeSet<_> = http["row"]["effort_breakdown"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["reasoning_effort"].to_string())
+                .collect();
+            assert_eq!(
+                efforts,
+                ["\"high\"".into(), "\"xhigh\"".into()]
+                    .into_iter()
+                    .collect()
+            );
+            assert_eq!(
+                repaired["effort_breakdown"][0]["reasoning_effort"],
+                Value::Null
+            );
+        },
+    );
+}
+
+/// Partially priced work keeps the complete-cohort cost unavailable while
+/// reporting measured, unpriced and missing-run coverage over the counted
+/// attempts behind it; a valid zero cost stays zero and neither coverage
+/// nor pricing changes scores or ranks.
+#[test]
+fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
+    isolated(
+        "agents::implementers_report_cost_coverage_without_averaging_priced_attempts",
+        || {
+            use orbit_core::InvocationInsertParams;
+            use orbit_core::application::agents::{AgentQuery, agent_detail, agent_scorecard};
+            use orbit_types::telemetry::InvocationTrace;
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let priced_cost = |fixture: &Fixture, run: &str, cost: f64, task: &str| {
+                fixture
+                    .runtime
+                    .insert_invocation_trace_record(&InvocationInsertParams {
+                        agent_execution_id: None,
+                        job_run_id: run.into(),
+                        account: None,
+                        activity_id: "implement_one".into(),
+                        agent: "codex".into(),
+                        provider: None,
+                        model: None,
+                        task_ids: vec![task.into()],
+                        trace: InvocationTrace {
+                            provider_cost_usd: Some(cost),
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+            };
+            let landed_task = |fixture: &Fixture, title: &str| {
+                add(
+                    fixture,
+                    Owned {
+                        title,
+                        orchestrator: None,
+                        origin: None,
+                        complexity: TaskComplexity::Medium,
+                        status: TaskStatus::Done,
+                        relations: vec![],
+                    },
+                )
+            };
+            // One priced and one unpriced local run for `coverage`, both
+            // with no recorded model so they share one row.
+            for (run, priced) in [
+                ("jrun-coverage-priced", true),
+                ("jrun-coverage-unpriced", false),
+            ] {
+                let id = landed_task(&fixture, run);
+                let start = now - Duration::hours(3);
+                implementation_run(
+                    &fixture,
+                    run,
+                    &id,
+                    "coverage",
+                    None,
+                    start,
+                    now - Duration::hours(2),
+                );
+                append(
+                    &fixture,
+                    &id,
+                    start,
+                    "started",
+                    None,
+                    Some(TaskStatus::InProgress),
+                );
+                append(
+                    &fixture,
+                    &id,
+                    now - Duration::hours(2),
+                    "status_changed",
+                    None,
+                    Some(TaskStatus::Done),
+                );
+                if priced {
+                    priced_cost(&fixture, run, 6.0, &id);
+                }
+            }
+            // One attempt pulled by another machine with no run recorded.
+            let missing = landed_task(&fixture, "missing run");
+            append(
+                &fixture,
+                &missing,
+                now - Duration::hours(4),
+                "crew_assigned",
+                Some("assigned crew `coverage` from pool:medium"),
+                None,
+            );
+            append(
+                &fixture,
+                &missing,
+                now - Duration::hours(3),
+                "pulled_by",
+                Some(&json!({"machine_id": "hm_fixture"}).to_string()),
+                Some(TaskStatus::InProgress),
+            );
+            append(
+                &fixture,
+                &missing,
+                now - Duration::hours(2),
+                "status_changed",
+                None,
+                Some(TaskStatus::Done),
+            );
+            // A separate row whose only run cost a valid zero.
+            let zero = landed_task(&fixture, "zero cost");
+            let start = now - Duration::hours(3);
+            implementation_run(
+                &fixture,
+                "jrun-zero",
+                &zero,
+                "zero",
+                None,
+                start,
+                now - Duration::hours(2),
+            );
+            append(
+                &fixture,
+                &zero,
+                start,
+                "started",
+                None,
+                Some(TaskStatus::InProgress),
+            );
+            append(
+                &fixture,
+                &zero,
+                now - Duration::hours(2),
+                "status_changed",
+                None,
+                Some(TaskStatus::Done),
+            );
+            priced_cost(&fixture, "jrun-zero", 0.0, &zero);
+
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let card = agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            let stat = |row: &Value, key: &str| {
+                row["stats"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|stat| stat["key"] == key)
+                    .unwrap()["value"]
+                    .clone()
+            };
+            let coverage = card["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["crew"] == "coverage")
+                .unwrap()
+                .clone();
+            assert_eq!(
+                stat(&coverage, "cost_per_weighted_landed"),
+                Value::Null,
+                "one missing run suppresses the complete-cohort average, never a priced-only average"
+            );
+            assert_eq!(
+                stat(&coverage, "cost_coverage"),
+                json!("1 measured · 1 unpriced · 1 missing run of 3 counted attempts")
+            );
+            assert_eq!(
+                stat(&coverage, "cost_coverage_attempts"),
+                json!(3),
+                "the named denominator is the counted attempts behind the cost calculation"
+            );
+            assert_eq!(stat(&coverage, "cost_measured_attempts"), json!(1));
+            assert_eq!(stat(&coverage, "cost_unpriced_attempts"), json!(1));
+            assert_eq!(stat(&coverage, "cost_missing_run_attempts"), json!(1));
+            let zero_row = card["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["crew"] == "zero")
+                .unwrap();
+            assert_eq!(
+                stat(zero_row, "cost_per_weighted_landed"),
+                json!(0.0),
+                "valid zero spend stays zero"
+            );
+            assert_eq!(stat(zero_row, "cost_measured_attempts"), json!(1));
+            let (score, rank) = (coverage["score"].clone(), coverage["rank"].clone());
+
+            let server = fixture.server(false);
+            let http_card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            assert_eq!(
+                http_card["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["crew"] == "coverage")
+                    .unwrap(),
+                &coverage
+            );
+            let detail = agent_detail(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                "coverage",
+                Some("model unknown"),
+                std::time::Duration::ZERO,
+            )
+            .unwrap();
+            assert_eq!(detail["row"], coverage);
+            let http_detail = json_ok(server.get(&format!("/api/agents/implementers/detail?{WS}&crew=coverage&model=model%20unknown&min_support=1")));
+            assert_eq!(http_detail["row"], coverage);
+
+            // Pricing the unpriced run updates coverage only: the missing
+            // run still suppresses the average and the score is unchanged.
+            priced_cost(&fixture, "jrun-coverage-unpriced", 12.0, &missing);
+            let next = agent_scorecard(
+                &fixture.runtime.agent_scan().unwrap(),
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            let next_coverage = next["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["crew"] == "coverage")
+                .unwrap();
+            assert_eq!(stat(next_coverage, "cost_per_weighted_landed"), Value::Null);
+            assert_eq!(stat(next_coverage, "cost_measured_attempts"), json!(2));
+            assert_eq!(stat(next_coverage, "cost_unpriced_attempts"), json!(0));
+            assert_eq!(
+                (
+                    next_coverage["score"].clone(),
+                    next_coverage["rank"].clone()
+                ),
+                (score, rank),
+                "cost coverage never changes score or rank"
+            );
         },
     );
 }
@@ -369,8 +699,8 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
 /// charges each crew only for its own attempt and credits the final run; a
 /// pulled attempt with no local run charges the crew its history assigned;
 /// the orchestrator ranking keeps an incomplete, untested regression off the
-/// orchestrator; and every selection after the first scan is served from the
-/// cached scan.
+/// orchestrator and the implementer score while retaining its implementer
+/// ownership; and every selection after the first scan is served from the cached scan.
 #[test]
 fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_scan() {
     isolated(
@@ -626,12 +956,6 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             // Regressions, each owned by the safeguard its escape names.
             regression(
                 &fixture,
-                &shared,
-                RegressionNature::Incomplete,
-                RegressionEscape::NoTest,
-            );
-            regression(
-                &fixture,
                 &edited,
                 RegressionNature::BrokeExisting,
                 RegressionEscape::SpecAmbiguous,
@@ -647,6 +971,28 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 &edited,
                 RegressionNature::BrokeExisting,
                 RegressionEscape::Nondeterministic,
+            );
+
+            let query =
+                orbit_core::application::agents::AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let before_no_test = fixture.runtime.agent_scan().unwrap();
+            let implemented_before = orbit_core::application::agents::agent_scorecard(
+                &before_no_test,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            let strip_before = orbit_core::application::agents::agent_attribution(
+                &before_no_test,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            rated_regression(
+                &fixture,
+                &shared,
+                RegressionNature::Incomplete,
+                RegressionEscape::NoTest,
+                DefectSeverity::High,
             );
 
             // The runtime API: one owner per problem.
@@ -768,8 +1114,6 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "only the final run is credited"
             );
 
-            let query =
-                orbit_core::application::agents::AgentQuery::parse(Some("30d"), Some(1)).unwrap();
             let implemented = orbit_core::application::agents::agent_scorecard(
                 &facts,
                 AgentRole::Implementers,
@@ -777,6 +1121,32 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 std::time::Duration::ZERO,
             );
             assert_eq!(implemented["status"], "ok");
+            assert!(
+                implemented["terms"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|term| term["key"] != "escaped_regressions"),
+                "escaped regressions remain unscored context"
+            );
+            assert_eq!(
+                implemented["fleet_average"],
+                implemented_before["fleet_average"]
+            );
+            for row in implemented["rows"].as_array().unwrap() {
+                let before = implemented_before["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|before| before["crew"] == row["crew"] && before["model"] == row["model"])
+                    .unwrap();
+                for field in ["counts", "expected", "raw", "score", "rank"] {
+                    assert_eq!(
+                        row[field], before[field],
+                        "a no_test regression changes ownership context, not {field}: {row}"
+                    );
+                }
+            }
             let sol = implemented["rows"]
                 .as_array()
                 .unwrap()
@@ -785,8 +1155,14 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 .unwrap();
             assert_eq!(sol["units"], 2);
             assert_eq!(
-                sol["counts"]["escaped_regressions"], 1,
-                "only no_test reaches the implementer; review_missed is the reviewer's"
+                sol["stats"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|stat| stat["key"] == "escaped_regressions")
+                    .unwrap()["value"],
+                4.0,
+                "only no_test reaches the implementer, weighted by its high severity; review_missed is the reviewer's"
             );
             assert_eq!(sol["counts"]["review_rejects"], 1);
             assert_eq!(
@@ -895,7 +1271,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "the mid-run edit and the spec_ambiguous regression; not the untested one"
             );
 
-            // Attribution totals are the problems behind the four roles.
+            // Attribution retains unscored implementer context, independently of scores.
             let strip = json_ok(server.get(&format!("/api/agents/attribution?{WS}&window=30d")));
             let owners = &strip["owners"];
             assert_eq!(
@@ -913,6 +1289,17 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "{strip}"
             );
             assert_eq!(strip["total"], 11);
+            assert_eq!(strip_before["owners"]["implementers"], 4);
+            assert_eq!(
+                owners["implementers"],
+                strip_before["owners"]["implementers"].as_u64().unwrap() + 1,
+                "the no_test escape adds one Implementers-owned problem, regardless of severity"
+            );
+            let implemented_http = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=1"
+            )));
+            assert_eq!(implemented_http["rows"], implemented["rows"]);
+            assert_eq!(implemented_http["terms"], implemented["terms"]);
             for role in ["orchestrators", "implementers", "reviewers", "pilots"] {
                 let charged: u64 = strip["charged"][role]
                     .as_array()
@@ -974,6 +1361,134 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 format!("/api/agents/attribution?{WS}&window=1y"),
             ] {
                 assert_eq!(server.get(&refused).status().as_u16(), 400, "{refused}");
+            }
+        },
+    );
+}
+
+#[test]
+fn count_windows_exclude_old_attempts_on_recently_commented_tasks() {
+    isolated(
+        "agents::count_windows_exclude_old_attempts_on_recently_commented_tasks",
+        || {
+            for with_recent in [false, true] {
+                let fixture = Fixture::new();
+                let now = Utc::now();
+                let old_start = now - Duration::days(120);
+                let old = add(
+                    &fixture,
+                    Owned {
+                        title: "old work",
+                        orchestrator: None,
+                        origin: None,
+                        complexity: TaskComplexity::Low,
+                        status: TaskStatus::Done,
+                        relations: vec![],
+                    },
+                );
+                let path = bundle_dir(&fixture.path(""), &old)
+                    .unwrap()
+                    .join(orbit_types::task::TASK_ENVELOPE_FILE_NAME);
+                let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+                    serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                envelope.created_at = old_start - Duration::days(1);
+                envelope.updated_at = old_start;
+                fs::write(&path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+                append(
+                    &fixture,
+                    &old,
+                    old_start,
+                    "started",
+                    None,
+                    Some(TaskStatus::InProgress),
+                );
+                append(
+                    &fixture,
+                    &old,
+                    old_start + Duration::hours(1),
+                    "status_changed",
+                    None,
+                    Some(TaskStatus::Done),
+                );
+                comment(&fixture, &old, "recent comment");
+                let recent_start = now - Duration::days(2);
+                if with_recent {
+                    let recent = add(
+                        &fixture,
+                        Owned {
+                            title: "recent work",
+                            orchestrator: None,
+                            origin: None,
+                            complexity: TaskComplexity::Low,
+                            status: TaskStatus::Done,
+                            relations: vec![],
+                        },
+                    );
+                    implementation_run(
+                        &fixture,
+                        "jrun-recent",
+                        &recent,
+                        "recent",
+                        Some("model"),
+                        recent_start - Duration::seconds(1),
+                        recent_start + Duration::hours(1),
+                    );
+                    append(
+                        &fixture,
+                        &recent,
+                        recent_start,
+                        "started",
+                        None,
+                        Some(TaskStatus::InProgress),
+                    );
+                    append(
+                        &fixture,
+                        &recent,
+                        recent_start + Duration::hours(1),
+                        "status_changed",
+                        None,
+                        Some(TaskStatus::Done),
+                    );
+                }
+                let server = fixture.server(false);
+                for (window, size) in [
+                    ("last50", 50),
+                    ("last200", 200),
+                    ("last500", 500),
+                    ("last1000", 1000),
+                    ("90d", 0),
+                ] {
+                    let response = json_ok(server.get(&format!(
+                        "/api/agents/implementers/scorecard?{WS}&window={window}&min_support=1"
+                    )));
+                    let since = DateTime::parse_from_rfc3339(response["since"].as_str().unwrap())
+                        .unwrap()
+                        .with_timezone(&Utc);
+                    if size > 0 {
+                        assert_eq!(response["window_attempts"], size);
+                        let expected = if with_recent {
+                            recent_start
+                        } else {
+                            DateTime::parse_from_rfc3339(response["computed_at"].as_str().unwrap())
+                                .unwrap()
+                                .with_timezone(&Utc)
+                                - Duration::days(90)
+                        };
+                        assert_eq!(
+                            since.timestamp(),
+                            expected.timestamp(),
+                            "{window}: {response}"
+                        );
+                    } else {
+                        assert!(response["window_attempts"].is_null());
+                    }
+                    let rows = response["rows"].as_array().unwrap();
+                    assert_eq!(rows.len(), usize::from(with_recent), "{window}: {response}");
+                    if with_recent {
+                        assert_eq!(rows[0]["crew"], "recent");
+                        assert_eq!(rows[0]["units"], 1);
+                    }
+                }
             }
         },
     );

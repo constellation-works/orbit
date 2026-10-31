@@ -105,6 +105,7 @@ tags: []
 context_files: []
 external_refs: []
 created_by: codex:gpt-5.5
+created_by_model: gpt-5.5   # only when the create named a full model
 planned_by: null
 implemented_by: null
 created_at: 2026-05-11T00:00:00Z
@@ -113,7 +114,7 @@ updated_at: 2026-05-11T00:00:00Z
 
 The envelope must not contain `description`, `acceptance_criteria`, `plan`, `execution_summary`, `history`, `comments`, or `review_threads`.
 The envelope must not contain local-only `workspace_path` or `repo_root`; those live in the local registry workspace binding.
-The envelope must not contain the old `batch_id` name or internal execution-routing fields such as `agent` and `model`; job-run membership is stored as `job_run_id`, while durable task attribution uses `created_by`, `planned_by`, `implemented_by`, and the explicit `orchestrator` named-crew alias. `crew` is execution selection only; `orchestrator` is read-only orchestration attribution, never a model/provider selector. It is mutable only in `proposed` and `backlog`, and a missing field in a schema-v1 bundle reads as `null`. `orchestrator_model` is the orchestrator's model, written once when the task is created with an orchestrator and never updated: an explicit `orchestrator_model` create input (`orchestrator_model_source: explicit`), else that crew's configured model at creation (`crew_config`). Both are absent on a task created without an orchestrator and read as `null` on older bundles; nothing backfills them. A legacy writer can omit this additive field, so schema-v1 compatibility guarantees readability rather than preservation across legacy writes.
+The envelope must not contain the old `batch_id` name or internal execution-routing fields such as `agent` and `model`; job-run membership is stored as `job_run_id`, while durable task attribution uses `created_by`, `planned_by`, `implemented_by`, and the explicit `orchestrator` named-crew alias. `crew` is execution selection only; `orchestrator` is read-only orchestration attribution, never a model/provider selector. It is mutable only in `proposed` and `backlog`, and a missing field in a schema-v1 bundle reads as `null`. `orchestrator_model` is the orchestrator's model, written once when the task is created with an orchestrator and never updated: an explicit `orchestrator_model` create input (`orchestrator_model_source: explicit`), else that crew's configured model at creation (`crew_config`). Both are absent on a task created without an orchestrator and read as `null` on older bundles; nothing backfills them. `created_by_model` is likewise write-once: the creator's full model id when the `orbit.task.add` `model` input names one rather than a bare family (`created_by` still records the family), absent otherwise and on older bundles, never updated or backfilled. A legacy writer can omit this additive field, so schema-v1 compatibility guarantees readability rather than preservation across legacy writes.
 Task-only relation types must target valid task IDs matching the configured-prefix grammar (including non-ORB task IDs, such as `DANI-00001` or `SHR-00001`). `produces` and `resolves` may target task IDs or friction (`FYYYY-MM-NNN`) and ADR (`ADR-NNNN+`) IDs. `covered_by` targets a task ID or GitHub PR external key.
 
 ## Documents
@@ -155,7 +156,8 @@ inline a machine-generated blob — a serialized structure, a path list, a
 captured stream — into it. Because `events.jsonl` is append-only, an oversized
 note is permanent: it dilutes every downstream reader of that task (history
 scanning, memory distillation, triage, and the agent task context assembled in
-`engine_host/actions/task_context.rs`) for the life of the record.
+`crates/orbit-core/src/adapter/engine_host/actions/task_context.rs`)
+for the life of the record.
 
 A writer whose note would carry such a payload must instead keep a leading
 excerpt and name, **inside the note itself**, the command that reads the full
@@ -227,10 +229,12 @@ relations:
     regression:
       nature: defect_in_new
       escape: test_not_selected
+      severity: high
+      severity_source: filer
 ```
 
-Both fields are required inside the payload and take one value from a closed
-set:
+`nature` and `escape` are required inside the payload and take one value from
+a closed set:
 
 - `nature`
   - `broke_existing`: the culprit broke behavior that worked before it landed.
@@ -247,6 +251,18 @@ set:
   - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
   - `nondeterministic`: the failure depends on timing, ordering or environment and passed when gated.
   - `unclassified`: the filer could not tell how the defect escaped.
+
+`severity` and `severity_source` say how much the defect matters, on the scale
+review findings share (`critical`, `high`, `medium`, `low`, `nit`), and who
+rated it (`filer`, `verified`, `operator`, `backfill`, `default`). The screened
+`orbit.task.add` and `orbit.task.update` writes require `severity` on a new
+classified link; a link the task already holds may be re-sent without one and
+keeps its recorded rating. A severity given alone records source `filer`, and
+only finding verification records `verified`, when it confirms the finding
+that carries the link. A classified link stored before severity existed reads
+as `medium` with source `default`, and is written back that way. Binaries
+before this field refuse a payload that carries it (the payload is
+`deny_unknown_fields`), so hosts sharing a store upgrade together.
 
 The payload is additive. An entry written without it, including every link
 stored before the field existed, reads back with no `regression` key, which is
@@ -287,6 +303,37 @@ diagnostic containing the task ID, canonical path, and reason. Direct lookup of
 another ID and allocation/publication of a new task must not scan the malformed
 bundle. List and search remain fail-loud and return that diagnostic. None of
 these query paths may delete, move, repair, or quarantine bundle bytes.
+
+Long-lived readers of writable registries reuse the rows and envelope-proof fingerprints
+between commits. A dedicated read-only SQLite connection samples
+`PRAGMA data_version` before loading a snapshot; commits from any registry
+writer invalidate it on the next read. The version is compared only on that
+same connection, and a commit during loading forces another refresh rather
+than labelling older rows with a newer version. Each registry handle retains
+at most one partition snapshot, shared by its clones.
+The snapshot aligns bindings, index fields, fingerprints and recorded proofs
+once at refresh, so warm scans traverse one row vector without rebuilding
+lookup maps or formatting unchanged proof stamps.
+Registries admitted read-only retain their direct reads, including the
+existing immutable-main-file fallback when live WAL observation is unavailable.
+
+Within a process, a successful comparison of a parsed envelope with an
+immutable index row is also reused while that exact row and the envelope's
+file stamp remain unchanged. A refreshed registry snapshot supplies new row
+identities, and a replaced envelope retires its comparison, so this avoids
+rebuilding scalar/tag/parent projections on warm polls without relaxing their
+validation.
+Pending proofs remain attached to their immutable row and are retried when a
+busy registry writer prevented recording them; reuse never suppresses that
+later recording attempt.
+
+This reuse does not cache filesystem freshness. Every listing still probes
+every registered `task.yaml` for file identity, size and modification time.
+A persisted proof is accepted only when both that file stamp and the current
+index-row fingerprint match; a cached parse of an older file is discarded.
+Missing or changed envelopes still take the strict read and detect-and-repair
+path, so neither an external envelope replacement nor an index-only change
+waits for a timer or a process restart to become visible.
 
 ### Concurrent reads and lifecycle writes
 

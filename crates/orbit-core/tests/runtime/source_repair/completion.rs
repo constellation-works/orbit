@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 #[path = "completion/mutation.rs"]
 pub(super) mod mutation;
+#[path = "completion/policy.rs"]
+pub(super) mod policy;
 #[path = "completion/prerequisite.rs"]
 pub(super) mod prerequisite;
 
@@ -24,6 +26,15 @@ fn fixture_with(
     required_commands: bool,
     failure_handoff: bool,
 ) -> (Fixture, PathBuf) {
+    fixture_with_timing(auto_fix, required_commands, failure_handoff, None)
+}
+
+fn fixture_with_timing(
+    auto_fix: bool,
+    required_commands: bool,
+    failure_handoff: bool,
+    timing: Option<&str>,
+) -> (Fixture, PathBuf) {
     let mut f = Fixture::new();
     let config = f.repo.join(".orbit/config.toml");
     let mut text = std::fs::read_to_string(&config).unwrap().replace(
@@ -34,6 +45,12 @@ fn fixture_with(
         text = text.replace(
             "required_validation_commands = [\"true\"]",
             "required_validation_commands = []",
+        );
+    }
+    if let Some(timing) = timing {
+        text = text.replace(
+            "before_pr = false\nbefore_landing = false",
+            &format!("timing = {timing:?}"),
         );
     }
     std::fs::write(&config, text).unwrap();
@@ -164,7 +181,12 @@ esac
     calls
 }
 
-fn run_tail(f: &Fixture) -> Result<orbit_engine::JobOutcome, orbit_engine::DispatchError> {
+fn run_tail(
+    f: &Fixture,
+) -> (
+    Result<orbit_engine::JobOutcome, orbit_engine::DispatchError>,
+    Vec<String>,
+) {
     let path = f
         ._root
         .path()
@@ -213,23 +235,27 @@ fn run_tail(f: &Fixture) -> Result<orbit_engine::JobOutcome, orbit_engine::Dispa
             )
         },
     );
+    let started = audit
+        .events_snapshot()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            orbit_types::workflow::V2AuditEventKind::StepStarted { step_id } => Some(step_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        started.len() <= 2 && started.iter().all(|step_id| step_id == "complete_pr"),
+        "a resumed completion tail may start at most two completion attempts, including on error; it must never restart earlier steps: {started:?}"
+    );
     if matches!(&outcome, Ok(outcome) if outcome.success) {
-        let started = audit
-            .events_snapshot()
-            .unwrap()
-            .into_iter()
-            .filter_map(|event| match event.kind {
-                orbit_types::workflow::V2AuditEventKind::StepStarted { step_id } => Some(step_id),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
         assert_eq!(
             started,
             ["complete_pr", "complete_pr"],
             "only completion runs twice; implementation, commit, native validation and push never restart, including no-op attempts"
         );
     }
-    outcome
+    (outcome, started)
 }
 
 pub(super) fn unchanged_publication_retries_only_completion() {
@@ -255,7 +281,8 @@ fn unchanged_publication_tail(auto_fix: bool, review: bool) {
     assert_ne!(state.pipeline["sync_base"]["head_sha_before"], f.head);
     let prefix = state.step_outputs.clone();
     let artifacts = f.runtime.get_task_artifact_manifest(&f.task).unwrap();
-    let outcome = run_tail(&f).unwrap_or_else(|error| {
+    let (outcome, _) = run_tail(&f);
+    let outcome = outcome.unwrap_or_else(|error| {
         panic!(
             "{error}; recovery: {:?}",
             f.runtime
@@ -352,7 +379,8 @@ pub(super) fn moved_base_and_empty_requirements_retry_unchanged_completion() {
         git(&f.repo, &["add", "drain-base.txt"]);
         git(&f.repo, &["commit", "-qm", "another delivery lands"]);
         git(&f.repo, &["push", "origin", "HEAD:main"]);
-        let outcome = run_tail(&f).unwrap_or_else(|error| {
+        let (outcome, _) = run_tail(&f);
+        let outcome = outcome.unwrap_or_else(|error| {
             panic!(
                 "required commands {required_commands}: {error}; recovery: {:?}",
                 f.runtime
@@ -427,14 +455,23 @@ pub(super) fn empty_requirements_still_bind_completion_policy() {
     );
 }
 
-/// A second lost read after the retry spends no further budget: the run
-/// stops before any merge and the failure handoff diagnoses it.
-pub(super) fn repeated_observation_failure_escalates_after_one_retry() {
+/// [ORB-19430] A second lost read after the retry spends no further budget:
+/// the run holds before any merge, without the failure handoff, and the task
+/// stays in review.
+pub(super) fn repeated_observation_failure_holds_after_one_retry() {
     let (f, checkout) = fixture_with(true, true, true);
     let calls = tail_forge(&f, "repeated_lost_read");
-    let outcome = run_tail(&f);
+    let (outcome, _started) = run_tail(&f);
     assert!(
-        !matches!(&outcome, Ok(outcome) if outcome.success),
+        matches!(
+            &outcome,
+            Err(orbit_engine::DispatchError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::ForgeObservationUnavailable,
+                message,
+                ..
+            }) if message.contains("completion_observation_unavailable:")
+                && message.contains("TLS handshake timeout")
+        ),
         "{outcome:?}"
     );
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
@@ -446,22 +483,17 @@ pub(super) fn repeated_observation_failure_escalates_after_one_retry() {
         "one authenticated retry: {:?}",
         state.final_recovery
     );
-    // As for any completion failure after publication, the failure handoff
-    // keeps the PR and the task in review and records the diagnosis.
     assert_eq!(
         f.runtime.get_task(&f.task).unwrap().status,
         TaskStatus::Review
     );
     assert!(
-        f.runtime
+        !f.runtime
             .get_task_comments(&f.task)
             .unwrap()
             .iter()
-            .any(
-                |c| c.message.contains("PR completion failed after publication")
-                    && c.message.contains("completion_observation_unavailable:")
-            ),
-        "the exhausted retry is diagnosed on the task"
+            .any(|c| c.message.contains("PR completion failed after publication")),
+        "a held completion does not run the failure handoff"
     );
     let requests = std::fs::read_to_string(calls).unwrap();
     assert!(
@@ -936,7 +968,12 @@ pub(super) fn refused_receipts_stop_before_agent_or_republication() {
             b"{}".to_vec(),
         )
         .unwrap();
-    assert!(run_tail(&f).is_err());
+    let (outcome, started) = run_tail(&f);
+    assert!(outcome.is_err());
+    assert!(
+        started.iter().all(|step_id| step_id == "complete_pr"),
+        "a refused receipt must not start an agent, commit, validation, or publication step: {started:?}"
+    );
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
     assert!(
         matches!(state.final_recovery.unwrap().decision,
@@ -989,6 +1026,7 @@ fn configure_review(f: &mut Fixture, checkout: &std::path::Path) -> PathBuf {
         ),
         baseline_commands: f.runtime.review_baseline_commands().to_vec(),
         host_evidence: policy.review_host_evidence.value.clone(),
+        selective_before_landing: None,
         captured_at: Utc::now(),
     };
     f.source.input.as_mut().unwrap()["review"] = json!(admission);
@@ -1015,4 +1053,51 @@ fn configure_review(f: &mut Fixture, checkout: &std::path::Path) -> PathBuf {
     assert_eq!(settled["reviewer_fixed"], false);
     published_owner::checkpoint(f, &f.source.run_id, 5, "review_gate_settle", settled);
     source
+}
+
+/// Published completion receipts bind the effective policy, including its
+/// source, rather than an enum spelling or a doctor's equivalent rewrite.
+pub(super) fn timing_alias_rewrites_preserve_published_completion_authentication() {
+    let (mut f, _) = fixture_with_timing(true, true, false, Some("none"));
+    admit(&f);
+    let original = f.runtime.operation_policy().clone();
+    let config = f.repo.join(".orbit/config.toml");
+    for spelling in ["after_landing", "after-landing", "none", "off"] {
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+        document["review"]["timing"] = toml::Value::String(spelling.into());
+        std::fs::write(&config, toml::to_string(&document).unwrap()).unwrap();
+        // Authenticate both the historical spelling and its canonical save.
+        for save in [false, true] {
+            if save {
+                let mut store =
+                    orbit_config::ConfigStore::open(orbit_config::ConfigScope::Workspace, &config)
+                        .unwrap();
+                store.validate().unwrap();
+                store.save().unwrap();
+            }
+            f.runtime = orbit_core::OrbitRuntime::from_roots(
+                &f._root.path().join("global"),
+                &f.repo.join(".orbit"),
+            )
+            .unwrap()
+            .with_automation_execution_location(Some(
+                orbit_types::task::ExecutionLocation {
+                    machine_id: "hm_fixture".into(),
+                    machine_name: None,
+                },
+            ));
+            assert_eq!(
+                f.runtime.operation_policy(),
+                &original,
+                "{spelling}, saved={save}"
+            );
+            assert!(
+                f.runtime
+                    .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
+                    .unwrap(),
+                "published receipt survives {spelling}, saved={save}"
+            );
+        }
+    }
 }

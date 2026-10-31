@@ -262,6 +262,53 @@ fn the_run_record_lists_the_instructions_each_dispatch_received() {
         "a run without v2 audit evidence cannot say what it received"
     );
 
+    for (index, payload) in [
+        r#"{"event_id":123,"body_kind":"step_recovery_attempted"}"#,
+        r#"{"event_id":false,"body_kind":"step_recovery_attempted"}"#,
+        r#"{"event_id":[],"body_kind":"step_recovery_attempted"}"#,
+        r#"{"event_id":{},"body_kind":"step_recovery_attempted"}"#,
+        r#"{"event_id":null,"body_kind":"step_recovery_attempted"}"#,
+        r#"{"body_kind":"step_recovery_attempted"}"#,
+        "{",
+    ]
+    .iter()
+    .enumerate()
+    {
+        fx.runtime
+            .insert_v2_audit_event(&V2AuditEventInsertParams {
+                workspace_id: fx.runtime.workspace_id().unwrap(),
+                event_id: format!("invalid-{index}"),
+                source: "v2_envelope".into(),
+                schema_version: 1,
+                event_type: "step_started".into(),
+                ts: Utc::now(),
+                run_id: run.clone(),
+                agent_identity: "claude".into(),
+                parent_event_id: None,
+                workspace_path: None,
+                payload_json: (*payload).into(),
+            })
+            .unwrap();
+        assert_eq!(
+            fx.runtime.collect_run_tag_instructions(&run).unwrap().state,
+            "unavailable"
+        );
+        assert_eq!(
+            fx.runtime
+                .collect_run_recovery_attempts(&run)
+                .unwrap()
+                .state,
+            "unavailable"
+        );
+        assert_eq!(
+            fx.runtime
+                .collect_bounded_run_detail(&run, 0, 10, 128)
+                .unwrap()
+                .state,
+            "unavailable"
+        );
+    }
+
     let received = fx.instructions(&run, "agent_implement", &task).unwrap();
     let event = V2AuditEvent {
         envelope: V2AuditEnvelope {
@@ -299,6 +346,20 @@ fn the_run_record_lists_the_instructions_each_dispatch_received() {
 
     let listed = fx.runtime.collect_run_tag_instructions(&run).unwrap();
     assert_eq!(listed.state, "observed");
+    assert_eq!(
+        fx.runtime
+            .collect_run_recovery_attempts(&run)
+            .unwrap()
+            .state,
+        "not_attempted"
+    );
+    assert_eq!(
+        fx.runtime
+            .collect_bounded_run_detail(&run, 0, 10, 128)
+            .unwrap()
+            .state,
+        "observed"
+    );
     let projected = listed.to_json();
     assert_eq!(projected["items"][0]["step_id"], "implement");
     assert_eq!(projected["items"][0]["instructions"][0]["tag"], "ui");

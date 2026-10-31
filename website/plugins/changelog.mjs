@@ -42,17 +42,28 @@ export function changelogReleases() {
       filter: ['h2'],
       visit(node, ctx) {
         if (!isChangelog(ctx)) return;
+        const unreleased = ctx.textContent(node).trim() === 'Unreleased';
         const match = ctx.textContent(node).match(/^(\d+\.\d+\.\d+)(?:\s+[—-]\s+(\d{4}-\d{2}-\d{2}))?$/);
-        if (!match) return;
+        if (!match && !unreleased) return;
+        const parent = ctx.parent(node);
+        const index = ctx.indexOf(node);
+        if (parent?.type !== 'root' || index === undefined) return;
+        // This public page describes shipped versions only. Remove the whole
+        // Unreleased section, including notes if the source later gains them.
+        if (unreleased) {
+          for (const sibling of parent.children.slice(index + 1)) {
+            if (sibling.type === 'element' && sibling.tagName === 'h2') break;
+            ctx.removeNode(sibling);
+          }
+          ctx.removeNode(node);
+          return;
+        }
         const [, version, recordedDate] = match;
         const date = recordedDate ?? releaseDates[version];
         const parsedDate = new Date(`${date}T00:00:00Z`);
         if (!date || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
           throw new Error(`Release ${version} needs an ISO date in its CHANGELOG.md heading (see RELEASING.md).`);
         }
-        const parent = ctx.parent(node);
-        const index = ctx.indexOf(node);
-        if (parent?.type !== 'root' || index === undefined) return;
         const body = [];
         for (const sibling of parent.children.slice(index + 1)) {
           if (sibling.type === 'element' && sibling.tagName === 'h2') break;

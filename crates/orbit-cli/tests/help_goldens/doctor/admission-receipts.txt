@@ -1,0 +1,17 @@
+Show admission receipt counts and logical payload bytes, with separate claim-mutation receipt usage
+
+Usage: orbit doctor admission-receipts [OPTIONS]
+
+Options:
+      --compact
+          Compact idle and settled admission receipts to permanent tombstones; retain full receipts for unsettled claims and failed or revoked claims with a preserved PR
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

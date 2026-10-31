@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-10-19
+last_validated: 2026-10-26
 ---
 
 # Spec: Output Modes and Sink Resolution
@@ -37,7 +37,7 @@ Precedence, first match wins:
 
 `auto` resolves to `table` when `is_tty`, and to the **plain** form otherwise. Plain is `table` with the header suppressed, borders and ANSI absent, truncation disabled, and single-tab field separators — the form `cut -f` expects. `--format plain` explicitly selects this form on any sink, with the same bytes as the default piped rendering. The global `--header` asks the plain form to start each table with its header row, tab-separated and escaped like the fields beneath it, so a reader over ssh or a pipe can tell the columns apart. It is opt-in: without it the plain form keeps exactly the bytes above, and it has no effect in `table` mode, which always carries a header, or in `json` and `ndjson`.
 
-`--format`, `--json` and `--header` are each declared once and installed across the assembled command tree, including plugin-derived groups. Both are accepted at the root and after subcommands, and appear in help. `--json` selects JSON through the existing compatibility rung, preserving its always-pretty output. Combining it with an explicit non-JSON output `--format` is a usage error (exit 2), reported as JSON on stderr. `--json --format json` is accepted. Command-local `--format` arguments keep their own meaning: `audit export --format json|csv` selects the exported file's serialization; `--json` independently selects the sink's output mode; the existing file export and human confirmation remain unchanged. There are no built-in command exclusions. A plugin schema may derive a `--json` tool-input flag with a different meaning; that flag is preserved. Select output JSON at the root/group (for example `orbit --json plugin-ns verb --json`), or use `--format json` on that leaf.
+`--format`, `--json` and `--header` are each declared once and installed across the assembled command tree, including plugin-derived groups. They are accepted at the root and after subcommands, and appear in help. Subcommand help lists inherited options as single-line entries under **Global options**, pointing to `orbit --help` for full descriptions and the output format value descriptions. Command-owned flags retain their own help. `--json` selects JSON through the existing compatibility rung, preserving its always-pretty output. Combining it with an explicit non-JSON output `--format` is a usage error (exit 2), reported as JSON on stderr. `--json --format json` is accepted. Command-local `--format` arguments keep their own meaning: `audit export --format json|csv` selects the exported file's serialization; `--json` independently selects the sink's output mode; the existing file export and human confirmation remain unchanged. There are no built-in command exclusions. A plugin schema may derive a `--json` tool-input flag with a different meaning; that flag is preserved. Select output JSON at the root/group (for example `orbit --json plugin-ns verb --json`), or use `--format json` on that leaf.
 
 ## 3. Mode Contracts
 
@@ -48,8 +48,8 @@ Precedence, first match wins:
 | `json` | one document | no | no | no |
 | `ndjson` | one document per line | no | no | **yes** |
 
-- `json` for a list command emits a single array; for a detail command, a single object. `--format json` is pretty-printed only when `is_tty`; `--json` keeps its historical pretty form (see Migration). Commands with no table or plain view preserve pretty JSON in those human modes.
-- `ndjson` emits one complete JSON value per line and flushes per record. List commands assemble their record payload before rendering, so records flush incrementally only after collection. Command-specific stream payloads such as `orbit log tail` emit as data arrives using their selected line format.
+- `json` for a list command emits a single array or its documented envelope; for a detail command, a single object. For example, `orbit run history --json` retains `{"runs":[...]}` (including with `--incidents`), and `--failures --json` uses `{"failures":[...]}`. `--format json` is pretty-printed only when `is_tty`; `--json` keeps its historical pretty form (see Migration). Commands with no table or plain view preserve pretty JSON in those human modes.
+- `ndjson` emits one complete JSON value per line and flushes per record. List commands emit their rows in listing order without a document envelope; an empty list emits no records. This includes ordinary, incident and failure rows from `orbit run history`. List commands assemble their record payload before rendering, so records flush incrementally only after collection. Command-specific stream payloads such as `orbit log tail` emit as data arrives using their selected line format.
 - `table` and `json` for the same invocation describe the same records. The table may omit fields and reformat values; it may not contain a value absent from the payload, and it may not omit a record the payload includes.
 
 ## 4. Payload Rules

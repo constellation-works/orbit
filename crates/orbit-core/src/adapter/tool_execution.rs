@@ -115,6 +115,9 @@ impl OrbitRuntime {
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<Value, OrbitError> {
         self.bind_worker_session(&mut tool_context.session_context)?;
+        if !self.tool_registry().has(name) {
+            self.ensure_tool_agent_facing_with_context(name, &tool_context)?;
+        }
         if tool_context.orbit_host.is_none() {
             let task_id = resolve_task_id_from_context(self, &tool_context)?;
             tool_context.orbit_host = Some(super::tool_host::build_orbit_tool_host(

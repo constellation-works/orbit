@@ -56,6 +56,11 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// for a host that does — a follower pulling from this owner, say — and
     /// `detail` names the wait (`waits for a macos host (os:macos)`).
     HostOsMismatch,
+    /// The task's `requires_labels` name a capability label this host does
+    /// not carry (its `machine.labels` plus its OS). It stays in `backlog`
+    /// for a host that does, and `detail` names the wait and the labels this
+    /// host lacks. Checked after [`Self::HostOsMismatch`].
+    HostLabelsMissing,
     /// The task is tagged `ui` and this host has no verified headless browser
     /// kit to render its change. It stays in `backlog` for a host that has
     /// one — a follower whose request declares a kit, say — and `detail`
@@ -63,6 +68,11 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// [`Self::HostOsMismatch`], so a task this host's OS cannot run names
     /// that wait first.
     BrowserKitMissing,
+    /// A `verify-mock-ui` task whose mocks fail validation against the
+    /// view manifest at the base revision (visual-review §2.3). `detail`
+    /// names every failing artifact and its refusal code; only renaming,
+    /// re-exporting or re-declaring clears it.
+    MockValidationFailed,
     GroupMemberConflict,
     /// An `epic`-tagged root that declared no `context_files` of its own while
     /// its descendants did. Admission no longer inherits their surface, so the
@@ -121,6 +131,12 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// task on that crew instead. `detail` names the run, the failure, the
     /// excluded crews and the time.
     ProviderBackoff,
+    /// The task's `not_before` is still ahead. No dispatcher starts it until
+    /// then: the hold lifts by itself on the first admission pass after that
+    /// time, with no timer. `detail` names the time. An operator's
+    /// `orbit run ship --ignore-schedule` records a `schedule_overridden`
+    /// event for that time, which lifts it early.
+    Scheduled,
     /// Every crew the task may run as belongs to a provider whose latest usage
     /// reading on this host is exhausted, or at or above the configured
     /// threshold, and the reading is still live [ORB-14697]. A crew left

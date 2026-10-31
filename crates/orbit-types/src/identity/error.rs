@@ -34,12 +34,6 @@ impl IdentityError {
 pub enum ProviderModelError {
     #[error("provider '{provider}' does not support configured reasoning effort")]
     EffortUnsupportedByProvider { provider: String },
-    #[error(
-        "OpenCode CLI supports effort values high, max (`opencode run --variant`); '{effort}' is \
-         unsupported. Values are not remapped; choose a supported effort or set a model whose \
-         provider defines the variant."
-    )]
-    OpenCodeEffort { effort: ReasoningEffort },
     /// `model` is a verified Grok model whose documented efforts, listed in
     /// `supported`, exclude `effort`.
     #[error("Grok model '{model}' supports effort values {supported}; '{effort}' is unsupported")]
@@ -59,9 +53,9 @@ pub enum ProviderModelError {
     )]
     GrokModelMissing,
     #[error(
-        "Antigravity CLI supports effort values low, medium, high (`agy --effort`); '{effort}' is \
-         unsupported. Migrate xhigh/max to high, or choose a *-high model slug from `agy \
-         models`. Values are not remapped."
+        "Orbit accepts Antigravity effort only as low, medium or high (`agy --effort` advertises \
+         low|medium|high|xhigh|max); '{effort}' is unsupported. Migrate xhigh/max to high, or \
+         choose a *-high model slug from `agy models`. Values are not remapped."
     )]
     AntigravityEffort { effort: ReasoningEffort },
     /// `model` is a Gemini CLI id without the effort suffix `agy` requires.

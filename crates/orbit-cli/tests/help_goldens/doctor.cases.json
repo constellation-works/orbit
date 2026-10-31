@@ -1,0 +1,15 @@
+[
+  {
+    "argv": [
+      "doctor"
+    ],
+    "golden": "doctor.txt"
+  },
+  {
+    "argv": [
+      "doctor",
+      "admission-receipts"
+    ],
+    "golden": "doctor/admission-receipts.txt"
+  }
+]

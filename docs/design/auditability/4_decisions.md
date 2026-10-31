@@ -3,7 +3,7 @@ summary: "Auditability — Decisions"
 type: design
 title: "Auditability — Decisions"
 owner: codex
-last_updated: 2026-10-15
+last_updated: 2026-10-29
 last_validated: 2026-10-15
 status: Draft
 feature: auditability
@@ -570,7 +570,7 @@ The result is clamped to `FRICTION_TITLE_MAX_CHARS` (120) at a word boundary. An
 
 **Consequences.**
 - Bounded scan memory and indexed workspace-local reads for the CLI, MCP, HTTP, dashboard, Bridge-facing, and scoreboard friction paths; the scoreboard consumes a per-model SQL aggregate instead of the full record slice.
-- Legacy trees stay untouched, read-only rollback evidence for one release, and `export_workspace_frictions` re-materializes the live corpus in the same Markdown layout for inspection.
+- Legacy trees stay untouched, read-only rollback evidence for one release.
 - No retention, deletion, cold archival, body compression, or disk-reclamation policy is introduced; removing legacy trees needs an explicit later finalize path that also drops `legacy_path`.
 - Cost: a consumer that read `path` as an always-present file location now sees `null` for post-cutover records and must treat it as an optional legacy pointer.
 - Rejected alternative: keeping the file store and adding a SQLite index sidecar. That would have preserved two sources of truth for the same records and left the full parse cost on every cold read and index rebuild.
@@ -605,6 +605,24 @@ Deprecate `agent` as a normal tool-call input, prefer exact `model`, infer the a
 ### Consequences
 - Seeded skills and instructions can use shorter model-only tool calls while task records still retain both fields internally.
 - Cost: unknown or ambiguous models still need a compatible legacy `agent` value when family-specific dispatch matters.
+
+## Prompt-size price tiers key on each request's own prompt
+
+**Recorded:** 2026-10-29 04:23:10Z · [ORB-19680]
+**Paths:** `crates/orbit-types/src/telemetry/{invocation,pricing}.rs`, `crates/orbit-common/assets/model_prices.yaml`, `crates/orbit-agent/src/providers/long_prompt.rs`, `crates/orbit-store/src/driver/sqlite/invocation_store/records/**`
+
+**Context.** Claude Haiku 5.5, the OpenAI GPT-6/GPT-5.6 rows and Grok 4.5–4.7 bill one request at higher rates for the whole request once that request's own prompt crosses a threshold (over 100,000 tokens, over 272,000 input tokens, and 200,000 or more prompt tokens). The price table had no tier dimension, so every invocation was derived at short-context rates; Haiku 5.5's derived total was 36% of its provider-reported cost. An invocation sums many requests, so its totals cannot say which requests crossed: about 74% of fleet invocations had totals over their model's threshold, while their individual requests mostly did not. Two alternatives were real: key the tier on invocation totals, which bills a run of many short requests as long context, or capture per-request prompt sizes and key on them.
+
+**Decision.** The tier key is one request's prompt: every input-side token after the base row's `input_token_basis` (uncached input, cache reads and both cache writes), compared inclusively against a tier's `min_prompt_tokens`. Tiers are a separate `prompt_tiers` list of `PromptTierRow`s with their own model and effective period, so base `prices` rows stay short-context and none is rewritten. `InvocationTrace.long_prompt_requests` captures the usage of each request whose prompt may reach the 100,000-token floor (`LONG_PROMPT_CAPTURE_FLOOR_TOKENS`, the lowest published threshold; the table refuses a tier below it). Codex's session rollout yields one per `token_count` `last_token_usage` whose running total moved. Claude's message stream carries each request's final input-side buckets but only its starting `output_tokens`, so it records an empty list when no request may reach the floor and `None` otherwise. Other providers, including Grok's single JSON wrapper, record `None`. The list persists in the nullable `invocations.long_prompt_requests_json` column (store migration v71). `cost_from_rows` prices the totals at the base row and adds each tiered request's tier-minus-base cost. Without captured requests, the totals bound every request: below the threshold the base cost is exact, and at or above it the derived cost is `None`.
+
+**Consequences.**
+- Codex runs with a readable rollout price long requests at their tier, and standard requests keep their short-context rates. A Claude run whose stream shows every request under 100,000 prompt tokens keeps its exact short-context cost even when its totals are larger.
+- Tier periods start at the first verified observation (2026-10-29T04:23:10Z). Earlier invocations hold no per-request usage and keep their shipped pricing, so history is not repriced.
+- An older binary writes `NULL` to the new column, and its rows read as not captured.
+- Cost: from the tier boundary, an invocation without per-request usage whose totals reach its model's threshold has an unknown derived cost. This covers Grok runs over 200,000 prompt tokens, Claude runs with any request at or over 100,000 prompt tokens (most Haiku 5.5 work: 21 of 30 requests in one measured run), Claude `--output-format json` or truncated captures, Codex runs whose rollout is missing, and worker-posted invocations. Their spend is reported as unknown rather than underpriced.
+- Cost: requests under 100,000 prompt tokens are not retained. A future tier below that floor would need a lower capture floor first, and invocations recorded before the change could not use the new tier.
+- Cost: Claude's stream repeats each request's starting usage on every content-block message (a measured run streamed 232 output tokens against 73,963 billed), so a long Haiku request's output, and with it the tier premium, is not on the stream. Pricing the long requests from it would have derived $0.309 against a provider-reported $0.421. Capturing it needs each request's final usage, such as the `message_delta` events of `--include-partial-messages`.
+- Cost: the tier-minus-base sum assumes each captured request is part of the invocation totals. A Claude subagent request on another model is excluded, and the Haiku whole-request rule is applied as published.
 
 ## Task References
 
@@ -642,5 +660,6 @@ Deprecate `agent` as a normal tool-call input, prefer exact `model`, infer the a
 - [ORB-10590] — make the friction record handle an author-settable field and derive it structurally when omitted.
 - [ORB-10680] — moved hub friction records into the host-global SQLite store to bound scan memory.
 - [ORB-10890] — record an explicitly-untrusted self-reported actor beside the trusted `role` so unauthenticated MCP traffic is attributable-but-labelled.
+- [ORB-19680] — price prompt-size tiers per request from captured per-request usage, never from invocation totals.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

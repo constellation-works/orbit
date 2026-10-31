@@ -30,61 +30,43 @@ impl ShipMode {
     about = "Ship backlog or explicitly selected tasks through the gated task pipeline",
     override_usage = "orbit run ship [<TASK_ID>...] [OPTIONS]",
     after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n  orbit run ship T123 --review before-landing\n\n\
-                  Shipment is asynchronous: this prints the durable run ID and returns. The\n\
-                  eventual outcome is not known when it does.\n\n\
-                  `--allow-crew` restricts an explicit shipment to configured crews. It does\n\
-                  not reassign tasks or select a fallback: an excluded current or later-resolved\n\
-                  crew is refused before its provider starts.\n\n\
-                  `--review` adds a second-agent review before landing to this run only. It\n\
-                  can only add review: the layer workspace policy already applies is accepted\n\
-                  unchanged, and the other layer, a workspace that sets neither\n\
-                  `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`\n\
-                  and local-only delivery are refused before the run starts.\n\n\
-                  Inspect submitted runs with `orbit run history -j task_auto_pipeline` and\n\
-                  `orbit run show <RUN_ID>`."
+                  Shipment is asynchronous: prints the run ID and returns before\n\
+                  the work completes. Follow it with `orbit run show <RUN_ID>`.\n\
+                  Details: the orbit-orchestrate skill, references/orchestration.md."
 )]
 pub struct ShipCommand {
     /// Optional task IDs to seed explicit gated shipment. Omit for auto mode.
     #[arg(value_name = "TASK_ID", num_args = 0..)]
     pub task_ids: Vec<String>,
-    /// Pipeline mode. Each PR leaf accepts one task; explicit selections are
-    /// dispatched as singletons. When omitted,
-    /// the mode is resolved from the current workspace's registry entry
-    /// (explicit `ship_mode`, else defaults to `pr`).
+    /// Pipeline mode. Explicit selections ship as singletons
+    /// (default: registry `ship_mode`, else `pr`).
     #[arg(short = 'm', long, value_enum)]
     pub mode: Option<ShipMode>,
-    /// Base branch for shipment. Defaults to the registered workspace
-    /// base branch, else `[workflow] base_branch` from `config.toml`
-    /// (or `main` if unset).
+    /// Base branch for shipment (default: registered workspace base branch,
+    /// else `[workflow] base_branch`, else `main`).
     #[arg(short = 'b', long)]
     pub base: Option<String>,
-    /// Authorize this run to finish delivery and move the tasks it ships to
-    /// `done`, instead of leaving them in `review` for a separate approval.
-    /// In `local` mode that happens once the work is merged and pushed; in
-    /// `pr` mode once the PR is verified merged, respecting branch protections
-    /// and required checks. Off by default, and it never approves `proposed`
-    /// work for the backlog.
+    /// Authorize this run to finish delivery and move shipped tasks to `done`
+    /// instead of `review`. Default off; never approves `proposed` work.
     #[arg(long)]
     pub complete: bool,
-    /// Restrict an explicit shipment to these configured crews. Repeatable and
-    /// comma-separated. Every name must be configured; an unknown or empty one
-    /// fails before a run is created. Omitted, shipment remains unrestricted.
+    /// Restrict an explicit shipment to these configured crews
+    /// (repeatable, comma-separated).
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
-    /// Add this review layer before landing to this run when workspace
-    /// policy applies none: `before-pr` holds PR creation for a reviewer,
-    /// `before-landing` reviews the open PR before it lands. The layer
-    /// `review.timing` already applies is accepted unchanged; the other one
-    /// is refused, as are a workspace that sets neither
-    /// `workflow.purpose_crews.pre_landing_review` nor
-    /// `workflow.purpose_crews.review` and local-only delivery. Omitted,
-    /// workspace policy decides.
+    /// Add a review layer before landing to this run when workspace policy
+    /// applies none. Only adds review. `before-landing` is recommended;
+    /// `before-pr` is deprecated but still holds PR creation for a reviewer.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
     /// Require a systemd user scope for this run and every worker it starts.
     /// Treats machine.worker_containment as strict for this invocation.
     #[arg(long)]
     pub strict_worker_containment: bool,
+    /// Start the named tasks now even if their scheduled start (`not_before`)
+    /// is still ahead. Records a `schedule_overridden` history event.
+    #[arg(long, requires = "task_ids")]
+    pub ignore_schedule: bool,
     /// Token for this workspace's exclusive claim, when another operator holds
     /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
     #[arg(long)]
@@ -118,6 +100,7 @@ impl Execute for ShipCommand {
             orbit_types::workflow::JobRunTrigger::cli(),
             self.strict_worker_containment,
             self.review,
+            self.ignore_schedule,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,

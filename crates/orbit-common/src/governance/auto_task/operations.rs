@@ -125,7 +125,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
         required(mcp_only(
             "schedule",
             ParamType::Object,
-            "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine). Required.",
+            "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`). Required.",
         )),
         cli_only(
             "cron",
@@ -346,7 +346,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         mcp_only(
             "schedule",
             ParamType::Object,
-            "New schedule object: `{ cron: string }` `{ every_minutes: number }`, or `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1).",
+            "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`).",
         ),
         cli_only(
             "cron",
@@ -510,6 +510,13 @@ const TOGGLE: AutoTaskOperation = AutoTaskOperation {
             CliArgKind::Positional,
             "Whether to enable (`on`) or disable (`off`)",
         )),
+        both(
+            "dry_run",
+            ParamType::Switch,
+            "With `on` for a condition definition: list the subjects enabling would baseline or fire, and whether `max_matches` refuses it, without enabling anything.",
+            CliArgKind::flag("dry-run"),
+            "With `on` for a condition definition: show what enabling would baseline or fire, and whether max_matches refuses it, without enabling anything",
+        ),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],

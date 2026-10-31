@@ -133,7 +133,8 @@ pub(crate) fn later_prerequisite_read_failure_resumes_only_completion() {
             .any(|(path, _)| path == orbit_types::workflow::REVIEW_GATE_ARTIFACT)
     );
 
-    let outcome = run_tail(&f).unwrap();
+    let (outcome, _) = run_tail(&f);
+    let outcome = outcome.unwrap();
     assert!(outcome.success, "{outcome:?}");
 
     let requests = std::fs::read_to_string(calls).unwrap();
@@ -251,7 +252,8 @@ pub(crate) fn prerequisite_read_after_mutation_provenance_never_resumes() {
             },
         )
         .unwrap();
-    assert!(run_tail(&f).is_err());
+    let (outcome, _) = run_tail(&f);
+    assert!(outcome.is_err());
     let requests = std::fs::read_to_string(calls).unwrap();
     assert!(requests.contains("/status?"), "{requests}");
     assert!(!requests.contains("/pulls/17/merge"), "{requests}");
@@ -337,6 +339,12 @@ fault_read() {{
         credentials)
             echo 'gh: Bad credentials (HTTP 401)' >&2
             exit 1 ;;
+        not_found)
+            echo 'gh: Not Found (HTTP 404)' >&2
+            exit 1 ;;
+        unprocessable)
+            echo 'gh: Validation Failed (HTTP 422)' >&2
+            exit 1 ;;
         malformed)
             printf '%s\n' 'not-json'
             exit 0 ;;
@@ -387,7 +395,8 @@ fn assert_resumed_merge(
     reread: bool,
 ) {
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
-    let outcome = run_tail(f).unwrap();
+    let (outcome, _) = run_tail(f);
+    let outcome = outcome.unwrap();
     assert!(outcome.success, "{outcome:?}");
     let requests = std::fs::read_to_string(calls).unwrap();
     let requests = requests.lines().collect::<Vec<_>>();
@@ -471,11 +480,13 @@ fn assert_resumed_merge(
     );
 }
 
-/// [ORB-16340] A REST TLS handshake timeout on the required-checks read, and an
-/// persistent HTTP 5xx on the merge-capability read, resume only that completion.
+/// [ORB-16340] TLS and HTTP 5xx failures on both prerequisite reads resume only
+/// that completion.
 pub(crate) fn transient_required_check_and_merge_capability_reads_resume_completion() {
     for (mode, kind, token, reread) in [
         ("required", "tls", "isRequired(pullRequestNumber", false),
+        ("required", "http500", "isRequired(pullRequestNumber", false),
+        ("merge", "tls", "autoMergeAllowed", true),
         ("merge", "http500", "autoMergeAllowed", true),
     ] {
         let (mut f, checkout) = fixture();
@@ -485,18 +496,26 @@ pub(crate) fn transient_required_check_and_merge_capability_reads_resume_complet
     }
 }
 
-/// Auth, permission, other permanent 4xx answers, and a malformed provider
-/// body stay terminal. None of them resumes completion or merges.
+/// Auth, permission, permanent 4xx answers, and malformed provider bodies stay
+/// terminal on both prerequisite reads. None resumes completion or merges.
 pub(crate) fn permanent_required_check_and_merge_capability_answers_do_not_resume() {
     for (mode, kind, token) in [
         ("required", "forbidden", "isRequired(pullRequestNumber"),
-        ("merge", "credentials", "autoMergeAllowed"),
+        ("required", "credentials", "isRequired(pullRequestNumber"),
+        ("required", "not_found", "isRequired(pullRequestNumber"),
+        ("required", "unprocessable", "isRequired(pullRequestNumber"),
         ("required", "malformed", "isRequired(pullRequestNumber"),
+        ("merge", "forbidden", "autoMergeAllowed"),
+        ("merge", "credentials", "autoMergeAllowed"),
+        ("merge", "not_found", "autoMergeAllowed"),
+        ("merge", "unprocessable", "autoMergeAllowed"),
+        ("merge", "malformed", "autoMergeAllowed"),
     ] {
         let (mut f, checkout) = fixture();
         configure_review(&mut f, &checkout);
         let calls = observation_forge(&f, mode, kind);
-        assert!(run_tail(&f).is_err(), "{kind} on {mode} resumed completion");
+        let (outcome, _) = run_tail(&f);
+        assert!(outcome.is_err(), "{kind} on {mode} resumed completion");
         let requests = std::fs::read_to_string(calls).unwrap();
         assert!(
             requests.contains(token),

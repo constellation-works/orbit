@@ -101,6 +101,24 @@ fn has_registry(global_root: &Path) -> bool {
     workspace_registry::registry_path_for(global_root).is_file()
 }
 
+/// Catalog root a generated local MCP launch must pass as `--root`.
+///
+/// A client started without `--root` or `ORBIT_ROOT` opens the host-global
+/// directory. Only a different directory that actually holds the workspace
+/// catalog needs to be embedded. A repo-local `.orbit` is workspace data and
+/// has no catalog of its own, so it is not a launch root. Callers omit the
+/// result from federated entries.
+pub(super) fn embedded_launch_root(candidate: &Path) -> Option<PathBuf> {
+    if candidate.as_os_str().is_empty() || !has_registry(candidate) {
+        return None;
+    }
+    let candidate = canonical_or_original(candidate);
+    match workspace_registry::global_orbit_dir() {
+        Ok(default_root) if paths_equivalent(&candidate, &default_root) => None,
+        _ => Some(candidate),
+    }
+}
+
 fn registered_checkout_paths(
     registry_root: &Path,
     cwd: &Path,

@@ -370,6 +370,74 @@ fn routine_status_does_not_wait_behind_a_queued_task_commit_writer() {
     assert_eq!(ordinary.join().unwrap().unwrap(), task.id);
 }
 
+/// `preparation_eligible` is the only state kind whose target job this
+/// fixture's catalog resolves.
+fn state_routine_yaml(name: &str, enabled: bool) -> String {
+    format!(
+        r#"schemaVersion: 1
+name: {name}
+enabled: {enabled}
+target: job:task_pilot_pipeline
+trigger:
+  state:
+    kind: preparation_eligible
+    owner_machine: fixture-machine
+    branch: main
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    retries: 1
+    deadline_minutes: 90
+policy:
+  timeout_minutes: 90
+  overlap: forbid
+  retries: {{ max: 1, backoff_minutes: 5 }}
+"#
+    )
+}
+
+/// The sweep skips a state routine for duplicate ownership when an enabled
+/// same-kind peer shares its target. `routine show` and `list` must report that
+/// skip, not the evaluator's dry-run reason. A disabled routine owns nothing and
+/// keeps its own reason. [ORB-17918]
+#[test]
+fn status_reports_the_duplicate_skip_the_sweep_records_for_a_state_routine() {
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let routines = workspace.repo.join(".orbit/routines");
+    std::fs::create_dir_all(&routines).unwrap();
+    for (name, enabled) in [("pilot-a", true), ("pilot-b", true), ("parked", false)] {
+        std::fs::write(
+            routines.join(format!("{name}.yaml")),
+            state_routine_yaml(name, enabled),
+        )
+        .unwrap();
+    }
+
+    let report = routine_statuses_with_providers(
+        &workspace.runtime.global_root(),
+        machine(),
+        &SingleWorkspace(workspace.runtime.clone()),
+        Utc::now(),
+    )
+    .unwrap();
+    assert!(report.load_errors.is_empty(), "{:?}", report.load_errors);
+    let reason = |name: &str| {
+        let status = report
+            .statuses
+            .iter()
+            .find(|status| status.routine.definition.name == name)
+            .unwrap();
+        status.automation.as_ref().unwrap()["reason"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(reason("pilot-a"), "duplicate_routine_ownership");
+    assert_eq!(reason("pilot-b"), "duplicate_routine_ownership");
+    assert_ne!(reason("parked"), "duplicate_routine_ownership");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     routine_status_reads_cached_refs_while_clock_sweep_fetches_scenarios,

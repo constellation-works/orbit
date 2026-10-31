@@ -49,10 +49,8 @@ use serde_json::{Value, json};
 
 use super::pull_waiting::{OwnerAnswer, PullWaiting};
 use super::{ensure_distributed_mutation_available, probe_pull_contract};
+use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::job::PipelineInvokeResult;
-
-/// The job a follower drain runs.
-pub const PULL_DRAIN_JOB: &str = "workspace_pull_pipeline";
 
 /// The drain run-input key holding the owner's validation gates as its probe
 /// reported them at submission, or `null` when an older owner reported none.

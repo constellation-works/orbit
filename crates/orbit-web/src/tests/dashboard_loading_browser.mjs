@@ -1,12 +1,14 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup|--clock]
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup|--clock|--review-repairs|--elapsed]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertDashboardNavigationRepairs } from './dashboard_navigation_repairs_browser.mjs';
 import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
-import { assertRunTaskLabels, assertTaskLinkScopeHistory, assertTaskLookupClear } from './dashboard_run_tasks_browser.mjs';
+import { assertRunTaskLabels, assertTaskLinkScopeHistory, assertTaskLookupClear, assertFixPrReadinessRefresh, assertPinnedFixPr } from './dashboard_run_tasks_browser.mjs';
+import { assertPilotAdmission } from './dashboard_pilot_admission_browser.mjs';
 import { assertClockRepaint } from './dashboard_clock_browser.mjs';
 import { assertTaskTitleLayout } from '../../tests/http_api/dashboard_task_titles_browser.mjs';
 import { assertPullRequestLinks } from '../../tests/http_api/dashboard_pull_request_links_browser.mjs';
@@ -17,7 +19,54 @@ fs.mkdirSync(evidence, { recursive: true });
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
 const locksOnly = process.argv[4] === '--locks-only';
 const authExclusionsOnly = process.argv[4] === '--auth-exclusions';
+const repairsOnly = process.argv[4] === '--review-repairs';
 const clockOnly = process.argv[4] === '--clock';
+const elapsedOnly = process.argv[4] === '--elapsed';
+const elapsedScenario = `
+const reads = [];
+const task = {
+  id: 'ELAPSED-1', title: 'Elapsed clock fixture', status: 'in-progress', priority: 'medium',
+  crew: 'opus', job_run_id: 'jrun-elapsed-fixture',
+};
+const response = payload => new Response(JSON.stringify(payload), { status: 200 });
+class QuietEventSource {
+  constructor(url) {
+    this.url = url;
+    this.readyState = 0;
+    queueMicrotask(() => { this.readyState = 1; this.onopen?.(); });
+  }
+  close() { this.readyState = 2; }
+}
+globalThis.EventSource = QuietEventSource;
+globalThis.fetch = async input => {
+  const url = new URL(input, location.href);
+  reads.push(url.pathname + url.search);
+  let payload = [];
+  if (url.pathname === '/api/workspaces') payload = [{ id: 'one', name: 'one', status: 'active', is_default: true }];
+  else if (url.pathname === '/api/tasks') payload = { items: [task], total: 1, limit: 50, truncated: false };
+  else if (url.pathname === '/api/crews') payload = { default_crew: 'opus', crews: [{ name: 'opus' }] };
+  else if (url.pathname === '/api/job-runs' && url.searchParams.get('state') === 'active') payload = {
+    items: [], total: 0,
+    running_items: [{ run_id: task.job_run_id, started_at: '2026-10-29T00:28:30.000Z' }],
+  };
+  else if (url.pathname === '/api/tasks/locks') payload = { total_locked: 0, by_task: [] };
+  else if (url.pathname === '/api/workflows/auto/readiness') payload = { capacity: {}, tasks: [] };
+  else if (url.pathname === '/api/routines') payload = { routines: [], clock: {} };
+  else if (url.pathname === '/api/fleet/drains') payload = { items: [] };
+  else if (url.pathname === '/api/audit/summary') payload = {};
+  return response(payload);
+};
+await import('/app.js');
+const { changeStreamLive } = await import('/js/change-stream.js');
+globalThis.elapsedFixtureState = () => {
+  const relevantReads = reads.filter(read => {
+    const url = new URL(read, location.href);
+    return url.pathname === '/api/tasks'
+      || (url.pathname === '/api/job-runs' && url.searchParams.get('state') === 'active');
+  });
+  return { live: changeStreamLive(), relevantReads };
+};
+`;
 const locksOnlyScenario = `
 const tasks = Array.from({ length: 20 }, (_, index) => ({
   id: 'BASE-' + index, title: 'Base task ' + index, status: 'in-progress', priority: 'medium',
@@ -38,6 +87,17 @@ await new Promise(resolve => setTimeout(resolve, 0));
 globalThis.loadingTestsPassed = true;
 `;
 
+async function runNavigationRepairs(browser, origin) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await page.goto(`${origin}/?workspace=one#tasks`);
+    await page.evaluate(() => { globalThis.setInterval = () => 0; globalThis.EventSource = class { close() {} }; });
+    await page.addScriptTag({ type: 'module', content: locksOnlyScenario });
+    await page.waitForFunction(() => globalThis.loadingTestsPassed);
+    await assertDashboardNavigationRepairs(page, evidence);
+  } finally { await page.close(); }
+}
+
 async function assertAccentFocusRing(control) {
   const focused = await control.evaluate(element => {
     const style = getComputedStyle(element);
@@ -52,6 +112,87 @@ async function assertAccentFocusRing(control) {
   if (!focused.active || !focused.focusVisible || focused.outlineWidth !== '2px'
     || focused.outlineStyle !== 'solid' || focused.outlineColor !== 'rgb(122, 167, 255)') {
     throw new Error(`Keyboard control must show a 2px accent focus ring: ${JSON.stringify(focused)}`);
+  }
+}
+
+async function assertElapsedTaskClock(browser, origin, evidence) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const failures = [];
+  page.on('pageerror', error => failures.push(error.message));
+  try {
+    await page.clock.install({ time: new Date('2026-10-29T00:30:00.000Z') });
+    await page.goto(`${origin}/?workspace=one#tasks`);
+    await page.addScriptTag({ type: 'module', url: '/test.mjs' });
+    await page.clock.fastForward(1);
+    await page.waitForFunction(() => globalThis.elapsedFixtureState?.().live
+      && document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent === '1m');
+
+    const rowSelector = '#tasks-body [data-key="task-ELAPSED-1"]';
+    const initial = await page.evaluate(() => ({ time: Date.now(), ...globalThis.elapsedFixtureState() }));
+    const editor = page.locator(`${rowSelector} .task-crew-select`);
+    await editor.focus();
+    await page.clock.fastForward(30_100);
+    await page.waitForFunction(() => document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent === '2m');
+    const afterMinute = await page.evaluate(() => ({
+      time: Date.now(),
+      elapsed: document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent,
+      rowKey: document.querySelector('#tasks-body [data-key="task-ELAPSED-1"]')?.dataset.key,
+      editorFocused: document.activeElement === document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .task-crew-select'),
+      ...globalThis.elapsedFixtureState(),
+    }));
+    if (afterMinute.elapsed !== '2m' || afterMinute.rowKey !== 'task-ELAPSED-1' || !afterMinute.editorFocused) {
+      throw new Error(`Elapsed repaint lost the task row or crew editor focus: ${JSON.stringify(afterMinute)}`);
+    }
+    if (afterMinute.relevantReads.length !== initial.relevantReads.length
+      || afterMinute.time - initial.time >= 180_000) {
+      throw new Error(`Elapsed repaint read APIs or missed the quiet-stream window: ${JSON.stringify({ initial, afterMinute })}`);
+    }
+    await page.screenshot({ path: path.join(evidence, 'tasks-dark-1280.png') });
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.clock.fastForward(120_000);
+    const hidden = await page.evaluate(() => ({
+      elapsed: document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent,
+      ...globalThis.elapsedFixtureState(),
+    }));
+    if (hidden.live || hidden.elapsed !== '2m' || hidden.relevantReads.length !== initial.relevantReads.length) {
+      throw new Error(`Hidden Tasks page continued its elapsed repaint: ${JSON.stringify(hidden)}`);
+    }
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.clock.fastForward(1);
+    await page.waitForFunction(() => globalThis.elapsedFixtureState?.().live);
+    await page.waitForFunction(() => document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent === '4m');
+    const resumed = await page.evaluate(() => ({
+      elapsed: document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .run-cell .run-sub')?.textContent,
+      editorFocused: document.activeElement === document.querySelector('#tasks-body [data-key="task-ELAPSED-1"] .task-crew-select'),
+      ...globalThis.elapsedFixtureState(),
+    }));
+    if (resumed.elapsed !== '4m' || !resumed.editorFocused) {
+      throw new Error(`Resumed Tasks page did not repaint cached elapsed time in place: ${JSON.stringify(resumed)}`);
+    }
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.screenshot({ path: path.join(evidence, 'tasks-dark-375.png') });
+    if (failures.length) throw new Error(failures.join('\n'));
+    fs.writeFileSync(path.join(evidence, 'elapsed-clock-result.json'), JSON.stringify({
+      passed: true,
+      stream: 'connected EventSource; no notices sent',
+      initial_elapsed: '1m',
+      after_minute: afterMinute.elapsed,
+      hidden_elapsed: hidden.elapsed,
+      resumed_elapsed: resumed.elapsed,
+      relevant_api_reads: initial.relevantReads.length,
+      focused_editor_preserved: afterMinute.editorFocused && resumed.editorFocused,
+      time_to_first_update_ms: afterMinute.time - initial.time,
+    }, null, 2));
+  } finally {
+    await page.close();
   }
 }
 
@@ -106,7 +247,7 @@ async function assertFrictionTaskLinks(page) {
       if (await page.locator('#task-filter .chip[data-status="done"]').getAttribute('aria-pressed') !== 'false') {
         throw new Error('Opening a friction task must retain the normal Tasks route status filter');
       }
-      if (await page.locator('#tasks-body .task-action-notice').count()) {
+      if (await page.locator('#tasks-notices .task-action-notice').count()) {
         throw new Error('Opening a friction task must not fall back to copying its ID');
       }
       if (status === 'backlog') {
@@ -177,20 +318,21 @@ async function assertLockedTaskNavigation(page) {
   }, tasks);
 
   try {
-    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('drain'));
+    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks?dock=locks'));
+    await page.locator('#locks-view [data-view="task"]').click();
     await page.locator('#refresh-btn').click();
     await page.waitForFunction(() =>
       document.querySelectorAll('#locks-body .lock-task-group').length === 2
       && document.querySelector('#tasks-body [data-key="task-LOCKED-1"]')
       && document.querySelector('#tasks-body [data-key="task-LOCKED-2"]'));
 
-    const nested = await nestedInteractive(page, '#drain-main');
+    const nested = await nestedInteractive(page, '#tasks-dock');
     if (nested.length) throw new Error(`Drain pane nests controls in an interactive element: ${nested.join('\n')}`);
 
     if (process.env.AXE_CORE_SCRIPT) {
       await page.addScriptTag({ path: process.env.AXE_CORE_SCRIPT });
       const axeNodes = await page.evaluate(async () => {
-        const result = await globalThis.axe.run('#drain-main', {
+        const result = await globalThis.axe.run('#tasks-dock', {
           runOnly: { type: 'rule', values: ['nested-interactive'] },
         });
         return result.violations.flatMap(violation => violation.nodes.map(node => node.target.join(' ')));
@@ -199,7 +341,7 @@ async function assertLockedTaskNavigation(page) {
     }
 
     for (const task of tasks) {
-      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('drain'));
+      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks?dock=locks'));
       const group = page.locator(`#locks-body [data-key="lock-task-${task.id}"]`);
       const summary = group.locator(':scope > details > summary');
       const link = group.locator(':scope > .lock-task-id');
@@ -630,13 +772,23 @@ async function assertCostPage(page) {
       comparable_cost_count: 2, comparable_provider_cost_usd: 1.25,
       comparable_derived_cost_usd: 1.5, comparable_cost_delta_usd: 0.25,
       models: [{ model: 'claude-sonnet', tokens: { normalized_token_total: 1500 } }],
+    }, {
+      kind: 'unattributed', invocation_count: 1, linked_task_count: 0,
+      provider_cost_count: 0, missing_provider_count: 1,
+      derived_cost_count: 0, unpriced_derived_count: 1, comparable_cost_count: 0,
+      models: [{ model: 'provider-a', tokens: { normalized_token_total: 80 } }],
+    }, {
+      kind: 'missing', invocation_count: 1, linked_task_count: 0,
+      provider_cost_count: 0, missing_provider_count: 1,
+      derived_cost_count: 0, unpriced_derived_count: 1, comparable_cost_count: 0,
+      models: [{ model: 'provider-b', tokens: { normalized_token_total: 40 } }],
     }],
   };
   const painted = await page.evaluate(async (orchestration) => {
     const { getWindow } = await import('/js/common.js');
     const { renderScoreboard } = await import('/js/scoreboard.js');
-    for (const pane of document.querySelectorAll('.tab-pane')) pane.classList.toggle('active', pane.dataset.tab === 'analytics');
-    document.getElementById('analytics-cost-main').style.display = 'grid';
+    const { setActiveTab } = await import('/js/router.js');
+    setActiveTab('analytics/cost', { refresh: false, updateHash: false });
     const selected = getWindow();
     renderScoreboard({ window: selected, agents: {}, orchestration });
     const host = document.getElementById('scoreboard-orchestration');
@@ -648,21 +800,26 @@ async function assertCostPage(page) {
       text: host.textContent,
       count: document.getElementById('scoreboard-orchestration-count').textContent,
       subtab: subtab ? subtab.textContent.replace(/\s+/g, ' ').trim() : '',
+      activeSubtab: subtab?.classList.contains('active') || false,
+      costVisible: document.getElementById('analytics-cost-main').checkVisibility(),
       windows,
       removed,
     };
   }, orchestration);
-  if (!painted.subtab.startsWith('Cost')) throw new Error(`Analytics subtab must read Cost: ${painted.subtab}`);
+  if (!painted.subtab.startsWith('Cost') || !painted.activeSubtab || !painted.costVisible) {
+    throw new Error(`Analytics › Cost must be the visible route: ${JSON.stringify(painted)}`);
+  }
   if (painted.windows.join() !== '1h,24h,7d,30d,all') throw new Error(`Cost window selector missing windows: ${painted.windows}`);
   if (painted.removed.length) throw new Error(`Retired scoreboard nodes still in the page: ${painted.removed}`);
-  if (!painted.text.includes('$1.2500') || !painted.text.includes('$1.5000') || !painted.text.includes('1.5K')) {
+  if (!painted.text.includes('$1.25') || !painted.text.includes('$1.50') || !painted.text.includes('1.5K')) {
     throw new Error(`Cost numbers changed for the fixed payload: ${painted.text}`);
   }
-  if (!painted.text.includes('named orchestrator: claude') || !painted.text.includes('claude-sonnet 1.5K')) {
+  if (!painted.text.includes('Orchestrator: claude') || !painted.text.includes('claude-sonnet 1.5K')) {
     throw new Error(`Cost attribution missing: ${painted.text}`);
   }
-  if (painted.count !== '1 buckets') throw new Error(`Cost bucket count changed: ${painted.count}`);
-  for (const width of [1280, 375]) {
+  if (painted.count !== '3 buckets') throw new Error(`Cost bucket count changed: ${painted.count}`);
+  const contrastEvidence = [];
+  for (const width of [1280, 1440, 375]) {
     await page.setViewportSize({ width, height: 900 });
     const layout = await page.evaluate(() => {
       const main = document.getElementById('analytics-cost-main');
@@ -678,9 +835,67 @@ async function assertCostPage(page) {
     });
     if (!layout.shown || !layout.selector) throw new Error(`Cost panel or window selector hidden at ${width}px: ${JSON.stringify(layout)}`);
     if (layout.pageOverflow) throw new Error(`Cost page widens the viewport at ${width}px`);
-    if (!layout.text.includes('$1.2500')) throw new Error(`Cost dollars missing at ${width}px`);
+    if (!layout.text.includes('$1.25')) throw new Error(`Cost dollars missing at ${width}px`);
+    const contrast = await page.evaluate(() => {
+      const luminance = (color) => {
+        const [red, green, blue] = color.match(/[\d.]+/g).slice(0, 3).map(Number).map((channel) => {
+          const normalized = channel / 255;
+          return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+      };
+      const ratio = (foreground, background) => {
+        const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+        return (lighter + 0.05) / (darker + 0.05);
+      };
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--fg-disabled)';
+      document.body.append(probe);
+      const disabledColor = getComputedStyle(probe).color;
+      probe.remove();
+      const labels = [...document.querySelectorAll('#scoreboard-orchestration .scoreboard-orchestration-bucket .token-models-label')]
+        .map((label) => {
+          let background = 'rgba(0, 0, 0, 0)';
+          for (let ancestor = label; ancestor; ancestor = ancestor.parentElement) {
+            const color = getComputedStyle(ancestor).backgroundColor;
+            if (color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') {
+              background = color;
+              break;
+            }
+          }
+          const foreground = getComputedStyle(label).color;
+          return { foreground, background, visible: label.checkVisibility(), ratio: ratio(foreground, background) };
+        });
+      const disabledText = [...document.querySelectorAll('#analytics-cost-main *')]
+        .filter((node) => node.children.length === 0 && node.textContent.trim() && node.checkVisibility())
+        .filter((node) => getComputedStyle(node).color === disabledColor
+          && !node.closest(':disabled, [aria-disabled="true"]'))
+        .map((node) => ({ tag: node.tagName, className: node.className, text: node.textContent.trim() }));
+      return { disabledColor, bucketCount: document.querySelectorAll('#scoreboard-orchestration .scoreboard-orchestration-bucket').length, labels, disabledText };
+    });
+    if (contrast.labels.length !== contrast.bucketCount || contrast.bucketCount !== 3) {
+      throw new Error(`Every Cost bucket must have a measured model-token caption: ${JSON.stringify(contrast)}`);
+    }
+    for (const label of contrast.labels) {
+      if (!label.visible || !Number.isFinite(label.ratio) || label.ratio < 4.5 || label.foreground === contrast.disabledColor) {
+        throw new Error(`Model-token caption must reach 4.5:1 without the disabled token at ${width}px: ${JSON.stringify(label)}`);
+      }
+    }
+    if (contrast.disabledText.length) {
+      throw new Error(`Informational Cost text uses the disabled color: ${JSON.stringify(contrast.disabledText)}`);
+    }
+    contrastEvidence.push({ width, ...contrast });
+    if (width === 375) {
+      const label = page.locator('#scoreboard-orchestration .token-models-label').first();
+      await label.scrollIntoViewIfNeeded();
+      const bounds = await label.boundingBox();
+      if (!bounds || bounds.x < 0 || bounds.x + bounds.width > width || bounds.y < 0 || bounds.y + bounds.height > 900) {
+        throw new Error(`The model-token caption must fit in the 375px Cost viewport: ${JSON.stringify(bounds)}`);
+      }
+    }
     await page.screenshot({ path: path.join(evidence, `cost-${width}.png`), fullPage: true });
   }
+  fs.writeFileSync(path.join(evidence, 'cost-contrast-result.json'), JSON.stringify({ passed: true, viewports: contrastEvidence }, null, 2));
   const routed = await page.evaluate(async () => {
     const { setActiveTab } = await import('/js/router.js');
     // Refresh and the hash write stay off: this fixture has already replaced
@@ -717,36 +932,150 @@ async function assertCostPage(page) {
     throw new Error(`#analytics/cost did not select Analytics › Cost: ${JSON.stringify(routed)}`);
   }
   if (routed.window !== '7d' || !routed.shown) throw new Error(`Cost window was not restored: ${JSON.stringify(routed)}`);
-  if (!routed.text.includes('$1.2500') || routed.removed.length) {
+  if (!routed.text.includes('$1.25') || routed.removed.length) {
     throw new Error(`Routing disturbed the painted cost panel: ${JSON.stringify({ removed: routed.removed, text: routed.text.slice(0, 240) })}`);
+  }
+  await assertCostExplorationStatus(page, orchestration);
+}
+
+// Cost exploration is a separate tab panel: in aggregate view opened from
+// another Analytics subtab both bodies placeholder, and while exploration
+// is visible it shows its own loading, cold-error, and stale-refresh notes
+// from the single /api/cost GET that also fills Spend.
+async function assertCostExplorationStatus(page, orchestration) {
+  const aggregate = await page.evaluate(async () => {
+    const common = await import('/js/common.js');
+    common.setMultiWorkspace(true);
+    common.setWorkspace(null);
+    const { setActiveTab } = await import('/js/router.js');
+    const opts = { refresh: false, updateHash: false };
+    setActiveTab('analytics/metrics', opts);
+    setActiveTab('analytics/cost?tab=exploration', opts);
+    return {
+      spend: document.getElementById('scoreboard-orchestration').textContent,
+      explore: document.getElementById('scoreboard-exploration').textContent,
+      exploreVisible: document.getElementById('scoreboard-exploration').checkVisibility(),
+      spendPanelHidden: document.getElementById('scoreboard-panel-spend').hidden,
+      explorePanelHidden: document.getElementById('scoreboard-panel-exploration').hidden,
+    };
+  });
+  if (!aggregate.spend.includes('Select a workspace to view this panel')
+    || !aggregate.explore.includes('Select a workspace to view this panel')) {
+    throw new Error(`Aggregate Cost opened from another subtab must placeholder both bodies: ${JSON.stringify(aggregate)}`);
+  }
+  if (!aggregate.exploreVisible || aggregate.explorePanelHidden || !aggregate.spendPanelHidden) {
+    throw new Error(`Exploration must be the visible Cost panel in the aggregate check: ${JSON.stringify(aggregate)}`);
+  }
+  await page.evaluate(async (orchestration) => {
+    const common = await import('/js/common.js');
+    common.setWorkspace('one');
+    const cohort = { runs: 1, mean_duration_ms: 60000, mean_cost_usd: 1, priced_runs: 1, footprint_known_runs: 1, footprint_miss_runs: 0, footprint_miss_rate: 0, explore_calls: 1, explore_cost_usd: 0.5 };
+    globalThis.__costPayload = {
+      window: common.getWindow(), orchestration,
+      explore_comparison: { crews: [{ crew: 'browser-crew', with_explore: cohort, without_explore: { ...cohort, explore_calls: 0 } }] },
+    };
+    globalThis.__costCalls = 0;
+    globalThis.fetch = (path) => {
+      const url = new URL(path, window.location.href);
+      if (url.pathname !== '/api/cost') return new Promise(() => {});
+      globalThis.__costCalls += 1;
+      return new Promise(resolve => { globalThis.__resolveCost = resolve; });
+    };
+    const { fetchAndRenderScoreboard } = await import('/js/scoreboard.js');
+    globalThis.__costDone = fetchAndRenderScoreboard()
+      .then(() => { globalThis.__costOutcome = 'ok'; }, error => { globalThis.__costOutcome = error.message; });
+  }, orchestration);
+  const loading = await page.evaluate(() => ({
+    calls: globalThis.__costCalls,
+    explore: document.getElementById('scoreboard-exploration').textContent,
+    visible: document.getElementById('scoreboard-exploration').checkVisibility(),
+  }));
+  if (loading.calls !== 1 || !loading.visible || !loading.explore.includes('Loading…')) {
+    throw new Error(`Exploration must show Loading from one in-flight GET: ${JSON.stringify(loading)}`);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: path.join(evidence, 'cost-exploration-loading-1280.png') });
+  await page.evaluate(() => {
+    globalThis.__resolveCost(new Response(JSON.stringify({ error: 'cost unavailable' }), { status: 500 }));
+  });
+  await page.waitForFunction(() => globalThis.__costOutcome === 'cost unavailable');
+  const coldError = await page.evaluate(() => document.getElementById('scoreboard-exploration').textContent);
+  if (!coldError.includes('Unable to load') || coldError.includes('No implement runs in this window.')) {
+    throw new Error(`Exploration must show Unable to load after a failed cold load: ${coldError}`);
+  }
+  await page.evaluate(async () => {
+    globalThis.fetch = (path) => {
+      const url = new URL(path, window.location.href);
+      if (url.pathname !== '/api/cost') return new Promise(() => {});
+      globalThis.__costCalls += 1;
+      return Promise.resolve(new Response(JSON.stringify(globalThis.__costPayload), { status: 200 }));
+    };
+    const { fetchAndRenderScoreboard } = await import('/js/scoreboard.js');
+    await fetchAndRenderScoreboard();
+  });
+  const filled = await page.evaluate(() => ({
+    calls: globalThis.__costCalls,
+    explore: document.getElementById('scoreboard-exploration').textContent,
+    spend: document.getElementById('scoreboard-orchestration').textContent,
+  }));
+  if (filled.calls !== 2 || !filled.explore.includes('browser-crew') || !filled.spend.includes('$1.25')) {
+    throw new Error(`One successful GET must fill both Cost bodies: ${JSON.stringify(filled)}`);
+  }
+  await page.evaluate(async () => {
+    globalThis.fetch = (path) => {
+      const url = new URL(path, window.location.href);
+      if (url.pathname !== '/api/cost') return new Promise(() => {});
+      return Promise.resolve(new Response(JSON.stringify({ error: 'cost refresh unavailable' }), { status: 500 }));
+    };
+    const { fetchAndRenderScoreboard } = await import('/js/scoreboard.js');
+    globalThis.__costDone = fetchAndRenderScoreboard()
+      .then(() => { globalThis.__costOutcome = 'ok'; }, error => { globalThis.__costOutcome = error.message; });
+  });
+  await page.waitForFunction(() => globalThis.__costOutcome === 'cost refresh unavailable');
+  const stale = await page.evaluate(() => document.getElementById('scoreboard-exploration').textContent);
+  if (!stale.includes('Refresh failed; showing stale data') || !stale.includes('browser-crew')) {
+    throw new Error(`Exploration must keep crew rows with the stale-data note after a failed refresh: ${stale}`);
+  }
+  for (const width of [1280, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: path.join(evidence, `cost-exploration-stale-${width}.png`) });
   }
 }
 
 // ORB-14481: from 1024px up the top bar is one fixed-height row on every
-// route, and a host chip turning throttled neither re-wraps it nor resizes any
-// chip or moves Refresh. The fixture is the worst case the bar holds: the
-// widest destination, three wide host readings with two held, and the
-// aggregate drain label.
+// route. Host readings live in the rail; a critical fixture shows one warning
+// chip, and a throttle flip neither re-wraps the bar nor resizes that chip,
+// the rail rows or Refresh. The fixture is the worst case the bar holds: the
+// widest destination, the warning chip, provider usage and the aggregate drain label.
 async function assertTopbarSingleRow(page) {
   const routes = ['tasks', 'operations/routines', 'config/effective', 'knowledge/frictions', 'plugins'];
   const snapshot = () => page.evaluate(() => {
     const rect = id => document.getElementById(id).getBoundingClientRect();
     const bar = document.querySelector('.topbar').getBoundingClientRect();
-    const children = [...document.querySelectorAll('.topbar .crumb, .topbar .host-resource, .topbar #refresh-btn, .topbar #global-drain-state')]
+    const children = [...document.querySelectorAll('.topbar .crumb, .topbar .host-warn, .topbar .host-resource, .topbar #refresh-btn, .topbar #global-drain-state')]
       .filter(node => node.getClientRects().length);
     // Items are centred in the row, so one row means one shared vertical centre.
     const centres = children.map(node => { const r = node.getBoundingClientRect(); return r.top + r.height / 2; });
     const rows = Math.max(...centres) - Math.min(...centres) <= 2 ? 1 : 2;
     const refresh = rect('refresh-btn');
-    const strip = document.getElementById('host-resource-chips');
-    const chips = [...strip.querySelectorAll('.host-resource')];
+    const warn = document.getElementById('host-warn');
+    const warnBox = warn.getBoundingClientRect();
+    const block = document.getElementById('host-block');
+    const chips = [...block.querySelectorAll(':scope > .host-resource')];
     // Provider usage shows its chips on a wide bar and one summary chip on a narrow one.
     const usageStrip = document.getElementById('provider-usage-chips');
     const usage = [...usageStrip.querySelectorAll('.provider-usage')].filter(chip => chip.getClientRects().length);
-    const lastChip = (usage.length ? usage : chips).at(-1).getBoundingClientRect();
+    const lastChip = usage.at(-1)?.getBoundingClientRect();
     const drain = document.getElementById('global-drain-state');
     return {
       height: bar.height, refreshLeft: refresh.left, rows, drainShown: !drain.hidden,
+      topbarHostChips: document.querySelectorAll('.topbar .host-resource[data-resource]').length,
+      warn: {
+        shown: !warn.hidden && warn.getClientRects().length > 0,
+        left: warnBox.left, width: warnBox.width,
+        clipped: warn.scrollWidth > warn.clientWidth + 1,
+        inside: warnBox.left >= bar.left - 0.5 && warnBox.right <= bar.right + 0.5,
+      },
       usage: usage.map(chip => ({
         className: chip.className, width: chip.getBoundingClientRect().width, left: chip.getBoundingClientRect().left,
         clipped: chip.scrollWidth > chip.clientWidth,
@@ -756,8 +1085,8 @@ async function assertTopbarSingleRow(page) {
         resource: chip.dataset.resource, className: chip.className, width: chip.getBoundingClientRect().width,
         left: chip.getBoundingClientRect().left, clipped: chip.scrollWidth > chip.clientWidth,
       })),
-      refreshRight: refresh.right, barRight: bar.right, stripOverflows: strip.scrollWidth > strip.clientWidth,
-      overlaps: lastChip.right > refresh.left || (!drain.hidden && lastChip.right > rect('global-drain-state').left),
+      refreshRight: refresh.right, barRight: bar.right,
+      overlaps: !!lastChip && (lastChip.right > refresh.left || (!drain.hidden && lastChip.right > rect('global-drain-state').left)),
     };
   });
   await page.evaluate(async () => {
@@ -805,8 +1134,10 @@ async function assertTopbarSingleRow(page) {
           heights.add(state.height);
           if (!state.drainShown) throw new Error(`The worst-case fixture lost its drain pill on #${route} at ${width}px`);
           if (state.height > 64 || state.rows !== 1) throw new Error(`Top bar wraps on #${route} at ${width}px: ${JSON.stringify(state)}`);
-          if (state.stripOverflows || state.overlaps || state.refreshRight > state.barRight + 0.5) throw new Error(`Top bar content overflows on #${route} at ${width}px: ${JSON.stringify(state)}`);
-          if (state.chips.map(chip => chip.resource).join() !== 'cpu,memory,disk') throw new Error(`Top bar must show load, mem and disk chips: ${JSON.stringify(state.chips)}`);
+          if (state.usageOverflows || state.overlaps || state.refreshRight > state.barRight + 0.5) throw new Error(`Top bar content overflows on #${route} at ${width}px: ${JSON.stringify(state)}`);
+          if (state.topbarHostChips !== 0) throw new Error(`The top bar still shows host readings: ${JSON.stringify(state)}`);
+          if (!state.warn.shown || state.warn.clipped || !state.warn.inside) throw new Error(`The warning chip is missing or clipped on #${route} at ${width}px: ${JSON.stringify(state.warn)}`);
+          if (state.chips.map(chip => chip.resource).join() !== 'cpu,memory,disk') throw new Error(`The rail block must show load, mem and disk: ${JSON.stringify(state.chips)}`);
           if (state.chips.some(chip => chip.clipped)) throw new Error(`A host reading is cut off on #${route} at ${width}px: ${JSON.stringify(state.chips)}`);
         }
         const [open, held] = flips;
@@ -823,14 +1154,14 @@ async function assertTopbarSingleRow(page) {
           if (!state.usage.length || state.usage.some(chip => chip.clipped)) throw new Error(`A provider usage reading is cut off on #${route} at ${width}px: ${JSON.stringify(state.usage)}`);
           usageStates.push(state);
         }
-        const hostGeometry = state => JSON.stringify([state.height, state.refreshLeft, state.chips.map(chip => [chip.left, chip.width])]);
+        const hostGeometry = state => JSON.stringify([state.height, state.refreshLeft, state.warn.left, state.warn.width, state.chips.map(chip => [chip.left, chip.width])]);
         if (new Set(usageStates.map(hostGeometry)).size !== 1 || hostGeometry(usageStates[0]) !== hostGeometry(open)) {
           throw new Error(`Provider usage readings moved the top bar on #${route} at ${width}px: ${JSON.stringify(usageStates)}`);
         }
         if (held.chips.map(chip => chip.className.includes('throttled')).join() !== 'true,false,true') {
           throw new Error(`Only the held resources must read as throttled: ${JSON.stringify(held.chips)}`);
         }
-        const geometry = state => JSON.stringify([state.height, state.refreshLeft, state.chips.map(chip => [chip.left, chip.width])]);
+        const geometry = state => JSON.stringify([state.height, state.refreshLeft, state.warn.left, state.warn.width, state.chips.map(chip => [chip.left, chip.width])]);
         if (geometry(open) !== geometry(held)) {
           throw new Error(`Throttled verdict moved or resized the top bar on #${route} at ${width}px: ${JSON.stringify(flips)}`);
         }
@@ -1317,7 +1648,8 @@ async function assertSkipLinkAndFocusRings(page) {
 
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const testScenario = (locksOnly || authExclusionsOnly) ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
+  const testScenario = elapsedOnly ? Buffer.from(elapsedScenario)
+    : (locksOnly || authExclusionsOnly || repairsOnly) ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
   const served = name === '/test.mjs' ? { data: testScenario, type: 'text/javascript' } : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
@@ -1329,9 +1661,20 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
+  if (elapsedOnly) {
+    await assertElapsedTaskClock(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+    console.log('Quiet-stream elapsed labels, cached repaint, focus preservation and hidden-tab coalescing passed.');
+  } else if (repairsOnly) {
+    await runNavigationRepairs(browser, `http://127.0.0.1:${server.address().port}`);
+  } else if (process.argv[4] === '--pilot-admission') {
+    await assertPilotAdmission(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  } else {
+  if (!locksOnly && !authExclusionsOnly) await assertPilotAdmission(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (!locksOnly && !authExclusionsOnly) await assertClockRepaint(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (clockOnly) console.log('Dashboard clock switch repainted kept task detail and run rows in place.');
   if (!locksOnly && !authExclusionsOnly && !clockOnly) await assertTaskLookupClear(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly && !clockOnly) await assertFixPrReadinessRefresh(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly && !clockOnly) await assertPinnedFixPr(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (process.argv[4] === '--task-lookup') {
     console.log('Dashboard task lookup dismissal browser checks passed.');
   }
@@ -1352,6 +1695,7 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  if (!locksOnly && !authExclusionsOnly && !clockOnly && !process.argv[4]) await runNavigationRepairs(browser, `http://127.0.0.1:${server.address().port}`);
   if (!locksOnly && !authExclusionsOnly && process.argv[4] !== '--run-detail') {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.evaluate(() => globalThis.showHealthEvidence('errors'));
@@ -1502,6 +1846,7 @@ try {
     if (failures.length) throw new Error(failures.join('\n'));
     fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, fleetScope: await page.evaluate(() => globalThis.fleetScopeEvidence), scenarios: 'Task, run and friction rows with no controls nested in a button, one Tab stop per row list with Up/Down/Home/End between rows, Enter/Space toggling the focused task, its disclosure keeping focus across a refresh that rebuilds the row, and / focusing the task search; Runs pinned first column and scroll edge while the card is narrower than the grid, including at 1280px, and a plain table once the card fits, for the default grid and All-workspaces; card layout and an in-body toolbar at 375px; Runs, Audit events and Errors as cards without sideways scrolling at 375px, unchanged tables at 1280px; Cost paints provider and derived dollars and normalized tokens for a fixed payload at 1280px and 375px, #analytics/cost restores its window and the retired Health cost routes do not open it; Task pagination page 1/page 2 with visible, unoccluded first rows and accessible Previous/Next at 1280px and 390px; failed run step target, state, duration and exit code readable with click and keyboard expansion at 1280px, 480px and 390px; single-row top bar of identical height across Tasks, Automation, Settings, Knowledge and Plugins with a fixed host chip and Refresh offset when the throttle verdict flips or the provider usage readings change at 1024px, 1280px, 1440px, 1600px and 1920px; terminal protocol skew code, fingerprints and repair at 1280px and 390px; pull drain crew window runnable crews and preflight/provider-unavailable exclusions readable at 1280px and 390px; Tasks, Recent runs, Errors, Operations: cold, stale refresh, scope changes, reordered responses, empty success, network error; Metrics HTTP failure isolation and network offline/recovery' }, null, 2));
     console.log('Chromium dashboard lifecycle and accessible visible feedback passed.');
+  }
   }
   }
   }

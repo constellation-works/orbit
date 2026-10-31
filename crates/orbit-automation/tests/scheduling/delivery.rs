@@ -5,10 +5,10 @@
 //! `delivery_adopt` and `delivery_recovery` share this fixture.
 
 use chrono::{TimeZone, Utc};
-use orbit_automation::AutomationError;
 use orbit_automation::delivery::{
     self, ActionOutcome, DeliveryHost, Evaluation, evidence::EvidenceFacts,
 };
+use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::OrbitError;
 use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
 use orbit_types::workflow::automation::*;
@@ -87,6 +87,8 @@ pub(super) struct Host {
     pub(super) adopts_settings: AtomicBool,
     /// Each automatic adoption reported, as `previous -> epoch: changes`.
     pub(super) adoptions: Mutex<Vec<String>>,
+    /// Why admission is deferred, such as a closed `when:` guard.
+    pub(super) deferral: Mutex<Option<String>>,
 }
 
 impl Host {
@@ -112,6 +114,7 @@ impl Host {
             repository: Mutex::new("owner/repo".into()),
             adopts_settings: AtomicBool::new(true),
             adoptions: Mutex::new(vec![]),
+            deferral: Mutex::new(None),
         }
     }
 
@@ -174,6 +177,10 @@ impl Host {
 }
 
 impl DeliveryHost for Host {
+    fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
+        Ok(self.deferral.lock().unwrap().clone())
+    }
+
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
         Ok((self.repository.lock().unwrap().clone(), revision(0)))
     }
@@ -208,7 +215,9 @@ impl DeliveryHost for Host {
             .or_insert_with(|| format!("action-{len}"))
             .clone();
         if self.fail_admit.swap(false, Ordering::SeqCst) {
-            return Err(AutomationError::Deferred("crash_after_mint".into()));
+            return Err(AutomationError::Deferred(DeferredReason::SourceIo(
+                std::io::Error::other("crash_after_mint").into(),
+            )));
         }
         Ok(id)
     }

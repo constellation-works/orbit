@@ -2,7 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_engine::TaskActivityUpdate;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{ContextWideningStep, Task, TaskStatus};
 
 use crate::OrbitRuntime;
 
@@ -112,5 +112,126 @@ pub(super) fn record_claim_handoff(
             orbit_store::contracts::ClaimMutation::AcceptHandoff(handoff.clone()),
         )),
     )?;
+    Ok(())
+}
+
+pub(super) fn kept_claim_candidate(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+) -> Result<Option<orbit_store::contracts::KeptClaimCandidate>, OrbitError> {
+    // Without an identity this host is no machine a candidate lives on,
+    // so only a durable one is offered.
+    runtime.stores().tasks().kept_claim_candidate(
+        task_id,
+        runtime.automation_machine_identity().unwrap_or_default(),
+    )
+}
+
+pub(super) fn widen_task_context_files(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    run_id: &str,
+    step: ContextWideningStep,
+    activity: &str,
+    paths: &[String],
+) -> Result<Vec<String>, OrbitError> {
+    // A claimed leaf cannot write the owner's task; the owner widens the
+    // declaration when it accepts the handoff.
+    if runtime.worker_invocation().is_some() {
+        return Ok(Vec::new());
+    }
+    runtime.widen_context_files_for_paths(task_id, run_id, step, activity, paths)
+}
+
+pub(super) fn insert_job_run(
+    runtime: &OrbitRuntime,
+    job_id: &str,
+    attempt: u32,
+    scheduled_at: chrono::DateTime<chrono::Utc>,
+    input: Option<serde_json::Value>,
+    retry_source_run_id: Option<String>,
+) -> Result<orbit_types::workflow::JobRun, OrbitError> {
+    runtime.stores().jobs().insert_job_run(
+        job_id,
+        attempt,
+        scheduled_at,
+        input,
+        retry_source_run_id,
+    )
+}
+
+pub(super) fn mark_job_run_running(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+    pid: u32,
+) -> Result<orbit_types::workflow::JobRunStartOutcome, OrbitError> {
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(run_id, started_at, pid)
+}
+
+pub(super) fn complete_job_run_step(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    params: &orbit_store::contracts::JobRunStepParams,
+) -> Result<bool, OrbitError> {
+    runtime
+        .stores()
+        .jobs()
+        .complete_job_run_step(run_id, params)
+}
+
+pub(super) fn finalize_job_run(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    state: orbit_types::workflow::JobRunState,
+    finished_at: chrono::DateTime<chrono::Utc>,
+    duration_ms: Option<u64>,
+) -> Result<bool, OrbitError> {
+    runtime.finalize_job_run_with_reservation_cleanup(
+        run_id,
+        state,
+        finished_at,
+        duration_ms,
+        orbit_store::contracts::TaskReservationReleaseReason::RunTerminal,
+    )
+}
+
+pub(super) fn get_job_run(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
+    match runtime.show_job_run(run_id) {
+        Ok(run) => Ok(Some(run)),
+        Err(OrbitError::NotFound {
+            kind: orbit_common::NotFoundKind::JobRun,
+            ..
+        }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn read_run_state(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
+    runtime.stores().jobs().read_run_state(run_id)
+}
+
+pub(super) fn write_run_state(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    state: &orbit_types::workflow::PipelineState,
+) -> Result<(), OrbitError> {
+    runtime.stores().jobs().write_run_state(run_id, state)
+}
+
+pub(super) fn record_direct_landing(
+    runtime: &OrbitRuntime,
+    request: &orbit_types::workflow::automation::DirectLandingRequest,
+) -> Result<(), OrbitError> {
+    runtime.record_direct_landing_diff_stats(request);
     Ok(())
 }

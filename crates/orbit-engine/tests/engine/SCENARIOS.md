@@ -56,7 +56,7 @@ after the wrapper signals that its queue interval earned the capped credit.
 - `a_failure_before_the_worktree_exists_skips_final_recovery`
 - `failed_recovery_dispatch_is_injected_before_final_recovery`
 - `final_recovery_injects_only_its_runs_bounded_evidence_in_order`
-- `final_recovery_escalates_instead_of_dropping_records_that_cannot_fit`
+- `final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows`
 - `final_recovery_keeps_post_recovery_output_when_a_later_step_fails`
 - `final_recovery_resume_checkpoints_the_latest_conflict_diagnostics`
 
@@ -101,6 +101,7 @@ after the wrapper signals that its queue interval earned the capped credit.
 - `replica_worktree_gc_fences_unreachable_owners_by_route`
 - `worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty`
 - `worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root`
+- `worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing`
 
 ### `v2_worktree_lifecycle::worktree_contracts_2`
 
@@ -334,6 +335,7 @@ certifies the repaired head as both the original head and publication lease.
 
 - `a_content_filter_refusal_skips_recovery_and_keeps_the_candidate`
 - `a_declared_owner_route_failure_skips_recovery`
+- `a_declared_validation_route_failure_skips_recovery`
 - `other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt`
 
 ### `provider_capacity::provider_failure_contracts_3`
@@ -402,6 +404,25 @@ certifies the repaired head as both the original head and publication lease.
 - `only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair`
 - `an_owed_hosted_check_must_pass_before_the_owner_merges`
 
+### `handoff_landing::handoff_landing_contracts_3`
+
+- `owner_landing_waits_for_exact_required_checks_before_one_verified_merge`
+- `owner_landing_waits_for_required_checks_the_head_has_not_reported`
+- `owner_landing_pending_evidence_never_extends_refusal_or_merge_authority`
+
+### `handoff_landing::handoff_landing_contracts_4`
+
+- `a_cached_branch_update_requires_a_fresh_landing_base`
+- `a_required_aggregate_after_recovery_is_classified_without_waiting`: labelled rows `after rerun` (retired `a_required_aggregate_after_rerun_is_classified_without_waiting`) and `after branch update` (retired `a_required_aggregate_after_branch_update_is_classified_without_waiting`)
+- `a_transient_rerun_waits_for_queued_replacement_jobs`
+- `owner_landing_waits_for_unknown_then_clean_and_retains_expired_or_blocked_evidence`
+
+### `handoff_landing::handoff_landing_contracts_5`
+
+- `adopted_provider_head_accepts_readable_empty_policy`
+- `adopted_provider_head_accepts_authentic_legacy_success`
+- `adopted_provider_head_refuses_unavailable_or_unsatisfied_policy`
+
 ### `forge_hold::forge_hold_contracts_1`
 
 - `a_forge_wrapper_refuses_a_non_local_origin_before_pushing`
@@ -432,6 +453,8 @@ certifies the repaired head as both the original head and publication lease.
 - `a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking`
 - `an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks`
 - `an_admission_refusal_for_held_evidence_stays_held_not_escalated`
+- `a_worktree_step_failure_ends_the_failure_hook_as_no_candidate`
+- `a_failure_before_the_worktree_checkpoint_releases_reviews_and_a_later_gap_is_refused`
 
 ### `pr_landing::implementation_handoff_contracts`
 
@@ -810,3 +833,30 @@ and require the pipeline's outside-sandbox final validation. The absorbed tables
 reported no coverage refusal. This pair does not establish a complete affected
 workspace pass or the complete CI job's 900 s budget. All four normal final gates
 remain pipeline-owned; full CI is separately run on the PR.
+
+## Worktree lifecycle shared setup
+
+All 43 `v2_worktree_lifecycle::worktree_contracts_N` rows keep their scenario
+functions, names, `cfg(unix)` gates and assertions. The rows now share the
+fixture steps they used to repeat: checkout setup (`setup_checkout`,
+`gc_checkout`, `landing_checkout`), GC reports, Git queries (`head`, `status`,
+`branch`), substitute providers (`install_provider`,
+`PreparedRebase::with_provider`), conflict fields and recovery input, the
+agent-loop spec and audit sink, and the preserved-candidate requeue and
+resume steps. The two held-candidate rows share one body
+(`assert_held_candidate_resumes_carried`). The `worktree_families!` macro builds each
+family's rows from the function names, so the reported row names are
+unchanged. Scenarios no longer wrap themselves in `isolated`, because the
+family test already runs them in an isolated child under the same deadline.
+
+The family declarations use `worktree_families!` to share the isolation and
+scenario runner while retaining all nine test names and their original row
+partitions. `Fixture::hosted` and `Fixture::with_checkout` build independent
+repositories and hosts; `Fixture::with_provider` installs the substitute CLI
+before applying the existing host-copy rules. The nested-repository scenario
+keeps its explicit provider path because it replaces the script between
+stages. `PreservedCandidate::feature` names the common candidate contents;
+`assert_fresh` shares the unchanged outcome, base-head and clean-tree checks
+between spec/discard and held-candidate retirement cases. Typed fixture record
+helpers share in-memory map reads and writes without sharing stores between
+scenarios or retaining a lock during dispatch. No scenario is retired.

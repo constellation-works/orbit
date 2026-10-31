@@ -6,7 +6,6 @@ use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_string, required_string,
 };
-use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::{JobRunQuery, TaskListFilter};
 use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskRelationType, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
@@ -14,12 +13,15 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::{RunStepSource, run_display_steps};
 use crate::runtime::audit::run::RunProviderProcess;
+use crate::runtime::audit::run_logs::{
+    BOUNDED_EXCERPT_MAX_BYTES, RunCliInvocationProfile, bounded_redacted_text,
+};
 
 const MAX_PAGE: usize = 50;
 const MAX_RUN_PREFIX: usize = 10_000;
 const MAX_LOG_PREFIX: usize = 200;
-const LOG_BYTES: usize = 4096;
 const ANSWER_BYTES: usize = 4096;
 
 pub(super) fn read(
@@ -115,12 +117,12 @@ fn tasks(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, O
 }
 
 fn task_list_item(task: &TaskEnvelopeV2, local_machine: Option<&str>) -> Value {
-    let (title, title_truncated) = bounded_text(&task.title, 512);
+    let (title, title_truncated) = bounded_redacted_text(&task.title, 512);
     let (crew, crew_truncated) = task
         .crew
         .as_deref()
         .map(|value| {
-            let (value, truncated) = bounded_text(value, 128);
+            let (value, truncated) = bounded_redacted_text(value, 128);
             (Some(value), truncated)
         })
         .unwrap_or((None, false));
@@ -149,8 +151,8 @@ fn task_list_item(task: &TaskEnvelopeV2, local_machine: Option<&str>) -> Value {
         "relations":relations,"relations_total":task.relations.len(),"relations_truncated":relations_truncated,
         "dependencies":dependencies,"dependencies_total":dependencies_total,"dependencies_truncated":dependencies.len() < dependencies_total,
         "job_run_machine":task.job_run_machine.as_ref().map(|host| json!({
-            "machine_id":bounded_text(&host.machine_id,512).0,
-            "machine_name":host.machine_name.as_deref().map(|name| bounded_text(name,128).0),
+            "machine_id":bounded_redacted_text(&host.machine_id,512).0,
+            "machine_name":host.machine_name.as_deref().map(|name| bounded_redacted_text(name,128).0),
         })),
         "job_run_navigable":job_run_id.is_some() && task.job_run_machine.as_ref().is_none_or(|host| local_machine == Some(host.machine_id.as_str())),
         "job_run_id":job_run_id,"job_run_id_omitted":task.job_run_id.is_some() && job_run_id.is_none(),
@@ -228,23 +230,44 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     let run = runtime.show_job_run_observed(&id)?;
     let mut value = run_summary(&run);
     let state = runtime.read_run_state(&id).ok().flatten();
-    // Provider responses and original inputs are deliberately absent.
-    value["steps"] =
-        json!(run.steps.iter().take(MAX_PAGE).map(|s| json!({
-        "step_index": s.step_index, "target_id": s.target_id, "target_type": s.target_type,
-        "state": s.state, "started_at": s.started_at, "finished_at": s.finished_at,
-        "duration_ms": s.duration_ms, "exit_code": s.exit_code, "error_code": s.error_code,
-        "error_message": s.error_message.as_deref().map(redact_all),
-    })).collect::<Vec<_>>());
-    value["steps_total"] = json!(run.steps.len());
-    value["steps_truncated"] = json!(run.steps.len() > MAX_PAGE);
     // Progress and the log page come from one bounded audit read; its total
     // is a store count, so a long history pages honestly.
     let page_limit = offset
         .saturating_add(limit)
         .min(MAX_LOG_PREFIX)
         .saturating_sub(offset);
-    let detail = runtime.collect_bounded_run_detail(&id, offset, page_limit, LOG_BYTES)?;
+    let detail =
+        runtime.collect_bounded_run_detail(&id, offset, page_limit, BOUNDED_EXCERPT_MAX_BYTES)?;
+    let steps = run_display_steps(&run, || detail.steps.clone());
+    let steps_complete = steps.source == RunStepSource::Record || detail.steps_complete;
+    // Reuse the lifecycle window; never replay an unbounded trail to populate
+    // missing record steps. Provider responses and original inputs stay absent.
+    value["steps"] = json!(
+        steps
+            .records
+            .iter()
+            .take(MAX_PAGE)
+            .map(|step| {
+                let output = step.command_output_summary(state.as_ref());
+                let exit_code = step.exit_code.map(|code| json!(code)).or_else(|| output.as_ref().map(|output| output["exit_code"].clone()));
+                let mut step_value = json!({
+                    "step_index":step.step_index, "target_id":step.target_id,
+                    "target_type":step.target_type, "state":step.state,
+                    "started_at":step.started_at, "finished_at":step.finished_at,
+                    "duration_ms":step.duration_ms, "exit_code":exit_code,
+                    "error_code":step.error_code,
+                    "error_message":step.error_message.as_deref().map(|message| bounded_redacted_text(message,4096).0),
+                });
+                if let Some(output) = output {
+                    step_value["output"] = output;
+                }
+                step_value
+            })
+            .collect::<Vec<_>>()
+    );
+    value["steps_source"] = json!(steps.source.as_str());
+    value["steps_total"] = json!(steps_complete.then_some(steps.records.len()));
+    value["steps_truncated"] = json!(!steps_complete || steps.records.len() > MAX_PAGE);
     let progress = &detail.progress;
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         &run,
@@ -260,19 +283,15 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
         "provider_processes": {"limit":progress.limit,"truncated":progress.truncated,
             "items":progress.provider_processes.iter().map(RunProviderProcess::to_json).collect::<Vec<_>>()}});
     let total = detail.logs_total;
-    let logs = detail.logs.iter().map(|r| {
-            let (stdout, stdout_truncated) = excerpt(&r.stdout);
-            let (stderr, stderr_truncated) = excerpt(&r.stderr);
-            json!({
-            "event_id":r.event_id,"ts":r.ts,"step_id":r.step_id,"step_index":r.step_index,
-            "provider":r.provider,"stdout":stdout,"stderr":stderr,
-            "stdout_truncated":r.stdout_blob_truncated || stdout_truncated,"stderr_truncated":r.stderr_blob_truncated || stderr_truncated,
-            "exit_code":r.exit_code,"timed_out":r.timed_out,"duration_ms":r.duration_ms,
-        })}).collect::<Vec<_>>();
+    let logs = detail
+        .logs
+        .iter()
+        .map(|record| record.to_profile_json(RunCliInvocationProfile::BoundedExcerpt))
+        .collect::<Vec<_>>();
     Ok(
         json!({"run": value, "usage":{"state":"unavailable"}, "execution_progress":execution_progress,
         "logs":{"state":detail.state,"pagination":pagination(offset,limit,logs.len(),total,MAX_LOG_PREFIX),
-            "items":logs,"total":total,"available_through":MAX_LOG_PREFIX.min(total),"excerpt_max_bytes":LOG_BYTES},
+            "items":logs,"total":total,"available_through":MAX_LOG_PREFIX.min(total),"excerpt_max_bytes":BOUNDED_EXCERPT_MAX_BYTES},
         "audit_metadata":{"complete":detail.complete,"rows_read":detail.rows_read,"row_budget":detail.row_budget}}),
     )
 }
@@ -376,21 +395,4 @@ fn prefix_bound(offset: usize, maximum: usize, field: &str) -> Result<(), OrbitE
 
 fn invalid(message: impl Into<String>) -> OrbitError {
     OrbitError::InvalidInput(message.into())
-}
-
-fn excerpt(raw: &str) -> (String, bool) {
-    bounded_text(raw, LOG_BYTES)
-}
-
-pub(super) fn bounded_text(raw: &str, max_bytes: usize) -> (String, bool) {
-    let mut text = redact_all(raw);
-    if text.len() <= max_bytes {
-        return (text, false);
-    }
-    let mut end = max_bytes;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text.truncate(end);
-    (text, true)
 }

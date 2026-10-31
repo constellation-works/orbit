@@ -16,11 +16,7 @@ use super::support::{Fixture, isolated, json_ok, write_json};
 const URL: &str = "/api/auto-tasks?workspace=ws_http_fixture";
 
 fn definition(fixture: &Fixture, name: &str) {
-    definition_with_schedule(
-        fixture,
-        name,
-        AutoTaskSchedule::Interval { every_minutes: 60 },
-    );
+    definition_with_schedule(fixture, name, AutoTaskSchedule::every_minutes(60));
 }
 
 fn definition_with_schedule(fixture: &Fixture, name: &str, schedule: AutoTaskSchedule) {
@@ -81,7 +77,7 @@ fn seed(
     for index in 0..16 {
         let name = format!("fixture-{index:02}");
         let schedule = if index % 2 == 0 {
-            AutoTaskSchedule::Interval { every_minutes: 60 }
+            AutoTaskSchedule::every_minutes(60)
         } else {
             serde_json::from_value(json!({"deliveries_landed": {
                 "branch":"agent-main", "threshold":1, "max_wait_minutes":10,
@@ -375,13 +371,7 @@ fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
                 fixture.runtime.auto_task_toggle(name, enabled).unwrap();
             }
             definition(&fixture, "interval");
-            definition_with_schedule(
-                &fixture,
-                "cron",
-                AutoTaskSchedule::Cron {
-                    cron: "* * * * *".into(),
-                },
-            );
+            definition_with_schedule(&fixture, "cron", AutoTaskSchedule::cron("* * * * *"));
             // The missing seeding plugin makes the enabled definition inactive.
             let inactive = fixture.work.join("auto_tasks/inactive.yaml");
             let body = fs::read_to_string(&inactive).unwrap();

@@ -37,6 +37,10 @@ pub trait ExecutorDefStoreBackend: Send + Sync {
     fn list_executor_defs(&self) -> Result<Vec<ExecutorDef>, OrbitError>;
     fn get_executor_def(&self, name: &str) -> Result<Option<ExecutorDef>, OrbitError>;
     fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError>;
+    /// Remove one executor definition by name. `Ok(false)` when absent.
+    fn delete_executor_def(&self, _name: &str) -> Result<bool, OrbitError> {
+        Ok(false)
+    }
 }
 
 pub trait PolicyDefStoreBackend: Send + Sync {

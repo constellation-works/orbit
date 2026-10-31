@@ -13,8 +13,9 @@ use orbit_common::OrbitError;
 use orbit_config::TagInstructionSetting;
 use orbit_store::contracts::AdmissionShipContract;
 use orbit_types::workflow::{
-    CapturedTagInstructions, TAG_INSTRUCTIONS_SCHEMA_VERSION, TagInstruction, TagInstructionError,
-    TagInstructionRefusal, TagInstructionRole, TagInstructionSource, select_tag_instructions,
+    CapturedTagInstructions, ExperimentActivityOverlay, MAX_TAG_INSTRUCTION_PROMPT_BYTES,
+    TAG_INSTRUCTIONS_SCHEMA_VERSION, TagInstruction, TagInstructionError, TagInstructionRefusal,
+    TagInstructionRole, TagInstructionSource, select_tag_instructions,
 };
 use serde_json::Value;
 
@@ -57,16 +58,18 @@ impl OrbitRuntime {
             .get_task(task_id)
             .map_err(TagInstructionFailure::Store)?
             .tags;
-        if let Some(captured) = self.claimed_tag_instructions() {
-            return captured
-                .select(&tags, role)
-                .map_err(TagInstructionFailure::Refused);
+        let selected = match self.claimed_tag_instructions() {
+            Some(captured) => captured.select(&tags, role),
+            None => {
+                let mut revision = LazyRevision::new(|| self.run_base_revision(run_id));
+                select_tag_instructions(&tags, role, |tag| {
+                    self.resolve_tag_instruction(tag, role, &mut revision)
+                })
+            }
         }
-        let mut revision = LazyRevision::new(|| self.run_base_revision(run_id));
-        select_tag_instructions(&tags, role, |tag| {
-            self.resolve_tag_instruction(tag, role, &mut revision)
-        })
-        .map_err(TagInstructionFailure::Refused)
+        .map_err(TagInstructionFailure::Refused)?;
+        let overlays = self.experiment_overlays_for_activity(run_id, activity_name, input)?;
+        with_experiment_instructions(selected, &overlays, role)
     }
 
     /// Every instruction this host applies, with workspace files read at the
@@ -203,7 +206,7 @@ impl OrbitRuntime {
 
     /// The commit the run's worktree was cut from, as its `worktree` step
     /// recorded it, or else this checkout's `HEAD` commit.
-    fn run_base_revision(&self, run_id: &str) -> Result<String, String> {
+    pub(crate) fn run_base_revision(&self, run_id: &str) -> Result<String, String> {
         let recorded = self
             .read_run_state(run_id)
             .ok()
@@ -225,7 +228,10 @@ impl OrbitRuntime {
     /// Match delivery worktree base spelling and mode without fetching during
     /// admission. An unavailable authoritative ref is a refusal, never another
     /// branch or this checkout's unrelated HEAD.
-    fn claim_base_revision(&self, ship: &AdmissionShipContract) -> Result<String, String> {
+    pub(crate) fn claim_base_revision(
+        &self,
+        ship: &AdmissionShipContract,
+    ) -> Result<String, String> {
         let base = ship.base_branch.trim();
         let branch = base.strip_prefix("origin/").unwrap_or(base).trim();
         if branch.is_empty() || branch.starts_with('-') {
@@ -240,22 +246,57 @@ impl OrbitRuntime {
     }
 }
 
+/// `selected` with live experiment arms applied after it: a suppressing arm
+/// removes Orbit's shipped defaults, and each arm's instruction follows every
+/// tag instruction. The total still fits the per-prompt cap.
+fn with_experiment_instructions(
+    mut selected: Vec<TagInstruction>,
+    overlays: &[ExperimentActivityOverlay],
+    role: TagInstructionRole,
+) -> Result<Vec<TagInstruction>, TagInstructionFailure> {
+    if overlays
+        .iter()
+        .any(|overlay| overlay.suppress_default_instructions)
+    {
+        selected.retain(|instruction| instruction.source != TagInstructionSource::Default);
+    }
+    selected.extend(
+        overlays
+            .iter()
+            .filter_map(|overlay| overlay.instruction.clone()),
+    );
+    let bytes = selected
+        .iter()
+        .map(|instruction| instruction.text.len())
+        .sum::<usize>();
+    if bytes > MAX_TAG_INSTRUCTION_PROMPT_BYTES {
+        return Err(TagInstructionFailure::Refused(
+            TagInstructionError::PromptTooLarge {
+                role: role.as_str(),
+                bytes,
+                limit: MAX_TAG_INSTRUCTION_PROMPT_BYTES,
+            },
+        ));
+    }
+    Ok(selected)
+}
+
 /// A revision looked up at most once, and only when a workspace file needs
 /// it, so a task with only default instructions never touches Git.
-struct LazyRevision<'a> {
+pub(crate) struct LazyRevision<'a> {
     resolve: Box<dyn FnMut() -> Result<String, String> + 'a>,
     value: Option<Result<String, String>>,
 }
 
 impl<'a> LazyRevision<'a> {
-    fn new(resolve: impl FnMut() -> Result<String, String> + 'a) -> Self {
+    pub(crate) fn new(resolve: impl FnMut() -> Result<String, String> + 'a) -> Self {
         Self {
             resolve: Box::new(resolve),
             value: None,
         }
     }
 
-    fn get(&mut self) -> Result<String, String> {
+    pub(crate) fn get(&mut self) -> Result<String, String> {
         if self.value.is_none() {
             self.value = Some((self.resolve)());
         }
@@ -270,7 +311,7 @@ impl<'a> LazyRevision<'a> {
 }
 
 /// The full commit id `revision` names in the repository at `root`.
-fn commit_at(root: &Path, revision: &str) -> Result<String, String> {
+pub(crate) fn commit_at(root: &Path, revision: &str) -> Result<String, String> {
     let repo = git2::Repository::open(root)
         .map_err(|error| format!("the repository cannot be opened: {}", error.message()))?;
     repo.revparse_single(revision)
@@ -286,7 +327,7 @@ fn commit_at(root: &Path, revision: &str) -> Result<String, String> {
 
 /// The bytes of `path` in the tree of commit `revision`. The admission, not
 /// this read, enforces the size cap, so an oversized file is refused by name.
-fn read_blob_at(root: &Path, revision: &str, path: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn read_blob_at(root: &Path, revision: &str, path: &str) -> Result<Vec<u8>, String> {
     let repo = git2::Repository::open(root)
         .map_err(|error| format!("the repository cannot be opened: {}", error.message()))?;
     let tree = repo

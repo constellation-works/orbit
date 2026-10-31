@@ -56,13 +56,13 @@ const REPLICA_LOCAL_ROUTINE_JOBS: &[&str] =
     &[REPLICA_LOCAL_ROUTINE_JOB, REPLICA_LOCAL_STORE_GC_JOB];
 
 /// Whether a replica checkout may schedule `definition` on this host's clock:
-/// a cron routine targeting worktree GC or store GC. Delivery and state
-/// triggers observe owner coordination state, so they are owner-only even for
-/// those jobs. Listing, toggling and the sweep all ask this one rule.
+/// a cron routine targeting worktree GC or store GC. Delivery, state and
+/// condition triggers observe owner coordination state, so they are
+/// owner-only even for those jobs. Listing, toggling and the sweep all ask
+/// this one rule.
 pub fn runs_in_replica(definition: &RoutineDefinition) -> bool {
     REPLICA_LOCAL_ROUTINE_JOBS.contains(&definition.target.job_name())
-        && definition.trigger.deliveries_landed.is_none()
-        && definition.trigger.state.is_none()
+        && definition.trigger.is_cron()
 }
 
 /// Why a replica checkout does not schedule `definition`, naming the owner
@@ -341,7 +341,7 @@ fn collect_from_sources(
     sources: &[RoutineSource],
     job_names_by_root: &BTreeMap<
         PathBuf,
-        crate::application::job::catalog::V2JobExecutionMembership,
+        std::rc::Rc<crate::application::job::catalog::V2JobExecutionMembership>,
     >,
     skip: &orbit_automation::routines::loader::RoutineSkipRule<'_>,
 ) -> RoutineCollection {
@@ -367,14 +367,45 @@ fn collect_from_sources(
     )
 }
 
+/// What one workspace's job execution membership is built from: the global
+/// job layer, the workspace job layer when that directory is on disk, and the
+/// active plugins' job files, in layer order. Workspaces on one host share
+/// the global layer and usually the plugin set, so keying the parse by these
+/// inputs reads the global job YAML once per collection instead of once per
+/// workspace. A workspace jobs directory that is not on disk contributes
+/// nothing to the catalog; one equal to the global jobs directory still
+/// matters, because it switches off the shipped-default exclusion, so it
+/// stays in the key either way.
+fn membership_share_key(runtime: &OrbitRuntime) -> (PathBuf, Option<PathBuf>, Vec<PathBuf>) {
+    let paths = runtime.paths();
+    let global_dir = paths.global_dir.clone();
+    let jobs_dir = paths.jobs_dir.clone();
+    let workspace_jobs_dir =
+        (jobs_dir.is_dir() || jobs_dir == global_dir.join("resources/jobs")).then_some(jobs_dir);
+    let plugin_job_files = runtime
+        .plugin_load()
+        .active()
+        .flat_map(|plugin| plugin.definitions.jobs.iter().cloned())
+        .collect();
+    (global_dir, workspace_jobs_dir, plugin_job_files)
+}
+
 fn preload_job_execution_names(
     workspaces: &[&(Workspace, OrbitRuntime)],
-) -> BTreeMap<PathBuf, crate::application::job::catalog::V2JobExecutionMembership> {
+) -> BTreeMap<PathBuf, std::rc::Rc<crate::application::job::catalog::V2JobExecutionMembership>> {
     let mut job_names_by_root = BTreeMap::new();
+    let mut shared: BTreeMap<
+        (PathBuf, Option<PathBuf>, Vec<PathBuf>),
+        std::rc::Rc<crate::application::job::catalog::V2JobExecutionMembership>,
+    > = BTreeMap::new();
     for (_, runtime) in workspaces {
+        let membership = shared
+            .entry(membership_share_key(runtime))
+            .or_insert_with(|| std::rc::Rc::new(runtime.load_v2_job_execution_membership()))
+            .clone();
         job_names_by_root
             .entry(runtime.shared_root())
-            .or_insert_with(|| runtime.load_v2_job_execution_membership());
+            .or_insert(membership);
     }
     job_names_by_root
 }

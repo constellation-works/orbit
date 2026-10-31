@@ -4,6 +4,30 @@ use rusqlite::Connection;
 
 use super::introspect::add_column_if_missing;
 
+/// Durable notices and an acknowledgement cursor, additive to existing leases.
+pub(super) fn apply_lease_notices(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(
+        conn,
+        "task_reservations",
+        "notice_cursor",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS lease_notices (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id TEXT,
+            workspace_orbit_dir TEXT NOT NULL,
+            lease_id TEXT NOT NULL REFERENCES task_reservations(reservation_id),
+            kind TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            event_key TEXT NOT NULL,
+            UNIQUE(lease_id, event_key)
+        );
+        CREATE INDEX IF NOT EXISTS lease_notices_workspace_seq ON lease_notices(workspace_id, seq);
+        CREATE INDEX IF NOT EXISTS lease_notices_dir_seq ON lease_notices(workspace_orbit_dir, seq);"
+    ).map_err(sqlite_store_error)
+}
+
 /// v13 `workspace_claim_scope` migration (ORB-10709, ADR-0352).
 ///
 /// The exclusive workspace claim reuses `task_reservations` rather than a
@@ -90,4 +114,74 @@ fn ensure_task_reservations_schema_v13(conn: &Connection) -> Result<(), OrbitErr
     .map_err(sqlite_store_error)?;
 
     Ok(())
+}
+
+/// v61 `task_reservation_leases` migration: path leases (`docs/design/path-leases`).
+///
+/// A lease is a `task_reservations` row held by a principal rather than a task.
+/// Its rows keep `scope = 'files'`, so a binary without this migration reads
+/// every lease, advisory ones included, as an exclusive file reservation: it
+/// over-blocks rather than letting an overlap through. Every existing row and
+/// every row such a binary writes later reads through the column defaults as a
+/// hard task reservation, which is exactly what it is.
+pub(super) fn apply_task_reservation_leases(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(
+        conn,
+        "task_reservations",
+        "kind",
+        "TEXT NOT NULL DEFAULT 'task_reservation'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "task_reservations",
+        "mode",
+        "TEXT NOT NULL DEFAULT 'hard'",
+    )?;
+    for column in [
+        "principal",
+        "principal_class",
+        "machine_id",
+        "priority",
+        "tags_json",
+        "base_branch",
+        "bound_branch",
+        "heartbeat_at",
+    ] {
+        add_column_if_missing(conn, "task_reservations", column, "TEXT")?;
+    }
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_task_reservations_kind_release
+            ON task_reservations(workspace_id, kind, released_at);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
+}
+
+/// v66 `task_reservation_lease_token` migration: the lease token id a lease
+/// intake request authenticated with (`docs/design/path-leases`, §7.2).
+///
+/// One nullable column. Rows written before it, or by a binary without it,
+/// read as leases requested without a token.
+pub(super) fn apply_task_reservation_lease_token(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "task_reservations", "token_id", "TEXT")
+}
+
+/// v67 `task_reservation_lease_queue` migration: the hard-lease queue
+/// (`docs/design/path-leases`, §3).
+///
+/// A queued request or a blocked expansion keeps the selectors it waits for in
+/// `queued_files_json`, never in `files_json`, so every overlap reader, this
+/// binary's and an older one's, sees only what a lease holds. `queue_kind` is
+/// `request` (the lease holds nothing yet) or `expansion` (it keeps its
+/// granted selectors), and `queued_at` is the age the queue's aging reads.
+/// Three nullable columns: an older binary never reads them, and the rows it
+/// writes read here as not waiting.
+pub(super) fn apply_task_reservation_lease_queue(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "task_reservations", "queued_files_json", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "queued_at", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "queue_kind", "TEXT")
 }

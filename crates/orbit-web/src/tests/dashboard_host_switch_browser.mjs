@@ -53,6 +53,7 @@ const WORKSPACES = {
 };
 let forwardWrites = { authorized: true, reason: null };
 let routeLog = [];
+let hideTasks = false;
 // The log tail's snapshots per host. A held host's snapshot requests wait in
 // `heldLogs` until the test settles them; open streams wait in `logStreams`
 // for the test to push events.
@@ -63,6 +64,17 @@ let logStreams = [];
 // A held host's workspace list waits in `heldWorkspaces` the same way.
 const workspaceHolds = new Set();
 let heldWorkspaces = [];
+let heldConfigDelete = null;
+let holdConfigDelete = false;
+const redundantConfig = {
+  config_set: { authorized: true },
+  sections: [{ token: 'workflow', keys: ['workflow.base_branch', 'pr.draft'].map((key) => ({
+    key, label: key, value: 'same', value_type: 'string', state: 'set', settable: true,
+    source: { layer: 'workspace' }, fallback: { layer: 'global', value: 'same', state: 'set' },
+  })).concat([{ key: 'workflow.resource_throttle.enabled', label: 'Enabled', value: true, value_type: 'bool', state: 'set', settable: true, source: { layer: 'global' } }]) }],
+  crews: [{ name: 'fixture', provider: 'codex', model: 'fixture', source: 'workspace' }],
+  crew_fields: ['model'],
+};
 
 function tasksFor(host, workspace) {
   // On the serving host a run recorded on hostb links there; on hostb it
@@ -119,6 +131,11 @@ function hostApi(host, req, rest, url, res) {
   const workspaces = WORKSPACES[host] || [];
   const workspace = url.searchParams.get('workspace') || (workspaces.find((ws) => ws.is_default) || {}).id;
   if (req.method !== 'GET') {
+    if (holdConfigDelete && req.method === 'DELETE' && rest.startsWith('config/keys/')) {
+      holdConfigDelete = false;
+      heldConfigDelete = res;
+      return;
+    }
     const approved = rest.match(/^tasks\/([^/]+)\/approve$/);
     if (approved) return json({ ...tasksFor(host, workspace).find((task) => task.id === approved[1]), status: 'backlog' });
     return json({ ok: true });
@@ -127,7 +144,7 @@ function hostApi(host, req, rest, url, res) {
     if (workspaceHolds.has(host)) { heldWorkspaces.push({ host, res }); return; }
     return json(workspaces);
   }
-  if (rest === 'tasks') return json({ items: tasksFor(host, workspace), total: 4, limit: 50, truncated: false });
+  if (rest === 'tasks') return json({ items: hideTasks ? [] : tasksFor(host, workspace), total: hideTasks ? 0 : 4, limit: 50, truncated: false });
   if (rest === 'tasks/all') return json({ items: workspaces.flatMap((ws) => tasksFor(host, ws.id)), total: 4 * workspaces.length });
   if (rest === 'tasks/locks') return json({ total_locked: 0, total_tasks: 0, by_task: [] });
   const artifact = rest.match(/^tasks\/([^/]+)\/artifacts\/(.+)$/);
@@ -149,10 +166,19 @@ function hostApi(host, req, rest, url, res) {
   }
   if (rest === 'workflows/auto/readiness') return json({ controls_authorized: true, tasks: [], capacity: { active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4 } });
   if (rest === 'routines') return json({ machine_name: host, capabilities: {}, clock: {}, routines: [] });
+  if (rest === 'job-runs') return json({ items: [{ run_id: `jrun-${host}-confirmed`, job_id: 'fixture_sweep', state: 'running', run_role: 'top-level',
+    created_at: '2026-10-08T00:00:00Z', started_at: '2026-10-08T00:00:01Z', finished_at: null, duration_ms: null }], total: 1, limit: 100, truncated: false });
+  if (rest === 'auto-tasks') {
+    const allowed = { authorized: true, reason: null };
+    return json({ workspace, controls_authorized: true, capabilities: { auto_task_toggle: allowed, auto_task_mint: allowed, auto_task_schedule: allowed },
+      definitions: [{ name: `${host}-confirmed-definition`, enabled: true, template: { title: 'Confirmed chore' }, template_summary: 'Confirmed chore',
+        schedule_summary: 'every 15 minutes', description: 'A definition the read-only host still lists.', next_evaluation: { state: 'waiting' } }] });
+  }
   const run = rest.match(/^runs\/([^/]+)$/);
   if (run) return json({ run_id: decodeURIComponent(run[1]), job_name: 'auto', state: 'running', steps: [], workspace_id: workspace });
   if (rest.startsWith('runs/')) return json([]);
   if (rest === 'audit/summary') return json({ window: '24h', events: 0, failed_runs: 0 });
+  if (rest === 'config/effective' || rest === 'config/file') return json(redundantConfig);
   if (rest.startsWith('config/')) return json({ entries: [], rows: [], config_set: { authorized: true, reason: null } });
   return json({ items: [], total: 0 });
 }
@@ -169,6 +195,34 @@ const server = http.createServer((req, res) => {
   }
   routeLog.push({ method: req.method, path: `${name}${url.search}` });
   const json = (body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+  if (name === '/api/hosts' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      const data = JSON.parse(body);
+      const row = hostRow(data.name, 'hm_added', { ssh: data.ssh });
+      HOSTS.hosts.push(row);
+      json({ action: 'added', entry: row });
+    });
+    return;
+  }
+  const editHost = name.match(/^\/api\/hosts\/(hm_added)$/);
+  if (editHost && req.method === 'PATCH') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      const row = HOSTS.hosts.find(item => item.machine_id === editHost[1]);
+      const previous_name = row.name;
+      row.name = JSON.parse(body).name;
+      json({ previous_name, entry: row });
+    });
+    return;
+  }
+  if (editHost && req.method === 'DELETE') {
+    const index = HOSTS.hosts.findIndex(item => item.machine_id === editHost[1]);
+    const [row] = HOSTS.hosts.splice(index, 1);
+    return json({ entry: row });
+  }
   if (name === '/api/hosts') return json(HOSTS);
   const conn = name.match(/^\/api\/hosts\/([^/]+)\/connection$/);
   if (conn) {
@@ -250,10 +304,11 @@ async function switchHost(name) {
 async function assertNamed(label) {
   const select = await page.locator('#host-select').evaluate((node) => node.options[node.selectedIndex].textContent);
   assert(select.includes(label), `the rail picker names ${label}: ${select}`);
-  const chipName = await page.locator('#host-resource-name').textContent();
   const chipLabel = await page.locator('#host-resource-group').getAttribute('aria-label');
-  assert(chipName.includes(label) && chipLabel.includes(label), `the chip group names ${label}: ${chipName} / ${chipLabel}`);
-  assert(await page.locator('#host-resource-name').isVisible(), 'the chip group name is visible text');
+  const detailLabel = await page.locator('#host-detail').getAttribute('aria-label');
+  assert(chipLabel.includes(label), `provider usage names ${label}: ${chipLabel}`);
+  assert(detailLabel.includes(label), `the host detail names ${label}: ${detailLabel}`);
+  assert(await page.locator('#host-select').isVisible(), 'the host name stays visible on the rail');
   const conn = await page.locator('#conn-host').textContent();
   assert(conn.includes(label), `the connection line names ${label}: ${conn}`);
 }
@@ -261,7 +316,61 @@ async function assertNamed(label) {
 try {
   browser = await chromium.launch({ headless: true });
 
+  // A bulk deletion cannot follow the picker into another host, even when
+  // both hosts name the same workspace. Keep the first response held until
+  // the destination Settings page has rendered.
+  await openPage('/?workspace=ws_orbit#config/all-keys', { fresh: true });
+  await page.evaluate(() => {
+    const original = window.fetch;
+    window.settingsSettled = 0;
+    window.settingsDeletes = [];
+    window.fetch = async (...args) => {
+      if (args[1]?.method === 'DELETE') window.settingsDeletes.push(String(args[0]));
+      const response = await original(...args);
+      if (args[1]?.method === 'DELETE') {
+        const text = response.text.bind(response);
+        response.text = async () => { const body = await text(); window.settingsSettled++; return body; };
+      }
+      return response;
+    };
+  });
+  const bulk = page.getByRole('button', { name: 'Remove all 2 workspace values', exact: true });
+  await bulk.waitFor({ state: 'visible' });
+  routeLog = [];
+  holdConfigDelete = true;
+  await bulk.click();
+  await until('the held Settings DELETE', () => heldConfigDelete !== null);
+  await switchHost('hostb');
+  await until('the remote Settings payload', () => logged(/^GET \/api\/on\/hostb\/config\/effective\?workspace=ws_orbit$/));
+  await bulk.waitFor({ state: 'visible' });
+  heldConfigDelete.writeHead(200, { 'content-type': 'application/json' });
+  heldConfigDelete.end('{"ok":true}');
+  heldConfigDelete = null;
+  await page.waitForFunction(() => window.settingsSettled >= 1);
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  const sentDeletes = await page.evaluate(() => window.settingsDeletes);
+  assert(sentDeletes.length === 1, `a retired bulk loop begins no second fetch: ${JSON.stringify(sentDeletes)}`);
+  const deletes = routeLog.filter((entry) => entry.method === 'DELETE');
+  assert(deletes.length === 1 && deletes[0].path === '/api/config/keys/workflow.base_branch?scope=workspace&workspace=ws_orbit',
+    `bulk removal stays in its initiating host and visit: ${JSON.stringify(deletes)}`);
+  assert(!(await page.locator('#config-body').textContent()).includes('Removed '), 'the new host receives no stale bulk completion');
+  evidenceLog.settingsBulkRoutes = deletes;
+  for (const view of ['all-keys', 'machine', 'crews']) {
+    await page.evaluate((view) => { window.location.hash = `config/${view}`; }, view);
+    await until(`Settings ${view}`, () => page.evaluate(async (view) => (await import('/static/js/config.js')).getConfigSubtab() === view, view));
+    if (view === 'machine') await page.locator('.config-sys-enabled .config-pencil').click();
+    if (view === 'crews') await page.locator('.config-crew-row .config-pencil').click();
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+      if (view !== 'all-keys') await page.locator('.config-editor-actions').scrollIntoViewIfNeeded();
+      await capture(`settings-${view}-dark-${width}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
+  await page.close();
+
   // 1. Picker order, the switch, and every request after it.
+  routeLog = [];
   await openPage('/', { fresh: true });
   await taskRow('alpha-RUN').waitFor({ state: 'visible' });
   const options = await page.locator('#host-select option').evaluateAll((nodes) => nodes.map((node) => [node.value, node.textContent]));
@@ -383,7 +492,7 @@ try {
     if (FAILURES[host]) assert(text.includes(FAILURES[host].message), `${host} shows the forward's message: ${text}`);
     assert(!(await page.locator('.tab-pane.active').isVisible()), `${host} replaces the panels`);
     assert(await page.locator('.panel-placeholder.action-error:visible').count() === 0, `${host} shows no failed panels`);
-    assert(await page.locator('#host-resource-chips .host-resource.unknown').count() === 3, `${host} shows no other host's readings`);
+    assert(await page.locator('#host-block .host-resource.unknown').count() === 3, `${host} shows no other host's readings`);
     if (host === 'deadhost') await captureWidths('unreachable');
     const back = page.locator('.host-state-back');
     assert((await back.textContent()) === `Back to ${SERVING}`, 'the way back names the serving host');
@@ -436,7 +545,7 @@ try {
     await linkedTab.close();
   }
   assert(await taskRow('alpha-LOCAL').locator('.task-quick-cell a').count() === 0, 'an unregistered machine is not a link');
-  assert((await taskRow('alpha-LOCAL').locator('.task-quick-cell .exec-origin').textContent()) === 'on laptop', 'an unregistered machine keeps its text');
+  assert((await taskRow('alpha-LOCAL').locator('.task-quick-cell .task-quick-link.unlinked').textContent()) === 'View run', 'an unregistered machine keeps a dimmed View run label');
   await page.locator('#tasks-body [data-key="task-alpha-ART"] .title').click();
   const deliveryTab = page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' });
   await deliveryTab.click();
@@ -478,8 +587,27 @@ try {
   assert(await page.locator('#task-detail-body .task-action-row.comment-actions .action.comment:visible').isDisabled(), 'Comment is disabled on a read-only host');
   await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
   await page.locator('.claim-action-denied', { hasText: 'Read-only on hostb' }).first().waitFor({ state: 'visible' });
-  assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   await capture('host-read-only-1440');
+  // Refused writes do not refuse reads: Jobs Live, the Catalogue and the
+  // Auto-task definitions render hostb's successful GETs for the selected
+  // workspace, with their write controls refused for the same reason.
+  await page.evaluate(() => { window.location.hash = 'jobs/live'; });
+  await page.locator('#jobs-live-body', { hasText: 'jrun-hostb-confirmed' }).waitFor({ state: 'visible' });
+  assert(!(await page.locator('#jobs-live-body').textContent()).includes('Select a workspace'), 'Jobs Live lists the read-only host runs');
+  await capture('host-read-only-jobs-live-dark-1440');
+  await page.evaluate(() => { window.location.hash = 'jobs/catalogue'; });
+  const catalogueJob = page.locator('#jobs-body [data-job="fixture_sweep"]');
+  await catalogueJob.waitFor({ state: 'visible' });
+  assert(await catalogueJob.getByRole('button', { name: 'Run ▸' }).isDisabled(), 'Run stays refused on a read-only host');
+  assert((await page.locator('#jobs-body .operations-readonly-note').textContent()).includes(READ_ONLY_REASON), 'the Catalogue says why Run is off');
+  await capture('host-read-only-jobs-catalogue-dark-1440');
+  await page.evaluate(() => { window.location.hash = 'operations/auto-tasks'; });
+  await page.locator('#auto-tasks-body', { hasText: 'hostb-confirmed-definition' }).waitFor({ state: 'visible' });
+  assert(await page.locator('#auto-tasks-body').getByRole('button', { name: 'Mint now' }).isDisabled(), 'Mint stays refused on a read-only host');
+  assert(await page.locator('#auto-tasks-body [role="switch"]').first().isDisabled(), 'the auto-task switch stays refused on a read-only host');
+  await capture('host-read-only-auto-tasks-dark-1440');
+  assert(logged(/^GET \/api\/on\/hostb\/job-runs\?/) && logged(/^GET \/api\/on\/hostb\/auto-tasks\?/), 'the reads went to hostb');
+  assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   forwardWrites = { authorized: true, reason: null };
   await page.close();
 
@@ -543,13 +671,13 @@ try {
     assert(view.status === '' && view.source === '' && view.time === '' && view.empty, `${label}: the status bar is cleared: ${JSON.stringify(view)}`);
   };
   logSnapshots = {
-    [SERVING]: { events: [logEvent('alpha-only-event')], offset: 7, agent_offset: 2 },
-    hostb: { events: [], offset: 3, agent_offset: 1 },
+    [SERVING]: { events: [logEvent('alpha-only-event')], offset: 7, agent_offset: 2, cursor: '7@alpha-op:2@alpha-agent' },
+    hostb: { events: [], offset: 3, agent_offset: 1, cursor: '3@hostb-op:1@hostb-agent' },
   };
   logStreams = [];
   await openPage('/', { fresh: true });
   await taskRow('alpha-RUN').waitFor({ state: 'visible' });
-  await until('the alpha stream from its snapshot cursor', () => logStreams.some((entry) => entry.host === SERVING && entry.query === '?from=7&agent_from=2'));
+  await until('the alpha stream from its snapshot cursor', () => logStreams.some((entry) => entry.host === SERVING && entry.query === '?from=7&agent_from=2&cursor=7%40alpha-op%3A2%40alpha-agent'));
   let view = await logView();
   assert(view.rows.join() === 'alpha-only-event' && view.status === 'alpha-only-event' && !view.empty, `alpha's snapshot is shown: ${JSON.stringify(view)}`);
   await page.evaluate(() => document.getElementById('log-follow-tail').click());
@@ -585,10 +713,10 @@ try {
   await assertRetired('a stale alpha snapshot settling on hostb');
 
   settleLog('hostb', { body: logSnapshots.hostb });
-  await until('the hostb stream from its own cursor', () => logStreams.some((entry) => entry.host === 'hostb' && entry.query === '?from=3&agent_from=1'));
+  await until('the hostb stream from its own cursor', () => logStreams.some((entry) => entry.host === 'hostb' && entry.query === '?from=3&agent_from=1&cursor=3%40hostb-op%3A1%40hostb-agent'));
   await assertRetired('an empty hostb snapshot');
   const streamsSinceSwitch = routeLog.filter((entry) => entry.path.includes('/log/stream'));
-  assert(streamsSinceSwitch.every((entry) => entry.path === '/api/on/hostb/log/stream?from=3&agent_from=1'),
+  assert(streamsSinceSwitch.every((entry) => entry.path === '/api/on/hostb/log/stream?from=3&agent_from=1&cursor=3%40hostb-op%3A1%40hostb-agent'),
     `only hostb's stream opens, from hostb's cursor: ${JSON.stringify(streamsSinceSwitch)}`);
   logHolds.clear();
 
@@ -804,9 +932,109 @@ try {
   evidenceLog.historyAggregateForward = await restoreAggregate(1, 'Forward from a single-workspace host', 'tasks/all');
   await page.close();
 
+  // Settings publishes externally refreshed host-file rows to every reader.
+  await openPage('/#config/hosts', { fresh: true });
+  await page.locator('#config-body').waitFor({ state: 'visible' });
+  await page.locator('.host-add-open').click();
+  await page.locator('.host-input-ssh').fill('added-ssh');
+  await page.locator('.host-input-name').fill('added-host');
+  await page.locator('.host-editor .host-submit').click();
+  await until('added host published', async () => await page.locator('#host-select option[value="added-host"]').count() === 1);
+  assert(await page.evaluate(async () => !!(await import('/static/js/common.js')).findRegisteredHost('added-host')), 'new host appears in shared registry');
+  await page.getByRole('button', { name: 'Rename added-host' }).click();
+  await page.locator('.host-input-name').fill('renamed-host');
+  await page.locator('.host-editor .host-submit').click();
+  await until('renamed host published', async () => await page.locator('#host-select option[value="renamed-host"]').count() === 1);
+  assert(await page.locator('#host-select option[value="added-host"]').count() === 0, 'old name leaves the picker');
+  WORKSPACES['renamed-host'] = WORKSPACES.alpha;
+  await page.getByRole('link', { name: 'Show renamed-host' }).click();
+  await until('Show selects renamed host', async () => (await page.locator('#host-select').inputValue()) === 'renamed-host');
+  WORKSPACES['selected-host'] = WORKSPACES.alpha;
+  await page.getByRole('button', { name: 'Rename renamed-host' }).click();
+  await page.locator('.host-input-name').fill('selected-host');
+  await page.locator('.host-editor .host-submit').click();
+  await until('selected rename follows its machine', async () => (await page.locator('#host-select').inputValue()) === 'selected-host');
+  await page.getByRole('button', { name: 'Remove selected-host' }).click();
+  await page.locator('.host-remove-confirm .host-confirm').click();
+  await until('removed host published', async () => await page.evaluate(async () => !(await import('/static/js/common.js')).findRegisteredHost('selected-host')));
+  assert((await page.locator('#host-select option[value="selected-host"]').textContent()).includes('not registered'), 'removed selected host is identified as unregistered');
+  // A later external registry refresh also reaches the picker.
+  HOSTS.hosts.push(hostRow('external-host', 'hm_external'));
+  await page.evaluate(async () => (await import('/static/js/hosts.js')).fetchAndRenderHosts({ probe: false }));
+  assert(await page.locator('#host-select option[value="external-host"]').count() === 1, 'external addition reaches picker');
+  await page.close();
+  // Fleet, execution location, host resources and the checkout-owner hint
+  // read the same registry Settings just published.
+  const localHost = HOSTS.hosts.find((host) => host.local);
+  localHost.workspaces = [{ id: 'ws_orbit', role: 'replica', owner_machine_id: 'hm_external' }];
+  hideTasks = true;
+  await openPage('/?workspace=ws_orbit#tasks', { fresh: true });
+  await until('replica owner hint', async () => (await page.locator('#tasks-body').textContent()).includes('pull replica of external-host'));
+  assert(await page.getByRole('button', { name: 'Show on external-host' }).count() === 1, 'the checkout-owner hint names the refreshed owner');
+  const shared = await page.evaluate(async () => {
+    const common = await import('/static/js/common.js');
+    const distributed = await import('/static/js/distributed.js');
+    const fleet = await import('/static/js/fleet-drains.js');
+    const added = common.findRegisteredHost('external-host');
+    const located = distributed.registeredMachineHost({ known: true, machine_id: added.machine_id, machine_name: 'stale-name' });
+    const drains = await fleet.fetchFleetDrains({ force: true });
+    return {
+      distributed: located && located.name,
+      fleet: drains.items.some((row) => row.host === 'external-host'),
+      registry: common.getRegisteredHosts().map((row) => row.name),
+    };
+  });
+  assert(shared.distributed === 'external-host', 'execution location follows the refreshed registry');
+  assert(shared.fleet, 'fleet membership includes the refreshed host');
+  assert(shared.registry.includes('external-host') && shared.registry.includes('alpha'), 'shared registry lists the serving host and the addition');
+  WORKSPACES['external-host'] = WORKSPACES.alpha;
+  const resources = await page.evaluate(async () => {
+    const common = await import('/static/js/common.js');
+    const hostResources = await import('/static/js/host-resources.js');
+    common.setHost('external-host');
+    await hostResources.fetchHostResourcePayload();
+    const row = common.findRegisteredHost(common.getHost());
+    return { name: row && row.name, machine_id: row && row.machine_id, ssh: row && row.ssh };
+  });
+  assert(resources.name === 'external-host' && resources.machine_id === 'hm_external' && resources.ssh === 'external-host-ssh', 'host resources resolve the refreshed host');
+  assert(logged(/^GET \/api\/on\/external-host\/host\/resources$/), 'host resources read the refreshed host');
+  localHost.workspaces = [];
+  hideTasks = false;
+  delete WORKSPACES['external-host'];
+  HOSTS.hosts.pop();
+  await page.close();
+
+  // The serving host's Show href, opened in a new tab of a browser that
+  // remembers a remote, selects the serving host there; an ordinary click
+  // on the same link switches in page to the same destination.
+  await openPage('/?workspace=ws_orbit#tasks', { fresh: true });
+  await taskRow('alpha-RUN').waitFor({ state: 'visible' });
+  await switchHost('hostb');
+  await taskRow('hostb-RUN').waitFor({ state: 'visible' });
+  assert(await page.evaluate(() => localStorage.getItem('orbit.dashboard.host')) === 'hostb', 'hostb is the remembered remote');
+  await page.evaluate(() => { window.location.hash = 'config/hosts'; });
+  const servingShow = page.getByRole('link', { name: `Show ${SERVING}` });
+  await servingShow.waitFor({ state: 'visible' });
+  const servingHref = await servingShow.getAttribute('href');
+  assert(new URL(servingHref, origin).searchParams.has('host') && new URL(servingHref, origin).searchParams.get('host') === '',
+    `serving Show href carries an explicit empty host: ${servingHref}`);
+  const tab2 = await context.newPage();
+  tab2.on('pageerror', (error) => pageErrors.push(`serving Show tab: ${error.message}`));
+  await tab2.goto(new URL(servingHref, origin).href);
+  await tab2.locator('#host-select').waitFor({ state: 'attached' });
+  await until('serving Show tab selects the serving host', async () => ['', null].includes(await tab2.evaluate(() => new URL(window.location.href).searchParams.get('host')))
+    && await tab2.locator('#host-select').inputValue() === '');
+  assert(await tab2.evaluate(() => localStorage.getItem('orbit.dashboard.host')) === 'hostb', 'the new tab did not rewrite the remembered remote in the original tab');
+  await tab2.close();
+  await servingShow.click();
+  await until('ordinary Show click selects the serving host', async () => (await selectedHost()) === null && await page.locator('#host-select').inputValue() === '');
+  evidenceLog.servingShowHref = servingHref;
+  await page.close();
+
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
+      'browser-settings-bulk-delete-retires-at-host-switch',
       'browser-host-picker-lists-serving-host-first',
       'browser-every-request-follows-the-selected-host',
       'browser-host-url-and-memory-precedence',
@@ -814,12 +1042,15 @@ try {
       'browser-workspaces-rebuild-per-host',
       'browser-host-level-failure-and-way-back',
       'browser-host-skew-banner',
+      'browser-refreshed-registry-reaches-shared-consumers',
       'browser-remote-run-links',
       'browser-remote-writes-disabled-with-reason',
+      'browser-read-only-host-still-lists-jobs-and-auto-tasks',
       'browser-host-picker-keyboard-and-focus',
       'browser-log-tail-retires-the-old-host-at-the-switch',
       'browser-history-restores-the-host-each-entry-names',
       'browser-history-restores-aggregate-after-a-single-workspace-host',
+      'browser-serving-show-href-selects-serving-in-new-tab',
     ],
     viewports: ['1440', '768'],
     ...evidenceLog,

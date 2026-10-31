@@ -1,0 +1,21 @@
+Show an experiment's per-arm outcomes, intervals and verdict
+
+Usage: orbit experiment readout [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          The experiment's id or name
+
+Options:
+      --metric <METRIC>
+          Report only this metric
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

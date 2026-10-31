@@ -479,8 +479,12 @@ fn claim_review_admission(
         policy_version: 0,
         timing: if request.ship.before_landing {
             ReviewTiming::BeforeLanding
-        } else {
+        } else if request.ship.before_pr {
             ReviewTiming::BeforePr
+        } else {
+            // A selective-only contract: the leaf gate evaluates the
+            // captured policy at its open PR's pinned head.
+            ReviewTiming::None
         },
         timing_source: CLAIM_SOURCE.into(),
         crew: review.crew.clone(),
@@ -491,6 +495,7 @@ fn claim_review_admission(
         required_validation_commands: review.required_validation_commands.clone(),
         baseline_commands: review.baseline_commands.clone(),
         host_evidence: review.host_evidence.clone(),
+        selective_before_landing: review.selective_before_landing.clone(),
         captured_at: now,
     })
 }
@@ -564,6 +569,15 @@ pub(super) fn allocate(
         return Err(invalid(
             "an owner with review.timing = before_pr or before_landing admits only a PR leaf \
              that runs the review gate",
+        ));
+    }
+    if request.ship.selective_policy().is_some()
+        && !(request.selective_review && request.review_gate && request.ship.mode == "pr")
+    {
+        return Err(invalid(
+            "an owner with an active selective before-landing policy admits only a PR leaf \
+             that declares selective-review capability; an older executor is refused rather \
+             than allowed to drop the policy",
         ));
     }
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
@@ -654,7 +668,11 @@ pub(super) fn mutate(
                 // in place of a local task lookup, so the leaf runs on the
                 // owner task's crew rather than this host's `default_crew`.
                 let task = record.receipt.as_ref().and_then(|r| r.task.as_ref()).filter(|task| task.id == claim.task_id).ok_or_else(|| invalid("claimed task snapshot missing"))?;
-                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew}});
+                // [ORB-17773] `crew_source` and `complexity` ride the
+                // snapshot so the follower can re-draw an automatic
+                // assignment under its own usage pressure.
+                let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew, "crew_source": task.crew_source, "complexity": task.complexity}});
+                input["experiment_capture"] = serde_json::to_value(record.receipt.as_ref().and_then(|receipt| receipt.experiments.as_ref())).map_err(|error| OrbitError::Store(format!("serialize experiment capture: {error}")))?;
                 // Carry the profile key already chosen by admission into the
                 // queued leaf. The host forecast then exchanges its reservation
                 // for a run with the same price before the worker starts.

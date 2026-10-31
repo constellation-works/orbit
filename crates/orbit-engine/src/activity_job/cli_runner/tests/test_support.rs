@@ -58,6 +58,8 @@ impl crate::test_support::NullRuntimeHost for TestHost {
         Ok(ResolvedCliExecutor {
             command: self.command.clone(),
             args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
         })
     }
 
@@ -75,6 +77,7 @@ impl crate::test_support::NullRuntimeHost for TestHost {
                 TEST_REGISTERED_TOOLS.iter().copied(),
             ),
             omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
         })
     }
 
@@ -137,11 +140,13 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         other => panic!("unsupported provider for test: {other}"),
     };
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: String::new(),
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,
@@ -157,6 +162,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 

@@ -18,7 +18,7 @@
 //! host again whether the claim can be admitted.
 
 use super::{DeliveryHost, Evaluation, recovery};
-use crate::AutomationError;
+use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::{RecoveryRequest, SYSTEM_ACTOR, refusal};
@@ -208,7 +208,7 @@ pub(super) fn adopt(
     store
         .automation_state(request.consumer)?
         .map(|state| Adoption::Adopted(Box::new(state)))
-        .ok_or_else(|| AutomationError::Deferred("state_missing".into()))
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::StateMissing))
 }
 
 /// An adopt-settings request carrying `reason` for the audit record.

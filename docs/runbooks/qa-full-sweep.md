@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010, ORB-15327]
-last_validated: 2026-10-19
+last_validated: 2026-10-25
 ---
 
 # Full pre-release QA sweep
@@ -17,13 +17,22 @@ It complements the recent-change `qa-sweep`.
 Orbit also ships a generic, product-agnostic `qa-full-sweep` default that
 coordinates per-area surface-QA chores and a roll-up release decision
 ([auto-task overview](../design/auto-tasks/1_overview.md#embedded-default-catalog)).
+That roll-up's description and acceptance criteria require the owning
+machine: preparation records `required_machine` because area status and
+`qa-progress.json` reads are owner-task-store evidence, and the coordinator
+wires dependencies with `orbit.task.update` or a
+`qa_rollup_dependencies_unwired` handoff. Area tasks in that default stay
+portable. This runbook does not change the generic default.
 This workspace's own `.orbit/auto_tasks/qa-full-sweep.yaml` predates it and
 overrides it: `orbit workspace sync` and `orbit update` keep the file byte for
 byte and never retire it, and sync warns that it occupies the bundled
 default's name. That warning is expected here; do not move or rename the file.
 The rest of this runbook describes this workspace's definition and harness.
-The generic default's area brief also points workers here when the repository
-provides this harness, including browser-kit and website preparation.
+The generic default's area brief names this workspace's runbooks only as guarded
+examples: workers use them only when the checkout provides this harness and its
+workspace guide permits it, discovering the repository's own permitted recipe
+otherwise, and retaining `NOT_RUN` with the capability probe when neither a
+usable host kit nor an applicable permitted recipe exists.
 
 ## Mint and run
 
@@ -79,6 +88,9 @@ scenario, and binds every result to the resulting candidate ID. Supplying an
 installed binary without that build attestation intentionally makes provenance
 FAIL, even when `--version` exits zero. The harness constructs a clean child
 environment and disposable Orbit root and Git repositories for mutations.
+Built-in scenarios run only after source-build provenance passes. A failed
+build or unavailable executable still produces the requested report, retains
+the failed command evidence, and leaves built-in scenarios `NOT_RUN`.
 Its disposable `orbit init` calls pass `--skip-host-prerequisites`, so they
 never install packages or change security policy and need no supported Linux
 distribution; the built-in scenarios do not exercise native sandbox dispatch,
@@ -159,7 +171,13 @@ dependencies and generated files are preserved. This flag never deploys.
 
 Hosted evidence can be combined with `--platform-evidence <report.json>`. A
 schema-version 2 full-sweep report must name the exact candidate ID and exact
-inventory command. The macOS workflow also uploads a bounded
+inventory command. An unchanged report can be imported again: harness
+bookkeeping rows are ignored, declared local scenarios are not imported, and
+unknown behavioral scenarios are rejected. Browser commands are compared after
+expanding only the inventory's `{playwright_module}` and `{evidence_dir}`
+placeholders from the report's browser module and retained evidence directory.
+All other arguments and assertion sets must match exactly, and retained browser
+files must still exist with their recorded hashes. The macOS workflow also uploads a bounded
 `macos-platform-evidence-<run>-<attempt>` artifact after all of its required
 tests pass. That report records the physical checkout commit, exact required
 command, assertion set, workflow/run identity, and hashes of the workflow,
@@ -171,7 +189,14 @@ hashes are rejected. The imported file hash is retained in the combined
 report. Each required workflow Cargo command now runs through the sweep's
 `--record-native-command` transport, which retains the executed arguments,
 checkout revision, exit status and complete output under
-`.orbit/tmp/macos-native-execution/`. The emitter and importer both require
+`.orbit/tmp/macos-native-execution/`. A timeout, lost supervisor result or
+unverified cleanup keeps `FAIL` with a null exit status in that evidence and
+returns shell status 1; numeric command statuses are returned unchanged.
+Built-in negative controls likewise require a completed, nonzero command status:
+a timeout, lost result or unverified cleanup stays `FAIL` with no refusal
+assertions. A completed refusal can earn its assertions only after its additional
+checks, such as unchanged configuration bytes, succeed.
+The emitter and importer both require
 all exact workflow commands, nonzero completed test counts, and no skip or
 deferral notices. Artifacts emitted by the older listing-only contract lack
 that execution record and must be regenerated by the current workflow.
@@ -441,7 +466,11 @@ supervisor owns each command's process group until cleanup finishes. Timeout,
 normal command completion, and loss of the QA parent sweep the owned group.
 The report records whether cleanup was verified. A refused group signal or
 expired reap deadline fails with an explicit unverified cleanup outcome;
-timeout and lost-supervisor outcomes also fail.
+timeout and lost-supervisor outcomes also fail. The harness scratch directory
+itself is removed with cleanup errors ignored, so a fixture child that
+outlives its test and writes into the tree during removal cannot lose the
+report; any leftover paths are recorded in the report's `scratch_cleanup`
+field as a warning instead.
 `python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.

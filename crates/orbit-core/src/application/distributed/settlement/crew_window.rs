@@ -2,7 +2,7 @@
 //! leaf's settlement phase means for the operator.
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::{AdmissionCrewCapability, LocalPullPhase};
+use orbit_store::contracts::{AdmissionCrewCapability, AdmissionCrewPressure, LocalPullPhase};
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullAuthExclusion};
 use serde::Serialize;
 
@@ -64,6 +64,12 @@ pub struct PullCrewWindow {
     /// not the review it owes.
     #[serde(skip)]
     pub(super) reviewable: Option<Vec<String>>,
+    /// Per-crew weekly usage pressure from this host's own readings
+    /// [ORB-17773], recomputed each pass like the limit gate. Empty under
+    /// `workflow.crew_selection = "static"`: then the capability reports
+    /// none and the owner orders this follower's offers as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_pressure: Vec<AdmissionCrewPressure>,
 }
 
 impl PullCrewWindow {
@@ -74,6 +80,7 @@ impl PullCrewWindow {
             runnable: self.runnable.clone(),
             default_crew: self.default_crew.clone(),
             excluded: self.excluded.clone(),
+            usage_pressure: self.usage_pressure.clone(),
         }
     }
 
@@ -102,6 +109,7 @@ impl PullCrewWindow {
             runnable: self.reviewable.clone(),
             default_crew: None,
             excluded,
+            usage_pressure: Vec::new(),
         }
         .unrunnable_reason(Some(crew))
     }

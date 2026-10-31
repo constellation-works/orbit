@@ -15,12 +15,15 @@ pub const UI_TAG: &str = "ui";
 /// and runs the smoke test that verifies it.
 pub const BROWSER_KIT_INSTALL_COMMAND: &str = "orbit browser-kit install";
 
-/// Whether `tags` carry the `ui` tag, so only a host with a verified browser
-/// kit may start the task.
+/// Whether `tags` carry the `ui` tag — or `verify-mock-ui`, which implies
+/// the `ui` tag's admission routing (visual-review §6.1) — so only a host
+/// with a verified browser kit may start the task.
 #[must_use]
 pub fn requires_browser_kit(tags: &[String]) -> bool {
-    tags.iter()
-        .any(|tag| tag.trim().eq_ignore_ascii_case(UI_TAG))
+    tags.iter().any(|tag| {
+        let tag = tag.trim();
+        tag.eq_ignore_ascii_case(UI_TAG) || tag.eq_ignore_ascii_case(super::VERIFY_MOCK_UI_TAG)
+    })
 }
 
 /// What a `ui` task waits for on a host without a verified kit, naming the

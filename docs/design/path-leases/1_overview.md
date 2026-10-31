@@ -1,0 +1,130 @@
+---
+title: Path Leases — Overview
+owner: claude
+last_updated: 2026-10-30
+last_validated: 2026-10-30
+status: Draft
+stage: shipped
+next: "—"
+feature: path-leases
+doc_role: overview
+type: design
+summary: "Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the listener's configured request and rate limits are implemented."
+tags: [path-leases, locks, admission, reservations, notifications]
+paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**"]
+related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
+related_artifacts: []
+---
+
+# Path Leases — Overview
+
+> **Status: Committed scope shipped.** Lease storage and request, renew, release, show, list and
+> check operations are shipped through MCP and CLI, with a loopback REST surface and Orbit Web
+> notices/SSE. Lease-token administration, the `orbit-auth` credential crate and the authenticated
+> Unix intake socket are also implemented, as is the lease listener (`orbit lease listen`, run as the
+> listener user) with its request and rate limits. Native TLS and the configured listener limits
+> are implemented; preemption and signed webhooks remain later work.
+
+Orbit already keeps parallel drain tasks from editing the same files: an in-progress or review
+task holds a lock on its declared footprint, and admission defers a candidate that overlaps it.
+Work that does not run through a drain, such as a Claude Code or Codex session, an editor, or a
+person at the keyboard, is invisible to that lock. A **path lease** lets any such client ask the
+owner "I'm about to work on these paths", get a green light now or a place in line, and be told
+when work that overlaps it lands. The engine is the owner's existing lock index; what is new is a
+user-level surface (push a request, then poll or stream) instead of host-level drain pull, and
+a token-authenticated listener so that several people and their agents can coordinate on one
+repository through one owner.
+
+## 1. Motivation
+
+Measured on ws_orbit on 2026-10-25 (read-only; the queries are described in
+[2_design.md §10](./2_design.md#10-concerns--honest-limitations)):
+
+- **Conflicts are rare but not free.** Since 2026-10-06, 110 runs needed a
+  `pr_conflict_recovery` agent against 2,364 landed tasks (about 4.7%), and in 90 days 24 tasks
+  blocked on a base conflict recovery could not fix (about 0.7% of 3,448 landed).
+- **Declarations are incomplete.** Pilot footprints cover 59–69% of the files the landed commit
+  changed, at 82–87% precision. About 40% of the recovered conflicts trace to a file one side
+  never declared.
+- **Exclusive locks over-block.** Of 326 lock denials where both tasks have since landed, 100
+  (31%) never changed a file in common.
+- **Outside work is unaccounted for.** Interactive sessions on the same repository take no lock
+  at all, so neither they nor the drain can see each other until a rebase fails.
+- **Only one person can reach the lock.** The owner is reached over SSH, and an SSH login is
+  ownership of it. A second person working on the same repository, or their agents, has no way
+  to see or take a lock without being handed the whole owner.
+
+So the target is best-effort conflict reduction, not a guarantee: tell people and agents about
+overlap early, let exclusive holds exist where a path policy wants them, and keep git, rebase and
+`pr_conflict_recovery` as the backstop for what slips through.
+
+## 2. Core Concepts
+
+- **Path lease** — a reservation of path selectors on the owner, held by a principal rather than
+  a task, with a mode, a priority, a lifetime and optionally a bound branch.
+- **Mode** — `advisory` (recorded and announced, never blocks anyone) or `hard` (exclusive, like
+  a task's context lock). Advisory is the default.
+- **Principal** — who holds a lease: a person or a named agent. Over SSH it is attribution only;
+  over the lease listener it is the authenticated token's subject.
+- **Lease queue** — hard requests that overlap a hard holder wait in priority-then-age order
+  instead of being refused.
+- **Notice** — a durable event on a lease (granted, queued, expiring, released,
+  overlap landed), read by polling a cursor or streaming the same cursor over SSE.
+- **Landing notice** — the notice that work which changed paths an active lease holds has just
+  landed on its base, so the holder should rebase now.
+- **Lease token** — a bearer credential that authorizes lease operations, and nothing else, on
+  the lease listener. Every principal other than the operator uses one: each person, and each of
+  their agents.
+- **Listener user** — the dedicated OS user that runs the lease listener and owns its tokens.
+  Agents run as the operator. They cannot mint tokens only when every transition to that user,
+  and every `sudo` that can become root, requires a host-provisioned factor they cannot reuse.
+  The supported factor is root-owned sudoers with `timestamp_timeout=0` and no passwordless
+  grant. Ordinary password-protected `sudo` caches a timestamp, so it is not that factor, and
+  a caller-supplied `sudo -k` is not enforcement. The listener stays off when the factor is
+  absent.
+
+Full definitions: [references/glossary.md](./references/glossary.md).
+
+## 3. At a Glance
+
+| Concern | File | Task |
+|---------|------|------|
+| Reserve and release path selectors with a TTL (exists) | [crates/orbit-runtime/src/task/locks/commands.rs](../../../crates/orbit-runtime/src/task/locks/commands.rs) | — |
+| Which tasks hold their context (exists) | [crates/orbit-runtime/src/task/locks/index.rs](../../../crates/orbit-runtime/src/task/locks/index.rs) | — |
+| Reservation rows and lease columns | [crates/orbit-store/src/driver/sqlite/task_reservation_store/](../../../crates/orbit-store/src/driver/sqlite/task_reservation_store/) | [ORB-18404] |
+| Landed paths per task (exists; feeds landing notices) | [crates/orbit-core/src/application/codebase/facts/scan.rs](../../../crates/orbit-core/src/application/codebase/facts/scan.rs) | — |
+| SSE streaming pattern (exists, for logs) | [crates/orbit-web/src/api/log.rs](../../../crates/orbit-web/src/api/log.rs) | — |
+| Hard/advisory modes, lease lifetime and notices | implemented by [ORB-18405], [ORB-18551] and [ORB-18554], [2_design.md §2–§6](./2_design.md#2-the-lease-record) | — |
+| Lease queue, expansion and `--no-wait` behavior | implemented by [ORB-18553], [2_design.md §6](./2_design.md#6-surfaces) | — |
+| MCP, CLI, loopback REST and notices/SSE | implemented by [ORB-18406], [ORB-18411], [ORB-18551] and [ORB-18552]; [2_design.md §6](./2_design.md#6-surfaces) | — |
+| Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`), the intake socket, native TLS and configured listener limits are implemented; preemption and signed webhooks remain later work, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412, ORB-18413, ORB-18421 |
+| Listener user and intake socket | intake socket and the listener's startup checks implemented ([crates/orbit-web/src/lease/intake/mod.rs](../../../crates/orbit-web/src/lease/intake/mod.rs)); creating the user is the host's, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
+| Security review and repairs | [ORB-18414] reviewed the listener; [ORB-18774], [ORB-18775] and [ORB-18776] delivered renewal ceilings, secret redaction and token resource bounds | [ORB-18414], [ORB-18774], [ORB-18775], [ORB-18776] |
+| Dashboard Leases view | implemented by [ORB-18555] | [ORB-18555] |
+| Credential code (`orbit-auth`) | implemented, [2_design.md §7.4](./2_design.md#74-the-orbit-auth-crate) | ORB-18410, ORB-18421 |
+
+Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:
+[3_vision.md](./3_vision.md).
+
+## Task References
+
+- [ORB-18404] — stored lease rows alongside task reservations.
+- [ORB-18405] — added lease operations and principal policy.
+- [ORB-18406] — exposed MCP tools and the CLI.
+- [ORB-18410] — added the credential crate and listener tokens.
+- [ORB-18411] — served lease REST routes on Orbit Web.
+- [ORB-18430] — added the authenticated intake socket.
+- [ORB-18412] — ran the listener as its own OS user.
+- [ORB-18413] — added native listener TLS.
+- [ORB-18421] — bounded listener requests and rates.
+- [ORB-18414] — reviewed listener and token security and filed repairs.
+- [ORB-18774] — enforced token and workspace ceilings on renewal.
+- [ORB-18775] — redacted owner audit payloads and errors.
+- [ORB-18776] — bounded token lease accumulation and answer construction.
+- [ORB-18551] — delivered durable notices and Orbit Web polling and SSE.
+- [ORB-18552] — delivered notice polling and SSE on the listener.
+- [ORB-18553] — delivered the hard-lease queue and expansion.
+- [ORB-18554] — delivered landing release and expiry notices.
+- [ORB-18555] — delivered the dashboard Leases view.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

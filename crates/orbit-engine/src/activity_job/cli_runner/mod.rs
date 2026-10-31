@@ -1,8 +1,8 @@
 mod argv;
 mod auth_probe;
 mod envelope;
+mod image_input;
 mod inspection;
-mod inspection_tools;
 mod launcher;
 mod orchestrator;
 mod plugin_broker;
@@ -15,6 +15,8 @@ pub(crate) mod spawn;
 mod spawn_diagnostics;
 mod stdout_preview;
 mod supervisor;
+#[cfg(feature = "test-support")]
+pub use spawn::with_bwrap_probe_unavailable;
 #[cfg(feature = "test-support")]
 pub use supervisor::with_cli_supervision_clock;
 

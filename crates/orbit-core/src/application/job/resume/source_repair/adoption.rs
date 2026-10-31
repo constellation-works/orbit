@@ -18,23 +18,15 @@ impl OrbitRuntime {
                 .map_err(|error| refuse(format!("unreadable prior repair admission: {error}")))?;
         let binding = &admission.binding;
         let entries = self.get_task_history(&task.id)?;
-        let reservations = orbit_types::workflow::source_repair_reservations(&entries)
+        let reservations = orbit_types::workflow::source_repair_authorizations(&entries)
             .map_err(|error| refuse(format!("unreadable repair reservation: {error}")))?;
         let matching = reservations
             .iter()
             .filter(|record| record.request_key == admission.request_key)
             .collect::<Vec<_>>();
-        let recorded =
-            serde_json::to_value(&admission).map_err(|error| refuse(error.to_string()))?;
-        // Run input alone is not operator authority. Require the immutable,
-        // system-authored reservation and its unique link to this exact run.
-        let reserved = entries.iter().any(|entry| {
-            entry.by == "system"
-                && entry.event == SOURCE_REPAIR_RESERVED
-                && entry.note.as_deref().is_some_and(|note| {
-                    serde_json::from_str::<Value>(note).is_ok_and(|value| value == recorded)
-                })
-        });
+        // Run input alone is not operator authority. The resolver authenticates
+        // the immutable system reservation and any fresh authorization; require
+        // its unique link to this exact run as well.
         let links = entries
             .iter()
             .filter(|entry| entry.event == SOURCE_REPAIR_LINKED)
@@ -50,7 +42,6 @@ impl OrbitRuntime {
             .collect::<Vec<_>>();
         if matching.len() != 1
             || digest(matching[0])? != digest(&admission)?
-            || !reserved
             || linked.len() != 1
             || linked[0].0 != "system"
             || linked[0].1.run_id != source.run_id
@@ -74,8 +65,13 @@ impl OrbitRuntime {
         // Keep the original reservation, unique link and adoption authenticated
         // below, and retain the stricter rule for interrupted repair sources.
         if source.state != JobRunState::Success
-            && admitted_task_digest(task, &entries, &source.run_id, admission.authorized_at)?
-                != binding.task_digest
+            && !admitted_task_matches(
+                task,
+                &entries,
+                &source.run_id,
+                admission.authorized_at,
+                &binding.task_digest,
+            )?
         {
             return Err(refuse(
                 "task meaning or scope changed since original repair admission",
@@ -88,10 +84,7 @@ impl OrbitRuntime {
             .read_run_state(&binding.source_run_id)?
             .ok_or_else(|| refuse("prior repair source checkpoints missing"))?;
         let definition = self.source_repair_definition(&predecessor)?;
-        if digest(
-            &json!({"run":predecessor,"steps":predecessor.steps,"checkpoints":prior_state,"definition":definition}),
-        )? != binding.source_digest
-        {
+        if run_evidence_digest(&predecessor, &prior_state, &definition)? != binding.source_digest {
             return Err(refuse("immutable prior repair source changed"));
         }
         if field(adopted, "phase")? != "candidate_resume"
@@ -119,13 +112,15 @@ impl OrbitRuntime {
 }
 
 /// Compare the admitted task while accounting only for this run's durable host
-/// additions. The task and the original reservation remain immutable here.
-pub(super) fn admitted_task_digest(
+/// additions and system crew redraws. The task and the original reservation
+/// remain immutable here.
+pub(super) fn admitted_task_matches(
     task: &Task,
     entries: &[TaskHistoryEntry],
     run_id: &str,
     authorized_at: chrono::DateTime<Utc>,
-) -> Result<String, OrbitError> {
+    expected: &str,
+) -> Result<bool, OrbitError> {
     // Delivery legitimately appends selectors for changed files. Account
     // only for this attempt's system-recorded additions in memory; arbitrary
     // scope edits still change the original digest and no history is edited.
@@ -148,5 +143,62 @@ pub(super) fn admitted_task_digest(
             }
         }
     }
-    task_digest(&original_task)
+    task_matches_before_crew_redraws(&original_task, entries, authorized_at, expected)
+}
+
+/// Whether `task` digests to `expected` now or as it stood before any
+/// unbroken run of the newest system crew redraws recorded since `since`.
+///
+/// Admission redraws an automatic crew under usage pressure [ORB-17770] and
+/// records it as a system `crew_redrawn` entry that keeps the crew's source.
+/// Such a redraw changes who runs the task, not what the task is, so it must
+/// not orphan an identity bound earlier [ORB-18560]. The redraws are undone in
+/// memory, newest first, only while each one names the crew and source the
+/// task holds at that point; any other crew change (an operator's, or a
+/// redraw that moved the source with the complexity) stops the walk, so it
+/// still changes the digest. Meaning, tools and complexity are never undone.
+pub(super) fn task_matches_before_crew_redraws(
+    task: &Task,
+    entries: &[TaskHistoryEntry],
+    since: chrono::DateTime<Utc>,
+    expected: &str,
+) -> Result<bool, OrbitError> {
+    let mut earlier = task.clone();
+    if task_digest(&earlier)? == expected {
+        return Ok(true);
+    }
+    for entry in entries
+        .iter()
+        .rev()
+        .filter(|entry| entry.at >= since && entry.event == CREW_REDRAWN_EVENT)
+    {
+        let Some((source, from, to)) = source_keeping_crew_redraw(entry) else {
+            return Ok(false);
+        };
+        if earlier.crew.as_deref() != Some(to) || earlier.crew_source.as_deref() != Some(source) {
+            return Ok(false);
+        }
+        earlier.crew = Some(from.to_string());
+        if task_digest(&earlier)? == expected {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+const CREW_REDRAWN_EVENT: &str = "crew_redrawn";
+
+/// `(source, from, to)` of a system `crew_redrawn` entry that kept the crew's
+/// source, as `persist_usage_pressure_redraw` writes it:
+/// ``crew redrawn from <source> (`<from>`) to <source> (`<to>`) …``.
+fn source_keeping_crew_redraw(entry: &TaskHistoryEntry) -> Option<(&str, &str, &str)> {
+    if entry.by != "system" {
+        return None;
+    }
+    let rest = entry.note.as_deref()?.strip_prefix("crew redrawn from ")?;
+    let (source, rest) = rest.split_once(" (`")?;
+    let (from, rest) = rest.split_once("`) to ")?;
+    let (to_source, rest) = rest.split_once(" (`")?;
+    let (to, _) = rest.split_once("`)")?;
+    (source == to_source && !from.is_empty() && !to.is_empty()).then_some((source, from, to))
 }

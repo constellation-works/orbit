@@ -21,13 +21,14 @@ except ImportError:
 ROOT = Path(__file__).resolve().parent.parent
 HELPER_CALL = re.compile(r"(?:[\w.-]+/)*scripts/ci-[\w.-]+\.(?:py|sh)")
 WORKFLOW_REF = "${{ github.sha }}"
+PRODUCER_REF = "${{ github.event.pull_request.base.sha || github.sha }}"
 
 
 def helper_revision_errors(document):
     """Resolve each orchestration call to its preceding checkout's revision.
 
-    Candidate validators belong to the tested code. Every other ci-* helper
-    orchestrates the workflow and must follow its revision, even on an old PR.
+    Candidate validators belong to the tested code. Orchestration follows the
+    workflow revision; isolated dependency evidence follows the trusted event base.
     """
     errors = []
     for name, job in document["jobs"].items():
@@ -41,14 +42,17 @@ def helper_revision_errors(document):
                 options = step.get("with", {})
                 checkouts[options.get("path", "").removeprefix("./").rstrip("/")] = options.get("ref", WORKFLOW_REF)
             for call in HELPER_CALL.findall(step.get("run", "")):
+                call = str(Path(step.get("working-directory", "")) / call)
                 if Path(call).name == "ci-guardrails.sh":
                     continue
                 call = call.removeprefix("./")
                 owners = [path for path in checkouts if not path or call.startswith(path + "/")]
                 owner = max(owners, key=len) if owners else None
-                if owner is None or checkouts[owner] != WORKFLOW_REF:
+                expected_ref = (PRODUCER_REF if step.get("env", {}).get("ORBIT_DEPENDENCY_EXECUTION")
+                                == "isolated-source-v1" else WORKFLOW_REF)
+                if owner is None or checkouts[owner] != expected_ref:
                     errors.append(f"{name}: {step.get('name', 'run')}: {call} must use a preceding "
-                                  "checkout of github.sha (protects workflow/helper revision agreement)")
+                                  "checkout of the trusted source revision (protects workflow/helper revision agreement)")
     return errors
 
 
@@ -56,6 +60,166 @@ def helper_revision_errors(document):
 class WorkflowHelperRevisionTests(unittest.TestCase):
     def setUp(self):
         self.document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+
+    def test_dependency_producer_ignores_ambient_import_and_executable_interposition(self):
+        # Execute the real workflow command/shell. The trusted wrapper only
+        # bounds the real producer's API wait; it does not supply isolation.
+        import shlex
+        import shutil
+        import subprocess
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        step = next(s for s in self.document["jobs"]["ci"]["steps"]
+                    if s.get("name") == "Await the test build and nextest shards")
+        with tempfile.TemporaryDirectory(dir=scratch, prefix="producer-interposition-") as directory:
+            root = Path(directory)
+            trusted = root / step.get("working-directory", ".")
+            (trusted / "scripts").mkdir(parents=True)
+            reached = root / "trusted-invocation"
+            stub = (
+                f"from pathlib import Path\nPath({str(reached)!r}).write_text('reached')\n"
+                "import runpy, sys\nsys.argv += ['--timeout-seconds', '1']\n"
+                f"runpy.run_path({str(ROOT / 'scripts/ci-await-jobs.py')!r}, run_name='__main__')\n")
+            (trusted / "scripts/ci-await-jobs.py").write_text(stub)
+            git_env = dict(os.environ, HOME=str(root), GIT_CONFIG_GLOBAL="/dev/null",
+                           GIT_CONFIG_NOSYSTEM="1")
+
+            def git(*args):
+                return subprocess.run(
+                    ["git", *args], cwd=trusted, env=git_env,
+                    capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+
+            git("init")
+            git("config", "user.email", "fixture@example.invalid")
+            git("config", "user.name", "Fixture")
+            git("add", "scripts/ci-await-jobs.py")
+            git("commit", "-m", "trusted producer")
+            base = git("rev-parse", "HEAD")
+            base_object = trusted / ".git/objects" / base[:2] / base[2:]
+            trusted_commit = base_object.read_bytes()
+            trusted_bytes = root / "trusted-source.py"
+            trusted_bytes.write_text(stub)
+            command = root / "step"
+            command.write_text(step["run"])
+            marker = root / "interposed"
+            poison = root / "poison"
+            poison.mkdir()
+            attack = (f"from pathlib import Path\nPath({str(marker)!r}).write_text('interposed')\n"
+                      "print('orbit-dependency-evidence:{\"kind\":\"forged\"}')\nraise SystemExit(1)\n")
+            for module in ("argparse", "subprocess", "sitecustomize"):
+                (poison / (module + ".py")).write_text(attack)
+            for executable in ("python3", "gh"):
+                file = poison / executable
+                file.write_text(f"#!{sys.executable}\n" + attack)
+                file.chmod(0o755)
+            for case in ("pythonpath", "cwd", "python-executable", "gh-executable",
+                         "helper_overwrite", "clean_filter", "replace_object", "object_storage"):
+                with self.subTest(case=case):
+                    base_object.chmod(0o644)
+                    base_object.write_bytes(trusted_commit)
+                    git("update-ref", "-d", "refs/replace/" + base)
+                    (trusted / ".gitattributes").unlink(missing_ok=True)
+                    (trusted / "scripts/ci-await-jobs.py").write_text(stub)
+                    git("add", "scripts/ci-await-jobs.py")
+                    for module in ("argparse", "subprocess", "sitecustomize"):
+                        (trusted / "scripts" / (module + ".py")).unlink(missing_ok=True)
+                    reached.unlink(missing_ok=True)
+                    if marker.exists():
+                        marker.unlink()
+                    if case in ("helper_overwrite", "clean_filter", "replace_object", "object_storage"):
+                        # An earlier candidate step overwrites the trusted
+                        # checkout with ordinary workspace writes before launch.
+                        (trusted / "scripts/ci-await-jobs.py").write_text(attack)
+                    if case == "clean_filter":
+                        # A clean filter can hash the trusted bytes while
+                        # runpy still executes the overwritten file.
+                        (trusted / ".gitattributes").write_text(
+                            "scripts/ci-await-jobs.py filter=trusted\n")
+                        git("config", "filter.trusted.clean", "cat " + shlex.quote(str(trusted_bytes)))
+                    if case in ("replace_object", "object_storage"):
+                        # HEAD's spelling stays the trusted base, but replace
+                        # refs redirect its tree to the overwritten producer.
+                        git("add", "scripts/ci-await-jobs.py")
+                        tree = git("write-tree")
+                        replacement = git("commit-tree", tree, "-p", base, "-m", "replacement")
+                        if case == "replace_object":
+                            git("replace", base, replacement)
+                        else:
+                            # A loose-object filename is not content proof.
+                            # Replace its bytes without changing HEAD's ID.
+                            object_file = trusted / ".git/objects" / replacement[:2] / replacement[2:]
+                            base_object.write_bytes(object_file.read_bytes())
+                    path = os.environ["PATH"]
+                    if case == "python-executable":
+                        path = str(poison) + ":" + path
+                    if case == "gh-executable":
+                        gh_only = root / "gh-only"
+                        gh_only.mkdir(exist_ok=True)
+                        shutil.copy2(poison / "gh", gh_only / "gh")
+                        path = str(gh_only) + ":" + path
+                    if case == "cwd":
+                        for module in ("argparse", "subprocess", "sitecustomize"):
+                            shutil.copy2(poison / (module + ".py"), trusted / "scripts" / (module + ".py"))
+                    env = dict(PATH=path, HOME=str(root), GH_CONFIG_DIR=str(root / "config"),
+                               GITHUB_REPOSITORY="fixture/orbit", GITHUB_RUN_ID="7",
+                               GITHUB_RUN_ATTEMPT="1", GITHUB_SHA="a" * 40,
+                               GITHUB_JOB="ci", GITHUB_WORKFLOW_REF="fixture/orbit/.github/workflows/ci.yml@refs/pull/1/merge",
+                               NEXTEST_SHARDS="3")
+                    env.update(step.get("env", {}))
+                    env["ORBIT_DEPENDENCY_PRODUCER_SHA"] = base
+                    # No credentials: authentic gh refuses locally, never querying GitHub.
+                    env.pop("GH_TOKEN", None)
+                    if case == "pythonpath":
+                        env["PYTHONPATH"] = str(poison)
+                    shell = step.get("shell", "bash --noprofile --norc -e -o pipefail {0}")
+                    result = self_test_hang.run(
+                        [word.replace("{0}", str(command)) for word in shlex.split(shell)],
+                        step="dependency producer ambient " + case, cwd=trusted, env=env,
+                        text=True, capture_output=True)
+                    if case in ("helper_overwrite", "clean_filter", "replace_object", "object_storage"):
+                        self.assertFalse(reached.exists(), result.stdout + result.stderr)
+                    else:
+                        self.assertTrue(reached.exists(), result.stdout + result.stderr)
+                    self.assertFalse(marker.exists(), result.stdout + result.stderr)
+                    self.assertNotIn("orbit-dependency-evidence:", result.stdout)
+                    self.assertNotEqual(result.returncode, 0)
+                    for module in ("argparse", "subprocess", "sitecustomize"):
+                        (trusted / "scripts" / (module + ".py")).unlink(missing_ok=True)
+
+    def test_doctest_step_accepts_a_candidate_with_the_previous_guard_cli(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch, prefix="workflow-doctests-") as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            # The workflow may advance while a PR head still has the previous
+            # guard interface. Execute the actual step against that boundary.
+            guard = scripts / "ci-guardrails.sh"
+            guard.write_text("#!/bin/sh\necho 'old candidate guard: unsupported mode' >&2\nexit 2\n")
+            guard.chmod(0o755)
+            lint = scripts / "with-test-build-lint.sh"
+            lint.write_bytes((ROOT / "scripts/with-test-build-lint.sh").read_bytes())
+            lint.chmod(0o755)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            cargo = bin_dir / "cargo"
+            cargo.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
+                             "print(json.dumps(sys.argv[1:]))\n"
+                             "raise SystemExit(int(os.environ['DOC_EXIT']))\n")
+            cargo.chmod(0o755)
+            step = next(step for step in self.document["jobs"]["test-build"]["steps"]
+                        if step.get("name") == "Run workspace doctests")
+            for status in (0, 9):
+                with self.subTest(status=status):
+                    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", DOC_EXIT=str(status))
+                    result = self_test_hang.run(
+                        ["bash", "-euo", "pipefail", "-c", step["run"]],
+                        step="old-candidate doctest workflow", cwd=root, env=env,
+                        text=True, capture_output=True)
+                    self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(result.stdout),
+                                     ["test", "--no-fail-fast", "--workspace", "--doc"])
 
     def test_every_pr_head_job_routes_orchestration_to_the_workflow_revision(self):
         for path in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
@@ -77,6 +241,8 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                     candidate = copy.deepcopy(self.document)
                     candidate["jobs"][job_name]["steps"][index]["run"] = step["run"].replace(
                         call, "scripts/" + Path(call).name)
+                    if step.get("working-directory"):
+                        candidate["jobs"][job_name]["steps"][index]["working-directory"] = "."
                     with self.subTest(job=job_name, call=call):
                         self.assertTrue(helper_revision_errors(candidate), "PR-head helper call must fail")
                     checked += 1
@@ -133,16 +299,19 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
             bin_dir = root / "bin"
             bin_dir.mkdir()
             gh = bin_dir / "gh"
-            # Transport fixture: the upload succeeded but the build is still
-            # running, so success requires the real helper's --step behavior.
+            # Transport fixture: the last upload succeeded but the build is
+            # still running, so success requires the real helper's --step behavior.
+            upload = [step["name"] for step in self.document["jobs"]["test-build"]["steps"]
+                      if step.get("name", "").startswith("Upload nextest archive")][-1]
             job = {"name": "Test build", "status": "in_progress", "conclusion": None,
-                   "steps": [{"name": "Upload nextest archive", "status": "completed",
-                              "conclusion": "success"}]}
-            gh.write_text(f"#!{sys.executable}\nprint({json.dumps(job)!r})\n")
+                   "steps": [{"name": upload, "status": "completed", "conclusion": "success"}]}
+            gh.write_text(f"#!{sys.executable}\nimport sys\n"
+                          f"print('HTTP/2.0 200 OK\\n\\n' + {json.dumps({'total_count': 1, 'jobs': [job]})!r} "
+                          f"if '--include' in sys.argv else {json.dumps(job)!r})\n")
             gh.chmod(0o755)
             env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
                        GITHUB_REPOSITORY="fixture/repository", GITHUB_RUN_ID="1")
-            bindings = {WORKFLOW_REF: workflow,
+            bindings = {WORKFLOW_REF: workflow, PRODUCER_REF: workflow,
                         "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}": old}
             for job_name in ("docs", "ci", "test-build", "test-1", "test-2", "test-3"):
                 with self.subTest(job=job_name):
@@ -170,9 +339,9 @@ class WorkflowHelperRevisionTests(unittest.TestCase):
                         result = run(["bash", "-euo", "pipefail", "-c", step["run"]],
                                      cwd=checkout, check=False, env=env)
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                        self.assertIn("passed step 'Upload nextest archive'", result.stdout)
+                        self.assertIn(f"passed step '{upload}'", result.stdout)
                         negative = run([sys.executable, "scripts/ci-await-jobs.py", "--job", "Test build",
-                                        "--step", "Upload nextest archive"], cwd=checkout, check=False)
+                                        "--step", upload], cwd=checkout, check=False)
                         self.assertEqual(negative.returncode, 2, negative.stderr)
                         self.assertIn("unrecognized arguments: --step", negative.stderr)
                     self.assertEqual(run(["git", "rev-parse", "HEAD"], cwd=checkout).stdout.strip(), old)

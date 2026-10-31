@@ -61,6 +61,21 @@ fn agent_envelopes_never_fall_back_to_human_attribution() {
             "claude",
         ),
         (&[("ORBIT_AGENT_MODEL", "gpt-5")], "codex"),
+        (
+            &[
+                ("ORBIT_AGENT_NAME", "muse"),
+                ("ORBIT_AGENT_MODEL", "muse-wonder-1.0"),
+            ],
+            "muse",
+        ),
+        (&[("ORBIT_AGENT_MODEL", "muse-wonder-1.0")], "muse"),
+        (
+            &[
+                ("ORBIT_AGENT_NAME", "muse"),
+                ("ORBIT_AGENT_MODEL", "claude-sonnet-5"),
+            ],
+            "unknown",
+        ),
         (&[], "human:fixture-user"),
         (&[("ORBIT_ACTOR", "named-human")], "named-human"),
         (&[("ORBIT_OPERATOR", "1")], "operator"),
@@ -111,7 +126,7 @@ fn process_actor_is_used_for_task_attribution() {
     assert_eq!(actor.label, expected);
     let expected_kind = match expected.as_str() {
         "unknown" => ActorKind::Unknown,
-        "claude" | "codex" => ActorKind::Agent,
+        "claude" | "codex" | "muse" => ActorKind::Agent,
         _ => ActorKind::Human,
     };
     assert_eq!(actor.kind, expected_kind);

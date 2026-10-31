@@ -11,7 +11,8 @@
 //!
 //! [ORB-14260] A claimed worker whose owner calls could not reach its run's
 //! coordinator declares `owner_route_unavailable`; repair cannot open the
-//! route either, so that run takes the same skip.
+//! route either, so that run takes the same skip. [ORB-19224] So does one
+//! whose required check its own sandbox refuses (`validation_route_unavailable`).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -33,9 +34,9 @@ use orbit_types::workflow::activity_job::{
     Provider, V2AuditEvent, V2AuditEventKind,
 };
 use orbit_types::workflow::{
-    BaselineRedHold, failed_provider, is_baseline_red_failure, is_owner_route_unavailable,
-    is_provider_capacity_exhausted, is_provider_failure, is_provider_refusal,
-    is_provider_unavailable,
+    BaselineRedHold, ClaimFailureClass, failed_provider, is_baseline_red_failure,
+    is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
+    is_provider_refusal, is_provider_unavailable, is_validation_route_unavailable,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -86,13 +87,27 @@ impl FakeProvider {
         exit_code: i32,
         before: &str,
     ) -> Self {
+        Self::with_usage_command(binary, stdout, stderr, exit_code, before, "exit 1")
+    }
+
+    /// Keep native quota reads separate from model turns and their side effects.
+    pub(super) fn with_usage_command(
+        binary: &str,
+        stdout: &str,
+        stderr: &str,
+        exit_code: i32,
+        before: &str,
+        usage_command: &str,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(binary);
         let invocations = dir.path().join("invocations");
         fs::write(
             &path,
             format!(
-                "#!/bin/sh\ncat > /dev/null\necho invoked >> '{}'\n{before}\n\
+                "#!/bin/sh\ncat > /dev/null\n\
+                 if [ \"$1\" = '--print' ] && [ \"$2\" = '/usage' ]; then\n{usage_command}\nexit 1\nfi\n\
+                 echo invoked >> '{}'\n{before}\n\
                  cat <<'STDOUT'\n{stdout}\nSTDOUT\ncat >&2 <<'STDERR'\n{stderr}\nSTDERR\n\
                  exit {exit_code}\n",
                 invocations.display()
@@ -112,11 +127,13 @@ impl FakeProvider {
 
 pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,
@@ -132,6 +149,7 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 
@@ -245,6 +263,13 @@ impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         let mut env = allowlisted_child_env(&[], required_env_vars);
+        // Fake Grok runs must never read the host's real login or billing API.
+        if required_env_vars.contains(&"GROK_HOME") {
+            env.push((
+                "GROK_HOME".to_string(),
+                self.worktree.join("grok-home").display().to_string(),
+            ));
+        }
         env.extend(self.agent_env.iter().cloned());
         env
     }
@@ -254,6 +279,8 @@ impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
         Ok(ResolvedCliExecutor {
             command: self.cli.to_string_lossy().into_owned(),
             args: Vec::new(),
+            inspection_args: None,
+            image_input: None,
         })
     }
 
@@ -747,6 +774,64 @@ fn a_declared_owner_route_failure_skips_recovery() {
     assert_eq!(host.calls("handoff").len(), 1);
 }
 
+/// [ORB-19224] A Mac worker whose `orbit plugin test` was refused because its
+/// own Seatbelt profile refuses the backend's declares
+/// `validation_route_unavailable`. Before the typed route that envelope
+/// reached final recovery, which escalated it as human-only; now it skips both
+/// recoveries, keeps the candidate as a validation-environment failure, and a
+/// claimed leaf releases its claim instead of blocking the task.
+fn a_declared_validation_route_failure_skips_recovery() {
+    let worktree = tempfile::tempdir().unwrap();
+    let fake = FakeProvider::new(
+        "claude",
+        r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"validation_route_unavailable","message":"orbit plugin test: sandbox-exec: sandbox_apply: Operation not permitted"}}"#,
+        "",
+        0,
+        "",
+    );
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let run = run_job(
+        &implementation_job(agent_spec(Provider::Claude)),
+        &host,
+        "validation-route-run",
+    );
+
+    let message = failure_message(&run.outcome);
+    assert!(
+        is_validation_route_unavailable(None, Some(&message)),
+        "the run keeps the typed marker: {message}"
+    );
+    assert_eq!(
+        ClaimFailureClass::of_step_failure(None, Some(&message)),
+        Some(ClaimFailureClass::Environment),
+        "a claimed leaf releases the claim as the lane's failure: {message}"
+    );
+    assert_eq!(fake.invocations(), 1, "the step is not rerun");
+    assert!(host.calls("step_fix").is_empty(), "no step recovery runs");
+    assert_eq!(
+        *host.final_recovery_admissions.lock().unwrap(),
+        0,
+        "final recovery is not admitted"
+    );
+    assert!(host.calls("decide").is_empty(), "no final recovery runs");
+    assert_eq!(
+        count(&run.events, |kind| matches!(
+            kind,
+            V2AuditEventKind::FinalRecoveryAttempted { outcome, detail, .. }
+                if outcome == "skipped"
+                    && detail.as_deref().is_some_and(|detail| detail.contains("host replay"))
+        )),
+        1,
+        "the skip is audited with the route's reason"
+    );
+    let handoff = host.calls("handoff");
+    assert_eq!(handoff.len(), 1, "the failure handoff keeps the candidate");
+    assert_eq!(
+        handoff[0]["error_code"], "validation_environment",
+        "{handoff:?}"
+    );
+}
+
 /// Every failure that is not provider capacity still gets step recovery and
 /// its post-recovery attempt: a failed exit (whose answer may even quote the
 /// capacity text) and a declared `status: "failed"` envelope. A timeout takes
@@ -989,6 +1074,61 @@ esac
     }
 }
 
+/// A failed `parallel:` join keeps a branch's provider failure, like fan-out.
+fn parallel_join_keeps_a_branch_provider_failure() {
+    let fake = FakeProvider::new("codex", "", "", 1, "");
+    fs::write(&fake.path, r#"#!/bin/sh
+prompt=$(cat)
+case "$prompt" in
+  *provider-branch*)
+    echo '{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}'
+    exit 1
+    ;;
+  *)
+    echo '{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"work_failed","message":"ordinary work failure"}}'
+    exit 0
+    ;;
+esac
+"#).unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let mut spec = agent_spec(Provider::Codex);
+    spec.instruction = "{{ input.label }}".into();
+    for labels in [
+        ["ordinary-branch", "provider-branch"],
+        ["provider-branch", "ordinary-branch"],
+    ] {
+        let branches: Vec<Value> = labels
+            .iter()
+            .map(|label| {
+                json!({
+                    "id": label,
+                    "spec": ActivityV2Spec::AgentLoop(spec.clone()),
+                    "default_input": {"label": label},
+                })
+            })
+            .collect();
+        let job = load_job_asset(
+            &json!({
+                "schemaVersion": 2, "kind": "Job", "metadata": {"name": "parallel_failure"},
+                "spec": {"state": "enabled", "kind": "workflow", "steps": [{
+                    "id": "branches",
+                    "parallel": {"branches": branches, "join": {"mode": "all"}},
+                }]},
+            })
+            .to_string(),
+        )
+        .unwrap()
+        .spec;
+        let run = run_job(&job, &host, "parallel-mixed-failure");
+        let message = failure_message(&run.outcome);
+        assert!(
+            is_provider_capacity_exhausted(None, Some(&message)),
+            "a branch provider failure must form a hold despite an ordinary failure: {message}"
+        );
+    }
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn provider_failure_contracts_1() {
@@ -997,6 +1137,10 @@ fn provider_failure_contracts_1() {
             (
                 "fan_out_prefers_a_provider_failure_over_an_ordinary_failure",
                 fan_out_prefers_a_provider_failure_over_an_ordinary_failure,
+            ),
+            (
+                "parallel_join_keeps_a_branch_provider_failure",
+                parallel_join_keeps_a_branch_provider_failure,
             ),
             (
                 "capacity_is_typed_only_from_text_the_failed_provider_wrote",
@@ -1026,6 +1170,10 @@ fn provider_failure_contracts_2() {
             (
                 "a_declared_owner_route_failure_skips_recovery",
                 a_declared_owner_route_failure_skips_recovery,
+            ),
+            (
+                "a_declared_validation_route_failure_skips_recovery",
+                a_declared_validation_route_failure_skips_recovery,
             ),
             (
                 "other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt",

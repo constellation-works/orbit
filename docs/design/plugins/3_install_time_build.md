@@ -5,10 +5,10 @@ summary: "Threat model and binding decisions for an opt-in spec.build that build
 owner: claude
 status: Accepted
 tags: [plugins, security, sandbox, supply-chain, install]
-paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-core/src/runtime/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install/**", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-runtime/src/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install/**", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
-last_updated: 2026-10-22
+last_updated: 2026-10-27
 last_validated: 2026-10-22
 ---
 
@@ -468,9 +468,9 @@ Where the implementation makes a decision above more precise:
 
 ## Task References
 
-- ORB-12878: this threat model.
-- ORB-12843: the plugin-source review it was split from.
-- ORB-12874: digest-pinned `https://` archive sources, the recommended alternative.
-- ORB-12816: the consent gate for `orbit plugin test`.
+- [ORB-12878] — authored this threat model.
+- [ORB-12843] — ran the plugin-source review it was split from.
+- [ORB-12874] — built digest-pinned `https://` archive sources, the recommended alternative.
+- [ORB-12816] — built the consent gate for `orbit plugin test`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

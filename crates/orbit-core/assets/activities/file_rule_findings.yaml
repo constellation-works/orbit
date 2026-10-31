@@ -1,0 +1,79 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: file_rule_findings
+spec:
+  type: deterministic
+  description: >
+    Keep one task per rule-result fingerprint from a results document in the
+    ux-rules.json schema, written by any workspace script. A new failing
+    fingerprint files one proposed bug task carrying the fingerprint in its
+    rule_fingerprint field, the measurements, the evidence (attached when
+    the evidence files are reachable) and a reproduce command naming the
+    rule and target. An open owner is commented only when its measurements
+    changed; a fingerprint that passes again gets exactly one comment and no
+    status change. Rule errors file one task per rule, tagged
+    ux-rules-error. New tasks per run are capped at ux_rules.max_new_tasks,
+    highest severity first; results below ux_rules.file_at and for disabled
+    rules are recorded in the output only. The filer is surface-agnostic: it
+    reads rule ids, targets, statuses, severities, measurements, evidence
+    and fingerprints, and nothing specific to any UI or CLI.
+  input_schema_json:
+    type: object
+    properties:
+      results:
+        type: object
+        description: >
+          One rule-results document ({schema_version, surface, commit,
+          results: [{rule, target, status, severity, measurements,
+          evidence, fingerprint}]}). Give this or results_file.
+      results_file:
+        type: string
+        description: Path of a rule-results file, resolved under the workspace root when relative. Evidence paths resolve beside it.
+      evidence_dir:
+        type: string
+        description: Directory evidence paths in an inline results document resolve against.
+      max_new_tasks:
+        type: [number, 'null']
+        minimum: 1
+        maximum: 50
+        description: Optional run override for ux_rules.max_new_tasks.
+      file_at:
+        type: string
+        enum: [critical, high, medium, low, nit]
+        description: Optional run override for ux_rules.file_at.
+      runner:
+        type: string
+        description: Optional run override for ux_rules.runner, used in filed tasks' reproduce commands.
+      disabled:
+        type: array
+        items:
+          type: string
+        description: Rule ids to record only, in addition to ux_rules.disabled.
+  output_schema_json:
+    type: object
+    required: [outcome, counts, filed_count, filed, commented, skipped_existing, skipped_over_cap, recorded_only, max_new_tasks, file_at]
+    properties:
+      outcome:
+        type: string
+      counts:
+        type: object
+        description: Result counts by status (pass, fail, error, skipped).
+      filed_count:
+        type: number
+      filed:
+        type: array
+      commented:
+        type: array
+      skipped_existing:
+        type: array
+      skipped_over_cap:
+        type: array
+      recorded_only:
+        type: array
+      max_new_tasks:
+        type: number
+      file_at:
+        type: string
+  action: file_rule_findings
+  config: {}

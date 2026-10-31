@@ -9,16 +9,18 @@ feature: host-registry
 tags: [host-registry, federated-mcp, task-migration, spec]
 related_features: [host-registry, federated-mcp, task-migration, distributed-drain]
 related_artifacts: [ORB-14449, ORB-14448, ORB-14447]
+last_updated: 2026-10-26
 ---
 
 # Spec: Host routing
 
-A task id's prefix names the host that holds it. Any task call that addresses a single task
-by id, made without an explicit workspace selector, is delivered to that host. If the prefix
-is the local host's, the call runs in-process. If it is a registered remote host's, the call
-goes there over the federated route. Any other prefix fails closed. Separately, `--host`
-names a host for workspace and pull selection, and resolves to the host-qualified selector
-that the host itself lists. Status: implemented in [ORB-14449], on top of
+A task ID's prefix names the host that holds it. Routed CLI calls and federated MCP calls
+that address one task by ID without an explicit workspace selector deliver it to that host.
+If the prefix is the local host's, the call runs in-process. If it is a registered remote
+host's, the call goes there over the federated route. Any other prefix fails closed. Direct
+v1 MCP servers do not relay: an ID-only call for a remote prefix returns `task_prefix_remote`.
+Separately, `--host` names a host for workspace and pull selection, and resolves to the
+host-qualified selector that the host itself lists. Status: implemented in [ORB-14449], on top of
 [host-commands](./host-commands.md) ([ORB-14448]).
 
 ## Why This Exists
@@ -73,14 +75,17 @@ For an id-routed tool:
    call carries no selector, so the federated rule that refuses task reads on a replica
    selector (`capability_refused`) does not come into play. The prefix's host is the
    task's writer by definition. The `task_reads` entry in the federated conformance reference
-   gains the id-only routed case.
+   includes the id-only routed case.
 4. **Anything else** fails with `unknown_task_prefix`, naming the prefix and pointing to
    `orbit host list` and `orbit host add`.
 
 ### Where routing applies
 
 - **CLI.** Every `orbit task` subcommand that wraps an id-routed tool, and
-  `orbit tool run <id-routed tool>`.
+  `orbit tool run <id-routed tool>`. A routed `orbit task artifact get --out <FILE>` writes
+  the holder's stored bytes, text or binary, through the same export as a local read, and
+  reports the stored `size`. Without `--out` it prints only text and refuses any other
+  payload with the `ssh <host> orbit task artifact get … --out <FILE>` to run.
 - **Federated MCP** (`--mode federated`). An id-only call routes by prefix. This amends the
   federated rule that `orbit.task.show` requires a host-qualified selector. A call that
   carries a selector keeps that rule.
@@ -121,7 +126,9 @@ local host is allowed.
 It is accepted:
 
 - with `--workspace` on the routable task commands: `orbit task show`, `update`,
-  `artifact put|get`, `review-reset`, and `reconcile-review …`, and on `orbit tool run`;
+  `artifact put|get`, `review-reset`, `reconcile-review …`, and `requeue`, and on `orbit tool run`;
+- with `--workspace` on `orbit task recover-claim` and `orbit task revoke-handoff`, which are not
+  id-routed;
 - with `--pull` on `orbit run auto`.
 
 To resolve, Orbit reads the host's live workspace list and matches the workspace value by
@@ -139,7 +146,7 @@ by concatenation, which keeps federated selector rule 2.
 the value is a full selector: Orbit never picks a host by itself.
 
 Commands that open a host-local runtime directly reject `--host` at parse time. These include
-`task list`, `task add`, other task commands outside the routable set above, `run history`,
+`task list`, `task add`, other task commands outside the sets above, `run history`,
 `run logs`, `run show`, `doctor`, `workspace …`, `config …`, `update` and the deploy targets.
 Pass `--host` after the routable task subcommand, rather than on the `task` group.
 The error gives the command to run on that host:
@@ -164,3 +171,13 @@ JSON input, or run the task command on that host over SSH.
 
 Specified by opus during on-call ORB-14441 at Daniel's direction (2026-10-07), for
 implementation in [ORB-14449].
+
+## Task References
+
+- [DANI-10433] identified replica worktree GC querying the wrong host (historical incident citation).
+- [ORB-14441] coordinated the operator-approved host-registry specifications and delivery.
+- [ORB-14447] fixed replica GC lookup of locally owned task IDs.
+- [ORB-14448] implemented the host file and orbit host operations.
+- [ORB-14449] implemented task-prefix routing and --host selection.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

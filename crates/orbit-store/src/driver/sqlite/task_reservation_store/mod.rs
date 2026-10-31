@@ -1,8 +1,12 @@
 //! SQLite task reservations and workspace claims.
 //!
 //! `reservations` holds the `Store` reservation API; `rows` the SQL helpers
-//! and row mapping it shares with `workspace_claim`.
+//! and row mapping it shares with `workspace_claim` and `leases`.
 
+mod holder_list;
+mod lease_queue;
+mod leases;
+pub(crate) mod notices;
 mod reservations;
 mod rows;
 mod workspace_claim;

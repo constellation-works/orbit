@@ -33,6 +33,41 @@ helper. Its streaming omission marker is part of the output contract.
 All existing unit tests remain. Retirement tasks can use this mapping when
 removing duplicated cases.
 
+The registered `fallback.json` byte-window cases also cover opaque values after
+`Bearer`, Authorization headers, and API-key assignments. Assignment keys are
+normalized to lowercase alphanumerics and match an `apikey` suffix at a root
+key or a separator, case transition, or uppercase `API` acronym boundary.
+This covers prefix segments such as `x-api-key` and `my_api_key`,
+camelCase/acronym spellings including `serviceApiKey`, `serviceAPIKey`,
+`HTTPApiKey`, `HTTPAPIKey` and `SERVICEAPIKey`, and surrounding quotes/brackets.
+Original character positions distinguish these segments from an unseparated
+name such as `capiKey`;
+`api_keyboard` and `serviceApiKeyboard` remain noncredential names. Compact `key=value`,
+quoted values, and whitespace on either side of `=` use the same classification.
+Ordinary assignments and similar noncredential names retain their cut text. Complementary
+value cuts and cuts inside introducers must omit the value while retaining raw
+source coordinates and selected-byte counts. Complete Bearer context and harmless
+cut words remain readable; EOF, newlines, collector batch boundaries, and capped
+head/tail display exercise the same public `github.run.logs` path. Classification
+retains at most 16 KiB of original line-prefix context, carrying pending
+introducers across newlines. If that bound is exceeded, affected display bytes
+are conservatively omitted until the next context reset.
+
+Registered line-window fixtures exercise the same introducers on both primary
+and fallback job logs, with full-log controls and step-plus-line selections.
+Discarded lines still contribute bounded original payload token context. Runner
+timestamps and job/step columns are excluded from that context and remain
+readable when a credential value on the following selected line is masked. Values
+whose introducer falls outside the selection are masked with asterisks before excerpt
+retention, preserving raw selected byte/line counts and source coordinates.
+A capped head/tail cut that separates an in-selection introducer from its value
+omits that value when the introducer is inside the tail cut's display lookbehind
+(the same 16 KiB bound, with the same newline reset). A token the redactor
+already recognizes on its own stays for in-place redaction. Raw selected byte
+and line counts stay the source counts.
+EOF, collector batch boundaries, overlong context, capped displays and ordinary
+line/step selections are covered without live GitHub access or authentication.
+
 ## Carrier cost and boundary coverage
 
 Rows write `golden row start: <suite>/<fixture>` to stderr before source
@@ -139,6 +174,9 @@ target, not a hosted speedup or the whole-job 900-second budget.
 | `bounded_logs.rs` | `an_abbreviated_and_a_full_spelling_are_one_commit` | `streamed.golden.json` |
 | `bounded_logs.rs` | `merge_parents_quoted_in_a_checkout_subject_are_not_checkout_identity` | `streamed.golden.json` |
 | `bounded_logs.rs` | `two_checkout_steps_naming_different_commits_stay_two_commits` | `streamed.golden.json` |
+| `bounded_logs.rs` | `a_nested_helper_checkout_is_not_a_second_commit` | `streamed.golden.json` |
+| `bounded_logs.rs` | `two_checkouts_of_one_workspace_directory_stay_two_commits` | `streamed.golden.json` |
+| `bounded_logs.rs` | `a_checkout_directory_without_an_ancestor_is_kept` | `streamed.golden.json` |
 | `bounded_logs.rs` | `an_abbreviation_with_rival_expansions_is_not_resolved_to_a_guess` | `streamed.golden.json` |
 | `bounded_logs.rs` | `long_log_retains_complete_middle_command_independently_of_display` | `streamed.golden.json` |
 | `bounded_logs.rs` | `incomplete_ambiguous_and_source_limited_commands_are_not_complete_units` | `streamed.golden.json` |

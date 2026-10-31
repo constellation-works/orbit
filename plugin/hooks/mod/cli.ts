@@ -1,7 +1,5 @@
-// How the Orbit mod reaches Orbit: the `orbit` CLI, run in the session's
-// checkout when this machine owns the workspace, or over SSH on the owner
-// host the `ownerHost` option names when the checkout is a replica. Pure
-// helpers only: register.tsx runs the commands they build.
+// How the Orbit mod reaches Orbit: locally, or over SSH to the `ownerHost`
+// host for a replica checkout. Pure helpers only; register.tsx runs the commands they build.
 
 import { firstLine } from './model'
 

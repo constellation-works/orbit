@@ -161,9 +161,21 @@ fn refresh_defaults_preserves_a_user_authored_terra_crew() {
     .expect("initialization seeds config");
 
     let config_path = global_root.join("config.toml");
-    let mut config = fs::read_to_string(&config_path).expect("read seeded config");
-    config.push_str("\n[crews.terra]\nmodel = \"gpt-5.6-terra\"\nprovider = \"codex\"\n");
-    fs::write(&config_path, config).expect("add user crew");
+    // Model an existing installation where the user supplied Terra before it
+    // became a built-in crew, without appending a duplicate TOML table.
+    let mut config: toml::Table = fs::read_to_string(&config_path)
+        .expect("read seeded config")
+        .parse()
+        .expect("seeded config is valid TOML");
+    config["crews"]["terra"] = toml::Value::Table(toml::Table::from_iter([
+        ("model".into(), toml::Value::String("gpt-5.6-terra".into())),
+        ("provider".into(), toml::Value::String("codex".into())),
+    ]));
+    fs::write(
+        &config_path,
+        toml::to_string(&config).expect("serialize config"),
+    )
+    .expect("write user-authored crew");
 
     init_workspace_at_root(
         &global_root,

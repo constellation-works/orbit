@@ -22,8 +22,10 @@ page.on('pageerror', error => errors.push(String(error)));
 await page.route('**/static/app.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
 const boot = async () => {
   await page.evaluate(async () => {
+    // The dock lives on Tasks. Show its pane while app.js is stubbed.
+    const dock = document.getElementById('side-dock');
     for (const pane of document.querySelectorAll('.tab-pane')) {
-      pane.classList.toggle('active', pane.dataset.tab === 'tasks');
+      pane.classList.toggle('active', pane.contains(dock));
     }
     const { initLogTail } = await import('/static/js/log-tail.js');
     initLogTail();
@@ -91,7 +93,7 @@ try {
     const { setDockMode } = await import('/static/js/log-tail.js');
     setDockMode('log');
   });
-  assert.ok(await agent.isVisible(), 'the log fixture must select the Tasks pane and Log dock');
+  assert.ok(await agent.isVisible(), 'the log fixture must show the dock pane and Log dock');
   const initial = await checkOrder('item.started');
   const home = await page.locator('#logInner .log-line[data-level="error"] .m code[title]').allTextContents();
   assert.ok(home.includes('~/workspace/project'), `home path must shorten: ${home}`);
@@ -163,9 +165,49 @@ try {
   assert.ok((await bar.textContent()).startsWith('item.started'), 'enabling agent output must redraw the newest relay');
   assert.ok(!(await bar.textContent()).includes('{"type"'), `relay line must be shortened to its kind: ${await bar.textContent()}`);
   await page.screenshot({ path: path.join(evidence, 'statusbar-relay-1440.png'), clip: { x: 0, y: 940, width: 1440, height: 60 } });
+
+  // ORB-13483 states history dropped while paused with a gap notice. After an
+  // ordinary 50-row snapshot, 201 paused events overflow the 200-event
+  // buffer by one; resuming must keep that notice past the 200 retained rows
+  // rather than trimming it with them. A later short pause has no stale count.
+  const orbitLine = (step) => `${JSON.stringify({
+    timestamp: '2026-10-07T01:10:00Z', level: 'INFO', target: 'orbit.job.step_started',
+    fields: { job_run_id: 'http-log-fixture', step_id: step },
+  })}\n`;
+  fs.appendFileSync(logPath, Array.from({ length: 50 }, (_, i) => orbitLine(`snapshot-${i}`)).join(''));
+  await page.reload();
+  await boot();
+  await page.waitForFunction(() => document.querySelectorAll('#logInner .log-line').length === 50);
+  const buffered = page.locator('#log-buffered-count');
+  await page.click('#log-follow-tail');
+  fs.appendFileSync(logPath, Array.from({ length: 201 }, (_, i) => orbitLine(`paused-${i}`)).join(''));
+  await page.waitForFunction(() => document.getElementById('log-buffered-count').textContent === '200 buffered · 1 discarded');
+  await page.click('#log-follow-tail');
+  const flushed = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#logInner .log-line')];
+    const gaps = rows.filter(row => row.dataset.gap === 'true');
+    return {
+      logRows: rows.length - gaps.length,
+      gaps: gaps.map(row => ({ text: row.querySelector('.m').textContent, visible: getComputedStyle(row).display !== 'none', index: rows.indexOf(row) })),
+      newest: rows[0].textContent.includes('paused-200'),
+    };
+  });
+  assert.equal(flushed.logRows, 200, `the row cap still holds after the flush: ${JSON.stringify(flushed)}`);
+  assert.deepEqual(flushed.gaps, [{ text: '1 older line discarded while paused', visible: true, index: 200 }], `the discarded-history notice survives the flush below the newest 200 rows: ${JSON.stringify(flushed)}`);
+  assert.ok(flushed.newest, 'the newest paused event leads the dock');
+  assert.equal(await buffered.isVisible(), false, 'the paused count clears once the buffer is shown');
+  await page.locator('#logInner .log-line[data-gap="true"]').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'log-gap-after-resume-1440.png'), fullPage: false });
+  await page.click('#log-follow-tail');
+  fs.appendFileSync(logPath, orbitLine('short-pause'));
+  await page.waitForFunction(() => document.getElementById('log-buffered-count').textContent.endsWith('buffered'));
+  assert.equal(await buffered.textContent(), '1 buffered', 'a later short pause carries no stale discard count');
+  assert.equal(await buffered.getAttribute('title'), '', 'nor a stale discard explanation');
+  await page.click('#log-follow-tail');
+
   assert.deepEqual(errors, [], 'dashboard log module must not raise browser errors');
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ passed: true, chromium: browser.version(), viewport: { width: 1440, height: 1000 }, initial, final, errors }, null, 2));
-  console.log('PASS: real log API, 1440px message priority, path and target titles, snapshot/live/paused filtering, severity composition, and reload persistence');
+  console.log('PASS: real log API, 1440px message priority, path and target titles, snapshot/live/paused filtering, severity composition, reload persistence, and the paused-overflow gap notice kept after resume');
 } finally {
   await browser.close();
 }

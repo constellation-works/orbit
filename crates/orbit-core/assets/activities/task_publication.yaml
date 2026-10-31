@@ -1,0 +1,16 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: task_publication
+spec:
+  type: deterministic
+  description: >
+    Publish this workspace's task recovery snapshot using its owner-local
+    publication binding and configured routine attachment policy. Unbound
+    workspaces skip successfully; publication errors fail the run.
+  input_schema_json:
+    type: object
+  output_schema_json:
+    type: object
+  action: task_publication
+  config: {}

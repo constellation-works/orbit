@@ -33,6 +33,8 @@ use crate::{Tool, ToolContext, ToolExecutionKind};
 pub struct PluginToolBinding {
     pub provenance: PluginProvenance,
     pub execution_kind: PluginExecutionKind,
+    /// Manifest declaration, active only after the host verifies consent.
+    pub agent_callable: bool,
     /// Set on an inactive entry: why the plugin is not on the active surface
     /// and what would fix it.
     pub diagnostic: Option<String>,
@@ -175,6 +177,9 @@ impl PluginTool {
             &spec.allowed_tools(ctx),
         )?;
         callback.stamp_env(&mut environment);
+        // The decision-channel callbacks read a store no plugin child may
+        // read, so the child reaches them through this host.
+        callback.open_host_route(ctx.orbit_host.as_ref())?;
         // A call the broker runs for an agent is held to that agent's
         // profile as well as the plugin's (design
         // `docs/design/plugins/2_agent_call_broker.md` §5).

@@ -110,7 +110,7 @@ pub(super) fn error_class(error: &OrbitError) -> String {
             "unreachable_destination".to_string()
         }
         OrbitError::HostRegistry { code, .. } => code.as_str().to_string(),
-        OrbitError::RemoteTool { code, .. } => code.clone(),
+        OrbitError::RemoteTool { code, .. } => code.to_string(),
         _ => "probe_failed".to_string(),
     }
 }

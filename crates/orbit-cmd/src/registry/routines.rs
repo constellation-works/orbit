@@ -184,16 +184,15 @@ pub fn routine_status_input_paths(
         ] {
             paths.push(root.join(directory));
         }
+        // Persistence paths derive from the two roots alone, never from the
+        // config document, so the memo's input set needs no config load per
+        // workspace (every workspace resolves the same global store paths).
         // A workspace whose config does not load is reported by status as a
         // load error; its config files above still invalidate once fixed.
-        let Ok(config) =
-            orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(global_root, &root))
-        else {
-            continue;
-        };
-        paths.push(config.persistence.job_dir);
-        paths.push(config.persistence.activity_dir);
-        let database = config.persistence.audit_db;
+        let persistence = orbit_config::PersistenceConfig::default_for_roots(global_root, &root);
+        paths.push(persistence.job_dir);
+        paths.push(persistence.activity_dir);
+        let database = persistence.audit_db;
         paths.push(database.with_file_name(format!(
             "{}-wal",
             database.file_name().unwrap_or_default().to_string_lossy()

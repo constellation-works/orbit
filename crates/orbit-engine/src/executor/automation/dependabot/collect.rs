@@ -34,28 +34,42 @@ pub(super) fn collect<Q: DependabotQueries + ?Sized>(
     queries: &Q,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    let dependabot_limit = bounded_u64(input, "max_alerts", DEFAULT_LIMIT, MAX_LIMIT)?;
-    let code_limit = bounded_u64(input, "max_code_scanning_alerts", DEFAULT_LIMIT, MAX_LIMIT)?;
+    let dependabot_limit = bounded_u64(input, "max_alerts", DEFAULT_LIMIT, MAX_LIMIT)?.max(1);
+    let code_limit =
+        bounded_u64(input, "max_code_scanning_alerts", DEFAULT_LIMIT, MAX_LIMIT)?.max(1);
     let secret_limit = bounded_u64(
         input,
         "max_secret_scanning_alerts",
         DEFAULT_LIMIT,
         MAX_LIMIT,
-    )?;
+    )?
+    .max(1);
     let location_limit = bounded_u64(
         input,
         "max_secret_locations",
         DEFAULT_LOCATION_LIMIT,
         MAX_LIMIT,
-    )?;
-    let pr_limit = bounded_u64(input, "max_pull_requests", DEFAULT_LIMIT, MAX_LIMIT)?;
+    )?
+    .max(1);
+    let pr_limit = bounded_u64(input, "max_pull_requests", DEFAULT_LIMIT, MAX_LIMIT)?.max(1);
     let repo = optional_input_string(input, "repo");
     let auth = queries.auth_status();
     if !auth.usable() {
         return unavailable_snapshot(&auth, &auth.detail);
     }
 
-    let repository = queries.repo_view(repo.as_deref())?;
+    let mut dependabot_errors = Vec::new();
+    let repository = match queries.repo_view(repo.as_deref()) {
+        Ok(repository) => repository,
+        Err(error) => {
+            dependabot_errors.push(json!({
+                "query": "repo_view",
+                "error": redact_all(&error.to_string()),
+                "retryable": true,
+            }));
+            json!({})
+        }
+    };
     let dependabot = family_data(
         queries.open_alerts(repo.as_deref(), dependabot_limit),
         &auth,
@@ -69,7 +83,6 @@ pub(super) fn collect<Q: DependabotQueries + ?Sized>(
         &auth,
     );
 
-    let mut dependabot_errors = Vec::new();
     let pull_requests = if dependabot.collected {
         match queries.open_dependabot_pull_requests(repo.as_deref(), pr_limit) {
             Ok(pull_requests) => pull_requests,

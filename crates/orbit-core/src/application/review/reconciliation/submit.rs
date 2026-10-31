@@ -21,7 +21,8 @@ use serde_json::{Value, json};
 use super::observe::{contract, observe};
 use super::{RECONCILIATION_AUDIT, next_step};
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::{PipelineSubmission, RetryKey};
+use crate::application::contracts::RetryKey;
+use crate::application::job::pipeline::PipelineSubmission;
 use crate::application::task::TaskUpdateParams;
 
 /// Governed tool name; operator-only.

@@ -3,7 +3,7 @@
 //
 // Moved from app.js (router was the widest cross-cut for subsequent module splits).
 // Owns: TABS, the Health and Analytics subtabs and their secondary views, the
-// Agents role tabs,
+// Agents role tabs (under Analytics),
 // RUN_DETAIL_SUBTABS, KNOWLEDGE_SUBTABS, parseHashRoute, setActiveTab, set*Subtab
 // helpers, initTabs, navigateToRun.
 //
@@ -22,6 +22,7 @@
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
 import { renderRuns } from './runs.js';
 import { AGENT_ROLES } from './agents.js';
+import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
 
 const $ = (id) => document.getElementById(id);
@@ -43,13 +44,15 @@ function markWorkspaceSelectorScope(fleetWide) {
   }
 }
 
-// Drain is a Work destination. Retired auto-drain and Tasks dock links are
+// Retired Drain and auto-drain links are
 // normalized in place so Back never gets trapped on a redirect.
-const TABS = ["tasks", "jobs", "drain", "diagnostics", "analytics", "agents", "operations", "knowledge", "plugins", "config", "run-detail"];
+const TABS = ["tasks", "jobs", "leases", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
-const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "cost"];
+const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "forecast", "cost", "agents", "experiments"];
+// Analytics › Cost tabs: `#analytics/cost?tab=exploration`; no `tab` is Spend.
+const COST_TABS = ["spend", "exploration"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
@@ -66,7 +69,10 @@ const ANALYTICS_MAINS = {
   tools: "analytics-tools-main",
   codebase: "analytics-codebase-main",
   resources: "analytics-resources-main",
+  forecast: "analytics-forecast-main",
   cost: "analytics-cost-main",
+  agents: "agents-main",
+  experiments: "analytics-experiments-main",
 };
 const RUN_DETAIL_SUBTABS = ["steps", "events"];
 // Rail labels name destinations the way an operator reads them; some hashes
@@ -74,10 +80,9 @@ const RUN_DETAIL_SUBTABS = ["steps", "events"];
 const RAIL_LABELS = {
   tasks: "Tasks",
   jobs: "Jobs",
-  drain: "Drain",
+  leases: "Leases",
   diagnostics: "Health",
   analytics: "Analytics",
-  agents: "Agents",
   operations: "Automation",
   knowledge: "Knowledge",
   plugins: "Plugins",
@@ -93,7 +98,6 @@ export function destinationLabel(top) {
 function railRoute(ctx, tab) {
   if (tab === "diagnostics") return healthHash(ctx).slice(1);
   if (tab === "analytics") return analyticsSubtabRoute(ctx, ctx.getAnalyticsSubtab());
-  if (tab === "agents") return `agents/${ctx.getAgentsRole()}`;
   if (tab === "jobs") return `jobs/${ctx.getJobsSubtab()}`;
   return tab;
 }
@@ -105,9 +109,62 @@ function incidentsRoute(ctx, view = ctx.getIncidentsView()) {
 
 function analyticsSubtabRoute(ctx, sub) {
   if (!ANALYTICS_SUBTABS.includes(sub)) sub = "metrics";
+  if (sub === "agents") return `analytics/agents/${ctx.getAgentsRole()}`;
   if (sub === "codebase") return ctx.buildCodebaseHash().slice(1);
   if (sub === "reliability" && ctx.getReliabilityView() === "tools") return "analytics/reliability/tools";
+  if (sub === "experiments" && ctx.experimentsRoute) return ctx.experimentsRoute();
   return `analytics/${sub}`;
+}
+
+// The Cost tab on screen. It lives here, not in app.js, because only the hash
+// and the tab strip read it: a tab switch is a view change, so it rewrites the
+// hash in place and never routes, which would refetch.
+let costTab = COST_TABS[0];
+
+function setCostTabView(tab) {
+  costTab = COST_TABS.includes(tab) ? tab : COST_TABS[0];
+  for (const btn of document.querySelectorAll("#scoreboard-tabs [data-cost-tab]")) {
+    const on = btn.dataset.costTab === costTab;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+    btn.tabIndex = on ? 0 : -1;
+  }
+  for (const name of COST_TABS) {
+    const panel = $(`scoreboard-panel-${name}`);
+    if (panel) panel.hidden = name !== costTab;
+  }
+}
+
+function selectCostTab(ctx, tab) {
+  setCostTabView(tab);
+  const url = new URL(window.location.href);
+  url.hash = analyticsHash(ctx, parseHashRoute(window.location.hash).query).replace(/^#/, "");
+  if (url.href !== window.location.href) window.history.replaceState(null, "", url);
+}
+
+function wireCostTabs(ctx) {
+  const strip = $("scoreboard-tabs");
+  if (!strip) return;
+  const tabs = () => Array.from(strip.querySelectorAll("[data-cost-tab]"));
+  strip.addEventListener("click", (event) => {
+    const btn = event.target?.closest?.("[data-cost-tab]");
+    if (btn && strip.contains(btn)) selectCostTab(ctx, btn.dataset.costTab);
+  });
+  strip.addEventListener("keydown", (event) => {
+    const btn = event.target?.closest?.("[data-cost-tab]");
+    const all = tabs();
+    const index = btn ? all.indexOf(btn) : -1;
+    if (index < 0) return;
+    let next = null;
+    if (event.key === "ArrowRight") next = (index + 1) % all.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + all.length) % all.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = all.length - 1;
+    if (next == null) return;
+    event.preventDefault();
+    all[next].focus();
+    selectCostTab(ctx, all[next].dataset.costTab);
+  });
 }
 
 function windowQuery() {
@@ -125,16 +182,19 @@ function healthHash(ctx) {
 
 /// The canonical hash of the Agents role on screen, with the shared window.
 function agentsHash(ctx) {
-  return `#agents/${ctx.getAgentsRole()}?${windowQuery()}`;
+  return `#analytics/agents/${ctx.getAgentsRole()}?${windowQuery()}`;
 }
 
 /// The canonical hash of the Analytics view on screen. Codebase has its own
-/// window, so it serializes its own selection instead of the shared window.
+/// window, so it serializes its own view and selection instead of the shared
+/// window.
 function analyticsHash(ctx, query) {
   const sub = ctx.getAnalyticsSubtab();
   if (sub === "codebase") return ctx.buildCodebaseHash();
+  if (sub === "agents") return agentsHash(ctx);
   let hash = `#${analyticsSubtabRoute(ctx, sub)}?${windowQuery()}`;
-  if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}`;
+  if (sub === "cost" && costTab !== COST_TABS[0]) hash += `&tab=${costTab}`;
+  if (sub === "metrics") hash += `&outcome=${query.get("outcome") === "all" ? "all" : "succeeded"}${countViewsHashSuffix(query)}`;
   return hash;
 }
 
@@ -154,7 +214,8 @@ const KNOWLEDGE_SUBTABS = ["frictions"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
 // `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
 // the serving host's registered remote hosts [ORB-14451].
-const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys", "system", "hosts"];
+const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "hosts", "all-keys"];
+const CONFIG_LEGACY_REDIRECTS = { effective: "workflow", "workspace-file": "all-keys", "global-file": "machine", system: "machine", keys: "all-keys" };
 
 function parseHashRoute(raw) {
   const trimmed = String(raw || "").replace(/^#/, "");
@@ -264,6 +325,7 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
     btn.classList.toggle("active", btn.dataset.subtab === name);
   }
   syncViewTabs("reliability-views", view, name === "reliability");
+  syncViewTabs("agents-roles", typeof ctx.getAgentsRole === "function" ? ctx.getAgentsRole() : "orchestrators", name === "agents");
   for (const [key, mainId] of Object.entries(ANALYTICS_MAINS)) {
     const node = $(mainId);
     if (node) node.style.display = key === shown ? "grid" : "none";
@@ -272,11 +334,16 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
   markWorkspaceSelectorScope(shown === "pipeline");
   // Pipeline aggregates across workspaces server-side, so it stays live in the
   // aggregate view; Cost is per-workspace and does not.
-  if (name === "cost" && isAggregateView()) renderPanelPlaceholder("scoreboard-orchestration");
-  // Metrics, Pipeline and Resources read as soon as they open, not on the next tick.
+  if (name === "cost" && isAggregateView()) {
+    renderPanelPlaceholder("scoreboard-orchestration");
+    renderPanelPlaceholder("scoreboard-exploration");
+  }
+  // Metrics, Pipeline, Resources and Forecast read as soon as they open, not on the next tick.
   if (shown === "metrics" && ctx.fetchMetrics) ctx.fetchMetrics();
   if (shown === "pipeline" && ctx.fetchReliability) ctx.fetchReliability();
   if (shown === "resources" && ctx.fetchResources) ctx.fetchResources();
+  if (shown === "forecast" && ctx.fetchForecast) ctx.fetchForecast();
+  if (shown === "experiments" && ctx.fetchExperiments) ctx.fetchExperiments();
 }
 
 // Agents shows one role at a time behind its secondary tabs, and reads it as
@@ -284,7 +351,8 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
 function setAgentsRoleImpl(ctx, name) {
   if (!AGENT_ROLES.includes(name)) name = AGENT_ROLES[0];
   ctx.setAgentsRole(name);
-  syncViewTabs("agents-roles", name, true);
+  const shown = typeof ctx.getAnalyticsSubtab === "function" ? ctx.getAnalyticsSubtab() === "agents" : true;
+  syncViewTabs("agents-roles", name, shown);
   if (ctx.fetchAgents) ctx.fetchAgents();
 }
 
@@ -332,10 +400,29 @@ function setKnowledgeSubtabImpl(ctx, name) {
 }
 
 function setConfigSubtabImpl(ctx, name) {
-  if (!CONFIG_SUBTABS.includes(name)) name = "effective";
+  if (CONFIG_LEGACY_REDIRECTS[name]) name = CONFIG_LEGACY_REDIRECTS[name];
+  if (!CONFIG_SUBTABS.includes(name)) name = "workflow";
   ctx.setConfigSubtab(name);
   for (const btn of document.querySelectorAll("#config-subtabs .subtab")) {
     btn.classList.toggle("active", btn.dataset.subtab === name);
+  }
+}
+
+function revealActiveRailSelection() {
+  const tab = document.querySelector(".rail .tab.active");
+  if (!tab) return;
+  // Counts and web fonts can change this width after the route was selected.
+  // Recompute the space beside the destination before revealing its view.
+  $("tabs").style.setProperty("--active-tab-width", `${tab.offsetWidth}px`);
+  const rail = tab.closest(".rail");
+  const foot = rail.querySelector(".rail-foot");
+  rail.style.setProperty("--rail-foot-height", `${foot?.offsetHeight || 0}px`);
+  const subtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
+  subtab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  // On desktop the selected leaf takes precedence: revealing its parent can
+  // scroll it back behind the foot. Phones keep both nested strips in view.
+  if (!subtab || window.matchMedia("(max-width: 760px)").matches) {
+    tab.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 }
 
@@ -345,17 +432,40 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   const { segments, query } = parseHashRoute(raw);
   let head = segments[0] || "tasks";
   let legacyRoute = false;
-  const dockView = segments[1] || query.get("dock") || query.get("dockMode") || query.get("panel");
-  if (head === "auto-drain" || (head === "operations" && segments[1] === "auto-drain") ||
-      (head === "tasks" && ["drain", "auto-drain", "log"].includes(dockView))) {
-    head = "drain";
-    segments.splice(1, segments.length, dockView === "log" || segments[2] === "log" ? "log" : "drain");
+  let dockView = query.get("dock") || query.get("dockMode") || query.get("panel");
+  if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
+      (head === "tasks" && ["drain", "auto-drain", "log", "locks", "start"].includes(segments[1]))) {
+    dockView = ["log", "start", "locks"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+    head = "tasks";
+    segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
-  // Analytics › Orchestrators became the Agents destination's default role.
+  if (head === "tasks" && ["drain", "auto-drain", "start", "locks", "log"].includes(dockView)) {
+    dockView = dockView === "auto-drain" ? "drain" : dockView;
+    query.set("dock", dockView);
+    query.delete("dockMode");
+    query.delete("panel");
+  } else dockView = null;
+  // Old standalone Agents links normalize to Analytics › Agents in place.
+  if (head === "agents") {
+    const role = AGENT_ROLES.includes(segments[1]) ? segments[1] : ctx.getAgentsRole();
+    head = "analytics";
+    segments.splice(0, segments.length, "analytics", "agents", role);
+    legacyRoute = true;
+  }
+  // Analytics › Orchestrators became Analytics › Agents › Orchestrators.
   if (head === "analytics" && segments[1] === "orchestrators") {
-    head = "agents";
-    segments.splice(0, segments.length, "agents", "orchestrators");
+    segments.splice(0, segments.length, "analytics", "agents", "orchestrators");
+    legacyRoute = true;
+  }
+  // A `#comment-<task>-<n>` fragment, as older copies of a comment link carry
+  // it, opens that task and names the comment.
+  const legacyComment = /^comment-([\w.-]{1,64})-(\d+)$/.exec(head);
+  if (legacyComment) {
+    head = "tasks";
+    segments.splice(0, segments.length, "tasks");
+    query.set("open", legacyComment[1]);
+    query.set("comment", legacyComment[2]);
     legacyRoute = true;
   }
   if (head === "runs" && !segments[1] && query.get("run_id")) {
@@ -434,8 +544,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   for (const pane of document.querySelectorAll(".tab-pane")) {
     pane.classList.toggle("active", pane.dataset.tab === top);
   }
-  if (ctx.placeDock) ctx.placeDock(top);
-  if (top === "drain" || top === "tasks") requestAnimationFrame(ctx.fitLogPanelToViewport || (() => {}));
+  if (top === "tasks") requestAnimationFrame(ctx.fitLogPanelToViewport || (() => {}));
 
   const indicator = $("tab-indicator") || el("div", {id: "tab-indicator", class: "tab-indicator"});
   if (!indicator.parentNode) document.querySelector(".tabs").appendChild(indicator);
@@ -450,8 +559,8 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     indicator.style.display = "none";
   }
 
-  // The shared window rides in the hash of Jobs History, Health, Analytics and
-  // Agents, except Events and Codebase, whose queries carry their own windows.
+  // The shared window rides in the hash of Jobs History, Health and Analytics
+  // (including Agents), except Events and Codebase, whose queries carry their own windows.
   const adoptHashedWindow = () => {
     const hashedWindow = parseDashboardWindow(query.get("window"));
     if (hashedWindow && hashedWindow !== getWindow()) {
@@ -461,11 +570,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     }
   };
   let hash;
-  if (top === "drain") {
-    const mode = ["log", "start"].includes(segments[1]) ? segments[1] : "drain";
-    if (ctx.setDrainView) ctx.setDrainView(mode);
-    hash = mode === "drain" ? "#drain" : `#drain/${mode}`;
-  } else if (top === "jobs") {
+  if (top === "jobs") {
     const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
     adoptHashedWindow();
     setJobsSubtabImpl(ctx, sub);
@@ -490,17 +595,31 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     const view = sub !== "reliability" || !segments[1] ? ctx.getReliabilityView()
       : segments[2] === "tools" ? "tools" : "pipeline";
     if (sub === "codebase") {
-      if (segments[1]) ctx.applyCodebaseHashQuery(query);
+      // `#analytics/codebase[/file|/coupling|/marks]`: the segment names the
+      // view; a bare `#analytics` keeps the remembered one.
+      if (segments[1]) ctx.applyCodebaseHashQuery(query, segments[2] || null);
     } else {
       adoptHashedWindow();
     }
+    if (sub === "experiments" && segments[1] && ctx.setExperimentId) {
+      // `#analytics/experiments[/<id>]`: the segment names one experiment; a
+      // malformed escape opens the list. A bare `#analytics` keeps the
+      // remembered view.
+      let id = null;
+      try {
+        id = segments[2] ? decodeURIComponent(segments[2]) : null;
+      } catch {
+        id = null;
+      }
+      ctx.setExperimentId(id);
+    }
     setAnalyticsSubtabImpl(ctx, sub, view);
+    setCostTabView(sub === "cost" ? query.get("tab") : null);
+    if (sub === "agents") {
+      const role = AGENT_ROLES.includes(segments[2]) ? segments[2] : ctx.getAgentsRole();
+      setAgentsRoleImpl(ctx, role);
+    }
     hash = analyticsHash(ctx, query);
-  } else if (top === "agents") {
-    const role = AGENT_ROLES.includes(segments[1]) ? segments[1] : ctx.getAgentsRole();
-    adoptHashedWindow();
-    setAgentsRoleImpl(ctx, role);
-    hash = agentsHash(ctx);
   } else if (top === "run-detail") {
     setRunDetailSubtabImpl(ctx, ctx.getRunSubtab());
     hash = `#runs/${encodeURIComponent(ctx.getRunId() || "")}` +
@@ -515,7 +634,8 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     setOperationsSubtabImpl(ctx, sub);
     hash = `#operations/${sub}`;
   } else if (top === "config") {
-    const sub = CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab();
+    if (CONFIG_LEGACY_REDIRECTS[segments[1]]) legacyRoute = true;
+    const sub = CONFIG_LEGACY_REDIRECTS[segments[1]] || (CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab());
     setConfigSubtabImpl(ctx, sub);
     hash = `#config/${sub}`;
   } else if (top === "tasks") {
@@ -533,6 +653,14 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query, page);
     if (ctx.syncTaskControls) ctx.syncTaskControls();
     hash = ctx.buildTasksHash ? ctx.buildTasksHash() : "#tasks";
+    if (ctx.setDockRouteShown) ctx.setDockRouteShown(Boolean(dockView));
+    if (dockView) {
+      if (ctx.setDrainView) ctx.setDrainView(dockView);
+      const [route, taskQuery = ""] = hash.split("?");
+      const params = new URLSearchParams(taskQuery);
+      params.set("dock", dockView);
+      hash = `${route}?${params}`;
+    }
   } else {
     hash = `#${top}`;
   }
@@ -542,8 +670,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // A repeated hash normalization must not undo intervening keyboard scrolling.
   const activeSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
   if (activeTabEl !== previousTab || activeSubtab !== previousSubtab) {
-    activeSubtab?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    activeTabEl?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    revealActiveRailSelection();
   }
   const hashChanged = window.location.hash !== hash;
   const shouldUpdateHash = opts.updateHash !== false;
@@ -578,7 +705,25 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
   setActiveTabImpl(ctx, `runs/${encodeURIComponent(runId)}`);
 }
 
+// The address the router last routed, kept at module scope so recordRoutedHref
+// can move it when the dock rewrites the hash without the router.
+let routedHref = null;
+
 function initTabsImpl(ctx) {
+  // A late count on any preceding entry shifts the selection, even when the
+  // destination itself keeps its width. Observe entries as well as the row so
+  // those updates and font/viewport changes repair both nested scroll strips.
+  // Keyboard exploration takes precedence over the selection after a resize.
+  const railLayout = new ResizeObserver(() => {
+    revealActiveRailSelection();
+    const focused = document.activeElement;
+    if (focused?.matches(".rail .tab, .rail-subtabs .subtab")) {
+      focused.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  });
+  for (const entry of document.querySelectorAll(".rail, .rail-foot, .rail .tabs, .rail .tab, .rail-subtabs .subtab")) {
+    railLayout.observe(entry);
+  }
   $("skip-link")?.addEventListener("click", (event) => {
     const main = activePaneMain();
     if (!main) return;
@@ -626,9 +771,10 @@ function initTabsImpl(ctx) {
       setActiveTabImpl(ctx, analyticsSubtabRoute(ctx, btn.dataset.subtab), { refresh: false }),
     );
   }
+  wireCostTabs(ctx);
   for (const btn of document.querySelectorAll("#agents-roles .subtab")) {
     btn.addEventListener("click", () =>
-      setActiveTabImpl(ctx, `agents/${btn.dataset.view}`, { refresh: false }),
+      setActiveTabImpl(ctx, `analytics/agents/${btn.dataset.view}`, { refresh: false }),
     );
   }
   for (const btn of document.querySelectorAll("#reliability-views .subtab")) {
@@ -671,7 +817,6 @@ function initTabsImpl(ctx) {
   // An entry made by pushState (a task link that changes workspace) fires no
   // hashchange, so popstate routes too; the address that was just routed is not
   // routed twice. common.js restores the scope on popstate first.
-  let routedHref = null;
   const routeFromLocation = () => {
     if (window.location.href === routedHref) return;
     routedHref = window.location.href;
@@ -684,7 +829,7 @@ function initTabsImpl(ctx) {
     updateHash: false,
   });
   initBackgroundNotifications();
-  startDashboardPolling(() => ctx.refreshDashboard());
+  startDashboardPolling(() => ctx.refreshDashboard({ poll: true }));
 }
 
 // Public named exports (the stable import surface for app.js and future modules).
@@ -708,7 +853,14 @@ export function initTabs() {
   return initTabsImpl(ctx);
 }
 
-/// The canonical hash of the Health, Analytics or Agents view on screen, for a scope
+/// Record the address a dock replaceState just wrote as routed. Without it the
+/// router's last-routed address still names the list URL the rewrite replaced,
+/// so a later hash navigation to that URL is skipped as already routed (ORB-19783).
+export function recordRoutedHref() {
+  routedHref = window.location.href;
+}
+
+/// The canonical hash of the Health or Analytics view on screen, for a scope
 /// change to write in place; null on other destinations.
 export function scopeRouteHash() {
   const ctx = getCtx();
@@ -716,7 +868,6 @@ export function scopeRouteHash() {
   if (ctx.getTab() === "jobs" && ctx.getJobsSubtab() === "history") return `#jobs/history?${windowQuery()}`;
   if (ctx.getTab() === "diagnostics") return healthHash(ctx);
   if (ctx.getTab() === "analytics") return analyticsHash(ctx, query);
-  if (ctx.getTab() === "agents") return agentsHash(ctx);
   return null;
 }
 

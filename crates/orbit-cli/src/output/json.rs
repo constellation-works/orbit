@@ -1,4 +1,4 @@
-use orbit_common::LOCK_BUSY_ERROR_CODE;
+use orbit_common::{LOCK_BUSY_ERROR_CODE, RemoteToolCode};
 use orbit_core::{NotFoundKind, OrbitError};
 use serde_json::{Value, json};
 
@@ -79,7 +79,7 @@ pub fn usage_error_payload(message: &str) -> Value {
 
 fn error_code(error: &OrbitError) -> &str {
     match error {
-        OrbitError::PolicyDenied(_) => "policy_denied",
+        OrbitError::PolicyDenied(_) => const { RemoteToolCode::PolicyDenied.as_str() },
         OrbitError::NotFound { kind, .. } => match kind {
             NotFoundKind::Tool => "tool_not_found",
             NotFoundKind::Task => "task_not_found",
@@ -88,16 +88,14 @@ fn error_code(error: &OrbitError) -> &str {
             NotFoundKind::Skill => "skill_not_found",
             NotFoundKind::Job => "job_not_found",
             NotFoundKind::JobRun => "job_run_not_found",
-            NotFoundKind::Activity => "activity_not_found",
-            NotFoundKind::DesignFeature => "design_feature_not_found",
-            NotFoundKind::AgentSession => "agent_session_not_found",
             NotFoundKind::Workspace => "workspace_not_found",
         },
-        OrbitError::CapabilityDenied(_) => "capability_denied",
+        OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
         // Catalog-role refusal, not an operator capability grant: the CLI
         // surfaces the same stable code MCP does [ORB-11012].
-        OrbitError::CapabilityRefused(_) => "capability_refused",
-        OrbitError::ProtocolSkew(_) => "protocol_skew",
+        OrbitError::CapabilityRefused(_) => const { RemoteToolCode::CapabilityRefused.as_str() },
+        OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
+        OrbitError::DecisionRefused { code, .. } => code.as_str(),
         OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::UnknownSelector(_) => "unknown_selector",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
@@ -113,9 +111,10 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
-        | OrbitError::ClaimRefused { .. } => "invalid_input",
+        | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
         OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
         OrbitError::PrForgeRemoteMissing { .. } => "pr_forge_remote_missing",
+        OrbitError::TaskScheduled { .. } => "task_scheduled",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) => "skill_validation_failed",
         OrbitError::JobValidation(_) => "job_validation_failed",
@@ -134,7 +133,6 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::Store(_) => "store_error",
         // The same retryable code MCP reports [ORB-15088].
         OrbitError::FileLockTimeout(_) | OrbitError::SqliteContention(_) => LOCK_BUSY_ERROR_CODE,
-        OrbitError::TaskStatusTransition(_) => "task_status_transition",
         OrbitError::JobRunStateTransition(_) => "job_run_state_transition",
         OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
         OrbitError::JobRunControlConflict(_) => "conflict",
@@ -144,7 +142,8 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::ArtifactNotLocal { .. } => "artifact_not_local",
         OrbitError::FrictionNotLocal(_) => "friction_not_local",
         OrbitError::Migration(_) => "migration_failed",
-        OrbitError::StorageAccessDenied { layer, .. } => layer.error_code(),
+        OrbitError::StorageAccessDenied { layer, .. }
+        | OrbitError::StorageLockBusy { layer, .. } => layer.error_code(),
         OrbitError::ResumeRunInFlight { .. } => "resume_run_in_flight",
         OrbitError::TmpGcActiveRuns { .. } => "tmp_gc_active_runs",
         OrbitError::SystemIdentityTagDropped { .. } => "system_identity_tag_dropped",

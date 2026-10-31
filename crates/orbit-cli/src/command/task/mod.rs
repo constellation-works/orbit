@@ -1,6 +1,5 @@
 mod archive;
 pub(crate) mod artifact;
-pub mod artifacts;
 mod command;
 mod eligible;
 mod export;

@@ -195,19 +195,19 @@ const costOrchestration = {
   buckets: [costBucket],
 };
 scoreboard.namespace.renderScoreboard({ window: '24h', agents: {}, orchestration: costOrchestration });
-assert.match(costHost.textContent, /\$1\.2500/, 'provider-reported dollars keep four decimal places');
-assert.match(costHost.textContent, /\$1\.5000/, 'derived estimate keeps four decimal places');
+assert.match(costHost.textContent, /\$1\.25(?!\d)/, 'provider-reported dollars show cents');
+assert.match(costHost.textContent, /\$1\.50(?!\d)/, 'derived estimate shows cents');
 assert.match(costHost.textContent, /1\.5K/, 'normalized tokens stay compact');
-assert.match(costHost.textContent, /named orchestrator: claude/);
+assert.match(costHost.textContent, /Orchestrator: claude/);
 assert.match(costHost.textContent, /claude-sonnet 1\.5K/, 'model attribution stays on the same population');
-assert.equal(costCount.textContent, '1 buckets');
+assert.equal(costCount.textContent, '1 bucket');
 assert.equal(removedCostChrome(), false, 'cost render has no leaderboard, narrative, agent strip or insights');
 scoreboard.namespace.renderScoreboard({
   window: '7d', agents: { codex: { tasks_created: 4 } },
   orchestration: { ...costOrchestration, buckets: [{ ...costBucket, provider_cost_usd: 9.5 }] },
 });
-assert.match(costHost.textContent, /\$1\.2500/, 'a 7d body is not painted under the 24h window');
-assert.doesNotMatch(costHost.textContent, /\$9\.5000/);
+assert.match(costHost.textContent, /\$1\.25(?!\d)/, 'a 7d body is not painted under the 24h window');
+assert.doesNotMatch(costHost.textContent, /\$9\.50/);
 scoreboard.namespace.renderScoreboard({ window: '24h', agents: {}, orchestration: null });
 assert.match(costHost.textContent, /No managed execution cost data yet/);
 assert.equal(costCount.textContent, '—');

@@ -578,3 +578,37 @@ fn recovery_evidence_contracts_1() {
         ]);
     });
 }
+
+/// Recovery evidence is read from `events_snapshot`, which must hold every
+/// persisted event of the run, oldest first, however many a long provider run
+/// emitted after the first attempts.
+#[test]
+fn events_snapshot_returns_every_event_oldest_first_beyond_the_default_page() {
+    const EVENTS: usize = 1_100;
+    let dir = tempfile::tempdir().unwrap();
+    let writer = V2AuditWriter::with_disk_sinks(
+        dir.path(),
+        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        "fixture",
+        RUN,
+        "test-agent",
+        None,
+    )
+    .unwrap();
+    for index in 0..EVENTS {
+        writer
+            .emit(prior_attempt(index, format!("diagnostic {index}")))
+            .unwrap();
+    }
+
+    let markers: Vec<u64> = writer
+        .events_snapshot()
+        .unwrap()
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            V2AuditEventKind::StepPostRecoveryAttempt { output, .. } => output?["marker"].as_u64(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(markers, (0..EVENTS as u64).collect::<Vec<_>>());
+}

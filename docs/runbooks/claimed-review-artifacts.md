@@ -3,16 +3,17 @@ type: runbook
 summary: Verify and recover a distributed-drain follower's before-PR reviewer, whose review-artifact reads and report write reach the owner through the run's coordinator instead of SSH inside the sandbox.
 tags: [operations, review-gate, distributed-drain, sandbox, plugin-broker]
 paths:
-  - "crates/orbit-core/src/adapter/command/dispatch/claimed_owner.rs"
-  - "crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs"
-  - "crates/orbit-core/src/adapter/command/dispatch/claimed_recovery.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed/owner.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed/review.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed/recovery.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed/findings.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/brokered.rs"
   - "crates/orbit-core/src/adapter/tool_host/worker_tools.rs"
   - "crates/orbit-cli/src/command/mcp/claimed_owner.rs"
   - "crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs"
 related_features: [review-gate, distributed-drain, plugins, policy-sandbox]
-related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171, ORB-14321, ORB-14792]
-last_validated: 2026-10-18
+related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171, ORB-14321, ORB-14792, ORB-18667]
+last_validated: 2026-10-26
 ---
 
 # Verify and Recover Claimed-Review Artifacts
@@ -101,7 +102,7 @@ attaching a report by hand, or disabling before-PR review.
 | `stale_claim` | The owner no longer holds the claim as active: it was released, failed, revoked by recovery, or superseded by a later pull, or it is bound to another run | Preserve the refusal, the claim's owner state (`ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'` on the owner) and the follower's ledger. Do not replay the call. The claim's lifecycle already ended, so the review cannot finish in this run. Let the run settle. Then follow the [distributed drain runbook](./distributed-drain.md) for that claim state. |
 | `review_manifest_stale` | The owner holds another attempt's manifest | Preserve the call and run evidence. Do not replay it. After terminal settlement and cause diagnosis, use the existing authorized recovery to start a fresh attempt. |
 | `claimed_review_bridge_refused` | Another activity, path in the review gate's `review-*` namespace (including an evidence path the owner's current hold does not name), request field, report attempt, or a malformed report | Preserve the refusal and inspect the bound task, run, claim and review attempt. Correct the diagnosed prompt or binary cause before any normally authorized fresh run. |
-| `claimed_owner_bridge_refused` | A request field the coordinator does not carry, another task, a new task's relation other than `spawned_from` the claimed task or a finding's `regression_from`, or, inside the sandbox, an owner call outside the claimed worker's list (including `orbit.search`) | As for `claimed_review_bridge_refused`. A finding that cannot be filed belongs in the implementer's `unfiled_findings`, which the handoff attaches to the claimed task as `unfiled-findings.json`; file it from there on the owner. |
+| `claimed_owner_bridge_refused` | A request field the coordinator does not carry, a task outside the claimed workspace, a write (artifact put or friction) for another task, a new task's relation other than `spawned_from` the claimed task or a finding's `regression_from`, or, inside the sandbox, an owner call outside the claimed worker's list, or an `orbit.search` or `orbit.task.list` asking for a federated scope | As for `claimed_review_bridge_refused`. A finding that cannot be filed belongs in the implementer's `unfiled_findings`, which the handoff attaches to the claimed task as `unfiled-findings.json`; file it from there on the owner. |
 | `owner_route_unavailable`, "could not reach this run's coordinator" | The coordinator could not provide a usable response; the owner may or may not have received the request | The reviewer ends its step on this code, and the run skips recovery and releases the claim. Treat the outcome as unknown: preserve both runs, the claim and ledger state, and use the existing idempotent/reconciliation path. Do not manufacture another claim or report. |
 | `plugin_broker_busy` | The listener rejected the connection before dispatch because its bounded queue is full | Retry only the same call and bytes while the admitted attempt remains current, following the retryable response. Do not create a second claim or report. |
 | `owner_route_unavailable`, "ORBIT_PLUGIN_BROKER is not set" | The coordinator capability was not passed to this process, or the follower binary/launch configuration is wrong | The run releases the claim as above. Preserve the refusal and inspect the run's launch evidence. Confirm the deployed binary hash and broker setup before the task is pulled again; a version string alone is not proof. |
@@ -127,6 +128,19 @@ from its record of the leaf. Its refusals carry `review_write_refused`,
 refused read as a gap in its evidence, so a refusal alone is no reason for its
 escalation; inspect the leaf's admission phase and run state before trusting a
 decision made with the gap.
+
+Any step of a claimed leaf other than its final recovery may also read
+`review-evidence-findings.json`, named exactly: the findings an owner evidence
+run reported on a held candidate. The task's comment keeps only the first
+4 KiB of them, so the leaf that repairs the candidate needs the whole
+artifact. The coordinator carries this one read while the leaf holds its
+claim, and only when the leaf's admission receipt offered a kept candidate and
+the owner's artifact is Orbit's own findings on that candidate's held run and
+commit. Its refusals carry `findings_read_refused` (another spelling),
+`no_kept_candidate` (the claim resumes nothing), `findings_unverified` (not
+written by Orbit), `findings_candidate_mismatch` (findings on another run or
+commit), or the leaf refusals above. A write of the artifact, and every other
+`review-*` path, stays the reviewer's.
 
 ## 3. Smoke procedure
 
@@ -270,8 +284,8 @@ cargo test --locked -p orbit-cli --test tool "$NATIVE" -- --exact --list
 cargo test --locked -p orbit-cli --test tool "$NATIVE" -- --exact --nocapture
 # Any Unix host: the broker's scope, refusals, lost answer and stopped broker,
 # for the review artifacts and for every other claimed-owner call.
-cargo test -p orbit-core --lib dispatch::tests::claimed_review
-cargo test -p orbit-core --lib dispatch::tests::claimed_owner
+cargo test -p orbit-core --lib dispatch::claimed::tests::review
+cargo test -p orbit-core --lib dispatch::claimed::tests::owner
 ```
 
 The outer exact fixture uses the bounded child-test runner, which verifies

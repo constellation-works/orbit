@@ -4,8 +4,11 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_types::identity::Crew;
-use orbit_types::workflow::CrewPurpose;
 use orbit_types::workflow::automation::members::PreparationFreshness;
+use orbit_types::workflow::{
+    ConventionTemplate, CrewPurpose, DeliveryConventions, MissingSectionPolicy,
+    PrBodyTemplateSource, ScreenshotSection, TemplateSurface,
+};
 
 use super::machine::{
     AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
@@ -23,9 +26,10 @@ pub struct MidRunSteeringSettings {
     pub max_rounds: u8,
 }
 
-/// Admitted `workflow.regression_risk.*`: whether implement and review
-/// prompts mark regression-prone context files, and the gates a file must
-/// pass to be marked.
+/// Admitted `workflow.regression_risk.*`: settings for prompt marks on
+/// regression-prone context files and task riskiness scores. `enabled` gates
+/// marks only; `window_days` and `min_support` size both, while
+/// `threshold_percent` and `max_files` govern marks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegressionRiskSettings {
     /// `workflow.regression_risk.enabled` (default `true`).
@@ -38,6 +42,18 @@ pub struct RegressionRiskSettings {
     pub threshold_percent: u8,
     /// `workflow.regression_risk.max_files` (default 3).
     pub max_files: u32,
+}
+
+/// Admitted `experiments.*`: the workspace's experiment policy. Experiment
+/// definitions are store records, not configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExperimentSettings {
+    /// `experiments.enabled` (default `false`).
+    pub enabled: bool,
+    /// `experiments.max_running` (default 3).
+    pub max_running: u32,
+    /// `experiments.config_keys` (default empty).
+    pub config_keys: Vec<String>,
 }
 
 /// Admitted `workflow.explore.*`: whether implement and review-repair runs
@@ -57,12 +73,46 @@ pub struct ExploreSettings {
     pub max_answer_bytes: u32,
 }
 
+/// Admitted `workflow.explore_brief.*`: whether the task pilot is asked for
+/// explore briefs, which tasks request one, and whether a stored brief
+/// reaches the implementer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExploreBriefSettings {
+    /// `workflow.explore_brief.enabled` (default `false`).
+    pub enabled: bool,
+    /// `workflow.explore_brief.tags` (default empty: every piloted task).
+    pub tags: Vec<String>,
+    /// `workflow.explore_brief.deliver` (default `true`).
+    pub deliver: bool,
+}
+
+impl ExploreBriefSettings {
+    /// Whether a task carrying `task_tags` requests a brief.
+    pub fn requested_for(&self, task_tags: &[String]) -> bool {
+        self.enabled
+            && (self.tags.is_empty() || self.tags.iter().any(|tag| task_tags.contains(tag)))
+    }
+}
+
+/// Which document an admission sees: a layered load (both files merged, or
+/// one effective layer), or one file read alone, whose cross-layer
+/// references the layered load checks instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmissionScope {
+    /// The merged or effective document.
+    Layered,
+    /// One file alone: `workflow.type_complexity_crews` may name a type the
+    /// other layer's `workflow.crew_performance_types` defines.
+    File,
+}
+
 impl ConfigSnapshot {
     pub(super) fn finish_admission(
         &mut self,
         crews: &BTreeMap<String, Crew>,
         env_default: Option<&str>,
         require_default_crew: bool,
+        scope: AdmissionScope,
     ) -> Result<(), OrbitError> {
         LogRotationConfig::from_parts(
             Some(self.runtime_log_retention_days),
@@ -89,6 +139,12 @@ impl ConfigSnapshot {
             crews,
             "workflow.xhard_complexity_crews",
         )?;
+        crate::crew_pools::admit_type_complexity_crews(
+            &mut self.workflow_type_complexity_crews,
+            (scope == AdmissionScope::Layered)
+                .then_some(self.workflow_crew_performance_types.as_slice()),
+            crews,
+        )?;
         for (pool, setting) in [
             (
                 &mut self.workflow_purpose_crews_auto_fix,
@@ -114,6 +170,10 @@ impl ConfigSnapshot {
                 &mut self.workflow_purpose_crews_task_pilot,
                 "workflow.purpose_crews.task_pilot",
             ),
+            (
+                &mut self.workflow_purpose_crews_visual_review,
+                "workflow.purpose_crews.visual_review",
+            ),
         ] {
             admit_crew_pool(pool, crews, setting)?;
         }
@@ -133,10 +193,12 @@ impl ConfigSnapshot {
             env_default,
             require_default_crew,
         )?;
-        crate::provider_limit_budget::validate_budget_crews(
-            &self.workflow_provider_limit_budgets,
-            crews,
+        crate::crew_ladder::admit_crew_ladder_rungs(&mut self.workflow_crew_ladder_rungs, crews)?;
+        crate::crew_ladder::check_crew_ladder_sample(
+            self.workflow_crew_ladder_look_every,
+            self.workflow_crew_ladder_max_sample,
         )?;
+        crate::provider_limit::validate_budget_crews(&self.workflow_provider_limit_budgets, crews)?;
         crate::provider_limit::validate_override_crews(
             &self.workflow_provider_limit_overrides,
             crews,
@@ -196,6 +258,32 @@ impl ConfigSnapshot {
             .unwrap_or(crate::operation::ReviewTimingSetting::Off)
     }
 
+    /// The admitted selective before-landing policy, or `None` while its
+    /// mode is `off`. Provenance and timing-conflict validation live in
+    /// the layered [`crate::OperationPolicy`] an admission captures; this
+    /// snapshot view carries the same predicates without layer labels.
+    pub fn selective_before_landing_policy(
+        &self,
+    ) -> Option<orbit_types::workflow::SelectiveBeforeLandingPolicy> {
+        let mode =
+            crate::operation::selective_mode_parse(&self.review_selective_before_landing_mode)
+                .unwrap_or(orbit_types::workflow::SelectiveBeforeLandingMode::Off);
+        if !mode.is_active() {
+            return None;
+        }
+        let unknown_risk = crate::operation::selective_unknown_risk_parse(
+            &self.review_selective_before_landing_unknown_risk,
+        )
+        .unwrap_or_default();
+        Some(orbit_types::workflow::SelectiveBeforeLandingPolicy::new(
+            mode,
+            self.review_selective_before_landing_risk_threshold.clone(),
+            self.review_selective_before_landing_paths.clone(),
+            unknown_risk,
+            std::collections::BTreeMap::new(),
+        ))
+    }
+
     /// The admitted `workflow.validation_env.shell_probe`.
     pub fn shell_probe(&self) -> crate::aliases::ShellProbeMode {
         crate::aliases::ShellProbeMode::parse(&self.workflow_validation_env_shell_probe)
@@ -235,7 +323,16 @@ impl ConfigSnapshot {
                 CrewPurpose::Explorer,
                 self.workflow_purpose_crews_explorer.clone(),
             ),
+            (
+                CrewPurpose::VisualReview,
+                self.workflow_purpose_crews_visual_review.clone(),
+            ),
         ])
+    }
+
+    /// The admitted `workflow.type_complexity_crews.<type>.<tier>` pools.
+    pub fn type_complexity_crews(&self) -> crate::TypeComplexityCrewPools {
+        crate::TypeComplexityCrewPools::from_table(&self.workflow_type_complexity_crews)
     }
 
     /// This machine's identity, as admitted from the same registry rows every
@@ -356,11 +453,31 @@ impl ConfigSnapshot {
         self.machine_host_shutdown_hold_minutes
     }
 
+    /// The admitted `workflow.lock_modes` entries, compiled. Admission has
+    /// already compiled every pattern, so an error here is a snapshot built
+    /// around admission.
+    pub fn footprint_lock_modes(
+        &self,
+    ) -> Result<orbit_common::fs::lock_mode::FootprintLockModes, OrbitError> {
+        orbit_common::fs::lock_mode::FootprintLockModes::new(&self.workflow_lock_modes).map_err(
+            |reason| OrbitError::InvalidInput(format!("{} {reason}", crate::LOCK_MODES_KEY)),
+        )
+    }
+
     /// The admitted `workflow.mid_run_steering.*` settings.
     pub fn mid_run_steering(&self) -> MidRunSteeringSettings {
         MidRunSteeringSettings {
             enabled: self.workflow_mid_run_steering_enabled,
             max_rounds: self.workflow_mid_run_steering_max_rounds,
+        }
+    }
+
+    /// The admitted `experiments.*` settings.
+    pub fn experiments(&self) -> ExperimentSettings {
+        ExperimentSettings {
+            enabled: self.experiments_enabled,
+            max_running: self.experiments_max_running,
+            config_keys: self.experiments_config_keys.clone(),
         }
     }
 
@@ -372,6 +489,15 @@ impl ConfigSnapshot {
             max_concurrent_per_run: self.workflow_explore_max_concurrent_per_run,
             timeout_seconds: self.workflow_explore_timeout_seconds,
             max_answer_bytes: self.workflow_explore_max_answer_bytes,
+        }
+    }
+
+    /// The admitted `workflow.explore_brief.*` settings.
+    pub fn explore_brief(&self) -> ExploreBriefSettings {
+        ExploreBriefSettings {
+            enabled: self.workflow_explore_brief_enabled,
+            tags: self.workflow_explore_brief_tags.clone(),
+            deliver: self.workflow_explore_brief_deliver,
         }
     }
 
@@ -400,6 +526,51 @@ impl ConfigSnapshot {
             disk_resume_percent: self.workflow_resource_throttle_disk_resume_percent,
             io_full_high_percent: self.workflow_resource_throttle_io_full_high_percent,
             io_full_resume_percent: self.workflow_resource_throttle_io_full_resume_percent,
+        }
+    }
+}
+
+impl ConfigSnapshot {
+    /// The admitted `pr.*`, `commit.*` and `branch.*` delivery conventions.
+    /// Admission already parsed every template, so each parses again here.
+    pub fn delivery_conventions(&self) -> DeliveryConventions {
+        let text = |key: &str, raw: &Option<String>| {
+            raw.as_deref()
+                .and_then(|raw| ConventionTemplate::parse(key, raw, TemplateSurface::Text).ok())
+        };
+        let defaults = DeliveryConventions::default();
+        DeliveryConventions {
+            pr_title: text("pr.title_template", &self.pr_title_template),
+            pr_body: self
+                .pr_body_template
+                .as_deref()
+                .and_then(|raw| PrBodyTemplateSource::parse("pr.body_template", raw).ok()),
+            agent_sections: self.pr_agent_sections.clone(),
+            required_sections: self.pr_required_sections.clone(),
+            missing_section: MissingSectionPolicy::parse(&self.pr_missing_required_section)
+                .unwrap_or_default(),
+            screenshot_section: ScreenshotSection::parse(&self.pr_screenshot_section)
+                .unwrap_or_default(),
+            freshness_section: self.pr_freshness_section,
+            signature: self.pr_signature,
+            pr_orchestration_trailer: self.pr_orchestration_trailer,
+            labels: self.pr_labels.clone(),
+            task_tag_labels: self.pr_task_tag_labels.clone(),
+            task_type_labels: self.pr_task_type_labels.clone(),
+            reviewers: self.pr_reviewers.clone(),
+            draft: self.pr_draft,
+            commit_subject: self.commit_subject_template.as_deref().and_then(|raw| {
+                ConventionTemplate::parse_commit_subject("commit.subject_template", raw).ok()
+            }),
+            commit_body: text("commit.body_template", &self.commit_body_template),
+            planned_by_trailer: self.commit_planned_by_trailer,
+            implemented_by_trailer: self.commit_implemented_by_trailer,
+            orchestrated_by_trailer: self.commit_orchestrated_by_trailer,
+            branch_name: self
+                .branch_name_template
+                .as_deref()
+                .and_then(|raw| ConventionTemplate::parse_branch("branch.name_template", raw).ok())
+                .unwrap_or(defaults.branch_name),
         }
     }
 }

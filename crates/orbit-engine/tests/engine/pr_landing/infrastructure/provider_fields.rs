@@ -38,17 +38,17 @@ fn provider_fields_keep_prerequisite_refusals_across_read_operations() {
                         "ci.emission_evidence",
                         "ci.current_gates",
                     ] {
-                        let error = orbit_engine::run_private_vcs_operation(
-                            operation,
-                            &json!({
-                                "workspace_path": fx.repo, "pr": PR_NUMBER,
-                                "head_sha": fx.candidate, "head_branch": BRANCH,
-                                "base_branch": BASE,
-                                "deadline_ms": std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH).unwrap()
-                                    .as_millis() as u64 + 60_000,
-                            }),
-                        )
+                        let error = super::super::with_completion_clock(|| {
+                            orbit_engine::run_private_vcs_operation(
+                                operation,
+                                &json!({
+                                    "workspace_path": fx.repo, "pr": PR_NUMBER,
+                                    "head_sha": fx.candidate, "head_branch": BRANCH,
+                                    "base_branch": BASE,
+                                    "deadline_ms": 1_060_000,
+                                }),
+                            )
+                        })
                         .expect_err("malformed or changed provider fields must refuse");
                         let orbit_common::OrbitError::Execution(message) = error else {
                             panic!("unexpected refusal for {operation}: {error}");

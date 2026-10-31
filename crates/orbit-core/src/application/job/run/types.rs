@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 pub use orbit_store::contracts::JobRunOrder;
 use orbit_types::workflow::JobRunState;
 use serde::Serialize;
+use serde_json::{Value, json};
 
 /// Parameters for filtering and paging job run listings.
 #[derive(Debug, Clone, Default)]
@@ -84,9 +85,9 @@ pub struct JobRunCancelResult {
     /// claims are released back to the owner's backlog once no drain carries
     /// them); for a claimed leaf, its own settlement. Empty for every other
     /// run.
-    pub pull_settlements: Vec<crate::application::distributed::PullSettlementEntry>,
+    pub pull_settlements: Vec<crate::application::contracts::PullSettlementEntry>,
     /// The claimed leaves a `cancelling` pull drain is waiting for.
-    pub waiting_leaves: Vec<crate::application::distributed::DrainClaimedLeaf>,
+    pub waiting_leaves: Vec<crate::application::contracts::DrainClaimedLeaf>,
     /// Runs a forced cancel stopped besides this one: a pull drain's live
     /// claimed leaves, or a local drain's detached children.
     pub forced_runs: Vec<String>,
@@ -138,9 +139,55 @@ impl UnstoppedLeaf {
     }
 }
 
+/// Compatibility profile a surface selects for the shared
+/// [`JobRunCancelResult`] JSON projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobRunCancelResultProfile {
+    /// The CLI result: the twelve shared fields, without attribution.
+    Cli,
+    /// The HTTP result: the twelve shared fields plus `actor` and `source`.
+    Http,
+}
+
 impl JobRunCancelResult {
     pub(super) fn with_providers_stopped(mut self, stopped: usize) -> Self {
         self.provider_processes_stopped = stopped;
         self
+    }
+
+    /// The shared JSON projection of a cancellation result. Every profile
+    /// carries the same twelve fields; [`JobRunCancelResultProfile::Http`]
+    /// additionally carries `actor` and `source` after `final_state`, in
+    /// the HTTP response's existing field order.
+    #[must_use]
+    pub fn to_json(&self, profile: JobRunCancelResultProfile) -> Value {
+        // [ORB-13663] Cancelling a follower pull drain settles what it
+        // carried: recorded settlements are delivered and claims nothing
+        // will launch go back to the owner's backlog. A gracefully
+        // cancelled pull drain is `cancelling` until its waiting leaves
+        // finish; a forced cancel names what it stopped, and what it
+        // could not confirm stopped (those keep their claims).
+        let mut value = json!({
+            "run_id": self.run_id,
+            "outcome": self.outcome,
+            "previous_state": self.previous_state,
+            "final_state": self.final_state,
+            "signal_attempted": self.signal_attempted,
+            "signal_outcome": self.signal_outcome,
+            "provider_processes_stopped": self.provider_processes_stopped,
+            "pull_settlements": serde_json::to_value(&self.pull_settlements)
+                .unwrap_or_else(|_| Value::Array(Vec::new())),
+            "waiting_leaves": self.waiting_leaves,
+            "forced_runs": self.forced_runs,
+            "unstopped_leaves": self.unstopped_leaves,
+            "unstopped_children": self.unstopped_children,
+        });
+        if profile == JobRunCancelResultProfile::Http
+            && let Value::Object(map) = &mut value
+        {
+            map.shift_insert(4, "actor".to_string(), json!(self.actor));
+            map.shift_insert(5, "source".to_string(), json!(self.source));
+        }
+        value
     }
 }

@@ -1,5 +1,3 @@
-use super::PULL_DRAIN_JOB_NAME;
-
 use std::cell::{Cell, RefCell};
 
 use orbit_common::OrbitError;
@@ -22,6 +20,7 @@ use super::record::{
     refused_settlements,
 };
 use crate::OrbitRuntime;
+use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::application::distributed::{
     OwnerAnswer, PullCrewWindow, PullWorkFit, owner_binary_version,
 };
@@ -208,9 +207,10 @@ pub(crate) fn pull_refill(
         },
     };
     // A settlement the owner refused holds new requests until it is
-    // accepted; this pass still delivers it once its backoff is due.
+    // accepted, except a delivery-evidence refusal, which holds only that
+    // settlement; this pass still delivers refused settlements once due.
     let settlement_held = match refused_settlements(&drain, &destination) {
-        Ok(refused) => !refused.is_empty(),
+        Ok(refused) => refused.iter().any(|refused| refused.holds_admission()),
         Err(failure) => {
             error.get_or_insert(failure.to_string());
             true
@@ -268,9 +268,12 @@ pub(crate) fn pull_refill(
                         // The claimed PR leaf runs the before-PR gate the
                         // ship contract captures [ORB-13908].
                         review_gate: true,
+                        selective_review: true,
                         run_context: AdmissionRunContext {
                             run_id: run_id.clone(),
-                            job_name: PULL_DRAIN_JOB_NAME.to_string(),
+                            // The job that runs this action, so the owner's
+                            // claim names the drain that holds it.
+                            job_name: PULL_DRAIN_JOB.to_string(),
                             machine_name: runtime
                                 .automation_execution_location()
                                 .and_then(|location| location.machine_name.clone()),
@@ -281,6 +284,9 @@ pub(crate) fn pull_refill(
                         // Read for each request, so a kit verified
                         // mid-window is declared from the next pull.
                         browser_kit: runtime.browser_kit_verified(),
+                        // The owner checks each candidate's
+                        // `requires_labels` against these plus `os`.
+                        labels: runtime.machine_labels().to_vec(),
                         admissible,
                     }))
                 };
@@ -475,7 +481,11 @@ pub(crate) fn pull_refill(
         error.get_or_insert(failure.to_string());
         Vec::new()
     });
-    admitting &= refused.is_empty();
+    let holding_refused: Vec<_> = refused
+        .iter()
+        .filter(|refused| refused.holds_admission())
+        .collect();
+    admitting &= holding_refused.is_empty();
     // An unreadable count is not zero: the drain must not finish while it
     // cannot tell whether a settlement is still owed.
     let unsettled = match drain.unsettled(&destination) {
@@ -569,14 +579,26 @@ pub(crate) fn pull_refill(
          `crews.excluded`, fix the providers, and start a new drain"
             .to_string()
     };
+    let delivery_refused = refused.len() - holding_refused.len();
     let refusal = refusal
         .or_else(|| {
-            (!refused.is_empty()).then(|| {
+            (!holding_refused.is_empty()).then(|| {
                 format!(
                     "settlement_refused: the owner refused {} recorded settlement(s) while \
                      holding their claims, so no new claim is requested; `orbit run show \
                      {run_id}` names the reason and the remedy",
-                    refused.len()
+                    holding_refused.len()
+                )
+            })
+        })
+        .or_else(|| {
+            (delivery_refused > 0 && admitted == 0).then(|| {
+                format!(
+                    "delivery_settlement_refused: the owner refused {delivery_refused} \
+                     delivery-evidence settlement(s) while holding their claims; those \
+                     settlements back off and close once the owner ends their claims, \
+                     and other work is still admitted; `orbit run show {run_id}` names \
+                     the reason and the remedy"
                 )
             })
         })
@@ -654,6 +676,7 @@ pub(crate) fn pull_refill(
         "admitting": admitting,
         "refusal": refusal,
         "settlement_refused": refused.len(),
+        "settlement_refused_holding": holding_refused.len(),
         "crews": crews,
         "admission_fit": admission_fit.flatten(),
         "consecutive_failures": consecutive_failures,

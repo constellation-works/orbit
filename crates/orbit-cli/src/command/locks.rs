@@ -37,6 +37,8 @@ pub(crate) fn render(verb: TaskVerb, value: Value) -> CommandOut {
         | TaskVerb::BlockTriage
         | TaskVerb::ReconcileReview
         | TaskVerb::RetryHandoff
+        | TaskVerb::RecoverClaim
+        | TaskVerb::RevokeHandoff
         | TaskVerb::Reject
         | TaskVerb::Delete => Err(OrbitError::Execution(
             "task lock renderer received another operation".into(),
@@ -46,7 +48,7 @@ pub(crate) fn render(verb: TaskVerb, value: Value) -> CommandOut {
 
 /// The TTL as whole seconds. `parse_duration_seconds` accepts the same
 /// `s/m/h/d/w` forms as the rest of the CLI; the domain rejects anything
-/// outside 1..=7200, so only the conversion to its integer width is checked
+/// outside 1..=14400, so only the conversion to its integer width is checked
 /// here — a week-long TTL must reach the domain to be refused by name rather
 /// than silently wrapping.
 pub(crate) fn reservation_ttl_seconds(raw: &str) -> Result<u64, OrbitError> {

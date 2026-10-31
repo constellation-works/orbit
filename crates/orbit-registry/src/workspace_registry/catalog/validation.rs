@@ -296,10 +296,10 @@ pub fn validate_workspace_registry(
         changed |= checkout.path_overrides.len() != before;
     }
 
-    // A path may belong to only one checkout. `register_checkout` and
-    // `set_path_override` refuse the same collision early; this check is the
-    // persistence rule so a rewritten `repo_root` or hand-edited override
-    // cannot save and then resolve by JSON order.
+    // A path may belong to only one checkout. `register_checkout` refuses the
+    // same collision early; this check is the persistence rule so a rewritten
+    // `repo_root` or hand-edited override cannot save and then resolve by JSON
+    // order.
     let mut claimed_paths: HashMap<&Path, &str> = HashMap::new();
     for checkout in &registry.checkouts {
         claim_checkout_path(

@@ -17,10 +17,13 @@ use super::super::legacy_decisions;
 use super::super::lifecycle::{ensure_completion_run_stopped, ensure_post_deploy_criteria_met};
 use super::super::resolves::pending_resolves_history;
 use super::FINAL_RECOVERY_REQUEUED_EVENT;
-use super::request::{FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest};
+use super::request::{
+    FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TERMINAL_REFUSAL_MARK,
+};
 use super::revision::FinalRecoveryTaskRevision;
 use super::verify::verify_on_base;
 use crate::OrbitRuntime;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
 const COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";
@@ -119,9 +122,14 @@ impl OrbitRuntime {
                     Some(reason) => Plan::refused(&task, request, &decision, reason),
                     None => self.plan(&task, request, &decision, infra.as_ref())?,
                 };
-                if plan.status == TaskStatus::Done {
+                // Completion checks guard a transition into done. `Plan::refused`
+                // copies the current status, so an already-done task is not a
+                // completion: the refusal comment and decision must still be
+                // recorded, including when a mutation proposal is unapplied.
+                if plan.status == TaskStatus::Done && task.status != TaskStatus::Done {
                     self.ensure_resolves_are_workspace_local(&task)?;
                     ensure_post_deploy_criteria_met(self, &task)?;
+                    self.ensure_mutation_proposals_applied(&task)?;
                     ensure_completion_run_stopped(self, &task, None, Some(&request.run_id))?;
                 }
                 self.write_plan(&task, request, &decision, &plan)?;
@@ -453,7 +461,7 @@ impl OrbitRuntime {
             }),
         });
         let published = if matches!(plan.outcome, FinalRecoveryOutcome::Requeued) {
-            self.published_owner_requeue_record(task, &request.run_id)?
+            self.published_owner_preservation(task, &request.run_id)?
         } else {
             None
         };
@@ -574,7 +582,7 @@ fn refusal(
 ) -> Option<String> {
     if task.status.is_terminal() {
         return Some(format!(
-            "task is already {}; final recovery never reopens settled work",
+            "task is already {}; {TERMINAL_REFUSAL_MARK}",
             task.status
         ));
     }

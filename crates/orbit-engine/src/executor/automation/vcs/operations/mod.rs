@@ -1,12 +1,16 @@
 mod check_annotations;
 mod ci;
+mod ci_rerun;
+mod dependency_record;
 mod dispatch;
 mod emission;
+mod evidence;
 mod input;
 mod pr;
 mod prerequisite;
 pub(super) mod process;
 mod push_retry;
+mod recovery_log;
 mod workflow_dependency;
 mod workflow_read;
 
@@ -19,12 +23,17 @@ pub(crate) use push_retry::valid_candidate_ref;
 pub(crate) const PUSH: &str = "push";
 /// [ORB-14338] Push one commit to a run-owned `refs/orbit/candidates/` ref.
 pub(crate) const CANDIDATE_REF_PUSH: &str = "push.candidate_ref";
+/// Publish a task's screenshot tree to its permanent `refs/orbit/evidence/` ref.
+pub(crate) const EVIDENCE_REF_PUSH: &str = "push.evidence_ref";
 /// The namespace a carried candidate ref lives under on `origin`.
 pub(crate) const CANDIDATE_REF_PREFIX: &str = "refs/orbit/candidates/";
 pub(crate) const PR_LIST: &str = "pr.list";
 /// Every open pull request, for closing a task's earlier delivery PRs.
 pub(crate) const PR_LIST_OPEN: &str = "pr.list_open";
+pub(crate) const PR_ADD_LABELS: &str = "pr.add_labels";
 pub(crate) const PR_CREATE: &str = "pr.create";
+pub(crate) const PR_EDIT_BODY: &str = "pr.edit_body";
+pub(crate) const PR_READY: &str = "pr.ready";
 pub(crate) const PR_VIEW: &str = "pr.view";
 pub(crate) const PR_MERGE: &str = "pr.merge";
 pub(crate) const PR_MERGE_CAPABILITIES: &str = "pr.merge_capabilities";
@@ -63,3 +72,5 @@ pub(crate) const CI_EMISSION_OBSERVE: &str = "ci.emission_observe";
 
 /// Current exact policy gates on an adopted provider head.
 pub(crate) const CI_CURRENT_GATES: &str = "ci.current_gates";
+
+pub(crate) const CI_RERUN_PLAN: &str = "ci.rerun_plan";

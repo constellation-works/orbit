@@ -66,6 +66,7 @@ const analytics = {
   ] },
 };
 const analyticsRequests = [];
+const relatedRequests = [];
 // When set, /api/audit pages through it like the real endpoint: newest first,
 // `before` keyset cursor, `x-audit-next-before` while a full page may have more.
 let pagedEvents = null;
@@ -73,12 +74,17 @@ let pagedEvents = null;
 // even though it is short: a capped scan that stopped before the window ended.
 let cappedHead = null;
 const auditRequests = [];
+const summaryRequests = [];
 // Paged requests `holdAudit` matches wait in `heldAudit` until the test answers
 // or fails them, so it decides the order responses settle in.
 let holdAudit = null;
 const heldAudit = [];
+// When set, /api/audit only returns events at or after this instant, the way
+// the real endpoint reparses a relative `since` against its clock per request.
+let auditCutoffMs = null;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
+  if (url.pathname === '/api/log/stream') { res.writeHead(204); res.end(); return; }
   if (url.pathname === '/api/audit' && pagedEvents) {
     auditRequests.push(url.searchParams);
     if (holdAudit && holdAudit(url.searchParams)) {
@@ -92,9 +98,23 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname.startsWith('/api/')) {
     let payload = events;
+    // Contract-shaped background responses let the Tools window scenario run
+    // the complete app, including scope changes, requests and URL restoration.
+    if (url.pathname === '/api/workspaces') payload = [{ id: 'ws_fixture', name: 'orbit', status: 'active', is_default: true }];
+    else if (url.pathname === '/api/log') payload = { events: [], offset: 0 };
+    else if (url.pathname === '/api/crews') payload = { default_crew: null, crews: [] };
+    else if (url.pathname === '/api/workflows/auto/readiness') payload = { capacity: { drain_phase: 'idle' }, tasks: [] };
+    else if (url.pathname === '/api/audit/summary') {
+      summaryRequests.push(url.searchParams.get('since'));
+      payload = { ...summary, window: url.searchParams.get('since') };
+    } else if (url.pathname !== '/api/audit') payload = { items: [], total: 0, limit: 100, truncated: false };
     if (url.pathname === '/api/codebase/analytics') {
       analyticsRequests.push(url.searchParams);
       payload = analytics;
+    }
+    if (url.pathname === '/api/codebase/related') {
+      relatedRequests.push(url.searchParams);
+      payload = { path: url.searchParams.get('path'), path_support: 3, min_support: 15, rows: [], empty_reason: { kind: 'path_below_minimum', path_support: 3, min_support: 15 } };
     }
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(payload));
@@ -103,7 +123,7 @@ const server = http.createServer((req, res) => {
   const served = dashboardFile(url.pathname);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
-  if (url.pathname === '/') data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
+  if (url.pathname === '/' && !url.searchParams.has('app')) data = data.toString().replace(/<script[^>]*src="[^"]*app.js"[^>]*><\/script>/g, '');
   res.setHeader('content-type', served.type);
   res.end(data);
 });
@@ -115,6 +135,7 @@ function answerAudit(url, res) {
     .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status')
       || (url.searchParams.get('status') === 'non_success' && event.status !== 'success'))
     .filter(event => url.searchParams.get('hide_unverified') !== 'true' || !(event.role === 'unverified' && event.status === 'success'))
+    .filter(event => auditCutoffMs === null || !event.timestamp || Date.parse(event.timestamp) >= auditCutoffMs)
     .slice(0, limit);
   const capped = before === null && cappedHead;
   const cursor = capped ? cappedHead.cursor : rows.length >= limit ? String(rows.at(-1).id) : null;
@@ -140,6 +161,103 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
+  page.on('pageerror', error => errors.push(String(error)));
+  const origin = `http://127.0.0.1:${server.address().port}/?app=1&workspace=ws_fixture`;
+  const before = process.argv.includes('--before');
+  const windowResults = [];
+  const selector = page.locator('#tools-window-selector');
+  const tab = value => selector.locator(`[data-window="${value}"]`);
+  const loadTools = async window => {
+    const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/summary');
+    await page.goto(`${origin}&window=${window}#analytics/reliability/tools`);
+    await response;
+    await page.waitForFunction(() => document.querySelector('#audit-summary-body .audit-summary-card'));
+    await page.evaluate(() => document.fonts.ready);
+  };
+  const assertWindow = async (selected, shared = selected) => {
+    await page.waitForFunction(selected => document.querySelector('#audit-summary-title').textContent.includes(selected), selected);
+    assert.equal(summaryRequests.at(-1), selected, 'Tools requests the effective summary cutoff');
+    assert.equal(new URL(page.url()).searchParams.get('window'), shared, 'the URL retains the shared Analytics window');
+    assert.equal(await page.evaluate(async () => (await import('/static/js/common.js')).getWindow()), shared);
+    assert.equal(await tab(selected).getAttribute('aria-selected'), 'true');
+    assert.equal(await tab(selected).getAttribute('tabindex'), '0');
+    assert.equal(await selector.locator('[aria-selected="true"]').count(), 1);
+    assert.equal(await selector.locator('[tabindex="0"]').count(), 1);
+    assert.match(await page.locator('#tools-meta').innerText(), new RegExp(selected));
+    windowResults.push({ selected, shared, since: summaryRequests.at(-1) });
+  };
+  await loadTools('24h');
+  if (!before) {
+    assert.deepEqual(await selector.locator('[role="tab"]').evaluateAll(tabs => tabs.map(tab => tab.dataset.window)), ['24h', '7d', '30d']);
+    assert.equal(await selector.getAttribute('role'), 'tablist');
+    await assertWindow('24h');
+    // Clicks must issue a fresh request, update the single shared window, and
+    // restore both the request and selected tab on reload of that URL.
+    for (const selected of ['7d', '30d', '24h']) {
+      const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/summary'
+        && new URL(response.url()).searchParams.get('since') === selected);
+      await tab(selected).click();
+      await response;
+      await assertWindow(selected);
+      const reloadResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/summary');
+      await page.reload();
+      await reloadResponse;
+      await assertWindow(selected);
+    }
+    // The shared helper activates tabs as focus moves and wraps at either end.
+    for (const [key, selected] of [['ArrowRight', '7d'], ['End', '30d'], ['ArrowRight', '24h'], ['ArrowLeft', '30d'], ['Home', '24h']]) {
+      await selector.locator('[tabindex="0"]').focus();
+      const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/audit/summary');
+      await page.keyboard.press(key);
+      await response;
+      await assertWindow(selected);
+      assert.equal(await tab(selected).evaluate(node => node === document.activeElement), true);
+    }
+    for (const shared of ['1h', 'all']) {
+      await loadTools(shared);
+      await assertWindow('24h', shared);
+      assert.match(await page.locator('#tools-meta').innerText(), /independent 24h window/i);
+      for (const width of [1440, 375]) {
+        await page.setViewportSize({ width, height: 1000 });
+        assert.equal(await page.locator('#tools-meta').isVisible(), true);
+        await page.screenshot({ path: path.join(evidence, `tools-window-${shared}-fallback-dark-${width}.png`), animations: 'disabled' });
+      }
+      // Clicking the already-highlighted fallback makes it the shared window.
+      await tab('24h').click();
+      await page.waitForFunction(() => new URL(location.href).searchParams.get('window') === '24h');
+      await assertWindow('24h');
+      assert.doesNotMatch(await page.locator('#tools-meta').innerText(), /independent/i);
+    }
+  }
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const selected of ['24h', '7d', '30d']) {
+      await loadTools(selected);
+      if (!before) {
+        await assertWindow(selected);
+        const fit = await page.locator('#tools-controls').evaluate(node => {
+          const box = node.getBoundingClientRect();
+          return { overflow: document.documentElement.scrollWidth > innerWidth,
+            outside: [...node.querySelectorAll('button, #tools-meta')].some(child => {
+              const rect = child.getBoundingClientRect();
+              return rect.left < box.left || rect.right > box.right;
+            }) };
+        });
+        assert.deepEqual(fit, { overflow: false, outside: false }, `Tools controls fit at ${width}px`);
+      }
+      await page.screenshot({ path: path.join(evidence, `tools-window-${selected}-dark-${width}${before ? '-before' : ''}.png`), animations: 'disabled' });
+    }
+  }
+  fs.writeFileSync(path.join(evidence, 'tools-windows.json'), JSON.stringify({ before, windows: windowResults, requests: summaryRequests, errors }, null, 2));
+  assert.deepEqual(errors, []);
+  if (before) {
+    console.log('Tools window before screenshots captured');
+  } else {
+    console.log('Tools windows: clicks, reload, shared state, bounded fallbacks, keyboard and desktop/phone controls passed');
+  }
+  // Retire the complete-app page before the renderer-only scenarios below.
+  await page.close();
+  page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('pageerror', error => errors.push(String(error)));
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h#diagnostics/incidents/events`);
   await page.evaluate(() => document.fonts.ready);
@@ -502,6 +620,103 @@ try {
   assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'the held older page continues the refreshed head');
   await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
   assert.equal(await page.locator('.audit-row').count(), 100, 'a later same-scope refresh keeps the loaded tail');
+  // A relative window expires retained tail rows on refresh: load 100 of 120
+  // events in a 1h window, advance the fixture clock ten minutes so only 61
+  // remain, and the refreshed list must drop the 39 expired tail rows while
+  // keeping the 11 still-valid ones behind the new head.
+  const expiryBase = Date.UTC(2026, 9, 28, 12, 0, 0);
+  const expiryStamp = (id) => new Date(expiryBase - (id >= 60 ? (120 - id) * 0.8 : 51 + (59 - id) * 0.2) * 60000).toISOString();
+  pagedEvents = Array.from({ length: 120 }, (_, index) => {
+    const id = 120 - index;
+    return { ...events[1], id, timestamp: expiryStamp(id), execution_id: `expiry-${id}`, status: 'success', role: 'codex' };
+  });
+  auditCutoffMs = expiryBase - 60 * 60000;
+  await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=all&since=1h'));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  assert.equal(await page.locator('.audit-row').count(), 50);
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'two pages load events 120 through 21');
+  auditCutoffMs = expiryBase - 50 * 60000;
+  auditRequests.length = 0;
+  await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
+  assert.equal(await page.locator('.audit-row').count(), 61, 'refresh removes the 39 expired tail rows and keeps the 11 valid ones');
+  assert.deepEqual(await rowTitles(), Array.from({ length: 61 }, (_, index) => `event ${120 - index}`), 'only events still in the 1h window remain, in order');
+  assert.ok(auditRequests.some(params => params.has('before')), 'the retained tail was revalidated against the server, not kept by ID alone');
+  assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'no older events remain in the shrunken window');
+  // A Load older page that settles while a same-scope refresh is revalidating
+  // its tail must survive that refresh, and paging must continue from it.
+  auditCutoffMs = null;
+  pagedEvents = Array.from({ length: 170 }, (_, index) => {
+    const id = 170 - index;
+    return { ...events[1], id, execution_id: `reval-${id}`, status: 'success', role: 'codex' };
+  });
+  await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=all'));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  assert.equal(await page.locator('.audit-row').count(), 50);
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 71', 'two pages load events 170 through 71');
+  holdAudit = params => params.has('before');
+  await page.evaluate(() => { globalThis.revalRefresh = auditFixture.fetchAndRenderAudit(auditContext).then(() => 'loaded', () => 'failed'); });
+  const walk = await takeHeld(params => params.get('before') === '121');
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  const olderDuringRefresh = await takeHeld(params => params.get('before') === '71');
+  holdAudit = null;
+  olderDuringRefresh.answer();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 150);
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: path.join(evidence, `events-revalidation-held-dark-${width}.png`), animations: 'disabled' });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  walk.answer();
+  assert.equal(await page.evaluate(() => revalRefresh), 'loaded');
+  assert.equal(await page.locator('.audit-row').count(), 150, 'the page loaded during revalidation stays on screen after the refresh lands');
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: path.join(evidence, `events-revalidation-landed-dark-${width}.png`), animations: 'disabled' });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'the refreshed list still ends at the page loaded during revalidation');
+  auditRequests.length = 0;
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 170);
+  assert.equal(auditRequests.at(-1).get('before'), '21', 'Load older continues from the oldest row on screen');
+  assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'no button once the window is exhausted after the refresh');
+  // A successful head still renders when the second older-page revalidation
+  // fails. Discard the partial walk and retain the previously loaded tail.
+  pagedEvents.unshift({ ...pagedEvents[0], id: 171, execution_id: 'reval-171' });
+  holdAudit = isOlder;
+  await page.evaluate(() => { globalThis.failedTailRefresh = auditFixture.fetchAndRenderAudit(auditContext).then(() => 'loaded', () => 'failed'); });
+  const firstTailPage = await takeHeld(params => params.get('before') === '122');
+  firstTailPage.answer();
+  const secondTailPage = await takeHeld(params => params.get('before') === '72');
+  secondTailPage.fail();
+  const tailFailure = {
+    outcome: await page.evaluate(() => failedTailRefresh),
+    rows: await rowTitles(),
+    panelErrors: await page.locator('#audit-body [data-panel-status].action-error').count(),
+  };
+  holdAudit = null;
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.locator('.audit-row').first().scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, `events-tail-failure-dark-${width}.png`), animations: 'disabled' });
+  }
+  fs.writeFileSync(path.join(evidence, 'tail-failure.json'), JSON.stringify(tailFailure, null, 2));
+  assert.equal(tailFailure.rows[0], 'event 171', 'the fresh head renders when the second tail revalidation page fails');
+  assert.equal(tailFailure.outcome, 'loaded', 'a tail revalidation failure does not fail a successful head refresh');
+  assert.equal(tailFailure.panelErrors, 0, 'a tail revalidation failure shows no panel failure');
+  assert.deepEqual(tailFailure.rows, Array.from({ length: 171 }, (_, index) => `event ${171 - index}`),
+    'the fallback retains the full prior tail in order without duplicates or a partial walk');
+  assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'the fallback retains the exhausted tail cursor');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  auditCutoffMs = null;
   pagedEvents = null;
   await page.evaluate(async () => {
     const codebase = await import('/js/codebase.js');
@@ -525,76 +740,8 @@ try {
   });
   assert.ok(fullWidth.panel >= fullWidth.main - 2, `Codebase takes the full width: ${JSON.stringify(fullWidth)}`);
 
-  // Seven tiles are toggle buttons; the overlap list is open by default and
-  // holds exactly the paths in two or more of the four path rankings.
-  const tiles = page.locator('#codebase-body .codebase-tile');
-  assert.equal(await tiles.count(), 7);
-  assert.deepEqual(await tiles.evaluateAll(nodes => nodes.map(node => [node.tagName, node.getAttribute('aria-pressed')])),
-    [['BUTTON', 'true'], ...Array.from({ length: 6 }, () => ['BUTTON', 'false'])]);
-  const rowPaths = () => page.locator('#codebase-list .codebase-row .codebase-path').evaluateAll(nodes => nodes.map(node => node.textContent));
-  assert.deepEqual(await rowPaths(), ['crates/orbit-core/src/application/task/mod.rs', 'docs/README.md', 'src/blocked.rs']);
-  const selectedPath = () => page.locator('#codebase-list .codebase-row[aria-current="true"] .codebase-path').textContent();
-  assert.equal(await selectedPath(), 'crates/orbit-core/src/application/task/mod.rs', 'the first row is selected');
-  assert.equal(await page.locator('#codebase-detail .codebase-task').count(), 1);
-  await page.locator('#codebase-list .codebase-row').nth(1).click();
-  assert.equal(await selectedPath(), 'docs/README.md');
-  assert.match(await page.locator('#codebase-detail [data-ranking="regressions"] .codebase-standing-rank').textContent(), /^not in the top 25$/);
-
-  // A poll with the same payload keeps the tile, the row and the scroll.
-  await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').click();
-  assert.equal(await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true');
-  const scroller = page.locator('.tab-pane[data-tab="analytics"]');
-  await page.setViewportSize({ width: 1440, height: 600 });
-  const scrolled = await scroller.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
-  assert.ok(scrolled > 0, 'the fixture page is tall enough to scroll');
-  await refreshCodebase();
-  assert.equal(await scroller.evaluate(node => node.scrollTop), scrolled, 'a poll keeps the scroll position');
-  assert.equal(await page.locator('#codebase-body .codebase-tile[data-tile="footprint_misses"]').getAttribute('aria-pressed'), 'true', 'a poll keeps the tile');
-  assert.equal(await selectedPath(), 'docs/README.md', 'a poll keeps the row');
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.screenshot({ path: path.join(evidence, 'codebase-1440.png'), fullPage: true, animations: 'disabled' });
-
-  // The segments and the empty-coupling action rewrite the hash and the request.
-  await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').click();
-  assert.equal(await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').getAttribute('aria-pressed'), 'true');
-  assert.deepEqual(await page.evaluate(() => globalThis.codebaseHashes), ['#analytics/codebase?rollup=crate']);
-  await refreshCodebase();
-  assert.equal(analyticsRequests.at(-1).get('rollup'), 'crate', 'the rollup segment changes the request');
-  await page.locator('#codebase-body .codebase-tile[data-tile="change_coupling"]').click();
-  await page.getByRole('button', { name: 'Group by directory' }).click();
-  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase?rollup=dir');
-  await refreshCodebase();
-  assert.equal(analyticsRequests.at(-1).get('rollup'), 'dir');
-
-  // 375 px: no horizontal page scroll, every tile and row inside the body,
-  // the detail stacked under the list, and readable text.
-  await page.locator('#codebase-body .codebase-tile[data-tile="overlap"]').click();
-  for (const width of [375, 1280]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.evaluate(() => new Promise(requestAnimationFrame));
-    const fit = await page.evaluate(() => {
-      const body = document.getElementById('codebase-body').getBoundingClientRect();
-      const pane = document.querySelector('.tab-pane[data-tab="analytics"]');
-      const outside = [...document.querySelectorAll('#codebase-body .codebase-tile, #codebase-body .codebase-row, #codebase-body .codebase-metric, #codebase-controls .codebase-seg')]
-        .map(node => node.getBoundingClientRect())
-        .filter(box => box.left < body.left - 1 || box.right > body.right + 1);
-      const list = document.getElementById('codebase-list').getBoundingClientRect();
-      const detail = document.getElementById('codebase-detail').getBoundingClientRect();
-      return {
-        page: document.documentElement.scrollWidth - innerWidth,
-        pane: pane.scrollWidth - pane.clientWidth,
-        outside: outside.length,
-        stacked: detail.top >= list.bottom - 1,
-      };
-    });
-    assert.equal(fit.page, 0, `no horizontal page scroll at ${width}: ${JSON.stringify(fit)}`);
-    assert.equal(fit.pane, 0, `no horizontal pane scroll at ${width}: ${JSON.stringify(fit)}`);
-    assert.equal(fit.outside, 0, `tiles, rows and segments fit at ${width}: ${JSON.stringify(fit)}`);
-    assert.equal(fit.stacked, width < 1280, `the detail stacks under the list only on a narrow screen at ${width}`);
-    await page.screenshot({ path: path.join(evidence, `codebase-${width}.png`), fullPage: true, animations: 'disabled' });
-  }
   // Text contrast against the composited background, through the alpha
-  // washes of selected rows and hints.
+  // washes of shaded cells and hints.
   const contrastFailures = () => page.evaluate(() => {
     const parse = value => (value.match(/[\d.]+/g) || []).map(Number);
     const blend = (top, under) => {
@@ -631,12 +778,94 @@ try {
     }
     return failures;
   });
-  assert.deepEqual(await contrastFailures(), [], 'codebase text meets 4.5:1');
+  // Hotspots: one column per signal with data, the paths in two or more
+  // rankings first, then the top three of each signal no other flags.
+  const columns = await page.locator('#codebase-body .codebase-hot-table thead th[data-signal]').evaluateAll(nodes => nodes.map(node => node.dataset.signal));
+  assert.deepEqual(columns, ['regressions', 'footprint_misses', 'blocked', 'rejected']);
+  const rowPaths = () => page.locator('#codebase-body .codebase-hot-row').evaluateAll(nodes => nodes.map(node => node.dataset.path));
+  assert.deepEqual((await rowPaths()).slice(0, 3), ['crates/orbit-core/src/application/task/mod.rs', 'docs/README.md', 'src/blocked.rs']);
+  assert.equal(await page.locator('#codebase-body .codebase-tile, #codebase-body .codebase-crosstab').count(), 0, 'no ranking tiles or cross-tabs');
+  assert.match(await page.locator('#codebase-body .codebase-notes').textContent(), /Blocks from infrastructure \(3\) and manual holds \(0\) never count against paths\./);
+
+  // A poll with the same payload keeps the scroll position.
+  const scroller = page.locator('.tab-pane[data-tab="analytics"]');
+  await page.setViewportSize({ width: 1440, height: 600 });
+  const scrolled = await scroller.evaluate(node => { node.scrollTop = 200; return node.scrollTop; });
+  assert.ok(scrolled > 0, 'the fixture page is tall enough to scroll');
+  await refreshCodebase();
+  assert.equal(await scroller.evaluate(node => node.scrollTop), scrolled, 'a poll keeps the scroll position');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({ path: path.join(evidence, 'codebase-1440.png'), fullPage: true, animations: 'disabled' });
+
+  // A path opens its deep-linked file view: tiles, regressed tasks and the
+  // related files, which explain a path below the minimum.
+  await page.locator('#codebase-body .codebase-hot-row').first().locator('a.codebase-path-link').click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase/file?path=crates%2Forbit-core%2Fsrc%2Fapplication%2Ftask%2Fmod.rs');
+  assert.equal(await page.locator('#codebase-file-path').textContent(), 'mod.rs');
+  assert.equal(await page.locator('#codebase-toolbar').isVisible(), false, 'the file view has no toolbar');
+  assert.equal(await page.locator('#codebase-body .codebase-file-tile').count(), 4);
+  assert.equal(await page.locator('#codebase-body .codebase-task').count(), 1);
+  await page.waitForFunction(() => /ranking partners needs 15/.test(document.getElementById('codebase-body').textContent));
+  assert.equal(relatedRequests.at(-1).get('path'), 'crates/orbit-core/src/application/task/mod.rs');
+  assert.match(await page.locator('#codebase-body .codebase-file-related .codebase-empty').textContent(), /^Only 3 landed tasks changed this file in the last 90 days; ranking partners needs 15\.$/);
+  assert.equal(await page.getByRole('button', { name: 'Use all time' }).isVisible(), true);
+  const contrastFile = await contrastFailures();
+  await page.screenshot({ path: path.join(evidence, 'codebase-file-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.locator('.codebase-file-related').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'codebase-file-dark-375.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('#codebase-body a.codebase-back').click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase');
+
+  // The segments, the view tabs and the empty-coupling action rewrite the
+  // hash and the request.
+  await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').click();
+  assert.equal(await page.locator('#codebase-rollup .codebase-seg[data-value="crate"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase?rollup=crate');
+  await refreshCodebase();
+  assert.equal(analyticsRequests.at(-1).get('rollup'), 'crate', 'the rollup segment changes the request');
+  await page.locator('#codebase-views a[data-view="coupling"]').click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase/coupling?rollup=crate');
+  assert.equal(await page.locator('#codebase-views a[data-view="coupling"]').getAttribute('aria-current'), 'page');
+  await page.getByRole('button', { name: 'Group by directory' }).click();
+  assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase/coupling?rollup=dir');
+  await refreshCodebase();
+  assert.equal(analyticsRequests.at(-1).get('rollup'), 'dir');
+  const contrastCoupling = await contrastFailures();
+  await page.locator('#codebase-views a[data-view="hotspots"]').click();
+
+  // 375 px: no horizontal page scroll, the toolbar wraps inside the body and
+  // the table scrolls inside its own box; readable text.
+  for (const width of [375, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    const fit = await page.evaluate(() => {
+      const body = document.getElementById('codebase-body').getBoundingClientRect();
+      const pane = document.querySelector('.tab-pane[data-tab="analytics"]');
+      const outside = [...document.querySelectorAll('#codebase-body .codebase-hot-scroll, #codebase-body .codebase-filters, #codebase-body .codebase-note, #codebase-controls .codebase-seg, #codebase-controls .codebase-select, #codebase-search')]
+        .map(node => node.getBoundingClientRect())
+        .filter(box => box.left < body.left - 1 || box.right > body.right + 1);
+      const box = document.querySelector('#codebase-body .codebase-hot-scroll');
+      return {
+        page: document.documentElement.scrollWidth - innerWidth,
+        pane: pane.scrollWidth - pane.clientWidth,
+        outside: outside.length,
+        tableScrolls: box.scrollWidth > box.clientWidth,
+      };
+    });
+    assert.equal(fit.page, 0, `no horizontal page scroll at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.pane, 0, `no horizontal pane scroll at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.outside, 0, `the toolbar, filters, table box and notes fit at ${width}: ${JSON.stringify(fit)}`);
+    assert.equal(fit.tableScrolls, width < 1280, `the table scrolls inside its box only on a narrow screen at ${width}`);
+    await page.screenshot({ path: path.join(evidence, `codebase-${width}.png`), fullPage: true, animations: 'disabled' });
+  }
+  assert.deepEqual([await contrastFailures(), contrastFile, contrastCoupling], [[], [], []], 'codebase text meets 4.5:1 in Hotspots, the file view and Coupling');
 
   await page.setViewportSize({ width: 1440, height: 900 });
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(evidence, 'measurements.json'), JSON.stringify({ events: measurements, codebase: { fullWidth }, errors }, null, 2));
-  console.log('Audit browser: Tools flush column bottoms (both height cases, every side-card subset, 1500/1600/1920 and single-column 1499/375), Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase view (tiles, overlap list, detail, poll stability, hash, 375 px and contrast) passed');
+  console.log('Audit browser: Tools flush column bottoms (both height cases, every side-card subset, 1500/1600/1920 and single-column 1499/375), Events statuses and Tools summary columns at 1440/1024/1920/375, duplicate targets, duration buckets, keyboard expansion, paging order across a filter change, and the full-width Analytics › Codebase views (Hotspots table, file view and related files, Coupling, poll stability, hashes, 375 px and contrast) passed');
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true }).catch(() => {});
   throw error;

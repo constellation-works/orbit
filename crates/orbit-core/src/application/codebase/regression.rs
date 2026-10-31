@@ -10,9 +10,15 @@
 //! - **detected_by** is who found it: the regression task's tags through
 //!   [`DETECTOR_TABLE`], else its filer.
 //!
+//! Each link also carries its payload's severity and severity source, shown
+//! beside the dimensions but not a dimension: nothing breaks down or filters
+//! by it, and its recorded `sites`, which attribute the regressed task to
+//! paths in the Regressions ranking.
+//!
 //! A filter keeps the links whose dimensions all match. It narrows the path
-//! ranking and the per-path detail (a regressed task counts when any of its
-//! links matches) and the crew and complexity rates.
+//! ranking and the per-path detail (a regressed task counts against a path
+//! when a kept link names a site under it) and the crew and complexity
+//! rates.
 
 use std::collections::BTreeMap;
 
@@ -233,10 +239,16 @@ pub(super) struct RegressionLink {
     dims: [&'static str; 4],
     /// `landed`, `footprint` or `none`: what the layer was read from.
     layer_source: &'static str,
+    /// The link's severity and who set it; `absent` for both without a
+    /// payload.
+    severity: (&'static str, &'static str),
     /// When the regression task was filed.
     pub(super) filed_at: DateTime<Utc>,
     /// The regression task's title: its one-line account of the defect.
     pub(super) summary: String,
+    /// Where the defect lives, as the payload's `sites` record it; empty
+    /// for a link filed without sites.
+    pub(super) sites: Vec<String>,
 }
 
 impl RegressionLink {
@@ -259,6 +271,9 @@ impl RegressionLink {
             "layer": self.dims[2],
             "layer_source": self.layer_source,
             "detected_by": self.dims[3],
+            "severity": self.severity.0,
+            "severity_source": self.severity.1,
+            "sites": self.sites,
         })
     }
 }
@@ -270,9 +285,11 @@ pub(super) struct PendingLink {
     pub(super) task_id: String,
     nature: &'static str,
     escape: &'static str,
+    severity: (&'static str, &'static str),
     detected_by: &'static str,
     filed_at: DateTime<Utc>,
     summary: String,
+    sites: Vec<String>,
 }
 
 impl PendingLink {
@@ -282,20 +299,30 @@ impl PendingLink {
         fix: &Task,
         classification: Option<RegressionClassification>,
     ) -> Self {
-        let (nature, escape) = classification.map_or((ABSENT, ABSENT), |classification| {
-            (
-                nature_name(classification.nature),
-                escape_name(classification.escape),
-            )
-        });
+        let (nature, escape, severity, sites) = classification.map_or(
+            (ABSENT, ABSENT, (ABSENT, ABSENT), Vec::new()),
+            |classification| {
+                (
+                    nature_name(classification.nature),
+                    escape_name(classification.escape),
+                    (
+                        classification.severity.as_str(),
+                        classification.severity_source.as_str(),
+                    ),
+                    classification.sites,
+                )
+            },
+        );
         Self {
             regressed,
             task_id: fix.id.to_string(),
             nature,
             escape,
+            severity,
             detected_by: detected_by(fix.created_by.as_deref(), fix.origin, &fix.tags),
             filed_at: fix.created_at,
             summary: fix.title.clone(),
+            sites,
         }
     }
 
@@ -306,8 +333,10 @@ impl PendingLink {
             task_id: self.task_id,
             dims: [self.nature, self.escape, layer, self.detected_by],
             layer_source,
+            severity: self.severity,
             filed_at: self.filed_at,
             summary: self.summary,
+            sites: self.sites,
         }
     }
 }

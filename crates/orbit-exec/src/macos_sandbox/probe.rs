@@ -1,7 +1,10 @@
-//! Test capability checks; production dispatch keeps its fail-closed spawn path.
+//! Capability checks for tests and for `orbit plugin test`, which defers its
+//! cases rather than spawn a backend where the apply is refused; production
+//! dispatch keeps its fail-closed spawn path.
 
 use std::io::Write;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Result of applying a permissive Seatbelt profile to a harmless child.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,12 +69,40 @@ pub fn seatbelt_deferral_notice(test: &str, detail: &str) -> String {
     )
 }
 
+/// Set only by [`force_seatbelt_refusal_for_test`], which production code
+/// cannot call: it exists only under the `test-support` feature.
+static FORCED_SEATBELT_REFUSAL: AtomicBool = AtomicBool::new(false);
+
 /// Probe once per process, using a trusted absolute wrapper, a permissive
 /// profile and `/usr/bin/true`. The child has a ten-second deadline and capped
 /// output. This diagnostic does not change production sandbox behavior.
 pub fn probe_sandbox_exec_apply() -> &'static SandboxExecApplyProbe {
     static PROBE: OnceLock<SandboxExecApplyProbe> = OnceLock::new();
-    PROBE.get_or_init(probe_now)
+    static FORCED: OnceLock<SandboxExecApplyProbe> = OnceLock::new();
+    if FORCED_SEATBELT_REFUSAL.load(Ordering::SeqCst) {
+        return FORCED.get_or_init(|| {
+            SandboxExecApplyProbe::ApplyRefused(
+                "sandbox_apply refused by ORBIT_TEST_FORCE_SEATBELT_REFUSAL".to_string(),
+            )
+        });
+    }
+    PROBE.get_or_init(probe_platform)
+}
+
+/// Test seam reproducing a nested-Seatbelt lane on any host: after this
+/// call the probe reports the apply refused, so sandbox-gated tests print
+/// their sanctioned deferral notice and skip exactly as they do inside a
+/// macOS agent sandbox.
+///
+/// This setter exists only under the `test-support` feature, enabled solely
+/// from `[dev-dependencies]`. No production code calls it and nothing in
+/// this crate reads an environment variable to set it, so an inherited
+/// variable cannot reroute a production `orbit plugin test` run; only a
+/// test harness that explicitly installs the refusal (from its own child
+/// process, before the guard or gate runs) sees it.
+#[cfg(feature = "test-support")]
+pub fn force_seatbelt_refusal_for_test() {
+    FORCED_SEATBELT_REFUSAL.store(true, Ordering::SeqCst);
 }
 
 /// Shared guard for tests that actually launch a Seatbelt-confined backend.
@@ -115,7 +146,7 @@ pub(super) fn classify_apply_result(
 }
 
 #[cfg(target_os = "macos")]
-fn probe_now() -> SandboxExecApplyProbe {
+fn probe_platform() -> SandboxExecApplyProbe {
     use orbit_common::process::run_bounded_capped;
     use std::process::Command;
     use std::time::Duration;
@@ -138,6 +169,6 @@ fn probe_now() -> SandboxExecApplyProbe {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn probe_now() -> SandboxExecApplyProbe {
+fn probe_platform() -> SandboxExecApplyProbe {
     SandboxExecApplyProbe::NotMacos
 }

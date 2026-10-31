@@ -13,6 +13,7 @@ use orbit_types::workflow::activity_job::Provider;
 /// silently coercing dispatch to a wrong runtime.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CrewConfig {
+    pub name: Option<String>,
     pub provider: Option<Provider>,
     pub model: Option<String>,
     pub reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,
@@ -24,6 +25,8 @@ pub struct CrewConfig {
     /// ([`orbit_types::identity::Crew::account`]); `None` for a crew on its
     /// provider's default login.
     pub account: Option<String>,
+    /// The crew sets `vision = false`: it may not be given images.
+    pub vision_disabled: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -36,4 +39,7 @@ pub struct PrConfig {
     /// `pr.delivery_authors`: forge logins whose pull requests count as
     /// Orbit's. Empty means the login that opened this run's pull request.
     pub delivery_authors: Vec<String>,
+    /// `pr.*`, `commit.*` and `branch.*` templates and switches; the default
+    /// is Orbit's built-in titles, bodies, messages and branch names.
+    pub conventions: orbit_types::workflow::DeliveryConventions,
 }

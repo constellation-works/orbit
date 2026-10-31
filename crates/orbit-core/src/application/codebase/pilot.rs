@@ -9,14 +9,19 @@
 //! receipt names its pilot job run (`pilot_run_id`), whose record holds the
 //! frozen activity crew draw; invocation evidence holds the pilot model. A
 //! receipt written before that field is matched to the one task-pilot run
-//! active when it was written, or among several, the one whose step outputs
-//! carry its operation id.
+//! active when it was written, or among several, the one whose apply report
+//! carries its exact operation id. Models come from the producing worker step
+//! when its apply report is available. Without a report, only a single
+//! recorded worker can identify the round (including a repair-only run).
+//! Task links distinguish fan-out invocations; ambiguous evidence stays unknown.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
+use orbit_store::contracts::{InvocationQuery, InvocationRecord, JobRunQuery};
+use orbit_types::workflow::{JobRun, JobV2Step, JobV2StepBody};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -45,15 +50,86 @@ struct RunRecord {
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
     run: PilotRun,
+    /// Loaded once per attributed run, shared across its tasks and receipts.
+    invocations: RefCell<Option<Vec<InvocationRecord>>>,
 }
 
-/// The workspace's task-pilot runs, read once per scan without their steps.
-struct PilotRuns {
+impl RunRecord {
+    fn model_for_pilot_receipt(
+        &self,
+        runtime: &OrbitRuntime,
+        steps: &[(String, String)],
+        producing: &[usize],
+        task_id: &str,
+    ) -> Option<String> {
+        let mut invocations = self.invocations.borrow_mut();
+        let invocations = invocations.get_or_insert_with(|| {
+            // A truncated or failed read cannot establish an identity.
+            const LIMIT: usize = 1000;
+            match runtime.workspace_invocation_records(InvocationQuery {
+                job_run_id: Some(self.run.run_id.clone()),
+                limit: LIMIT,
+                ..Default::default()
+            }) {
+                Ok(records) if records.len() < LIMIT => records,
+                Ok(_) => {
+                    tracing::warn!(run_id = %self.run.run_id, "pilot identity: invocation read truncated");
+                    Vec::new()
+                }
+                Err(error) => {
+                    tracing::warn!(run_id = %self.run.run_id, %error, "pilot identity: invocations unreadable");
+                    Vec::new()
+                }
+            }
+        });
+        let workers: Vec<_> = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, worker))| {
+                let matches = match producing {
+                    [producing] => *producing == index,
+                    [] => invocations.iter().any(|invocation| {
+                        invocation.activity_id == *worker
+                            && (invocation.task_ids.is_empty()
+                                || invocation.task_ids.iter().any(|id| id == task_id))
+                    }),
+                    _ => false,
+                };
+                matches.then_some(worker)
+            })
+            .collect();
+        let [worker] = workers.as_slice() else {
+            return None;
+        };
+        let recorded: Vec<_> = invocations
+            .iter()
+            .filter(|invocation| invocation.activity_id == **worker)
+            .collect();
+        // Records are newest first. A task-linked retry supersedes its
+        // previous invocation, even when its model is unrecorded.
+        if let Some(invocation) = recorded
+            .iter()
+            .find(|invocation| invocation.task_ids.iter().any(|id| id == task_id))
+        {
+            return invocation.model.clone();
+        }
+        // Legacy unlinked evidence is usable only when unique.
+        match recorded.as_slice() {
+            [invocation] if invocation.task_ids.is_empty() => invocation.model.clone(),
+            _ => None,
+        }
+    }
+}
+
+/// The workspace's task-pilot runs, read once per scan without their steps:
+/// what every receipt, held or clean, is attributed to.
+pub(in crate::application) struct PilotRuns {
     runs: Vec<RunRecord>,
+    steps: Vec<(String, String)>,
 }
 
 impl PilotRuns {
-    fn load(runtime: &OrbitRuntime) -> Self {
+    pub(in crate::application) fn load(runtime: &OrbitRuntime) -> Self {
         let runs = runtime
             .stores()
             .jobs()
@@ -66,22 +142,41 @@ impl PilotRuns {
                 tracing::warn!(%error, "pilot scorecard: task-pilot runs unreadable");
                 Vec::new()
             });
+        Self::from_runs(runtime, runs)
+    }
+
+    /// Detail reads with linked receipts need only their recorded runs. A
+    /// legacy receipt without a run id still needs the overlapping-run scan.
+    pub(in crate::application) fn load_for_receipts<'a>(
+        runtime: &OrbitRuntime,
+        run_ids: impl Iterator<Item = Option<&'a str>>,
+    ) -> Self {
+        let Some(ids) = run_ids.collect::<Option<BTreeSet<_>>>() else {
+            return Self::load(runtime);
+        };
+        let runs = ids
+            .into_iter()
+            .filter_map(|id| match runtime.get_job_run_backend(id) {
+                Ok(Some(run)) if run.job_id == PILOT_JOB => Some(run),
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::warn!(run_id = id, %error, "pilot identity: run unreadable");
+                    None
+                }
+            })
+            .collect();
+        Self::from_runs(runtime, runs)
+    }
+
+    fn from_runs(runtime: &OrbitRuntime, runs: Vec<JobRun>) -> Self {
         let crews = runtime
             .recorded_run_crews(runs.iter())
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "pilot scorecard: recorded crews unreadable");
                 Default::default()
             });
-        let ids = runs
-            .iter()
-            .map(|run| run.run_id.to_string())
-            .collect::<Vec<_>>();
-        let mut models = runtime
-            .recorded_activity_models("task_pilot", &ids)
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "pilot scorecard: invocation models unreadable");
-                Default::default()
-            });
+        // Worker ids, rather than activity catalog names, name invocations.
+        let steps = pilot_steps(runtime);
         let runs = runs
             .into_iter()
             .map(|run| RunRecord {
@@ -90,61 +185,104 @@ impl PilotRuns {
                 run: PilotRun {
                     run_id: run.run_id.to_string(),
                     crew: crews.crews(&run, None).into_iter().next(),
-                    model: models.remove(run.run_id.as_str()).flatten(),
+                    model: None,
                     seconds: run.started_at.zip(run.finished_at).map(|(start, end)| {
                         (end - start).num_milliseconds().max(0) as f64 / 1000.0
                     }),
                 },
+                invocations: RefCell::new(None),
             })
             .collect();
-        Self { runs }
+        Self { runs, steps }
     }
 
-    /// The run a receipt names, else the one task-pilot run active when it
-    /// was written, else among several the one whose step outputs carry its
-    /// operation id.
-    fn attribute(
+    /// Explicit run ids win. Legacy receipts use a unique active run, or
+    /// disambiguate overlapping runs by exact operation id in an apply report.
+    pub(in crate::application) fn attribute(
         &self,
         runtime: &OrbitRuntime,
+        task_id: &str,
         run_id: Option<&str>,
         at: DateTime<Utc>,
         operation_id: &str,
         now: DateTime<Utc>,
     ) -> Option<PilotRun> {
-        if let Some(run_id) = run_id {
-            return self
-                .runs
-                .iter()
-                .find(|record| record.run.run_id == run_id)
-                .map(|record| record.run.clone());
-        }
-        let active: Vec<&RunRecord> = self
+        let candidates: Vec<_> = self
             .runs
             .iter()
             .filter(|record| {
-                record.started_at.is_some_and(|started| started <= at)
-                    && record.finished_at.unwrap_or(now) >= at
+                if let Some(run_id) = run_id {
+                    record.run.run_id == run_id
+                } else {
+                    record.started_at.is_some_and(|started| started <= at)
+                        && record.finished_at.unwrap_or(now) >= at
+                }
             })
             .collect();
-        let found: Vec<&RunRecord> = if active.len() > 1 {
-            active
-                .into_iter()
-                .filter(|record| {
-                    runtime
-                        .read_run_state(&record.run.run_id)
-                        .ok()
-                        .flatten()
-                        .and_then(|state| serde_json::to_string(&state.step_outputs).ok())
-                        .is_some_and(|outputs| outputs.contains(operation_id))
+        let mut found = candidates.iter().filter_map(|record| {
+            let state = runtime.read_run_state(&record.run.run_id).ok().flatten();
+            let producing: Vec<_> = self
+                .steps
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (step, _))| {
+                    let tasks = state.as_ref()?.pipeline_step_output(step)?["tasks"].as_array()?;
+                    let matches = tasks
+                        .iter()
+                        .any(|task| task["operation_id"].as_str() == Some(operation_id));
+                    matches.then_some(index)
                 })
-                .collect()
-        } else {
-            active
-        };
-        match found.as_slice() {
-            [record] => Some(record.run.clone()),
-            _ => None,
+                .collect();
+            if candidates.len() > 1 && producing.len() != 1 {
+                return None;
+            }
+            let mut run = record.run.clone();
+            run.model = record.model_for_pilot_receipt(runtime, &self.steps, &producing, task_id);
+            Some(run)
+        });
+        let run = found.next()?;
+        found.next().is_none().then_some(run)
+    }
+}
+
+/// Apply step ids paired with their pilot worker ids, in pipeline order.
+/// Read the job definition so renaming a worker or apply step preserves attribution.
+fn pilot_steps(runtime: &OrbitRuntime) -> Vec<(String, String)> {
+    let job = match runtime.resolved_job_spec(PILOT_JOB) {
+        Ok(job) => job,
+        Err(error) => {
+            tracing::warn!(%error, "pilot scorecard: task-pilot definition unreadable");
+            return Vec::new();
         }
+    };
+    job.steps
+        .iter()
+        .filter_map(|apply| {
+            let input = activity_input(apply, "apply_task_pilot_results")?;
+            let results = input.get("results")?.as_str()?;
+            let worker = job.steps.iter().find_map(|step| {
+                let JobV2StepBody::FanOut { fan_out, fan_in } = &step.body else {
+                    return None;
+                };
+                activity_input(&fan_out.worker, "task_pilot")?;
+                let collect = fan_in.collect.as_deref().unwrap_or(&step.id);
+                (results == format!("{{{{ steps.{collect}.output }}}}"))
+                    .then_some(&fan_out.worker.id)
+            })?;
+            Some((apply.id.clone(), worker.clone()))
+        })
+        .collect()
+}
+
+fn activity_input<'a>(step: &'a JobV2Step, name: &str) -> Option<&'a Value> {
+    match &step.body {
+        JobV2StepBody::Target(target) if target.activity_name.as_deref() == Some(name) => {
+            target.default_input.as_ref()
+        }
+        JobV2StepBody::TargetRef(target) if target.target == format!("activity:{name}") => {
+            target.default_input.as_ref()
+        }
+        _ => None,
     }
 }
 
@@ -268,12 +406,13 @@ pub(in crate::application) struct PilotEvidence {
 /// Every done task with a landing receipt and a pilot assessment, apart
 /// from bulk tasks (more than [`LARGE_FOOTPRINT_CAP`] landed files) and
 /// `no-diff-expected` ones, each attributed to its pilot run, and every lock
-/// wait, whenever it happened, on a path one of them held.
+/// wait, whenever it happened, on a path one of them held. `runs` is loaded
+/// on first use and left for the caller to attribute other receipts with.
 pub(in crate::application) fn pilot_evidence(
     runtime: &OrbitRuntime,
     facts: &CodebaseFacts,
+    runs: &mut Option<PilotRuns>,
 ) -> PilotEvidence {
-    let mut runs = None;
     let mut assessments = Vec::new();
     for task in &facts.tasks {
         let (Some(landed), Some(inputs)) = (&task.landed, &task.pilot) else {
@@ -285,6 +424,7 @@ pub(in crate::application) fn pilot_evidence(
         let runs = runs.get_or_insert_with(|| PilotRuns::load(runtime));
         let run = runs.attribute(
             runtime,
+            &task.id,
             inputs.run_id.as_deref(),
             inputs.at,
             &inputs.operation_id,

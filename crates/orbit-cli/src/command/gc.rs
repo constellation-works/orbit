@@ -231,7 +231,10 @@ impl Execute for AuditGcArgs {
                   keep working, and `archived_at` records when the state was dropped. The \
                   host's per-minute run and host resource history, and the admission \
                   forecasts recorded against it, older than 30 days go in the same pass, \
-                  whatever the window.\n\n\
+                  whatever the window, except rows kept at any age by count: the newest \
+                  max(200, machine.auto_concurrency.profile_window) deliveries per workspace, \
+                  work class and complexity, the newest 10,000 forecasts, and host minutes \
+                  from the oldest kept forecast onward.\n\n\
                   Examples:\n  orbit gc runs\n  orbit gc runs --apply"
 )]
 pub struct RunGcArgs {

@@ -13,6 +13,7 @@ mod build;
 mod callback;
 mod envelope;
 mod lifecycle;
+mod line_queue;
 mod loader;
 mod mcp;
 mod migrate;
@@ -24,11 +25,11 @@ mod tool;
 mod tests;
 
 pub use backend::{
-    BrokeredCaller, DeliveredPluginSecret, DroppedFsRoot, PLUGIN_GRANT_WITNESS_DIR,
-    PLUGIN_SECRET_STORE_DIR, PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginConfigSection,
-    PluginProgramStatus, PluginSandboxProfile, PluginSecretDelivery, PluginSecretRotation,
-    PluginSecretSource, RenderedFsRoots, plugin_grant_witness_relative, program_statuses,
-    render_fs_roots, resolve_declared_programs,
+    BrokeredCaller, DECISION_CHANNEL_STORE_DIR, DeliveredPluginSecret, DroppedFsRoot,
+    PLUGIN_GRANT_WITNESS_DIR, PLUGIN_SECRET_STORE_DIR, PLUGIN_TIMEOUT_CEILING_MS,
+    PluginBackendSpec, PluginConfigSection, PluginProgramStatus, PluginSandboxProfile,
+    PluginSecretDelivery, PluginSecretRotation, PluginSecretSource, RenderedFsRoots,
+    plugin_grant_witness_relative, program_statuses, render_fs_roots, resolve_declared_programs,
 };
 pub use build::{
     PLUGIN_BUILD_DENIED_ENV, PLUGIN_BUILD_DENIED_ENV_PREFIXES, PLUGIN_BUILD_DIR_PREFIX,
@@ -39,10 +40,11 @@ pub use build::{
     prebuilt_outputs_present, run_plugin_build,
 };
 pub use callback::{
-    CallbackResolution, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV, ORBIT_PLUGIN_ENV,
-    PLUGIN_CALLBACK_FD, PluginCallbackIdentity, PluginCallbackSession, resolve_plugin_callback,
-    resolve_plugin_callback_session, retired_callback_credential,
-    stale_plugin_callback_session_count, unidentified_plugin_child,
+    CallbackResolution, HOST_ROUTED_CALLBACK_TOOLS, HostRouteOutcome, ORBIT_PLUGIN_CALLBACK_ENV,
+    ORBIT_PLUGIN_CALLBACK_FD_ENV, ORBIT_PLUGIN_ENV, PLUGIN_CALLBACK_FD, PLUGIN_HOST_ROUTE_FD,
+    PluginCallbackIdentity, PluginCallbackSession, forward_host_routed_callback,
+    is_host_routed_callback_tool, resolve_plugin_callback, resolve_plugin_callback_session,
+    retired_callback_credential, stale_plugin_callback_session_count, unidentified_plugin_child,
 };
 pub use envelope::{
     PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, take_delivered_plugin_secret_names,

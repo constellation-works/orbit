@@ -35,6 +35,25 @@ use super::callback::{
     take_callback_plugin_provenance,
 };
 
+/// Resolve the activity grants relevant to recovery hints using the same
+/// trusted-envelope rule as dispatch. Unmanaged MCP sessions ignore process policy.
+pub fn tool_suggestion_context(
+    entry_point: ToolEntryPoint,
+    session_context: ToolSessionContext,
+) -> ToolContext {
+    let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context() {
+        read_activity_tool_policy_from_env()
+    } else {
+        Default::default()
+    };
+    ToolContext {
+        session_context,
+        allowed_tools: policy.allowed_tools,
+        tool_deny_policy: policy.deny_policy,
+        ..Default::default()
+    }
+}
+
 /// Where a tool invocation arrived from. Captured in the audit row so a single
 /// audit table can attribute tool calls back to their origin (CLI vs MCP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +235,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             enforce_plugin_callback_allowlist_from_root(&global_root, name)?;
             authorize_plugin_tool(
                 binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
+                binding.agent_callable,
                 entry_point,
                 &tool_context.session_context,
             )?;
@@ -230,6 +250,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
 /// Decide a plugin tool call that has no workspace runtime behind it.
 fn authorize_plugin_tool(
     mutating: bool,
+    agent_callable: bool,
     entry_point: ToolEntryPoint,
     session_context: &ToolSessionContext,
 ) -> Result<(), OrbitError> {
@@ -243,7 +264,7 @@ fn authorize_plugin_tool(
         ToolEntryPoint::Mcp => CallerEnvelope::mcp_session(session_context),
         ToolEntryPoint::Cli => CallerEnvelope::from_process_env(session_context),
     };
-    let operation = governed_plugin_tool(mutating);
+    let operation = governed_plugin_tool(mutating, agent_callable);
     let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);
     authorize(operation, &caller).map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))
 }
@@ -365,8 +386,48 @@ impl OrbitRuntime {
         agent_override: Option<String>,
         model_override: Option<String>,
         entry_point: ToolEntryPoint,
-        session_context: ToolSessionContext,
+        mut session_context: ToolSessionContext,
     ) -> Result<ToolDispatchOutcome, OrbitError> {
+        // The authorization decision and entry-point row describe one call.
+        // CLI invocations have no transport-minted trace, so create it here
+        // before either path receives the session (and preserve MCP's trace).
+        if session_context
+            .trace_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            session_context.trace_id = Some(audit_execution_id("tool-call"));
+        }
+        // A plugin backend's decision-channel callbacks read a store its
+        // sandbox denies, so its descendants hand them to the host that
+        // spawned it, which audits what it dispatches. A route that did not
+        // answer is this caller's to audit; never answered locally instead.
+        if let Some(outcome) =
+            orbit_tools::plugin::forward_host_routed_callback(&self.global_root(), name, &input)
+        {
+            let error = match outcome {
+                orbit_tools::plugin::HostRouteOutcome::Answered(result) => {
+                    mark_tool_audit_recorded();
+                    return result.map(|value| ToolDispatchOutcome {
+                        value,
+                        audit_recorded: false,
+                    });
+                }
+                orbit_tools::plugin::HostRouteOutcome::Unanswered(error) => error,
+            };
+            return self.execute_tool_dispatch_with(
+                name,
+                input,
+                ToolDispatchAuditContext {
+                    agent_override,
+                    model_override,
+                    entry_point,
+                    session_context: Some(session_context),
+                    brokered: None,
+                },
+                |_| Err(error),
+            );
+        }
         // The broker audits dispatched plugin calls and host-credentialed
         // reads. Listener refusals and unusable responses belong to this
         // caller's audit boundary; never execute them locally as a fallback.
@@ -430,7 +491,7 @@ impl OrbitRuntime {
         #[cfg(unix)]
         let mut claimed_owner_refusal = None;
         #[cfg(unix)]
-        match super::claimed_owner::bridge_claimed_owner_call(
+        match super::claimed::bridge_claimed_owner_call(
             &self.global_root(),
             self.worker_invocation(),
             self.automation_machine_identity(),
@@ -440,14 +501,14 @@ impl OrbitRuntime {
             &self.paths().repo_root,
             entry_point,
         ) {
-            Some(super::claimed_owner::ClaimedOwnerRoute::Forwarded(result)) => {
+            Some(super::claimed::ClaimedOwnerRoute::Forwarded(result)) => {
                 mark_tool_audit_recorded();
                 return Ok(ToolDispatchOutcome {
                     value: result?,
                     audit_recorded: false,
                 });
             }
-            Some(super::claimed_owner::ClaimedOwnerRoute::Refused(error)) => {
+            Some(super::claimed::ClaimedOwnerRoute::Refused(error)) => {
                 claimed_owner_refusal = Some(error);
             }
             None => {}
@@ -471,7 +532,10 @@ impl OrbitRuntime {
                         name,
                     )?;
                 }
-                self.ensure_tool_agent_facing(name)?;
+                self.ensure_tool_agent_facing_with_context(
+                    name,
+                    &tool_suggestion_context(entry_point, session_context.clone()),
+                )?;
                 #[cfg(unix)]
                 if let Some(error) = claimed_owner_refusal {
                     return Err(error);
@@ -718,6 +782,11 @@ where
             1,
             Some(redact_sensitive_env_text(msg)),
         ),
+        Err(error @ OrbitError::DecisionRefused { code, .. }) if code.is_policy_denial() => (
+            AuditEventStatus::Denied,
+            1,
+            Some(redact_sensitive_env_text(&error.to_string())),
+        ),
         // A plugin switched off in this workspace is an operator decision,
         // refused before the tool ran, not a failed call.
         Err(err @ OrbitError::PluginDisabledInWorkspace { .. }) => (
@@ -824,7 +893,7 @@ where
     // outlasts one busy timeout is retried once, and only after the tool
     // itself succeeded: a failed call has nothing committed to protect, and
     // its own error must not wait on a second timeout.
-    if result.is_ok() && audit_write.as_ref().is_err_and(is_store_lock_contention) {
+    if result.is_ok() && audit_write.as_ref().is_err_and(OrbitError::is_lock_busy) {
         tracing::warn!(
             tool = name,
             "committed tool call lost the audit-store lock; retrying with the busy timeout"
@@ -852,17 +921,6 @@ where
     // (ORB-16383). Finding M1 (SECURITY-REVIEW-2026-07-15) still holds for
     // the silent case: a missing audit row is reported on the success value.
     finalize_successful_dispatch(name, execution_kind, value, audit_write)
-}
-
-/// Whether `error` is a SQLite writer lock that the store's busy timeout
-/// did not outlast. `sqlite_store_error` keeps that as [`OrbitError::Store`]
-/// whose text is `database is locked`; the classified contention variant is
-/// the same wait exhausted on a path-aware open.
-fn is_store_lock_contention(error: &OrbitError) -> bool {
-    if error.is_lock_busy() {
-        return true;
-    }
-    orbit_common::is_lock_busy_message(&error.to_string())
 }
 
 /// Fold a successful tool call together with its audit-write outcome into the

@@ -25,7 +25,7 @@ impl OrbitRuntime {
     pub fn active_pull_auth_exclusions(&self) -> Result<Vec<PullAuthExclusion>, OrbitError> {
         let mut exclusions = Vec::new();
         for run in self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(super::PULL_DRAIN_JOB.into()),
+            job_id: Some(crate::application::contracts::PULL_DRAIN_JOB.into()),
             active_only: true,
             include_steps: false,
             ..Default::default()
@@ -306,8 +306,7 @@ pub(crate) fn relogin_hint(provider: &str) -> String {
         "gemini" => "Run `gemini` and sign in.".into(),
         "antigravity" => "Run `agy` and sign in.".into(),
         "copilot" => "Run `copilot` and `/login`.".into(),
-        "cursor" => "Run `cursor-agent login`.".into(),
-        "grok" | "pi" | "opencode" => format!("Run `{provider}` and configure its provider credentials."),
+        "grok" => format!("Run `{provider}` and configure its provider credentials."),
         "muse" => "Run `muse login`, or pass META_API_KEY in [execution.env].pass.".into(),
         _ => format!("Re-login with the `{provider}` CLI."),
     }

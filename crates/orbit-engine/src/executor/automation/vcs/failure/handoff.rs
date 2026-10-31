@@ -102,6 +102,19 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     // Before anything that may refuse the handoff — a bundle, a missing
     // task — so every attempt this run admitted is closed.
     release_review_attempts(host, input, run_id);
+    // [ORB-17710] `worktree` is the pipeline's first step. When it failed
+    // before writing its checkpoint, the run created no checkout and so has no
+    // candidate to preserve. `no_candidate` is the outcome consumers already
+    // read as "published nothing"; any other decision would count as
+    // publication evidence. Only this step with no checkpoint qualifies: a
+    // missing checkpoint after a later step is still refused below.
+    if failed_step_id == "worktree" && pipeline_step(input, "worktree").is_err() {
+        return Ok(json!({
+            "phase": "failure_handoff",
+            "decision": "no_candidate",
+            "failed_step_id": failed_step_id,
+        }));
+    }
     let job_input = input
         .get("job_input")
         .ok_or_else(|| OrbitError::InvalidInput("missing required input.job_input".to_string()))?;

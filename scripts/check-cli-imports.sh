@@ -38,8 +38,8 @@ while (my $file = <STDIN>) {
   while (my $text = <$source>) {
     $line++;
     chomp $text;
-    $text =~ s{//.*$}{};
     $text =~ s/"[^"]*"/""/g;
+    $text =~ s{//.*$}{};
     # GNU grep word boundaries recognize UTF-8 identifiers; keep that
     # behavior while retaining the original bytes in diagnostics.
     my $code = decode("UTF-8", $text);

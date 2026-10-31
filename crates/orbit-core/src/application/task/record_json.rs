@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 
 use super::{TaskOsReadout, TaskRow, task_pilot_warnings};
 use crate::OrbitRuntime;
+use crate::application::task::TaskReviewPort;
 
 impl OrbitRuntime {
     /// `task` with its comment, history and artifact sidecars read from this
@@ -31,7 +32,7 @@ impl OrbitRuntime {
 /// The full task record: the shared base ([`task_base_json`]), the
 /// `comments`, `history` and `artifacts` sidecars, the settled before-PR
 /// `review` gate when one exists [ORB-11333], and the host-local crew
-/// enrichment ([`OrbitRuntime::task_crew_read`]).
+/// enrichment ([`crate::runtime::RuntimeKernel::task_crew_read`]).
 ///
 /// A single-task show serves [`task_show_json`], which is this record plus
 /// `block`, `next_step` and `final_recovery`. Writes and list rows stay on this record.
@@ -42,10 +43,51 @@ pub fn task_record_json(
 ) -> Result<Map<String, Value>, OrbitError> {
     let task = &row.task;
     let mut object = task_base_json(task, status_by_id);
+    if let Some(at) = orbit_types::task::task_started_at(&row.history) {
+        object.insert("started_at".into(), serde_json::json!(at));
+    }
+    if let Some(at) = task.not_before {
+        object.insert(
+            "scheduled_hold".into(),
+            serde_json::json!(
+                task.status == TaskStatus::Backlog
+                    && at > chrono::Utc::now()
+                    && !orbit_types::task::schedule_overridden(&row.history, at)
+            ),
+        );
+    }
     TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
+    // Read projections must tolerate corrupt pilot receipts: the CLI contract
+    // keeps malformed task-pilot comments as ordinary text (see orbit-cli
+    // `pilot_comment_rendering`). A strict decode failure therefore means "no
+    // resolvable hold", not a failed record. Other errors still propagate.
+    let resolvable_pilot_admission_hold = if task.status.is_terminal() {
+        false
+    } else {
+        match runtime.pilot_admission_hold_in(task, &row.comments, &|| Ok(row.history.clone())) {
+            Ok(hold) => hold.is_some_and(|hold| hold.is_resolvable()),
+            Err(OrbitError::Execution(message))
+                if message.starts_with("decode ")
+                    || message.contains("pilot receipt")
+                    || message.contains("pilot assessment") =>
+            {
+                false
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    object.insert(
+        "resolvable_pilot_admission_hold".into(),
+        serde_json::json!(resolvable_pilot_admission_hold),
+    );
     object.insert(
         "pilot_warnings".into(),
-        serde_json::json!(task_pilot_warnings(task.status, &row.comments)),
+        serde_json::json!(task_pilot_warnings(
+            task.status,
+            &row.comments,
+            &task.dependencies(),
+            &|id: &str| task_is_done(runtime, Some(status_by_id), id),
+        )),
     );
     object.insert(
         "comments".to_string(),
@@ -59,9 +101,7 @@ pub fn task_record_json(
         "artifacts".to_string(),
         task_artifact_manifest_json(&row.artifacts),
     );
-    if let Some(review) =
-        crate::application::review::task_review_projection(runtime, task, &row.artifacts)?
-    {
+    if let Some(review) = runtime.task_review_evidence(task, &row.artifacts)? {
         object.insert("review".to_string(), review);
     }
     runtime.task_crew_read(task).insert_into(&mut object);
@@ -76,7 +116,9 @@ pub fn task_record_json(
 /// `final_recovery` is the last automated final-recovery decision, with
 /// `run_id`, `decision`, `outcome` and `at`. `owed_criteria` lists each
 /// criterion the delivery owes after deploy, with its host, command, target
-/// and state. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
+/// and state. `visual_review` is a `verify-mock-ui` task's last capture of
+/// record: its summary line, outcome, `not_established` reasons and check
+/// findings. Each key is present only when it applies. `orbit task show`, `orbit.task.show`, `GET /api/tasks/:id` and a
 /// routed remote show all serve this record and add only their own extras.
 pub fn task_show_json(
     runtime: &OrbitRuntime,
@@ -84,6 +126,11 @@ pub fn task_show_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
     let mut object = task_record_json(runtime, row, status_by_id)?;
+    object.insert(
+        "experiments".into(),
+        serde_json::to_value(runtime.task_experiments(&row.task.id)?)
+            .map_err(serialize_error("experiments"))?,
+    );
     if let Some(block) = super::blocked_recovery::block_json(row) {
         object.insert("block".to_string(), block);
     }
@@ -107,6 +154,19 @@ pub fn task_show_json(
     if let Some(owed) = super::owed_criteria_json(&row.history) {
         object.insert("owed_criteria".to_string(), owed);
     }
+    if let Some(visual) = runtime.task_visual_review_json(&row.task)? {
+        object.insert("visual_review".to_string(), visual);
+    }
+    if row
+        .history
+        .iter()
+        .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
+    {
+        let open = runtime.open_decisions_json(&row.task.id)?;
+        if open.as_array().is_some_and(|items| !items.is_empty()) {
+            object.insert("open_decisions".to_string(), open);
+        }
+    }
     Ok(object)
 }
 
@@ -124,11 +184,32 @@ pub fn task_show_field_json(
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<Value, OrbitError> {
     match field {
+        "scheduled_hold" => {
+            let held = if task.status == TaskStatus::Backlog
+                && let Some(at) = task.scheduled_after(chrono::Utc::now())
+            {
+                !orbit_types::task::schedule_overridden(&runtime.get_task_history(&task.id)?, at)
+            } else {
+                false
+            };
+            Ok(serde_json::json!(held))
+        }
+        "started_at" => Ok(serde_json::json!(orbit_types::task::task_started_at(
+            &runtime.get_task_history(&task.id)?
+        ))),
+        "experiments" => serde_json::to_value(runtime.task_experiments(&task.id)?)
+            .map_err(serialize_error("experiments")),
         "pilot_warnings" => Ok(serde_json::json!(task_pilot_warnings(
             task.status,
-            &runtime.get_task_comments(&task.id)?
+            &runtime.get_task_comments(&task.id)?,
+            &task.dependencies(),
+            &|id: &str| task_is_done(runtime, status_by_id, id),
         ))),
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
+        "placement_wait" => Ok(TaskOsReadout::new(runtime)?
+            .placement_wait(task)
+            .map_or(Value::Null, Value::String)),
+        "open_decisions" => runtime.open_decisions_json(&task.id),
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
             .map_err(serialize_error("comments")),
         "history" => serde_json::to_value(runtime.get_task_history(&task.id)?)
@@ -150,4 +231,32 @@ pub fn task_show_field_json(
 
 fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {
     move |error| OrbitError::Execution(format!("serialize task {label}: {error}"))
+}
+
+/// A list projection preserves the row and marks unreadable fields as unknown,
+/// with a warning, rather than discarding every healthy task in the page.
+pub(crate) fn task_listing_field_json(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    field: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Value, OrbitError> {
+    let result = super::task_fields_response_json(runtime, task, &[field.to_string()]);
+    Ok(super::listing::task_bundle_scan_result(result, warnings)?.unwrap_or(Value::Null))
+}
+
+fn task_is_done(
+    runtime: &OrbitRuntime,
+    status_by_id: Option<&BTreeMap<String, TaskStatus>>,
+    id: &str,
+) -> bool {
+    status_by_id
+        .and_then(|index| index.get(id).copied())
+        .map(|status| status == TaskStatus::Done)
+        .unwrap_or_else(|| {
+            matches!(
+                runtime.get_task(id),
+                Ok(found) if found.status == TaskStatus::Done
+            )
+        })
 }

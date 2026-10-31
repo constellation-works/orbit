@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_types::task::{Task, TaskPriority, automatic_dispatch_cmp_with_expiry};
 
 use super::backlog_exclusion::{
@@ -60,6 +61,7 @@ pub(super) fn reserving_detail() -> String {
 /// sorts ahead of it in dispatch order, using the same frozen-batch expiry
 /// snapshot as the backlog sort. A task in `published_resumes` is never
 /// withheld.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn withhold_reserved_surfaces<'a>(
     backlog: Vec<&'a Task>,
     reserving: &[&Task],
@@ -67,6 +69,7 @@ pub(super) fn withhold_reserved_surfaces<'a>(
     expiring_batches: &BTreeMap<String, DateTime<Utc>>,
     workspace_root: &Path,
     unlocked: &UnlockedContextPaths,
+    lock_modes: &FootprintLockModes,
     excluded: &mut Vec<BacklogTaskExclusion>,
 ) -> Vec<&'a Task> {
     if reserving.is_empty() {
@@ -83,53 +86,88 @@ pub(super) fn withhold_reserved_surfaces<'a>(
         .iter()
         .map(|task| (task.id.as_str(), *task))
         .collect();
+    withhold_reserved_by(
+        backlog,
+        |task| task,
+        |task| published_resumes.contains_key(&task.id),
+        expiring_batches,
+        |task| {
+            task_lock_overlaps(task, &reserved_index, workspace_root, unlocked, lock_modes)
+                .into_iter()
+                .filter_map(|overlap| {
+                    let reserver = *reserving_by_id.get(overlap.locking_task_id.as_str())?;
+                    Some((overlap, reserver))
+                })
+                .collect()
+        },
+        |task, conflicts: Vec<BacklogTaskConflict>| {
+            let mut reserved_for = conflicts
+                .iter()
+                .map(|conflict| conflict.locking_task_id.as_str())
+                .collect::<Vec<_>>();
+            reserved_for.sort_unstable();
+            reserved_for.dedup();
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason: BacklogTaskExclusionReason::SurfaceReserved,
+                detail: Some(format!(
+                    "Reserved for {}, ranked ahead of this task and waiting only on context \
+                     locks. This task is admitted once the reserving task is admitted or leaves \
+                     backlog.",
+                    reserved_for.join(", ")
+                )),
+                conflicts,
+                crew: None,
+            });
+        },
+    )
+}
 
+/// The reservation policy over any overlap lookup: the drain expands live
+/// selectors, the backlog forecast reads its precomputed conflict rows
+/// [ORB-18686].
+///
+/// `overlaps` lists a candidate's overlaps with the reserving tasks'
+/// surfaces, each with the reserving task it names; only those whose
+/// reserving task sorts ahead of the candidate withhold it, and `withheld`
+/// receives each withheld candidate with them. `exempt` names candidates a
+/// reservation never withholds (a published resume). The rest are returned
+/// in their original order.
+pub(super) fn withhold_reserved_by<'a, 'r, T: Copy, C>(
+    backlog: Vec<T>,
+    task_of: impl Fn(T) -> &'a Task,
+    exempt: impl Fn(&Task) -> bool,
+    expiring_batches: &BTreeMap<String, DateTime<Utc>>,
+    mut overlaps: impl FnMut(T) -> Vec<(C, &'r Task)>,
+    mut withheld: impl FnMut(T, Vec<C>),
+) -> Vec<T> {
     let mut kept = Vec::with_capacity(backlog.len());
-    for task in backlog {
+    for candidate in backlog {
+        let task = task_of(candidate);
         // Resuming a published delivery takes no lock at admission, so it
         // cannot take a reserved surface either.
-        if published_resumes.contains_key(&task.id) {
-            kept.push(task);
+        if exempt(task) {
+            kept.push(candidate);
             continue;
         }
-        let conflicts: Vec<BacklogTaskConflict> =
-            task_lock_overlaps(task, &reserved_index, workspace_root, unlocked)
-                .into_iter()
-                .filter(|overlap| {
-                    reserving_by_id
-                        .get(overlap.locking_task_id.as_str())
-                        .is_some_and(|reserver| {
-                            automatic_dispatch_cmp_with_expiry(
-                                reserver,
-                                expiring_batches.contains_key(&reserver.id),
-                                task,
-                                expiring_batches.contains_key(&task.id),
-                            )
-                            .is_lt()
-                        })
-                })
-                .collect();
+        let conflicts: Vec<C> = overlaps(candidate)
+            .into_iter()
+            .filter(|(_, reserver)| {
+                automatic_dispatch_cmp_with_expiry(
+                    reserver,
+                    expiring_batches.contains_key(&reserver.id),
+                    task,
+                    expiring_batches.contains_key(&task.id),
+                )
+                .is_lt()
+            })
+            .map(|(conflict, _)| conflict)
+            .collect();
         if conflicts.is_empty() {
-            kept.push(task);
-            continue;
+            kept.push(candidate);
+        } else {
+            withheld(candidate, conflicts);
         }
-        let mut reserved_for = conflicts
-            .iter()
-            .map(|conflict| conflict.locking_task_id.as_str())
-            .collect::<Vec<_>>();
-        reserved_for.sort_unstable();
-        reserved_for.dedup();
-        excluded.push(BacklogTaskExclusion {
-            id: task.id.clone(),
-            reason: BacklogTaskExclusionReason::SurfaceReserved,
-            detail: Some(format!(
-                "Reserved for {}, ranked ahead of this task and waiting only on context locks. \
-                 This task is admitted once the reserving task is admitted or leaves backlog.",
-                reserved_for.join(", ")
-            )),
-            conflicts,
-            crew: None,
-        });
     }
     kept
 }

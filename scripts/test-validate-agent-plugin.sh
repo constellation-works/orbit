@@ -86,6 +86,22 @@ def expect_failure(root: Path, needle: str, label: str) -> None:
         errors.append(f"{label}: stderr/stdout missing {needle!r}\n{combined}")
 
 
+def expect_success(root: Path, label: str) -> None:
+    result = run_validator(root)
+    if result.returncode != 0:
+        errors.append(f"{label}: expected validator success, got {result.returncode}\n{result.stdout + result.stderr}")
+
+
+def set_orbit_cwd(root: Path, cwd: str | None) -> None:
+    path = root / "plugin" / "mcp.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if cwd is None:
+        payload["mcpServers"]["orbit"].pop("cwd", None)
+    else:
+        payload["mcpServers"]["orbit"]["cwd"] = cwd
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 # Cursor discovers Agent Plugins from ~/.cursor/plugins/local/<name>.
 home = base_fixture / "fake-home"
 cursor_plugin = home / ".cursor" / "plugins" / "local" / "orbit"
@@ -193,6 +209,55 @@ broken = clone_fixture("cursor-plugin-dir")
 (broken / "plugin" / ".cursor-plugin").mkdir()
 (broken / "plugin" / ".cursor-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
 expect_failure(broken, ".cursor-plugin", "unexpected .cursor-plugin surface")
+
+# Negative: placeholder cwd traversal escapes its named root.
+for label, cwd in (
+    ("root-traversal", "${PLUGIN_ROOT}/../../outside"),
+    ("data-traversal", "${PLUGIN_DATA}/../../outside"),
+    ("nested-traversal", "${PLUGIN_ROOT}/safe/../../outside"),
+    ("dotdot-suffix", "${PLUGIN_ROOT}/.."),
+):
+    broken = clone_fixture(f"cwd-{label}")
+    set_orbit_cwd(broken, cwd)
+    expect_failure(broken, "must be plugin-relative", f"placeholder cwd traversal {label}")
+
+# Negative: malformed placeholder suffixes and absolute suffixes.
+for label, cwd in (
+    ("missing-slash", "${PLUGIN_ROOT}extra"),
+    ("data-missing-slash", "${PLUGIN_DATA}suffix"),
+    ("empty-descendant", "${PLUGIN_ROOT}/"),
+    ("double-slash", "${PLUGIN_ROOT}//etc/passwd"),
+    ("data-double-slash", "${PLUGIN_DATA}//etc"),
+    ("drive-suffix", "${PLUGIN_ROOT}/C:/Windows"),
+    ("backslash-suffix", "${PLUGIN_ROOT}/safe\\evil"),
+):
+    broken = clone_fixture(f"cwd-{label}")
+    set_orbit_cwd(broken, cwd)
+    expect_failure(broken, "must be plugin-relative", f"placeholder cwd suffix {label}")
+
+# Negative: a second server entry with traversal cwd is also rejected.
+broken = clone_fixture("cwd-second-server")
+payload = json.loads((broken / "plugin" / "mcp.json").read_text(encoding="utf-8"))
+payload["mcpServers"]["helper"] = {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "helper", "mcp", "serve"],
+    "cwd": "${PLUGIN_ROOT}/../../outside",
+}
+(broken / "plugin" / "mcp.json").write_text(json.dumps(payload), encoding="utf-8")
+expect_failure(broken, "mcpServers.helper.cwd must be plugin-relative", "second server cwd traversal")
+
+# Positive: bare placeholders and safe descendants are accepted.
+for label, cwd in (
+    ("bare-root", "${PLUGIN_ROOT}"),
+    ("bare-data", "${PLUGIN_DATA}"),
+    ("root-descendant", "${PLUGIN_ROOT}/work"),
+    ("data-descendant", "${PLUGIN_DATA}/cache/v1"),
+    ("dot-relative", "./work"),
+):
+    good = clone_fixture(f"cwd-ok-{label}")
+    set_orbit_cwd(good, cwd)
+    expect_success(good, f"legitimate cwd {label}")
 
 if errors:
     print("test-validate-agent-plugin: failed", file=sys.stderr)

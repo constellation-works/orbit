@@ -4,8 +4,10 @@ type: design
 title: "Task Artifacts — Overview"
 owner: codex
 last_updated: 2026-05-17
-last_validated: 2026-10-22
+last_validated: 2026-10-28
 status: Draft
+stage: shipped
+next: "—"
 feature: task-artifacts
 doc_role: overview
 tags: ["task-artifacts"]
@@ -90,7 +92,7 @@ Lifecycle changes, comments, and automation updates are naturally append-heavy. 
 
 ### 2.6 Typed relations
 
-Typed links live in a single directed `relations` array on the envelope. Task-to-task relation types remain source-implied (`child_of`, `blocked_by`, `spawned_from`, `regression_from`, `supersedes`, and `related_to`) and task-only. Cross-artifact provenance uses `produces` and `resolves`, whose targets may be task, friction, or ADR IDs. A `regression_from` edge may also carry a typed `regression` classification (nature and escape; see [the bundle spec](specs/task-bundle-v2.md#regression-classification)). The bundle stores one directed edge per relationship. Consumers reason about relation meaning rather than inferring it from legacy field names.
+Typed links live in a single directed `relations` array on the envelope. Task-only relation types remain source-implied (`child_of`, `blocked_by`, `spawned_from`, `regression_from`, `supersedes`, and `related_to`). `covered_by` may target another task or a GitHub PR reference. Cross-artifact provenance uses `produces` and `resolves`, whose targets may be task, friction, or ADR IDs. A `regression_from` edge may also carry a typed `regression` classification (nature, escape and severity; see [the bundle spec](specs/task-bundle-v2.md#regression-classification)). The bundle stores one directed edge per relationship. Consumers reason about relation meaning rather than inferring it from legacy field names.
 
 ### 2.7 Local task store
 
@@ -109,7 +111,7 @@ Before narrowing a listing by parent, the store verifies the generated `child_of
 | V2 bundle primitives (file layout, atomic writes, JSONL append) | [crates/orbit-store/src/driver/file/task_bundle/](../../../crates/orbit-store/src/driver/file/task_bundle/) | — |
 | V2 task backend adapter (create/get/list/search/mutations) | [crates/orbit-store/src/repository/task/v2/](../../../crates/orbit-store/src/repository/task/v2/) | — |
 | Home registry: allocator, workspace bindings, generated indexes | [crates/orbit-store/src/driver/sqlite/task_registry/](../../../crates/orbit-store/src/driver/sqlite/task_registry/) | — |
-| V2 runtime wiring (`build_v2_task_backends`) | [crates/orbit-core/src/runtime/builder.rs](../../../crates/orbit-core/src/runtime/builder.rs) | — |
+| V2 runtime wiring (`build_v2_task_backends`) | [crates/orbit-runtime/src/builder.rs](../../../crates/orbit-runtime/src/builder.rs) | — |
 | Local task store and canonical lookup | [2_design.md §6](./2_design.md#6-local-task-store-and-canonical-lookup) | — |
 | Task ID local-only doctrine after graph attribution removal | [docs/POSITIONING.md](../../POSITIONING.md) | [T20260506-11] |
 | V2 task bundle contract | [specs/task-bundle-v2.md](./specs/task-bundle-v2.md) | — |

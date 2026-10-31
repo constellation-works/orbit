@@ -9,7 +9,7 @@ use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_mcp::federated;
 use orbit_mcp::{ListenerExposure, McpHost, McpListener, McpSessionAuthority};
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{McpToolsetSelection, ToolSessionContext};
 
 use super::host::ServerMcpHost;
 
@@ -27,6 +27,15 @@ use super::host::ServerMcpHost;
 pub(crate) const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] =
     &["orbit.task.show", "orbit.task.artifact.get"];
 
+/// Launch provenance of one stdio session, set by the Orbit route that
+/// started it, never by initialize or per-call metadata.
+pub(in super::super) struct StdioLaunch {
+    /// Serve only the internal drain tools.
+    pub(in super::super) internal_drain: bool,
+    /// The session answers a worker host's routed calls.
+    pub(in super::super) worker_host: bool,
+}
+
 /// Serve one stdio MCP session.
 ///
 /// This is the entry point an SSH caller reaches, and its `--operator` is a
@@ -40,8 +49,8 @@ pub(in super::super) fn serve_mcp_stdio(
     authority: McpSessionAuthority,
     bound_workspace: Option<String>,
     bound_orchestrator: Option<String>,
-    internal_drain: bool,
-    worker_host: bool,
+    launch: StdioLaunch,
+    toolsets: McpToolsetSelection,
 ) -> Result<(), OrbitError> {
     orbit_mcp::warn_ignored_caller_authorization(&global_root);
     let (host, mut session_context) = compose_server(
@@ -50,10 +59,10 @@ pub(in super::super) fn serve_mcp_stdio(
         authority,
         bound_workspace,
         bound_orchestrator,
+        toolsets,
     )?;
-    // This is launch provenance, never initialize or per-call metadata.
-    session_context.worker_host_call = worker_host;
-    let exit = if internal_drain {
+    session_context.worker_host_call = launch.worker_host;
+    let exit = if launch.internal_drain {
         block_on_server(orbit_mcp::serve_internal_drain_stdio(host, session_context))?
     } else {
         block_on_server(orbit_mcp::serve_stdio_with_context(host, session_context))?
@@ -73,6 +82,7 @@ pub(in super::super) fn serve_mcp_federated_stdio(
     global_root: PathBuf,
     bound_orchestrator: Option<String>,
     authority: McpSessionAuthority,
+    toolsets: McpToolsetSelection,
 ) -> Result<(), OrbitError> {
     let remotes = federated::load_destinations(&global_root)?;
     // The mux is a client to each remote, and identifies itself with the same
@@ -142,6 +152,9 @@ pub(in super::super) fn serve_mcp_federated_stdio(
         &global_root_for_bridge,
         &identity.process_machine_id,
     );
+    // The mux lists and refuses for every destination at once, so each remote
+    // row gets this server's toolsets; its own SSH session serves them all.
+    let host = orbit_mcp::with_mcp_toolsets(host, toolsets);
     tracing::info!(
         machine_id = %identity.process_machine_id,
         "serving the federated MCP mux"
@@ -177,6 +190,7 @@ pub(in super::super) fn serve_mcp_listener(
     addr: SocketAddr,
     exposure: ListenerExposure,
     bound_workspace: Option<String>,
+    toolsets: McpToolsetSelection,
 ) -> Result<(), OrbitError> {
     // A listener has no forwarding proxy in front of it, so there is no caller
     // machine label to trust; each accepted connection contributes only the
@@ -203,6 +217,7 @@ pub(in super::super) fn serve_mcp_listener(
         McpSessionAuthority::Agent,
         bound_workspace,
         None,
+        toolsets,
     )?;
     block_on_server(async move {
         let listener = McpListener::bind(addr, exposure, host, session_context).await?;
@@ -230,6 +245,7 @@ fn compose_server(
     authority: McpSessionAuthority,
     bound_workspace: Option<String>,
     bound_orchestrator: Option<String>,
+    toolsets: McpToolsetSelection,
 ) -> Result<(Arc<dyn McpHost>, ToolSessionContext), OrbitError> {
     let mut identity =
         orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, authority)?;
@@ -254,7 +270,10 @@ fn compose_server(
         &global_root,
         &identity.process_machine_id,
     );
-    Ok((host, identity.session_context))
+    Ok((
+        orbit_mcp::with_mcp_toolsets(host, toolsets),
+        identity.session_context,
+    ))
 }
 
 /// A managed worker's host, with a claimed worker's owner calls routed

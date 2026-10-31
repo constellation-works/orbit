@@ -87,6 +87,10 @@ impl TaskV2Store {
         // dashboard, auto-task mint, import — so the reserved `os:` namespace
         // cannot be bypassed by any of them.
         validate_os_tags(&normalize_task_tags(params.tags.clone()))?;
+        let requires_labels = orbit_types::task::normalize_host_labels(
+            params.requires_labels.clone(),
+            orbit_types::task::REQUIRES_LABELS_FIELD,
+        )?;
         if let Some(boundary) = &self.coordination {
             boundary.guard_ordinary_footprint(params.status, &params.context_files)?;
         }
@@ -138,7 +142,7 @@ impl TaskV2Store {
             from_status: None,
             to_status: Some(params.status),
             operation_id: None,
-            decision: None,
+            decision: params.creation_decision.clone(),
         }];
         // The initial grant is part of the bundle the create publishes, so a
         // task never exists without the creation intent its writer declared.
@@ -165,6 +169,28 @@ impl TaskV2Store {
                 decision: None,
             });
         }
+        // A creation grant is a grant change like any later one: history
+        // names who set it, the tool set and that no run or claim existed.
+        let granted_tools = orbit_types::task::normalize_required_tools(params.granted_tools);
+        if !granted_tools.is_empty() {
+            let event_id = next_event_id(&events);
+            events.push(orbit_types::task::TaskEventRowV2 {
+                schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id,
+                at: now,
+                by: params.actor.clone(),
+                event_type: orbit_types::task::GRANTED_TOOLS_CHANGED_EVENT.to_string(),
+                note: Some(orbit_types::task::granted_tools_change_note(
+                    &[],
+                    &granted_tools,
+                    "set at creation; no run or claim exists",
+                )),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        }
         let bundle = TaskBundleV2 {
             envelope: orbit_types::task::TaskEnvelopeV2 {
                 job_run_machine: None,
@@ -183,12 +209,17 @@ impl TaskV2Store {
                 orchestrator_model: params.orchestrator_model,
                 orchestrator_model_source: params.orchestrator_model_source,
                 origin: params.origin,
+                rule_fingerprint: params.rule_fingerprint,
                 relations,
                 tags: normalize_task_tags(params.tags),
                 required_tools: orbit_types::task::normalize_required_tools(params.required_tools),
+                granted_tools,
+                requires_labels,
+                not_before: params.not_before,
                 context_files: params.context_files,
                 external_refs: params.external_refs,
                 created_by: params.created_by,
+                created_by_model: params.created_by_model,
                 planned_by: params.planned_by,
                 implemented_by: params.implemented_by,
                 created_at: now,
@@ -205,11 +236,14 @@ impl TaskV2Store {
 
         if key.is_some() {
             let (bundle, replayed) = self.bundle_store.create_or_recover_action_bundle(&bundle)?;
-            self.replace_index_best_effort(&bundle.envelope, "idempotent task creation");
+            self.publish_task_index_and_lease_notices(
+                &bundle.envelope,
+                "idempotent task creation",
+            )?;
             return self.task_from_bundle(bundle).map(|task| (task, replayed));
         }
         self.bundle_store.create_bundle(&bundle)?;
-        self.replace_index_best_effort(&bundle.envelope, "task creation");
+        self.publish_task_index_and_lease_notices(&bundle.envelope, "task creation")?;
         self.task_from_bundle(bundle).map(|task| (task, false))
     }
 

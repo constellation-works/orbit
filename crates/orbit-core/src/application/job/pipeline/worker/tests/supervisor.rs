@@ -181,6 +181,14 @@ impl JobRunStoreBackend for ReadFaultStore {
             .finalize_job_run_with_outcome(run_id, state, finished_at, duration_ms)
     }
 
+    fn cancel_pending_job_run(
+        &self,
+        run_id: &str,
+        finished_at: DateTime<Utc>,
+    ) -> Result<orbit_store::contracts::PendingJobRunCancellation, OrbitError> {
+        self.inner.cancel_pending_job_run(run_id, finished_at)
+    }
+
     fn repair_terminal_job_run_timing(
         &self,
         run_id: &str,

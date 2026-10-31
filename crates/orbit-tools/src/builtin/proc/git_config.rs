@@ -11,10 +11,11 @@
 //!
 //! The rule covers the two commands that write configuration directly, `git
 //! config` and `git remote`, and it fails closed: a form this module cannot
-//! recognize as a read is refused. Command-line alias definitions are also
-//! refused: Git expands them before dispatch, and a shell alias can run arbitrary
-//! configuration writes. Ordinary non-alias `-c` / `--config-env` options remain
-//! available.
+//! recognize as a read is refused. Command-line alias and include definitions
+//! are also refused: Git expands an alias before dispatch, a shell alias can run
+//! arbitrary configuration writes, and an included file can define an `[alias]`
+//! section. Ordinary `-c` / `--config-env` options remain available. The dashed
+//! builtins (`git-config`, `git-remote`) are held to the same rule.
 
 use orbit_common::OrbitError;
 use orbit_common::tracing;
@@ -28,10 +29,13 @@ const VALUE_TAKING_GIT_OPTIONS: &[&str] = &[
     "--git-dir",
     "--work-tree",
     "--namespace",
+    "--attr-source",
 ];
 
 /// `git config` invocations that only read, in both the flag form and the
-/// subcommand form Git 2.46 introduced.
+/// subcommand form Git 2.46 introduced. The subcommand form counts only as the
+/// first argument after `config`: later, `get` can be the value of an option
+/// such as `--comment`, or the key of a legacy write.
 const CONFIG_READ_FLAGS: &[&str] = &[
     "--get",
     "--get-all",
@@ -44,6 +48,43 @@ const CONFIG_READ_FLAGS: &[&str] = &[
 ];
 const CONFIG_READ_SUBCOMMANDS: &[&str] = &["get", "list"];
 
+/// Modifiers that cannot select a write action. Unknown options fail closed;
+/// in particular, a write action must not override an earlier read flag.
+const CONFIG_READ_MODIFIERS: &[&str] = &[
+    "--global",
+    "--system",
+    "--local",
+    "--worktree",
+    "--includes",
+    "--no-includes",
+    "--null",
+    "-z",
+    "--name-only",
+    "--show-origin",
+    "--show-scope",
+    "--show-names",
+    "--fixed-value",
+    "--bool",
+    "--int",
+    "--bool-or-int",
+    "--bool-or-str",
+    "--path",
+    "--expiry-date",
+    "--no-type",
+];
+
+/// Consume these options' data before looking for a legacy read flag. Values
+/// such as `--get` and `--` are data even when passed as a separate argument.
+const VALUE_TAKING_CONFIG_OPTIONS: &[&str] = &[
+    "--file",
+    "-f",
+    "--blob",
+    "--type",
+    "-t",
+    "--default",
+    "--comment",
+];
+
 /// `git remote` invocations that only report. Every other remote subcommand —
 /// `add`, `rename`, `remove`, `set-url`, `set-head`, … — writes `.git/config`.
 const REMOTE_READ_SUBCOMMANDS: &[&str] = &["show", "get-url"];
@@ -55,13 +96,22 @@ pub(super) fn enforce_no_persistent_git_config(
     program: &str,
     args: &[String],
 ) -> Result<(), OrbitError> {
-    if !is_git_program(program) {
+    let Some(invocation) = git_invocation(program) else {
         return Ok(());
-    }
-    let (matched_rule, reason) = match git_subcommand(args) {
+    };
+    let command = match invocation {
+        GitInvocation::Git => git_subcommand(args),
+        GitInvocation::Dashed(name) => GitCommand::Subcommand(name, args),
+    };
+    let (matched_rule, reason) = match command {
         GitCommand::Alias => (
             "alias",
             "Command-line Git aliases may write persistent repository configuration",
+        ),
+        GitCommand::Include => (
+            "include",
+            "Command-line Git config includes may load aliases that write persistent repository \
+             configuration",
         ),
         GitCommand::Subcommand("config", rest) if !is_read_only_config(rest) => (
             "config",
@@ -89,23 +139,45 @@ pub(super) fn enforce_no_persistent_git_config(
     )))
 }
 
-fn is_git_program(program: &str) -> bool {
+enum GitInvocation<'a> {
+    /// `git [options] <subcommand> …`
+    Git,
+    /// A dashed builtin such as `git-config`, which is its own subcommand.
+    Dashed(&'a str),
+}
+
+fn git_invocation(program: &str) -> Option<GitInvocation<'_>> {
     let file_name = std::path::Path::new(program)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(program);
     let stem = file_name.strip_suffix(".exe").unwrap_or(file_name);
-    stem.eq_ignore_ascii_case("git")
+    if stem.eq_ignore_ascii_case("git") {
+        return Some(GitInvocation::Git);
+    }
+    let prefix = stem
+        .get(..4)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("git-"))?;
+    let name = &stem[prefix.len()..];
+    // Subcommand names are matched exactly; fold the case of the two guarded
+    // ones the way the program name above is.
+    let name = ["config", "remote"]
+        .into_iter()
+        .find(|guarded| name.eq_ignore_ascii_case(guarded))
+        .unwrap_or(name);
+    Some(GitInvocation::Dashed(name))
 }
 
 enum GitCommand<'a> {
     Subcommand(&'a str, &'a [String]),
     Alias,
+    Include,
     None,
 }
 
 /// The first positional argument, skipping Git's own leading options and
-/// refusing alias definitions before they can disguise the dispatched command.
+/// refusing alias and include definitions before they can disguise the
+/// dispatched command.
 fn git_subcommand(args: &[String]) -> GitCommand<'_> {
     let mut index = 0;
     while let Some(arg) = args.get(index) {
@@ -120,13 +192,19 @@ fn git_subcommand(args: &[String]) -> GitCommand<'_> {
         };
         // Git config section names are case-insensitive. Deny every alias
         // definition, including shell aliases and aliases of other aliases,
-        // rather than attempting to reproduce Git's expansion rules.
-        if config.is_some_and(|value| {
-            value
-                .split_once('.')
-                .is_some_and(|(section, _)| section.eq_ignore_ascii_case("alias"))
-        }) {
+        // rather than attempting to reproduce Git's expansion rules. An
+        // `include` / `includeIf` path can load an `[alias]` section from a
+        // file the caller wrote, so it is refused for the same reason.
+        let section = config
+            .and_then(|value| value.split_once('.'))
+            .map(|(section, _)| section);
+        if section.is_some_and(|section| section.eq_ignore_ascii_case("alias")) {
             return GitCommand::Alias;
+        }
+        if section.is_some_and(|section| {
+            section.eq_ignore_ascii_case("include") || section.eq_ignore_ascii_case("includeif")
+        }) {
+            return GitCommand::Include;
         }
         if VALUE_TAKING_GIT_OPTIONS.contains(&arg.as_str()) {
             index += 1;
@@ -137,19 +215,45 @@ fn git_subcommand(args: &[String]) -> GitCommand<'_> {
 }
 
 fn is_read_only_config(args: &[String]) -> bool {
-    let positional = args.iter().find(|arg| !arg.starts_with('-'));
-    if positional.is_some_and(|arg| CONFIG_READ_SUBCOMMANDS.contains(&arg.as_str())) {
+    if args
+        .first()
+        .is_some_and(|arg| CONFIG_READ_SUBCOMMANDS.contains(&arg.as_str()))
+    {
         return true;
     }
-    // The flag form reads only when it names a read mode and carries no second
-    // positional to store: `git config --get a.b` reads, `git config a.b value`
-    // writes. The rule fails closed, so a read that spends a second positional
-    // — `--get-urlmatch`, or `--file <path>` with the path detached from its
-    // option — is refused along with the writes.
-    let read_flag = args
-        .iter()
-        .any(|arg| CONFIG_READ_FLAGS.contains(&arg.as_str()));
-    read_flag && args.iter().filter(|arg| !arg.starts_with('-')).count() <= 1
+    // Only recognized options can establish a read mode. After `--`, every
+    // token is an operand, including dash-leading keys and values. Retain the
+    // conservative single-operand limit for legacy reads.
+    let mut args = args.iter();
+    let mut read_flag = false;
+    let mut operands = 0;
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            operands += args.count();
+            break;
+        }
+        if CONFIG_READ_FLAGS.contains(&arg.as_str()) {
+            read_flag = true;
+        } else if CONFIG_READ_MODIFIERS.contains(&arg.as_str()) {
+            continue;
+        } else {
+            let (option, value) = arg
+                .split_once('=')
+                .map_or((arg.as_str(), None), |(option, value)| {
+                    (option, Some(value))
+                });
+            if VALUE_TAKING_CONFIG_OPTIONS.contains(&option) {
+                if value.is_none() && args.next().is_none() {
+                    return false;
+                }
+            } else if arg.starts_with('-') {
+                return false;
+            } else {
+                operands += 1;
+            }
+        }
+    }
+    read_flag && operands <= 1
 }
 
 fn is_read_only_remote(args: &[String]) -> bool {

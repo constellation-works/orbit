@@ -19,6 +19,9 @@ pub struct TaskListFilter {
     pub task_type: Option<TaskType>,
     /// Keep only tasks recorded with this origin; tasks without one never match.
     pub origin: Option<TaskOrigin>,
+    /// Keep only the task carrying this rule-result fingerprint; tasks
+    /// without one never match.
+    pub rule_fingerprint: Option<String>,
     pub parent_id: Option<String>,
     pub job_run_id: Option<String>,
     pub tags: Vec<String>,
@@ -29,6 +32,13 @@ pub struct TaskListFilter {
     /// listing; `scan_before` continuation assumes the canonical order and is
     /// not combined with it.
     pub terminal_last: bool,
+    /// Inclusive lower schedule bound; unscheduled tasks do not match.
+    pub not_before_from: Option<chrono::DateTime<chrono::Utc>>,
+    /// Inclusive upper schedule bound; unscheduled tasks do not match.
+    pub not_before_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Keep schedules strictly after this instant and order soonest first.
+    /// Takes precedence over `terminal_last`; not combined with `scan_before`.
+    pub scheduled_after: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl TaskListFilter {
@@ -47,6 +57,15 @@ impl TaskListFilter {
 
     pub(crate) fn matches(&self, task: &TaskEnvelopeV2) -> bool {
         self.matches_cursor(task)
+            && self
+                .not_before_from
+                .is_none_or(|from| task.not_before.is_some_and(|at| at >= from))
+            && self
+                .not_before_until
+                .is_none_or(|until| task.not_before.is_some_and(|at| at <= until))
+            && self
+                .scheduled_after
+                .is_none_or(|now| task.not_before.is_some_and(|at| at > now))
             && self.search.as_ref().is_none_or(|query| {
                 task.id.to_lowercase().contains(query) || task.title.to_lowercase().contains(query)
             })
@@ -57,6 +76,10 @@ impl TaskListFilter {
             && self.priority.is_none_or(|value| task.priority == value)
             && self.task_type.is_none_or(|value| task.task_type == value)
             && self.origin.is_none_or(|value| task.origin == Some(value))
+            && self
+                .rule_fingerprint
+                .as_ref()
+                .is_none_or(|value| task.rule_fingerprint.as_ref() == Some(value))
             && self.parent_id.as_ref().is_none_or(|value| {
                 task.relations.iter().any(|relation| {
                     relation.relation_type == TaskRelationType::ChildOf && relation.target == *value
@@ -104,9 +127,13 @@ impl TaskListFilter {
     /// rows name after the freshness scan verifies every `child_of` target.
     /// Parent selections still confirm each envelope before counting/limiting.
     pub(crate) fn is_fully_indexed(&self) -> bool {
-        self.search.is_none()
+        self.not_before_from.is_none()
+            && self.not_before_until.is_none()
+            && self.scheduled_after.is_none()
+            && self.search.is_none()
             && self.task_type.is_none()
             && self.origin.is_none()
+            && self.rule_fingerprint.is_none()
             && self.parent_id.is_none()
             && self.external_ref.is_none()
             && self.has_external_ref_system.is_none()
@@ -131,7 +158,7 @@ impl TaskListFilter {
 }
 
 /// Ordered metadata matches. Counts do not certify off-page bundle integrity.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TaskCandidates {
     pub items: Vec<TaskEnvelopeV2>,
     /// Matches remaining after `scan_before`, before `limit`.
@@ -157,6 +184,15 @@ pub struct TaskCandidateKeys {
 pub struct TaskCandidateKey {
     pub id: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// One task's change stamp: what a change watcher compares between two reads
+/// to tell which tasks changed, without reading any envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskChangeStamp {
+    pub id: String,
+    pub status: TaskStatus,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// One fully validated bundle, retaining sidecars from that same read.

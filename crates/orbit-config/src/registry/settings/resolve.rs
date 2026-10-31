@@ -7,14 +7,29 @@ use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
     Crew, resolve_crew, validate_machine_id, validate_machine_name, validate_stored_task_prefix,
 };
-use orbit_types::workflow::Provider;
 use orbit_types::workflow::automation::members::MaterialField;
+use orbit_types::workflow::{ConventionTemplate, PrBodyTemplateSource, Provider, TemplateSurface};
 use serde::de::DeserializeOwned;
 
 use super::super::{
     CONSTELLATION_DEFAULT_PROVIDER_ENV, DEFAULT_WORKFLOW_CREW, LEGACY_DEFAULT_WORKFLOW_CREW,
 };
 use crate::memory_limit::MemoryLimit;
+
+/// Add the physical layer to value-admission errors while preserving other
+/// error kinds for callers that distinguish I/O and store failures.
+pub(super) fn resolve_at<T>(
+    result: Result<T, OrbitError>,
+    config_path: &Path,
+) -> Result<T, OrbitError> {
+    result.map_err(|error| match error {
+        OrbitError::InvalidInput(message) => OrbitError::InvalidInput(format!(
+            "{}: {message}",
+            redact_home_dir(&config_path.display().to_string())
+        )),
+        other => other,
+    })
+}
 
 pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
     // Cargo output, and the build directories and base checkouts agents leave
@@ -61,6 +76,72 @@ pub(super) fn resolve_light_delivery_paths(
         &patterns,
     )?;
     Ok(patterns)
+}
+
+/// `workflow.test_paths` default: test directories and test-file naming
+/// conventions shared across languages, not one toolchain's layout.
+const DEFAULT_TEST_PATHS: &[&str] = &[
+    "**/test/**",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/spec/**",
+    "**/testdata/**",
+    "**/*_test.*",
+    "**/*.test.*",
+    "**/test_*.*",
+    "**/*_spec.*",
+    "**/*.spec.*",
+];
+
+/// `workflow.non_code_paths` default: prose, configuration, data and media.
+const DEFAULT_NON_CODE_PATHS: &[&str] = &[
+    "docs/**",
+    "**/*.md",
+    "**/*.mdx",
+    "**/*.rst",
+    "**/*.txt",
+    "**/*.json",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.toml",
+    "**/*.lock",
+    "**/*.csv",
+    "**/*.golden",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.gif",
+    "**/*.webp",
+    "**/*.svg",
+    "**/*.ico",
+    "**/LICENSE*",
+];
+
+fn resolve_path_filter_default(
+    key: &str,
+    raw: Option<Vec<String>>,
+    default: &[&str],
+) -> Result<Vec<String>, OrbitError> {
+    let patterns = raw.unwrap_or_else(|| {
+        default
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect()
+    });
+    orbit_common::fs::path_filter::PathFilter::new(key, &patterns)?;
+    Ok(patterns)
+}
+
+/// `workflow.test_paths`: unset is [`DEFAULT_TEST_PATHS`]; `[]` counts no
+/// path as a test.
+pub(super) fn resolve_test_paths(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    resolve_path_filter_default("workflow.test_paths", raw, DEFAULT_TEST_PATHS)
+}
+
+/// `workflow.non_code_paths`: unset is [`DEFAULT_NON_CODE_PATHS`]; `[]`
+/// counts every path that is not a test as code.
+pub(super) fn resolve_non_code_paths(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    resolve_path_filter_default("workflow.non_code_paths", raw, DEFAULT_NON_CODE_PATHS)
 }
 
 /// `workflow.unlocked_path_validation_commands`: blank entries are dropped,
@@ -276,6 +357,13 @@ pub(super) fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitErr
 /// idle the host all day.
 pub(super) const DEFAULT_HOST_SHUTDOWN_HOLD_MINUTES: u32 = 180;
 
+/// Admit `machine.labels`: opaque capability labels, normalized the way a
+/// task's `requires_labels` are, so the two compare exactly.
+pub(super) fn resolve_machine_labels(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    orbit_types::task::normalize_host_labels(raw.unwrap_or_default(), "machine.labels")
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+}
+
 /// Admit a positive shutdown-hold horizon. There is no upper bound: a host
 /// that wants a longer quiet period before a reboot may set one.
 pub(super) fn resolve_host_shutdown_hold_minutes(raw: Option<u32>) -> Result<u32, OrbitError> {
@@ -400,6 +488,28 @@ pub(super) fn resolve_distributed_completion(raw: Option<String>) -> Result<Stri
     }
 }
 
+/// `lease.intake.peer_user`: unset, or a non-empty OS user name. Whether the
+/// user exists, and is neither root nor the operator, is decided when Orbit
+/// Web resolves it at startup.
+pub(super) fn resolve_lease_intake_peer_user(
+    raw: Option<String>,
+) -> Result<Option<String>, OrbitError> {
+    resolve_optional_non_empty(raw, crate::registry::LEASE_INTAKE_PEER_USER_KEY)
+}
+
+/// Admit `lease.intake.peer_user` alone from one `config.toml` document.
+pub(crate) fn admit_lease_intake_peer_user(
+    document: &toml::Value,
+    config_path: &Path,
+) -> Result<Option<String>, OrbitError> {
+    let raw = read_optional(
+        document,
+        crate::registry::LEASE_INTAKE_PEER_USER_KEY,
+        config_path,
+    )?;
+    resolve_at(resolve_lease_intake_peer_user(raw), config_path)
+}
+
 pub(super) fn resolve_optional_non_empty(
     raw: Option<String>,
     key: &str,
@@ -432,6 +542,8 @@ pub(super) fn resolve_default_crew(
         let preferred = match provider.as_str() {
             "claude" => "opus",
             "codex" => "sol",
+            "antigravity" => "gemini-flash",
+            "muse" => "muse-spark",
             provider => provider,
         };
         Some(if crews.contains_key(preferred) {
@@ -592,4 +704,132 @@ pub(super) fn resolve_build_output_env(
         names.insert(name.to_string());
     }
     Ok(names.into_iter().collect())
+}
+
+fn convention_error(error: orbit_types::workflow::ConventionTemplateError) -> OrbitError {
+    OrbitError::InvalidInput(error.to_string())
+}
+
+/// Admit an optional `{{ }}` text template (`pr.title_template`,
+/// `commit.body_template`), refusing an unknown placeholder by name.
+pub(super) fn resolve_text_template(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty_raw(raw, key)? else {
+        return Ok(None);
+    };
+    ConventionTemplate::parse(key, &raw, TemplateSurface::Text).map_err(convention_error)?;
+    Ok(Some(raw))
+}
+
+/// Admit `commit.subject_template`, which must carry `[{{task_id}}]`.
+pub(super) fn resolve_commit_subject_template(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
+        return Ok(None);
+    };
+    ConventionTemplate::parse_commit_subject(key, &raw).map_err(convention_error)?;
+    Ok(Some(raw))
+}
+
+/// Admit `branch.name_template`, which must carry `{{task_id}}` and
+/// `{{hash}}`.
+pub(super) fn resolve_branch_template(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
+        return Ok(None);
+    };
+    ConventionTemplate::parse_branch(key, &raw).map_err(convention_error)?;
+    Ok(Some(raw))
+}
+
+/// Admit `pr.body_template`: `"repo"` or a repository-relative path.
+pub(super) fn resolve_pr_body_template(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
+        return Ok(None);
+    };
+    PrBodyTemplateSource::parse(key, &raw).map_err(convention_error)?;
+    Ok(Some(raw))
+}
+
+/// Trimmed, non-empty entries in first-seen order without duplicates.
+/// `machine.mcp.toolsets`: every entry names a toolset (or `all`).
+pub(super) fn resolve_mcp_toolsets(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    let names = raw.unwrap_or_default();
+    orbit_types::tool::McpToolsetSelection::from_names(names.iter().map(String::as_str))
+        .map_err(|error| OrbitError::InvalidInput(format!("machine.mcp.toolsets: {error}")))?;
+    Ok(names.iter().map(|name| name.trim().to_string()).collect())
+}
+
+pub(super) fn resolve_name_list(
+    raw: Option<Vec<String>>,
+    key: &str,
+) -> Result<Vec<String>, OrbitError> {
+    let mut names: Vec<String> = Vec::new();
+    for name in raw.unwrap_or_default() {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "{key} must not contain an empty entry"
+            )));
+        }
+        // Labels and reviewers reach `gh` as option values.
+        if name.starts_with('-') {
+            return Err(OrbitError::InvalidInput(format!(
+                "{key} entry '{name}' must not start with '-'"
+            )));
+        }
+        if !names.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+            names.push(name.to_string());
+        }
+    }
+    Ok(names)
+}
+
+/// Tag matching is exact, including case: unlike static forge names, keep
+/// differently cased entries so neither configured tag is lost.
+pub(super) fn resolve_task_tag_labels(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    let mut labels = BTreeSet::new();
+    for label in raw.unwrap_or_default() {
+        labels.extend(resolve_name_list(Some(vec![label]), "pr.task_tag_labels")?);
+    }
+    Ok(labels.into_iter().collect())
+}
+
+/// Only canonical task types may map to non-empty, option-safe label names.
+pub(super) fn resolve_task_type_labels(
+    raw: Option<BTreeMap<String, String>>,
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    let mut labels = BTreeMap::new();
+    for (task_type, label) in raw.unwrap_or_default() {
+        task_type
+            .parse::<orbit_types::task::TaskType>()
+            .map_err(|error| OrbitError::InvalidInput(format!("pr.task_type_labels: {error}")))?;
+        let key = format!("pr.task_type_labels.{task_type}");
+        let label = resolve_name_list(Some(vec![label]), &key)?;
+        labels.insert(task_type, label[0].clone());
+    }
+    Ok(labels)
+}
+
+/// A text template keeps its whitespace: a body template may begin or end
+/// with blank lines on purpose. Only an all-blank value is refused.
+fn resolve_optional_non_empty_raw(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    match raw {
+        Some(value) if value.trim().is_empty() => {
+            Err(OrbitError::InvalidInput(format!("{key} must not be empty")))
+        }
+        other => Ok(other),
+    }
 }

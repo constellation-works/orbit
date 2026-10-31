@@ -1,0 +1,1312 @@
+//! [ORB-17770] Under `workflow.crew_selection = "usage_pressure"`, task
+//! creation, complexity re-rate and admission draws weigh each pool member by
+//! its crew's weekly usage pressure, and admission draws a system-chosen crew
+//! again from its whole pool. Under `static`, or with the keys unset, every
+//! draw and its recorded selection is what it was before.
+//!
+//! Weekly readings are seeded into the host's provider-limit store the way a
+//! run's telemetry records them. A selection is read from a replay's admitted
+//! run input, the same admission every delivery submission runs.
+//!
+//! Draws are random. Where a test needs one outcome, its config drives the
+//! losing member to one ticket against about a billion, so the outcome is
+//! fixed in practice without a seed hook.
+//!
+//! `workflow.crew_performance` multiplies the same draws by each crew's
+//! performance factor, read from a crew-performance snapshot seeded into the
+//! workspace store the way the hourly refresh writes it.
+
+use chrono::{Duration, Utc};
+use orbit_core::application::task::TaskAddParams;
+use orbit_core::{
+    OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus, WorkspaceRuntimeBinding,
+};
+use orbit_store::contracts::{
+    CrewPerformanceCell, CrewPerformanceSnapshot, CrewPerformanceStoreBackend as _,
+};
+use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+use orbit_types::workflow::{JobRunState, JobRunTrigger};
+use serde_json::{Value, json};
+use tempfile::TempDir;
+
+/// A provider reading at the public telemetry boundary. Used by the other
+/// pool-draw regression scenarios as well as task admission.
+pub(crate) fn record_week(
+    runtime: &OrbitRuntime,
+    provider: &str,
+    used_percent: f64,
+    resets_in: Duration,
+) {
+    runtime
+        .record_provider_limit(&ProviderLimitObservation {
+            provider: provider.into(),
+            account: None,
+            model: None,
+            window: Some("seven_day".into()),
+            exhausted: false,
+            source: ProviderLimitSource::Event,
+            resets_at: Some(Utc::now() + resets_in),
+            used_percent: Some(used_percent),
+            window_minutes: Some(10080),
+            gating: true,
+            partial: false,
+            observed_at: Utc::now(),
+            run_id: None,
+            crew: None,
+            detail: String::new(),
+        })
+        .unwrap();
+}
+
+/// Configured weights stay observable beside the actual pressure-adjusted
+/// weights; membership and parked-member filtering remain the caller's.
+pub(crate) fn assert_pool(pool: &Value, expected: &[(&str, u32, f64)]) {
+    let members = pool
+        .as_array()
+        .unwrap_or_else(|| panic!("missing eligible pool: {pool}"));
+    assert_eq!(members.len(), expected.len(), "{pool}");
+    for (name, weight, effective) in expected {
+        let member = members
+            .iter()
+            .find(|member| member["name"] == *name)
+            .unwrap();
+        assert_eq!(member["weight"], *weight, "{pool}");
+        assert_eq!(member["effective_weight"], *effective, "{pool}");
+        assert!(
+            member["pressure"]
+                .as_f64()
+                .is_some_and(|pressure| pressure > 0.0),
+            "{pool}"
+        );
+    }
+}
+
+/// Two Claude crews and a Codex crew, `pool` as the hard-complexity pool,
+/// `purpose` as the baseline-red repair pool, and `extra` under `[workflow]`.
+fn config(pool: &str, purpose: &str, extra: &str) -> String {
+    format!(
+        "[workflow]\ndefault_crew = \"sol\"\nhard_complexity_crews = {pool}\n{extra}\n\n\
+         [workflow.purpose_crews]\nbaseline_red_repair = {purpose}\n\n\
+         [crews.opus]\nprovider = \"claude\"\nmodel = \"opus-model\"\n\n\
+         [crews.sonnet]\nprovider = \"claude\"\nmodel = \"sonnet-model\"\n\n\
+         [crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n\
+         [review]\nbefore_pr = false\n"
+    )
+}
+
+/// Pressure decides outright: a Claude crew at ×10⁶ against a Codex crew at
+/// the 10⁻⁶ floor, so the Codex member holds one ticket in about a billion.
+const DECISIVE: &str = "crew_selection = \"usage_pressure\"\n\
+                        usage_pressure_cap = 1000000\n\
+                        usage_pressure_strength = 10";
+
+struct Fixture {
+    root: TempDir,
+}
+
+impl Fixture {
+    fn new(config: &str) -> Self {
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        std::fs::create_dir_all(root.path().join("global/resources/jobs")).unwrap();
+        std::fs::create_dir_all(root.path().join("repo/.orbit")).unwrap();
+        let fixture = Self { root };
+        fixture.configure(config);
+        fixture
+    }
+
+    fn configure(&self, config: &str) {
+        std::fs::write(self.root.path().join("repo/.orbit/config.toml"), config).unwrap();
+    }
+
+    fn runtime(&self) -> OrbitRuntime {
+        let repo = self.root.path().join("repo");
+        OrbitRuntime::from_roots_with_binding(
+            &self.root.path().join("global"),
+            &repo.join(".orbit"),
+            WorkspaceRuntimeBinding {
+                logical_workspace_id: "ws_usage_pressure".into(),
+                task_partition_id: "ws_usage_pressure".into(),
+                owner_machine_id: None,
+                checkout_role: None,
+                repo_root: repo,
+                ship_mode: ShipMode::Local,
+                base_branch: Some("main".into()),
+            },
+        )
+        .unwrap()
+        .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
+    }
+
+    /// A backlog task of `complexity`, tagged `tags`, on `crew` when one is
+    /// named. Its own context file keeps tasks from locking each other.
+    fn task(
+        &self,
+        name: &str,
+        complexity: TaskComplexity,
+        crew: Option<&str>,
+        tags: &[&str],
+    ) -> Task {
+        std::fs::write(self.root.path().join("repo").join(name), "fixture\n").unwrap();
+        self.runtime()
+            .add_task(TaskAddParams {
+                title: format!("Usage pressure fixture {name}"),
+                description: "A task whose crew draw weighs usage pressure.".into(),
+                acceptance_criteria: vec!["Delivered.".into()],
+                plan: "1. Deliver it.".into(),
+                complexity,
+                context_files: vec![format!("file:{name}")],
+                task_type: Some(orbit_core::TaskType::Chore),
+                status: Some(TaskStatus::Backlog),
+                tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                crew: crew.map(ToOwned::to_owned),
+                ..Default::default()
+            })
+            .unwrap()
+    }
+
+    /// Record a weekly reading of `provider`: `used_percent` used, resetting
+    /// in `resets_in`.
+    fn week(&self, provider: &str, used_percent: f64, resets_in: Duration) {
+        record_week(&self.runtime(), provider, used_percent, resets_in);
+    }
+
+    /// The run input a replay of a failed delivery, submitted with `input`,
+    /// is admitted with.
+    fn admit(&self, input: Value) -> Value {
+        std::fs::write(
+            self.root
+                .path()
+                .join("global/resources/jobs/task_auto_pipeline.yaml"),
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_auto_pipeline\nspec:\n  \
+             state: enabled\n  steps: []\n",
+        )
+        .unwrap();
+        let runtime = self.runtime();
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            runtime.sqlite_store().unwrap(),
+            runtime.workspace_id().unwrap(),
+        );
+        let source = jobs
+            .insert_job_run("task_auto_pipeline", 1, Utc::now(), Some(input), None)
+            .unwrap();
+        jobs.mark_job_run_running(&source.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        jobs.finalize_job_run(&source.run_id, JobRunState::Failed, Utc::now(), Some(1))
+            .unwrap();
+        let replay = runtime
+            .submit_replay_run(&source.run_id, None, None, JobRunTrigger::dashboard())
+            .unwrap();
+        jobs.get_job_run(&replay.run_id)
+            .unwrap()
+            .unwrap()
+            .input
+            .unwrap()
+    }
+
+    /// The task's `crew_redrawn` history notes, oldest first.
+    fn redraws(&self, task: &str) -> Vec<String> {
+        self.runtime()
+            .get_task_history(task)
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.event == "crew_redrawn")
+            .map(|entry| entry.note.unwrap_or_default())
+            .collect()
+    }
+}
+
+/// Workers are harmless substitutes: admission is complete before a run is
+/// persisted.
+fn substitute_worker() {
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--list".into(),
+    ]);
+}
+
+const POOL: &str = r#"["opus:50", "sonnet:25", "sol:25"]"#;
+
+/// Claude 10% used with six hours left (pressure about 25) and Codex 0% used
+/// with the week ahead (pressure 1): the task text's worked example.
+fn read_example_week(fx: &Fixture) {
+    fx.week("claude", 10.0, Duration::hours(6));
+    fx.week("codex", 0.0, Duration::days(7));
+}
+
+/// Criterion 1: unset, `static`, and `usage_pressure` at strength 0 record
+/// the selection exactly as before, whatever the readings, and never
+/// re-draw or rewrite a task's assigned crew. A task with no pool assignment
+/// records the crew its admission drew [ORB-19416].
+fn static_selection_draws_and_records_as_before() {
+    substitute_worker();
+    let fx = Fixture::new(&config(r#"["sol"]"#, "[]", ""));
+    let assigned = fx.task("assigned.txt", TaskComplexity::Hard, None, &[]);
+    assert_eq!(assigned.crew.as_deref(), Some("sol"));
+    assert_eq!(assigned.crew_source.as_deref(), Some("pool:hard"));
+    // Created before the pool exists, this task draws the whole pool.
+    fx.configure(&config("[]", "[]", ""));
+    let unpooled = fx.task("unpooled.txt", TaskComplexity::Hard, None, &[]);
+    assert_eq!(unpooled.crew_source.as_deref(), Some("default"));
+    read_example_week(&fx);
+
+    for extra in [
+        "",
+        "crew_selection = \"static\"",
+        "crew_selection = \"usage_pressure\"\nusage_pressure_strength = 0",
+    ] {
+        fx.configure(&config(POOL, "[]", extra));
+        let mut drawn = String::new();
+        for _ in 0..5 {
+            let admitted = fx.admit(json!({ "task_ids": [assigned.id] }));
+            assert_eq!(
+                admitted["crew_selection"],
+                json!({
+                    "task_id": assigned.id, "crew": "sol", "source": "pool:hard",
+                    "complexity": "hard", "eligible_pool": [{"name": "sol", "weight": 1}],
+                }),
+                "[{extra}] the assigned pool member is kept: {admitted}"
+            );
+            let admitted = fx.admit(json!({ "task_ids": [unpooled.id] }));
+            let selection = &admitted["crew_selection"];
+            drawn = admitted["crew"].as_str().unwrap().to_string();
+            assert_eq!(
+                selection["source"], "workflow.hard_complexity_crews",
+                "[{extra}] {admitted}"
+            );
+            assert_eq!(
+                selection["eligible_pool"],
+                json!([
+                    {"name": "opus", "weight": 50},
+                    {"name": "sol", "weight": 25},
+                    {"name": "sonnet", "weight": 25},
+                ]),
+                "[{extra}] configured weights, no pressure fields: {admitted}"
+            );
+        }
+        let current = fx.runtime().get_task(&assigned.id).unwrap();
+        assert_eq!(
+            current.crew, assigned.crew,
+            "[{extra}] the record is not rewritten"
+        );
+        assert_eq!(current.crew_source, assigned.crew_source, "[{extra}]");
+        let current = fx.runtime().get_task(&unpooled.id).unwrap();
+        assert_eq!(current.crew.as_deref(), Some(drawn.as_str()), "[{extra}]");
+        assert!(
+            current.crew_source == unpooled.crew_source
+                || current.crew_source.as_deref() == Some("redraw:pool"),
+            "[{extra}] {:?}",
+            current.crew_source
+        );
+        for task in [&assigned, &unpooled] {
+            assert!(fx.redraws(&task.id).is_empty(), "[{extra}]");
+        }
+    }
+}
+
+/// Criteria 2 and 3: the worked example's admission weighs Claude ×8 (capped
+/// from about 25) and Codex ×1, names usage pressure in its source, and draws
+/// a pool assignment from the whole pool. A changed crew is persisted under
+/// the task's unchanged `pool:hard` source with a `crew_redrawn` entry.
+fn usage_pressure_weighs_the_admission_draw_and_redraws_a_pool_assignment() {
+    substitute_worker();
+    let fx = Fixture::new(&config(r#"["sol"]"#, "[]", ""));
+    let task = fx.task("pool.txt", TaskComplexity::Hard, None, &[]);
+    assert_eq!(task.crew.as_deref(), Some("sol"));
+    assert_eq!(task.crew_source.as_deref(), Some("pool:hard"));
+    fx.configure(&config(POOL, "[]", "crew_selection = \"usage_pressure\""));
+    read_example_week(&fx);
+
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    let selection = &admitted["crew_selection"];
+    assert_eq!(
+        selection["source"], "workflow.hard_complexity_crews; usage pressure",
+        "{admitted}"
+    );
+    let pool = selection["eligible_pool"].as_array().unwrap();
+    let member = |name: &str| {
+        pool.iter()
+            .find(|member| member["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing from {admitted}"))
+    };
+    for (name, weight, effective) in [
+        ("opus", 50, 400.0),
+        ("sonnet", 25, 200.0),
+        ("sol", 25, 25.0),
+    ] {
+        assert_eq!(member(name)["weight"], weight, "{admitted}");
+        assert_eq!(member(name)["effective_weight"], effective, "{admitted}");
+    }
+    assert!(
+        member("opus")["pressure"].as_f64().unwrap() > 25.0,
+        "{admitted}"
+    );
+    assert!(
+        (member("sol")["pressure"].as_f64().unwrap() - 1.0).abs() < 1e-3,
+        "{admitted}"
+    );
+
+    let drawn = admitted["crew"].as_str().unwrap();
+    let current = fx.runtime().get_task(&task.id).unwrap();
+    assert_eq!(
+        current.crew.as_deref(),
+        Some(drawn),
+        "the draw is persisted"
+    );
+    assert_eq!(current.crew_source.as_deref(), Some("pool:hard"));
+    let redraws = fx.redraws(&task.id);
+    if drawn == "sol" {
+        assert!(
+            redraws.is_empty(),
+            "an unchanged crew is not re-recorded: {redraws:?}"
+        );
+    } else {
+        let [note] = redraws.as_slice() else {
+            panic!("one crew_redrawn entry: {redraws:?}");
+        };
+        assert!(
+            note.starts_with(&format!(
+                "crew redrawn from pool:hard (`sol`) to pool:hard (`{drawn}`) at admission under usage pressure: `sol` ×1"
+            )) && note.contains(&format!("`{drawn}` ×25.")) && note.contains("seven_day 10%"),
+            "the entry names both crews and their pressures: {note}"
+        );
+    }
+}
+
+/// Criterion 3: a decisive draw moves a `pool:hard` and a
+/// `purpose:baseline_red_repair` assignment off Codex, each keeping its own
+/// source. An explicit task crew and an explicit run crew are never re-drawn,
+/// and the run allowlist bounds the re-draw.
+fn a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew() {
+    substitute_worker();
+    let fx = Fixture::new(&config(r#"["sol"]"#, r#"["sol"]"#, ""));
+    let pooled = fx.task("pooled.txt", TaskComplexity::Hard, None, &[]);
+    let purpose = fx.task(
+        "purpose.txt",
+        TaskComplexity::Hard,
+        None,
+        &["baseline-red-repair"],
+    );
+    assert_eq!(
+        purpose.crew_source.as_deref(),
+        Some("purpose:baseline_red_repair")
+    );
+    let explicit = fx.task("explicit.txt", TaskComplexity::Hard, Some("sol"), &[]);
+    assert_eq!(explicit.crew_source.as_deref(), Some("explicit"));
+    fx.configure(&config(
+        r#"["opus", "sol"]"#,
+        r#"["opus", "sol"]"#,
+        DECISIVE,
+    ));
+    fx.week("claude", 0.0, Duration::hours(6));
+    fx.week("codex", 89.0, Duration::days(7));
+
+    // The allowlist leaves only the assigned crew: nothing changes.
+    let admitted = fx.admit(json!({ "task_ids": [pooled.id], "allowed_crews": ["sol"] }));
+    assert_eq!(admitted["crew"], "sol", "{admitted}");
+    assert!(fx.redraws(&pooled.id).is_empty());
+
+    for (task, source) in [
+        (&pooled, "pool:hard"),
+        (&purpose, "purpose:baseline_red_repair"),
+    ] {
+        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+        assert_eq!(admitted["crew"], "opus", "{admitted}");
+        let current = fx.runtime().get_task(&task.id).unwrap();
+        assert_eq!(current.crew.as_deref(), Some("opus"));
+        assert_eq!(
+            current.crew_source.as_deref(),
+            Some(source),
+            "the automatic source is kept"
+        );
+        let redraws = fx.redraws(&task.id);
+        let [note] = redraws.as_slice() else {
+            panic!("one crew_redrawn entry: {redraws:?}");
+        };
+        assert!(
+            note.starts_with(&format!(
+                "crew redrawn from {source} (`sol`) to {source} (`opus`) at admission under usage pressure:"
+            )),
+            "{note}"
+        );
+    }
+
+    for _ in 0..3 {
+        let admitted = fx.admit(json!({ "task_ids": [explicit.id] }));
+        assert_eq!(
+            admitted["crew"], "sol",
+            "an explicit task crew stays: {admitted}"
+        );
+        assert_eq!(admitted["crew_selection"]["source"], "task.crew");
+        let admitted = fx.admit(json!({
+            "task_ids": [pooled.id], "crew": "sol",
+            "crew_selection": {"task_id": pooled.id, "crew": "sol", "source": "explicit"},
+        }));
+        assert_eq!(
+            admitted["crew"], "sol",
+            "an explicit run crew stays: {admitted}"
+        );
+        assert_eq!(admitted["crew_selection"]["source"], "explicit");
+    }
+    let current = fx.runtime().get_task(&explicit.id).unwrap();
+    assert_eq!(current.crew.as_deref(), Some("sol"));
+    assert_eq!(current.crew_source.as_deref(), Some("explicit"));
+    assert!(fx.redraws(&explicit.id).is_empty());
+    // The task records the run crew it ran [ORB-19416] under an automatic
+    // source, so a later admission draws the pool again.
+    let current = fx.runtime().get_task(&pooled.id).unwrap();
+    assert_eq!(current.crew.as_deref(), Some("sol"));
+    assert_eq!(current.crew_source.as_deref(), Some("redraw:run_crew"));
+}
+
+/// Criterion 4: creation and a complexity re-rate of a pool task draw with
+/// usage pressure (`creation_crew_assignment` serves both).
+fn a_complexity_rerate_of_a_pool_task_draws_with_usage_pressure() {
+    let extra = format!("medium_complexity_crews = [\"sol\"]\n{DECISIVE}");
+    let fx = Fixture::new(&config(r#"["opus", "sol"]"#, "[]", &extra));
+    fx.week("claude", 0.0, Duration::hours(6));
+    fx.week("codex", 89.0, Duration::days(7));
+
+    let created = fx.task("created.txt", TaskComplexity::Hard, None, &[]);
+    assert_eq!(
+        created.crew.as_deref(),
+        Some("opus"),
+        "creation weighs pressure"
+    );
+    assert_eq!(created.crew_source.as_deref(), Some("pool:hard"));
+
+    let task = fx.task("rerated.txt", TaskComplexity::Medium, None, &[]);
+    assert_eq!(task.crew.as_deref(), Some("sol"));
+    fx.runtime()
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task.id, "complexity": "hard", "model": "codex"}),
+        )
+        .expect("complexity re-rate");
+    let rerated = fx.runtime().get_task(&task.id).unwrap();
+    assert_eq!(
+        rerated.crew.as_deref(),
+        Some("opus"),
+        "the re-rate draw weighs pressure"
+    );
+    assert_eq!(rerated.crew_source.as_deref(), Some("pool:hard"));
+    assert_eq!(
+        fx.redraws(&task.id),
+        [
+            "crew redrawn from pool:medium (`sol`) to pool:hard (`opus`) after complexity changed to hard"
+        ],
+    );
+}
+
+/// Criterion 5: a parked member stays undrawable at any pressure, and a crew
+/// at 95% weekly use with six days left draws at the ×1/8 floor and is gated
+/// only by the existing threshold.
+fn parked_members_stay_out_and_low_pressure_floors_without_gating() {
+    substitute_worker();
+    let fx = Fixture::new(&config("[]", "[]", ""));
+    let task = fx.task("floor.txt", TaskComplexity::Hard, None, &[]);
+    assert_eq!(task.crew_source.as_deref(), Some("default"));
+
+    fx.configure(&config(r#"["opus:0", "sol:1"]"#, "[]", DECISIVE));
+    fx.week("claude", 0.0, Duration::hours(6));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(admitted["crew"], "sol", "{admitted}");
+    let pool = admitted["crew_selection"]["eligible_pool"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        pool.len(),
+        1,
+        "the parked member holds no ticket: {admitted}"
+    );
+    assert_eq!(pool[0]["name"], "sol");
+
+    fx.week("claude", 95.0, Duration::days(6));
+    let pool = r#"["opus:1", "sol:1"]"#;
+    fx.configure(&config(
+        pool,
+        "[]",
+        "crew_selection = \"usage_pressure\"\nprovider_limit_max_used_pct = 96",
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    let selection = &admitted["crew_selection"];
+    assert_eq!(
+        selection["source"], "workflow.hard_complexity_crews; usage pressure",
+        "below the threshold the crew is weighed, not gated: {admitted}"
+    );
+    let opus = selection["eligible_pool"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|member| member["name"] == "opus")
+        .cloned()
+        .unwrap_or_else(|| panic!("opus missing: {admitted}"));
+    assert_eq!(opus["effective_weight"], 0.125, "{admitted}");
+    assert!(opus["pressure"].as_f64().unwrap() < 0.125, "{admitted}");
+
+    fx.configure(&config(pool, "[]", "crew_selection = \"usage_pressure\""));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(admitted["crew"], "sol", "{admitted}");
+    let source = admitted["crew_selection"]["source"].as_str().unwrap();
+    assert!(
+        source
+            .starts_with("workflow.hard_complexity_crews; provider limit: claude seven_day at 95%")
+            && source.contains("crews opus skipped"),
+        "the default 90% threshold still gates: {source}"
+    );
+}
+
+/// The crew-performance scope's worked example: a low pool of three crews,
+/// `review` tasks tagged `review`, and `extra` under `[workflow]`.
+fn performance_config(pool: &str, extra: &str) -> String {
+    format!(
+        "[workflow]\ndefault_crew = \"luna\"\nlow_complexity_crews = {pool}\n{extra}\n\n\
+         [[workflow.crew_performance_types]]\nname = \"review\"\ntags = [\"review\"]\n\n\
+         [crews.haiku]\nprovider = \"claude\"\nmodel = \"haiku-model\"\n\n\
+         [crews.luna]\nprovider = \"codex\"\nmodel = \"luna-model\"\n\n\
+         [crews.gemini-flash]\nprovider = \"gemini\"\nmodel = \"flash-model\"\n\n\
+         [review]\nbefore_pr = false\n"
+    )
+}
+
+const EXAMPLE_POOL: &str = r#"["haiku:40", "luna:30", "gemini-flash:30"]"#;
+
+/// A `low` cell of the snapshot: crew, model, type, `n`, score, crew mean.
+type Cell<'a> = (&'a str, &'a str, &'a str, u64, f64, f64);
+
+/// The worked example's cells: review scores 115/108/90 over tier means
+/// 114/98/92, and an `other` cell per crew so each has a tier mean.
+const EXAMPLE_CELLS: [Cell<'static>; 6] = [
+    ("haiku", "haiku-model", "review", 40, 115.0, 114.0),
+    ("haiku", "haiku-model", "other", 80, 113.5, 114.0),
+    ("luna", "luna-model", "review", 40, 108.0, 98.0),
+    ("luna", "luna-model", "other", 80, 93.0, 98.0),
+    ("gemini-flash", "flash-model", "review", 40, 90.0, 92.0),
+    ("gemini-flash", "flash-model", "other", 80, 93.0, 92.0),
+];
+
+impl Fixture {
+    /// Store a snapshot of `cells`, computed `age` ago, built from the
+    /// current type list unless `types_hash` names another.
+    fn snapshot(&self, cells: &[Cell<'_>], age: Duration, types_hash: Option<&str>) {
+        let runtime = self.runtime();
+        let current = orbit_config::crew_performance_types_hash(runtime.crew_performance_types());
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .replace_crew_performance_snapshot(&CrewPerformanceSnapshot {
+                workspace_id: runtime.workspace_id().unwrap(),
+                computed_at: Utc::now() - age,
+                window_days: 30,
+                types_hash: types_hash.map_or(current, ToOwned::to_owned),
+                types_json: "[]".into(),
+                cells: cells
+                    .iter()
+                    .map(
+                        |(crew, model, task_type, n, score, crew_mean)| CrewPerformanceCell {
+                            crew: (*crew).into(),
+                            model: (*model).into(),
+                            tier: "low".into(),
+                            task_type: (*task_type).into(),
+                            n: *n,
+                            raw: *score,
+                            crew_mean: *crew_mean,
+                            score: *score,
+                        },
+                    )
+                    .collect(),
+            })
+            .unwrap();
+    }
+}
+
+/// `name`'s entry in an admitted run's recorded eligible pool.
+fn pool_member<'a>(admitted: &'a Value, name: &str) -> &'a Value {
+    admitted["crew_selection"]["eligible_pool"]
+        .as_array()
+        .unwrap_or_else(|| panic!("missing eligible pool: {admitted}"))
+        .iter()
+        .find(|member| member["name"] == name)
+        .unwrap_or_else(|| panic!("{name} missing from {admitted}"))
+}
+
+/// Assert each member's recorded performance factor to two places, and that
+/// it drew on `weight × factor` tickets.
+fn assert_factors(admitted: &Value, expected: &[(&str, u32, f64)]) {
+    for (name, weight, factor) in expected {
+        let member = pool_member(admitted, name);
+        let recorded = member["performance"]["factor"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{name} has no factor: {admitted}"));
+        assert!(
+            (recorded - factor).abs() < 0.005,
+            "{name} factor {recorded} is not ×{factor}: {admitted}"
+        );
+        assert_eq!(member["weight"], *weight, "{admitted}");
+        let effective = (f64::from(*weight) * recorded * 1000.0).round() / 1000.0;
+        assert_eq!(member["effective_weight"], effective, "{admitted}");
+    }
+}
+
+/// Criteria 1 and 2: off records the configured weights exactly as a static
+/// draw does, whatever the snapshot holds. The worked example's admission of
+/// a `review` task records ×1.57/×1.27/×0.74 under `absolute` and
+/// ×1.03/×1.35/×0.94 under `comparative`, with no pressure, and an assigned
+/// pool member is never re-drawn by performance alone.
+fn crew_performance_weighs_the_worked_example_and_off_draws_as_before() {
+    substitute_worker();
+    let fx = Fixture::new(&performance_config(r#"["luna"]"#, ""));
+    let assigned = fx.task("assigned.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(assigned.crew_source.as_deref(), Some("pool:low"));
+    fx.configure(&performance_config("[]", ""));
+    let task = fx.task("review.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(task.crew_source.as_deref(), Some("default"));
+    fx.configure(&performance_config(EXAMPLE_POOL, ""));
+    fx.snapshot(&EXAMPLE_CELLS, Duration::hours(1), None);
+
+    for extra in [
+        "",
+        "crew_performance = \"off\"",
+        "crew_performance = \"absolute\"\ncrew_performance_strength = 0",
+        "crew_performance = \"shadow_absolute\"\ncrew_performance_strength = 0",
+        "crew_performance = \"shadow_comparative\"\ncrew_performance_strength = 0",
+    ] {
+        fx.configure(&performance_config(EXAMPLE_POOL, extra));
+        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+        assert_eq!(
+            admitted["crew_selection"]["eligible_pool"],
+            json!([
+                {"name": "gemini-flash", "weight": 30},
+                {"name": "haiku", "weight": 40},
+                {"name": "luna", "weight": 30},
+            ]),
+            "[{extra}] configured weights, no factor fields: {admitted}"
+        );
+    }
+
+    fx.configure(&performance_config(
+        EXAMPLE_POOL,
+        "crew_performance = \"absolute\"",
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(
+        admitted["crew_selection"]["source"], "workflow.low_complexity_crews",
+        "performance alone does not rename the source: {admitted}"
+    );
+    assert_factors(
+        &admitted,
+        &[
+            ("haiku", 40, 1.57),
+            ("luna", 30, 1.27),
+            ("gemini-flash", 30, 0.74),
+        ],
+    );
+    let haiku = &pool_member(&admitted, "haiku")["performance"];
+    assert_eq!(haiku["mode"], "absolute", "{admitted}");
+    assert_eq!(haiku["applied"], true, "{admitted}");
+    assert_eq!(haiku["type"], "review", "{admitted}");
+    assert_eq!(haiku["tier"], "low", "{admitted}");
+    assert_eq!(haiku["score"], 115.0, "{admitted}");
+    assert_eq!(haiku["crew_mean"], 114.0, "{admitted}");
+    assert_eq!(haiku["n"], 40, "{admitted}");
+    assert!(haiku["computed_at"].is_string(), "{admitted}");
+    assert!(
+        pool_member(&admitted, "haiku").get("pressure").is_none(),
+        "no pressure without usage_pressure: {admitted}"
+    );
+
+    fx.configure(&performance_config(
+        EXAMPLE_POOL,
+        "crew_performance = \"comparative\"",
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_factors(
+        &admitted,
+        &[
+            ("haiku", 40, 1.03),
+            ("luna", 30, 1.35),
+            ("gemini-flash", 30, 0.94),
+        ],
+    );
+    assert_eq!(
+        pool_member(&admitted, "luna")["performance"]["applied"],
+        true,
+        "{admitted}"
+    );
+
+    // The assigned member stays: only usage pressure re-draws at admission.
+    let admitted = fx.admit(json!({ "task_ids": [assigned.id] }));
+    assert_eq!(
+        admitted["crew_selection"]["eligible_pool"],
+        json!([{"name": "luna", "weight": 1}]),
+        "{admitted}"
+    );
+    assert_eq!(
+        fx.runtime().get_task(&assigned.id).unwrap().crew.as_deref(),
+        Some("luna")
+    );
+    assert!(fx.redraws(&assigned.id).is_empty());
+}
+
+/// Criterion 3: with usage pressure too, each member draws on the product of
+/// both factors and records both, and a re-draw's history names both.
+fn crew_performance_composes_with_usage_pressure() {
+    substitute_worker();
+    let fx = Fixture::new(&performance_config(r#"["gemini-flash"]"#, ""));
+    let task = fx.task("both.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(task.crew.as_deref(), Some("gemini-flash"));
+    fx.configure(&performance_config(
+        EXAMPLE_POOL,
+        "crew_selection = \"usage_pressure\"\ncrew_performance = \"absolute\"",
+    ));
+    fx.snapshot(&EXAMPLE_CELLS, Duration::hours(1), None);
+    fx.week("claude", 10.0, Duration::hours(6));
+    fx.week("codex", 0.0, Duration::days(7));
+
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(
+        admitted["crew_selection"]["source"], "workflow.low_complexity_crews; usage pressure",
+        "{admitted}"
+    );
+    // Claude's pressure (about 25) caps at ×8; Codex reads 1.
+    for (name, pressure_factor, performance_factor) in
+        [("haiku", 8.0, 1.568_312), ("luna", 1.0, 1.271_249)]
+    {
+        let member = pool_member(&admitted, name);
+        assert!(member["pressure"].as_f64().is_some(), "{admitted}");
+        let recorded = member["performance"]["factor"].as_f64().unwrap();
+        assert!((recorded - performance_factor).abs() < 1e-5, "{admitted}");
+        assert_eq!(member["performance"]["applied"], true, "{admitted}");
+        let weight = member["weight"].as_u64().unwrap() as f64;
+        let effective = (weight * pressure_factor * recorded * 1000.0).round() / 1000.0;
+        assert_eq!(member["effective_weight"], effective, "{name}: {admitted}");
+    }
+    let drawn = admitted["crew"].as_str().unwrap();
+    if drawn != "gemini-flash" {
+        let redraws = fx.redraws(&task.id);
+        let [note] = redraws.as_slice() else {
+            panic!("one crew_redrawn entry: {redraws:?}");
+        };
+        assert!(
+            note.contains("under usage pressure:")
+                && note.contains(
+                    "; crew performance absolute: `gemini-flash` ×0.74 (review score 90.0"
+                ),
+            "the entry names both factors: {note}"
+        );
+    }
+}
+
+/// Criteria 4 and 5: a crew with no cell for the type reads its crew mean,
+/// a crew with no evidence reads 100, factors clamp to `[1/cap, cap]`, a
+/// missing, stale or other-list snapshot gives every factor 1 with its
+/// reason and draws on the configured weights, a parked member holds no
+/// ticket, and creation draws weigh performance.
+fn crew_performance_fallbacks_clamps_and_unusable_snapshots() {
+    substitute_worker();
+    let fx = Fixture::new(&performance_config("[]", ""));
+    let task = fx.task("fallback.txt", TaskComplexity::Low, None, &["review"]);
+    let absolute = "crew_performance = \"absolute\"";
+
+    // Haiku has only an `other` cell (crew mean 120), luna has none; the
+    // `[1/cap, cap]` clamp at cap 1.5 holds haiku's ×1.82 to ×1.5.
+    fx.configure(&performance_config(
+        EXAMPLE_POOL,
+        &format!("{absolute}\ncrew_performance_cap = 1.5"),
+    ));
+    fx.snapshot(
+        &[("haiku", "haiku-model", "other", 50, 125.0, 120.0)],
+        Duration::hours(1),
+        None,
+    );
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    let haiku = &pool_member(&admitted, "haiku")["performance"];
+    assert_eq!(
+        haiku["score"], 120.0,
+        "a missing cell reads its crew mean: {admitted}"
+    );
+    assert_eq!(haiku["evidence"], "crew_mean", "{admitted}");
+    assert_eq!(haiku["factor"], 1.5, "clamped to the cap: {admitted}");
+    let luna = &pool_member(&admitted, "luna")["performance"];
+    assert_eq!(
+        luna["score"], 100.0,
+        "a crew with no evidence reads 100: {admitted}"
+    );
+    assert_eq!(luna["evidence"], "none", "{admitted}");
+    assert_eq!(luna["factor"], 1.0, "{admitted}");
+
+    // A low score floors at 1/cap.
+    fx.snapshot(
+        &[("luna", "luna-model", "review", 50, 40.0, 60.0)],
+        Duration::hours(1),
+        None,
+    );
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    let floor = pool_member(&admitted, "luna")["performance"]["factor"]
+        .as_f64()
+        .unwrap();
+    assert!((floor - 1.0 / 1.5).abs() < 1e-9, "{admitted}");
+
+    // Unusable snapshots: factor 1, the reason, and the configured weights.
+    fx.configure(&performance_config(EXAMPLE_POOL, absolute));
+    for (age, hash, reason) in [
+        (Duration::hours(25), None, "stale"),
+        (
+            Duration::hours(1),
+            Some("another-list"),
+            "type_list_changed",
+        ),
+    ] {
+        fx.snapshot(&EXAMPLE_CELLS, age, hash);
+        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+        for name in ["haiku", "luna", "gemini-flash"] {
+            let member = pool_member(&admitted, name);
+            assert_eq!(member["performance"]["factor"], 1.0, "{admitted}");
+            assert_eq!(member["performance"]["applied"], true, "{admitted}");
+            assert_eq!(member["performance"]["unusable"], reason, "{admitted}");
+            assert!(member.get("effective_weight").is_none(), "{admitted}");
+        }
+    }
+    let empty = Fixture::new(&performance_config(EXAMPLE_POOL, absolute));
+    let fresh = empty.task("missing.txt", TaskComplexity::Low, None, &["review"]);
+    empty.configure(&performance_config("[]", ""));
+    let unpooled = empty.task("unpooled.txt", TaskComplexity::Low, None, &["review"]);
+    empty.configure(&performance_config(EXAMPLE_POOL, absolute));
+    let admitted = empty.admit(json!({ "task_ids": [unpooled.id] }));
+    assert_eq!(
+        pool_member(&admitted, "haiku")["performance"]["unusable"],
+        "missing",
+        "{admitted}"
+    );
+    assert_eq!(fresh.crew_source.as_deref(), Some("pool:low"));
+
+    // A parked member holds no ticket, and a decisive factor fixes the
+    // creation draw: haiku's +15 against luna's −10 at k = 100.
+    fx.configure(&performance_config(
+        r#"["haiku:1", "luna:1", "gemini-flash:0"]"#,
+        &format!("{absolute}\ncrew_performance_strength = 100\ncrew_performance_cap = 1000000"),
+    ));
+    fx.snapshot(
+        &[
+            ("haiku", "haiku-model", "review", 50, 115.0, 110.0),
+            ("luna", "luna-model", "review", 50, 90.0, 100.0),
+        ],
+        Duration::hours(1),
+        None,
+    );
+    for name in ["c1.txt", "c2.txt", "c3.txt"] {
+        let created = fx.task(name, TaskComplexity::Low, None, &["review"]);
+        assert_eq!(
+            created.crew.as_deref(),
+            Some("haiku"),
+            "creation weighs performance"
+        );
+        assert_eq!(created.crew_source.as_deref(), Some("pool:low"));
+    }
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    let pool = admitted["crew_selection"]["eligible_pool"]
+        .as_array()
+        .unwrap();
+    assert!(
+        pool.iter().all(|member| member["name"] != "gemini-flash"),
+        "the parked member holds no ticket: {admitted}"
+    );
+}
+
+/// Shadow modes compute the same factor as the live mode, record it with
+/// `applied: false`, and draw the crew `off` would draw. `absolute` applies
+/// the factor (`applied: true`) and can flip that crew. Pressure still
+/// scales a shadow draw, and the redraw note does not claim performance did.
+fn shadow_modes_record_the_factor_and_draw_like_off() {
+    substitute_worker();
+    let flip = r#"["haiku:1000000", "luna:1"]"#;
+    let cells = [
+        ("haiku", "haiku-model", "review", 40, 10.0, 100.0),
+        ("luna", "luna-model", "review", 40, 200.0, 100.0),
+    ];
+    let tuned = |mode: &str| {
+        format!("{mode}\ncrew_performance_strength = 100\ncrew_performance_cap = 1000000")
+    };
+    let fx = Fixture::new(&performance_config("[]", ""));
+    let task = fx.task("shadow.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(task.crew_source.as_deref(), Some("default"));
+
+    fx.configure(&performance_config(
+        flip,
+        &tuned("crew_performance = \"shadow_absolute\""),
+    ));
+    fx.snapshot(&cells, Duration::hours(1), None);
+    for name in ["s1.txt", "s2.txt", "s3.txt"] {
+        let created = fx.task(name, TaskComplexity::Low, None, &["review"]);
+        assert_eq!(
+            created.crew.as_deref(),
+            Some("haiku"),
+            "shadow creation matches the heavy configured weight"
+        );
+    }
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(admitted["crew"], "haiku", "{admitted}");
+    let haiku = pool_member(&admitted, "haiku");
+    assert_eq!(
+        haiku["performance"]["mode"], "shadow_absolute",
+        "{admitted}"
+    );
+    assert_eq!(haiku["performance"]["applied"], false, "{admitted}");
+    assert!(
+        (haiku["performance"]["factor"].as_f64().unwrap() - 1e-6).abs() < 1e-12,
+        "{admitted}"
+    );
+    assert!(
+        haiku.get("effective_weight").is_none(),
+        "shadow does not rescale tickets: {admitted}"
+    );
+    let luna = pool_member(&admitted, "luna");
+    assert_eq!(luna["performance"]["applied"], false, "{admitted}");
+    assert_eq!(
+        luna["performance"]["factor"], 1_000_000.0,
+        "the live factor is recorded: {admitted}"
+    );
+
+    fx.configure(&performance_config(
+        flip,
+        &tuned("crew_performance = \"shadow_comparative\""),
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(admitted["crew"], "haiku", "{admitted}");
+    assert_eq!(
+        pool_member(&admitted, "haiku")["performance"]["mode"],
+        "shadow_comparative",
+        "{admitted}"
+    );
+    assert_eq!(
+        pool_member(&admitted, "haiku")["performance"]["applied"],
+        false,
+        "{admitted}"
+    );
+
+    fx.configure(&performance_config(
+        flip,
+        &tuned("crew_performance = \"absolute\""),
+    ));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(
+        admitted["crew"], "luna",
+        "absolute applies the factor and flips the winner: {admitted}"
+    );
+    assert_eq!(
+        pool_member(&admitted, "luna")["performance"]["applied"],
+        true,
+        "{admitted}"
+    );
+    assert!(
+        pool_member(&admitted, "luna")
+            .get("effective_weight")
+            .is_some(),
+        "{admitted}"
+    );
+    let created = fx.task("live.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(
+        created.crew.as_deref(),
+        Some("luna"),
+        "creation applies absolute"
+    );
+
+    fx.configure(&performance_config(flip, "crew_performance = \"off\""));
+    let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+    assert_eq!(admitted["crew"], "haiku", "{admitted}");
+    assert!(
+        pool_member(&admitted, "haiku").get("performance").is_none(),
+        "{admitted}"
+    );
+
+    let pressured = Fixture::new(&performance_config(r#"["luna"]"#, ""));
+    let assigned = pressured.task("pressed.txt", TaskComplexity::Low, None, &["review"]);
+    assert_eq!(assigned.crew.as_deref(), Some("luna"));
+    pressured.configure(&performance_config(
+        flip,
+        &tuned("crew_selection = \"usage_pressure\"\ncrew_performance = \"shadow_absolute\""),
+    ));
+    pressured.snapshot(&cells, Duration::hours(1), None);
+    pressured.week("claude", 10.0, Duration::hours(6));
+    pressured.week("codex", 0.0, Duration::days(7));
+    let admitted = pressured.admit(json!({ "task_ids": [assigned.id] }));
+    assert_eq!(
+        admitted["crew"], "haiku",
+        "pressure does not apply the shadow factor: {admitted}"
+    );
+    let haiku = pool_member(&admitted, "haiku");
+    assert_eq!(haiku["performance"]["applied"], false, "{admitted}");
+    let effective = haiku["effective_weight"].as_f64().unwrap();
+    assert!(
+        effective > 100_000.0,
+        "the tiny shadow factor was not multiplied in: {admitted}"
+    );
+    let luna_effective = pool_member(&admitted, "luna")["effective_weight"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        luna_effective < 100.0,
+        "luna's cap factor was not applied: {admitted}"
+    );
+    let note = pressured.redraws(&assigned.id).join("\n");
+    assert!(note.contains("under usage pressure:"), "{note}");
+    assert!(
+        !note.contains("crew performance"),
+        "a shadow redraw does not claim the factor changed the crew: {note}"
+    );
+}
+
+/// The shadow scorecard reads implementation-run `crew_selection` only:
+/// per pool and type, draw counts and mean static, drawn and would-be
+/// shares. A record with no `applied` field counts as applied. Draws with
+/// no performance object are a separate static section. The coordinator
+/// job is not a draw.
+fn shadow_scorecard_reports_static_drawn_and_would_be_shares() {
+    substitute_worker();
+    let fx = Fixture::new(&performance_config("[]", ""));
+    let runtime = fx.runtime();
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    let insert = |job: &str, selection: Value| {
+        jobs.insert_job_run(job, 1, Utc::now(), Some(selection), None)
+            .unwrap();
+    };
+    let pool = |source: &str, crew: &str, members: Value| {
+        json!({
+            "crew_selection": {
+                "crew": crew,
+                "source": source,
+                "eligible_pool": members,
+            }
+        })
+    };
+    let weighed = json!([
+        {"name": "haiku", "weight": 40, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 2.0}},
+        {"name": "luna", "weight": 30, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 1.0}},
+        {"name": "gemini-flash", "weight": 30, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 1.0}},
+    ]);
+    insert(
+        "task_local_pipeline",
+        pool("workflow.low_complexity_crews", "haiku", weighed.clone()),
+    );
+    insert(
+        "task_pr_pipeline",
+        pool("workflow.low_complexity_crews", "luna", weighed),
+    );
+    insert(
+        "task_local_pipeline",
+        pool(
+            "workflow.low_complexity_crews; usage pressure",
+            "gemini-flash",
+            json!([
+                {"name": "haiku", "weight": 40, "effective_weight": 80.0, "performance": {"mode": "absolute", "applied": true, "type": "other", "factor": 2.0}},
+                {"name": "luna", "weight": 30, "effective_weight": 30.0, "performance": {"mode": "absolute", "applied": true, "type": "other", "factor": 1.0}},
+                {"name": "gemini-flash", "weight": 30, "effective_weight": 30.0, "performance": {"mode": "absolute", "applied": true, "type": "other", "factor": 1.0}},
+            ]),
+        ),
+    );
+    insert(
+        "task_local_pipeline",
+        pool(
+            "workflow.low_complexity_crews",
+            "haiku",
+            json!([
+                {"name": "haiku", "weight": 40, "effective_weight": 80.0, "performance": {"mode": "absolute", "type": "legacy", "factor": 2.0}},
+                {"name": "luna", "weight": 30, "effective_weight": 30.0, "performance": {"mode": "absolute", "type": "legacy", "factor": 1.0}},
+                {"name": "gemini-flash", "weight": 30, "effective_weight": 30.0, "performance": {"mode": "absolute", "type": "legacy", "factor": 1.0}},
+            ]),
+        ),
+    );
+    insert(
+        "task_claimed_pr_pipeline",
+        pool(
+            "workflow.hard_complexity_crews",
+            "haiku",
+            json!([
+                {"name": "haiku", "weight": 10, "effective_weight": 20.0, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 2.0}},
+                {"name": "luna", "weight": 10, "effective_weight": 10.0, "performance": {"mode": "shadow_absolute", "applied": false, "type": "review", "factor": 1.0}},
+            ]),
+        ),
+    );
+    insert(
+        "task_claimed_local_pipeline",
+        pool(
+            "workflow.medium_complexity_crews",
+            "haiku",
+            json!([
+                {"name": "haiku", "weight": 40, "effective_weight": 80},
+                {"name": "luna", "weight": 30, "effective_weight": 30},
+                {"name": "gemini-flash", "weight": 30, "effective_weight": 15},
+            ]),
+        ),
+    );
+    insert(
+        "task_auto_pipeline",
+        pool(
+            "decoy-pool",
+            "haiku",
+            json!([{"name": "haiku", "weight": 1, "performance": {"applied": false, "type": "review", "factor": 9.0}}]),
+        ),
+    );
+    insert(
+        "task_local_pipeline",
+        json!({"crew_selection": "not-an-object"}),
+    );
+
+    let report = runtime
+        .run_tool(
+            "orbit.agents.scorecard",
+            json!({
+                "role": "implementers",
+                "by_type": true,
+                "shadow": true,
+                "window": "7d",
+            }),
+        )
+        .unwrap();
+    assert_eq!(report["shadow"], true, "{report}");
+    assert_eq!(report["by_type"], true, "{report}");
+    assert_eq!(report["window"], "7d", "{report}");
+    assert_eq!(report["requested_window"], "7d", "{report}");
+    assert!(report.get("cells").is_none(), "{report}");
+    assert!(report.get("rows").is_none(), "{report}");
+    assert!(report.get("min_support").is_none(), "{report}");
+    assert!(!report.to_string().contains("decoy-pool"), "{report}");
+
+    let crew = |pool: &str, ty: &str, name: &str| -> Value {
+        report["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|group| group["pool"] == pool && group["type"] == ty)
+            .unwrap_or_else(|| panic!("missing {pool}/{ty}: {report}"))["crews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|crew| crew["crew"] == name)
+            .unwrap_or_else(|| panic!("missing {name} in {pool}/{ty}: {report}"))
+            .clone()
+    };
+    let close = |member: &Value, key: &str, expected: f64| {
+        let value = member[key].as_f64().unwrap();
+        assert!(
+            (value - expected).abs() < 1e-9,
+            "{key} {value} != {expected} in {member}"
+        );
+    };
+    let review = report["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|group| group["pool"] == "workflow.low_complexity_crews" && group["type"] == "review")
+        .unwrap();
+    assert_eq!(review["draws"], 2, "{report}");
+    let haiku = crew("workflow.low_complexity_crews", "review", "haiku");
+    assert_eq!(haiku["draws"], 1, "{haiku}");
+    close(&haiku, "static_share", 0.4);
+    close(&haiku, "drawn_share", 0.4);
+    close(&haiku, "would_be_share", 0.5714);
+    let luna = crew("workflow.low_complexity_crews", "review", "luna");
+    assert_eq!(luna["draws"], 1, "{luna}");
+    close(&luna, "static_share", 0.3);
+    close(&luna, "would_be_share", 0.2143);
+    let flash = crew("workflow.low_complexity_crews", "review", "gemini-flash");
+    assert_eq!(flash["draws"], 0, "{flash}");
+    close(&flash, "would_be_share", 0.2143);
+
+    let other = crew("workflow.low_complexity_crews", "other", "haiku");
+    close(&other, "static_share", 0.4);
+    close(&other, "drawn_share", 0.5714);
+    close(&other, "would_be_share", 0.5714);
+    let legacy = crew("workflow.low_complexity_crews", "legacy", "haiku");
+    assert_eq!(legacy["draws"], 1, "{legacy}");
+    close(&legacy, "drawn_share", 0.5714);
+    close(&legacy, "would_be_share", 0.5714);
+
+    let pressured = crew("workflow.hard_complexity_crews", "review", "haiku");
+    assert_eq!(pressured["draws"], 1, "{pressured}");
+    close(&pressured, "static_share", 0.5);
+    close(&pressured, "drawn_share", 0.6667);
+    close(&pressured, "would_be_share", 0.8);
+    let pressured_luna = crew("workflow.hard_complexity_crews", "review", "luna");
+    close(&pressured_luna, "drawn_share", 0.3333);
+    close(&pressured_luna, "would_be_share", 0.2);
+
+    assert_eq!(report["static_draws"]["draws"], 1, "{report}");
+    let static_pool = &report["static_draws"]["pools"][0];
+    assert_eq!(
+        static_pool["pool"], "workflow.medium_complexity_crews",
+        "{report}"
+    );
+    assert_eq!(static_pool["draws"], 1, "{report}");
+    let static_haiku = static_pool["crews"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|crew| crew["crew"] == "haiku")
+        .unwrap();
+    assert!(
+        static_haiku.get("would_be_share").is_none(),
+        "{static_haiku}"
+    );
+    close(static_haiku, "static_share", 0.4);
+    close(static_haiku, "drawn_share", 0.64);
+    let static_luna = static_pool["crews"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|crew| crew["crew"] == "luna")
+        .unwrap();
+    close(static_luna, "drawn_share", 0.24);
+
+    let plain = runtime
+        .run_tool(
+            "orbit.agents.scorecard",
+            json!({"role": "implementers", "window": "7d"}),
+        )
+        .unwrap();
+    assert!(plain.get("shadow").is_none(), "{plain}");
+    assert!(plain.get("pools").is_none(), "{plain}");
+    let error = runtime
+        .run_tool(
+            "orbit.agents.scorecard",
+            json!({"role": "implementers", "shadow": true}),
+        )
+        .expect_err("shadow without by_type");
+    assert!(
+        error
+            .to_string()
+            .contains("shadow is only supported for implementers with by_type"),
+        "{error}"
+    );
+    let error = runtime
+        .run_tool(
+            "orbit.agents.scorecard",
+            json!({"role": "orchestrators", "by_type": true, "shadow": true}),
+        )
+        .expect_err("shadow on another role");
+    assert!(
+        error
+            .to_string()
+            .contains("shadow is only supported for implementers with by_type"),
+        "{error}"
+    );
+}
+
+crate::scenario_table!(
+    usage_pressure_draw_scenarios,
+    static_selection_draws_and_records_as_before,
+    usage_pressure_weighs_the_admission_draw_and_redraws_a_pool_assignment,
+    a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew,
+    a_complexity_rerate_of_a_pool_task_draws_with_usage_pressure,
+    parked_members_stay_out_and_low_pressure_floors_without_gating,
+    crew_performance_weighs_the_worked_example_and_off_draws_as_before,
+    crew_performance_composes_with_usage_pressure,
+    crew_performance_fallbacks_clamps_and_unusable_snapshots,
+    shadow_modes_record_the_factor_and_draw_like_off,
+    shadow_scorecard_reports_static_drawn_and_would_be_shares
+);

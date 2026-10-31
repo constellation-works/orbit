@@ -21,8 +21,10 @@ use super::record::{record_stop, stop};
 /// Budget for waiting out required checks on a pull request before the attempt
 /// stops. The same shape `pr_complete` uses, so operators tune one thing.
 const DEFAULT_MAX_WAIT_SECONDS: u64 = 3600;
+const DEFAULT_MAX_BASE_CI_CYCLES: u64 = 3;
 const DEFAULT_POLL_INTERVAL_SECONDS: u64 = 30;
 const MAX_WAIT_SECONDS: u64 = 6 * 60 * 60;
+const MAX_BASE_CI_CYCLES: u64 = 100;
 const MIN_POLL_INTERVAL_SECONDS: u64 = 5;
 const MAX_POLL_INTERVAL_SECONDS: u64 = 10 * 60;
 
@@ -118,6 +120,7 @@ fn settle_failure<H: RuntimeHost + ?Sized>(
 /// The check-wait budget of one landing run, shared by every pass it makes.
 pub(super) struct LandingBudget {
     pub(super) max_wait_seconds: u64,
+    pub(super) max_base_ci_cycles: u64,
     pub(super) poll_interval_seconds: u64,
     pub(super) started: Instant,
     pub(super) deadline_ms: u64,
@@ -131,6 +134,13 @@ impl LandingBudget {
             DEFAULT_MAX_WAIT_SECONDS,
             MAX_WAIT_SECONDS,
         )?;
+        let max_base_ci_cycles = bounded_u64(
+            input,
+            "max_base_ci_cycles",
+            DEFAULT_MAX_BASE_CI_CYCLES,
+            MAX_BASE_CI_CYCLES,
+        )?
+        .max(1);
         let poll_interval_seconds = bounded_u64(
             input,
             "poll_interval_seconds",
@@ -148,6 +158,7 @@ impl LandingBudget {
             });
         Ok(Self {
             max_wait_seconds,
+            max_base_ci_cycles,
             poll_interval_seconds,
             started: Instant::now(),
             deadline_ms,

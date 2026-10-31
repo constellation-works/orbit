@@ -1,3 +1,9 @@
+---
+type: context
+summary: "Release checklist: versioning, bumps, tagging, CI, promotion and hotfixes"
+last_validated: 2026-10-29
+---
+
 # Releasing Orbit
 
 How to cut an Orbit release. Follow the checklist top to bottom. Plugin, npm, signing-key, and MCP Registry details live in [docs/runbooks/release.md](docs/runbooks/release.md).
@@ -31,24 +37,36 @@ Pre-1.0 semver, `0.<minor>.<patch>`. A breaking change bumps minor (`0.3.1 → 0
 - Task storage or task-field enum changes that need a data migration.
 - Any other `.orbit/` on-disk layout change existing workspaces can't absorb as-is (see below).
 - Removing a seeded skill, activity, or job.
+- Adding a field to a persisted `#[serde(deny_unknown_fields)]` type (task envelope, relation, regression classification). Older binaries, including follower hosts, refuse the new record.
 
 **Not breaking:**
 
 - Rejecting input that was already invalid by spec, or new guards that match documented behavior.
 - MCP description-only wording changes (names, types, requiredness, and shape unchanged).
 - Internal refactors, module splits, and performance changes.
-- New optional fields with safe defaults.
+- New optional fields with safe defaults, except on a persisted `deny_unknown_fields` type (above).
 
 When in doubt, ask the human in step 3. Don't promote behavior tightening to breaking on your own.
+
+### The `breaking-change` tag and `Breaking:` notes
+
+The lists above are the definition. Two records carry it from the task to the release:
+
+- **`breaking-change` tag.** The implementer adds it to a task whose change is breaking, and the reviewer confirms it. A landed task with the tag makes the release a minor bump.
+- **`Breaking:` note.** The task's execution summary has one line starting `Breaking:` with the migration as a phrase, for example `Breaking: orbit run ship-sweep removed → use orbit run auto drains or orbit run ship`. It becomes the task's Breaking Changes bullet.
+
+`scripts/release-breaking-changes.py` reads both for the landed tasks in a range. It also detects mechanical signals: a raised `SUPPORTED_SCHEMA_VERSION` or `SUPPORTED_LAYOUT_VERSION`; a command, flag or possible value gone from the CLI help goldens; a non-additive change in the MCP `tools/list` snapshot (tool or property removed or renamed, type changed, enum value removed, property newly required, or a required, enum or whole properties-map constraint relaxed inside a surviving `oneOf` branch); a field added to a `deny_unknown_fields` type in `orbit-types` or `orbit-store`; a new `DEPRECATED_CONFIG_KEYS` entry; or a removed seeded routine, activity or job asset. The bump is **minor** when any landed task carries the tag or any signal fires, otherwise **patch**. A signal on an untagged task is listed as *detected, untagged*.
+
+The detector can't see hidden flags, output-shape changes or new validation, so the tag is still needed for those.
 
 ### Breaking `.orbit/` layout changes
 
 A breaking on-disk change must ship its migration in the same PR:
 
-- **SQLite schema:** add to `MIGRATIONS` and bump `SUPPORTED_SCHEMA_VERSION` in `crates/orbit-store/src/driver/sqlite/migration/ledger.rs`.
+- **SQLite schema:** add to `MIGRATIONS` and bump `SUPPORTED_SCHEMA_VERSION` in `crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs`.
 - **Everything else** (directories, non-SQLite state files, log and index locations, file formats): add a `LAYOUT_MIGRATIONS` entry and bump `SUPPORTED_LAYOUT_VERSION` in `crates/orbit-store/src/workflow/layout/registry.rs`.
 
-Each entry declares `MigrationCompatibility::Additive` (older binaries open the state read-only) or `::Breaking` (older binaries refuse and name the migration). Declare `Breaking` when unsure. The contract is in [docs/design/state-compatibility](docs/design/state-compatibility/2_design.md).
+Each entry declares `MigrationCompatibility::Additive` (older binaries can read the state and keep writing), `::ReadCompatible` (older binaries open SQLite state read-only; newer layout state requires an updated binary) or `::Breaking` (older binaries refuse and name the migration). Declare `Breaking` when unsure. The contract is in [docs/design/state-compatibility](docs/design/state-compatibility/2_design.md).
 
 Layout migrations must be idempotent or staged (write new, then swap). They auto-apply when a workspace opens and re-run after a crash, because `state/layout.version` only advances after an entry succeeds. `orbit migrate --dry-run` lists pending migrations.
 
@@ -72,8 +90,10 @@ On a major release:
 ```sh
 git log v<prev>..HEAD --pretty='%h%x09%s' --no-merges
 git log v<prev>..HEAD --pretty='%s' --no-merges | grep -oE '\[[A-Z]+-[0-9]+\]' | sort -u
+scripts/release-breaking-changes.py --range v<prev>..HEAD
 ```
 
+- `scripts/release-breaking-changes.py` lists the breaking candidates (tagged, or detected and untagged), decides the bump and drafts the Breaking Changes bullets. Add `--json` for a machine-readable report. It reads tags and execution summaries with `orbit task show` from the checkout. If Orbit is unavailable, or with `--offline`, it takes task IDs from commit subjects only and says so, so tags and notes are missing from that report.
 - Use the last tag whose version files actually match it. A recovery tag (e.g. `v0.10.1`, whose files still said `0.10.0`) is not a baseline.
 - With more than about 30 task IDs, file a read-only survey task for the release crew (`luna`) instead of looking each one up in-session. The survey lands as an artifact on that task, not as a file in `docs/`.
 - The survey is for understanding and breaking-change triage, not a CHANGELOG inventory.
@@ -86,7 +106,7 @@ The CHANGELOG is a short consumer-facing release note, not a commit log. Non-rel
 Add `## <X.Y.Z> — <YYYY-MM-DD>` at the top of `CHANGELOG.md`, with the release's
 UTC calendar date in the heading (for example, `## 0.28.0 — 2026-10-07`), and:
 
-1. `### Breaking Changes`: minor bumps only. List every breaking change, one bullet each.
+1. `### Breaking Changes`: minor bumps only. List every breaking change, one bullet each. Start from the script's draft: each bullet comes from the task's `Breaking:` note, and a `TODO` placeholder names a task that has none. Rewrite the theme and fill in every placeholder.
 2. `### Highlights`: 3 to 6 user-facing features or behavior changes. If you're unsure whether something is a highlight, it isn't.
 
 The website renders the date beside the version and keeps version-only anchors
@@ -115,7 +135,10 @@ The style check lints only `## Unreleased`, so you can iterate there before movi
 
 ### 3. Confirm breaking changes with the human
 
-Show each candidate with its task ID, title, and why it was flagged. The human accepts, downgrades, or adds. Don't classify autonomously.
+Show the script's candidate list: each task ID, its title, and its signals or its `breaking-change` tag. The human confirms the list instead of classifying from scratch. They accept, downgrade or add candidates. Don't classify autonomously.
+
+- **Detected, untagged:** once the human confirms one, add the `breaking-change` tag to the task so the record matches the release.
+- **Version:** the bump follows the script's decision unless the human overrides it. Record any override and its reason on the release task.
 
 ### 4. Bump versions
 
@@ -279,12 +302,14 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 | Job | What it does |
 |---|---|
 | `build-release` | `cargo build -p orbit-cli --release --locked` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu` |
+| `build-bundled-bwrap` | Builds the static bundled Bubblewrap per architecture in a digest-pinned Alpine image and uploads it with its sources and recipe |
 | `publish-release` | Writes `orbit-checksums.txt`, signs it as `orbit-checksums.txt.sig`, and creates the GitHub Release with auto-generated notes |
 | `desktop-preflight` | Checks the six Apple secrets and plans the desktop build. Linux is always in the plan. macOS is added only when every secret is present; otherwise the run shows a warning naming the missing ones. Turns the desktop jobs off when `ORBIT_DESKTOP_RELEASE` is `false` |
 | `build-desktop` | Runs `cargo tauri build` in `desktop/` at the tag to make the `.deb` and `.AppImage` for Linux x86_64 and arm64, and, when the secrets are present, a signed, notarized universal macOS `.dmg` |
 | `publish-desktop` | Once `publish-release` has created the release and every planned desktop leg has succeeded, writes `orbit-desktop-version.txt`, signs `orbit-desktop-checksums.txt` over it and exactly the bundles built, and attaches them. A failed Linux leg stops it; a macOS leg the preflight left out does not. Tag pushes, manual backfills, and reruns for the same tag attach one at a time: the publisher already uploading finishes, and a different tag stays independent |
 | `bump-homebrew-tap` | Updates `Formula/orbit.rb` in `constellation-works/homebrew-tap` (macOS only; Linux uses `install.sh`) |
 | `smoke-install-macos` / `smoke-install-ubuntu` | Installs from the tag's `install.sh` and runs `orbit --version` |
+| `smoke-install-ubuntu-2204-bundled-bwrap` | Removes host Bubblewrap on Ubuntu 22.04 to reach the installer fallback, then checks the bundled binary is installed and passes the capability probe |
 
 A release that shipped without desktop bundles, such as v0.29.0, can get its missing desktop assets afterwards from the workflow's manual run: Actions → `release` → **Run workflow**, with `tag` set to the existing release tag. It runs only the desktop jobs, builds the tag's source with the current workflow, and attaches missing assets under the same rules. It refuses a tag without a GitHub Release, and it ignores `ORBIT_DESKTOP_RELEASE`. See the [runbook](docs/runbooks/release.md#desktop-backfill).
 

@@ -8,7 +8,12 @@
 //! leaf validates, replays deferrals and trusts baseline reruns against that
 //! capture rather than its own configuration.
 
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
 use serde::{Deserialize, Serialize};
+
+use crate::task::ReviewSkipProfile;
 
 /// An owner's gates, as admission captures them and the probe reports them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +29,11 @@ pub struct ValidationGates {
     /// validation, since that owner would refuse the handoff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub light_delivery_paths: Option<Vec<String>>,
+    /// `workflow.review_skip_tags` profiles by normalized tag. `None`
+    /// from an owner that predates mapped review-skip tags: its claims
+    /// never skip review for a mapped tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_skip_tags: Option<BTreeMap<String, ReviewSkipProfile>>,
 }
 
 impl ValidationGates {
@@ -128,6 +138,17 @@ impl HostValidationGates {
         }
     }
 
+    /// The mapped review-skip profiles a candidate is judged against:
+    /// this host's own, or the owner's its claim captured. A replica
+    /// fallback, or an owner that captured none, yields no profiles.
+    #[must_use]
+    pub fn review_skip_tags(&self) -> &BTreeMap<String, ReviewSkipProfile> {
+        match (&self.gates.review_skip_tags, self.source) {
+            (_, ValidationGateSource::ReplicaConfig) | (None, _) => empty_profiles(),
+            (Some(profiles), _) => profiles,
+        }
+    }
+
     /// Gates read from this host's own configuration.
     #[must_use]
     pub fn local(gates: ValidationGates) -> Self {
@@ -146,6 +167,11 @@ impl HostValidationGates {
             self.source.describe()
         )
     }
+}
+
+fn empty_profiles() -> &'static BTreeMap<String, ReviewSkipProfile> {
+    static EMPTY: OnceLock<BTreeMap<String, ReviewSkipProfile>> = OnceLock::new();
+    EMPTY.get_or_init(BTreeMap::new)
 }
 
 fn trimmed(commands: &[String]) -> Vec<&str> {

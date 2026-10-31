@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Artifact Write Redaction"
 tags: ["auditability"]
-last_validated: 2026-10-20
+last_validated: 2026-10-24
 ---
 
 # Spec: Artifact Write Redaction
@@ -60,7 +60,7 @@ bytes, the ordinary values `user`, `true`, `false`, `none`, `null`, `root`,
 shorter than twelve digits are not substituted. The shared structural
 patterns then mask:
 
-- JSON and raw header forms of `Authorization`, `x-api-key`, and `api_key`; bearer values; and `key` query parameters
+- JSON and raw header forms of `Authorization`, `x-api-key`, and `api_key`; prefixed JSON API-key properties with JSON whitespace (including line breaks) around the colon; bearer values; `key` query parameters; and same-line API-key assignments (`key=value` / `key: value`) whose key ends in an `api key` segment at a separator, camel-case or all-caps `API` boundary, wherever they appear on the line
 - OpenAI, Google, GitLab, GitHub, AWS, npm, and Slack credential token shapes, AWS secret assignments, and URI user-info passwords
 - OpenSSH `SHA256:` public-key fingerprints
 - comments on serialized OpenSSH public keys, and the key descriptor/comment on `ssh-keygen -l` and canonical verbose key-offer lines

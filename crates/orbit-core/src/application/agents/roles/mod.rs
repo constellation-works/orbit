@@ -5,6 +5,7 @@
 
 mod implementers;
 mod orchestrators;
+pub(super) mod pilot_warnings;
 pub(super) mod pilots;
 mod reviewers;
 
@@ -13,16 +14,44 @@ use chrono::{DateTime, Utc};
 use super::score::{RowInput, Term};
 use super::{AgentFacts, AgentRole};
 
-/// Builds a role's rows from the scan for the window starting at `since`.
-pub(super) type Rows = for<'a> fn(&'a AgentFacts, DateTime<Utc>) -> Vec<RowInput<'a>>;
+/// Builds a role's rows for the window and requested minimum support.
+pub(super) type Rows = for<'a> fn(&'a AgentFacts, DateTime<Utc>, usize) -> Vec<RowInput<'a>>;
+
+/// Role-level fields a role adds to every response header for the window
+/// starting at `since`.
+pub(super) type Header =
+    fn(&AgentFacts, DateTime<Utc>) -> serde_json::Map<String, serde_json::Value>;
 
 /// One role's scorecard definition.
 pub(super) struct RoleSpec {
     /// The label of the role's unit of work.
     pub(super) unit: &'static str,
     pub(super) terms: &'static [Term],
+    /// Terms rated per 100 of their own unit rather than the role's, with
+    /// that unit's label.
+    pub(super) term_units: &'static [(&'static str, &'static str)],
     /// `None` while the role's terms are not computed yet.
     pub(super) rows: Option<Rows>,
+    /// `None` for a role that adds nothing to the header.
+    pub(super) header: Option<Header>,
+}
+
+/// The implementer `(crew, model, tier, type)` cell matrix.
+/// One row per implemented task, for the offline type-discovery report.
+pub(super) fn implementer_per_task_rows(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    types: &[orbit_config::CrewPerformanceType],
+) -> Vec<serde_json::Value> {
+    implementers::per_task_rows(facts, since, types)
+}
+
+pub(super) fn implementer_by_type_cells(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    types: &[orbit_config::CrewPerformanceType],
+) -> Vec<serde_json::Value> {
+    implementers::by_type_cells(facts, since, types)
 }
 
 pub(super) fn spec(role: AgentRole) -> &'static RoleSpec {

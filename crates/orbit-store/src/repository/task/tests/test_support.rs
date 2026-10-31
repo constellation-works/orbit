@@ -18,6 +18,8 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskBundleV2 {
         envelope: TaskEnvelopeV2 {
+            granted_tools: Vec::new(),
+            requires_labels: Vec::new(),
             job_run_machine: None,
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             id: id.to_string(),
@@ -33,7 +35,9 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             orchestrator: None,
             orchestrator_model: None,
             orchestrator_model_source: None,
+            created_by_model: None,
             origin: None,
+            rule_fingerprint: None,
             relations: Vec::new(),
             tags: vec!["task-artifacts".to_string()],
             required_tools: Vec::new(),
@@ -44,6 +48,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             implemented_by: None,
             created_at: now,
             updated_at: now,
+            not_before: None,
         },
         description: "Description body".to_string(),
         acceptance: "- [ ] Bundle writes are durable".to_string(),

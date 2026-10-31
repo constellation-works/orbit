@@ -25,10 +25,12 @@ repo_root="${1:-${ORBIT_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 docs_dir="$repo_root/docs"
 runbooks_dir="$docs_dir/runbooks"
 design_dir="$docs_dir/design"
-rca_dir="$docs_dir/rca"
+qa_dir="$docs_dir/dev/qa"
+rca_dir="$docs_dir/dev/rca"
+archived_dir="$design_dir/_archived"
 
 if [[ ! -d "$runbooks_dir" || ! -d "$design_dir" || ! -d "$rca_dir" ]]; then
-  echo "error: expected docs/runbooks, docs/design, and docs/rca under $repo_root" >&2
+  echo "error: expected docs/runbooks, docs/design, and docs/dev/rca under $repo_root" >&2
   exit 1
 fi
 
@@ -125,10 +127,12 @@ design_entry_doc() {
   local directory="$1"
   local candidate
 
-  if [[ -f "$directory/1_overview.md" ]]; then
-    printf '%s\n' "$directory/1_overview.md"
-    return
-  fi
+  for candidate in 1_overview.md 1_scope.md; do
+    if [[ -f "$directory/$candidate" ]]; then
+      printf '%s\n' "$directory/$candidate"
+      return
+    fi
+  done
 
   candidate="$(find "$directory" -maxdepth 1 -type f -name '*.md' ! -name 'CONVENTIONS.md' | sort | sed -n '1p')"
   if [[ -z "$candidate" ]]; then
@@ -244,6 +248,28 @@ render_rca_rows() {
   done < <(find "$rca_dir" -maxdepth 1 -type f -name '*.md' | sort -r)
 }
 
+design_feature_title() {
+  local directory="$1"
+  local entry="$2"
+  local title
+
+  # A scope doc's H1 is a sentence ("Scope: …"); the Feature column wants the folder's name.
+  if [[ "$(basename "$entry")" == "1_scope.md" ]]; then
+    title="$(titleize_slug "$(basename "$directory")")"
+  else
+    title="$(frontmatter_value "$entry" title)"
+  fi
+
+  if [[ -z "$title" ]]; then
+    if [[ "$(basename "$entry")" == "1_overview.md" ]]; then
+      title="$(first_h1 "$entry")"
+    else
+      title="$(titleize_slug "$(basename "$directory")")"
+    fi
+  fi
+  clean_design_title "$title"
+}
+
 render_design_rows() {
   local root="$1"
   local directory
@@ -261,19 +287,10 @@ render_design_rows() {
       continue
     fi
 
-    title="$(frontmatter_value "$entry" title)"
+    title="$(design_feature_title "$directory" "$entry")"
     summary="$(frontmatter_value "$entry" summary)"
     status="$(frontmatter_value "$entry" status)"
     owner="$(frontmatter_value "$entry" owner)"
-
-    if [[ -z "$title" ]]; then
-      if [[ "$(basename "$entry")" == "1_overview.md" ]]; then
-        title="$(first_h1 "$entry")"
-      else
-        title="$(titleize_slug "$(basename "$directory")")"
-      fi
-    fi
-    title="$(clean_design_title "$title")"
 
     if [[ -z "$summary" ]]; then
       summary="$(first_h1 "$entry")"
@@ -299,7 +316,71 @@ render_design_rows() {
       "$(markdown_escape "$summary")" \
       "$(markdown_escape "$status")" \
       "$(markdown_escape "$owner")"
-  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '_templates' | sort)
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '_templates' ! -name '_archived' | sort)
+}
+
+# Delivery stages, in board order. `stage` says how far the feature is built; `status` only
+# says whether its design doc is approved. Both are documented in docs/design/CONVENTIONS.md.
+feature_stages=(building designing idea shipped parked)
+
+render_feature_board() {
+  local directory
+  local entry
+  local stage
+  local known
+  local wanted
+  local count
+  local rows
+  local next
+  local owner
+  local relative
+  local -a entries=()
+
+  while IFS= read -r directory; do
+    entry="$(design_entry_doc "$directory")"
+    if ! is_versioned "$entry"; then
+      continue
+    fi
+    stage="$(frontmatter_value "$entry" stage)"
+    known=0
+    for wanted in "${feature_stages[@]}"; do
+      if [[ "$stage" == "$wanted" ]]; then
+        known=1
+      fi
+    done
+    if [[ "$known" -eq 0 ]]; then
+      echo "error: $entry needs stage: one of ${feature_stages[*]} (got '${stage}')" >&2
+      return 1
+    fi
+    entries+=("$directory")
+  done < <(find "$design_dir" -mindepth 1 -maxdepth 1 -type d ! -name '_templates' ! -name '_archived' | sort)
+
+  for wanted in "${feature_stages[@]}"; do
+    count=0
+    rows=""
+    for directory in "${entries[@]}"; do
+      entry="$(design_entry_doc "$directory")"
+      if [[ "$(frontmatter_value "$entry" stage)" != "$wanted" ]]; then
+        continue
+      fi
+      count=$((count + 1))
+      next="$(frontmatter_value "$entry" next)"
+      owner="$(frontmatter_value "$entry" owner)"
+      relative="${entry#"$docs_dir/"}"
+      rows+="$(printf '| [%s](./%s) | %s | %s |' \
+        "$(markdown_escape "$(design_feature_title "$directory" "$entry")")" \
+        "$relative" \
+        "$(markdown_escape "${next:-—}")" \
+        "$(markdown_escape "${owner:-—}")")"$'\n'
+    done
+    if [[ "$count" -eq 0 ]]; then
+      continue
+    fi
+    printf '\n### %s (%d)\n\n' "$(titleize_slug "$wanted")" "$count"
+    printf '| Feature | Next | Lead |\n'
+    printf '| --- | --- | --- |\n'
+    printf '%s' "$rows"
+  done
 }
 
 render_index() {
@@ -336,7 +417,7 @@ render_index() {
     printf 'These records describe evidence at the recorded commit or date; they do not certify the current tree.\n\n'
     printf '| Record | Purpose |\n'
     printf '| --- | --- |\n'
-    render_guide_rows "$docs_dir/qa"
+    render_guide_rows "$qa_dir"
     printf '\n'
     printf '## Runbooks\n\n'
     printf 'Each runbook is scoped to one goal or tightly coupled failure mode.\n'
@@ -359,14 +440,29 @@ render_index() {
     printf '| --- | --- | --- |\n'
     render_rca_rows
     printf '\n'
+    printf '## Feature board\n\n'
+    printf 'Where each feature in `docs/design/` stands, from the `stage` and `next` fields of its\n'
+    printf 'entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.\n'
+    printf 'Live task progress is in Orbit; this board records what the feature lead last set.\n'
+    render_feature_board
+    printf '\n'
     printf '## Designs\n\n'
     printf 'Active feature designs live under `docs/design/<feature>/`. Each row links to\n'
-    printf '`1_overview.md` when present, or to the folder\047s best available top-level entry doc.\n'
+    printf '`1_overview.md` (full track) or `1_scope.md` (scope track) when present, or to the\n'
+    printf 'folder\047s best available top-level entry doc.\n'
     printf 'Metadata comes from that document\047s frontmatter; folders without frontmatter use\n'
     printf 'a conservative title/status fallback.\n\n'
     printf '| Feature | Summary | Status | Lead |\n'
     printf '| --- | --- | --- | --- |\n'
     render_design_rows "$design_dir"
+    if [[ -d "$archived_dir" ]]; then
+      printf '\n### Archived designs\n\n'
+      printf 'Superseded, retired or parked designs live under `docs/design/_archived/<feature>/`.\n'
+      printf 'They are reference only and are not authoritative.\n\n'
+      printf '| Feature | Summary | Status | Lead |\n'
+      printf '| --- | --- | --- | --- |\n'
+      render_design_rows "$archived_dir"
+    fi
     printf '\nFolder layout, frontmatter, ADR, and ownership rules live in\n'
     printf '[design conventions](./design/CONVENTIONS.md).\n\n'
     printf 'Regenerate this file with `scripts/generate-doc-indexes.sh`.\n'

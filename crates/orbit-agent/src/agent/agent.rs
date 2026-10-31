@@ -22,10 +22,7 @@ pub enum ProviderOptions {
     Antigravity,
     Grok,
     Copilot,
-    Cursor,
     Ollama,
-    Pi,
-    Opencode,
     Muse,
     Mock,
 }
@@ -45,10 +42,7 @@ impl ProviderOptions {
             Self::Antigravity => "antigravity",
             Self::Grok => "grok",
             Self::Copilot => "copilot",
-            Self::Cursor => "cursor",
             Self::Ollama => "ollama",
-            Self::Pi => "pi",
-            Self::Opencode => "opencode",
             Self::Muse => "muse",
             Self::Mock => "mock",
         }
@@ -81,6 +75,26 @@ impl AgentConfig {
         let command = command.into();
         let registry = ProviderRegistry::default();
         let factory = registry.factory_for_cli(&command)?;
+        Ok(Self {
+            command,
+            model: model.map(ToString::to_string),
+            reasoning_effort: None,
+            provider_key: factory.key(),
+            provider_options: factory.options_from_config(config)?,
+        })
+    }
+
+    pub fn from_provider_and_cli_config(
+        provider: &str,
+        command: impl Into<String>,
+        model: Option<&str>,
+        config: &HashMap<String, String>,
+    ) -> Result<Self, OrbitError> {
+        let command = command.into();
+        let registry = ProviderRegistry::default();
+        let factory = registry
+            .factory_for_provider(provider)
+            .or_else(|_| registry.factory_for_cli(&command))?;
         Ok(Self {
             command,
             model: model.map(ToString::to_string),

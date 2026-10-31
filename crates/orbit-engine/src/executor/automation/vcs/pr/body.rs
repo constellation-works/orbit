@@ -1,46 +1,404 @@
+use std::collections::BTreeMap;
+
+use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
 use orbit_types::task::Task;
-use orbit_types::workflow::KnownRedValidation;
+use orbit_types::workflow::{
+    ConventionTemplate, KnownRedValidation, SCREENSHOTS_SECTION, TemplateSurface,
+};
 
 use crate::context::PrConfig;
 
 use super::super::attribution::orchestration_trailer;
+use super::super::conventions::{TaskValues, render_freshness_list};
 use super::super::freshness::BranchFreshness;
+use super::screenshots::Screenshots;
 
 pub(super) const GITHUB_PR_BODY_BYTE_LIMIT: usize = 65_536;
 
+/// Setting key named when a body template read at delivery time is refused.
+pub(super) const BODY_TEMPLATE_KEY: &str = "pr.body_template";
+
+/// Note published under a required section the implementer left unfilled;
+/// the pull request opens as a draft so the heading never stands empty.
+pub(super) const MISSING_SECTION_NOTE: &str = "> **Missing required section.** The implementer \
+     did not fill this section, so Orbit opened this pull request as a draft.";
+
+/// What a single-task body is rendered from beyond the task: the body
+/// template's text, when one applies, the agent-filled sections the
+/// implement step wrote (heading name to Markdown), and the screenshot
+/// section.
+#[derive(Default)]
+pub(super) struct BodyInputs<'a> {
+    pub(super) template: Option<&'a str>,
+    pub(super) filled: BTreeMap<String, String>,
+    pub(super) screenshots: Screenshots,
+}
+
+/// A rendered body and the required sections it published without content.
+pub(super) struct RenderedBody {
+    pub(super) body: String,
+    pub(super) missing_required: Vec<String>,
+}
+
 /// Builds the generated PR body. One-task PRs use the task-contract-first
-/// layout; multi-task callers intentionally keep the historical batch layout
-/// until those legacy paths are retired.
+/// layout, or the configured body template; multi-task callers intentionally
+/// keep the historical batch layout until those legacy paths are retired.
 pub(super) fn build_batch_pr_body(
     tasks: &[Task],
     freshness: &BranchFreshness,
     changed_files: &[&str],
     pr_config: &PrConfig,
     pr_opener_model: Option<&str>,
-) -> String {
-    let mut body = if let [task] = tasks {
-        build_single_task_pr_body(task, freshness, pr_config)
+    inputs: &BodyInputs<'_>,
+) -> Result<RenderedBody, OrbitError> {
+    let conventions = &pr_config.conventions;
+    let (mut body, missing_required) = if let [task] = tasks {
+        let values = TaskValues {
+            task,
+            pr_config,
+            freshness: Some(freshness),
+        };
+        let (body, missing) = match inputs.template {
+            Some(template) => render_template_body(template, &values, inputs)?,
+            None => {
+                let body = build_single_task_pr_body(task, freshness, pr_config, inputs);
+                append_agent_sections(body, pr_config, inputs)
+            }
+        };
+        (body, missing)
     } else {
-        build_legacy_batch_pr_body(tasks, freshness, changed_files, pr_config)
+        (
+            build_legacy_batch_pr_body(tasks, freshness, changed_files, pr_config),
+            Vec::new(),
+        )
     };
 
-    if let Some(signature) = batch_pr_signature(tasks, pr_opener_model) {
+    if let Some(signature) =
+        batch_pr_signature(tasks, pr_opener_model).filter(|_| conventions.signature)
+    {
         body.push_str("\n\n");
         body.push_str(&signature);
     }
-    if let Some(trailer) = orchestration_trailer(tasks) {
+    if let Some(trailer) =
+        orchestration_trailer(tasks).filter(|_| conventions.pr_orchestration_trailer)
+    {
         body.push_str("\n\n");
         body.push_str(&trailer);
     }
+    // A repository template need not mention the task. Readers still require
+    // the id as a whole token, and the signature and orchestration trailer
+    // do not carry it, so a generated comment does — independent of the
+    // template text.
+    if inputs.template.is_some()
+        && let [task] = tasks
+        && !task.id.is_empty()
+    {
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str(&delivery_task_identity_footer(&task.id));
+    }
 
-    bound_pr_body(body, tasks)
+    Ok(RenderedBody {
+        body: bound_pr_body(body, tasks),
+        missing_required,
+    })
+}
+
+/// Identity comment appended to a templated delivery body. The task id is a
+/// whole token, so `ORB-1` does not match `ORB-10`, and the line is short
+/// enough to reserve inside GitHub's body limit.
+fn delivery_task_identity_footer(task_id: &str) -> String {
+    format!("<!-- orbit-delivery-task: {task_id} -->")
+}
+
+/// Split off the generated identity comment, when this body carries one, so
+/// truncation and later sections cannot drop it. Only the last copy is
+/// moved; a template that already contains the same comment keeps its own.
+fn detach_delivery_identity(body: String, tasks: &[Task]) -> (String, String) {
+    let [task] = tasks else {
+        return (body, String::new());
+    };
+    if task.id.is_empty() {
+        return (body, String::new());
+    }
+    let footer = delivery_task_identity_footer(&task.id);
+    let Some(index) = body.rfind(&footer) else {
+        return (body, String::new());
+    };
+    let mut end = index;
+    if body[..end].ends_with("\n\n") {
+        end -= 2;
+    } else if body[..end].ends_with('\n') {
+        end -= 1;
+    }
+    let mut content = String::with_capacity(body.len());
+    content.push_str(&body[..end]);
+    content.push_str(&body[index + footer.len()..]);
+    (content.trim_end().to_string(), footer)
+}
+
+/// The ATX heading a template line opens, as `(level, name)`.
+fn heading(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() > 3 {
+        return None;
+    }
+    let level = trimmed.chars().take_while(|c| *c == '#').count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+    let rest = &trimmed[level..];
+    if !(rest.is_empty() || rest.starts_with([' ', '\t'])) {
+        return None;
+    }
+    let name = rest.trim().trim_end_matches('#').trim();
+    Some((level, name))
+}
+
+/// A fenced code block's delimiter run: the marker character and its length.
+/// A block closes only on a run of the same marker at least as long.
+#[derive(Clone, Copy)]
+struct Fence {
+    marker: char,
+    len: usize,
+}
+
+/// The fence a template line opens. A backtick fence's info string cannot
+/// hold a backtick, else the line is inline code.
+fn opens_fence(line: &str) -> Option<Fence> {
+    let (fence, info) = fence_run(line)?;
+    (fence.marker != '`' || !info.contains('`')).then_some(fence)
+}
+
+/// Whether a template line closes the open fence: the same marker, a run at
+/// least as long as the opener, and nothing but whitespace after the run.
+fn closes_fence(line: &str, open: Fence) -> bool {
+    fence_run(line).is_some_and(|(fence, info)| {
+        fence.marker == open.marker && fence.len >= open.len && info.trim().is_empty()
+    })
+}
+
+/// The delimiter run a line starts with and the text after it, when the line
+/// indents at most three spaces, as an ATX heading does.
+fn fence_run(line: &str) -> Option<(Fence, &str)> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() > 3 {
+        return None;
+    }
+    let marker = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let len = trimmed.chars().take_while(|c| *c == marker).count();
+    (len >= 3).then(|| (Fence { marker, len }, &trimmed[len..]))
+}
+
+/// Required headings still carrying Orbit's gap note in the live PR body.
+/// Ignore quoted code samples, as the body renderer does for headings.
+pub(super) fn missing_section_names(body: &str) -> Vec<String> {
+    let mut missing = Vec::new();
+    let mut section = "unnamed required section";
+    let mut open_fence = None;
+    for line in body.lines() {
+        if let Some(fence) = open_fence {
+            if closes_fence(line, fence) {
+                open_fence = None;
+            }
+            continue;
+        }
+        if let Some(fence) = opens_fence(line) {
+            open_fence = Some(fence);
+            continue;
+        }
+        if let Some((_, name)) = heading(line) {
+            section = name;
+        } else if line.trim() == MISSING_SECTION_NOTE && !missing.iter().any(|name| name == section)
+        {
+            missing.push(section.to_string());
+        }
+    }
+    missing
+}
+
+/// Render a body template. Each agent-filled heading keeps its heading line
+/// and takes the implementer's content in place of the template text under
+/// it (up to the next heading of the same or a higher level); an unfilled
+/// optional section keeps the template text, and an unfilled required one
+/// gets [`MISSING_SECTION_NOTE`]. Everything else renders its placeholders,
+/// and an unknown placeholder is refused naming `pr.body_template`.
+fn render_template_body(
+    template: &str,
+    values: &TaskValues<'_>,
+    inputs: &BodyInputs<'_>,
+) -> Result<(String, Vec<String>), OrbitError> {
+    let conventions = &values.pr_config.conventions;
+    let sections = conventions.agent_filled_sections();
+    let mut out = String::new();
+    let mut missing_required = Vec::new();
+    let mut pending = String::new();
+    // The level of the agent-filled heading being replaced, while its text
+    // is skipped.
+    let mut replacing: Option<usize> = None;
+    let mut open_fence: Option<Fence> = None;
+    let mut screenshots_placed = false;
+    let flush = |pending: &mut String, out: &mut String| -> Result<(), OrbitError> {
+        if !pending.is_empty() {
+            out.push_str(&render_text(pending, values)?);
+            pending.clear();
+        }
+        Ok(())
+    };
+    for line in template.split_inclusive('\n') {
+        // Fenced code, its delimiters included, is literal: a heading inside
+        // it is a sample, not a section.
+        let opened = match open_fence {
+            Some(fence) => {
+                if closes_fence(line, fence) {
+                    open_fence = None;
+                }
+                None
+            }
+            None => match opens_fence(line) {
+                Some(fence) => {
+                    open_fence = Some(fence);
+                    None
+                }
+                None => heading(line),
+            },
+        };
+        if let Some(level) = replacing {
+            match opened {
+                Some((next, _)) if next <= level => replacing = None,
+                _ => continue,
+            }
+        }
+        let Some((level, name)) = opened else {
+            pending.push_str(line);
+            continue;
+        };
+        if let Some(content) = screenshot_content(&inputs.screenshots)
+            .filter(|_| orbit_types::workflow::same_section_name(SCREENSHOTS_SECTION, name))
+        {
+            flush(&mut pending, &mut out)?;
+            out.push_str(line.trim_end_matches(['\r', '\n']));
+            out.push_str("\n\n");
+            out.push_str(content);
+            out.push_str("\n\n");
+            screenshots_placed = true;
+            replacing = Some(level);
+            continue;
+        }
+        let Some(section) = sections
+            .iter()
+            .find(|section| orbit_types::workflow::same_section_name(section, name))
+        else {
+            pending.push_str(line);
+            continue;
+        };
+        let content = filled_content(&inputs.filled, section);
+        let required = conventions.is_required_section(section);
+        if content.is_none() && !required {
+            pending.push_str(line);
+            continue;
+        }
+        flush(&mut pending, &mut out)?;
+        out.push_str(line.trim_end_matches(['\r', '\n']));
+        out.push_str("\n\n");
+        match content {
+            Some(content) => out.push_str(content),
+            None => {
+                missing_required.push(section.to_string());
+                out.push_str(MISSING_SECTION_NOTE);
+            }
+        }
+        out.push_str("\n\n");
+        replacing = Some(level);
+    }
+    flush(&mut pending, &mut out)?;
+    let mut out = out.trim_end().to_string();
+    // A template without the heading gets the section after its own text.
+    if !screenshots_placed && let Some(content) = screenshot_content(&inputs.screenshots) {
+        out.push_str(&format!("\n\n## {SCREENSHOTS_SECTION}\n\n{content}"));
+    }
+    Ok((out, missing_required))
+}
+
+/// The Markdown under the screenshots heading, or `None` when the section is
+/// off. An empty section is optional and carries a neutral note.
+fn screenshot_content(screenshots: &Screenshots) -> Option<&str> {
+    match screenshots {
+        Screenshots::Off => None,
+        Screenshots::Missing => Some("No screenshots attached."),
+        Screenshots::Table(table) => Some(table),
+    }
+}
+
+fn render_text(text: &str, values: &TaskValues<'_>) -> Result<String, OrbitError> {
+    let template = ConventionTemplate::parse(BODY_TEMPLATE_KEY, text, TemplateSurface::Text)
+        .map_err(|error| OrbitError::InvalidInput(format!("pr_open: {error}")))?;
+    Ok(values.render(&template))
+}
+
+/// Orbit's own layout has no headings to fill, so its agent-filled sections
+/// follow it in configured order; an unfilled optional section is left out,
+/// as is one named like the screenshot section while Orbit renders that.
+fn append_agent_sections(
+    mut body: String,
+    pr_config: &PrConfig,
+    inputs: &BodyInputs<'_>,
+) -> (String, Vec<String>) {
+    let conventions = &pr_config.conventions;
+    let mut missing_required = Vec::new();
+    for section in conventions.agent_filled_sections() {
+        if screenshot_content(&inputs.screenshots).is_some()
+            && orbit_types::workflow::same_section_name(section, SCREENSHOTS_SECTION)
+        {
+            continue;
+        }
+        let content = match filled_content(&inputs.filled, section) {
+            Some(content) => content,
+            None if conventions.is_required_section(section) => {
+                missing_required.push(section.to_string());
+                MISSING_SECTION_NOTE
+            }
+            None => continue,
+        };
+        body.push_str(&format!("\n\n## {}\n\n{content}", section.trim()));
+    }
+    (body, missing_required)
+}
+
+fn filled_content<'a>(filled: &'a BTreeMap<String, String>, section: &str) -> Option<&'a str> {
+    filled
+        .iter()
+        .find(|(name, _)| orbit_types::workflow::same_section_name(name, section))
+        .map(|(_, content)| content.trim())
+        .filter(|content| !content.is_empty())
 }
 
 /// Projects a PR body into GitHub's UTF-8 byte limit while keeping the
 /// complete task artifacts as the durable source of execution detail.
+/// A generated delivery-identity comment stays intact at the end.
 pub(super) fn bound_pr_body(body: String, tasks: &[Task]) -> String {
-    if body.len() <= GITHUB_PR_BODY_BYTE_LIMIT {
+    let (body, footer) = detach_delivery_identity(body, tasks);
+    let footer_suffix = if footer.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{footer}")
+    };
+    let limit = GITHUB_PR_BODY_BYTE_LIMIT.saturating_sub(footer_suffix.len());
+    let bounded = project_pr_body(body, tasks, limit);
+    if footer_suffix.is_empty() {
+        bounded
+    } else if bounded.is_empty() {
+        footer
+    } else {
+        format!("{bounded}{footer_suffix}")
+    }
+}
+
+fn project_pr_body(body: String, tasks: &[Task], limit: usize) -> String {
+    if body.len() <= limit {
         return body;
     }
 
@@ -57,10 +415,10 @@ pub(super) fn bound_pr_body(body: String, tasks: &[Task]) -> String {
     let audit_note = format!(
         "\n\n> **Audit note:** GitHub limits PR bodies to {GITHUB_PR_BODY_BYTE_LIMIT} bytes. This projection is truncated; complete task artifacts remain the durable record in {durable_record}."
     );
-    let retained_body_bytes = GITHUB_PR_BODY_BYTE_LIMIT.saturating_sub(audit_note.len());
+    let retained_body_bytes = limit.saturating_sub(audit_note.len());
 
     if retained_body_bytes == 0 {
-        return truncate_utf8(&audit_note, GITHUB_PR_BODY_BYTE_LIMIT).to_string();
+        return truncate_utf8(&audit_note, limit).to_string();
     }
 
     format!(
@@ -74,19 +432,28 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
     &value[..floor_char_boundary(value, max_bytes)]
 }
 
+/// Orbit's single-task layout. The screenshot section follows the task
+/// contract, ahead of the execution summary, so truncating a long summary
+/// from the end never cuts it.
 pub(super) fn build_single_task_pr_body(
     task: &Task,
     freshness: &BranchFreshness,
     pr_config: &PrConfig,
+    inputs: &BodyInputs<'_>,
 ) -> String {
     let mut sections = vec![render_single_task_section(task, pr_config)];
+    if let Some(content) = screenshot_content(&inputs.screenshots) {
+        sections.push(format!("## {SCREENSHOTS_SECTION}\n\n{content}"));
+    }
 
     if let Some(execution_summary) = meaningful_execution_summary(&task.execution_summary) {
         sections.push(render_execution_summary_section(execution_summary));
     }
 
     sections.push(render_validation_section());
-    sections.push(render_branch_freshness_section(freshness));
+    if pr_config.conventions.freshness_section {
+        sections.push(render_branch_freshness_section(freshness));
+    }
     sections.join("\n\n")
 }
 
@@ -106,14 +473,19 @@ pub(super) fn build_legacy_batch_pr_body(
         .map(|file| format!("- `{file}`"))
         .collect::<Vec<_>>()
         .join("\n");
+    let freshness_section = if pr_config.conventions.freshness_section {
+        format!(
+            "\n\n## Branch Freshness\n- Base ref: `{}`\n- Head ref: `{}`\n- Behind base: {}\n- Ahead of base: {}",
+            freshness.base_ref,
+            freshness.head_ref,
+            freshness.commits_behind,
+            freshness.commits_ahead,
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "## Tasks\n{}\n\n## Branch Freshness\n- Base ref: `{}`\n- Head ref: `{}`\n- Behind base: {}\n- Ahead of base: {}\n\n## Files Changed\n{}",
-        task_sections,
-        freshness.base_ref,
-        freshness.head_ref,
-        freshness.commits_behind,
-        freshness.commits_ahead,
-        changed_files_section
+        "## Tasks\n{task_sections}{freshness_section}\n\n## Files Changed\n{changed_files_section}"
     )
 }
 
@@ -168,12 +540,14 @@ pub(super) fn render_known_red_section(records: &[KnownRedValidation]) -> Option
 
 pub(super) fn render_branch_freshness_section(freshness: &BranchFreshness) -> String {
     format!(
-        "## Branch Freshness\n\n- Base ref: `{}`\n- Head ref: `{}`\n- Behind base: {}\n- Ahead of base: {}",
-        freshness.base_ref, freshness.head_ref, freshness.commits_behind, freshness.commits_ahead
+        "## Branch Freshness\n\n{}",
+        render_freshness_list(freshness)
     )
 }
 
-pub(super) fn render_acceptance_criteria(criteria: &[String]) -> String {
+pub(in crate::executor::automation::vcs) fn render_acceptance_criteria(
+    criteria: &[String],
+) -> String {
     criteria
         .iter()
         .map(|criterion| format!("- {criterion}"))
@@ -258,7 +632,10 @@ pub(super) fn render_task_ref(task: &Task, pr_config: &PrConfig) -> String {
     }
 }
 
-pub(super) fn task_url(task: &Task, pr_config: &PrConfig) -> Option<String> {
+pub(in crate::executor::automation::vcs) fn task_url(
+    task: &Task,
+    pr_config: &PrConfig,
+) -> Option<String> {
     task.external_refs
         .iter()
         .find_map(|external_ref| external_ref.url.as_deref())
@@ -269,6 +646,23 @@ pub(super) fn task_url(task: &Task, pr_config: &PrConfig) -> Option<String> {
                 .as_ref()
                 .map(|template| template.replace("{task_id}", &task.id))
         })
+}
+
+/// The pull request title: `pr.title_template` rendered on one line for a
+/// single-task delivery, else (or when it renders blank) Orbit's default.
+pub(super) fn pr_title(tasks: &[Task], pr_config: &PrConfig) -> String {
+    if let ([task], Some(template)) = (tasks, pr_config.conventions.pr_title.as_ref()) {
+        let title = TaskValues {
+            task,
+            pr_config,
+            freshness: None,
+        }
+        .render_line(template);
+        if !title.is_empty() {
+            return title;
+        }
+    }
+    default_pr_title(tasks)
 }
 
 pub(super) fn default_pr_title(tasks: &[Task]) -> String {

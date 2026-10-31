@@ -7,9 +7,11 @@
 //! collapsed from M failed events of T events in the last 24h" without either
 //! number being inferred.
 //!
-//! Every incident carries the ids of the raw rows it grouped, so the raw Audit
-//! view and its exports stay the authority on evidence; nothing here filters,
-//! rewrites, or hides a row.
+//! Every incident carries all raw row ids in `event_ids`, with a bounded
+//! newest-first `events` preview and an exact `events_omitted` count. Root
+//! samples and propagation links are retained. The raw Audit view and its
+//! exports stay the authority on complete evidence; the preview never changes
+//! the grouped population or its denominators.
 
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
@@ -34,6 +36,10 @@ use crate::state::Ws;
 /// view, so a page this size covers far more raw evidence than the same number
 /// of audit rows would.
 const INCIDENTS_DEFAULT_LIMIT: usize = 50;
+
+/// Full references repeated in a polled incident row. The complete ID list
+/// keeps exact raw-audit drilldowns independent of this preview bound.
+const INCIDENT_EVENT_PREVIEW_LIMIT: usize = 5;
 
 /// `?since=<24h|7d|RFC3339>&class=<deferred|denied|diagnostic|expected|unexpected>&limit=`.
 #[derive(Debug, Default, Deserialize)]
@@ -159,9 +165,7 @@ fn parse_class(raw: &str) -> Option<FailureClass> {
 
 /// Projects a report into the dashboard payload.
 ///
-/// Widened to `pub(super)` so `api/tests/incidents.rs` can pin the projection
-/// (denominators, class labels, evidence refs) without a live SQLite runtime.
-pub(super) fn incidents_payload(
+fn incidents_payload(
     report: &FailureIncidentReport,
     window: &str,
     since: Option<DateTime<Utc>>,
@@ -254,15 +258,33 @@ pub(super) fn failure_category_summaries(report: &FailureIncidentReport) -> Valu
 /// every propagation link [ORB-15527]. An object whose message was cut
 /// carries `truncated: true`, and an incident names in `message_event_id` the
 /// audit row its message came from, for [`incident_event_message`].
+/// A stored ellipsis-cut root is recovered from a complete matching audit
+/// message across all event references before the message and preview caps.
+/// Only the newest [`INCIDENT_EVENT_PREVIEW_LIMIT`] full event references are
+/// repeated; `event_ids` preserves every row for explicit raw-audit access.
 fn incident_to_json(incident: &FailureIncident) -> Value {
-    let message = incident.message.as_deref().map(message_excerpt);
-    let message_event_id = incident.message.as_deref().and_then(|message| {
+    let mut message_text = incident.message.as_deref();
+    let mut message_event_id = message_text.and_then(|message| {
         incident
             .events
             .iter()
             .find(|event| event.message.as_deref() == Some(message))
             .map(|event| event.id)
     });
+    if let Some(stem) = message_text.and_then(ellipsis_cut_message_stem)
+        && let Some(event) = incident.events.iter().find(|event| {
+            event.message.as_deref().is_some_and(|message| {
+                let message = message.trim();
+                message.len() > stem.len()
+                    && message.starts_with(stem)
+                    && ellipsis_cut_message_stem(message).is_none()
+            })
+        })
+    {
+        message_text = event.message.as_deref();
+        message_event_id = Some(event.id);
+    }
+    let message = message_text.map(message_excerpt);
     json!({
         "incident_id": incident.incident_id,
         "signature": redact_all(&incident.signature),
@@ -290,8 +312,11 @@ fn incident_to_json(incident: &FailureIncident) -> Value {
         "events": incident
             .events
             .iter()
+            .take(INCIDENT_EVENT_PREVIEW_LIMIT)
             .map(event_ref_to_json)
             .collect::<Vec<_>>(),
+        "events_omitted": incident.events.len().saturating_sub(INCIDENT_EVENT_PREVIEW_LIMIT),
+        "event_ids": incident.events.iter().map(|event| event.id).collect::<Vec<_>>(),
         "propagation": incident
             .propagation
             .iter()
@@ -305,6 +330,13 @@ fn incident_to_json(incident: &FailureIncident) -> Value {
             "basis": incident.cause.basis.as_str(),
         },
     })
+}
+
+fn ellipsis_cut_message_stem(message: &str) -> Option<&str> {
+    let message = message.trim();
+    message
+        .strip_suffix('…')
+        .or_else(|| message.strip_suffix("..."))
 }
 
 fn event_ref_to_json(event: &IncidentEventRef) -> Value {

@@ -90,6 +90,7 @@ pub(super) fn map_invocation_record(row: &rusqlite::Row<'_>) -> rusqlite::Result
     let cache_create_1h_tokens = row.get::<_, i64>(10)? as u64;
     let output_tokens = row.get::<_, i64>(11)? as u64;
     let provider_cost_usd: Option<f64> = row.get(13)?;
+    let long_prompt_requests = long_prompt_requests(row.get(15)?);
 
     let derived_cost_usd = model.as_deref().and_then(|model| {
         derive_cost_usd(
@@ -102,10 +103,12 @@ pub(super) fn map_invocation_record(row: &rusqlite::Row<'_>) -> rusqlite::Result
                 cache_create_1h: cache_create_1h_tokens,
                 output: output_tokens,
             },
+            long_prompt_requests.as_deref(),
         )
     });
 
     Ok(InvocationRecord {
+        execution: execution_identity(row.get(16)?)?,
         id: row.get(0)?,
         ts,
         job_run_id: row.get(2)?,
@@ -140,6 +143,7 @@ pub(super) fn map_invocation_accounting_fact(
     let cache_create_1h_tokens = row.get::<_, i64>(6)? as u64;
     let output_tokens = row.get::<_, i64>(7)? as u64;
     let provider_cost_usd = row.get(8)?;
+    let long_prompt_requests = long_prompt_requests(row.get(12)?);
     let derived_cost_usd = model.as_deref().and_then(|model| {
         derive_cost_usd(
             model,
@@ -151,11 +155,14 @@ pub(super) fn map_invocation_accounting_fact(
                 cache_create_1h: cache_create_1h_tokens,
                 output: output_tokens,
             },
+            long_prompt_requests.as_deref(),
         )
     });
 
     Ok(InvocationAccountingFact {
+        execution: execution_identity(row.get(13)?)?,
         id: row.get(0)?,
+        job_run_id: row.get(11)?,
         ts,
         model,
         input_tokens,
@@ -166,16 +173,23 @@ pub(super) fn map_invocation_accounting_fact(
         task_ids: Vec::new(),
         provider_cost_usd,
         derived_cost_usd,
+        activity_id: row.get(9)?,
+        duration_ms: u64::try_from(row.get::<_, i64>(10)?).unwrap_or(0),
     })
 }
 
 pub(super) fn hydrate_invocation_records(
     store: &Store,
     records: &mut [InvocationRecord],
+    with_tool_calls: bool,
 ) -> Result<(), OrbitError> {
     let invocation_ids = records.iter().map(|record| record.id).collect::<Vec<_>>();
     let task_ids = store.load_invocation_task_ids(&invocation_ids)?;
-    let tool_calls = store.load_invocation_tool_calls(&invocation_ids)?;
+    let tool_calls = if with_tool_calls {
+        store.load_invocation_tool_calls(&invocation_ids)?
+    } else {
+        Default::default()
+    };
     let index_by_id = records
         .iter()
         .enumerate()
@@ -194,6 +208,14 @@ pub(super) fn hydrate_invocation_records(
     }
 
     Ok(())
+}
+
+/// The per-request usage an invocation captured for prompt-size tiers.
+/// `NULL` (every row recorded before capture, and providers without
+/// per-request usage) and an unreadable value both read as not captured, so
+/// pricing never treats a lost request list as one with no long requests.
+fn long_prompt_requests(raw: Option<String>) -> Option<Vec<TokenUsage>> {
+    serde_json::from_str(&raw?).ok()
 }
 
 fn parse_rfc3339_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
@@ -247,4 +269,19 @@ fn sql_placeholders(count: usize) -> String {
         .map(|index| format!("?{}", index + 1))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn execution_identity(
+    raw: Option<String>,
+) -> rusqlite::Result<Option<orbit_types::telemetry::AgentExecutionIdentity>> {
+    raw.map(|raw| {
+        serde_json::from_str(&raw).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                raw.len(),
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })
+    })
+    .transpose()
 }

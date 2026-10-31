@@ -3,7 +3,7 @@
 # The durable consumer of one authorized handoff. It is dispatched by the
 # owner's handoff outbox — accepting a completion-authorized handoff or
 # approving a review-only one records the request — so landing never depends on
-# a drain or the ship sweep running.
+# a drain running.
 #
 # Failure semantics:
 # - One live attempt per handoff. Handoff identity is the dispatch key, and the
@@ -55,3 +55,11 @@ spec:
         task_id: "{{ input.task_id }}"
         max_wait_seconds: "{{ input.max_wait_seconds }}"
         poll_interval_seconds: "{{ input.poll_interval_seconds }}"
+
+    # Visual review §11.3: a landed live `verify-mock-ui` delivery files what
+    # its visual review left unresolved as proposed `visual-review`
+    # follow-ups. Every other landing files nothing.
+    - id: visual_landed
+      target: activity:visual_landed
+      default_input:
+        task_id: "{{ input.task_id }}"

@@ -75,17 +75,8 @@
 .task-search-wrap.error #task-search { border-color: var(--state-failed); }
 
 /* ORB-00211: Enter on a task ID in the search box looks the task up anywhere.
-   Its progress and failures float under the box so the header keeps its
-   height; the element is always present for aria-describedby. */
-.task-lookup-status {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 150;
-  display: none; max-width: min(100vw - 24px, 320px);
-  padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--bg-elev); color: var(--state-failed);
-  font-size: 12px; font-weight: 400; overflow-wrap: anywhere;
-}
-.task-search-wrap.error .task-lookup-status { display: block; }
-.task-search-wrap.pending .task-lookup-status { display: block; color: var(--fg-dim); }
+   Its progress and failures (#task-lookup-status, which the box names in
+   aria-describedby) show in the Tasks message area beside the dock. */
 
 /* A task opened by ID that the current filter or page would hide: it shows
    in the pane under a note saying it is outside the list. */
@@ -106,15 +97,17 @@
 /* The full page has no list for the task to be outside of. Its crew lives
    in the shared detail lever row, so the entire dock-only note can go. */
 main.tasks-layout.task-page-mode .pinned-external { display: none; }
-#tasks-panel > .controls { border-bottom: 0; padding: 0 0 14px; }
+/* The status pills, then the pager at their right once the list has pages
+   (on its own line when the pills fill theirs); the first status card follows
+   12px below. */
+#tasks-panel > .controls { border-bottom: 0; padding: 0 0 12px; align-items: flex-start; }
 
 #tasks-panel > .body {
   max-height: none;
   flex: 1 1 auto;
-  /* ORB-10874: floor so the task inventory stays usable (a few visible
-     rows) even on a short viewport or with the log panel expanded — it
-     never gets squeezed toward zero by the surrounding chrome. */
-  min-height: 240px;
+  /* Shrink inside the bounded Tasks grid on short viewports; a fixed floor
+     would put the list's bottom rows behind the shell's bottom bar. */
+  min-height: 0;
   padding: 0 0 16px;
   overflow-y: auto;
   overflow-x: auto;
@@ -126,7 +119,8 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
    raised and bright, unpressed ones transparent and muted. */
 #task-filter {
   display: flex;
-  flex: 1 1 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
@@ -414,6 +408,10 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 .run-host { color: var(--fg-soft); font-family: var(--font-mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run-host.none { color: var(--fg-mute); font-family: var(--font-sans); font-size: 12.5px; }
 .run-sub { color: var(--fg-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Estimated regression risk on the ID line: muted by default, amber when well
+   above the workspace base rate. */
+.risk-part { color: var(--fg-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.risk-part.risk-elevated { color: var(--warn-fg); }
 .status-cell {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);
@@ -552,17 +550,11 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
   gap: 8px;
   min-width: 0;
 }
-.task-quick-cell .exec-origin {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 /* The row's one action: Approve in a green outline, Ship in a neutral one
    with a play mark (the accent while nothing holds the task), or a PR link
    that fits the action column. */
 .task-quick {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -600,13 +592,40 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
   border-color: var(--state-success);
 }
 .task-quick:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Pending keeps the idle label and width; the spinner sits in the right
+   padding so the button never widens into the crew control. Ship's play
+   mark gives its place up while pending. */
+.task-quick.pending::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  margin-top: -5px;
+  animation: spin 0.8s linear infinite;
+  pointer-events: none;
+}
+.task-quick.ship.pending::before { visibility: hidden; }
+@media (prefers-reduced-motion: reduce) {
+  .task-quick.pending::after { animation-duration: 2.4s; }
+}
 .task-quick:focus-visible,
 .task-quick-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-quick-link { display: inline-flex; align-items: center; min-height: 30px; font-size: 13px; font-weight: 500; color: var(--accent); white-space: nowrap; text-decoration: none; }
 .task-quick-link:hover { color: var(--accent-hover); }
+/* A run on a machine the host file does not register: the label stays, dimmed,
+   with nothing to open. */
+.task-quick-link.unlinked { color: var(--fg-mute); cursor: default; }
 .row.has-quick-error { row-gap: 6px; }
 .task-quick-error {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   font-size: 11.5px;
   line-height: 1.4;
   color: var(--state-failed);
@@ -623,6 +642,26 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
   min-width: 0;
   max-width: 100%;
 }
+.task-quick-error-message {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.task-quick-error-dismiss {
+  flex: none;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  color: var(--state-failed);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.75;
+}
+.task-quick-error-dismiss:hover { opacity: 1; }
+.task-quick-error-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-quick-error-link {
   color: var(--accent);
   text-decoration: underline;
@@ -707,11 +746,11 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 .task-pagination[hidden] { display: none; }
 .task-pagination {
   display: flex;
+  flex: none;
+  margin-left: auto;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  min-height: 34px;
-  padding: 0 0 12px;
 }
 .task-pagination button {
   min-height: 32px;
@@ -725,12 +764,6 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 }
 .task-pagination button:disabled { color: var(--fg-dim); opacity: 0.55; }
 .task-pagination button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-#tasks-page-status { margin-right: auto; color: var(--fg-mute); font-size: 12.5px; }
-#tasks-page-status.error { color: var(--state-error); }
-
-@media (max-width: 520px) {
-  .task-pagination { justify-content: space-between; }
-}
 
 /* The two-line row needs about 620px beside its crew and action. The panel's
    own width decides, not the window's: beside the dock or the detail pane on
@@ -777,6 +810,11 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
    every row at once. The compact layout above places its action on its own
    line and is left alone. */
 @container tasks-panel (min-width: 621px) {
+  /* Keep crew starts and action ends consistent across task groups. The width
+     is the widest action (Approve, 72.6px at 13px), so the gap from the crew
+     chip is the row's column gap; the action cell right-aligns its action at
+     row padding. */
+  #tasks-body { --task-action-width: 73px; }
   #tasks-body[data-quick-actions="none"] .row {
     grid-template-columns: minmax(0, 1fr) var(--task-crew-width, 120px);
   }
@@ -784,40 +822,132 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
   /* A card with no action in any row (Blocked) does the same for itself. */
   #tasks-body > .row.no-quick { grid-template-columns: minmax(0, 1fr) var(--task-crew-width, 120px); }
   #tasks-body > .row.no-quick .task-quick-cell { display: none; }
-  /* In progress, the action is the run's link, or the host it runs on. */
-  #tasks-body > .row[data-group="in-progress"] { --task-action-width: 108px; }
 }
 
 /* The list, then the Drain dock (the Auto-drain status card, Start a window,
-   Locks held, Log) moved here from the Drain page while Tasks shows. An open
+   Locks held, Log) beside the list. An open
    task takes the dock's place, and below 1000px, where shell.css stacks every
-   main grid, the dock stays on the Drain page. */
+   main grid, the task list takes the full width. */
 main.tasks-layout { grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px); }
 main.tasks-layout:not(:has(> .tasks-dock > #side-dock)) { grid-template-columns: minmax(0, 1fr); }
 .tasks-dock { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.tasks-dock:empty,
-main.tasks-layout.task-pane-open > .tasks-dock { display: none; }
+/* Without room for the dock (an open task, or below 1000px) only its message
+   area stays, floating at the foot of the view (see below). */
+main.tasks-layout.task-pane-open > .tasks-dock { display: contents; }
+main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
+/* The Back control shows only where a dock route stands in for the list. */
+.dock-back {
+  display: none;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 36px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dock-back:hover { color: var(--fg); }
+.dock-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 @media (max-width: 1000px) {
   main.tasks-layout { grid-template-columns: minmax(0, 1fr); }
-  .tasks-dock { display: none; }
+  .tasks-dock { display: contents; }
+  .tasks-dock > #side-dock { display: none; }
+  /* An explicit Drain, Locks held or Log route (`dock=` in the hash) shows the
+     dock in place of the list, and the message area goes with the list. Any
+     route without `dock=` returns to the list, and desktop keeps the dock beside
+     it. The list's column has an inline display, hence !important. The log
+     scrolls inside a bounded height rather than running down the page. */
+  main.tasks-layout.dock-route > .col-tasks { display: none !important; }
+  main.tasks-layout.dock-route > .tasks-dock > #side-dock { display: flex; }
+  main.tasks-layout.dock-route > .tasks-dock > .tasks-messages { display: none; }
+  main.tasks-layout.dock-route .dock-back { display: inline-flex; }
+  main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
 }
 .tasks-dock #side-dock { flex: 1 1 auto; gap: 12px; }
-/* The page's heading, banner, tiles, waits and fleet cards stay on Drain; the
-   status card comes along and carries the throttle as its own note. */
-.tasks-dock .drain-page-head,
-.tasks-dock .drain-banner,
-.tasks-dock .drain-summary,
-.tasks-dock #drain-waits-panel,
-.tasks-dock #drain-started-panel,
-.tasks-dock #drain-pull-panel,
-.tasks-dock #drain-fleet-panel { display: none !important; }
+/* The active tab's first card starts level with the first task block, and
+   the list and dock end together: log-tail.js sets `--tasks-dock-lead` to the
+   room above the dock, which the message area fills (with a 12px gap above the
+   tabs, which sit above that line). Its height is that room, never its
+   content, so a notice moves neither the dock nor the list; more notices than
+   fit scroll inside it. */
+.tasks-dock { --tasks-dock-lead: 0px; }
+.tasks-messages {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.tasks-dock > .tasks-messages {
+  flex: 0 0 auto;
+  height: var(--tasks-dock-lead);
+  padding-bottom: 12px;
+}
+.tasks-messages > :empty { display: none; }
+#tasks-notices { display: flex; flex-direction: column; gap: 6px; }
+/* Lookup and page feedback share the notices' left-rule look. */
+.tasks-messages > .task-lookup-status,
+.tasks-messages > #tasks-page-status {
+  flex: none;
+  padding: 6px 12px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.tasks-messages > .task-lookup-status[data-kind="error"],
+.tasks-messages > #tasks-page-status.error { border-left-color: var(--state-failed); color: var(--state-failed); }
+.tasks-messages > .panel-placeholder:not(.quiet) { flex: none; position: static; padding: 6px 12px; border-left: 3px solid var(--border-strong); border-radius: 4px; background: var(--bg-elev); }
+.tasks-messages > .panel-placeholder.action-error { border-left-color: var(--state-failed); }
+.tasks-messages .task-action-notice { background: color-mix(in srgb, var(--state-success) 10%, var(--bg-elev)); }
+/* The floating area, at the foot of the Tasks view (the active tab pane is
+   its containing block): under the list while a task is open, so it covers
+   none of the task's controls, and across the page below 1000px. It takes no
+   clicks of its own, so when empty it hides nothing; its messages are opaque
+   cards over the list. */
+main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages {
+  position: absolute;
+  left: 20px;
+  bottom: 16px;
+  z-index: 150;
+  width: min(360px, calc(100% - 40px));
+  height: auto;
+  max-height: 40%;
+  padding-bottom: 0;
+  pointer-events: none;
+}
+main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages > :not(#tasks-notices),
+main.tasks-layout.task-pane-open #tasks-notices > * { pointer-events: auto; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+@media (max-width: 1000px) {
+  .tasks-dock > .tasks-messages {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    z-index: 150;
+    width: auto;
+    height: auto;
+    max-height: 40%;
+    padding-bottom: 0;
+    pointer-events: none;
+  }
+  .tasks-dock > .tasks-messages > :not(#tasks-notices),
+  #tasks-notices > * { pointer-events: auto; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+}
 .tasks-dock .drain-throttle-line { display: block; }
 .tasks-dock #dock-pane-drain { overflow-y: auto; padding-bottom: 16px; }
 .tasks-dock .drain-columns { display: block; }
-.tasks-dock .drain-col { gap: 12px; }
+.tasks-dock .drain-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .tasks-dock .drain-col + .drain-col { margin-top: 12px; }
 /* Each forecast peak is a meter against its threshold with the figure
-   beside it; the hour's chart, when, amount and margin stay on Drain and in
+   beside it; the hour's chart, when, amount and margin are in
    the row's tooltip. */
 .tasks-dock .drain-forecast-spark { display: none; }
 .tasks-dock .drain-forecast-spark + .drain-forecast-meter { display: block; }
@@ -828,11 +958,28 @@ main.tasks-layout.task-pane-open > .tasks-dock { display: none; }
 .tasks-dock .dock-pane > .panel,
 .tasks-dock #dock-pane-drain .panel { flex: 0 0 auto; min-height: 0; }
 .tasks-dock #dock-pane-drain .panel[hidden] { display: none; }
+/* On Tasks, Locks held is a tab of the dock (log-tail.js) apart from the
+   Drain tab's cards; the tab names it, so its own title is read by screen
+   readers only. */
+.tasks-dock #side-dock[data-card="drain"] #locks-panel,
+.tasks-dock #side-dock[data-card="locks"] :is(#auto-drain-panel, #auto-drain-quick-start, #auto-drain-operation-feedback) { display: none !important; }
+/* Drain notices stay in Drain, and the empty main column leaves no space
+   above Locks. Every tab's first card then has the same depth below the
+   shared tabs, so first-card alignment moves neither tabs nor viewport. */
+.tasks-dock #side-dock[data-card="locks"] .drain-col-side { margin-top: 0; }
+.tasks-dock #side-dock[data-card="locks"] #locks-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .tasks-dock #dock-pane-log > #log-panel { flex: 1 1 auto; }
 
 /* The task pane: the list, a resizer, then the selected task's detail at the
    operator's remembered share of the width (`--task-pane-width`, set from
-   tasks.js), kept wide enough to read and narrow enough to leave a list.
+   task-pane.js), kept wide enough to read and narrow enough to leave a list.
    Important because shell.css stacks every `main` grid below 1000px. */
 main.tasks-layout.task-pane-open {
   grid-template-columns:
@@ -892,8 +1039,10 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
   top: 0;
   z-index: 3;
   padding: 16px 20px 14px;
-  border-bottom: 1px solid var(--hair);
-  background: var(--bg-elev);
+  /* The head is the top of the detail's darker band; the edge keeps the
+     head's height and shows only where the band's colour ends. */
+  border-bottom: 1px solid var(--bg);
+  background: var(--bg);
 }
 .task-pane-bar { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .task-pane-bar .id { font-size: 13px; color: var(--fg-dim); }
@@ -970,13 +1119,30 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
   .task-pane-full { display: none; }
 }
 
-/* The composer stays outside list repainting so errors never discard a draft. */
-.task-create { padding: 16px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; flex: 0 1 auto; }
-.task-create[hidden] { display: none; }
+/* Task creation is a modal <dialog>: the top layer takes it out of the board's
+   and dock's layout, so opening, validating and dismissing it moves neither.
+   It scrolls internally when the viewport is short; closed it stays display:none. */
+.task-create {
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--fg);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.task-create::backdrop { background: rgb(0 0 0 / 0.6); }
 .task-create h3 { margin: 0; }
 .task-create fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 6px; min-width: 0; }
 .task-create label { margin-top: 8px; }
-.task-create input, .task-create textarea, .task-create select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); color: var(--fg); font: inherit; }
+.task-create input, .task-create textarea, .task-create select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--fg); font: inherit; }
 .task-create :disabled { opacity: 0.7; }
 .task-create .action { min-height: 36px; }
 /* The head's primary action: New task, in the accent. */
@@ -997,7 +1163,8 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
 #task-create-open:hover:not(:disabled) { background: var(--accent-hover); }
 #task-create-open[aria-expanded="true"] { background: var(--accent-hover); }
 .task-create textarea { resize: vertical; }
-.task-create-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* The actions stay in reach while a short viewport scrolls the fields. */
+.task-create-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding: 8px 0 0; position: sticky; bottom: -16px; background: var(--bg-elev); }
 .task-create [aria-invalid="true"] { border-color: var(--state-error); }
 #task-create-feedback { overflow-wrap: anywhere; }
 
@@ -1007,4 +1174,26 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
   background: var(--warn-wash);
   border-color: var(--warn-line);
   white-space: nowrap;
+}
+
+.delivery-attention-badge {
+  color: var(--warn-fg);
+  background: var(--warn-wash);
+  border: 1px solid var(--warn-line);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.title-tags > .scheduled-chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  color: var(--warn-fg);
+  background: var(--warn-wash);
+  font-size: 11px;
 }

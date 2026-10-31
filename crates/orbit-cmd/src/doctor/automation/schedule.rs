@@ -110,9 +110,9 @@ fn parse_doctor_time(raw: &str) -> Result<chrono::DateTime<chrono::Utc>, OrbitEr
 }
 
 /// A host shutdown inside the hold horizon holds every unattended admission —
-/// routine and auto-task fires, drain waves, the ship sweep — so doctor warns
-/// and names the mode and time [ORB-12968]. A later schedule is still named,
-/// as ok: nothing is wrong, and work continues until the horizon. Nothing is
+/// routine and auto-task fires, drain waves — so doctor warns and names the
+/// mode and time [ORB-12968]. A later schedule is still named, as ok: nothing
+/// is wrong, and work continues until the horizon. Nothing is
 /// wrong with the workspace either way.
 pub(in crate::doctor) fn doctor_check_host_shutdown(
     runtime: &OrbitRuntime,

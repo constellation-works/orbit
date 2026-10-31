@@ -120,6 +120,7 @@ fn deterministic_target(step: &JobV2Step) -> Option<(&TargetStep, &str)> {
 }
 
 pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
+    refuse_auto_task_steps(job)?;
     if let Some(name) = &job.recovery_activity
         && job.resolved_recovery_activity.is_none()
     {
@@ -174,6 +175,28 @@ pub fn validate_job(job: &JobV2) -> Result<(), DispatchError> {
     }
     validate_step_output_readiness(job)?;
     Ok(())
+}
+
+/// Refuse a job using the auto-task step extension before any step runs:
+/// this binary defines and explains such steps but has no durable waiting or
+/// keyed child admission to run them with
+/// (`docs/design/activity-job/specs/auto-task-step.md` §7, phase 1).
+fn refuse_auto_task_steps(job: &JobV2) -> Result<(), DispatchError> {
+    let what = match job.auto_task_steps().first() {
+        Some(step) => format!(
+            "step `{}` targets auto-task `{}`",
+            step.id,
+            step.auto_task_name().unwrap_or_default()
+        ),
+        None if job.is_auto_task_job() => {
+            "the job declares schemaVersion 3, `expire_when` or a step wait field".to_string()
+        }
+        None => return Ok(()),
+    };
+    Err(DispatchError::JobValidation(format!(
+        "{what}: auto-task steps can be defined and explained, but this Orbit cannot run them \
+         yet; no step ran and no task was minted"
+    )))
 }
 
 /// [ORB-11325] Reject a job whose `when:` / `break_when:` reads
@@ -550,6 +573,16 @@ pub(super) fn validate_step(step: &JobV2Step) -> Result<(), DispatchError> {
                     step.id
                 )));
             }
+            // Each fan-out spawns one thread per item (up to its own item
+            // bound), so a fan-out below another multiplies the thread count
+            // past what that bound protects.
+            if contains_fan_out(&fan_out.worker) {
+                return Err(DispatchError::JobValidation(format!(
+                    "step `{}` fan_out worker contains another fan_out; nested fan-outs \
+                     multiply their thread counts and are not supported",
+                    step.id
+                )));
+            }
             validate_step(&fan_out.worker)?;
         }
         JobV2StepBody::Loop { loop_ } => {
@@ -560,6 +593,17 @@ pub(super) fn validate_step(step: &JobV2Step) -> Result<(), DispatchError> {
         JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
     }
     Ok(())
+}
+
+/// Whether `step`, or any step nested in its parallel branches or loop body,
+/// is a fan-out.
+fn contains_fan_out(step: &JobV2Step) -> bool {
+    match &step.body {
+        JobV2StepBody::FanOut { .. } => true,
+        JobV2StepBody::Parallel { parallel } => parallel.branches.iter().any(contains_fan_out),
+        JobV2StepBody::Loop { loop_ } => loop_.steps.iter().any(contains_fan_out),
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => false,
+    }
 }
 
 /// Enforce `retry:` block invariants before any step executes (ORB-10006).

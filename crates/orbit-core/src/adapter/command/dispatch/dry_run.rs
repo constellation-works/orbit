@@ -35,7 +35,13 @@ impl OrbitRuntime {
             // A preview must not leave it on the thread for a later call.
             take_callback_plugin_provenance();
             callback?;
-            self.ensure_tool_agent_facing(name)?;
+            self.ensure_tool_agent_facing_with_context(
+                name,
+                &super::execute::tool_suggestion_context(
+                    super::execute::ToolEntryPoint::Cli,
+                    session_context.clone(),
+                ),
+            )?;
 
             let activity_policy = read_activity_tool_policy_from_env();
             let mut context = ToolContext {

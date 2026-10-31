@@ -7,7 +7,8 @@ use orbit_core::{
 };
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{
-    ChildDispatch, DrainCancelRequest, PipelineState, RunRootCause, TaskCancellationPolicy,
+    ChildDispatch, DrainCancelRequest, PipelineState, RunCancellationProvenance, RunRootCause,
+    TaskCancellationPolicy,
 };
 use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::{Value, json};
@@ -75,6 +76,82 @@ fn run_event_tail_pages_include_the_end_and_preserve_legacy_reads() {
                     .get(&format!("{path}?tail=true&kind=run_finished"))
                     .status(),
                 reqwest::StatusCode::BAD_REQUEST
+            );
+        },
+    );
+}
+
+/// Forward pages return each stored envelope as written: invalid JSON is
+/// skipped, a payload without an `event_id` is kept and no inherited
+/// `step_id` is added. A kind page the scan budget cannot fill is refused
+/// with 413; one it fills is served.
+#[test]
+fn run_event_pages_keep_stored_envelopes_and_refuse_an_unfillable_kind_scan() {
+    isolated(
+        "runs::run_event_pages_keep_stored_envelopes_and_refuse_an_unfillable_kind_scan",
+        || {
+            let fixture = Fixture::new();
+            let run = fixture.seed_run("jrun-event-budget", "fixture", JobRunState::Failed);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let start = "2026-10-10T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+            let mut db = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            let tx = db.transaction().unwrap();
+            {
+                let mut insert = tx
+                    .prepare(
+                        "INSERT INTO v2_audit_events (workspace_id, event_id, source, \
+                         schema_version, event_type, ts, run_id, agent_identity, payload_json) \
+                         VALUES (?1, ?2, 'v2_envelope', 1, 'fixture', ?3, ?4, 'test', ?5)",
+                    )
+                    .unwrap();
+                // One row past the budget, then a match only a larger budget reaches.
+                let rows = orbit_core::runtime::audit::run_events::RUN_EVENTS_MAX_SCAN_ROWS + 2;
+                for index in 0..rows {
+                    let payload = match index {
+                        0 => json!({"event_id": "e0", "body_kind": "step_started", "step_id": "implement"}).to_string(),
+                        1 => "not json".to_string(),
+                        2 => json!({"event_id": "e2", "parent_event_id": "e0", "body_kind": "cli_invocation_finished"}).to_string(),
+                        3 => json!({"body_kind": "activity_progress"}).to_string(),
+                        _ if index == rows - 1 => json!({"event_id": "late", "body_kind": "late_marker"}).to_string(),
+                        _ => json!({"event_id": format!("f{index}"), "body_kind": "activity_progress"}).to_string(),
+                    };
+                    let ts = (start + chrono::Duration::seconds(index as i64)).to_rfc3339();
+                    insert
+                        .execute(rusqlite::params![
+                            workspace,
+                            format!("row-{index}"),
+                            ts,
+                            run.run_id,
+                            payload
+                        ])
+                        .unwrap();
+                }
+            }
+            tx.commit().unwrap();
+            let server = fixture.server(false);
+            let path = format!("/api/runs/{}/events", run.run_id);
+
+            // An unfiltered page is a window of four stored rows, one of them invalid.
+            let page = json_ok(server.get(&format!("{path}?limit=4")));
+            assert_eq!(
+                page,
+                json!([
+                    {"event_id": "e0", "body_kind": "step_started", "step_id": "implement"},
+                    {"event_id": "e2", "parent_event_id": "e0", "body_kind": "cli_invocation_finished"},
+                    {"body_kind": "activity_progress"},
+                ]),
+                "stored envelopes only: invalid JSON skipped, nothing added"
+            );
+            let filled = json_ok(server.get(&format!("{path}?kind=step_started&limit=1")));
+            assert_eq!(
+                filled[0]["event_id"], "e0",
+                "a page the budget fills is served"
+            );
+            let refused = server.get(&format!("{path}?kind=late_marker"));
+            assert_eq!(refused.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+            assert_eq!(
+                refused.json::<Value>().unwrap(),
+                json!({"error": "run-events audit rows exceed bounded scan budget; narrow the kind filter or reduce offset"})
             );
         },
     );
@@ -1003,6 +1080,7 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
             leaf_state.task_cancellation_policy = Some(TaskCancellationPolicy {
                 block: false,
                 note: "run cancelled by dashboard: gate exceeded: retry".into(),
+                provenance: None,
             });
             write_state(&fixture, &leaf, &leaf_state);
 
@@ -1051,6 +1129,7 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
             drain_state.task_cancellation_policy = Some(TaskCancellationPolicy {
                 block: false,
                 note: "run cancelled by not-the-drain: note reason".into(),
+                provenance: None,
             });
             write_state(&fixture, &drain_run, &drain_state);
 
@@ -1080,8 +1159,38 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
             actor_state.task_cancellation_policy = Some(TaskCancellationPolicy {
                 block: false,
                 note: "run cancelled by parent-cascade".into(),
+                provenance: None,
             });
             write_state(&fixture, &actor_only, &actor_state);
+
+            let mut typed = fixture.seed_run(
+                "jrun-20261010-0552-c12",
+                "task_auto_pipeline",
+                JobRunState::Cancelled,
+            );
+            typed.finished_at = Some(at(5, 45));
+            fixture.save_run(&typed);
+            let mut typed_state =
+                PipelineState::new(typed.run_id.clone(), typed.job_id.clone(), json!({}));
+            typed_state.task_cancellation_policy = Some(TaskCancellationPolicy {
+                block: false,
+                note: "run cancelled by wrong: wrong".into(),
+                provenance: Some(RunCancellationProvenance::new(
+                    "typed",
+                    "api",
+                    Some("typed: reason"),
+                )),
+            });
+            write_state(&fixture, &typed, &typed_state);
+
+            let mut malformed_state =
+                PipelineState::new(empty.run_id.clone(), empty.job_id.clone(), json!({}));
+            malformed_state.task_cancellation_policy = Some(TaskCancellationPolicy {
+                block: false,
+                note: "unrecognized legacy note".into(),
+                provenance: None,
+            });
+            write_state(&fixture, &empty, &malformed_state);
 
             let server = fixture.server(false);
             let detail = |id: &str| json_ok(server.get(&format!("/api/runs/{id}")));
@@ -1148,6 +1257,13 @@ fn failure_chain_names_the_deepest_descendant_and_projects_cancellation() {
                     "source": "cli",
                     "reason": "stopped after the gate hung",
                     "at": audit_at,
+                })
+            );
+
+            assert_eq!(
+                detail(&typed.run_id)["run"]["cancellation"],
+                json!({
+                    "actor": "typed", "source": Value::Null, "reason": "typed: reason", "at": typed.finished_at,
                 })
             );
 
@@ -1306,6 +1422,137 @@ fn run_detail_projects_shared_provider_processes_and_worker_identity() {
     );
 }
 
+/// The run-log API serves the shared projection's HTTP preview profile: every
+/// record field, streams cut to 120 lines and redacted even when the stored
+/// capture predates write-time redaction, with truncation flags per stream.
+#[test]
+fn run_logs_serve_the_http_preview_profile_of_each_invocation() {
+    isolated(
+        "runs::run_logs_serve_the_http_preview_profile_of_each_invocation",
+        || {
+            let fixture = Fixture::new();
+            let run = fixture.seed_run("jrun-logs", "fixture", JobRunState::Failed);
+            let workspace = fixture.runtime.workspace_id().unwrap();
+            let secret = format!("ghp_{}", "L".repeat(36));
+            // A legacy capture written before blobs were redacted on write.
+            let blob = |name: char, text: String| {
+                let blob_ref = name.to_string().repeat(64);
+                let dir = fixture
+                    .runtime
+                    .data_root()
+                    .join("state/audit/blobs")
+                    .join(&blob_ref[..2]);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(&blob_ref), text).unwrap();
+                blob_ref
+            };
+            let stdout_ref = blob(
+                'a',
+                (0..130)
+                    .map(|line| format!("line {line} {secret}\n"))
+                    .collect(),
+            );
+            let stderr_ref = blob('b', format!("warning {secret}\n"));
+            for (event_id, ts, parent, body) in [
+                (
+                    "evt-step",
+                    "2026-10-10T08:00:00Z",
+                    None,
+                    json!({"body_kind": "step_started", "step_id": "invoke"}),
+                ),
+                (
+                    "evt-finished",
+                    "2026-10-10T08:00:05Z",
+                    Some("evt-step"),
+                    json!({
+                        "body_kind": "cli_invocation_finished",
+                        "provider": "codex",
+                        "exit_code": 1,
+                        "timed_out": false,
+                        "duration_ms": 5000,
+                        "stdout_blob_ref": stdout_ref,
+                        "stderr_blob_ref": stderr_ref,
+                    }),
+                ),
+            ] {
+                let mut payload = body;
+                payload["event_id"] = json!(event_id);
+                payload["ts"] = json!(ts);
+                payload["run_id"] = json!(run.run_id);
+                payload["parent_event_id"] = json!(parent);
+                fixture
+                    .runtime
+                    .insert_v2_audit_event(&V2AuditEventInsertParams {
+                        workspace_id: workspace.clone(),
+                        event_id: event_id.into(),
+                        source: "v2_envelope".into(),
+                        schema_version: 1,
+                        event_type: "test.event".into(),
+                        ts: ts.parse::<DateTime<Utc>>().unwrap(),
+                        run_id: run.run_id.clone(),
+                        agent_identity: "codex".into(),
+                        parent_event_id: parent.map(str::to_string),
+                        workspace_path: None,
+                        payload_json: payload.to_string(),
+                    })
+                    .unwrap();
+            }
+
+            let server = fixture.server(false);
+            let logs = json_ok(server.get(&format!("/api/runs/{}/logs", run.run_id)));
+            let records = logs.as_array().expect("bare record array");
+            assert_eq!(records.len(), 1, "{logs}");
+            let record = records[0].as_object().unwrap();
+            assert_eq!(
+                record.keys().map(String::as_str).collect::<Vec<_>>(),
+                [
+                    "run_id",
+                    "event_id",
+                    "ts",
+                    "step_id",
+                    "step_index",
+                    "provider",
+                    "stdout_blob_ref",
+                    "stderr_blob_ref",
+                    "stdout_preview",
+                    "stderr_preview",
+                    "stdout_truncated",
+                    "stderr_truncated",
+                    "exit_code",
+                    "timed_out",
+                    "duration_ms",
+                ],
+                "{logs}"
+            );
+            assert_eq!(record["run_id"], "jrun-logs");
+            assert_eq!(record["event_id"], "evt-finished");
+            assert_eq!(record["ts"], "2026-10-10T08:00:05+00:00");
+            assert_eq!(record["step_id"], "invoke");
+            assert_eq!(record["step_index"], 0);
+            assert_eq!(record["stdout_blob_ref"], stdout_ref);
+            assert_eq!(
+                (
+                    &record["exit_code"],
+                    &record["timed_out"],
+                    &record["duration_ms"]
+                ),
+                (&json!(1), &json!(false), &json!(5000))
+            );
+            let stdout = record["stdout_preview"].as_str().unwrap();
+            let stderr = record["stderr_preview"].as_str().unwrap();
+            assert!(
+                !stdout.contains(&secret) && !stderr.contains(&secret),
+                "previews never expose the raw capture: {logs}"
+            );
+            assert_eq!(stdout.lines().count(), 120, "{stdout}");
+            assert!(stdout.starts_with("line 0 ") && stdout.contains("\nline 119 "));
+            assert_eq!(record["stdout_truncated"], true);
+            assert!(stderr.starts_with("warning ") && stderr.ends_with('\n'));
+            assert_eq!(record["stderr_truncated"], false);
+        },
+    );
+}
+
 /// A drain that holds requests must expose its live breaker and refused
 /// settlements over HTTP, including after the run ends. Healthy and ordinary
 /// runs retain the same response shape with no hold records.
@@ -1364,6 +1611,7 @@ fn run_detail_exposes_pull_request_holds() {
         admission.leaf_run_id = Some("jrun-refused-leaf".into());
         admission.settlement_refusal = Some(SettlementRefusal {
             reason: "owner validation commands missing".into(),
+            code: None,
             refusals: 2,
             first_refused_at: at(8, 1),
             last_refused_at: at(8, 2),
@@ -1530,6 +1778,7 @@ fn pull_budget_tracks_allocator_through_launch_review_and_settlement() {
             admission.phase = LocalPullPhase::Settling;
             admission.settlement_refusal = Some(SettlementRefusal {
                 reason: "owner evidence missing".into(),
+                code: None,
                 refusals: 1,
                 first_refused_at: at(8, 1),
                 last_refused_at: at(8, 1),

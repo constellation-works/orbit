@@ -16,7 +16,7 @@ const DEFAULT_LIMIT: usize = 50;
 #[command(
     about = "Explain why backlog tasks can or cannot start in auto-drain",
     override_usage = "orbit run readiness [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --json\n  orbit run readiness --allow-crew opus,sonnet\n\nThis is a read-only snapshot. It does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks; an eligible task is not guaranteed to start.\n\nWithout `--concurrency`, the ceiling is the live local drain's, including an\n`orbit run concurrency` adjustment, otherwise a live pull drain's, otherwise 5.\n`--json` names that choice as `capacity.limit_source` (`run_input`,\n`run_control`, `pull_run_input`, `pull_run_control`, or `default`). An explicit\n`--concurrency` is `requested` and wins over both drains. When the pull drain\nsupplies the ceiling, text adds a `Leaf ceiling:` line naming it.\n\n`--allow-crew` previews the same restriction `orbit run auto --allow-crew` would\napply: excluded tasks report `crew_not_allowed` with the crew they would run as,\nand the rest keep filling the free slots. Without it, the live drain's own\n`--allow-crew` set applies; `--json` names it in `capacity.allowed_crews`.\n\nA drain started while another runs waits for it and is listed as `Queued drain:`\nwith its completion, ceiling, crews and window, the `execution.env.pass` names\nits start did not hold (`Unset env:`), and any Claude crew in its window left\nwith no worker credential (`capacity.queued_drains` in `--json`).\n\nWhile a host shutdown or reboot is within machine.host_shutdown_hold_minutes\n(default 180), every task reports `host_shutdown_scheduled` and the output says\nadmissions are held, naming the scheduled time and mode. A schedule further\naway is named the same way and admissions continue. A pull drain held for that\nshutdown reports it as `Pull drain requests held: host_shutdown_scheduled: …`.\n\nWhile sustained host resource pressure throttles admissions\n(`[workflow.resource_throttle]`), every task reports `resource_throttled` and\nthe output names the resource, its value, threshold and since-when.\nUnknown readings never throttle; `--json` lists them in\n`capacity.resource_telemetry_unknown`. On a replica the throttle is this\nhost's own and holds its pull drain; the owner's throttle never holds a pull\nclaim. When that pull drain's last pass requested no claim for another reason,\n`Pull drain requests held:` names it (`capacity.pull_drain_refusal`), for\nexample `circuit_open` once three of its claims in a row settled as failures,\nuntil its breaker half-opens to admit one probe claim.\nWhen CPU is the only held resource,\n`no-diff-expected` auto-tasks (marked `cpu-light`) still start within the\n`cpu_light_leaves` reserved slots; once those are taken they report\n`cpu_light_budget_full`, and memory, disk or I/O pressure holds them too.\nOn Linux, sustained disk I/O stall (`io full`, from `/proc/pressure/io`) is\none of the held resources; hosts without it are not gated.\n\nA `Provider limits:` line names each provider usage window at or past its\n`workflow.provider_limit_*` threshold, its reset, and the crews admission skips\nuntil then; a task whose every crew is skipped reports `provider_limit` with\nthat detail. `--json` lists every live reading in `provider_limits` (provider,\nscope, window, used_percent, exhausted, resets_at, source, observed_at,\nthreshold, gated, until and crews).\n\nA task whose frozen delivery batch is within two hours of its deadline\nsorts ahead of same-priority backlog and names that deadline.\n\nWith more than one slot, a backlog task with no context_files and no\n`no-diff-expected` tag holds no file lock: it reports `awaiting_footprint`\nwhile a task pilot on this host would still prepare it, then\n`awaiting_exclusive_slot` until no other leaf is in flight, and runs alone."
+    after_help = "This is a read-only snapshot: it does not reserve work, reconcile stale runs,\nsubmit a run, or mutate tasks. Eligible tasks are not guaranteed to start.\nAn explicit --concurrency overrides the live drain's ceiling; --allow-crew\npreviews a crew restriction without changing the drain.\n\nExamples:\n  orbit run readiness\n  orbit run readiness TASK-123 TASK-124\n  orbit run readiness --concurrency 8 --allow-crew sol --json"
 )]
 pub struct ReadinessCommand {
     /// Optional task IDs to explain. Omit to inspect a bounded backlog snapshot.
@@ -166,6 +166,29 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         },
     ));
     lines.extend(provider_limit_lines(&payload["provider_limits"]));
+    lines.push(crew_performance_line(&payload["crew_performance"]));
+    let now = Utc::now();
+    if let Ok(providers) = serde_json::from_value::<
+        Vec<orbit_core::application::task::ProviderUsageStatus>,
+    >(payload["provider_pressures"].clone())
+    {
+        lines.extend(providers.iter().map(|provider| {
+            format!(
+                "Provider pressure: {} {}",
+                provider.label(),
+                provider.usage.describe(now)
+            )
+        }));
+    }
+    if let Ok(crews) = serde_json::from_value::<Vec<orbit_core::application::task::CrewUsagePressure>>(
+        payload["crew_pressures"].clone(),
+    ) {
+        lines.extend(
+            crews
+                .iter()
+                .map(|crew| format!("Crew pressure: {} {}", crew.crew, crew.usage.describe(now))),
+        );
+    }
     if let Some(budget) = cpu_light_budget_line(&capacity["cpu_light_budget"]) {
         lines.push(budget);
     }
@@ -198,6 +221,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
             let host = matches!(
                 reason,
                 "host_os_mismatch"
+                    | "host_labels_missing"
                     | "browser_kit_missing"
                     | "native_os_required"
                     | "unverified_review_finding"
@@ -207,14 +231,24 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                     | "awaiting_footprint"
                     | "awaiting_exclusive_slot"
             )
-            .then(|| task["detail"].as_str())
+            .then(|| {
+                if reason == "host_os_mismatch" {
+                    task["host_os_wait"]
+                        .as_str()
+                        .or_else(|| task["detail"].as_str())
+                } else {
+                    task["detail"].as_str()
+                }
+            })
             .flatten()
             .map(|detail| format!(": {detail}"))
             .unwrap_or_default();
-            // A host-OS wait also names the registered hosts of that OS and
-            // whether each is pulling, and one hidden behind an unmet
-            // dependency is named beside it.
-            let host = match (task["host_os_wait"].as_str(), task["host_fleet"].as_str()) {
+            // The primary OS wait already carries its local scope above.
+            // Keep an OS wait behind another blocker as a secondary note.
+            let secondary_os_wait = task["host_os_wait"]
+                .as_str()
+                .filter(|_| reason != "host_os_mismatch");
+            let host = match (secondary_os_wait, task["host_fleet"].as_str()) {
                 (Some(wait), Some(fleet)) => format!("{host}; then {wait}; {fleet}"),
                 (Some(wait), None) => format!("{host}; then {wait}"),
                 (None, Some(fleet)) => format!("{host}; {fleet}"),
@@ -382,6 +416,45 @@ fn provider_limit_lines(readings: &Value) -> Vec<String> {
         .filter(|reading| reading.gated)
         .map(|reading| format!("Provider limits: {}", reading.skipped_line(now)))
         .collect()
+}
+
+/// The crew-performance snapshot draws read: when it was computed, its
+/// window and type list, or the reason a draw ignores it.
+fn crew_performance_line(crew_performance: &Value) -> String {
+    let mode = crew_performance["mode"].as_str().unwrap_or("off");
+    let snapshot = &crew_performance["snapshot"];
+    if snapshot.is_null() {
+        let reason = crew_performance["unusable_reason"]
+            .as_str()
+            .unwrap_or("missing");
+        if let Some(error) = crew_performance["error"].as_str() {
+            return format!("Crew performance snapshot: {reason} (mode {mode}): {error}");
+        }
+        return format!("Crew performance snapshot: {reason} (mode {mode}).");
+    }
+    let types = snapshot["types"]
+        .as_array()
+        .map(|types| {
+            types
+                .iter()
+                .filter_map(|entry| entry["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|types| !types.is_empty())
+        .unwrap_or_else(|| "other only".to_string());
+    let detail = format!(
+        "computed {} (window {}d, types: {types}; {} cells)",
+        snapshot["computed_at"].as_str().unwrap_or("-"),
+        snapshot["window_days"],
+        snapshot["cells"],
+    );
+    match crew_performance["unusable_reason"].as_str() {
+        Some(reason) => {
+            format!("Crew performance snapshot: unusable ({reason}); {detail} (mode {mode}).")
+        }
+        None => format!("Crew performance snapshot: {detail} (mode {mode})."),
+    }
 }
 
 /// [ORB-14624] While CPU alone throttles, the reserved light slots are the

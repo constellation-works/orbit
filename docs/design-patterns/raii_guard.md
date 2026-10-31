@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "RAII Guard Pattern"
-last_validated: 2026-10-19
+last_validated: 2026-10-29
 ---
 # RAII Guard Pattern
 
@@ -87,8 +87,8 @@ impl Drop for StagedTextFile {
 
 Patterns to copy:
 
-- **`committed: bool` is the lever.** Caller explicitly opts into the success path by calling `commit()`. Drop = rollback by default.
-- **Shape for "stage → validate → commit-or-bail."** Between `new()` and `commit()`, the caller can inspect the staged content; any early-return cleans up the temp file automatically.
+- **`committed: bool` separates staged from published.** Before `commit()`, Drop removes the staged file. `commit()` renames the target and marks it committed; if the later parent-directory sync fails, the target has already been replaced and Drop does not roll it back.
+- **Shape for "stage → validate → commit-or-bail."** Between `new()` and `commit()`, the caller can inspect the staged content; any early return before commit cleans up the temp file automatically.
 
 ## Reference: `SignalHandlerGuard` — restore global state
 
@@ -146,19 +146,33 @@ From `crates/orbit-common/src/fs/file_lock/acquisition.rs`:
 ```rust
 #[must_use = "the advisory lock is released as soon as the guard is dropped"]
 pub struct FileLockGuard {
-    file: File,
+    file: Option<File>,
     clear_holder_on_drop: bool,
     shared_record: Option<PathBuf>,
     hold: Option<HoldReport>,
 }
 ```
 
+`ReportScopedFileLockGuard` wraps a direct `FileLockGuard` with a
+`LockReportScope`; its descriptor field drops before the scope. It is
+thread-affine because the report scope uses thread-local accounting.
+
 Patterns to copy:
 
-- **Hold the resource in a field.** `FileLockGuard` keeps the locked `File`
-  alive in `file`; `Drop` clears holder metadata and reports a long hold before
-  dropping the file releases the OS advisory lock. There is no separate
-  explicit release path to call or duplicate.
+- **Release before reporting.** `FileLockGuard` keeps the locked `File` alive
+  in `file`. `Drop` clears holder metadata while still locked, takes and drops
+  the file, then snapshots the long hold. Release reports defer for the
+  closure and held-path helpers `with_exclusive_file_lock`,
+  `with_exclusive_file_lock_options`,
+  `with_exclusive_file_lock_named_options`, `with_shared_file_lock`,
+  `with_shared_file_lock_options` and `hold_exclusive_file_lock_options`;
+  they enter `LockReportScope` through `claim_lock_path`. The direct
+  `acquire_exclusive_file_lock_with_report_scope` helper provides the same
+  deferral for an exact-path exclusive lock. Bare direct acquisition helpers
+  do not create a report scope. A synchronous subscriber can block on I/O, so
+  emitting a nested report while an outer lock remains held extends that
+  critical section. The snapshot preserves the actual hold duration and step
+  timings.
 
 ---
 

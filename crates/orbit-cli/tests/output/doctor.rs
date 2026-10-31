@@ -1,330 +1,377 @@
 //! Doctor behavior through the CLI, with all Orbit state confined to disposable roots.
-use std::fs;
-use std::io::{Seek, SeekFrom, Write};
-use std::process::Output;
-use std::time::{Duration, Instant};
-
+use crate::git_repo::WorkCheckout;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use orbit_config::{ConfigRoots, OperationLayerSource, ResolvedConfig};
 use orbit_core::DOCTOR_FINDINGS_MESSAGE_PREFIX;
 use rusqlite::Connection;
 use serde_json::Value;
-
-use crate::git_repo::WorkCheckout;
-
+use std::{
+    fs,
+    io::{Seek, SeekFrom, Write},
+    process::Output,
+    time::{Duration, Instant},
+};
 fn command(fixture: &WorkCheckout) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    command
-        .current_dir(&fixture.work)
-        .env("HOME", &fixture.home)
-        .env("USERPROFILE", &fixture.home)
-        .env_remove("ORBIT_FORMAT");
+    command.current_dir(&fixture.work);
+    command.env("HOME", &fixture.home);
+    command.env("USERPROFILE", &fixture.home);
+    command.env_remove("ORBIT_FORMAT");
     command
 }
-
+fn run(fixture: &WorkCheckout, args: &[&str]) -> Output {
+    command(fixture).args(args).output().expect("orbit command")
+}
+fn run_ok(fixture: &WorkCheckout, args: &[&str]) -> Output {
+    let out = run(fixture, args);
+    assert!(out.status.success(), "{out:?}");
+    out
+}
 fn doctor(fixture: &WorkCheckout, extra: &[&str]) -> Output {
-    command(fixture)
-        .args(["doctor", "--json"])
-        .args(extra)
-        .output()
-        .expect("doctor report")
+    let mut cmd = command(fixture);
+    cmd.args(["doctor", "--json"]).args(extra);
+    cmd.output().expect("doctor report")
 }
-
 fn rows(output: &Output) -> Vec<Value> {
-    serde_json::from_slice(&output.stdout)
-        .unwrap_or_else(|error| panic!("doctor JSON: {error}; {output:?}"))
+    let parsed = serde_json::from_slice(&output.stdout);
+    parsed.unwrap_or_else(|error| panic!("doctor JSON: {error}; {output:?}"))
 }
-
 fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
-    rows.iter()
-        .find(|row| row["check"] == name)
-        .expect("diagnostic row")
+    let found = rows.iter().find(|row| row["check"] == name);
+    found.expect("diagnostic row")
 }
-
-/// ORB-16351: a unit file that names this binary is not `clock-unit: ok` while
-/// the systemd timer is disabled or inactive. A substitute `systemctl` reports
-/// each state; enabled and active stays ok.
+fn in_child(name: &str) -> bool {
+    crate::isolated_test::run_in_child(name)
+}
+fn global_dir(fixture: &WorkCheckout) -> std::path::PathBuf {
+    let dir = fixture.home.join(".orbit");
+    mkdir(&dir);
+    dir
+}
+type ConfigPaths = (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf);
+fn write_configs(fixture: &WorkCheckout, global: &str, workspace: &str) -> ConfigPaths {
+    let dir = global_dir(fixture);
+    let global_path = dir.join("config.toml");
+    let workspace_path = fixture.work.join(".orbit/config.toml");
+    fs::write(&global_path, global).expect("global config");
+    fs::write(&workspace_path, workspace).expect("workspace config");
+    (dir, global_path, workspace_path)
+}
+fn fix_rows(fixture: &WorkCheckout) -> Vec<Value> {
+    rows(&doctor(fixture, &["--fix-retired-config-keys"]))
+}
+fn assert_fix_ok(rows: &[Value]) {
+    expect_status(rows, "fix-retired-config-keys", "ok");
+}
+fn config_value(fixture: &WorkCheckout, key: &str) -> Value {
+    let output = run(fixture, &["config", "get", key, "--json"]);
+    let ok = output.status.success();
+    assert!(ok, "config get {key}: {output:?}");
+    serde_json::from_slice::<Value>(&output.stdout).unwrap()["value"].clone()
+}
+fn read_toml(path: &std::path::Path) -> toml::Value {
+    toml::from_str(&fs::read_to_string(path).expect("read config")).expect("config TOML")
+}
+fn expect_mentions(rows: &[&Value], key: &str, file: &std::path::Path) {
+    let found = rows.iter().any(|r| mentions_key_and_file(r, key, file));
+    assert!(found, "missing {key} in {}: {rows:?}", file.display());
+}
+fn expect_no_mentions(rows: &[&Value], key: &str, file: &std::path::Path) {
+    let found = rows.iter().any(|r| mentions_key_and_file(r, key, file));
+    assert!(!found, "unexpected {key} in {}: {rows:?}", file.display());
+}
+fn retired_rows(rows: &[Value]) -> Vec<&Value> {
+    rows.iter()
+        .filter(|r| r["check"] == "retired-config-keys")
+        .collect()
+}
+fn assert_backup(directory: &std::path::Path, original: &str) {
+    assert_eq!(backup_names(directory), vec!["config.toml.bak".to_string()]);
+    expect_file(&directory.join("config.toml.bak"), original);
+}
+fn assert_repair_settled(
+    fixture: &WorkCheckout,
+    paths: &[&std::path::Path],
+    dirs: &[&std::path::Path],
+) -> Vec<Value> {
+    let settled: Vec<Vec<u8>> = paths.iter().map(|path| fs::read(path).unwrap()).collect();
+    let backups: Vec<Vec<String>> = dirs.iter().map(|dir| backup_names(dir)).collect();
+    let again = fix_rows(fixture);
+    assert_fix_ok(&again);
+    for (path, before) in paths.iter().zip(settled) {
+        expect_bytes(path, &before);
+    }
+    for (dir, before) in dirs.iter().zip(backups) {
+        assert_eq!(backup_names(dir), before, "{}", dir.display());
+    }
+    again
+}
+fn expect_bytes(path: &std::path::Path, expected: &[u8]) {
+    assert_eq!(fs::read(path).unwrap(), expected, "{}", path.display());
+}
+fn expect_review(fixture: &WorkCheckout, expected: &(Value, Value), ctx: &str) {
+    assert_eq!(effective_review(fixture), *expected, "{ctx}");
+}
+fn expect_status(rows: &[Value], name: &str, status: &str) {
+    let actual = &row(rows, name)["status"];
+    assert_eq!(actual, status, "{name}: {}", row(rows, name));
+}
+fn msg_has(row: &Value, needle: &str) {
+    let found = row["message"].as_str().is_some_and(|m| m.contains(needle));
+    assert!(found, "{row}: missing {needle}");
+}
+fn fix_has(row: &Value, needle: &str) {
+    let found = row["remediation"]
+        .as_str()
+        .is_some_and(|m| m.contains(needle));
+    assert!(found, "{row}: missing fix {needle}");
+}
+#[cfg(unix)]
+fn expect_mode(path: &std::path::Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let actual = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(actual, mode, "{}", path.display());
+}
+#[cfg(unix)]
+fn expect_link(link: &std::path::Path, target: &std::path::Path) {
+    assert_eq!(fs::read_link(link).unwrap(), target, "{}", link.display());
+}
+fn read_str(path: &std::path::Path) -> String {
+    fs::read_to_string(path).expect("read fixture file")
+}
+fn mkdir(path: &std::path::Path) {
+    fs::create_dir_all(path).expect("create fixture dir");
+}
+fn put(path: &std::path::Path, contents: &str) {
+    fs::write(path, contents).expect("write fixture file");
+}
+fn has(haystack: &str, needle: &str) {
+    assert!(haystack.contains(needle), "{haystack}: missing {needle}");
+}
+fn expect_file(path: &std::path::Path, contents: &str) {
+    assert_eq!(read_str(path), contents, "{}", path.display());
+}
+fn utf8(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes).expect("UTF-8 output")
+}
+#[cfg(unix)]
+fn link(target: &std::path::Path, path: &std::path::Path) {
+    std::os::unix::fs::symlink(target, path).expect("create link");
+}
+#[cfg(unix)]
+fn set_mode(path: &std::path::Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("set mode");
+}
+/// Admission receipts: expose storage and compaction without broad checks.
+#[test]
+fn doctor_admission_receipts_reports_storage_and_compacts() {
+    if in_child("doctor::doctor_admission_receipts_reports_storage_and_compacts") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "receipt-maintenance"]);
+    for extra in [vec![], vec!["--compact"]] {
+        let mut cmd = command(&f);
+        cmd.args(["doctor", "admission-receipts", "--json"])
+            .args(extra);
+        let out = cmd.output().expect("receipt diagnostic");
+        assert!(out.status.success(), "{out:?}");
+        let report: Value = serde_json::from_slice(&out.stdout).expect("receipt JSON");
+        assert_eq!(report["compacted_receipts"], 0, "{report}");
+        assert_eq!(report["storage"]["full_receipts"]["count"], 0, "{report}");
+        let v = report["storage"]["tombstones"]["logical_payload_bytes"].clone();
+        assert_eq!(v, 0, "{report}");
+        let v = report["storage"]["claim_mutation_receipts"]["count"].clone();
+        assert_eq!(v, 0, "{report}");
+    }
+}
+/// ORB-16351: `clock-unit: ok` requires an enabled, active systemd timer.
 #[cfg(target_os = "linux")]
 #[test]
 fn doctor_clock_unit_requires_an_enabled_active_systemd_timer() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_clock_unit_requires_an_enabled_active_systemd_timer",
-    ) {
+    if in_child("doctor::doctor_clock_unit_requires_an_enabled_active_systemd_timer") {
         return;
     }
     for mode in ["disabled", "inactive", "enabled"] {
-        let fixture = WorkCheckout::new();
-        install_matching_sweep_unit(&fixture.home);
-        let bin = write_substitute_systemctl(fixture.temp.path());
-        let output = command(&fixture)
-            .env("PATH", prepend_path(&bin))
+        let f = WorkCheckout::new();
+        install_matching_sweep_unit(&f.home);
+        let bin = write_substitute_systemctl(f.temp.path());
+        let path_var = {
+            let mut e = vec![bin.clone()];
+            if let Some(p) = std::env::var_os("PATH") {
+                e.extend(std::env::split_paths(&p));
+            }
+            std::env::join_paths(e).expect("join PATH")
+        };
+        let mut cmd = command(&f);
+        cmd.env("PATH", path_var)
             .env("ORBIT_TEST_CLOCK_MANAGER", mode)
-            .args(["doctor", "--json"])
-            .output()
-            .expect("doctor report");
-        let parsed = rows(&output);
+            .args(["doctor", "--json"]);
+        let out = cmd.output().expect("doctor");
+        let parsed = rows(&out);
         let clock = row(&parsed, "clock-unit");
-        let rendered = format!("{clock}");
         if mode == "enabled" {
-            assert_eq!(clock["status"], "ok", "{mode}: {rendered}");
+            assert_eq!(clock["status"], "ok", "{mode}: {clock}");
         } else {
-            assert_ne!(clock["status"], "ok", "{mode}: {rendered}");
-            assert!(
-                rendered.contains("orbit clock enable"),
-                "{mode}: {rendered}"
-            );
+            assert_ne!(clock["status"], "ok", "{mode}: {clock}");
+            msg_has(clock, "orbit clock enable");
         }
     }
 }
-
 #[cfg(target_os = "linux")]
 fn install_matching_sweep_unit(home: &std::path::Path) {
     let unit_dir = home.join(".config/systemd/user");
-    fs::create_dir_all(&unit_dir).expect("systemd user unit dir");
+    mkdir(&unit_dir);
     let program = env!("CARGO_BIN_EXE_orbit")
         .replace('\\', "\\\\")
         .replace('"', "\\\"");
-    fs::write(
-        unit_dir.join("orbit-sweep.service"),
-        format!(
-            "[Service]\nType=oneshot\nTimeoutStartSec=10min\nKillMode=mixed\nExecStart=\"{program}\" clock tick\n"
-        ),
-    )
-    .expect("sweep unit");
+    let unit = format!(
+        "[Service]\nType=oneshot\nTimeoutStartSec=10min\nKillMode=mixed\nExecStart=\"{program}\" clock tick\n"
+    );
+    put(&unit_dir.join("orbit-sweep.service"), &unit);
 }
-
 #[cfg(target_os = "linux")]
 fn write_substitute_systemctl(root: &std::path::Path) -> std::path::PathBuf {
     let bin = root.join("bin");
-    fs::create_dir_all(&bin).expect("substitute bin");
+    mkdir(&bin);
     let path = bin.join("systemctl");
-    fs::write(
-        &path,
-        r#"#!/bin/sh
-mode=${ORBIT_TEST_CLOCK_MANAGER:-enabled}
-case " $* " in
-  *" is-enabled "*)
-    if [ "$mode" = "disabled" ]; then
-      echo disabled
-      exit 1
-    fi
-    echo enabled
-    exit 0
-    ;;
-esac
-for arg in "$@"; do
-  case "$arg" in
-    orbit-sweep.timer)
-      if [ "$mode" = "disabled" ] || [ "$mode" = "inactive" ]; then
-        printf '%s\n' LoadState=loaded ActiveState=inactive
-      else
-        printf '%s\n' LoadState=loaded ActiveState=active \
-          'NextElapseUSecRealtime=Mon 2026-10-19 12:00:00 UTC' \
-          NextElapseUSecMonotonic=1000000
-      fi
-      exit 0
-      ;;
-    orbit-sweep.service)
-      printf '%s\n' ActiveState=inactive Result=success TimeoutStartUSec=10min KillMode=mixed
-      exit 0
-      ;;
-  esac
-done
-exit 0
-"#,
-    )
-    .expect("substitute systemctl");
-    use std::os::unix::fs::PermissionsExt;
-    let mut permissions = fs::metadata(&path)
-        .expect("systemctl metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&path, permissions).expect("systemctl mode");
+    let script = "#!/bin/sh\nmode=${ORBIT_TEST_CLOCK_MANAGER:-enabled}\ncase \" $* \" in *\" is-enabled \"*) if [ \"$mode\" = \"disabled\" ]; then echo disabled; exit 1; fi; echo enabled; exit 0;; esac\nfor arg in \"$@\"; do case \"$arg\" in orbit-sweep.timer) if [ \"$mode\" = \"disabled\" ] || [ \"$mode\" = \"inactive\" ]; then printf '%s\\n' LoadState=loaded ActiveState=inactive; else printf '%s\\n' LoadState=loaded ActiveState=active 'NextElapseUSecRealtime=Mon 2026-10-19 12:00:00 UTC' NextElapseUSecMonotonic=1000000; fi; exit 0;; orbit-sweep.service) printf '%s\\n' ActiveState=inactive Result=success TimeoutStartUSec=10min KillMode=mixed; exit 0;; esac; done\nexit 0\n";
+    put(&path, script);
+    set_mode(&path, 0o755);
     bin
 }
-
-#[cfg(target_os = "linux")]
-fn prepend_path(dir: &std::path::Path) -> std::ffi::OsString {
-    let mut entries = vec![dir.to_path_buf()];
-    if let Some(path) = std::env::var_os("PATH") {
-        entries.extend(std::env::split_paths(&path));
-    }
-    std::env::join_paths(entries).expect("join PATH")
-}
-
 #[cfg(unix)]
 #[test]
 fn doctor_warns_about_selected_root_skill_links_without_changing_discovery_entries() {
-    use std::os::unix::fs::symlink;
     use std::path::PathBuf;
-
-    let fixture = WorkCheckout::new();
-    let base = fixture.temp.path().join("selected");
+    let f = WorkCheckout::new();
+    let base = f.temp.path().join("selected");
     let global = base.join(".orbit");
-    let live_target = base.join("live-skill");
-    fs::create_dir_all(&live_target).expect("live skill target");
-    fs::write(live_target.join("SKILL.md"), "live skill bytes").expect("live content");
+    let live = base.join("live-skill");
+    mkdir(&live);
+    put(&live.join("SKILL.md"), "live skill bytes");
     let roots = [base.join(".agents/skills"), base.join(".claude/skills")];
     for root in &roots {
-        fs::create_dir_all(root.join("regular-skill")).expect("discovery directory");
-        fs::write(root.join("regular-skill/notes.txt"), "operator bytes")
-            .expect("operator content");
-        symlink(&live_target, root.join("live-skill")).expect("live skill link");
+        mkdir(&root.join("regular-skill"));
+        put(&root.join("regular-skill/notes.txt"), "operator bytes");
+        link(&live, &root.join("live-skill"));
         // Only immediate discovery links are in scope; nested content is operator-owned.
-        symlink(
-            base.join("missing-nested"),
-            root.join("regular-skill/nested"),
-        )
-        .expect("nested dangling link");
+        link(
+            &base.join("missing-nested"),
+            &root.join("regular-skill/nested"),
+        );
     }
-    let home_discovery = fixture.home.join(".claude/skills");
-    fs::create_dir_all(&home_discovery).expect("other discovery root");
-    let home_link = home_discovery.join("unselected-skill");
-    let home_target = fixture.home.join("missing-skill");
-    symlink(&home_target, &home_link).expect("unselected dangling link");
-
+    let home_link = f.home.join(".claude/skills/unselected-skill");
+    mkdir(home_link.parent().unwrap());
+    let home_target = f.home.join("missing-skill");
+    link(&home_target, &home_link);
     let invoke = |args: &[&str]| {
-        command(&fixture)
+        command(&f)
             .arg("--root")
             .arg(&global)
             .args(args)
             .output()
-            .expect("selected-root doctor")
+            .expect("doctor")
     };
-    command(&fixture)
-        .arg("--root")
+    let mut init = command(&f);
+    init.arg("--root")
         .arg(&global)
-        .args([
-            "init",
-            "--non-interactive",
-            "--machine-name",
-            "doctor-fixture",
-            "--task-prefix",
-            "DF",
-        ])
+        .args(
+            "init --non-interactive --machine-name doctor-fixture --task-prefix DF"
+                .split_whitespace(),
+        )
         .assert()
         .success();
     let initial = rows(&invoke(&["doctor", "--json"]));
-    assert_eq!(row(&initial, "artifacts-skills")["status"], "ok");
-
+    expect_status(&initial, "artifacts-skills", "ok");
     let links = [roots[0].join("leaked-skill"), roots[1].join("leaked-skill")];
     let targets = [
         base.join("missing-skill"),
         PathBuf::from("../../missing-skill"),
     ];
-    for (link, target) in links.iter().zip(&targets) {
-        symlink(target, link).expect("dangling discovery link");
+    for (l, t) in links.iter().zip(&targets) {
+        link(t, l);
     }
     let plain = invoke(&["doctor", "--format", "plain"]);
-    let stdout = String::from_utf8(plain.stdout).expect("plain UTF-8");
-    let skills_line = stdout
+    let stdout = utf8(plain.stdout);
+    let line = stdout
         .lines()
-        .find(|line| line.starts_with("artifacts-skills\t"))
-        .expect("plain skills row");
-    assert_eq!(skills_line.split('\t').nth(1), Some("warning"));
-    for (link, target) in links.iter().zip(&targets) {
-        assert!(
-            skills_line.contains(&link.display().to_string()),
-            "{skills_line}"
-        );
-        assert!(
-            fs::symlink_metadata(link)
-                .expect("plain doctor retains link")
-                .file_type()
-                .is_symlink(),
-            "plain diagnosis must preserve dangling discovery symlinks",
-        );
-        assert_eq!(fs::read_link(link).unwrap(), *target);
+        .find(|l| l.starts_with("artifacts-skills\t"))
+        .expect("skills row");
+    assert_eq!(line.split('\t').nth(1), Some("warning"), "{line}");
+    for (l, t) in links.iter().zip(&targets) {
+        has(line, &l.display().to_string());
+        let is_link = fs::symlink_metadata(l).unwrap().file_type().is_symlink();
+        assert!(is_link, "preserve links: {l:?}");
+        expect_link(l, t);
     }
-
     let diagnostics = rows(&invoke(&["doctor", "--json"]));
+    expect_status(&diagnostics, "artifacts-skills", "warning");
     let warning = row(&diagnostics, "artifacts-skills");
-    assert_eq!(warning["status"], "warning");
     let message = warning["message"].as_str().expect("skills warning message");
-    let remediation = warning["remediation"].as_str().expect("manual fix-it");
-    assert!(!remediation.is_empty());
-    assert_eq!(remediation.lines().count(), 1);
-    assert!(
-        skills_line.contains(message),
-        "plain and JSON carry the same warning"
-    );
-    assert!(
-        skills_line.contains(remediation),
-        "plain and JSON carry the same fix-it"
-    );
-    for link in &links {
-        assert!(message.contains(&link.display().to_string()), "{message}");
-        assert!(
-            remediation.contains(&link.display().to_string()),
-            "{remediation}"
-        );
+    let fix = warning["remediation"].as_str().expect("manual fix-it");
+    assert!(!fix.is_empty() && fix.lines().count() == 1, "{fix}");
+    has(line, message);
+    has(line, fix);
+    for l in &links {
+        has(message, &l.display().to_string());
+        has(fix, &l.display().to_string());
     }
-    let skill_diagnostics = rows(&invoke(&["skill", "doctor", "--json"]));
-    for (link, target) in links.iter().zip(&targets) {
-        let finding = skill_diagnostics
-            .iter()
-            .find(|row| {
-                row["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains(&link.display().to_string())
-            })
-            .expect("skill doctor link diagnostic");
-        assert_eq!(finding["status"], "warning");
-        assert_eq!(fs::read_link(link).unwrap(), *target);
+    let skill_rows = rows(&invoke(&["skill", "doctor", "--json"]));
+    for (l, t) in links.iter().zip(&targets) {
+        let found = skill_rows.iter().find(|r| {
+            r["message"]
+                .as_str()
+                .unwrap()
+                .contains(&l.display().to_string())
+        });
+        let found = found.expect("skill doctor link diagnostic");
+        assert_eq!(found["status"], "warning", "{found}");
+        expect_link(l, t);
     }
     for root in &roots {
-        assert_eq!(fs::read_link(root.join("live-skill")).unwrap(), live_target);
+        expect_link(&root.join("live-skill"), &live);
         assert!(root.join("regular-skill").is_dir());
-        assert_eq!(
-            fs::read_to_string(root.join("regular-skill/notes.txt")).unwrap(),
-            "operator bytes"
-        );
-        assert_eq!(
-            fs::read_link(root.join("regular-skill/nested")).unwrap(),
-            base.join("missing-nested")
+        expect_file(&root.join("regular-skill/notes.txt"), "operator bytes");
+        expect_link(
+            &root.join("regular-skill/nested"),
+            &base.join("missing-nested"),
         );
     }
-    assert_eq!(
-        fs::read_to_string(live_target.join("SKILL.md")).unwrap(),
-        "live skill bytes"
-    );
-    assert_eq!(fs::read_link(home_link).unwrap(), home_target);
-
-    for link in &links {
-        fs::remove_file(link).expect("operator removes fixture's dangling link");
+    expect_file(&live.join("SKILL.md"), "live skill bytes");
+    expect_link(&home_link, &home_target);
+    for l in &links {
+        fs::remove_file(l).expect("remove dangling link");
     }
     let healthy = rows(&invoke(&["doctor", "--json"]));
-    assert_eq!(row(&healthy, "artifacts-skills")["status"], "ok");
+    expect_status(&healthy, "artifacts-skills", "ok");
     let healthy_plain = invoke(&["doctor", "--format", "plain"]);
-    assert!(
-        String::from_utf8(healthy_plain.stdout)
-            .unwrap()
-            .lines()
-            .any(|line| line.starts_with("artifacts-skills\tok\t"))
-    );
+    let text = utf8(healthy_plain.stdout);
+    let healthy_line = text
+        .lines()
+        .any(|l| l.starts_with("artifacts-skills\tok\t"));
+    assert!(healthy_line, "{text}");
 }
-
 /// Corrupt an unrelated B-tree page, leaving the header/schema ledger readable.
 fn corrupt_unrelated_data_page(fixture: &WorkCheckout) {
     let database = fixture.home.join(".orbit/orbit.db");
     let offset = {
         let db = Connection::open(&database).expect("fixture DB");
-        db.execute_batch("CREATE TABLE doctor_probe(value TEXT); INSERT INTO doctor_probe VALUES('data'); PRAGMA wal_checkpoint(TRUNCATE);")
-            .expect("fixture data page");
+        db.execute_batch("CREATE TABLE doctor_probe(value TEXT); INSERT INTO doctor_probe VALUES('data'); PRAGMA wal_checkpoint(TRUNCATE);").expect("fixture data page");
         let page: u64 = db
             .query_row(
                 "SELECT rootpage FROM sqlite_master WHERE name = 'doctor_probe'",
                 [],
-                |row| row.get(0),
+                |r| r.get(0),
             )
             .expect("table root page");
         let page_size: u64 = db
-            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .query_row("PRAGMA page_size", [], |r| r.get(0))
             .expect("page size");
         (page - 1) * page_size
     };
@@ -335,121 +382,80 @@ fn corrupt_unrelated_data_page(fixture: &WorkCheckout) {
     file.seek(SeekFrom::Start(offset))
         .expect("data page offset");
     file.write_all(&[0]).expect("invalid B-tree page type");
-    drop(file);
 }
-
 #[test]
 fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
-    if crate::isolated_test::run_in_child(
-        "doctor::default_doctor_checks_schema_and_deep_detects_corrupt_data",
-    ) {
+    if in_child("doctor::default_doctor_checks_schema_and_deep_detects_corrupt_data") {
         return;
     }
-    let fixture = WorkCheckout::new();
-    let initial = rows(&doctor(&fixture, &[]));
-    assert_eq!(row(&initial, "database")["status"], "ok");
-    corrupt_unrelated_data_page(&fixture);
-    let cheap = rows(&doctor(&fixture, &[]));
-    assert_eq!(
-        row(&cheap, "database")["status"],
-        "ok",
-        "default checks must not scan unrelated data pages"
-    );
-    let deep = doctor(&fixture, &["--deep"]);
-    assert_eq!(
-        deep.status.code(),
-        Some(1),
-        "deep integrity failure must set the exit status"
-    );
+    let f = WorkCheckout::new();
+    let initial = rows(&doctor(&f, &[]));
+    expect_status(&initial, "database", "ok");
+    corrupt_unrelated_data_page(&f);
+    let cheap = rows(&doctor(&f, &[]));
+    expect_status(&cheap, "database", "ok");
+    let deep = doctor(&f, &["--deep"]);
+    let code = deep.status.code();
+    assert_eq!(code, Some(1), "deep failure exit: {deep:?}");
     let deep_rows = rows(&deep);
-    assert_eq!(
-        row(&deep_rows, "database")["status"],
-        "error",
-        "deep must detect the corrupt data page"
-    );
+    expect_status(&deep_rows, "database", "error");
     for diagnostics in [&cheap, &deep_rows] {
         assert!(!diagnostics.is_empty());
-        for diagnostic in diagnostics {
-            assert!(
-                diagnostic["duration_ms"].as_u64().is_some(),
-                "every diagnostic, including error and skipped rows, must carry elapsed milliseconds: {diagnostic}"
-            );
+        for d in diagnostics {
+            let has_duration = d["duration_ms"].as_u64().is_some();
+            assert!(has_duration, "duration_ms missing: {d}");
         }
     }
-
-    let listed = command(&fixture)
-        .args(["audit", "list", "--limit", "50", "--json"])
-        .output()
-        .expect("audit list");
+    let listed = run(&f, &["audit", "list", "--limit", "50", "--json"]);
     let events: Vec<Value> = serde_json::from_slice(&listed.stdout)
-        .unwrap_or_else(|error| panic!("audit JSON: {error}; {listed:?}"));
+        .unwrap_or_else(|e| panic!("audit JSON: {e}; {listed:?}"));
     let failed = events
         .iter()
-        .find(|event| event["command"] == "doctor" && event["exit_code"] == 1)
-        .unwrap_or_else(|| panic!("failed doctor audit row missing: {events:?}"));
+        .find(|e| e["command"] == "doctor" && e["exit_code"] == 1);
+    let failed = failed.unwrap_or_else(|| panic!("failed doctor audit row missing: {events:?}"));
     let message = failed["error_message"].as_str().unwrap_or_default();
-    // Provider checks also fail on hosts without the crews' CLIs (CI
-    // runners), so assert that `database` is among the named failures rather
-    // than that it is the only one.
-    let named_failures = message
+    // Provider checks also fail without crews' CLIs, so name `database` among failures.
+    let names = message
         .strip_prefix(DOCTOR_FINDINGS_MESSAGE_PREFIX)
-        .and_then(|findings| findings.split_once('('))
-        .and_then(|(_, rest)| rest.split_once(')'))
-        .map(|(names, _)| names)
+        .and_then(|x| x.split_once('('))
+        .and_then(|(_, r)| r.split_once(')'))
+        .map(|(n, _)| n)
         .unwrap_or_default();
-    assert!(
-        named_failures.split(", ").any(|name| name == "database"),
-        "the audit row must name the failing check: {failed}"
-    );
-
-    let table = command(&fixture)
-        .args(["doctor", "--deep", "--format", "table"])
-        .output()
-        .expect("table");
+    let named = names.split(", ").any(|n| n == "database");
+    assert!(named, "audit must name database: {failed}");
+    let table = run(&f, &["doctor", "--deep", "--format", "table"]);
     assert_eq!(table.status.code(), Some(1));
-    let stdout = String::from_utf8(table.stdout).expect("table UTF-8");
+    let stdout = utf8(table.stdout);
     let (_, findings) = stdout.split_once("Findings:").expect("CLI findings");
     // An `info` row is a fact about the setup, not a finding.
-    for diagnostic in deep_rows
+    for d in deep_rows
         .iter()
-        .filter(|diagnostic| diagnostic["status"] != "ok" && diagnostic["status"] != "info")
+        .filter(|d| d["status"] != "ok" && d["status"] != "info")
     {
-        assert!(
-            findings.contains(diagnostic["check"].as_str().unwrap()),
-            "{findings}"
-        );
-        if let Some(fix) = diagnostic["remediation"].as_str() {
-            assert!(findings.contains(&format!("Fix: {fix}")), "{findings}");
+        has(findings, d["check"].as_str().unwrap());
+        if let Some(fix) = d["remediation"].as_str() {
+            has(findings, &format!("Fix: {fix}"));
         }
     }
-    let piped = command(&fixture)
-        .args(["doctor", "--deep"])
-        .output()
-        .expect("plain");
-    let explicit = command(&fixture)
-        .args(["doctor", "--deep", "--format", "plain"])
-        .output()
-        .expect("explicit plain");
-    let database_line = |output: Output| {
-        String::from_utf8(output.stdout)
-            .unwrap()
+    let db_line = |out: Output| {
+        utf8(out.stdout)
             .lines()
-            .find(|line| line.starts_with("database\t"))
+            .find(|l| l.starts_with("database\t"))
             .unwrap()
             .to_string()
     };
-    assert_eq!(database_line(piped), database_line(explicit));
+    let piped = run(&f, &["doctor", "--deep"]);
+    let explicit = run(&f, &["doctor", "--deep", "--format", "plain"]);
+    assert_eq!(db_line(piped), db_line(explicit));
 }
-
 #[cfg(unix)]
 #[test]
 fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
-
-    let fixture = WorkCheckout::new();
-    doctor(&fixture, &[]);
-    let global = fixture.home.join(".orbit");
-    let workspace = fixture.work.join(".orbit");
+    use std::os::unix::fs::symlink;
+    let f = WorkCheckout::new();
+    doctor(&f, &[]);
+    let global = f.home.join(".orbit");
+    let workspace = f.work.join(".orbit");
     let legacy = [
         global.clone(),
         global.join("tasks"),
@@ -462,8 +468,8 @@ fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
         workspace.join("frictions/legacy"),
     ];
     for path in &legacy {
-        fs::create_dir_all(path).expect("legacy state");
-        fs::set_permissions(path, fs::Permissions::from_mode(0o775)).expect("shared legacy mode");
+        mkdir(path);
+        set_mode(path, 0o775);
     }
     let excluded = [
         global.join("state/worktrees"),
@@ -474,124 +480,78 @@ fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
         workspace.join("state/worktrees/run/nested"),
         workspace.join("state/legacy/target"),
         workspace.join("state/legacy/target/nested"),
-        fixture.temp.path().join("outside"),
+        f.temp.path().join("outside"),
     ];
     for path in &excluded {
-        fs::create_dir_all(path).expect("excluded tree");
-        fs::set_permissions(path, fs::Permissions::from_mode(0o777)).expect("excluded mode");
+        mkdir(path);
+        set_mode(path, 0o777);
     }
     let cache = global.join("cache");
     if cache.exists() {
-        fs::rename(&cache, fixture.temp.path().join("retained-cache"))
-            .expect("retain existing fixture cache");
+        fs::rename(&cache, f.temp.path().join("retained-cache")).expect("retain cache");
     }
     symlink(excluded.last().unwrap(), &cache).expect("linked scan subtree root");
-    symlink(excluded.last().unwrap(), global.join("state/linked"))
-        .expect("external directory link");
+    symlink(excluded.last().unwrap(), global.join("state/linked")).expect("external link");
     let file = global.join("state/legacy-file");
-    fs::write(&file, "retained").expect("legacy file");
-    fs::set_permissions(&file, fs::Permissions::from_mode(0o666)).expect("legacy file mode");
-    let before = rows(&doctor(&fixture, &[]));
+    put(&file, "retained");
+    set_mode(&file, 0o666);
+    let before = rows(&doctor(&f, &[]));
+    expect_status(&before, "state-directory-permissions", "warning");
     let warning = row(&before, "state-directory-permissions");
-    assert_eq!(warning["status"], "warning");
     let remediation = warning["remediation"]
         .as_str()
         .expect("runnable remediation");
     let runnable = remediation.split('`').nth(1).expect("repair command");
-    let args = runnable
+    let args: Vec<&str> = runnable
         .strip_prefix("orbit ")
         .expect("Orbit repair")
         .split_whitespace()
-        .collect::<Vec<_>>();
-    let repaired = command(&fixture)
-        .args(args)
-        .arg("--json")
-        .output()
-        .expect("run remediation as written");
+        .collect();
+    let mut repair_args = args.clone();
+    repair_args.push("--json");
+    let repaired = run(&f, &repair_args);
     let after = rows(&repaired);
-    assert_eq!(
-        row(&after, "fix-state-directory-permissions")["status"],
-        "ok"
-    );
-    assert_eq!(row(&after, "state-directory-permissions")["status"], "ok");
+    expect_status(&after, "fix-state-directory-permissions", "ok");
+    expect_status(&after, "state-directory-permissions", "ok");
     for path in &legacy {
-        assert_eq!(
-            fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o700,
-            "{}",
-            path.display()
-        );
+        expect_mode(path, 0o700);
     }
     for path in &excluded {
-        assert_eq!(
-            fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o777,
-            "repair must leave worktrees, targets and symlink targets untouched: {}",
-            path.display()
-        );
+        expect_mode(path, 0o777);
     }
-    assert_eq!(
-        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
-        0o666
-    );
-    assert_eq!(fs::read_to_string(file).unwrap(), "retained");
-    let repeated = rows(&doctor(&fixture, &["--fix-state-directory-permissions"]));
-    assert_eq!(
-        row(&repeated, "state-directory-permissions")["status"],
-        "ok"
-    );
-    assert_eq!(
-        row(&repeated, "fix-state-directory-permissions")["status"],
-        "ok"
-    );
+    expect_mode(&file, 0o666);
+    expect_file(&file, "retained");
+    let repeated = rows(&doctor(&f, &["--fix-state-directory-permissions"]));
+    expect_status(&repeated, "state-directory-permissions", "ok");
+    expect_status(&repeated, "fix-state-directory-permissions", "ok");
     for path in &excluded {
-        assert_eq!(
-            fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o777,
-            "excluded directories must also survive repeated repair: {}",
-            path.display()
-        );
+        expect_mode(path, 0o777);
     }
 }
-
-/// Manual performance fixture; setup writes a real 1 GiB SQLite table and 50k directories.
-/// Keep its disk and setup cost out of routine CI; run and record it before handoff.
+/// Manual performance fixture: 1 GiB SQLite table and 50k directories; keep out of routine CI.
 #[test]
 #[ignore = "large doctor performance fixture; run with --ignored --nocapture"]
 fn default_doctor_large_store_and_worktrees_under_five_seconds() {
-    if crate::isolated_test::run_in_child(
-        "doctor::default_doctor_large_store_and_worktrees_under_five_seconds",
-    ) {
+    if in_child("doctor::default_doctor_large_store_and_worktrees_under_five_seconds") {
         return;
     }
-    let fixture = WorkCheckout::new();
-    assert_eq!(
-        row(&rows(&doctor(&fixture, &[])), "database")["status"],
-        "ok"
-    );
-    let database = fixture.home.join(".orbit/orbit.db");
+    let f = WorkCheckout::new();
+    let initial = rows(&doctor(&f, &[]));
+    expect_status(&initial, "database", "ok");
+    let database = f.home.join(".orbit/orbit.db");
     {
         let db = Connection::open(&database).expect("fixture DB");
-        db.execute_batch(
-            "PRAGMA synchronous=OFF; PRAGMA wal_autocheckpoint=0;
-            CREATE TABLE doctor_large(value BLOB); BEGIN;
-            INSERT INTO doctor_large VALUES(zeroblob(268435456));
-            INSERT INTO doctor_large VALUES(zeroblob(268435456));
-            INSERT INTO doctor_large VALUES(zeroblob(268435456));
-            INSERT INTO doctor_large VALUES(zeroblob(268435456)); COMMIT; PRAGMA wal_checkpoint(TRUNCATE);",
-        )
-        .expect("real 1 GiB database pages");
+        let inserts = "INSERT INTO doctor_large VALUES(zeroblob(268435456)); ".repeat(4);
+        db.execute_batch(&format!("PRAGMA synchronous=OFF; PRAGMA wal_autocheckpoint=0; CREATE TABLE doctor_large(value BLOB); BEGIN; {inserts} COMMIT; PRAGMA wal_checkpoint(TRUNCATE);")).expect("real 1 GiB database pages");
     }
-    let database_bytes = fs::metadata(&database).expect("database size").len();
-    assert!(database_bytes >= 1 << 30);
-    // Restrict only the small Orbit-owned fixture tree before adding writable,
-    // excluded checkout contents. The host's umask may otherwise create
-    // legitimate writable container directories unrelated to this regression.
+    let bytes = fs::metadata(&database).expect("database size").len();
+    assert!(bytes >= 1 << 30, "{bytes}");
+    // Restrict only the small Orbit-owned fixture tree before adding writable excluded contents.
     #[cfg(unix)]
-    for root in [fixture.home.join(".orbit"), fixture.work.join(".orbit")] {
+    for root in [f.home.join(".orbit"), f.work.join(".orbit")] {
         restrict_fixture_directories(&root);
     }
-    let worktrees = fixture.work.join(".orbit/state/worktrees");
+    let worktrees = f.work.join(".orbit/state/worktrees");
     let target = worktrees.join("run/target");
     for index in 0..50_000 {
         let path = if index < 10_000 {
@@ -599,74 +559,45 @@ fn default_doctor_large_store_and_worktrees_under_five_seconds() {
         } else {
             worktrees.join(format!("checkout-{index}"))
         };
-        fs::create_dir_all(&path).expect("worktree fixture directory");
+        mkdir(&path);
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o777))
-                .expect("writable excluded directory");
-        }
+        set_mode(&path, 0o777);
     }
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for container in [
-            &fixture.work.join(".orbit/state"),
-            &worktrees,
-            &worktrees.join("run"),
-        ] {
-            fs::set_permissions(container, fs::Permissions::from_mode(0o700))
-                .expect("private Orbit-owned container");
-        }
+    for container in [
+        &f.work.join(".orbit/state"),
+        &worktrees,
+        &worktrees.join("run"),
+    ] {
+        set_mode(container, 0o700);
     }
-    // A freshly linked debug binary can exceed 250 MB. Initialize the settled
-    // generation through an ordinary fixture writer so timing measures doctor
-    // rather than rehashing an uncached debug image on a read-only invocation.
-    // This uses normal admission and does not change the database/page or walk probes.
-    let initialized = command(&fixture)
-        .args(["config", "set", "review.timing", "off"])
-        .output()
-        .expect("initialize fixture generation digest");
-    assert!(
-        initialized.status.success(),
-        "fixture config writer failed: {initialized:?}"
-    );
+    // Initialize the settled generation so timing measures doctor, not rehashing a debug image.
+    let init = run(&f, &["config", "set", "review.timing", "off"]);
+    let init_ok = init.status.success();
+    assert!(init_ok, "fixture config writer failed: {init:?}");
     let start = Instant::now();
-    let output = doctor(&fixture, &[]);
+    let output = doctor(&f, &[]);
     let elapsed = start.elapsed();
     let diagnostics = rows(&output);
-    assert_eq!(row(&diagnostics, "database")["status"], "ok");
-    assert_eq!(
-        row(&diagnostics, "state-directory-permissions")["status"],
-        "ok",
-        "excluded writable worktrees must not warn: {}",
-        row(&diagnostics, "state-directory-permissions")
-    );
+    expect_status(&diagnostics, "database", "ok");
+    expect_status(&diagnostics, "state-directory-permissions", "ok");
     if let Some(scratch) = std::env::var_os("ORBIT_SCRATCH_DIR") {
-        let report = serde_json::json!({
-            "database_bytes": database_bytes,
-            "worktree_directories": 50_000,
-            "target_directories": 10_000,
-            "elapsed_ms": elapsed.as_millis(),
-            "checks": diagnostics,
-        });
+        let report = serde_json::json!({"database_bytes": bytes, "worktree_directories": 50000, "target_directories": 10000, "elapsed_ms": elapsed.as_millis(), "checks": diagnostics});
         fs::write(
             std::path::PathBuf::from(scratch).join("doctor-performance.json"),
             serde_json::to_vec_pretty(&report).expect("benchmark JSON"),
         )
-        .expect("record benchmark evidence under Orbit scratch");
+        .expect("record benchmark");
     }
+    let fast = elapsed < Duration::from_secs(5);
     assert!(
-        elapsed < Duration::from_secs(5),
-        "default doctor took {elapsed:?} with a 1 GiB DB and 50k worktree directories"
+        fast,
+        "default doctor took {elapsed:?} with 1 GiB DB and 50k dirs"
     );
 }
-
 #[cfg(unix)]
 fn restrict_fixture_directories(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .expect("private fixture directory");
+    set_mode(path, 0o700);
     for entry in fs::read_dir(path).expect("fixture children") {
         let entry = entry.expect("fixture entry");
         if entry.file_type().expect("fixture entry type").is_dir() {
@@ -674,12 +605,10 @@ fn restrict_fixture_directories(path: &std::path::Path) {
         }
     }
 }
-
 const WARNING_MESSAGE: &str =
     "The index is outdated and must be refreshed before querying the latest workspace records.";
 const ERROR_MESSAGE: &str = "The after-landing review consumer is stuck in definition_changed and cannot accept new delivery candidates.";
 const FIX: &str = "orbit auto-task recover delivery-code-review";
-
 pub(super) fn render_fixture(case: &str) -> String {
     let logs = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("child logs");
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
@@ -694,17 +623,11 @@ pub(super) fn render_fixture(case: &str) -> String {
         &output.stdout,
         &output.stderr,
     );
-    let stdout = String::from_utf8(output.stdout).expect("UTF-8 output");
-    stdout
-        .split_once("BEGIN_DOCTOR\n")
-        .expect("start marker")
-        .1
-        .split_once("END_DOCTOR")
-        .expect("end marker")
-        .0
-        .to_string()
+    let stdout = utf8(output.stdout);
+    let after = stdout.split_once("BEGIN_DOCTOR\n").expect("start marker").1;
+    let (body, _) = after.split_once("END_DOCTOR").expect("end marker");
+    body.to_string()
 }
-
 #[test]
 fn render_fixture_child() {
     use crate::output::{
@@ -716,33 +639,28 @@ fn render_fixture_child() {
     let Ok(case) = std::env::var("ORBIT_DOCTOR_RENDER_CASE") else {
         return;
     };
+    let make =
+        |check: &str, status: Status, message: &str, fix: Option<&str>| WorkspaceDoctorResult {
+            check_name: check.into(),
+            status,
+            message: message.into(),
+            remediation: fix.map(Into::into),
+            duration_ms: 0,
+        };
     let mut rows = vec![
-        WorkspaceDoctorResult {
-            check_name: "index".into(),
-            status: Status::Warning,
-            message: WARNING_MESSAGE.into(),
-            remediation: Some("orbit index refresh".into()),
-            duration_ms: 0,
-        },
-        WorkspaceDoctorResult {
-            check_name: "database".into(),
-            status: Status::Ok,
-            message: "Database is healthy".into(),
-            remediation: None,
-            duration_ms: 0,
-        },
-        WorkspaceDoctorResult {
-            check_name: "review".into(),
-            status: Status::Error,
-            message: ERROR_MESSAGE.into(),
-            remediation: Some(FIX.into()),
-            duration_ms: 0,
-        },
+        make(
+            "index",
+            Status::Warning,
+            WARNING_MESSAGE,
+            Some("orbit index refresh"),
+        ),
+        make("database", Status::Ok, "Database is healthy", None),
+        make("review", Status::Error, ERROR_MESSAGE, Some(FIX)),
     ];
     if case == "ok" {
-        for row in &mut rows {
-            row.status = Status::Ok;
-            row.remediation = None;
+        for r in &mut rows {
+            r.status = Status::Ok;
+            r.remediation = None;
         }
     }
     let mut table = Table::new(vec![
@@ -750,20 +668,20 @@ fn render_fixture_child() {
         Column::new("STATUS").fixed(),
         Column::new("DETAILS"),
     ]);
-    for row in &rows {
-        let status = match row.status {
+    for r in &rows {
+        let status = match r.status {
             Status::Ok => "OK",
             Status::Warning => "WARN",
             Status::Error => "ERROR",
             Status::Skipped => "SKIP",
             Status::Info => "INFO",
         };
-        let detail = row.remediation.as_ref().map_or_else(
-            || row.message.clone(),
-            |fix| format!("{} | Action: {fix}", row.message),
+        let detail = r.remediation.as_ref().map_or_else(
+            || r.message.clone(),
+            |fix| format!("{} | Action: {fix}", r.message),
         );
         table.add_row(vec![
-            comfy_table::Cell::new(&row.check_name),
+            comfy_table::Cell::new(&r.check_name),
             comfy_table::Cell::new(status),
             comfy_table::Cell::new(detail),
         ]);
@@ -774,19 +692,17 @@ fn render_fixture_child() {
         "json" => FormatArg::Json,
         _ => FormatArg::Table,
     };
+    let columns = if case == "wide" {
+        "240"
+    } else if case == "narrow" {
+        "32"
+    } else {
+        "48"
+    };
     let sink = OutputSink::resolve(
         true,
         &SinkEnv {
-            columns: Some(
-                if case == "wide" {
-                    "240"
-                } else if case == "narrow" {
-                    "32"
-                } else {
-                    "48"
-                }
-                .into(),
-            ),
+            columns: Some(columns.into()),
             no_color: (case != "plain").then(|| "1".into()),
             ..SinkEnv::default()
         },
@@ -795,10 +711,7 @@ fn render_fixture_child() {
         false,
     );
     if case == "plain" {
-        assert!(
-            !sink.color_allowed(),
-            "explicit plain must disable terminal styling"
-        );
+        assert!(!sink.color_allowed(), "explicit plain must disable styling");
     }
     writeln!(std::io::stdout(), "BEGIN_DOCTOR").expect("start marker");
     crate::output::render::emit(
@@ -808,53 +721,44 @@ fn render_fixture_child() {
     .expect("emit");
     writeln!(std::io::stdout(), "END_DOCTOR").expect("end marker");
 }
-
 #[test]
 fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     let stdout = render_fixture("mixed");
     let (table, findings) = stdout
         .split_once("\nFindings:\n")
         .expect("findings below table");
-    assert_eq!(
-        table.lines().count(),
-        4,
-        "header plus three one-line rows: {table}"
-    );
-    assert!(table.contains("database  OK"), "{table}");
+    let n = table.lines().count();
+    assert_eq!(n, 4, "one-line rows: {table}");
+    has(table, "database  OK");
     assert!(table.contains('…'), "fixture must truncate: {table}");
-    assert!(findings.find("review  ERROR").unwrap() < findings.find("index  WARN").unwrap());
+    let ordered = findings.find("review  ERROR").unwrap() < findings.find("index  WARN").unwrap();
+    assert!(ordered, "{findings}");
+    let collapsed = findings.split_whitespace().collect::<Vec<_>>().join(" ");
     for message in [ERROR_MESSAGE, WARNING_MESSAGE] {
-        assert!(
-            findings
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .contains(message),
-            "{findings}"
-        );
+        has(&collapsed, message);
     }
-    assert!(findings.contains("Fix: orbit index refresh"));
-    assert!(findings.contains("Fix: orbit auto-task recover\n  delivery-code-review"));
-    assert!(!findings.contains("database"));
-    for line in findings
-        .lines()
-        .filter(|line| !line.starts_with("Table details"))
-    {
+    has(findings, "Fix: orbit index refresh");
+    has(
+        findings,
+        "Fix: orbit auto-task recover\n  delivery-code-review",
+    );
+    assert!(!findings.contains("database"), "{findings}");
+    for line in findings.lines().filter(|l| !l.starts_with("Table details")) {
         assert!(line.chars().count() <= 48, "line exceeds width: {line}");
     }
-    assert!(findings.contains("--format plain or --json"));
+    has(findings, "--format plain or --json");
     let narrow = render_fixture("narrow");
     assert!(
-        !narrow.lines().any(|line| line == format!("Fix: {FIX}")),
-        "over-width action must not stay on one line: {narrow}"
+        !narrow.lines().any(|l| l == format!("Fix: {FIX}")),
+        "over-width action must wrap: {narrow}"
     );
-    assert!(
-        narrow.contains("Fix: orbit auto-task recover\n  delivery-code-review"),
-        "over-width action must wrap onto indented lines: {narrow}"
+    has(
+        &narrow,
+        "Fix: orbit auto-task recover\n  delivery-code-review",
     );
     for line in narrow
         .lines()
-        .filter(|line| !line.starts_with("Findings:") && !line.starts_with("Table details"))
+        .filter(|l| !l.starts_with("Findings:") && !l.starts_with("Table details"))
     {
         assert!(
             line.chars().count() <= 32,
@@ -862,281 +766,151 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
         );
     }
     let wide = render_fixture("wide");
-    assert!(wide.contains(ERROR_MESSAGE));
+    has(&wide, ERROR_MESSAGE);
     assert!(
-        wide.lines().any(|line| line == format!("Fix: {FIX}")),
+        wide.lines().any(|l| l == format!("Fix: {FIX}")),
         "sufficient width keeps action on one line: {wide}"
     );
-    assert!(!wide.contains("Table details shortened"));
+    assert!(!wide.contains("Table details shortened"), "{wide}");
     let ok = render_fixture("ok");
-    assert_eq!(ok.lines().count(), 4);
-    assert!(!ok.contains("Findings:"));
-    assert!(!ok.contains("--format plain"));
+    assert_eq!(ok.lines().count(), 4, "{ok}");
+    assert!(
+        !ok.contains("Findings:") && !ok.contains("--format plain"),
+        "{ok}"
+    );
 }
-
 #[test]
 fn findings_leave_plain_and_json_documents_unchanged() {
     let plain = render_fixture("plain");
-    assert_eq!(plain.lines().count(), 3);
-    assert!(plain.contains(&format!("review\tERROR\t{ERROR_MESSAGE} | Action: {FIX}")));
-    assert!(!plain.contains("Findings:"));
+    assert_eq!(plain.lines().count(), 3, "{plain}");
+    has(
+        &plain,
+        &format!("review\tERROR\t{ERROR_MESSAGE} | Action: {FIX}"),
+    );
+    assert!(!plain.contains("Findings:"), "{plain}");
     let json: Value = serde_json::from_str(&render_fixture("json")).expect("JSON document");
-    assert_eq!(json[2]["message"], ERROR_MESSAGE);
-    assert_eq!(json[2]["remediation"], FIX);
-    assert_eq!(json.as_array().unwrap().len(), 3);
+    assert_eq!(json[2]["message"], ERROR_MESSAGE, "{json}");
+    assert_eq!(json[2]["remediation"], FIX, "{json}");
+    assert_eq!(json.as_array().unwrap().len(), 3, "{json}");
 }
-
-/// `orbit doctor` runs the scan a sandboxed leaf meets, so an operator learns
-/// of a refusal, and of its fix, before a drain claims work.
-/// `orbit doctor` names the worker CPU ceiling, or says there is none, so an
-/// operator can tell whether one leaf can still take every core [ORB-15196].
+/// Doctor names the worker CPU ceiling, or says there is none [ORB-15196].
 #[cfg(target_os = "linux")]
 #[test]
 fn doctor_reports_the_worker_cpu_quota() {
-    let fixture = WorkCheckout::new();
-    let unset = rows(&doctor(&fixture, &[]));
-    let unset = row(&unset, "worker-containment");
+    let f = WorkCheckout::new();
+    let unset_rows = rows(&doctor(&f, &[]));
+    let unset = row(&unset_rows, "worker-containment");
     assert_eq!(unset["status"], "info", "{unset}");
-    assert!(
-        unset["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("CPUQuota is not set")),
-        "{unset}"
-    );
-
-    let global = fixture.home.join(".orbit");
-    fs::create_dir_all(&global).expect("global root");
-    fs::write(
-        global.join("config.toml"),
+    msg_has(unset, "CPUQuota is not set");
+    let global = global_dir(&f);
+    put(
+        &global.join("config.toml"),
         "[machine]\nworker_cpu_quota = 300\n",
-    )
-    .expect("global config");
-    let set = rows(&doctor(&fixture, &[]));
-    let set = row(&set, "worker-containment");
-    assert_eq!(set["status"], "ok", "{set}");
-    assert!(
-        set["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("CPUQuota=300%")),
-        "{set}"
     );
+    let set_rows = rows(&doctor(&f, &[]));
+    let set = row(&set_rows, "worker-containment");
+    assert_eq!(set["status"], "ok", "{set}");
+    msg_has(set, "CPUQuota=300%");
 }
-
-/// A retired key is reported with its file and left in place. The fix removes
-/// only that key, writes one backup, and a second run writes nothing more.
+/// A retired key is reported with its file; the fix removes only it, backs up once, and is idempotent.
 #[test]
 fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
-    let fixture = WorkCheckout::new();
-    let global_dir = fixture.home.join(".orbit");
-    fs::create_dir_all(&global_dir).expect("global root");
-    let global_config = global_dir.join("config.toml");
+    let f = WorkCheckout::new();
     let global_body = "[workflow]\nbase_branch = \"main\"\n";
-    fs::write(&global_config, global_body).expect("global config");
-
-    let workspace_config = fixture.work.join(".orbit/config.toml");
-    let workspace_body = "\
-# keep this note
-[workflow]
-base_branch = \"agent-main\"
-system_crew = \"sol\"
-
-[plugin]
-legacy_callback_identity = true
-
-[scoring]
-enabled = false
-
-[task.approval]
-delegate_approval = true
-
-[workflow.future]
-enabled = true
-
-[plugins.future]
-arbitrary = { nested = true }
-
-[future]
-";
-    fs::write(&workspace_config, workspace_body).expect("workspace config");
-
-    let reported = doctor(&fixture, &[]);
-    assert_eq!(
-        fs::read_to_string(&workspace_config).expect("workspace config"),
-        workspace_body,
-        "diagnosis must not rewrite config"
-    );
-    assert_eq!(
-        fs::read_to_string(&global_config).expect("global config"),
-        global_body,
-        "diagnosis must not rewrite the other config"
-    );
+    let workspace_body = "# keep this note\n[workflow]\nbase_branch = \"agent-main\"\nsystem_crew = \"sol\"\n\n[plugin]\nlegacy_callback_identity = true\n\n[scoring]\nenabled = false\n\n[task.approval]\ndelegate_approval = true\n\n[workflow.future]\nenabled = true\n\n[plugins.future]\narbitrary = { nested = true }\n\n[future]\n";
+    let (_, gc, wc) = write_configs(&f, global_body, workspace_body);
+    let reported = doctor(&f, &[]);
+    expect_file(&wc, workspace_body);
+    expect_file(&gc, global_body);
     assert!(
-        backup_names(&fixture.work.join(".orbit")).is_empty(),
+        backup_names(&f.work.join(".orbit")).is_empty(),
         "diagnosis must not write a backup"
     );
     let reported_rows = rows(&reported);
-    let retired = reported_rows
-        .iter()
-        .filter(|row| row["check"] == "retired-config-keys" && row["status"] == "warning")
-        .collect::<Vec<_>>();
+    let retired: Vec<&Value> = retired_rows(&reported_rows)
+        .into_iter()
+        .filter(|r| r["status"] == "warning")
+        .collect();
+    for key in [
+        "workflow.system_crew",
+        "scoring.enabled",
+        "task.approval",
+        "workflow.future",
+        "future",
+    ] {
+        assert!(
+            retired.iter().any(|r| mentions_key_and_file(r, key, &wc)),
+            "doctor names {key} and its file: {reported_rows:?}"
+        );
+    }
+    let callback = retired.iter().any(|r| {
+        mentions_key_and_file(r, "plugin.legacy_callback_identity", &wc)
+            && r["message"].as_str().is_some_and(|m| m.contains("removed"))
+    });
     assert!(
-        retired.iter().any(|row| mentions_key_and_file(
-            row,
-            "workflow.system_crew",
-            &workspace_config
-        )),
-        "doctor names the deprecated key and its file: {reported_rows:?}"
+        callback,
+        "retired callback reported as removed: {reported_rows:?}"
     );
-    assert!(
-        retired
-            .iter()
-            .any(|row| mentions_key_and_file(row, "scoring.enabled", &workspace_config)),
-        "doctor names the removed key and its file: {reported_rows:?}"
-    );
-    assert!(
-        retired.iter().any(|row| mentions_key_and_file(
-            row,
-            "plugin.legacy_callback_identity",
-            &workspace_config
-        ) && row["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("removed"))),
-        "doctor reports the retired callback setting as removed: {reported_rows:?}"
-    );
-    assert!(
-        ["task.approval", "workflow.future", "future"]
-            .iter()
-            .all(|key| retired.iter().any(|row| mentions_key_and_file(
-                row,
-                key,
-                &workspace_config
-            ))),
-        "doctor names unknown tables and their file: {reported_rows:?}"
-    );
-    assert!(
-        !retired
-            .iter()
-            .any(|row| mentions_key_and_file(row, "plugins.future", &workspace_config)),
-        "plugin namespaces are owned by plugins: {reported_rows:?}"
-    );
-    assert!(
-        retired.iter().all(|row| row["remediation"]
-            .as_str()
-            .is_some_and(|text| text.contains("--fix-retired-config-keys"))),
-        "each retired key names the repair: {retired:?}"
-    );
+    expect_no_mentions(&retired, "plugins.future", &wc);
+    for r in &retired {
+        fix_has(r, "--fix-retired-config-keys");
+    }
     assert!(
         !reported_rows
             .iter()
-            .any(|row| row["check"] == "fix-retired-config-keys"),
-        "the report does not run the repair"
+            .any(|r| r["check"] == "fix-retired-config-keys"),
+        "report does not run repair"
     );
-
-    let fixed = doctor(&fixture, &["--fix-retired-config-keys"]);
-    let fixed_rows = rows(&fixed);
-    let repair = row(&fixed_rows, "fix-retired-config-keys");
-    assert_eq!(repair["status"], "ok", "{repair}");
-    let repair_message = repair["message"].as_str().expect("repair message");
-    assert!(
-        repair_message.contains("workflow.system_crew")
-            && repair_message.contains("scoring.enabled")
-            && repair_message.contains("plugin.legacy_callback_identity")
-            && repair_message.contains(&workspace_config.display().to_string()),
-        "{repair}"
-    );
-    let updated = fs::read_to_string(&workspace_config).expect("updated config");
-    assert!(
-        updated.contains("# keep this note"),
-        "the repair keeps the operator's comment: {updated}"
-    );
-    assert!(
-        updated.contains("base_branch = \"agent-main\""),
-        "the repair keeps the neighboring key: {updated}"
-    );
-    assert!(
-        !updated.contains("legacy_callback_identity")
-            && !updated.contains("system_crew")
-            && !updated.contains("enabled")
-            && !updated.contains("[future]")
-            && !updated.contains("delegate_approval"),
-        "the repair removes only the retired keys: {updated}"
-    );
-    let parsed: Value = serde_json::to_value(updated.parse::<toml::Value>().expect("updated TOML"))
-        .expect("json config");
-    assert_eq!(
-        parsed["plugins"]["future"]["arbitrary"]["nested"], true,
-        "plugin config survives cleanup"
-    );
-    assert_eq!(
-        fs::read_to_string(&global_config).expect("global config"),
-        global_body,
-        "the repair leaves a file with no retired keys untouched"
-    );
-    let backups = backup_names(&fixture.work.join(".orbit"));
-    assert_eq!(backups, vec!["config.toml.bak".to_string()], "{backups:?}");
-    let backup = fixture.work.join(".orbit").join(&backups[0]);
-    assert_eq!(
-        fs::read_to_string(&backup).expect("backup"),
-        workspace_body,
-        "the backup is the file from before the repair"
-    );
-    assert_eq!(
-        row(&fixed_rows, "retired-config-keys")["status"],
-        "ok",
-        "the report after the repair no longer warns: {fixed_rows:?}"
-    );
-
-    let settled = fs::read(&workspace_config).expect("settled config");
-    let backup_bytes = fs::read(&backup).expect("backup bytes");
-    let again = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
+    let fixed = fix_rows(&f);
+    assert_fix_ok(&fixed);
+    let repair = row(&fixed, "fix-retired-config-keys");
+    for needle in [
+        "workflow.system_crew",
+        "scoring.enabled",
+        "plugin.legacy_callback_identity",
+    ] {
+        msg_has(repair, needle);
+    }
+    msg_has(repair, &wc.display().to_string());
+    let updated = read_str(&wc);
+    has(&updated, "# keep this note");
+    has(&updated, "base_branch = \"agent-main\"");
+    for gone in [
+        "legacy_callback_identity",
+        "system_crew",
+        "enabled",
+        "[future]",
+        "delegate_approval",
+    ] {
+        assert!(
+            !updated.contains(gone),
+            "repair removes only retired keys ({gone}): {updated}"
+        );
+    }
+    let parsed: Value = serde_json::to_value(read_toml(&wc)).expect("json config");
+    let nested = parsed["plugins"]["future"]["arbitrary"]["nested"].clone();
+    assert_eq!(nested, true, "plugin config survives");
+    expect_file(&gc, global_body);
+    assert_backup(&f.work.join(".orbit"), workspace_body);
+    expect_status(&fixed, "retired-config-keys", "ok");
+    let again = assert_repair_settled(&f, &[&wc, &gc], &[&f.work.join(".orbit")]);
     let again_repair = row(&again, "fix-retired-config-keys");
-    assert_eq!(again_repair["status"], "ok", "{again_repair}");
-    assert!(
-        again_repair["message"].as_str().is_some_and(
-            |message| message.contains("No retired, deprecated or unknown config keys")
-        ),
-        "{again_repair}"
+    msg_has(
+        again_repair,
+        "No retired, deprecated or unknown config keys",
     );
-    assert_eq!(
-        fs::read(&workspace_config).expect("config after second run"),
-        settled,
-        "a second run does not rewrite the config"
-    );
-    assert_eq!(
-        fs::read(&backup).expect("backup after second run"),
-        backup_bytes,
-        "a second run does not rewrite the backup"
-    );
-    assert_eq!(
-        backup_names(&fixture.work.join(".orbit")),
-        backups,
-        "a second run writes no further backup"
-    );
-    assert_eq!(
-        fs::read_to_string(&global_config).expect("global config"),
-        global_body
-    );
+    let bak = f.work.join(".orbit/config.toml.bak");
+    expect_bytes(&bak, workspace_body.as_bytes());
 }
-
-/// Live `[[review.host_evidence]]` rules are not unknown keys, so the repair
-/// leaves them in each layer that states them and removes only the neighbouring
-/// unknown key. A workspace list replaces the global one; an explicit empty
-/// workspace list clears it, and both must survive repeated repair.
+/// Live `[[review.host_evidence]]` rules survive repair in each layer; only neighbouring unknown keys are removed.
 #[test]
 fn doctor_retired_repair_keeps_host_evidence_rules_in_each_layer() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_retired_repair_keeps_host_evidence_rules_in_each_layer",
-    ) {
+    if in_child("doctor::doctor_retired_repair_keeps_host_evidence_rules_in_each_layer") {
         return;
     }
-    const SEATBELT: &str = "[[review.host_evidence]]\nkind = \"host_sandbox_test\"\n\
-        name = \"Seatbelt\"\npaths = [\"crates/orbit-exec/**\"]\nos = \"macos\"\n\
-        command = \"cargo test -p orbit-exec --test seatbelt\"\n\
-        artifact = \"evidence/seatbelt-macos.json\"\n";
-    const CODEQL: &str = "[[review.host_evidence]]\nkind = \"codeql\"\n\
-        name = \"Rust CodeQL (Linux)\"\npaths = [\"**/*.rs\"]\nos = \"linux\"\n\
-        command = \"scripts/codeql-rust-local.sh\"\nartifact = \"evidence/codeql.json\"\n";
-    for (workspace_body, expected_names) in [
+    const SEATBELT: &str = "[[review.host_evidence]]\nkind = \"host_sandbox_test\"\nname = \"Seatbelt\"\npaths = [\"crates/orbit-exec/**\"]\nos = \"macos\"\ncommand = \"cargo test -p orbit-exec --test seatbelt\"\nartifact = \"evidence/seatbelt-macos.json\"\n";
+    const CODEQL: &str = "[[review.host_evidence]]\nkind = \"codeql\"\nname = \"Rust CodeQL (Linux)\"\npaths = [\"**/*.rs\"]\nos = \"linux\"\ncommand = \"scripts/codeql-rust-local.sh\"\nartifact = \"evidence/codeql.json\"\n";
+    for (workspace_body, expected) in [
         (
             format!("[review]\nreviewers = 3\n{CODEQL}"),
             vec!["Rust CodeQL (Linux)"],
@@ -1146,130 +920,107 @@ fn doctor_retired_repair_keeps_host_evidence_rules_in_each_layer() {
             vec![],
         ),
     ] {
-        let fixture = WorkCheckout::new();
-        let global_dir = fixture.home.join(".orbit");
-        fs::create_dir_all(&global_dir).expect("global root");
-        let global_config = global_dir.join("config.toml");
+        let f = WorkCheckout::new();
         let global_body = format!("[review]\nreviewers = 2\n{SEATBELT}");
-        fs::write(&global_config, &global_body).expect("global config");
-        let workspace_dir = fixture.work.join(".orbit");
-        let workspace_config = workspace_dir.join("config.toml");
-        fs::write(&workspace_config, &workspace_body).expect("workspace config");
-
-        let before = effective_host_evidence(&fixture);
+        let (gd, gc, wc) = write_configs(&f, &global_body, &workspace_body);
+        let wd = f.work.join(".orbit");
+        let before = effective_host_evidence(&f);
         assert_eq!(before.0, OperationLayerSource::Workspace, "before repair");
-        assert_eq!(before.1, expected_names, "before repair");
-
-        let reported = rows(&doctor(&fixture, &[]));
-        let retired = reported
-            .iter()
-            .filter(|row| row["check"] == "retired-config-keys")
-            .collect::<Vec<_>>();
+        assert_eq!(before.1, expected, "before repair");
+        let reported = rows(&doctor(&f, &[]));
+        let retired = retired_rows(&reported);
         assert!(
-            retired.iter().all(|row| !row["message"]
+            retired.iter().all(|r| !r["message"]
                 .as_str()
                 .unwrap_or_default()
                 .contains("review.host_evidence")),
-            "live host rules are not reported as unknown: {reported:?}"
+            "live rules not unknown: {reported:?}"
         );
-        for config in [&global_config, &workspace_config] {
-            assert!(
-                retired
-                    .iter()
-                    .any(|row| mentions_key_and_file(row, "review.reviewers", config)),
-                "doctor names the neighbouring unknown key and its file: {reported:?}"
-            );
+        for config in [&gc, &wc] {
+            expect_mentions(&retired, "review.reviewers", config);
         }
-
-        let fixed = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
-        assert_eq!(
-            row(&fixed, "fix-retired-config-keys")["status"],
-            "ok",
-            "{fixed:?}"
-        );
-        assert_eq!(
-            effective_host_evidence(&fixture),
-            before,
-            "the effective rules survive the repair"
-        );
-        for (path, original) in [
-            (&global_config, &global_body),
-            (&workspace_config, &workspace_body),
-        ] {
+        let fixed = fix_rows(&f);
+        assert_fix_ok(&fixed);
+        assert_eq!(effective_host_evidence(&f), before, "survive repair");
+        for (path, original) in [(&gc, &global_body), (&wc, &workspace_body)] {
             let original_doc: toml::Value = toml::from_str(original).expect("original TOML");
-            let updated: toml::Value =
-                toml::from_str(&fs::read_to_string(path).expect("updated config"))
-                    .expect("updated TOML");
             assert_eq!(
-                updated["review"]["host_evidence"],
+                read_toml(path)["review"]["host_evidence"],
                 original_doc["review"]["host_evidence"],
                 "{}",
                 path.display()
             );
             assert!(
-                updated["review"].get("reviewers").is_none(),
+                read_toml(path)["review"].get("reviewers").is_none(),
                 "{}",
                 path.display()
             );
         }
-        for dir in [&global_dir, &workspace_dir] {
-            assert_eq!(
-                backup_names(dir),
-                vec!["config.toml.bak".to_string()],
-                "{}",
-                dir.display()
-            );
-        }
-        assert_eq!(
-            fs::read_to_string(global_dir.join("config.toml.bak")).expect("global backup"),
-            global_body
-        );
-        assert_eq!(
-            fs::read_to_string(workspace_dir.join("config.toml.bak")).expect("workspace backup"),
-            workspace_body
-        );
-
-        let settled = (
-            fs::read(&global_config).expect("global config"),
-            fs::read(&workspace_config).expect("workspace config"),
-        );
-        let again = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
-        assert_eq!(
-            row(&again, "fix-retired-config-keys")["status"],
-            "ok",
-            "{again:?}"
-        );
-        assert_eq!(
-            effective_host_evidence(&fixture),
-            before,
-            "a repeat repair keeps the effective rules"
-        );
-        assert_eq!(
-            (
-                fs::read(&global_config).expect("global config"),
-                fs::read(&workspace_config).expect("workspace config"),
-            ),
-            settled,
-            "a second run does not rewrite either config"
-        );
-        for dir in [&global_dir, &workspace_dir] {
-            assert_eq!(
-                backup_names(dir),
-                vec!["config.toml.bak".to_string()],
-                "a second run writes no further backup"
-            );
-        }
+        assert_backup(&gd, &global_body);
+        assert_backup(&wd, &workspace_body);
+        let again = assert_repair_settled(&f, &[&gc, &wc], &[&gd, &wd]);
+        assert_fix_ok(&again);
+        assert_eq!(effective_host_evidence(&f), before, "repeat repair");
     }
 }
 
-/// The repair preserves translated review values in their original layer,
-/// including explicit modern overrides, and keeps the first backup on retry.
+/// Live visual-review settings survive repair while an unknown sibling is removed.
+#[test]
+fn doctor_retired_repair_keeps_visual_review_settings() {
+    if in_child("doctor::doctor_retired_repair_keeps_visual_review_settings") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    let workspace_body = "[visual_review]\nmanifests = [\"views.toml\"]\ndefault_width = 375\nmock_neighbor = true\n";
+    let (gd, gc, wc) = write_configs(&f, "", workspace_body);
+
+    let diagnosis = rows(&doctor(&f, &[]));
+    let retired = retired_rows(&diagnosis);
+    expect_mentions(&retired, "visual_review.mock_neighbor", &wc);
+    expect_no_mentions(&retired, "visual_review.manifests", &wc);
+    expect_no_mentions(&retired, "visual_review.default_width", &wc);
+    expect_file(&gc, "");
+    expect_file(&wc, workspace_body);
+
+    let fixed = fix_rows(&f);
+    assert_fix_ok(&fixed);
+    let repair = row(&fixed, "fix-retired-config-keys");
+    msg_has(repair, "visual_review.mock_neighbor");
+    let updated = read_toml(&wc);
+    assert_eq!(
+        updated["visual_review"]["manifests"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        updated["visual_review"]["manifests"][0].as_str(),
+        Some("views.toml")
+    );
+    assert_eq!(
+        updated["visual_review"]["default_width"].as_integer(),
+        Some(375)
+    );
+    assert!(updated["visual_review"].get("mock_neighbor").is_none());
+    let config = ResolvedConfig::load(&ConfigRoots::new(
+        f.home.join(".orbit"),
+        f.work.join(".orbit"),
+    ))
+    .expect("repaired config loads");
+    assert_eq!(config.visual_review.manifests, ["views.toml"]);
+    assert_eq!(config.visual_review.default_width, 375);
+    assert_backup(&f.work.join(".orbit"), workspace_body);
+    assert!(backup_names(&gd).is_empty(), "global config was unchanged");
+
+    let settled = assert_repair_settled(&f, &[&wc, &gc], &[&f.work.join(".orbit"), &gd]);
+    assert_fix_ok(&settled);
+}
+
+/// The repair preserves translated review values in their original layer and keeps the first backup.
 #[test]
 #[allow(clippy::print_stderr)] // Name each scenario and its elapsed time in isolated child failure output.
 fn doctor_retired_review_repair_preserves_effective_policy() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_retired_review_repair_preserves_effective_policy",
-    ) {
+    if in_child("doctor::doctor_retired_review_repair_preserves_effective_policy") {
         return;
     }
     for (global, workspace, timing, minutes) in [
@@ -1306,91 +1057,45 @@ fn doctor_retired_review_repair_preserves_effective_policy() {
     ] {
         let started = Instant::now();
         eprintln!("scenario: global={global:?}, workspace={workspace:?}");
-        let fixture = WorkCheckout::new();
-        let global_dir = fixture.home.join(".orbit");
-        fs::create_dir_all(&global_dir).unwrap();
-        let global_path = global_dir.join("config.toml");
-        let workspace_path = fixture.work.join(".orbit/config.toml");
-        fs::write(&global_path, global).unwrap();
-        fs::write(&workspace_path, workspace).unwrap();
+        let f = WorkCheckout::new();
+        let (gd, gp, wp) = write_configs(&f, global, workspace);
+        let wd = f.work.join(".orbit");
         let expected = (Value::from(timing), Value::from(minutes));
-        assert_eq!(effective_review(&fixture), expected, "before repair");
-        let fixed = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
-        assert_eq!(
-            row(&fixed, "fix-retired-config-keys")["status"],
-            "ok",
-            "{fixed:?}"
-        );
-        assert_eq!(effective_review(&fixture), expected, "after repair");
-        for (path, original) in [(&global_path, global), (&workspace_path, workspace)] {
-            let updated = fs::read_to_string(path).unwrap();
-            let document: toml::Value = toml::from_str(&updated).unwrap();
-            assert!(
-                document
-                    .get("operation")
-                    .and_then(|v| v.get("review_policy"))
-                    .is_none()
-            );
-            assert!(
-                document
-                    .get("operation")
-                    .and_then(|v| v.get("review_minutes"))
-                    .is_none()
-            );
-            if original.contains("[operation]") {
-                assert_eq!(
-                    fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
-                    original
+        expect_review(&f, &expected, "before repair");
+        let fixed = fix_rows(&f);
+        assert_fix_ok(&fixed);
+        expect_review(&f, &expected, "after repair");
+        for (path, original) in [(&gp, global), (&wp, workspace)] {
+            let doc = read_toml(path);
+            for key in ["review_policy", "review_minutes"] {
+                assert!(
+                    doc.get("operation").and_then(|v| v.get(key)).is_none(),
+                    "{key} removed: {}",
+                    path.display()
                 );
+            }
+            if original.contains("[operation]") {
+                expect_file(&path.with_extension("toml.bak"), original);
             } else {
-                assert_eq!(updated, original, "unaffected layer stays byte-identical");
+                expect_file(path, original);
             }
         }
-        let settled = (
-            fs::read(&global_path).unwrap(),
-            fs::read(&workspace_path).unwrap(),
-        );
-        let backups = (
-            backup_names(&global_dir),
-            backup_names(&fixture.work.join(".orbit")),
-        );
-        let again = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
-        assert_eq!(row(&again, "fix-retired-config-keys")["status"], "ok");
-        assert_eq!(effective_review(&fixture), expected, "after repeat repair");
-        assert_eq!(
-            (
-                fs::read(&global_path).unwrap(),
-                fs::read(&workspace_path).unwrap()
-            ),
-            settled
-        );
-        assert_eq!(
-            (
-                backup_names(&global_dir),
-                backup_names(&fixture.work.join(".orbit"))
-            ),
-            backups
-        );
-        for (path, original) in [(&global_path, global), (&workspace_path, workspace)] {
+        let again = assert_repair_settled(&f, &[&gp, &wp], &[&gd, &wd]);
+        assert_fix_ok(&again);
+        assert_eq!(effective_review(&f), expected, "after repeat repair");
+        for (path, original) in [(&gp, global), (&wp, workspace)] {
             if original.contains("[operation]") {
-                assert_eq!(
-                    fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
-                    original
-                );
+                expect_file(&path.with_extension("toml.bak"), original);
             }
         }
         eprintln!("scenario elapsed: {:?}", started.elapsed());
     }
 }
-
-/// An after-landing policy, even when masked by another layer, requires an
-/// operator migration. Refusal must precede every config write and backup.
+/// An after-landing policy requires operator migration; refusal precedes every write and backup.
 #[test]
 #[allow(clippy::print_stderr)] // Name each scenario and its elapsed time in isolated child failure output.
 fn doctor_retired_review_repair_refuses_after_landing_before_any_write() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_retired_review_repair_refuses_after_landing_before_any_write",
-    ) {
+    if in_child("doctor::doctor_retired_review_repair_refuses_after_landing_before_any_write") {
         return;
     }
     for (global, workspace) in [
@@ -1409,38 +1114,31 @@ fn doctor_retired_review_repair_refuses_after_landing_before_any_write() {
     ] {
         let started = Instant::now();
         eprintln!("scenario: global={global:?}, workspace={workspace:?}");
-        let fixture = WorkCheckout::new();
-        let global_dir = fixture.home.join(".orbit");
-        fs::create_dir_all(&global_dir).unwrap();
-        let global_path = global_dir.join("config.toml");
-        let workspace_path = fixture.work.join(".orbit/config.toml");
-        fs::write(&global_path, global).unwrap();
-        fs::write(&workspace_path, workspace).unwrap();
-        let before = effective_review(&fixture);
-        let output = doctor(&fixture, &["--fix-retired-config-keys"]);
+        let f = WorkCheckout::new();
+        let (gd, gp, wp) = write_configs(&f, global, workspace);
+        let before = effective_review(&f);
+        let output = doctor(&f, &["--fix-retired-config-keys"]);
         assert!(!output.status.success(), "repair must refuse: {output:?}");
         let error = String::from_utf8_lossy(&output.stderr);
+        has(&error, "orbit auto-task toggle delivery-code-review");
+        expect_file(&gp, global);
+        expect_file(&wp, workspace);
         assert!(
-            error.contains("orbit auto-task toggle delivery-code-review"),
-            "{error}"
+            backup_names(&gd).is_empty(),
+            "global={global:?} workspace={workspace:?}"
         );
-        assert_eq!(fs::read_to_string(&global_path).unwrap(), global);
-        assert_eq!(fs::read_to_string(&workspace_path).unwrap(), workspace);
-        assert!(backup_names(&global_dir).is_empty());
-        assert!(backup_names(&fixture.work.join(".orbit")).is_empty());
-        assert_eq!(effective_review(&fixture), before);
+        assert!(
+            backup_names(&f.work.join(".orbit")).is_empty(),
+            "global={global:?} workspace={workspace:?}"
+        );
+        assert_eq!(effective_review(&f), before, "refused scenario");
         eprintln!("scenario elapsed: {:?}", started.elapsed());
     }
 }
-
-/// [ORB-16775] The repair writes each consolidated family's replacement into
-/// the file that set the deprecated spelling, removes the old keys, and the
-/// effective values `orbit config get` reports are the same before and after.
+/// [ORB-16775] Consolidated families are rewritten in the file that set them; effective values are unchanged.
 #[test]
 fn doctor_retired_repair_rewrites_consolidated_key_families() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_retired_repair_rewrites_consolidated_key_families",
-    ) {
+    if in_child("doctor::doctor_retired_repair_rewrites_consolidated_key_families") {
         return;
     }
     const KEYS: [&str; 6] = [
@@ -1451,31 +1149,11 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
         "machine.worker_containment",
         "workflow.validation_env.shell_probe",
     ];
-    let fixture = WorkCheckout::new();
-    let global_dir = fixture.home.join(".orbit");
-    fs::create_dir_all(&global_dir).unwrap();
-    let global_path = global_dir.join("config.toml");
-    let workspace_path = fixture.work.join(".orbit/config.toml");
-    let global = "[workflow]\nfinal_recovery_crews = [\"sol\"]\n\n\
-                  [workflow.validation_env]\nlogin_shell = false\n\n\
-                  [machine]\nworker_containment = false\n";
-    let workspace = "# keep this note\n[operation]\nreview_crew = [\"sol\", \"grok\"]\n\n\
-                     [review]\nbefore_landing = false\n\n\
-                     [workflow.purpose_crews]\nci_failure_sweep = [\"sol\"]\n\
-                     merged_head_repair = [\"sol\"]\n\n\
-                     [workflow.validation_env]\ninteractive = false\n";
-    fs::write(&global_path, global).unwrap();
-    fs::write(&workspace_path, workspace).unwrap();
-    let effective = || {
-        KEYS.map(|key| {
-            let output = command(&fixture)
-                .args(["config", "get", key, "--json"])
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "config get {key}: {output:?}");
-            serde_json::from_slice::<Value>(&output.stdout).unwrap()["value"].clone()
-        })
-    };
+    let f = WorkCheckout::new();
+    let global = "[workflow]\nfinal_recovery_crews = [\"sol\"]\n\n[workflow.validation_env]\nlogin_shell = false\n\n[machine]\nworker_containment = false\n";
+    let workspace = "# keep this note\n[operation]\nreview_crew = [\"sol\", \"grok\"]\n\n[review]\nbefore_landing = false\n\n[workflow.purpose_crews]\nci_failure_sweep = [\"sol\"]\nmerged_head_repair = [\"sol\"]\n\n[workflow.validation_env]\ninteractive = false\n";
+    let (gd, gp, wp) = write_configs(&f, global, workspace);
+    let effective = || KEYS.map(|key| config_value(&f, key));
     let before = effective();
     assert_eq!(
         before,
@@ -1485,107 +1163,54 @@ fn doctor_retired_repair_rewrites_consolidated_key_families() {
             serde_json::json!(["sol"]),
             serde_json::json!("off"),
             serde_json::json!("off"),
-            serde_json::json!("off"),
+            serde_json::json!("off")
         ],
-        "the deprecated spellings load"
+        "deprecated spellings load"
     );
-
-    let fixed = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
-    assert_eq!(
-        row(&fixed, "fix-retired-config-keys")["status"],
-        "ok",
-        "{fixed:?}"
-    );
-    assert_eq!(
-        row(&fixed, "retired-config-keys")["status"],
-        "ok",
-        "{fixed:?}"
-    );
-    assert_eq!(
-        effective(),
-        before,
-        "the repair keeps every effective value"
-    );
-
-    let read = |path: &std::path::Path| -> toml::Value {
-        toml::from_str(&fs::read_to_string(path).unwrap()).unwrap()
-    };
-    let global_doc = read(&global_path);
-    assert_eq!(
-        global_doc["workflow"]["purpose_crews"]["final_recovery"],
-        toml::Value::Array(vec!["sol".into()])
-    );
-    assert!(global_doc["workflow"].get("final_recovery_crews").is_none());
-    assert_eq!(
-        global_doc["workflow"]["validation_env"]["shell_probe"].as_str(),
-        Some("off")
-    );
-    assert!(
-        global_doc["workflow"]["validation_env"]
-            .get("login_shell")
-            .is_none()
-    );
-    assert_eq!(
-        global_doc["machine"]["worker_containment"].as_str(),
-        Some("off")
-    );
-
-    let workspace_doc = read(&workspace_path);
-    assert_eq!(
-        workspace_doc["workflow"]["purpose_crews"]["review"],
-        toml::Value::Array(vec!["sol".into(), "grok".into()])
-    );
-    assert_eq!(
-        workspace_doc["workflow"]["purpose_crews"]["sweep_tasks"],
-        toml::Value::Array(vec!["sol".into()])
-    );
+    let fixed = fix_rows(&f);
+    assert_fix_ok(&fixed);
+    expect_status(&fixed, "retired-config-keys", "ok");
+    assert_eq!(effective(), before, "repair keeps every effective value");
+    let g = read_toml(&gp);
+    let v = g["workflow"]["purpose_crews"]["final_recovery"].clone();
+    assert_eq!(v, toml::Value::Array(vec!["sol".into()]));
+    assert!(g["workflow"].get("final_recovery_crews").is_none());
+    let v = g["workflow"]["validation_env"]["shell_probe"].as_str();
+    assert_eq!(v, Some("off"));
+    assert!(g["workflow"]["validation_env"].get("login_shell").is_none());
+    let v = g["machine"]["worker_containment"].as_str();
+    assert_eq!(v, Some("off"));
+    let w = read_toml(&wp);
+    let v = w["workflow"]["purpose_crews"]["review"].clone();
+    assert_eq!(v, toml::Value::Array(vec!["sol".into(), "grok".into()]));
+    let v = w["workflow"]["purpose_crews"]["sweep_tasks"].clone();
+    assert_eq!(v, toml::Value::Array(vec!["sol".into()]));
     for legacy in ["ci_failure_sweep", "merged_head_repair"] {
         assert!(
-            workspace_doc["workflow"]["purpose_crews"]
-                .get(legacy)
-                .is_none()
+            w["workflow"]["purpose_crews"].get(legacy).is_none(),
+            "{legacy}"
         );
     }
     assert!(
-        workspace_doc
-            .get("operation")
+        w.get("operation")
             .and_then(|v| v.get("review_crew"))
             .is_none()
     );
-    assert_eq!(workspace_doc["review"]["timing"].as_str(), Some("off"));
-    assert!(workspace_doc["review"].get("before_landing").is_none());
-    assert_eq!(
-        workspace_doc["workflow"]["validation_env"]["shell_probe"].as_str(),
-        Some("off")
-    );
-    assert!(
-        fs::read_to_string(&workspace_path)
-            .unwrap()
-            .contains("# keep this note"),
-        "the repair keeps the operator's comment"
-    );
-    assert_eq!(
-        fs::read_to_string(global_dir.join("config.toml.bak")).unwrap(),
-        global
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.work.join(".orbit/config.toml.bak")).unwrap(),
-        workspace
-    );
+    let v = w["review"]["timing"].as_str();
+    assert_eq!(v, Some("off"));
+    assert!(w["review"].get("before_landing").is_none());
+    let v = w["workflow"]["validation_env"]["shell_probe"].as_str();
+    assert_eq!(v, Some("off"));
+    has(&read_str(&wp), "# keep this note");
+    assert_backup(&gd, global);
+    assert_backup(&f.work.join(".orbit"), workspace);
 }
-
 fn effective_review(fixture: &WorkCheckout) -> (Value, Value) {
-    let get = |key: &str| {
-        let output = command(fixture)
-            .args(["config", "get", key, "--json"])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "config get {key}: {output:?}");
-        serde_json::from_slice::<Value>(&output.stdout).unwrap()["value"].clone()
-    };
-    (get("review.timing"), get("review.minutes"))
+    (
+        config_value(fixture, "review.timing"),
+        config_value(fixture, "review.minutes"),
+    )
 }
-
 /// The review host rules a resolved load gives effect to, with the layer that set them.
 fn effective_host_evidence(fixture: &WorkCheckout) -> (OperationLayerSource, Vec<String>) {
     let config = ResolvedConfig::load(&ConfigRoots::new(
@@ -1599,162 +1224,114 @@ fn effective_host_evidence(fixture: &WorkCheckout) -> (OperationLayerSource, Vec
         rules.value.into_iter().map(|rule| rule.name).collect(),
     )
 }
-
 fn mentions_key_and_file(row: &Value, key: &str, file: &std::path::Path) -> bool {
     row["message"].as_str().is_some_and(|message| {
         message.contains(key) && message.contains(&file.display().to_string())
     })
 }
-
 fn backup_names(directory: &std::path::Path) -> Vec<String> {
-    let mut names = fs::read_dir(directory)
-        .expect("config directory")
-        .map(|entry| {
-            entry
-                .expect("entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .filter(|name| name.starts_with("config.toml.bak"))
-        .collect::<Vec<_>>();
+    let mut names = Vec::new();
+    for entry in fs::read_dir(directory).expect("config directory") {
+        let name = entry
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        if name.starts_with("config.toml.bak") {
+            names.push(name);
+        }
+    }
     names.sort();
     names
 }
-
-/// `orbit doctor` reports mid-run steering's resolved settings, read through
-/// both config layers, so an operator can tell whether this workspace
-/// records steering watermarks.
+/// Doctor reports mid-run steering's resolved settings from both config layers.
 #[test]
 fn doctor_reports_the_resolved_mid_run_steering_settings() {
-    let fixture = WorkCheckout::new();
-    let global = fixture.home.join(".orbit");
-    fs::create_dir_all(&global).expect("global root");
-    fs::write(
-        global.join("config.toml"),
+    let f = WorkCheckout::new();
+    let global = global_dir(&f);
+    put(
+        &global.join("config.toml"),
         "[workflow.mid_run_steering]\nmax_rounds = 3\n",
-    )
-    .expect("global config");
-    fs::write(
-        fixture.work.join(".orbit/config.toml"),
-        "[workflow.mid_run_steering]\nenabled = true\n",
-    )
-    .expect("workspace config");
-    let rows = rows(&doctor(&fixture, &[]));
-    let steering = row(&rows, "mid-run-steering");
-    assert_eq!(steering["status"], "ok", "{steering}");
-    assert!(
-        steering["message"].as_str().is_some_and(|message| {
-            message.contains("enabled = true") && message.contains("max_rounds = 3")
-        }),
-        "the workspace's enable and the global round budget both resolve: {steering}"
     );
+    put(
+        &f.work.join(".orbit/config.toml"),
+        "[workflow.mid_run_steering]\nenabled = true\n",
+    );
+    let all = rows(&doctor(&f, &[]));
+    let steering = row(&all, "mid-run-steering");
+    assert_eq!(steering["status"], "ok", "{steering}");
+    msg_has(steering, "enabled = true");
+    msg_has(steering, "max_rounds = 3");
 }
-
 #[cfg(unix)]
 #[test]
 fn doctor_reports_git_protection_refusals_with_their_fix() {
-    let fixture = WorkCheckout::new();
-    let git = fixture.work.join(".git");
-    assert_eq!(
-        row(&rows(&doctor(&fixture, &[])), "git-protection")["status"],
-        "ok"
-    );
-
+    let f = WorkCheckout::new();
+    let git = f.work.join(".git");
+    let initial = rows(&doctor(&f, &[]));
+    expect_status(&initial, "git-protection", "ok");
     // Git's own interrupted write: a temporary name beside the final one.
     let object = git.join("objects/61/5bfcb2ad167392037266f1f2dfec4546b37dd6");
-    fs::create_dir_all(object.parent().unwrap()).expect("object fan-out");
-    fs::write(&object, "loose object").expect("object");
+    mkdir(object.parent().unwrap());
+    put(&object, "loose object");
     fs::hard_link(&object, object.with_file_name("tmp_obj_Ab12Cd")).expect("temp leftover");
-    assert_eq!(
-        row(&rows(&doctor(&fixture, &[])), "git-protection")["status"],
-        "ok",
-        "a temp leftover paired inside the object store is not an attack"
-    );
-
+    let paired = rows(&doctor(&f, &[]));
+    expect_status(&paired, "git-protection", "ok");
     // A hook aliased to a file outside `.git` stays refused.
-    let outside = fixture.temp.path().join("outside-hook");
-    fs::write(&outside, "#!/bin/sh\n").expect("outside file");
+    let outside = f.temp.path().join("outside-hook");
+    put(&outside, "#!/bin/sh\n");
     let hook = git.join("hooks/pre-commit");
     fs::hard_link(&outside, &hook).expect("aliased hook");
-    let report = rows(&doctor(&fixture, &[]));
+    let report = rows(&doctor(&f, &[]));
     let refused = row(&report, "git-protection");
-    assert_eq!(refused["status"], "warning");
-    assert!(
-        refused["message"]
-            .as_str()
-            .is_some_and(|message| message.contains(&hook.display().to_string())),
-        "the warning names the entry: {refused}"
-    );
-    assert!(
-        refused["remediation"]
-            .as_str()
-            .is_some_and(|remediation| remediation.contains("git fsck")),
-        "the warning names the remedy: {refused}"
-    );
+    assert_eq!(refused["status"], "warning", "{refused}");
+    msg_has(refused, &hook.display().to_string());
+    fix_has(refused, "git fsck");
 }
-
 #[test]
 fn fs_access_reports_the_shipped_policy_verdicts_for_workspace_relative_paths() {
-    let fixture = WorkCheckout::new();
+    let f = WorkCheckout::new();
     for (path, read, modify) in [
         ("src/main.rs", true, true),
         (".orbit/tmp/x", true, true),
         (".orbit/tasks/x", true, false),
         ("src/.env", false, false),
     ] {
-        let output = command(&fixture)
-            .args(["doctor", "fs-access", "implementer", path, "--json"])
-            .assert()
-            .success()
-            .get_output()
-            .clone();
-        let json: Value = serde_json::from_slice(&output.stdout).expect("fs-access JSON");
+        let out = run_ok(&f, &["doctor", "fs-access", "implementer", path, "--json"]);
+        let json: Value = serde_json::from_slice(&out.stdout).expect("fs-access JSON");
         assert_eq!(json["policy"], "default", "{json}");
         assert_eq!(json["profile"], "implementer", "{json}");
         assert_eq!(json["path"], path, "{json}");
         assert_eq!(json["read"]["allowed"], read, "{path}: {json}");
         assert_eq!(json["modify"]["allowed"], modify, "{path}: {json}");
         assert!(json["read"]["matched_rule"].is_string(), "{json}");
-        let human = command(&fixture)
-            .args(["doctor", "fs-access", "implementer", path])
-            .assert()
-            .success()
-            .get_output()
-            .clone();
+        let human = run_ok(&f, &["doctor", "fs-access", "implementer", path]);
         let expected = format!("modify:  {}", if modify { "allowed" } else { "denied" });
-        assert!(
-            String::from_utf8_lossy(&human.stdout).contains(&expected),
-            "{path}: human output must carry the modify verdict"
-        );
+        has(&String::from_utf8_lossy(&human.stdout), &expected);
     }
 }
-
-/// An enabled hourly routine warns once its last success is past three hours,
-/// and a newer skipped fire does not make that success look fresh.
+/// An enabled hourly routine warns when its last success is past three hours; a newer skip does not refresh it.
 #[test]
 fn doctor_warns_when_routine_last_success_is_stale() {
-    if crate::isolated_test::run_in_child("doctor::doctor_warns_when_routine_last_success_is_stale")
-    {
+    if in_child("doctor::doctor_warns_when_routine_last_success_is_stale") {
         return;
     }
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path().join("empty-home");
     let repo = temp.path().join("repo");
     let root = temp.path().join("custom-root");
-    fs::create_dir_all(&home).expect("home");
-    fs::create_dir_all(&repo).expect("repo");
+    mkdir(&home);
+    mkdir(&repo);
     crate::git_repo::SeededRepo::new(&repo)
         .readme("# routine freshness\n")
         .build();
     let root_arg = root.to_string_lossy().into_owned();
     let run = |args: &[&str]| {
-        let mut command = cargo_bin_cmd!("orbit");
+        let mut cmd = cargo_bin_cmd!("orbit");
         test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
+            cmd.env_remove(name);
         });
-        command
-            .current_dir(&repo)
+        cmd.current_dir(&repo)
             .env("HOME", &home)
             .env("USERPROFILE", &home)
             .env_remove("ORBIT_FORMAT")
@@ -1762,228 +1339,142 @@ fn doctor_warns_when_routine_last_success_is_stale() {
             .output()
             .expect("orbit")
     };
-    for args in [
-        &[
-            "--root",
-            root_arg.as_str(),
-            "init",
-            "--non-interactive",
-            "--machine-name",
-            "freshness-host",
-            "--task-prefix",
-            "FR",
-        ][..],
-        &[
-            "--root",
-            root_arg.as_str(),
-            "workspace",
-            "init",
-            "--name",
-            "routine-freshness",
-        ][..],
+    let run_root = |tail: &[&str]| {
+        let mut a = vec!["--root", root_arg.as_str()];
+        a.extend_from_slice(tail);
+        run(&a)
+    };
+    for tail in [
+        "init --non-interactive --machine-name freshness-host --task-prefix FR",
+        "workspace init --name routine-freshness",
     ] {
-        let output = run(args);
+        let args: Vec<&str> = tail.split_whitespace().collect();
+        let out = run_root(&args);
+        let ok = out.status.success();
         assert!(
-            output.status.success(),
-            "orbit {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
+            ok,
+            "orbit {tail} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
-    let list = run(&[
-        "--root",
-        root_arg.as_str(),
-        "routine",
-        "list",
-        "--format",
-        "json",
-    ]);
-    assert!(
-        list.status.success(),
-        "{}",
-        String::from_utf8_lossy(&list.stderr)
-    );
-    let listed: Value = serde_json::from_slice(&list.stdout).expect("routine list JSON");
-    let routine = listed["routines"]
-        .as_array()
-        .and_then(|routines| {
-            routines.iter().find(|routine| {
-                routine["target"]
-                    .as_str()
-                    .is_some_and(|target| target.contains("worktree_gc"))
-            })
+    let list_routines = || -> Vec<Value> {
+        let list = run_root(&["routine", "list", "--format", "json"]);
+        let ok = list.status.success();
+        assert!(ok, "{}", String::from_utf8_lossy(&list.stderr));
+        let parsed: Value = serde_json::from_slice(&list.stdout).expect("routine list JSON");
+        parsed["routines"].as_array().expect("routines").clone()
+    };
+    let routines = list_routines();
+    let routine = routines
+        .iter()
+        .find(|r| {
+            r["target"]
+                .as_str()
+                .is_some_and(|t| t.contains("worktree_gc"))
         })
         .expect("seeded worktree-gc routine");
     let name = routine["name"].as_str().expect("name").to_string();
     let now = chrono::Utc::now();
     let rfc = |ago: chrono::Duration| (now - ago).to_rfc3339();
-    let database = Connection::open(root.join("orbit.db")).expect("host database");
-    database
-        .execute(
-            "INSERT INTO routine_cursors (routine_name, baseline_at, last_slot, updated_at) \
-             VALUES (?1, ?2, ?2, ?2)",
-            rusqlite::params![name, rfc(chrono::Duration::hours(5))],
-        )
-        .expect("cursor");
-    database
-        .execute(
-            "INSERT INTO routine_fires \
-             (routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at) \
-             VALUES (?1, ?2, 1, 'succeeded', 'jrun-fresh', 'routine-freshness', NULL, ?3, ?4)",
-            rusqlite::params![
-                name,
-                rfc(chrono::Duration::hours(5)),
-                rfc(chrono::Duration::hours(5)),
-                rfc(chrono::Duration::hours(4)),
-            ],
-        )
-        .expect("old success");
-    fn freshness(rows: &[Value]) -> &Value {
-        row(rows, "routine-freshness")
-    }
-    let before_enable = rows(&run(&["--root", root_arg.as_str(), "doctor", "--json"]));
-    assert_eq!(
-        freshness(&before_enable)["status"],
-        "ok",
-        "a disabled routine is not stale: {}",
-        freshness(&before_enable)
-    );
-
+    let db = Connection::open(root.join("orbit.db")).expect("host database");
+    db.execute("INSERT INTO routine_cursors (routine_name, baseline_at, last_slot, updated_at) VALUES (?1, ?2, ?2, ?2)", rusqlite::params![name, rfc(chrono::Duration::hours(5))]).expect("cursor");
+    db.execute("INSERT INTO routine_fires (routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at) VALUES (?1, ?2, 1, 'succeeded', 'jrun-fresh', 'routine-freshness', NULL, ?3, ?4)", rusqlite::params![name, rfc(chrono::Duration::hours(5)), rfc(chrono::Duration::hours(5)), rfc(chrono::Duration::hours(4))]).expect("old success");
+    let before = rows(&run_root(&["doctor", "--json"]));
+    expect_status(&before, "routine-freshness", "ok");
     // With `--root`, this host keeps seeded routines in the global catalog.
     let definition = root.join("routines/worktree_gc.yaml");
-    let yaml = fs::read_to_string(&definition).expect("seeded routine");
-    assert!(yaml.contains("enabled: false"), "{yaml}");
-    fs::write(
-        &definition,
-        yaml.replacen("enabled: false", "enabled: true", 1),
-    )
-    .expect("enable");
-
-    let stale = rows(&run(&["--root", root_arg.as_str(), "doctor", "--json"]));
-    let stale_row = freshness(&stale);
-    assert_eq!(stale_row["status"], "warning", "{stale_row}");
-    assert!(
-        stale_row["message"]
-            .as_str()
-            .is_some_and(|message| message.contains(&name)),
-        "the warning names the routine: {stale_row}"
-    );
-
-    database
-        .execute(
-            "INSERT INTO routine_fires \
-             (routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at) \
-             VALUES (?1, ?2, 1, 'skipped', NULL, 'routine-freshness', 'missed_run: skip', ?2, ?2)",
-            rusqlite::params![name, rfc(chrono::Duration::minutes(30))],
-        )
-        .expect("newer skip");
-    let still_stale = rows(&run(&["--root", root_arg.as_str(), "doctor", "--json"]));
-    let still = freshness(&still_stale);
-    assert_eq!(
-        still["status"], "warning",
-        "a skip is not a success: {still}"
-    );
-    assert!(
-        still["message"]
-            .as_str()
-            .is_some_and(|message| message.contains(&name)),
-        "{still}"
-    );
-    let listed = run(&[
-        "--root",
-        root_arg.as_str(),
-        "routine",
-        "list",
-        "--format",
-        "json",
-    ]);
-    let listed: Value = serde_json::from_slice(&listed.stdout).expect("list after skip");
-    let last_fire = listed["routines"]
-        .as_array()
-        .and_then(|routines| routines.iter().find(|routine| routine["name"] == name))
-        .and_then(|routine| routine.get("last_fire"))
+    let yaml = read_str(&definition);
+    has(&yaml, "enabled: false");
+    let enabled_yaml = yaml.replacen("enabled: false", "enabled: true", 1);
+    put(&definition, &enabled_yaml);
+    let stale = rows(&run_root(&["doctor", "--json"]));
+    expect_status(&stale, "routine-freshness", "warning");
+    msg_has(row(&stale, "routine-freshness"), &name);
+    db.execute("INSERT INTO routine_fires (routine_name, slot, attempt, state, run_id, source_workspace, detail, created_at, updated_at) VALUES (?1, ?2, 1, 'skipped', NULL, 'routine-freshness', 'missed_run: skip', ?2, ?2)", rusqlite::params![name, rfc(chrono::Duration::minutes(30))]).expect("newer skip");
+    let still = rows(&run_root(&["doctor", "--json"]));
+    expect_status(&still, "routine-freshness", "warning");
+    msg_has(row(&still, "routine-freshness"), &name);
+    let routines2 = list_routines();
+    let last = routines2
+        .iter()
+        .find(|r| r["name"] == name)
+        .and_then(|r| r.get("last_fire"))
         .expect("last fire");
-    assert_eq!(last_fire["detail"], "missed_run: skip", "{last_fire}");
-    assert_eq!(last_fire["state"], "skipped", "{last_fire}");
-
-    database
-        .execute(
-            "UPDATE routine_fires SET updated_at = ?1 \
-             WHERE routine_name = ?2 AND state = 'succeeded'",
-            rusqlite::params![rfc(chrono::Duration::hours(1)), name],
-        )
-        .expect("refresh success");
-    let fresh = rows(&run(&["--root", root_arg.as_str(), "doctor", "--json"]));
-    assert_eq!(
-        freshness(&fresh)["status"],
-        "ok",
-        "a success inside 3× the hourly interval is ok: {}",
-        freshness(&fresh)
-    );
+    assert_eq!(last["detail"], "missed_run: skip", "{last}");
+    assert_eq!(last["state"], "skipped", "{last}");
+    db.execute(
+        "UPDATE routine_fires SET updated_at = ?1 WHERE routine_name = ?2 AND state = 'succeeded'",
+        rusqlite::params![rfc(chrono::Duration::hours(1)), name],
+    )
+    .expect("refresh success");
+    let fresh = rows(&run_root(&["doctor", "--json"]));
+    expect_status(&fresh, "routine-freshness", "ok");
 }
-
 /// A home whose global config routes the default lane to `crew`, on `provider`.
 fn routed_crew_fixture(crew: &str, provider: &str) -> WorkCheckout {
-    let fixture = WorkCheckout::new();
-    let init = command(&fixture)
-        .env("ORBIT_SKIP_HOST_PREREQUISITES", "1")
-        .args([
-            "init",
-            "--non-interactive",
-            "--machine-name",
-            "doctor-host-os",
-            "--task-prefix",
-            "DH",
-        ])
-        .output()
-        .expect("init");
+    let f = WorkCheckout::new();
+    let mut cmd = command(&f);
+    cmd.env("ORBIT_SKIP_HOST_PREREQUISITES", "1").args(
+        "init --non-interactive --machine-name doctor-host-os --task-prefix DH".split_whitespace(),
+    );
+    let init = cmd.output().expect("init");
     assert!(init.status.success(), "{init:?}");
-    let global = fixture.home.join(".orbit");
-    fs::create_dir_all(&global).expect("global root");
-    fs::write(
-        global.join("config.toml"),
-        format!(
-            "[workflow]\ndefault_crew = \"{crew}\"\n\n\
-             [crews.{crew}]\nprovider = \"{provider}\"\nmodel = \"fixture\"\n"
-        ),
-    )
-    .expect("routed crew config");
-    fixture
+    let global = global_dir(&f);
+    let routed = format!(
+        "[workflow]\ndefault_crew = \"{crew}\"\n\n[crews.{crew}]\nprovider = \"{provider}\"\nmodel = \"fixture\"\n"
+    );
+    put(&global.join("config.toml"), &routed);
+    f
 }
-
-/// A crew whose executor `host_os` excludes this host is unsupported here, not
-/// a missing install: its provider row is `skipped` with no install advice, as
-/// `orbit doctor providers` reports it. The shipped Muse executor is macOS-only,
-/// so every other host, Linux and Windows alike, takes this branch.
+fn edit_executor(
+    f: &WorkCheckout,
+    provider: &str,
+    edit: impl FnOnce(&mut serde_yaml::Value),
+) -> std::path::PathBuf {
+    let path = f
+        .home
+        .join(".orbit/resources/executors")
+        .join(format!("{provider}.yaml"));
+    let mut executor: serde_yaml::Value =
+        serde_yaml::from_str(&read_str(&path)).expect("seeded executor YAML");
+    edit(&mut executor);
+    fs::write(
+        &path,
+        serde_yaml::to_string(&executor).expect("pinned executor YAML"),
+    )
+    .expect("pinned executor");
+    path
+}
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn doctor_skips_a_crew_whose_executor_host_os_excludes_this_host() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_skips_a_crew_whose_executor_host_os_excludes_this_host",
-    ) {
+    if in_child("doctor::doctor_skips_a_crew_whose_executor_host_os_excludes_this_host") {
         return;
     }
-    let fixture = routed_crew_fixture("muse-wonder", "muse");
-    let parsed = rows(&doctor(&fixture, &[]));
+    let f = routed_crew_fixture("muse-wonder", "muse");
+    pin_executor_host_os(&f, "muse", &["macos"]);
+    let parsed = rows(&doctor(&f, &[]));
     let crew = row(&parsed, "provider:muse-wonder");
     assert_eq!(crew["status"], "skipped", "{crew}");
-    assert!(
-        crew["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("unsupported on this OS")),
-        "{crew}"
-    );
+    msg_has(crew, "unsupported on this OS");
     assert!(
         crew["remediation"].is_null(),
-        "an unsupported crew gets no install advice: {crew}"
+        "unsupported crew gets no install advice: {crew}"
     );
 }
-
-/// Point `provider`'s seeded executor at a launcher that cannot exist: an
-/// absolute path under the disposable fixture root. An absolute command is
-/// looked up only at that path, never on `PATH` or in the system prefixes, so
-/// no installed CLI can satisfy it. Every other seeded field, including
-/// `host_os`, stays as shipped. Returns the configured command.
+/// Set `host_os` on `provider`'s seeded executor, leaving every other field as shipped.
+#[cfg(not(target_os = "macos"))]
+fn pin_executor_host_os(fixture: &WorkCheckout, provider: &str, host_os: &[&str]) {
+    edit_executor(fixture, provider, |executor| {
+        executor["spec"]["host_os"] = serde_yaml::Value::Sequence(
+            host_os
+                .iter()
+                .map(|os| serde_yaml::Value::String((*os).to_string()))
+                .collect(),
+        );
+    });
+}
+/// Point `provider`'s executor at an absent absolute launcher under the fixture root; returns that command.
 fn pin_missing_launcher(fixture: &WorkCheckout, provider: &str) -> String {
     let launcher = fixture
         .temp
@@ -1992,299 +1483,166 @@ fn pin_missing_launcher(fixture: &WorkCheckout, provider: &str) -> String {
         .join(provider)
         .display()
         .to_string();
-    let path = fixture
-        .home
-        .join(".orbit/resources/executors")
-        .join(format!("{provider}.yaml"));
-    let mut executor: serde_yaml::Value =
-        serde_yaml::from_str(&fs::read_to_string(&path).expect("seeded executor"))
-            .expect("seeded executor YAML");
-    executor["spec"]["command"] = serde_yaml::Value::String(launcher.clone());
-    fs::write(
-        &path,
-        serde_yaml::to_string(&executor).expect("pinned executor YAML"),
-    )
-    .expect("pinned executor");
+    let owned = launcher.clone();
+    edit_executor(fixture, provider, move |executor| {
+        executor["spec"]["command"] = serde_yaml::Value::String(owned);
+    });
     launcher
 }
-
-/// The complement: on macOS, where Muse runs, a missing CLI is still an error
-/// with install advice. Its launcher is pinned to an absent path under the
-/// fixture root, so an installed Muse in a system prefix cannot satisfy it.
-#[cfg(target_os = "macos")]
+/// A missing CLI is an error with install advice for supported and unrestricted executors alike.
 #[test]
 fn doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports",
-    ) {
+    if in_child("doctor::doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports") {
         return;
     }
-    let fixture = routed_crew_fixture("muse-wonder", "muse");
-    let launcher = pin_missing_launcher(&fixture, "muse");
-    let output = command(&fixture)
-        .env("PATH", fixture.temp.path())
-        .args(["doctor", "--json"])
-        .output()
-        .expect("doctor report");
-    let parsed = rows(&output);
-    let crew = row(&parsed, "provider:muse-wonder");
-    assert_eq!(crew["status"], "error", "{crew}");
-    assert!(
-        crew["message"]
-            .as_str()
-            .is_some_and(|message| message.contains(&format!("CLI '{launcher}' was not found"))),
-        "{crew}"
-    );
-    assert!(
-        crew["remediation"].as_str().is_some_and(
-            |remediation| remediation.contains(&format!("Install the '{launcher}' CLI"))
-        ),
-        "{crew}"
-    );
-}
-
-/// An unrestricted executor (no `host_os`) keeps its missing-CLI error on every
-/// host. Its launcher is pinned to an absent path under the fixture root, so no
-/// installed CLI or `PATH` entry can satisfy it.
-#[test]
-fn doctor_keeps_a_missing_cli_an_error_for_an_unrestricted_executor() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_keeps_a_missing_cli_an_error_for_an_unrestricted_executor",
-    ) {
-        return;
+    // Rows: (case, crew, provider). Each row gets a fresh fixture.
+    for (case, crew, provider) in [
+        ("supported-host", "muse-wonder", "muse"),
+        ("unrestricted", "codex-wonder", "codex"),
+    ] {
+        let f = routed_crew_fixture(crew, provider);
+        let launcher = pin_missing_launcher(&f, provider);
+        let mut cmd = command(&f);
+        cmd.env("PATH", f.temp.path()).args(["doctor", "--json"]);
+        let out = cmd.output().expect("doctor");
+        let parsed = rows(&out);
+        let crew_row = row(&parsed, &format!("provider:{crew}"));
+        assert_eq!(
+            crew_row["status"], "error",
+            "{case} {crew}/{provider}: {crew_row}"
+        );
+        msg_has(crew_row, &format!("CLI '{launcher}' was not found"));
+        fix_has(crew_row, &format!("Install the '{launcher}' CLI"));
     }
-    let fixture = routed_crew_fixture("codex-wonder", "codex");
-    let launcher = pin_missing_launcher(&fixture, "codex");
-    let output = command(&fixture)
-        .env("PATH", fixture.temp.path())
-        .args(["doctor", "--json"])
-        .output()
-        .expect("doctor report");
-    let parsed = rows(&output);
-    let crew = row(&parsed, "provider:codex-wonder");
-    assert_eq!(crew["status"], "error", "{crew}");
-    assert!(
-        crew["message"]
-            .as_str()
-            .is_some_and(|message| message.contains(&format!("CLI '{launcher}' was not found"))),
-        "{crew}"
-    );
-    assert!(
-        crew["remediation"].as_str().is_some_and(
-            |remediation| remediation.contains(&format!("Install the '{launcher}' CLI"))
-        ),
-        "{crew}"
-    );
 }
-
 /// Unknown-only files must enter the existing locked, backed-up repair flow.
 #[test]
 fn doctor_fixes_unknown_config_without_retired_keys() {
-    let fixture = WorkCheckout::new();
-    let global_dir = fixture.home.join(".orbit");
-    fs::create_dir_all(&global_dir).expect("global root");
-    let global = global_dir.join("config.toml");
-    let workspace = fixture.work.join(".orbit/config.toml");
+    let f = WorkCheckout::new();
     let global_body = "[workflow]\nbase_branc = 'stale'\nbase_branch = 'main'\n";
     let workspace_body = "# keep this note\n[workflow]\nbase_branch = 'agent-main'\n[future]\n";
-    fs::write(&global, global_body).expect("global config");
-    fs::write(&workspace, workspace_body).expect("workspace config");
-    let diagnosis = rows(&doctor(&fixture, &[]));
-    assert!(
-        diagnosis.iter().any(
-            |row| mentions_key_and_file(row, "workflow.base_branc", &global)
-                && row["message"]
-                    .as_str()
-                    .is_some_and(|message| message.contains("workflow.base_branch"))
-        ),
-        "{diagnosis:?}"
-    );
+    let (gd, gc, wc) = write_configs(&f, global_body, workspace_body);
+    let diagnosis = rows(&doctor(&f, &[]));
+    let typo = diagnosis.iter().any(|r| {
+        mentions_key_and_file(r, "workflow.base_branc", &gc)
+            && r["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("workflow.base_branch"))
+    });
+    assert!(typo, "{diagnosis:?}");
     assert!(
         diagnosis
             .iter()
-            .any(|row| mentions_key_and_file(row, "future", &workspace)),
+            .any(|r| mentions_key_and_file(r, "future", &wc)),
         "{diagnosis:?}"
     );
-    let repaired = rows(&doctor(&fixture, &["--fix-retired-config-keys"]));
-    assert_eq!(row(&repaired, "fix-retired-config-keys")["status"], "ok");
-    assert_eq!(row(&repaired, "retired-config-keys")["status"], "ok");
-    assert_eq!(
-        fs::read_to_string(global_dir.join("config.toml.bak")).expect("global backup"),
-        global_body
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.work.join(".orbit/config.toml.bak")).expect("workspace backup"),
-        workspace_body
-    );
-    let updated: toml::Value = fs::read_to_string(&global)
-        .expect("global")
-        .parse()
-        .expect("TOML");
+    let repaired = fix_rows(&f);
+    expect_status(&repaired, "fix-retired-config-keys", "ok");
+    expect_status(&repaired, "retired-config-keys", "ok");
+    assert_backup(&gd, global_body);
+    assert_backup(&f.work.join(".orbit"), workspace_body);
+    let updated = read_toml(&gc);
     assert_eq!(updated["workflow"]["base_branch"].as_str(), Some("main"));
     assert!(updated["workflow"].get("base_branc").is_none());
-    let updated = fs::read_to_string(&workspace).expect("workspace");
-    assert!(updated.contains("# keep this note"));
-    assert!(
-        updated
-            .parse::<toml::Value>()
-            .expect("TOML")
-            .get("future")
-            .is_none()
-    );
+    let updated_text = read_str(&wc);
+    has(&updated_text, "# keep this note");
+    assert!(read_toml(&wc).get("future").is_none());
 }
 
-/// ORB-16960: the count stays visible on stderr while stdout remains records.
-/// Doctor rows keep severity order, `--problems` filters human rows, and JSON
-/// output remains the full, unfiltered array.
+fn severity_order(text: &str) -> (bool, bool) {
+    let (mut max_rank, mut warn, mut ok_after) = (0, false, false);
+    for line in text.lines().filter(|l| l.contains('\t')) {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let status = parts[1].to_lowercase();
+        let ranks = ["error", "warning", "ok", "info", "skipped"];
+        let Some(rank) = ranks.iter().position(|r| r == &status) else {
+            continue;
+        };
+        let in_order = rank >= max_rank;
+        assert!(
+            in_order,
+            "status {} after rank {max_rank}: {line}",
+            parts[1]
+        );
+        max_rank = rank;
+        warn = warn || status == "warning";
+        ok_after = ok_after || (status == "ok" && warn);
+    }
+    (warn, ok_after)
+}
+/// ORB-16960: count on stderr, severity order, `--problems` filters human rows, JSON stays full.
 #[test]
 fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
-    if crate::isolated_test::run_in_child(
-        "doctor::doctor_prints_summary_count_orders_by_severity_and_filters_problems",
-    ) {
+    if in_child("doctor::doctor_prints_summary_count_orders_by_severity_and_filters_problems") {
         return;
     }
-    let fixture = WorkCheckout::new();
-
+    let f = WorkCheckout::new();
     let is_summary = |line: &str| line.contains(" failure(s), ") && line.ends_with(" warning(s).");
-
-    // 1. Plain stdout stays a stream of tab-separated records; the count is a
-    // diagnostic on stderr instead of a synthetic first record.
-    let plain = command(&fixture)
-        .args(["doctor", "--format", "plain"])
-        .output()
-        .expect("doctor plain");
-    let stdout = String::from_utf8(plain.stdout).expect("UTF-8 stdout");
-    let lines: Vec<&str> = stdout.lines().filter(|line| line.contains('\t')).collect();
+    // 1. Plain stdout stays tab-separated records; the count is on stderr.
+    let plain = run(&f, &["doctor", "--format", "plain"]);
+    let stdout = utf8(plain.stdout);
+    let lines: Vec<&str> = stdout.lines().filter(|l| l.contains('\t')).collect();
     assert!(!lines.is_empty(), "doctor output must not be empty");
     assert!(
         !stdout.lines().any(is_summary),
-        "summary count must not appear as a plain stdout record: {stdout}"
+        "summary must not be a plain stdout record: {stdout}"
     );
-    let plain_stderr = String::from_utf8(plain.stderr).expect("UTF-8 stderr");
     assert!(
-        plain_stderr.lines().any(is_summary),
-        "summary count must be reported on stderr: {plain_stderr}"
+        utf8(plain.stderr).lines().any(is_summary),
+        "summary must be on stderr"
     );
-
-    // 2. Introduce a warning by creating a dangling skill symlink
-    let base = fixture.work.join(".orbit/skills");
-    fs::create_dir_all(&base).expect("skills dir");
-    let link = base.join("dangling-probe");
+    // 2. Introduce a warning via a dangling skill symlink.
+    let base = f.work.join(".orbit/skills");
+    mkdir(&base);
     #[cfg(unix)]
-    std::os::unix::fs::symlink(base.join("nonexistent"), &link).expect("symlink");
-
-    let table_out = command(&fixture)
-        .args(["doctor", "--format", "table"])
-        .output()
-        .expect("doctor table");
-    let table_str = String::from_utf8(table_out.stdout).expect("UTF-8 stdout");
-    let table_stderr = String::from_utf8(table_out.stderr).expect("UTF-8 stderr");
-
-    // The count reaches the terminal-table path on stderr before the table is
-    // rendered, while stdout starts with the table header and rows.
-    let first_line = table_str.lines().next().unwrap_or("");
+    link(&base.join("nonexistent"), &base.join("dangling-probe"));
+    let table_out = run(&f, &["doctor", "--format", "table"]);
+    let table_str = utf8(table_out.stdout);
+    let first = table_str.lines().next().unwrap_or("");
     assert!(
-        first_line.starts_with("CHECK") && !is_summary(first_line),
-        "table stdout must start with its header, not the count: {first_line}"
+        first.starts_with("CHECK") && !is_summary(first),
+        "table stdout must start with header: {first}"
     );
     assert!(
-        table_stderr.lines().any(is_summary),
-        "terminal-table path must report the count on stderr: {table_stderr}"
+        utf8(table_out.stderr).lines().any(is_summary),
+        "table path must report count on stderr"
     );
-
-    // Check row ordering in plain output: failures, then warnings, then ok rows
-    let plain_with_warn = command(&fixture)
-        .args(["doctor", "--format", "plain"])
-        .output()
-        .expect("doctor plain with warn");
-    let plain_str = String::from_utf8(plain_with_warn.stdout).expect("UTF-8");
+    // Row ordering in plain output: failures, then warnings, then ok rows.
+    let plain_warn = run(&f, &["doctor", "--format", "plain"]);
+    let plain_str = utf8(plain_warn.stdout);
     assert!(
         !plain_str.lines().any(is_summary),
-        "summary count must stay off plain stdout: {plain_str}"
+        "summary must stay off plain stdout: {plain_str}"
     );
-    let plain_lines: Vec<&str> = plain_str
-        .lines()
-        .filter(|line| line.contains('\t'))
-        .collect();
-    let mut max_rank = 0;
-    let mut seen_warning = false;
-    let mut seen_ok_after_warning = false;
-    for line in &plain_lines {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 2 {
-            let status = parts[1];
-            let rank = match status {
-                "ERROR" | "error" => 0,
-                "warning" => 1,
-                "ok" => 2,
-                "info" => 3,
-                "skipped" => 4,
-                _ => continue,
-            };
-            assert!(
-                rank >= max_rank,
-                "status {status} (rank {rank}) appeared after higher severity rank {max_rank} in: {line}"
-            );
-            max_rank = rank;
-            if status == "warning" {
-                seen_warning = true;
-            } else if status == "ok" && seen_warning {
-                seen_ok_after_warning = true;
-            }
-        }
-    }
+    let (seen_warn, seen_ok_after) = severity_order(&plain_str);
     #[cfg(unix)]
     {
-        assert!(seen_warning, "should have found a warning row: {plain_str}");
-        assert!(
-            seen_ok_after_warning,
-            "ok rows should appear after warnings: {plain_str}"
-        );
+        assert!(seen_warn, "should have a warning row: {plain_str}");
+        assert!(seen_ok_after, "ok rows after warnings: {plain_str}");
     }
-
-    // 3. Test --problems:
-    let problems_out = command(&fixture)
-        .args(["doctor", "--problems", "--format", "plain"])
-        .output()
-        .expect("doctor --problems");
-    let problems_str = String::from_utf8(problems_out.stdout).expect("UTF-8");
-    let problems_lines: Vec<&str> = problems_str
-        .lines()
-        .filter(|line| line.contains('\t'))
-        .collect();
-    for line in &problems_lines {
+    // 3. --problems keeps only errors and warnings in human output.
+    let problems = run(&f, &["doctor", "--problems", "--format", "plain"]);
+    for line in utf8(problems.stdout).lines().filter(|l| l.contains('\t')) {
         let parts: Vec<&str> = line.split('\t').collect();
         if parts.len() >= 2 {
-            let status = parts[1];
-            assert!(
-                status == "ERROR" || status == "warning" || status == "error",
-                "--problems must only include errors and warnings, found {status}: {line}"
-            );
+            let problem = matches!(parts[1], "ERROR" | "warning" | "error");
+            assert!(problem, "--problems only errors/warnings: {line}");
         }
     }
-
-    // 4. Test --json with and without --problems:
-    let json_normal = command(&fixture)
-        .args(["doctor", "--json"])
-        .output()
-        .expect("doctor --json");
-    let json_problems = command(&fixture)
-        .args(["doctor", "--problems", "--json"])
-        .output()
-        .expect("doctor --problems --json");
-    let parsed_normal = rows(&json_normal);
-    let parsed_problems = rows(&json_problems);
-    assert_eq!(
-        parsed_normal.len(),
-        parsed_problems.len(),
-        "--problems --json must return all rows"
-    );
-    for (norm, prob) in parsed_normal.iter().zip(&parsed_problems) {
-        assert_eq!(norm["check"], prob["check"]);
-        assert_eq!(norm["status"], prob["status"]);
-        if norm["check"] != "disk-space" {
-            assert_eq!(norm["message"], prob["message"]);
+    // 4. --json with and without --problems returns the full array.
+    let normal = rows(&run(&f, &["doctor", "--json"]));
+    let problems_json = rows(&run(&f, &["doctor", "--problems", "--json"]));
+    let same_len = normal.len() == problems_json.len();
+    assert!(same_len, "--problems --json must return all rows");
+    for (n, pr) in normal.iter().zip(&problems_json) {
+        assert_eq!(n["check"], pr["check"]);
+        assert_eq!(n["status"], pr["status"]);
+        if n["check"] != "disk-space" {
+            assert_eq!(n["message"], pr["message"]);
         }
-        assert_eq!(norm["remediation"], prob["remediation"]);
+        assert_eq!(n["remediation"], pr["remediation"]);
     }
 }

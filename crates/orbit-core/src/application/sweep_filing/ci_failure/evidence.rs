@@ -466,11 +466,12 @@ pub(super) fn pending_audit(mut audit: Value, pending: &[Value]) -> Value {
     audit
 }
 
-pub(super) fn filing_audit(mut audit: Value, filed: &[Value], skipped_existing: &[Value]) -> Value {
-    let created_task_ids = filed
-        .iter()
-        .filter_map(|entry| entry.get("task_id").cloned())
-        .collect::<Vec<_>>();
+pub(super) fn filing_audit(
+    mut audit: Value,
+    filed: &[crate::application::task::CiSweepFilingEvidence],
+    skipped_existing: &[Value],
+) -> Value {
+    let created_task_ids = filed.iter().map(|entry| &entry.task_id).collect::<Vec<_>>();
     let existing_task_owners = skipped_existing
         .iter()
         .filter_map(|entry| entry.get("task_id").cloned())

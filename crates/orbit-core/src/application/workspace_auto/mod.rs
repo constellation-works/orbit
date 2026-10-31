@@ -5,11 +5,15 @@
 
 mod adopt;
 mod approvals;
+mod automation_port;
 mod classify;
 mod drains;
+mod job_port;
 mod limiters;
 mod mode;
 mod readiness;
+mod readiness_hosts;
+mod task_port;
 mod window;
 
 pub(crate) use adopt::adopt_orphaned_deliveries;
@@ -19,5 +23,4 @@ pub(crate) use approvals::{
 pub(crate) use classify::classify_workspace_auto_tasks;
 #[cfg(feature = "test-support")]
 pub use classify::release_failure_hook::with_reservation_release_failure;
-pub(super) use drains::read_live_leaf_runs;
 pub(crate) use window::drain_window;

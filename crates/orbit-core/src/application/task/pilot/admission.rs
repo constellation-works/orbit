@@ -6,8 +6,9 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
-    HostOs, PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, Task, TaskArtifact, TaskComment,
-    TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus,
+    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState, HostOs,
+    PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, Task, TaskArtifact, TaskComment,
+    TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus, decision_requests_from_history,
 };
 use orbit_types::tool::McpCapability;
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,7 @@ use super::super::positive_validation_tools;
 use super::super::helpers::is_automation_actor;
 use super::super::legacy_decisions;
 use crate::OrbitRuntime;
+use crate::application::task::TaskRecords;
 
 /// The trusted history events an operator decision on a hold records.
 const OPERATOR_VALIDATION_RESOLVED: &str = "operator_validation_resolved";
@@ -85,6 +87,44 @@ impl HostOperationalHold {
 }
 
 impl PilotAdmissionHold {
+    /// Whether evidenced operator clear/override actions can resolve this hold.
+    pub(crate) fn is_resolvable(&self) -> bool {
+        matches!(
+            self,
+            Self::OperatorValidation(_)
+                | Self::NativeOs(_)
+                | Self::HostOperational(_)
+                | Self::Duplicate
+                | Self::AlreadyLanded
+        )
+    }
+
+    /// Answers a decision request for this hold may offer.
+    ///
+    /// Duplicate and already-landed findings resolve only through a verdict
+    /// that overrides the finding. `evaluated` does not, so it is not offered:
+    /// an operator who chose it would spend the request and leave the hold.
+    pub(crate) fn decision_request_answers(&self) -> Vec<DecisionAnswer> {
+        match self {
+            Self::Duplicate | Self::AlreadyLanded => {
+                PilotAdmissionVerdict::finding_override_decision_answers()
+            }
+            _ => PilotAdmissionVerdict::decision_answers(),
+        }
+    }
+
+    /// Whether `verdict` records a resolution for this hold.
+    ///
+    /// A duplicate or already-landed finding accepts only an overriding
+    /// verdict. Every other hold keeps the answers it already accepted;
+    /// evidence rules for `evaluated` still run when that comment is applied.
+    pub(crate) fn accepts_decision_answer(&self, verdict: PilotAdmissionVerdict) -> bool {
+        match self {
+            Self::Duplicate | Self::AlreadyLanded => verdict.overrides_findings(),
+            _ => true,
+        }
+    }
+
     fn operator_handoff(&self, operation_id: &str) -> Option<(TaskHistoryEntry, &'static str)> {
         match self {
             Self::OperatorValidation(hold) => {
@@ -710,16 +750,88 @@ impl OrbitRuntime {
         for task in
             self.list_tasks_filtered(Some(TaskStatus::Backlog), None, None, None, None, None)?
         {
-            if let Some(
-                hold @ (PilotAdmissionHold::OperatorValidation(_)
-                | PilotAdmissionHold::HostOperational(_)),
-            ) = self.pilot_admission_hold(&task.id)?
-                && !self.pilot_operator_handoff_recorded(&task.id, &hold)?
-            {
-                self.record_pilot_operator_handoff(&task.id, &hold)?;
+            if let Some(hold) = self.pilot_admission_hold(&task.id)? {
+                if matches!(
+                    hold,
+                    PilotAdmissionHold::OperatorValidation(_)
+                        | PilotAdmissionHold::HostOperational(_)
+                ) && !self.pilot_operator_handoff_recorded(&task.id, &hold)?
+                {
+                    self.record_pilot_operator_handoff(&task.id, &hold)?;
+                }
+                self.raise_pilot_decision_request(&task.id)?;
             }
         }
         Ok(())
+    }
+
+    /// Raise the one open decision request for `task_id`'s current pilot
+    /// admission hold, when the decision channel is enabled. A hold whose
+    /// `operation_id` already has an open request raises nothing; an
+    /// answered request for that operation does not suppress a fresh
+    /// request, because one assessment can persist successive holds and
+    /// answering one only resolves the hold admission then reported. A
+    /// newer assessment raises a fresh request and the earlier one then
+    /// reads as superseded. Disabled, nothing is written.
+    pub(crate) fn raise_pilot_decision_request(&self, task_id: &str) -> Result<(), OrbitError> {
+        if !self.decision_channel_enabled() {
+            return Ok(());
+        }
+        self.stores()
+            .tasks()
+            .with_task_write_lock(task_id, &mut || {
+                let Some(hold) = self.pilot_admission_hold(task_id)? else {
+                    return Ok(());
+                };
+                let comments = self.get_task_comments(task_id)?;
+                let Some(operation_id) = super::latest_pilot_operation_id(&comments) else {
+                    return Ok(());
+                };
+                let history = self.get_task_history(task_id)?;
+                let binding = DecisionBinding::PilotOperation {
+                    operation_id: operation_id.to_string(),
+                };
+                if decision_requests_from_history(
+                    &self.get_task(task_id)?,
+                    &history,
+                    Some(operation_id),
+                    chrono::Utc::now(),
+                )
+                .iter()
+                .any(|request| {
+                    request.binding == binding && request.state == DecisionRequestState::Open
+                }) {
+                    return Ok(());
+                }
+                let now = chrono::Utc::now();
+                let request = DecisionRequest::new(
+                    task_id.to_string(),
+                    DecisionGate::PilotAdmission,
+                    hold.decision_request_answers(),
+                    binding,
+                    "task_pilot".to_string(),
+                    now,
+                );
+                self.stores().task_records().update(
+                    task_id,
+                    super::super::TaskRecordUpdateParams {
+                        actor: "task-pilot".into(),
+                        append_history: vec![request.history_entry("task-pilot")],
+                        ..Default::default()
+                    },
+                )?;
+                Ok(())
+            })
+    }
+
+    /// Whether the task currently carries a pilot-admission hold that an
+    /// evidenced operator `clear` or `approve-anyway` decision can resolve.
+    /// The dashboard's typed operator route checks this before writing, so a
+    /// task with no matching hold is refused without a comment.
+    pub fn has_resolvable_pilot_admission_hold(&self, task_id: &str) -> Result<bool, OrbitError> {
+        Ok(self
+            .pilot_admission_hold(task_id)?
+            .is_some_and(|hold| hold.is_resolvable()))
     }
 
     /// Only the trusted human update path calls this. Agent-authored comment

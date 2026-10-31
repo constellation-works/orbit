@@ -98,27 +98,6 @@
   max-height: 420px;
   overflow: auto;
 }
-.friction-control-grid {
-  display: grid;
-  grid-template-columns: minmax(140px, 0.4fr) minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-@media (max-width: 800px) {
-  .friction-control-grid { grid-template-columns: 1fr; }
-}
-.friction-control {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-.friction-control-label {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--fg-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
 .friction-tag-options {
   display: flex;
   flex-wrap: wrap;
@@ -385,51 +364,17 @@
   line-height: 1.65;
   color: var(--fg-soft);
 }
+/* The metadata card sits above the report. It reuses the task detail's
+   .task-delivery-card / .property-row look; only the controls and the task
+   link need to be told apart from plain fact rows. */
 .knowledge-side {
-  border-top: 1px solid var(--hair);
-  padding: 18px 22px 24px;
+  border-bottom: 1px solid var(--hair);
+  padding: 14px 22px;
   background: var(--bg);
-  overflow-y: auto;
 }
-.knowledge-side-group {
-  margin-bottom: 18px;
-}
-.knowledge-side-group:last-child {
-  margin-bottom: 0;
-}
-.knowledge-side-group h4 {
-  margin: 0 0 8px;
-}
-.knowledge-side-group .empty {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-dim);
-  opacity: 0.65;
-}
-.knowledge-side .meta-list {
-  display: grid;
-  gap: 6px;
-}
-.knowledge-side .meta-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 16px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  padding-bottom: 5px;
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
-}
-.knowledge-side .meta-row:last-child {
-  border-bottom: none;
-}
-.knowledge-side .meta-row .k {
-  color: var(--fg-dim);
-}
-.knowledge-side .meta-row .v {
-  color: var(--fg-soft);
-  text-align: right;
-}
+.friction-meta-card .property-row.fact .value.mono { font-size: 12px; }
+.friction-meta-card .property-row.triage { align-items: start; }
+.friction-meta-card .property-row.triage .label { line-height: 28px; }
 .knowledge-link-row {
   width: 100%;
   display: flex;
@@ -448,16 +393,11 @@
 .knowledge-link-row:hover {
   border-color: var(--fg-dim);
 }
-.knowledge-side .friction-control-grid {
-  grid-template-columns: 1fr;
+.friction-meta-card .knowledge-link-row {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
 }
-
-@media (max-width: 1400px) {
-  .knowledge-detail-body {
-    grid-template-columns: 1fr;
-  }
-  .knowledge-side {
-    border-left: none;
-    border-top: 1px solid var(--border);
-  }
-}
+.friction-meta-card .knowledge-link-row:hover { text-decoration: underline; }

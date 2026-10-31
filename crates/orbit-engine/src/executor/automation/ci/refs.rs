@@ -2,6 +2,7 @@
 //! retired or unverified on origin.
 
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::redact_all;
 use serde_json::{Value, json};
 
 use super::collect::{Bounds, push_retryable_error};
@@ -245,6 +246,7 @@ pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
                 (pull_requests, at_cap)
             }
             Err(error) => {
+                let error = redact_all(&error.to_string());
                 notes.push(format!(
                     "closed pull requests could not be listed ({error}); candidate branches will \
                      be queried by head before they are classified"
@@ -311,6 +313,7 @@ pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
                                 match_at_head
                             }
                             Err(error) => {
+                                let error = redact_all(&error.to_string());
                                 let message = format!(
                                     "closed pull requests for candidate branch '{branch}' could not \
                                      be listed ({error}); its failure remains deferred until verified"
@@ -354,6 +357,7 @@ pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
                             closed.insert((*branch).to_string(), pull_request);
                         }
                         Err(error) => {
+                            let error = redact_all(&error.to_string());
                             let message = format!(
                                 "open pull requests for candidate branch '{branch}' could not be \
                                  listed ({error}); its failure remains deferred"
@@ -368,6 +372,7 @@ pub(super) fn probe_branches<Q: CiQueries + ?Sized>(
                 }
             }
             Err(error) => {
+                let error = redact_all(&error.to_string());
                 notes.push(format!(
                     "branch '{branch}' could not be checked against origin ({error}); its \
                      failure remains deferred until verified"

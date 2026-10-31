@@ -591,6 +591,8 @@ impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
                     json!({
                         "gate": "not_required",
                         "reviewed_head_sha": "",
+                        "selective_selection_head_sha": "",
+                        "selective_receipt": null,
                         "reviewer_fixed": false,
                     })
                 } else {
@@ -607,6 +609,8 @@ impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
                     json!({
                         "gate": "passed",
                         "reviewed_head_sha": if re_review { reviewed("head") } else { "candidate".to_string() },
+                        "selective_selection_head_sha": "",
+                        "selective_receipt": null,
                         "reviewed_base_sha": if re_review { reviewed("base") } else { "base-sha".to_string() },
                         "implementation_head_sha": if re_review { reviewed("implementation") } else { "candidate".to_string() },
                         "reviewer_fixed": re_review,

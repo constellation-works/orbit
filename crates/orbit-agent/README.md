@@ -1,8 +1,8 @@
 # orbit-agent
 
 Provider CLI runtimes and audit contracts for Orbit. Provider adapters drive
-`claude`, `codex`, `copilot`, `cursor-agent`, `gemini`, `agy`, `grok`, `ollama`,
-`opencode`, `pi`, `muse`, and `mock-agent` through subprocess command
+`claude`, `codex`, `copilot`, `gemini`, `agy`, `grok`, `ollama`,
+`muse`, and `mock-agent` through subprocess command
 descriptors. A descriptor sends the prompt on stdin, or, for a CLI that cannot
 read stdin (`muse`), names a prompt-file flag the engine fills with a private
 file path.

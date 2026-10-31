@@ -32,10 +32,6 @@ fn keychain_backed_provider_failures_report_sandbox_access_or_real_logout() {
     let providers = [
         ("claude", "OAuth session expired"),
         ("copilot", "No authentication information found"),
-        (
-            "cursor",
-            "Authentication required. Please run agent login first",
-        ),
         ("antigravity", "authentication required"),
         (
             "muse",

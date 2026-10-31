@@ -46,10 +46,14 @@ impl MetricBucket {
 }
 
 impl Store {
+    /// Activity aggregates for one workspace partition, all time. Grouping,
+    /// model attribution, token totals, quantiles and ordering match the
+    /// former host-wide definition, restricted to the selected population.
     pub fn list_activity_invocation_metrics(
         &self,
+        workspace_id: &str,
     ) -> Result<Vec<ActivityInvocationMetrics>, OrbitError> {
-        let samples = self.load_model_attributed_invocation_samples()?;
+        let samples = self.load_model_attributed_invocation_samples(workspace_id)?;
         let grouped = self.group_invocation_metrics(samples, |sample| {
             (
                 sample.activity_id.clone(),
@@ -101,7 +105,13 @@ impl Store {
         Ok(rows.pop().unwrap_or_else(|| empty_task_metrics(task_id)))
     }
 
-    pub fn list_tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError> {
+    /// Tool aggregates for one workspace partition, all time. Grouping,
+    /// result-byte totals and ordering match the former host-wide
+    /// definition, restricted to the selected population.
+    pub fn list_tool_invocation_metrics(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<ToolInvocationMetrics>, OrbitError> {
         let conn = self.read()?;
         let mut stmt = conn
             .prepare(
@@ -110,6 +120,7 @@ impl Store {
                        COALESCE(AVG(tc.result_bytes), 0), COALESCE(SUM(tc.result_bytes), 0)
                 FROM tool_calls tc
                 INNER JOIN invocations i ON i.id = tc.invocation_id
+                WHERE i.workspace_id = ?1
                 GROUP BY i.activity_id, tc.tool_name
                 ORDER BY call_count DESC, i.activity_id ASC, tc.tool_name ASC
                 "#,
@@ -117,7 +128,7 @@ impl Store {
             .map_err(sqlite_store_error)?;
 
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(params![workspace_id], |row| {
                 Ok(ToolInvocationMetrics {
                     activity_id: row.get(0)?,
                     tool_name: row.get(1)?,
@@ -132,13 +143,15 @@ impl Store {
             .map_err(sqlite_store_error)
     }
 
-    /// Every invocation with a resolved model, in storage order. The callers
-    /// group into ordered maps and sort each bucket before taking
-    /// percentiles, so an `ORDER BY` here would only add a full-table sort;
-    /// the model filter runs in SQL so unattributed rows are never
-    /// materialized.
+    /// Every invocation with a resolved model in one workspace partition, in
+    /// storage order. The callers group into ordered maps and sort each
+    /// bucket before taking percentiles, so an `ORDER BY` here would only
+    /// add a full-table sort; the model filter runs in SQL so unattributed
+    /// rows are never materialized. Legacy rows without an attributed
+    /// workspace never match `workspace_id = ?1`.
     fn load_model_attributed_invocation_samples(
         &self,
+        workspace_id: &str,
     ) -> Result<Vec<InvocationSample>, OrbitError> {
         let conn = self.read()?;
         let mut stmt = conn
@@ -147,13 +160,13 @@ impl Store {
                 SELECT activity_id, agent, model, input_tokens, cache_read_tokens,
                        cache_create_tokens, output_tokens, tool_call_count
                 FROM invocations
-                WHERE model IS NOT NULL AND TRIM(model) <> ''
+                WHERE workspace_id = ?1 AND model IS NOT NULL AND TRIM(model) <> ''
                 "#,
             )
             .map_err(sqlite_store_error)?;
 
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(params![workspace_id], |row| {
                 Ok(InvocationSample {
                     activity_id: row.get(0)?,
                     agent: row.get(1)?,

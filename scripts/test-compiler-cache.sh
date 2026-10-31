@@ -5,7 +5,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$ROOT/scripts/rustc-compiler-cache.sh"
+if ! NS_REAL_CARGO="$(command -v cargo)"; then
+  printf 'test-compiler-cache: FAIL: cargo is required for the offline lockfile fixture\n' >&2
+  exit 1
+fi
 TMP="$(mktemp -d)"
+NS_REAL_HOME="$HOME"
+NS_REAL_PYTHON="$(command -v python3)"
+export NS_REAL_CARGO NS_REAL_HOME
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
@@ -39,6 +46,9 @@ chmod +x "$TMP/bin/rustc"
 cat > "$TMP/sccache" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "${FAKE_SCCACHE_LOG}"
+if [[ -n "${FAKE_SCCACHE_ARGS0:-}" ]]; then
+  printf '%s\0' "$@" > "$FAKE_SCCACHE_ARGS0"
+fi
 {
   printf 'SCCACHE_DIR=%s\n' "${SCCACHE_DIR-}"
   printf 'SCCACHE_CACHE_SIZE=%s\n' "${SCCACHE_CACHE_SIZE-}"
@@ -53,6 +63,8 @@ printf '%s' "${CACHE_ENV_SPACES-}" > "${FAKE_SCCACHE_SPACES:-/dev/null}"
 printf '%s' "${CACHE_ENV_EQUALS-}" > "${FAKE_SCCACHE_EQUALS:-/dev/null}"
 printf '%s' "${CACHE_ENV_MULTILINE-}" > "${FAKE_SCCACHE_MULTILINE:-/dev/null}"
 printf '%s' "${CACHE_ENV_EMPTY-}" > "${FAKE_SCCACHE_EMPTY:-/dev/null}"
+printf '%s' "${CACHE_ENV_TRAILING_ONE-}" > "${FAKE_SCCACHE_TRAILING_ONE:-/dev/null}"
+printf '%s' "${CACHE_ENV_TRAILING_MANY-}" > "${FAKE_SCCACHE_TRAILING_MANY:-/dev/null}"
 printf '%s' "${CACHE_ENV_BOUNDARY-}" > "${FAKE_SCCACHE_BOUNDARY:-/dev/null}"
 printf '%s' "${CACHE_ENV_SOURCE_BOUNDARY-}" > "${FAKE_SCCACHE_SOURCE_BOUNDARY:-/dev/null}"
 case "${1:-}" in
@@ -305,6 +317,47 @@ cmp "$TMP/env-empty.expected" "$FAKE_SCCACHE_EMPTY" || fail "empty environment v
 cmp "$TMP/env-boundary.expected" "$FAKE_SCCACHE_BOUNDARY" || fail "target path-prefix boundary was rewritten unexpectedly"
 cmp "$TMP/env-source-boundary.expected" "$FAKE_SCCACHE_SOURCE_BOUNDARY" || fail "source path-prefix boundary was rewritten unexpectedly"
 
+# The public wrapper must retain non-path bytes when either stable mount aliases
+# the checkout. A NUL-delimited fake-sccache capture distinguishes trailing LF
+# bytes and empty argv entries without changing the wrapper's real argv shape.
+run_rewrite_input_probe() {
+  local label="$1" target_arg="$2" expected_target="$3"
+  local trailing_one=$'argument\n' trailing_many=$'argument\n\n'
+  export CACHE_ENV_TRAILING_ONE="$trailing_one"
+  export CACHE_ENV_TRAILING_MANY="$trailing_many"
+  export CACHE_ENV_EMPTY=''
+  export FAKE_SCCACHE_ARGS0="$TMP/${label}.args0"
+  export FAKE_SCCACHE_TRAILING_ONE="$TMP/${label}-env-one.actual"
+  export FAKE_SCCACHE_TRAILING_MANY="$TMP/${label}-env-many.actual"
+  export FAKE_SCCACHE_EMPTY="$TMP/${label}-env-empty.actual"
+  export FAKE_SCCACHE_LOG="$TMP/${label}.log"
+  printf '%s' "$trailing_one" > "$TMP/${label}-env-one.expected"
+  printf '%s' "$trailing_many" > "$TMP/${label}-env-many.expected"
+  : > "$TMP/${label}-env-empty.expected"
+
+  "$WRAPPER" "$TMP/bin/rustc" --out-dir "$target_arg/debug" \
+    --cache-probe-one "$trailing_one" --cache-probe-many "$trailing_many" \
+    --cache-probe-empty '' "$ROOT/crates/orbit-types/src/lib.rs"
+
+  printf '%s\0' "$(source_rewrite_expected "$TMP/bin/rustc")" \
+    --out-dir "$expected_target/debug" \
+    --cache-probe-one "$trailing_one" --cache-probe-many "$trailing_many" \
+    --cache-probe-empty '' "$stable_src/crates/orbit-types/src/lib.rs" \
+    > "$TMP/${label}.args0.expected"
+  cmp "$TMP/${label}.args0.expected" "$FAKE_SCCACHE_ARGS0" \
+    || fail "$label: argv trailing LF bytes or empty value changed"
+  cmp "$TMP/${label}-env-one.expected" "$FAKE_SCCACHE_TRAILING_ONE" \
+    || fail "$label: one trailing LF in exported value changed"
+  cmp "$TMP/${label}-env-many.expected" "$FAKE_SCCACHE_TRAILING_MANY" \
+    || fail "$label: multiple trailing LFs in exported value changed"
+  cmp "$TMP/${label}-env-empty.expected" "$FAKE_SCCACHE_EMPTY" \
+    || fail "$label: empty exported value changed"
+  unset FAKE_SCCACHE_ARGS0 FAKE_SCCACHE_EMPTY FAKE_SCCACHE_TRAILING_ONE FAKE_SCCACHE_TRAILING_MANY
+  unset CACHE_ENV_TRAILING_ONE CACHE_ENV_TRAILING_MANY
+}
+
+run_rewrite_input_probe source-and-target-alias "$fake_tgt" "$stable_tgt"
+
 # Relative compiler inputs stay relative so they resolve after the stable chdir
 # instead of being expanded to a unique worktree prefix.
 export FAKE_SCCACHE_LOG="$TMP/sccache-relative.log"
@@ -354,6 +407,7 @@ custom_tgt="$TMP/custom-target"
 mkdir -p "$custom_tgt"
 expected_custom_tgt="$(source_rewrite_expected "$custom_tgt")"
 export CARGO_TARGET_DIR="$custom_tgt"
+run_rewrite_input_probe source-only-alias "$custom_tgt" "$expected_custom_tgt"
 export FAKE_SCCACHE_LOG="$TMP/sccache-custom-tgt.log"
 export FAKE_SCCACHE_ENV="$TMP/sccache-custom-tgt.env"
 export FAKE_SCCACHE_CWD="$TMP/sccache-custom-tgt.cwd"
@@ -508,6 +562,14 @@ assert_ns_not_applicable() {
 
 ns_home="$TMP/ns-home"
 ns_path="$ns_bwrap_dir:/usr/bin:/bin"
+# Hermetic no-sccache PATH: only stubs for the tools the live suite needs
+# before its no-sccache exit, so a host /usr/bin/sccache cannot leak in.
+ns_clean_dir="$TMP/ns-clean-bin"
+mkdir -p "$ns_clean_dir"
+for tool in bash mkdir dirname; do
+  ln -s "$(command -v "$tool")" "$ns_clean_dir/$tool"
+done
+ns_no_sccache_path="$ns_bwrap_dir:$ns_clean_dir"
 unset ORBIT_COMPILER_CACHE_BIN
 
 # Disabled by ORBIT_COMPILER_CACHE=0 even though a usable sccache is present.
@@ -518,7 +580,7 @@ assert_ns_not_applicable "cache forced off"
 
 # No sccache binary on HOME or PATH.
 rm -f "$NS_BWRAP_LOG"
-run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
+run_live_ns "$ns_home" "$ns_no_sccache_path" "$ns_out" "$ns_err" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
 assert_ns_not_applicable "no sccache"
 
 # Cache directory not writable. Root ignores directory mode bits, as in case 3.
@@ -624,12 +686,26 @@ grep -Fq 'host compiler cache is disabled' "$ns_out" \
 # oversized logs. No production test-only switch or private helper is invoked.
 ns_diagnostic_bin="$TMP/ns-diagnostic-bin"
 mkdir -p "$ns_diagnostic_bin"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$ns_diagnostic_bin/cargo"
+ln -s "$NS_REAL_PYTHON" "$ns_diagnostic_bin/python3"
+mkdir -p "$ROOT/.orbit/tmp"
+ns_fixture_root="$(mktemp -d "$ROOT/.orbit/tmp/compiler-cache-ns.XXXXXX")"
+trap 'rm -rf "$TMP" "$ns_fixture_root"' EXIT
+cat > "$ns_diagnostic_bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == generate-lockfile ]]; then
+  # Use real workspace discovery offline; all compilation stays stubbed.
+  HOME="$NS_REAL_HOME" "$NS_REAL_CARGO" generate-lockfile --offline
+else
+  exit 0
+fi
+EOF
 cat > "$ns_diagnostic_bin/bwrap" <<'EOF'
 #!/usr/bin/env python3
 import os
 from pathlib import Path
 import sys
+import signal
+import time
 
 args = sys.argv[1:]
 if args[-1] == "/bin/true":
@@ -641,11 +717,35 @@ for i, arg in enumerate(args):
 target = Path(env["CARGO_TARGET_DIR"])
 root = target.parent
 participant = target.name[-1].upper()
-stage = ("client-side-shared-tcp" if env.get("SCCACHE_CLIENT_SIDE") == "1"
+stage = ("server-side-shared-tcp" if env.get("SCCACHE_CLIENT_SIDE") == "0"
+         else "client-side-shared-tcp" if env.get("SCCACHE_CLIENT_SIDE") == "1"
          else "warm-identical-source" if participant == "E" else "isolated-daemon")
 with open(os.environ["NS_DIAGNOSTIC_EVENTS"], "a") as events:
     events.write(f"{os.getpid()} {root}\n")
-if stage == os.environ["NS_FAIL_STAGE"]:
+scenario = os.environ.get("NS_SCENARIO", "")
+if scenario == stage or (stage == "server-side-shared-tcp" and
+                         ((scenario in ("owner-timeout", "failure-cleanup") and participant == "C")
+                          or (scenario == "peer-timeout" and participant == "D"))):
+    # Both generations ignore TERM; the grandchild escapes the process group.
+    # Handshake before readiness makes cleanup exercise a known live tree.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    child = os.fork()
+    child_ready = root / ("child-ready-" + participant)
+    if child == 0:
+        os.setsid()
+        with open(os.environ["NS_DIAGNOSTIC_EVENTS"], "a") as events:
+            events.write(f"{os.getpid()} {root}\n")
+        child_ready.touch()
+    else:
+        while not child_ready.exists():
+            time.sleep(0.01)
+        if scenario == "failure-cleanup":
+            # Deliberately fail the owner's stats precondition after readiness.
+            Path(env["READY_FILE"]).touch()
+    print("stubborn transport ready", flush=True)
+    while True:
+        time.sleep(1)
+if stage == os.environ.get("NS_FAIL_STAGE", ""):
     # Keep both ends recognizable, including stats at the end of long stdout.
     sys.stdout.write(f"stdout-{participant}-begin\n" + "o" * 12000
                      + f"\n__SCCACHE_STATS__\nstdout-{participant}-end\n")
@@ -660,18 +760,27 @@ binary.touch()
 binary.chmod(0o700)
 (target / "debug/deps/liborbit_cache_probe-fixture.rlib").touch()
 print("6" if participant == "D" else "3")
-print("__SCCACHE_STATS__\nCache hits (Rust) 1")
+print("__SCCACHE_STATS__\nCache hits (Rust) 1", flush=True)
+if stage == "server-side-shared-tcp":
+    if participant == "C":
+        print("Compile requests 1", flush=True)
+        Path(env["READY_FILE"]).touch()
+        while not Path(env["DONE_FILE"]).exists():
+            time.sleep(0.01)
+    else:
+        print("extern location does not exist", file=sys.stderr)
+        sys.exit(42)
 EOF
 chmod +x "$ns_diagnostic_bin/bwrap" "$ns_diagnostic_bin/cargo"
 
 assert_ns_diagnostics() {
   local stage="$1" c_status="$2" d_status="$3" e_status="$4"
-  local fixture="$TMP/ns-diagnostics-$stage-$c_status-$d_status"
+  local fixture="$ns_fixture_root/ns-diagnostics-$stage-$c_status-$d_status"
   mkdir -p "$fixture/scratch"
   set +e
   env -i HOME="$ns_home" PATH="$ns_diagnostic_bin:/usr/bin:/bin" \
     TMPDIR="$fixture/scratch" ORBIT_COMPILER_CACHE_BIN="$ns_sccache" \
-    ORBIT_COMPILER_CACHE_REQUIRE_NS=1 NS_DIAGNOSTIC_EVENTS="$fixture/events" \
+    ORBIT_COMPILER_CACHE_REQUIRE_NS=1 NS_REAL_CARGO="$NS_REAL_CARGO" NS_REAL_HOME="$NS_REAL_HOME" NS_DIAGNOSTIC_EVENTS="$fixture/events" \
     NS_FAIL_STAGE="$stage" NS_EXIT_C="$c_status" NS_EXIT_D="$d_status" NS_EXIT_E="$e_status" \
     "$ROOT/scripts/test-compiler-cache-namespaces.sh" >"$fixture/out" 2>"$fixture/err"
   local status=$?
@@ -721,7 +830,189 @@ assert_ns_diagnostics client-side-shared-tcp 37 0 0
 assert_ns_diagnostics client-side-shared-tcp 0 41 0
 assert_ns_diagnostics client-side-shared-tcp 37 41 0
 
+# Python 3.10 on the applicable path: the supervisor's process_group needs 3.11,
+# so the entrypoint must refuse before any participant starts and before WORKDIR
+# exists. The shim answers only the version probe as 3.10.0 and runs everything
+# else with the real python3. The stub bwrap accepts the /bin/true probe and
+# writes no events there, so an event or a TMPDIR entry means the refusal came late.
+ns_refuse_bin="$TMP/ns-refuse-bin"
+ns_refuse_scratch="$ns_fixture_root/ns-refuse-scratch"
+ns_refuse_events="$ns_fixture_root/ns-refuse-events"
+mkdir -p "$ns_refuse_bin" "$ns_refuse_scratch"
+cat > "$ns_refuse_bin/python3" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *sys.version_info*) printf '3.10.0\n' ;;
+  *) exec "$NS_REAL_PYTHON" "$@" ;;
+esac
+EOF
+chmod +x "$ns_refuse_bin/python3"
+set +e
+env -i HOME="$ns_home" PATH="$ns_refuse_bin:$ns_diagnostic_bin:/usr/bin:/bin" \
+  TMPDIR="$ns_refuse_scratch" NS_REAL_PYTHON="$NS_REAL_PYTHON" \
+  NS_REAL_CARGO="$NS_REAL_CARGO" NS_REAL_HOME="$NS_REAL_HOME" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=1 \
+  NS_DIAGNOSTIC_EVENTS="$ns_refuse_events" \
+  "$ROOT/scripts/test-compiler-cache-namespaces.sh" \
+  >"$ns_fixture_root/refuse.out" 2>"$ns_fixture_root/refuse.err"
+ns_refuse_status=$?
+set -e
+[[ "$ns_refuse_status" -eq 1 ]] || fail "Python 3.10 must refuse the applicable namespace path, got exit $ns_refuse_status"
+grep -Fq "Python >= 3.11 is required" "$ns_fixture_root/refuse.err" \
+  || fail "Python 3.10 refusal should name the required version, got: $(tr '\n' ' ' <"$ns_fixture_root/refuse.err")"
+grep -Fq "found python3 3.10.0 at $ns_refuse_bin/python3" "$ns_fixture_root/refuse.err" \
+  || fail "Python 3.10 refusal should name the interpreter, got: $(tr '\n' ' ' <"$ns_fixture_root/refuse.err")"
+[[ ! -e "$ns_refuse_events" ]] || fail "a namespace participant started before the Python refusal"
+[[ -z "$(ls -A "$ns_refuse_scratch")" ]] || fail "namespace WORKDIR was created before the Python refusal"
+
+# Python 3.10 must not add a requirement to the not-applicable path: with
+# namespaces refused, the probe still skips (exit 0) before any interpreter check.
+rm -f "$NS_BWRAP_LOG"
+run_live_ns "$ns_home" "$ns_refuse_bin:$ns_bwrap_dir:/usr/bin:/bin" "$ns_out" "$ns_err" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache"
+assert_ns_skip "namespaces refused with Python 3.10"
+
+# Model immediate PID/PGID reuse after reaping, without creating/signaling any
+# process. Execute both embedded owners, including the independent watchdog.
+# Failed anchor forks and preexec startup also exercise cleanup while the
+# transport leader alone reserves its process group.
+python3 - "$ROOT" <<'PYIDENTITY'
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+from compiler_cache_process_regression import group_lifetime_regression
+group_lifetime_regression(Path(sys.argv[1]))
+PYIDENTITY
+
+# Exercise the benchmark's actual namespace caller with checkout-local WORKDIR.
+# Only lockfile generation is real; builds, cache and namespace transport are fixtures.
+cat > "$ns_diagnostic_bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1" == archive ]]; then
+  tar -cf - -C "$NS_BENCH_TREE" .
+else
+  printf 'fixture-head\n'
+fi
+EOF
+chmod +x "$ns_diagnostic_bin/git"
+ns_bench="$ns_fixture_root/ns-benchmark"
+mkdir -p "$ns_bench/tree" "$ns_bench/work"
+printf 'fixture\n' > "$ns_bench/tree/README.md"
+env -i HOME="$ns_home" PATH="$ns_diagnostic_bin:/usr/bin:/bin" \
+  NS_REAL_CARGO="$NS_REAL_CARGO" NS_REAL_HOME="$NS_REAL_HOME" NS_BENCH_TREE="$ns_bench/tree" \
+  ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=1 \
+  ORBIT_COMPILER_CACHE_BENCH_DIR="$ns_bench/work" NS_DIAGNOSTIC_EVENTS="$ns_bench/events" \
+  "$ROOT/scripts/bench-compiler-cache.sh" >"$ns_bench/out" 2>"$ns_bench/err" \
+  || fail "checkout-local benchmark namespace caller failed: $(tail -c 2000 "$ns_bench/err")"
+grep -Fq 'test-compiler-cache-namespaces: ok' "$ns_bench/out" \
+  || fail "benchmark did not run its namespace fixture"
+
+# Linux namespace supervision must adopt/reap escaped grandchildren. The outer
+# fixture is itself a subreaper so even a broken candidate is fully cleaned up
+# at the independent watchdog deadline; it never leaves a test process behind.
+if [[ "$(uname -s)" == Linux ]]; then
+  python3 - "$ROOT/scripts/test-compiler-cache-namespaces.sh" "$ns_fixture_root" \
+    "$ns_home" "$ns_diagnostic_bin" "$ns_sccache" <<'PYTIMEOUT'
+import ctypes
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+script, tmp, home, fixture_bin, sccache = sys.argv[1:]
+libc = ctypes.CDLL(None, use_errno=True)
+assert libc.prctl(36, 1, 0, 0, 0) == 0, "fixture needs descendant reaping"
+
+for scenario, stage, participants in [
+    ("isolated-daemon", "isolated-daemon", "CD"),
+    ("warm-identical-source", "warm-identical-source", "E"),
+    ("client-side-shared-tcp", "client-side-shared-tcp", "CD"),
+    ("owner-timeout", "server-side-shared-tcp", "C"),
+    ("peer-timeout", "server-side-shared-tcp", "D"),
+    ("failure-cleanup", "server-side-shared-tcp", "C"),
+    ("success", "", ""),
+]:
+    fixture = Path(tmp) / ("ns-timeout-" + scenario)
+    (fixture / "scratch").mkdir(parents=True)
+    env = dict(HOME=home, PATH=fixture_bin + ":/usr/bin:/bin",
+               TMPDIR=str(fixture / "scratch"), ORBIT_COMPILER_CACHE_BIN=sccache,
+               ORBIT_COMPILER_CACHE_REQUIRE_NS="1", NS_SCENARIO=scenario,
+               NS_REAL_CARGO=os.environ["NS_REAL_CARGO"], NS_REAL_HOME=os.environ["NS_REAL_HOME"],
+               NS_DIAGNOSTIC_EVENTS=str(fixture / "events"),
+               # Cleanup must finish before this longer participant deadline.
+               ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS="10" if scenario == "failure-cleanup" else "1")
+    start = time.monotonic()
+    with open(fixture / "out", "w") as out, open(fixture / "err", "w") as err:
+        process = subprocess.Popen([script], env=env, stdout=out, stderr=err,
+                                   start_new_session=True)
+        try:
+            # Observe without reaping so finally still owns the group identity.
+            watch_end = start + 5
+            while True:
+                exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                if exited is not None:
+                    status = exited.si_status if exited.si_code == os.CLD_EXITED else -exited.si_status
+                    break
+                if time.monotonic() >= watch_end:
+                    raise subprocess.TimeoutExpired([script], 5)
+                time.sleep(0.01)
+            elapsed = time.monotonic() - start
+            output = (fixture / "err").read_text()
+            assert status == (0 if scenario == "success" else 1), (scenario, status, output)
+            assert elapsed < 5, (scenario, elapsed)
+            if scenario == "success":
+                assert "test-compiler-cache-namespaces: ok" in (fixture / "out").read_text()
+            else:
+                for participant in participants:
+                    expected = 143 if scenario == "failure-cleanup" else 124
+                    assert (f"stage={stage} participant={participant} exit_status={expected}") in output, output
+                assert "stubborn transport ready" in output, output
+            assert not list((fixture / "scratch").iterdir()), "namespace scratch leaked"
+            events = (fixture / "events").read_text().splitlines()
+            for line in events:
+                pid, root = line.split(" ", 1)
+                assert not Path(root).exists(), "fixture root survived cleanup"
+                assert not Path(f"/proc/{pid}").exists(), f"{scenario}: child {pid} survived or was not reaped"
+            print(f"namespace-supervision: {scenario} exit={status} elapsed={elapsed:.3f}s reaped={len(events)}", flush=True)
+        finally:
+            # Independent cleanup for assertion failures and the legacy hang.
+            # As subreaper, this fixture owns all adopted descendants as well.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 3
+            while True:
+                children = [int(pid) for pid in Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").read_text().split()
+                            if int(pid) != process.pid]
+                for pid in children:
+                    try:
+                        os.kill(int(pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                for pid in children:
+                    try:
+                        os.waitpid(pid, os.WNOHANG)
+                    except ChildProcessError:
+                        pass
+                # The leader's exit reparents its descendants to this fixture.
+                # Observe that exit while the leader stays unreaped, before the
+                # child list is trusted; then reap the leader with no descendants.
+                leader_exited = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+                remaining = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").read_text().split()
+                if leader_exited and all(int(pid) == process.pid for pid in remaining):
+                    break
+                assert time.monotonic() < deadline, "fixture could not reap its children"
+                time.sleep(0.01)
+            process.wait(timeout=1)
+PYTIMEOUT
+fi
+
 # Live mount-namespace compile lives in the sibling script and is invoked as
 # a separate CI process after this unit process exits.
+
+python3 "$ROOT/scripts/test-bench-compiler-cache.py"
 
 printf 'test-compiler-cache: ok\n'

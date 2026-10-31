@@ -7,6 +7,108 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_types::workflow::{ChildDispatch, DrainWorkerLimit, JobRunTrigger, PipelineState};
 use serde_json::json;
 
+/// NDJSON exposes ordered history rows, including folded rows, without the
+/// JSON envelope or an empty-list sentinel.
+#[test]
+fn history_ndjson_streams_rows_without_envelopes() {
+    if !isolated_run_observation(
+        "run_observation::run_history::history_ndjson_streams_rows_without_envelopes",
+    ) {
+        return;
+    }
+    use orbit_types::workflow::RunRootCause;
+
+    let fixture = Fixture::terminal();
+    let workspace_id = fixture.workspace_id();
+    let db = fixture.db();
+    for (id, hours) in [
+        ("jrun-stream-echo", 1),
+        ("jrun-stream-other", 2),
+        ("jrun-stream-root", 3),
+    ] {
+        let at = (Utc::now() - Duration::hours(hours)).to_rfc3339();
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+                scheduled_at, started_at, finished_at, created_at)
+             VALUES (?1, ?2, 'task_pr_pipeline', 1, 'failed', ?3, ?3, ?3, ?3)",
+            params![id, workspace_id, at],
+        )
+        .unwrap();
+    }
+    let state = PipelineState {
+        root_cause: Some(RunRootCause {
+            leaf_run_id: "jrun-stream-root".into(),
+            task_id: None,
+            step: Some("implement".into()),
+            code: Some("provider_limit".into()),
+        }),
+        ..PipelineState::new(
+            "jrun-stream-echo".into(),
+            "task_pr_pipeline".into(),
+            json!({}),
+        )
+    };
+    db.execute(
+        "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json)
+         VALUES (?1, 'jrun-stream-echo', ?2)",
+        params![workspace_id, serde_json::to_string(&state).unwrap()],
+    )
+    .unwrap();
+
+    let future = (Utc::now() + Duration::hours(1)).to_rfc3339();
+    for (flags, key, count) in [
+        (vec![], "runs", 3),
+        (vec!["--incidents"], "runs", 2),
+        (vec!["--failures"], "failures", 2),
+    ] {
+        for empty in [false, true] {
+            let mut args = vec![
+                "run",
+                "history",
+                "--no-reconcile",
+                "--job",
+                "task_pr_pipeline",
+            ];
+            args.extend_from_slice(&flags);
+            if empty {
+                args.extend(["--since", &future]);
+            }
+            let doc = fixture.json(&[args.as_slice(), &["--json"]].concat());
+            let rows = doc[key].as_array().unwrap();
+            assert_eq!(doc.as_object().unwrap().len(), 1, "{doc}");
+            assert_eq!(rows.len(), if empty { 0 } else { count }, "{doc}");
+            if flags.is_empty() && !empty {
+                assert_eq!(
+                    rows.iter()
+                        .map(|row| row["run_id"].as_str().unwrap())
+                        .collect::<Vec<_>>(),
+                    ["jrun-stream-echo", "jrun-stream-other", "jrun-stream-root"]
+                );
+            }
+            let output = fixture
+                .orbit()
+                .args(&args)
+                .args(["--format", "ndjson"])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let records = stdout
+                .lines()
+                .map(|line| {
+                    let record: serde_json::Value = serde_json::from_str(line).unwrap();
+                    assert!(record.is_object(), "{record}");
+                    record
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(&records, rows, "flags={flags:?}, empty={empty}: {stdout}");
+            if empty {
+                assert!(stdout.is_empty(), "{stdout}");
+            }
+        }
+    }
+}
+
 /// V2 worker diagnostics name the job; the failing YAML step comes from the
 /// root's audit/checkpoint or the echo's recorded cause, even off-page.
 #[test]

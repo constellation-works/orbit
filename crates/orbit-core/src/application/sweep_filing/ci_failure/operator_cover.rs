@@ -1,17 +1,20 @@
-//! Ownership retained by an operator's archive or rejection: the exact failure
-//! key, plus the coordinate-free diagnostic set for compiler clusters.
+//! Archive and rejection holds, checked against the retained cause rather
+//! than treating a historical broad job/step key as proof of equivalence.
 
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
+use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{TaskRelationType, TaskStatus, is_valid_orb_task_id};
 use serde_json::{Value, json};
 
-use super::cluster::{FailureCluster, task_open_compiler_identity};
-use super::filing::{CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_TAG};
+use super::cluster::FailureCluster;
+use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
+use super::identity::CiTaskIdentities;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::sweep_filing::{full_revision, landed_task_commit};
 
@@ -60,6 +63,7 @@ impl<'a> OperatorCovers<'a> {
         &mut self,
         cluster: &FailureCluster,
         lookup: &L,
+        identities: &CiTaskIdentities<'_>,
     ) -> Result<OperatorAssessment, OrbitError> {
         let mut owners = BTreeMap::new();
         for key in std::iter::once(&cluster.failure_key).chain(&cluster.legacy_keys) {
@@ -67,12 +71,26 @@ impl<'a> OperatorCovers<'a> {
                 if matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected)
                     && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
                 {
+                    if cluster.compiler_cause.is_none()
+                        && !cluster.signature_is_step_fallback
+                        && identities.for_task(&task)?.is_some_and(|record| {
+                            record
+                                .archive_signature
+                                .as_ref()
+                                .is_some_and(|signature| signature != &cluster.signature)
+                        })
+                    {
+                        continue;
+                    }
                     // Old compiler keys can collide on chatter. Retain the
                     // same supplying-evidence requirement as open-owner lookup.
                     if cluster.compiler_cause.is_some()
                         && key != &cluster.failure_key
-                        && !cluster.runs.iter().any(|run| {
-                            super::grouping::legacy_source_matches(&task.description, run)
+                        && !identities.for_task(&task)?.is_some_and(|record| {
+                            cluster
+                                .sources
+                                .iter()
+                                .any(|source| record.matches_source(source))
                         })
                     {
                         continue;
@@ -89,7 +107,9 @@ impl<'a> OperatorCovers<'a> {
             for task in lookup.list_tasks()?.iter() {
                 if matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected)
                     && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
-                    && task_open_compiler_identity(task).as_ref() == Some(&identity)
+                    && identities.for_task(task)?.is_some_and(|record| {
+                        record.identity.open_compiler_set.as_ref() == Some(&identity)
+                    })
                 {
                     owners
                         .entry(task.id.clone())
@@ -102,27 +122,44 @@ impl<'a> OperatorCovers<'a> {
             failed_covers: Vec::new(),
         };
         for owner in owners.values() {
+            let history = self.runtime.get_task_history(&owner.id)?;
+            // Later metadata edits must neither change provenance nor restart
+            // the window taken from the status decision.
+            let decision = history
+                .iter()
+                .rev()
+                .find(|event| event.to_status == Some(owner.status));
+            let actor = decision
+                .map(|event| event.by.as_str())
+                .filter(|actor| !actor.trim().is_empty());
+            let cause_known = cluster.compiler_cause.is_some()
+                || (!cluster.signature_is_step_fallback
+                    && identities.for_task(owner)?.is_some_and(|record| {
+                        record.archive_signature.as_ref() == Some(&cluster.signature)
+                    }));
             let covers = owner
                 .relations
                 .iter()
                 .filter(|relation| relation.relation_type == TaskRelationType::CoveredBy)
                 .collect::<Vec<_>>();
-            if covers.is_empty() {
-                // Metadata edits after an archive must not restart the window.
-                let archived_at = self
-                    .runtime
-                    .get_task_history(&owner.id)?
-                    .iter()
-                    .rev()
-                    .find(|event| event.to_status == Some(owner.status))
-                    .map(|event| event.at)
-                    .unwrap_or(owner.updated_at);
-                if self.now < archived_at + self.suppression {
+            if covers.is_empty() || !cause_known {
+                let archived_at = decision.map(|event| event.at).unwrap_or(owner.updated_at);
+                let reason = if !cause_known {
+                    "archive_identity_unavailable"
+                } else {
+                    match actor {
+                        Some(actor) if is_automation_actor(actor) => "automation_archived",
+                        Some(_) => "operator_archived",
+                        None => "archive_provenance_unavailable",
+                    }
+                };
+                if self.now < archived_at + self.suppression || !covers.is_empty() {
                     assessment.withheld = Some(json!({
-                        "outcome": "withheld", "reason": "operator_archived",
-                        "task_id": owner.id, "owner": owner.id,
+                        "outcome": "withheld", "reason": reason, "archive_actor": actor,
+                        "task_id": owner.id, "owner": cause_known.then_some(&owner.id),
+                        "candidate_owner": (!cause_known).then_some(&owner.id),
                         "failure_key": cluster.failure_key, "cluster_key": cluster.cluster_key,
-                        "status": owner.status, "until": archived_at + self.suppression,
+                        "status": owner.status, "until": covers.is_empty().then_some(archived_at + self.suppression),
                     }));
                     return Ok(assessment);
                 }
@@ -165,6 +202,7 @@ impl<'a> OperatorCovers<'a> {
                 };
                 assessment.withheld = Some(json!({
                     "outcome": "covered", "reason": reason,
+                    "archive_actor": actor,
                     "task_id": owner.id, "owner": owner.id, "cover": target,
                     "landed_commit": landed,
                     "failure_key": cluster.failure_key, "cluster_key": cluster.cluster_key,

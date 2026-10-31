@@ -1,0 +1,69 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: visual_settle
+spec:
+  type: deterministic
+  description: >
+    Settle the capture of record against the delivery's head and the mocks
+    frozen at admission. A capture of another commit is `stale_capture`; a
+    mock whose bytes differ from its frozen digest is `mock_changed`. Both
+    are recorded in the system-written `visual/settle.json` and in the
+    summary run show, task show and the PR body print; in shadow they block
+    nothing. With `visual_review.require_established = true`, a capture
+    that is not established ends the run held
+    (`delivery_visual_not_established`) until an operator releases it or a
+    host with a verified browser kit captures it. It also settles the
+    comparison review: verifier verdicts are validated (image regions in
+    this delivery's capture, cited lines at the candidate, CONFIRMED
+    severities), a low-confidence verdict decides nothing without its one
+    escalation, and the findings, verdicts, verified severities, budgets
+    and dropped-evidence counts are recorded in the system-written
+    `visual/review.json` under purpose `visual_review`. In shadow nothing
+    is filed, nothing blocks and nothing is given to the code reviewer. In
+    `live` each confirmed finding gets a disposition from
+    `visual_review.block_at` and `visual_review.file_at`: must-address (the
+    code reviewer resolves it before landing), optional (filed after
+    landing when unfixed) or recorded; without a review before landing a
+    blocking finding is filed `high` instead. A `measure` capture (the
+    post-landing comparison) is settled under `visual/measure/` with
+    purpose `visual_measure` and never holds.
+  input_schema_json:
+    type: object
+    required: [workspace_path, capture]
+    properties:
+      job_run_id:
+        type: string
+        description: The run whose review admission decides the review layer.
+      workspace_path:
+        type: string
+      capture:
+        type: [object, "null"]
+        description: The visual_capture output for this run.
+      checks:
+        type: [object, "null"]
+        description: The visual_checks output for this run.
+      verified:
+        type: [object, "null"]
+        description: The initial visual_verify_prepare output for this run.
+      verify_results:
+        description: The visual_verify fan-out results.
+      escalation_prepared:
+        type: [object, "null"]
+        description: The escalation visual_verify_prepare output.
+      escalation_results:
+        description: The escalation visual_verify fan-out results.
+  output_schema_json:
+    type: object
+    required: [applies, settled, summary]
+    properties:
+      applies:
+        type: boolean
+      settled:
+        type: array
+        items:
+          type: object
+      summary:
+        type: string
+  action: visual_settle
+  config: {}

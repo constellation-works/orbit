@@ -68,6 +68,8 @@ def failures_under(label: str, root: Path) -> tuple[list[str], list[str]]:
 
 
 def check_assets(root: Path) -> tuple[list[str], list[str]]:
+    if not root.is_dir():
+        raise OSError(f"assets root does not exist: {root}")
     skill_failures, skill_skipped = failures_under("skills", root / "skills")
     activity_failures, activity_skipped = failures_under("activities", root / "activities")
     return skill_failures + activity_failures, skill_skipped + activity_skipped

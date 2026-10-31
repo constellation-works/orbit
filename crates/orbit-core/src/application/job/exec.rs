@@ -14,7 +14,7 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::load_job_asset;
 use orbit_engine::{
     JobOutcome, V2AuditWriter, dispatch_error_to_orbit, execute_job_with_resume,
-    resolve_job_catalog_refs_for_execution,
+    resolve_job_catalog_refs_with_scripts_for_execution,
 };
 use orbit_store::contracts::{JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
@@ -33,15 +33,30 @@ use crate::application::SYSTEM_AUDIT_IDENTITY;
 use crate::application::job::claimed::CLAIMED_LEAF_JOBS;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
+use crate::application::job::{
+    JobAutoConcurrencyPort, JobAutomationPort, JobDrainPort, ReviewAdmissionHook,
+};
 
 /// The hold an unsuccessful run of `job_id` ends on instead of failing, if
-/// its failure `message` names one. A claimed leaf also holds on its
-/// provider's usage limit [ORB-15517].
-fn held_failure(job_id: &str, message: Option<&str>) -> Option<HeldFailure> {
+/// its typed `error_code` or failure `message` names one. Owner-local runs hold on provider
+/// capacity and usage limits; claimed leaves hold on usage limits.
+fn held_failure(
+    job_id: &str,
+    error_code: Option<&str>,
+    message: Option<&str>,
+) -> Option<HeldFailure> {
     if CLAIMED_LEAF_JOBS.contains(&job_id) {
-        HeldFailure::of_claimed_leaf(None, message)
+        HeldFailure::of_claimed_leaf(error_code, message)
     } else {
-        HeldFailure::of(None, message)
+        HeldFailure::of_local(error_code, message)
+    }
+}
+
+/// The refusal identity retained across the engine/core error boundary.
+fn delivery_refusal_code(error: &OrbitError) -> Option<&'static str> {
+    match error {
+        OrbitError::DeliveryRefused { refusal, .. } => Some(refusal.error_code()),
+        _ => None,
     }
 }
 
@@ -96,7 +111,7 @@ impl OrbitRuntime {
         yaml_path: &Path,
         input: Value,
     ) -> Result<V2JobRunResult, OrbitError> {
-        self.run_job_v2_from_yaml_with_retry_source(yaml_path, input, None, 1, None)
+        self.run_job_v2_from_yaml_with_retry_source(yaml_path, input, None, 1, None, None)
     }
 
     /// Re-run a completed or historical job run from step 0 using the current
@@ -118,14 +133,8 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
     ) -> Result<V2JobRunResult, OrbitError> {
         let (source, mut input) = self.admit_job_run_replay(source_run_id, claim_token)?;
-        crate::application::review::install_review_admission(
-            self,
-            &source.job_id,
-            &mut input,
-            None,
-            false,
-        )?;
-        self.install_auto_crew_admission(
+        self.install_review_admission(&source.job_id, &mut input, None, false)?;
+        let task_writes = self.install_auto_crew_admission(
             &source.job_id,
             &mut input,
             None,
@@ -133,7 +142,14 @@ impl OrbitRuntime {
             &mut crew_pools::random_crew_ticket,
         )?;
         let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
-        self.run_job_v2_from_yaml_with_retry_source(&job_path, input, Some(source.run_id), 1, None)
+        self.run_job_v2_from_yaml_with_retry_source(
+            &job_path,
+            input,
+            Some(source.run_id),
+            1,
+            None,
+            task_writes,
+        )
     }
 
     /// Persist a whole-run replay and submit it to a detached worker.
@@ -165,12 +181,10 @@ impl OrbitRuntime {
             .unwrap_or_default()
             .into_iter()
             .collect();
-        self.drain_entry_admission(
-            crate::application::distributed::DrainEntryPoint::Replay,
+        self.admit_explicit_drain_entry(
+            crate::application::contracts::DrainEntryPoint::Replay,
             &task_ids,
-            false,
-        )?
-        .into_result()?;
+        )?;
         // Historical authority never travels into a new invocation. Trusted
         // host execution fails closed; review is captured from current policy.
         strip_trusted_host_admission(&mut input);
@@ -189,6 +203,7 @@ impl OrbitRuntime {
         retry_source_run_id: Option<String>,
         attempt: u32,
         resume: Option<&ResumePlan>,
+        admission_task_writes: Option<crew_pools::AdmissionTaskWrites>,
     ) -> Result<V2JobRunResult, OrbitError> {
         let (job_name, spec) = load_job_definition(yaml_path)?;
         // [ORB-11354] The foreground path takes caller-shaped input too, so it
@@ -212,8 +227,11 @@ impl OrbitRuntime {
             ));
         }
         let mut input = input;
+        if job_name == "ux_rules_pipeline" {
+            self.resolve_ux_rules_input(&mut input)?;
+        }
         super::delivery::normalize_delivery_input(&spec, &mut input)?;
-        self.capture_auto_concurrency(
+        self.install_auto_concurrency(
             &job_name,
             &mut input,
             resume.is_some() || retry_source_run_id.is_some(),
@@ -226,6 +244,11 @@ impl OrbitRuntime {
             Some(input.clone()),
             retry_source_run_id.clone(),
         )?;
+        // [ORB-19485] The run is durably inserted, so the draw's task writes
+        // may land. A failure before this point wrote nothing to the task.
+        if let Some(writes) = admission_task_writes {
+            self.apply_admission_task_writes(writes);
+        }
         // [ORB-14524] The run row is committed, so a seed or Start-write
         // failure must terminalize it: no worker exists to ever pick it up, and
         // a stranded pending run would hold its concurrency slot and retry key.
@@ -270,7 +293,7 @@ impl OrbitRuntime {
         // Once Start succeeds, setup errors belong to this run and must reach
         // the same terminal lifecycle as execution errors in detached workers.
         let outcome = (|| {
-            let bundle = crate::application::automation::members::bundle_crews(self, &run, &input);
+            let bundle = self.run_bundle_crews(&run, &input);
             self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
             self.record_event(OrbitEvent::JobRunStarted {
                 job_id: run.job_id.clone(),
@@ -338,11 +361,17 @@ impl OrbitRuntime {
         })?;
 
         // Phase 4: resolve `target: activity:<name>` refs before any other
-        // pass, so retired-feature rejection sees concrete specs.
+        // pass, so retired-feature rejection sees concrete specs. The
+        // workspace's script catalog rides along so a `target:
+        // script:<name>` step loads (its manifest is validated and its
+        // entry resolved inside the workspace) and runs at dispatch once
+        // its grant checks out; a missing or invalid manifest fails this
+        // load, naming the manifest file.
         let catalog = self
             .v2_activity_catalog()
             .map_err(|err| OrbitError::InvalidInput(format!("build activity catalog: {err}")))?;
-        resolve_job_catalog_refs_for_execution(&mut asset.spec, &catalog)
+        let scripts = self.v2_script_catalog()?;
+        resolve_job_catalog_refs_with_scripts_for_execution(&mut asset.spec, &catalog, &scripts)
             .map_err(dispatch_error_to_orbit)?;
 
         // [ORB-10801] Reject retired declarations at load time so a run never
@@ -389,6 +418,9 @@ impl OrbitRuntime {
                     orbit_engine::DispatchError::ProtocolSkew(message) => {
                         OrbitError::ProtocolSkew(message)
                     }
+                    refusal @ orbit_engine::DispatchError::DeliveryRefused { .. } => {
+                        dispatch_error_to_orbit(refusal)
+                    }
                     other => OrbitError::Execution(format!("v2 job dispatch: {other}")),
                 });
 
@@ -397,11 +429,18 @@ impl OrbitRuntime {
             Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
             Ok(o) if o.child_cancelled => ("cancelled", o.message.clone()),
             Ok(o) if o.success => ("success", None),
-            Ok(o) if held_failure(&asset.name, o.message.as_deref()).is_some() => {
+            Ok(o) if held_failure(&asset.name, None, o.message.as_deref()).is_some() => {
                 ("held", o.message.clone())
             }
             Ok(o) => ("failed", o.message.clone()),
-            Err(err) if held_failure(&asset.name, Some(&err.to_string())).is_some() => {
+            Err(err)
+                if held_failure(
+                    &asset.name,
+                    delivery_refusal_code(err),
+                    Some(&err.to_string()),
+                )
+                .is_some() =>
+            {
                 ("held", Some(err.to_string()))
             }
             Err(err) => ("error", Some(err.to_string())),
@@ -611,7 +650,7 @@ impl OrbitRuntime {
             Ok(result) => {
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
-                let held = held_failure(&run.job_id, Some(message));
+                let held = held_failure(&run.job_id, None, Some(message));
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
                 let message =
                     held.map_or_else(|| message.to_string(), |held| held.diagnostic(message));
@@ -642,9 +681,13 @@ impl OrbitRuntime {
             Err(error) => {
                 // [ORB-15202] A red base or a refusal awaiting a recorded
                 // decision kept its candidate: the run holds, it did not fail.
-                // [ORB-15517] So does a claimed leaf its provider's usage
-                // limit stopped.
-                let held = held_failure(&run.job_id, Some(&error.to_string()));
+                // So do local provider capacity/limit holds and a claimed
+                // leaf its provider's usage limit stopped [ORB-15517].
+                let held = held_failure(
+                    &run.job_id,
+                    delivery_refusal_code(error),
+                    Some(&error.to_string()),
+                );
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
                 let message = held.map_or_else(
                     || error.to_string(),

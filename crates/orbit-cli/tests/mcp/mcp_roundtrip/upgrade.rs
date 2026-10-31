@@ -105,82 +105,297 @@ fn audit_count(workspace: &McpWorkspace, tool: &str) -> i64 {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn new_review_record_contract_refuses_a_live_old_client_before_mutation() {
-    let workspace = McpWorkspace::init();
-    let initialized = orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(["task", "list"]),
-    );
-    assert!(initialized.status.success());
-    let latest = orbit_core::composition::compiled_compatibility();
-    assert_eq!(latest.features.get("review"), Some(&4));
-    let stored_version = Connection::open(workspace.home.join(".orbit/orbit.db"))
-        .expect("review feature schema")
-        .query_row(
-            "SELECT MAX(version) FROM feature_schema_meta WHERE feature = 'review'",
-            [],
-            |row| row.get::<_, u32>(0),
+    // Each old client lacks one breaking contract: the review feature schema,
+    // layout 4 (selective review contracts) or layout 5 (schemaVersion 3
+    // auto-task jobs, ORB-20237), or layout 6 (live visual contracts).
+    for old_contract in ["review", "selective", "auto-task-job-schema", "visual-live"] {
+        let workspace = McpWorkspace::init();
+        let initialized = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(["task", "list"]),
+        );
+        assert!(initialized.status.success());
+        let latest = orbit_core::composition::compiled_compatibility();
+        assert_eq!(latest.features.get("review"), Some(&4));
+        let stored_version = Connection::open(workspace.home.join(".orbit/orbit.db"))
+            .expect("review feature schema")
+            .query_row(
+                "SELECT MAX(version) FROM feature_schema_meta WHERE feature = 'review'",
+                [],
+                |row| row.get::<_, u32>(0),
+            )
+            .expect("review feature migration applied");
+        assert_eq!(stored_version, 4);
+        let mut old_identity = latest.clone();
+        if old_contract == "review" {
+            old_identity.features.insert("review".into(), 3);
+        } else {
+            let old_layout = match old_contract {
+                "selective" => 3,
+                "auto-task-job-schema" => 4,
+                "visual-live" => 5,
+                _ => unreachable!(),
+            };
+            old_identity.workspace_layout.version = old_layout;
+            old_identity.workspace_layout.writer_floor = old_layout;
+            old_identity.workspace_layout.reader_floor = old_layout;
+        }
+
+        // Hold the authority as a process compiled with the pre-change review
+        // reader. The candidate CLI must not enter its store bootstrap while that
+        // participant is live, because its reconciliation JSON is unreadable to
+        // this client.
+        let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit")))
+            .expect("fixture executable digest");
+        let participant = Participant {
+            digest: &digest,
+            identity: &old_identity,
+            role: ParticipantRole::McpServe,
+            access: Access::Write,
+            handover: None,
+            in_activity: false,
+        };
+        let _old_client = GenerationGuard::join(
+            &authority_root(&workspace),
+            &participant,
+            std::time::Duration::ZERO,
+            || Ok(0),
         )
-        .expect("review feature migration applied");
-    assert_eq!(stored_version, 4);
-    let mut old_identity = latest.clone();
-    old_identity.features.insert("review".into(), 3);
+        .expect("pre-change client joins its own compatibility generation");
 
-    // Hold the authority as a process compiled with the pre-change review
-    // reader. The candidate CLI must not enter its store bootstrap while that
-    // participant is live, because its reconciliation JSON is unreadable to
-    // this client.
-    let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit")))
-        .expect("fixture executable digest");
-    let participant = Participant {
-        digest: &digest,
-        identity: &old_identity,
-        role: ParticipantRole::McpServe,
-        access: Access::Write,
-        handover: None,
-        in_activity: false,
-    };
-    let _old_client = GenerationGuard::join(
-        &authority_root(&workspace),
-        &participant,
-        std::time::Duration::ZERO,
-        || Ok(0),
-    )
-    .expect("pre-change client joins its own compatibility generation");
+        let before = store_bytes(&workspace);
+        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env(QUIESCE_TIMEOUT_ENV, "0")
+            .args([
+                "task",
+                "add",
+                "--title",
+                "Must not be written during a review schema switch",
+                "--complexity",
+                "low",
+                "--json",
+            ])
+            .output()
+            .expect("candidate writer");
+        assert_refused(&output);
+        assert_eq!(
+            store_bytes(&workspace),
+            before,
+            "incompatible admission must stop before store or workspace writes"
+        );
 
-    let before = store_bytes(&workspace);
-    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .env(QUIESCE_TIMEOUT_ENV, "0")
-        .args([
+        drop(_old_client);
+        let added = orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+                "task",
+                "add",
+                "--title",
+                "Written after the old client quiesced",
+                "--complexity",
+                "low",
+                "--json",
+            ]),
+        );
+        let added: Value = serde_json::from_slice(&added.stdout).expect("task JSON");
+        assert_eq!(added["title"], "Written after the old client quiesced");
+    }
+}
+
+/// Every file under `root` with its bytes, without following symlinks.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn tree_bytes(root: &Path) -> BTreeSet<(PathBuf, Vec<u8>)> {
+    let mut files = BTreeSet::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read fixture tree") {
+            let entry = entry.expect("fixture entry");
+            let kind = entry.file_type().expect("fixture entry type");
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                files.insert((
+                    entry.path(),
+                    std::fs::read(entry.path()).expect("fixture file"),
+                ));
+            }
+        }
+    }
+    files
+}
+
+/// A process under another generation authority must not migrate a workspace
+/// it discovers from a nested cwd while a client protected by the workspace's
+/// own authority is live (the on-call incident behind this guard). Both
+/// authorities and the workspace are private temp roots. The row runs for a
+/// workspace that recorded its authority and for one that never did, as every
+/// workspace last opened by an older binary.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_foreign_authority_cannot_migrate_a_discovered_workspace_under_live_clients() {
+    for recorded in [true, false] {
+        // Authority A protects the workspace; authority B has its own
+        // registered workspace and never registered A's.
+        let protected = McpWorkspace::init();
+        let foreign = McpWorkspace::init_with_workspace_name("foreign-authority");
+        let authority_a = authority_root(&protected);
+        let authority_b = authority_root(&foreign);
+        let workspace_root = protected.work.join(".orbit");
+        let nested = protected.work.join("nested/uninitialized");
+        std::fs::create_dir_all(&nested).expect("nested cwd");
+        protected.run_ok(&["task", "list"]);
+        if !recorded {
+            match std::fs::remove_file(workspace_root.join("state/generation-authority.json")) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("private authority record: {error}"),
+            }
+        }
+        // Validate every resolved root before any candidate runs: all of them
+        // are private, distinct, and none is the real home's authority.
+        let real_authority =
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".orbit"));
+        for (path, temp) in [
+            (&authority_a, protected._temp.path()),
+            (&workspace_root, protected._temp.path()),
+            (&nested, protected._temp.path()),
+            (&authority_b, foreign._temp.path()),
+        ] {
+            let resolved = path.canonicalize().expect("fixture path resolves");
+            let temp = temp.canonicalize().expect("fixture temp resolves");
+            assert!(
+                resolved.starts_with(&temp),
+                "{} escapes its fixture",
+                resolved.display()
+            );
+            if let Some(real) = real_authority
+                .as_ref()
+                .and_then(|real| real.canonicalize().ok())
+            {
+                assert!(
+                    !resolved.starts_with(&real),
+                    "{} is a live authority",
+                    resolved.display()
+                );
+            }
+        }
+        assert_ne!(authority_a, authority_b);
+        assert!(!nested.join(".orbit").exists());
+
+        // The workspace still has a layout migration pending, and a client
+        // compiled before it holds authority A.
+        let marker = workspace_root.join("state/layout.version");
+        let latest = orbit_core::composition::compiled_compatibility();
+        let current = latest.workspace_layout.version;
+        let old_layout = current - 1;
+        std::fs::write(&marker, format!("{old_layout}\n")).expect("rewind layout marker");
+        let mut old_identity = latest.clone();
+        old_identity.workspace_layout.version = old_layout;
+        old_identity.workspace_layout.writer_floor = old_layout;
+        old_identity.workspace_layout.reader_floor = old_layout;
+        let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit")))
+            .expect("fixture executable digest");
+        let participant = Participant {
+            digest: &digest,
+            identity: &old_identity,
+            role: ParticipantRole::McpServe,
+            access: Access::Write,
+            handover: None,
+            in_activity: false,
+        };
+        let old_client = GenerationGuard::join(
+            &authority_a,
+            &participant,
+            std::time::Duration::ZERO,
+            || Ok(0),
+        )
+        .expect("old client joins authority A");
+
+        let foreign_write = || {
+            McpWorkspace::orbit_command(&nested, &foreign.home)
+                .env(QUIESCE_TIMEOUT_ENV, "0")
+                .args([
+                    "task",
+                    "add",
+                    "--title",
+                    "Must not migrate another authority's workspace",
+                    "--complexity",
+                    "low",
+                    "--json",
+                ])
+                .output()
+                .expect("foreign-authority candidate")
+        };
+        let before = (tree_bytes(&workspace_root), tree_bytes(&authority_a));
+        let output = foreign_write();
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("marker"),
+            format!("{old_layout}\n"),
+            "recorded={recorded}: a foreign authority advanced the protected layout: {output:?}"
+        );
+        assert_eq!(
+            (tree_bytes(&workspace_root), tree_bytes(&authority_a)),
+            before,
+            "recorded={recorded}: a foreign authority must refuse before any workspace or \
+             authority write"
+        );
+        assert_refused(&output);
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("pending layout upgrade"),
+            "recorded={recorded}: {output:?}"
+        );
+
+        // Releasing A does not authorize B: it is still not the authority
+        // protecting this workspace.
+        drop(old_client);
+        assert_refused(&foreign_write());
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("marker"),
+            format!("{old_layout}\n")
+        );
+
+        // The protecting authority upgrades once its old client has gone, and
+        // B keeps serving its own workspace. A workspace that recorded no
+        // authority is first adopted by it [ORB-20272].
+        if !recorded {
+            assert_refused(&protected.run(&[
+                "task",
+                "add",
+                "--title",
+                "Unrecorded",
+                "--complexity",
+                "low",
+            ]));
+            protected.run_ok(&[
+                "migrate",
+                "--adopt-authority",
+                &authority_a.to_string_lossy(),
+            ]);
+        }
+        let added = protected.run_ok(&[
             "task",
             "add",
             "--title",
-            "Must not be written during a review schema switch",
+            "Written by the protecting authority",
             "--complexity",
             "low",
             "--json",
-        ])
-        .output()
-        .expect("candidate writer");
-    assert_refused(&output);
-    assert_eq!(
-        store_bytes(&workspace),
-        before,
-        "incompatible admission must stop before store or workspace writes"
-    );
-
-    drop(_old_client);
-    let added = orbit_ok(
-        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+        ]);
+        let added: Value = serde_json::from_slice(&added.stdout).expect("task JSON");
+        assert_eq!(added["title"], "Written by the protecting authority");
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("marker"),
+            format!("{current}\n")
+        );
+        let own = foreign.run_ok(&[
             "task",
             "add",
             "--title",
-            "Written after the old client quiesced",
+            "B's own workspace",
             "--complexity",
             "low",
             "--json",
-        ]),
-    );
-    let added: Value = serde_json::from_slice(&added.stdout).expect("task JSON");
-    assert_eq!(added["title"], "Written after the old client quiesced");
+        ]);
+        let own: Value = serde_json::from_slice(&own.stdout).expect("task JSON");
+        assert_eq!(own["title"], "B's own workspace");
+    }
 }
 
 /// An idle stdio MCP server refuses a plain preflight, which renames nothing,
@@ -861,6 +1076,10 @@ fn upgrade_admission_and_session_handover() {
         (
             "a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes",
             a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes as fn(),
+        ),
+        (
+            "a_foreign_authority_cannot_migrate_a_discovered_workspace_under_live_clients",
+            a_foreign_authority_cannot_migrate_a_discovered_workspace_under_live_clients as fn(),
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");

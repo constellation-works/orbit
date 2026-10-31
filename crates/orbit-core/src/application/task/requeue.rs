@@ -26,6 +26,18 @@
 //! Two callers share [`OrbitRuntime::write_candidate_requeue`]: the operator
 //! command (`orbit task requeue`, `orbit.task.requeue`) and the cleared-infra
 //! requeue of a transient infrastructure block (`transient_infra`).
+//! Plain attributed blocked/review-to-backlog updates authenticate through
+//! the same publication contract and append preservation atomically with
+//! their status change.
+//!
+//! A run that published its own pull request through its pipeline steps and
+//! then escalated has no handoff receipt: its failure handoff kept that pull
+//! request open (`review_completion_failure`, `landing_review_failure`). A
+//! requeue resumes it the same way, once the completion-failure receipt names
+//! the run, the task and its unchanged specification, the checkpoints
+//! authenticate the pull request open and unmerged at the recorded head, and
+//! every required check on that head has passed. Anything else is refused
+//! with nothing written, naming the exit that applies.
 //!
 //! A requeue waits for the task's run to stop: final recovery blocks the task
 //! before the run's failure handoff publishes, and a requeue in between would
@@ -57,7 +69,7 @@ use serde_json::{Value, json};
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::SYSTEM_ACTOR_LABEL;
 use crate::OrbitRuntime;
-use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::task::{TaskJobPort, TaskRecords};
 use orbit_types::workflow::SourceRepairBinding;
 
 /// Status event of an operator's requeue of a blocked task.
@@ -133,7 +145,7 @@ impl OrbitRuntime {
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(None);
         };
-        let Some(state) = self.read_run_state(run_id)? else {
+        let Some(state) = self.stored_run_state(run_id)? else {
             return Ok(None);
         };
         let Some(checkpoint) = state.failure_activity_checkpoint else {
@@ -180,7 +192,7 @@ impl OrbitRuntime {
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(false);
         };
-        Ok(self.read_run_state(run_id)?.is_some_and(|state| {
+        Ok(self.stored_run_state(run_id)?.is_some_and(|state| {
             ["push", "pr_open"].iter().any(|key| {
                 state
                     .pipeline
@@ -275,7 +287,7 @@ impl OrbitRuntime {
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(None);
         };
-        let Some(run) = self.get_job_run_backend(run_id)? else {
+        let Some(run) = self.stored_job_run(run_id)? else {
             // Not in this store: a follower's leaf, fenced by its settled claim.
             return Ok(None);
         };
@@ -285,7 +297,7 @@ impl OrbitRuntime {
         };
         if !run.state.is_terminal()
             || run.finished_at.is_none()
-            || (!foreign && run_owner_liveness(&run) != RunOwnerLiveness::Stopped)
+            || (!foreign && !self.run_owner_stopped(&run))
         {
             return Ok(Some(format!(
                 "run `{run_id}` has not conclusively stopped, so its failure handoff may still \
@@ -313,6 +325,18 @@ impl OrbitRuntime {
         reason: &str,
         discard: bool,
     ) -> Result<Value, OrbitError> {
+        self.requeue_blocked_task_as(id, reason, discard, None)
+    }
+
+    /// Like [`Self::requeue_blocked_task`], recording `actor` in task history
+    /// instead of the ambient identity (the dashboard passes its own label).
+    pub fn requeue_blocked_task_as(
+        &self,
+        id: &str,
+        reason: &str,
+        discard: bool,
+        actor: Option<&str>,
+    ) -> Result<Value, OrbitError> {
         let reason = redact_all(reason.trim());
         if reason.is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -320,7 +344,10 @@ impl OrbitRuntime {
             ));
         }
         self.ensure_coordination_task_write_permitted()?;
-        let actor = self.actor().resolve_write_label(None, None)?;
+        let actor = match actor {
+            Some(actor) => actor.to_string(),
+            None => self.actor().resolve_write_label(None, None)?,
+        };
         let task = self.get_task(id)?;
         self.ensure_requeueable(&task)?;
         let receipt = self.handoff_receipt(&task)?;
@@ -465,7 +492,9 @@ impl OrbitRuntime {
         });
         let resumes = match (&resume, &kept) {
             (Some((_, binding)), _) => Some(json!({
-                "source": "failure_handoff",
+                // The receipt is the `[BLOCKED]` PR; without one the run's
+                // own pipeline published the PR its failure handoff kept.
+                "source": if receipt.is_some() { "failure_handoff" } else { "pipeline" },
                 "pull_request": binding.pull_request,
                 "branch": binding.branch,
                 "head_sha": binding.head_sha,
@@ -632,12 +661,13 @@ impl OrbitRuntime {
             .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str())))
     }
 
-    /// Authenticate a plain blocked-to-backlog status update without a
+    /// Authenticate a plain blocked/review-to-backlog status update without a
     /// discard, exactly as an operator requeue does. Returns the
     /// publication-preservation record to append with the status change
     /// (`None` when the same record is already on file or nothing was
-    /// published). A refusal leaves the task blocked with nothing written.
-    pub(crate) fn authenticate_blocked_to_backlog(
+    /// published). A refusal leaves the task in its current status with
+    /// nothing written.
+    pub(crate) fn authenticate_published_backlog_return(
         &self,
         task: &Task,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
@@ -682,11 +712,9 @@ impl OrbitRuntime {
             }
             // Every authentication refusal (an interrupted or timed-out
             // run, a newer execution, a foreign source, ...) has the same exit.
-            let authenticated =
-                self.failure_handoff_requeue_record(task)
-                    .and_then(|(entry, binding)| {
-                        Ok((self.preservation_to_append(task, entry)?, binding))
-                    });
+            let authenticated = self
+                .failure_handoff_preservation(task)
+                .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
             return authenticated.map(Some).map_err(|error| match error {
                 OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
                     "{refusal}. Nothing was changed. To {discard_hint}."
@@ -694,15 +722,26 @@ impl OrbitRuntime {
                 error => error,
             });
         }
+        // The run pushed and opened its pull request itself, then failed
+        // completion and was escalated: the requeue resumes that pull request,
+        // as a final-recovery requeue would, once it is still open at the
+        // recorded head with every required check passed.
         if self.run_published_through_pipeline(task)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "the task's stopped run published through its own pipeline steps with no \
-                 failure-handoff receipt to authenticate, so a requeue cannot resume it. \
-                 Nothing was changed. Inspect it with explicit source repair \
-                 (`orbit.workflow.run.resume` with `source_repair`), or {discard_hint}."
-            )));
+            let authenticated = self
+                .escalated_publication_preservation(task)
+                .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
+            return authenticated.map(Some).map_err(|error| match error {
+                OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
+                    "{refusal}. Nothing was changed. The requeue resumes the pull request its \
+                     run published once it is open at the recorded head with every required \
+                     check passed: requeue again when they pass. If the pull request already \
+                     merged, settle the task with `orbit task settle-merged`. Otherwise, \
+                     {discard_hint}."
+                )),
+                error => error,
+            });
         }
-        if self.unbound_publication_on_record(task)? {
+        if self.unbound_publication(task)? {
             return Err(OrbitError::InvalidInput(format!(
                 "the task has a pull request or preserved candidate on record that its stopped \
                  run's handoff does not bind, so its next run would refuse to start. Nothing \

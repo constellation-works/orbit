@@ -1,7 +1,100 @@
 # Task fields and validation access
 
-Use this when setting dependencies, relations or additional tool requirements.
+Use this when choosing task projections, editing context selectors, or setting
+dependencies, relations or additional tool requirements.
 The connected tool schema is authoritative for supported fields.
+
+## Context selectors
+
+`orbit.task.update` accepts `context_files` as a comma-separated string or an
+array of strings. The legacy `context` alias accepts a string;
+`context_files` takes precedence when both are supplied.
+
+- Omitting both fields preserves the current list. Supplying either replaces
+  the **whole list**, never appends.
+- To extend the list, first read the durable `context_files` with
+  `orbit.task.show`, then send the deduplicated union of **all existing
+  selectors and the additions**. Re-read afterward to verify none were lost.
+- `context_files: []` clears the list. A comma-only string such as `","`
+  also clears it through either field. An empty string is rejected by the
+  tool; the human CLI's `--context ""` clears it. The string `"[]"` is a
+  selector, not an empty list.
+- Add only files, directories or symbols the task expects to modify or
+  delete, or files it will create as described below. Do not add entries only
+  for background reading. Prefer `symbol:path#name:kind` for existing
+  symbols the change edits, else `file:path` or `dir:path` (see
+  [Selector granularity](task-authoring.md#selector-granularity)); legacy
+  raw paths are accepted and upgraded.
+- Existence checks verify the filesystem anchor only; a `symbol:` name and
+  kind are not looked up. A `symbol:` selector locks its whole file.
+
+Use `allow_missing_context: true` to declare a target before creating its
+file. Missing targets are rejected by default. Each accepted missing selector
+records durable creation intent for that **exact selector**; later writes and
+task preparation honor it. Re-sending a declared selector needs no flag, and a
+replacement list that omits it revokes the intent. Syntax, workspace
+containment and file/directory kind are still checked.
+
+For the read → full-union update → verify command sequence, see
+[Keep context_files current](task-execution.md#step-4--implement-and-validate).
+
+## Task projections and delivery evidence
+
+`orbit.task.show` resolves `id` globally through the host task registry by
+default. Cwd, MCP initialize metadata and linked-worktree runtime identities
+are not filters. Optional `workspace` is an explicit fail-closed filter.
+
+For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, use `fields`
+as a string or array of field names, or `field` as a single-field alias.
+`fields` takes precedence when both are supplied. The projection catalogue is:
+
+```text
+id, parent_id, title, description, acceptance_criteria,
+dependencies, resolved_dependencies, tags, required_tools, granted_tools,
+requires_labels, not_before, started_at, scheduled_hold, plan,
+execution_summary, context_files,
+created_by, created_by_model, planned_by, implemented_by, status, terminal, priority,
+complexity, type, pr_status, external_refs, relations,
+source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
+crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
+readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model,
+orchestrator_model_source, origin, rule_fingerprint, created_at, updated_at, comments,
+history, artifacts
+```
+
+Show without a projection returns the full task. A projection returns only
+the requested fields as JSON: a single field returns its value, and multiple
+fields return an object keyed by field name. A single derived `terminal`
+selection remains keyed as `{"terminal": ...}`. It is read-only and reports
+whether the task refuses implementer writes.
+
+On the CLI, `orbit task show --fields` takes the same names, repeated or
+comma-separated. Without `--json`, a single field prints its bare value and
+several fields print each under a `Field:` heading; with `--json`, the shapes
+above apply.
+
+Write responses without a projection omit the append-heavy `comments` and
+`history`; request those fields explicitly when needed. Write projections
+use the same field catalogue above.
+
+`crew` selects execution; `orchestrator` records separate orchestration
+attribution. `created_by` is the creator's agent family; `created_by_model` is
+the full model id (`claude-opus-5-5`) recorded once when `orbit.task.add` was
+given one as `model`. It is never rewritten, and it is `null` for family-only
+creates and tasks filed before it existed. The derived, never-persisted `os_requirement` reports the task's
+OS tags intersected with the stored crew executor `host_os`, its source, and
+unresolved/conflict states.
+
+For show only, `field: "delivery"` selects delivery evidence instead of task
+fields. It cannot be combined with other fields. Optional `run_id` chooses
+the delivery run; without it, the newest task-delivery run submitted with
+this task is used. `run_id` requires the delivery selection.
+
+Delivery reports what the run committed and landed for the task: typed status,
+base/head and landed commit SHAs, PR number, timestamps and provenance only,
+from the host's own commit and merge step records. Missing or inconsistent
+evidence is reported as unavailable, never inferred. Full run details remain
+on the operator-only `orbit.workflow.run.show`.
 
 ## Behavior-affecting optional fields
 
@@ -37,10 +130,30 @@ The connected tool schema is authoritative for supported fields.
   relation types require a task ID. A dangling target (unknown in every
   workspace this host can see) succeeds but emits a `TaskRelationDangling` audit event.
 - A `regression_from` relation may carry
-  `"regression": {"nature": "<nature>", "escape": "<escape>"}` (both required;
+  `"regression": {"nature": "<nature>", "escape": "<escape>", "severity": "<severity>", "sites": [...]}`
+  (`nature` and `escape` required, and `severity` on a new link;
   no other type accepts it). Choose `unclassified` rather than guess; an
   omitted payload reads back as absent, not as `unclassified`. Unknown values
   are refused with the allowed list.
+  - `severity` — how much the defect matters, on the same scale review
+    findings use ([severity rubric](#severity-rubric)). A new classified link
+    without one is refused. A link the task already holds may be re-sent
+    without it and keeps its recorded severity and source. Every link reads
+    back with `severity_source`: `filer` (set by the writer, the default),
+    `verified` (finding verification confirmed or adjusted it; only
+    verification sets it), `operator` (an operator override), `backfill` (a
+    backfill of older links), or `default` (stored before severity existed;
+    reads as `medium`). Send `"severity_source": "operator"` only for an
+    operator's override.
+  - `sites` (optional, up to 8) — where the defect lives, not everything the
+    culprit touched: `symbol:<path>#<name>:<kind>` of the function, method or
+    type that is wrong, `file:<path>` for a file without symbols, or
+    `dir:<path>` only when the defect spans a directory and no narrower site
+    can be named. Never tests, goldens, docs or wiring the culprit only
+    touched alongside. Codebase analytics attribute the culprit's regression
+    to these sites, and a link without sites to no path. An
+    absolute path outside the workspace refuses the write. A relations
+    replacement that omits `sites` clears them, so preserve an existing list.
   - `nature` — what kind of regression the link records:
     - `broke_existing`: the culprit broke behavior that worked before it landed.
     - `defect_in_new`: the defect is in code the culprit itself introduced.
@@ -83,6 +196,71 @@ The connected tool schema is authoritative for supported fields.
   `github.auth.status` can still yield a structured `available: false` or
   `authenticated: false` capability-unavailable result when the lane has no
   GitHub client or credentials; that is not a clean CI pass.
+- `granted_tools: ["<exact.canonical.tool>", ...]` — tools an **operator**
+  grants the implementing activity despite its deny list. Separate from
+  `required_tools`: only an operator session may set or change it, on
+  `orbit.task.add` or `orbit.task.update`, and any other caller that supplies
+  the field (even `[]`) is refused naming the missing operator authority,
+  never silently stripped. Names are checked like `required_tools`. An update
+  replaces the list (`[]`, or CLI `--granted-tools ""`, clears it) and is
+  accepted only while the task is `proposed`, `backlog` or `someday` with no
+  live run, footprint-protecting execution claim or worktree. A preserved
+  worktree keeps the grant frozen after its run stops or claim is released;
+  requeue and remove any preserved worktree before changing the grant for a
+  new attempt. Every change records a `granted_tools_changed` history entry
+  naming the writer, both tool sets and the run/claim/worktree state. Only
+  `agent_implement` reads a grant;
+  review, recovery, pilot and every other activity ignore it. A grant lifts
+  the deny list only for a tool classified read/repeat-safe. Every tool
+  `agent_implement` denies today is classified mutating, so such a grant
+  stays denied and is never called live, and also listing it in
+  `required_tools` still fails implementer admission. A lifted tool still
+  passes every other check: capability and field-level operator gates,
+  filesystem and process policy, and claimed-mode denials.
+- **Mutation proposals** carry a mutating grant's call instead. Attach
+  `mutation-proposals/<name>.json` with `orbit.task.artifact.put`, content
+  `{"tool": "<granted tool>", "input": {…exact tool input…}, "rationale":
+  "<why>"}`. It is refused unless the task grants the tool, the tool is a
+  grantable mutation, and an agent session could make that exact call (a
+  grant never satisfies a field-level gate such as `expected_enabled`).
+  Orbit stores it with the task id and an `idempotency_key` derived from the
+  task, tool and input; nothing changes live. The review gate's manifest
+  lists every unapplied proposal for the reviewer, and when that review
+  passes the pipeline applies each one once, with the reviewed input, and
+  records a `mutation-receipts/<key>.json` receipt (`applied` or `failed`).
+  Receipts are Orbit's alone. A re-emitted identical proposal never applies
+  twice; a changed one is a new key that waits for the next review. A failed
+  or unreviewed proposal fails the review step with a task comment, a run
+  that reviews nothing refuses the task, and a task cannot become `done`
+  while a proposal is unapplied. A change the agent needs during its run
+  cannot be proposed: it is an operator action or a prerequisite task.
+- `requires_labels: ["<label>", ...]` — capability labels a host must carry,
+  **all of them**, to run the task. A host carries its `machine.labels` setting
+  plus its OS as an implicit label (`linux`, `macos`, `windows`); `orbit doctor`
+  prints the effective set. `os:` tags keep their any-of meaning and both
+  apply. Labels are opaque, trimmed and lowercased. Add and update refuse a
+  requirement no known serving host carries with the task's `os:` tags, naming
+  the missing labels: this host, plus followers that pulled from the workspace
+  in the last seven days. Update replaces the list; `[]` (CLI
+  `--requires-labels ""`) clears it. A host lacking a label skips the task
+  (`host_labels_missing`), and while no live host carries them task show/list
+  and `orbit run readiness` name the wait in `placement_wait`. Use it for a
+  real capability (a GPU, a signed toolchain), not to pin a hostname.
+- `not_before: "<RFC 3339 instant>"` — the earliest time a dispatcher may
+  start the task, stored in UTC and shown only when set. Give an instant with
+  an offset (`2026-11-06T09:00:00Z`); the CLI's `--not-before` also takes a
+  local `YYYY-MM-DDTHH:MM` in the host's zone and echoes UTC and local time.
+  A malformed time is refused naming it. On `orbit.task.update` an empty
+  string (CLI `--clear-not-before`) clears it; `null` leaves it unchanged, as
+  for any field. Until then a `backlog` task waits `scheduled`, with the time
+  in `detail`, in drain listings, `orbit run readiness` and `run show`. No
+  local or pull drain starts it, and `orbit run ship <id>` and
+  `orbit.workflow.ship` refuse it with `task_scheduled`. The hold lifts by
+  itself on the first admission pass after that time, which can be later
+  than the time itself. Only an operator's
+  `orbit run ship <id> --ignore-schedule` starts it early, recording a
+  `schedule_overridden` history event; changing `not_before` reinstates the
+  hold. Other statuses ignore it.
 - `origin` records why the task was filed, from a closed set:
   `operator_request` (a human operator asked for the work),
   `orchestrator_initiative` (the orchestrator judged it necessary on its own)
@@ -95,12 +273,93 @@ The connected tool schema is authoritative for supported fields.
   value. `orbit.task.update` can correct an origin but not clear it, an unknown
   value is refused with the allowed list, and `orbit task list --origin`
   (`origin` on `orbit.task.list`) filters by it.
+- `rule_fingerprint` is the stable rule-result fingerprint the
+  `file_rule_findings` filer stamps at filing, so one open task owns one
+  failing rule result however it is retitled. It is absent on every task
+  the filer did not create, is not settable through task create or update,
+  and is readable through the `rule_fingerprint` show projection.
 - `covered_by` names a task or GitHub PR covering an archived/rejected CI
   sweep finding. Its target is a task ID or an external key such as
   `github-pr:NUMBER` (this checkout's repository) or
   `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`. Preserve existing
   relations and append it in the same update that archives/rejects the finding;
   see [CI recovery](../../orbit-orchestrate/references/recovery.md).
+
+## Severity rubric
+
+Review findings and `regression_from` links rate on one scale. Rate by the
+worst real impact the evidence shows, not by the size of the fix; when torn
+between two levels, take the lower and say why.
+
+- `critical` (weight 8): data loss or corruption, a security hole, every
+  drain halted, or silently wrong results. Examples: a migration drops task
+  history; a sandbox profile lets an agent write outside its worktree; a
+  store lock deadlock stops every drain; a scorecard ranks rows from the
+  wrong window without saying so.
+- `high` (4): a core workflow broken with no workaround. Examples: every
+  delivery of a task tagged `ui` fails at handoff; `orbit task update`
+  refuses all relation writes; the dashboard task list never loads.
+- `medium` (2): a feature broken or wrong in a real path, with a
+  workaround. Examples: `--json` drops a field the plain output shows; a
+  filter ignores one of its values; a retry needs a manual requeue.
+- `low` (1): an edge case, a misleading message or a minor UX defect.
+  Examples: an error names the wrong flag; a 375px layout wraps a label; an
+  empty state reads as a failure.
+- `nit` (0.25): wording or doc drift, cosmetic, no behavior impact.
+  Examples: a stale sentence in a reference doc; a misspelled help string;
+  an off-by-one-pixel border.
+
+The agent scorecards use these weights: a held review finding earns its
+weight, and an escaped or missed regression costs twice its weight.
+
+## Operator runbook: granting tools
+
+Use an operator session on the task's owner host. Inspect the task and the
+exact tool schema first (`orbit task show <id>`, `orbit tool show <tool>`).
+Decide whether the work needs a reviewed mutation or a prerequisite operator
+action: all currently denied implementer tools are mutating, so a grant does
+not enable their live execution. Do not also put a denied mutation in
+`required_tools`; that still refuses implementer admission.
+
+1. Before dispatch, set the complete grant list with
+   `orbit task update <id> --granted-tools orbit.auto_task.update`.
+   Creation also accepts `orbit task add --title "<title>" --complexity low --granted-tools
+   orbit.auto_task.update`. These are operator commands; an agent must not
+   claim operator authority to run them. A replacement is the whole list,
+   not an append; `--granted-tools ""` revokes it before the next attempt.
+2. Confirm `Granted Tools` beside `Required Tools` in task show/list and
+   inspect `orbit task show <id> --fields history`. The
+   `granted_tools_changed` entry records the operator identity, timestamp,
+   before/after lists and dispatch state. A grant pins execution to the owner
+   host. If required labels exclude the owner, resolve that intersection;
+   a follower carrying the labels cannot take over the grant.
+3. Have the implementer attach the proposal described above, then inspect it
+   with `orbit task show <id> --fields artifacts` and
+   `orbit tool run orbit.task.artifact.get --input
+   '{"id":"<id>","path":"mutation-proposals/<name>.json"}'`.
+   Review the exact input with the diff. A proposal-only delivery without a
+   reviewed diff is refused. Approval applies the reviewed proposal before
+   push/landing; verify its system-written receipt afterward.
+4. Diagnose refusals by their named gate. An exact disallow or wildcard
+   refusal is a deny-policy gate; `orbit.routine.control` or another missing
+   capability is a capability gate; an owner-host/label wait is placement.
+   None is resolved by adding `required_tools`. To change a frozen grant,
+   stop/requeue the attempt and remove its preserved worktree first.
+
+`orbit audit list --kind operation --json` exposes authorization decisions;
+the `command = "authorization"` rows include grant authorizations (operation
+`orbit.task.grant_tools`) and activity-policy/capability denials. Match them
+with task history to distinguish an authorized attempt from a committed grant
+change. `orbit audit stats --tool orbit.auto_task.update --json` gives the
+existing denial-by-operation breakdown; it counts a decision once even when
+an entry-point audit row repeats it.
+
+A `failed` receipt is evidence of a failed application. A `pending` receipt
+means the result is unknown: do not retry it or edit/forge a receipt. Inspect
+the receipt and the actual owner state, retain evidence, and resolve the
+outcome as separate operator work. There is no automatic pending-receipt
+reconciliation command. A changed proposal creates a new key and requires a
+new review; it must not be used to repeat an unknown outcome.
 
 ## Validation your lane can actually run
 
@@ -192,11 +451,17 @@ pilot records a typed `required_os` finding naming the one-based criterion and
 the OS, and commits it as `native_os_hold` in its assessment audit. Apply
 rejects an entry whose criterion text names no OS or native facility (mac,
 macos, darwin, seatbelt, sandbox-exec, linux, bwrap, bubblewrap, windows,
-launchd, systemd, keychain, cgroup) and tells the pilot to leave `required_os`
-empty for a portable criterion. When every
+launchd, systemd, keychain, cgroup), unless its evidence cites one
+`#[cfg(target_os = "<os>")]` gate at a repository-relative `path:line` that
+apply confirms in the pinned source, on an item the criterion names, and the
+entry's `os` is that OS. A portable criterion, a gate on an item the
+criterion does not name, an `os` that differs from the gate, a path or line
+the pin does not confirm, and a `cfg(unix)` or `cfg(not(windows))` gate that
+does not determine one OS are still rejected, and the rejection tells the
+pilot to leave `required_os` empty. When every
 finding names one OS and the task carries no `os:` tag, the same atomic write
 adds that tag (`os:linux`), so admission routes the task by its tags and a host
-of another OS waits as `host_os_mismatch`. The pilot never removes or replaces
+of another OS waits as `host_os_mismatch` (see [Executor definitions](../../orbit-setup/references/configuration.md#executor-definitions)). The pilot never removes or replaces
 an `os:` tag already on the task. While those tags do not name the required OS
 (an operator chose another, or findings name several OSes), a local drain, ship
 discovery, `orbit run ship` and an owner's pull admission on a host that cannot

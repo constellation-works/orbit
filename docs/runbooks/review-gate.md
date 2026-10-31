@@ -5,35 +5,70 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
-last_validated: 2026-10-18
+last_validated: 2026-10-27
 ---
 
 # Operate the Review Gate
 
-Use this runbook when `review.timing` is `before_pr` or `before_landing` and
-you need to read what a review did to a delivery, or a task is
-`blocked` with a `review_gate_escalation` or
+Use this runbook when `review.timing` is `before_pr` (deprecated) or
+`before_landing` and you need to read what a review did to a delivery, or a
+task is `blocked` with a `review_gate_escalation` or
 `review_timeout_requeue_exhausted` event, requeued after a reviewer timeout,
 `in-progress` while awaiting named external evidence, or in `review` with an
 open PR after a before-landing review did not approve it.
 
-Review has three timings. Before-PR review (`review.timing = "before_pr"`)
-holds PR creation for the reviewer. Before-landing review (`review.timing =
-"before_landing"`) opens the PR first and reviews it while hosted CI runs. After-landing review is
-the `delivery-code-review` auto-task. There is one review layer before
-landing, so `review.timing` selects at most one of them. Both share
+Review has three timings. Before-PR review (deprecated `review.timing =
+"before_pr"`) holds PR creation for the reviewer. Before-landing review
+(`review.timing = "before_landing"`, recommended when a pre-landing review is
+wanted) opens the PR first and reviews it while hosted CI runs. After-landing
+review is the `delivery-code-review` auto-task. There is one review layer
+before landing, so `review.timing` selects at most one of them. Both share
 `review.minutes` and one reviewer pool, `workflow.purpose_crews.pre_landing_review`
 (else `workflow.purpose_crews.review`, which after-landing review tasks always
 use), and neither runs on a workspace that ships locally:
 readiness holds that backlog as `local_route_before_pr` or
 `local_route_before_landing`, and `orbit doctor` fails its `review` check.
 
+> Staged deprecation [ORB-20099]: `before_pr` (and `before-pr`, `--review
+> before-pr`) is deprecated but still honoured with a bounded warning naming
+> the deciding key/request and source (config file on load; `global` /
+> `workspace` / `run-option` at submission); the effective value and
+> provenance stay truthful, deprecation alone never fails `orbit doctor`, and
+> already-admitted runs, claims, resumes, interrupted/held evidence, and
+> certificates keep their captured before-PR behavior byte-for-byte. New
+> setups use `off` or `before_landing` and new requests use `--review
+> before-landing`. Migrate only with an explicit `orbit config set
+> review.timing before_landing` (add `--global` only for the global layer),
+> preserving minutes, crews, validation, host evidence, and unrelated
+> settings. Ordinary writes, alias normalization, default refresh, and doctor
+> retired-key repair never perform that migration. Removal of accepted
+> `before_pr` input and internal handlers is a later separately scoped
+> decision; ORB-20087 consumed this deprecation without waiting for it.
+
+> Selective before-landing review [ORB-20087]: with `review.timing = "off"`,
+> `[review.selective_before_landing]` may `observe` or `enforce` review
+> selection by estimated `diff_lines` risk (strictly above
+> `risk_threshold`) and/or repository-relative `paths` globs over the
+> complete pinned PR diff. It ships `off`; nothing here enables it. To
+> adopt: configure a pre-landing reviewer crew, set `mode = "observe"`,
+> inspect the host-authored `review-selection.json` receipts (selection
+> volume per predicate, unknown/unavailable counts, gaps) and the doctor /
+> `orbit config show` selective line, then separately decide on
+> `mode = "enforce"`. An enforced `required` decision runs the ordinary
+> before-landing reviewer and cannot be skipped by review-skip tags; a
+> `selection_unavailable` or `selection_stale` hold means the diff could
+> not be read or the live head moved after selection — re-evaluate with a
+> fresh delivery run rather than merging around it. Observations and
+> skips are selection evidence only, never a passed review.
+
 ## 1. What the gate does
 
 One fresh reviewer, from `workflow.purpose_crews.pre_landing_review` (or
 `workflow.purpose_crews.review` while that is unset), examines the implementation
-commit, fixes what it finds, and returns a verdict. There is no findings-driven
-rework loop. If PR completion rebases a conflicting reviewed head, the pipeline
+commit, fixes what it finds, and returns a verdict. A reviewer's findings never
+send the candidate back to its implementer; the one exception is an owner
+evidence run whose CodeQL analysis reports results on a held candidate, which
+queues that candidate for repair (below). If PR completion rebases a conflicting reviewed head, the pipeline
 may admit up to two fresh re-reviews in the same lineage; a conflict after the
 last of them leaves the task in review as `review_gate_stale`.
 
@@ -163,8 +198,13 @@ PR (`held_pull_request`) and the owner keeps it with the held candidate, so the
 run that resumes the candidate after the evidence arrives publishes on its own
 branch and its `pr_open` closes the earlier PR as superseded
 (`superseded_pull_request` in that step's output; `close_failed` leaves it for
-you to close). Other non-approving claimed reviews still block the task on the
-owner with its PR open.
+you to close). When that resume's landing admission decides
+`evidence_received` — the hold named only owed evidence and it matches the
+unchanged candidate — `landing_review` does not start a reviewer. Settlement
+reuses the held certificate, as a before-PR resume does. A fresh `admitted` or
+`resumed` decision still starts the reviewer. Missing or mismatched evidence
+leaves the hold in place. Other non-approving claimed reviews still block the
+task on the owner with its PR open.
 
 #### Sandboxed reviewers on a claimed leaf
 
@@ -223,10 +263,27 @@ The owner enforces what it is owed in two places:
   is that success. A completed `SKIPPED` or `NEUTRAL` conclusion is not: the
   owner keeps waiting, the same as when a check is absent or still running,
   within `max_wait_seconds`. A failed check is classified first: one
-  inherited from the base gets one branch update, a transient one gets one
-  rerun, and one the candidate caused gets the claim's one automatic repair
-  ([distributed drain runbook](distributed-drain.md)). Past that budget the
-  landing stops, whatever branch protection requires. Branch protection may still treat a skipped or
+  inherited from the base gets a branch update; while the base stays red the
+  landing waits within its deadline for a newer passing base and updates
+  again, at most three updates per handoff, recording each wait and update
+  in task history. A transient one gets one rerun, and one the candidate
+  caused gets the claim's one automatic repair
+  ([distributed drain runbook](distributed-drain.md)). A new failure whose
+  log cites only files the candidate did not change is base-suspect: it waits
+  for a successful same-check push run on the accepted base ancestry, then
+  requests one `gh run rerun <id> --failed` for the original `pull_request`
+  run on its unchanged head. A qualifying base run may predate the candidate
+  failure; it authorizes the rerun but does not attribute the failure. GitHub
+  retains the original event's `GITHUB_SHA` and `GITHUB_REF` on a rerun
+  ([GitHub documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)),
+  and Orbit CI's candidate-build jobs check out
+  `github.event.pull_request.head.sha`; they do not build a merge with the
+  current base. A passing rerun clears the failure, while the same signature
+  failing again with a successful same-check run on the accepted base ancestry
+  enters candidate recovery. If the evidence remains incomplete,
+  `handoff_land` stops in review after `max_base_ci_cycles` observation cycles
+  (default 3) or `max_wait_seconds` (default 3600 seconds), whichever comes
+  first, and names the missing evidence. Branch protection may still treat a skipped or
   neutral required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
 
@@ -328,6 +385,17 @@ its log. A failed or incomplete run attaches only the log, with a typed
 reason. Each attempt is audited as `review.evidence_fulfilment`. See
 [owner fulfilment](codeql-local.md#owner-fulfilment) for CodeQL and
 [host sandbox tests](#host-sandbox-tests) below.
+
+A CodeQL run that reports results (`findings_reported`) is no evidence, but
+the hold cannot wait it out: no later run of the same tree will pass. When
+every refusal of the run is that one, the owner attaches
+`review-evidence-findings.json` (each result's rule, message, file, line and
+data flow) and queues the task in `backlog` with `review_evidence_findings`.
+The next delivery run resumes the held candidate for its implementer: its
+`resume_candidate` step reports `resumed_repaired` with trigger `review` and
+the findings as the repair's output. The repaired candidate then gets a fresh
+review, which needs CodeQL on its new tree again. A claimed leaf's
+implementer reads the findings in the task's comments.
 
 Receipt of all matching evidence queues the task in `backlog` with
 `review_evidence_received` for a fresh review, unless the hold names only owed
@@ -517,6 +585,8 @@ running it in the implementer's lane. Every notice must be one of these
 kinds, and the lane must refuse the probe of each kind present; the implement
 step refuses anything else before commit:
 
+Follow the [Sanctioned sandbox deferral contract](../../crates/orbit-core/assets/skills/orbit/references/task-execution.md#sanctioned-sandbox-deferral) for the implementer's eligibility, summary-only handoff, probe, replay and exclusion rules.
+
 | Host | Notices | Probe Orbit runs | Probe result |
 |---|---|---|---|
 | Linux | `DEFERRED: bubblewrap unavailable:` | `bwrap --unshare-user --ro-bind / / -- /bin/true` | nonzero, `No permissions to create a new namespace` (0.11) or `No permissions to create new namespace` (0.9) |
@@ -563,6 +633,11 @@ sandbox-gated test on a host of the rule's OS owes a run outside the agent
 sandbox. Orbit adds each owed requirement whatever the reviewer reported:
 `owed_external_evidence` in the manifest and `owed_evidence` in the certificate
 list them. A verdict whose only gaps are owed checks holds rather than blocking.
+A claimed before-landing reviewer on a known non-Linux host may also name
+Linux `host_sandbox_test` requirements without a workspace rule. Settlement
+records these in `owed_evidence`, adding their required `not_run` records
+when omitted, so Linux-only gaps hold for the owner. Failed required checks
+and open findings still block.
 A reviewer's claimed pass of an owed check also holds, with an `owed_evidence`
 escalation. Once the evidence arrives, the owner's next run resumes the held
 candidate and its admission decides `evidence_received`. Settlement then
@@ -582,7 +657,10 @@ host can create Bubblewrap namespaces. The owner's clock sweep dispatches
 down on a follower, a worker, another platform or a host without namespaces.
 The run admits only an exact owner-required validation command or
 `cargo test -p <crate> --test <target> [<filter>]`, written in
-`[A-Za-z0-9._/:@+=-]` and spaces with no other option. A command outside
+`[A-Za-z0-9._/:@+=-]` and spaces. A single `--` immediately before the
+one filter is also admitted and normalized to the same host command;
+a bare `--`, further arguments and test-harness options remain refused.
+A command outside
 that allowlist refuses the whole hold before anything runs. An admitted
 command runs without a shell at the held commit, in a detached worktree with
 the validation environment and a run-local build target, outside any sandbox

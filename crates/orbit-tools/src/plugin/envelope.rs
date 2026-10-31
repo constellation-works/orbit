@@ -185,7 +185,7 @@ impl CallSecrets {
                 message,
                 payload,
             } => OrbitError::RemoteTool {
-                code: self.mask_delivered(&code),
+                code: self.mask_delivered(code.as_str()).into(),
                 message: self.mask_delivered(&message),
                 payload: self.mask_json(payload),
             },
@@ -538,7 +538,7 @@ pub(crate) fn plugin_error(tool_name: &str, error: &Value) -> Option<OrbitError>
         payload["detail"] = detail.clone();
     }
     Some(OrbitError::RemoteTool {
-        code: code.to_string(),
+        code: code.into(),
         message: format!("plugin tool '{tool_name}' failed: {message}"),
         payload,
     })

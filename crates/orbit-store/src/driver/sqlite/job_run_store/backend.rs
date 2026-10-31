@@ -23,6 +23,7 @@ use crate::Store;
 use crate::contracts::{
     ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams, JobRunFinalization, JobRunQuery,
     JobRunStepParams, JobRunStoreBackend, KeyedJobRunAdmission, KeyedJobRunParams,
+    PendingJobRunCancellation,
 };
 use crate::fs::path_safety::validate_path_stem;
 
@@ -292,6 +293,16 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         })
     }
 
+    fn observed_run_page(&self, after: &str, limit: usize) -> Result<Vec<JobRun>, OrbitError> {
+        self.store.with_read_connection(|conn| {
+            let mut statement = conn.prepare(&format!(
+                "SELECT {JOB_RUN_COLUMNS} FROM job_runs WHERE workspace_id=?1 AND run_id>?2 ORDER BY run_id LIMIT ?3"
+            )).map_err(sqlite_store_error)?;
+            statement.query_map(rusqlite::params![self.workspace_id, after, limit.clamp(1,32)], row_to_job_run)
+                .map_err(sqlite_store_error)?.collect::<Result<Vec<_>,_>>().map_err(sqlite_store_error)
+        })
+    }
+
     fn automation_job_for_key(&self, key: &str) -> Result<Option<String>, OrbitError> {
         self.store.with_read_connection(|conn| {
             conn.query_row(
@@ -340,6 +351,28 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError> {
         self.store
             .list_job_runs_for_workspace(&self.workspace_id, query)
+    }
+
+    fn recent_job_runs_for_tasks(
+        &self,
+        job_id: &str,
+        task_ids: &[String],
+        per_task_limit: usize,
+    ) -> Result<std::collections::BTreeMap<String, Vec<JobRun>>, OrbitError> {
+        self.store.recent_job_runs_for_tasks_for_workspace(
+            &self.workspace_id,
+            job_id,
+            task_ids,
+            per_task_limit,
+        )
+    }
+
+    fn job_run_task_ids(
+        &self,
+        query: &JobRunQuery,
+    ) -> Result<std::collections::BTreeSet<String>, OrbitError> {
+        self.store
+            .job_run_task_ids_for_workspace(&self.workspace_id, query)
     }
 
     fn latest_job_runs(&self, job_ids: &[String]) -> Result<Vec<JobRun>, OrbitError> {
@@ -743,6 +776,28 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             run.finished_at = Some(finished_at);
             run.duration_ms = duration_ms;
             outcome = JobRunFinalization::Finalized;
+            Ok(true)
+        })?;
+        Ok(outcome)
+    }
+
+    fn cancel_pending_job_run(
+        &self,
+        run_id: &str,
+        finished_at: DateTime<Utc>,
+    ) -> Result<PendingJobRunCancellation, OrbitError> {
+        let mut outcome = PendingJobRunCancellation::Missing;
+        // The same immediate transaction as `mark_job_run_running`, so the
+        // pending check and the cancel cannot straddle a start.
+        self.update_run_and_state(run_id, |run| {
+            if run.state != JobRunState::Pending {
+                outcome = PendingJobRunCancellation::NotPending(run.state);
+                return Ok(false);
+            }
+            run.state = run.state.try_transition(RunEvent::Cancel)?;
+            run.finished_at = Some(finished_at);
+            run.duration_ms = None;
+            outcome = PendingJobRunCancellation::Cancelled;
             Ok(true)
         })?;
         Ok(outcome)

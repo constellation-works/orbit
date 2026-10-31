@@ -51,3 +51,70 @@ fn insert_workspace_identity(
     );
     Ok(())
 }
+
+/// Shape `--not-before` and `--clear-not-before` into the tool's `not_before`
+/// field. The tool takes an RFC 3339 instant, or an empty string that clears
+/// it (an explicit null is an omitted field on the wire); the CLI also takes a
+/// local `YYYY-MM-DDTHH:MM`, converted here with this host's time zone. Any
+/// other text is passed through for the tool to refuse, naming it.
+pub(crate) fn shape_not_before_flags(
+    input: &mut serde_json::Map<String, Value>,
+) -> Result<(), OrbitError> {
+    let clear = input.shift_remove("clear_not_before") == Some(Value::Bool(true));
+    if clear {
+        if input.contains_key("not_before") {
+            return Err(OrbitError::InvalidInput(
+                "pass either `--not-before` or `--clear-not-before`, not both".to_string(),
+            ));
+        }
+        input.insert("not_before".to_string(), Value::String(String::new()));
+        return Ok(());
+    }
+    let Some(Value::String(raw)) = input.get("not_before") else {
+        return Ok(());
+    };
+    if let Some(instant) = local_not_before(raw)? {
+        input.insert("not_before".to_string(), json!(instant));
+    }
+    Ok(())
+}
+
+/// A local `YYYY-MM-DDTHH:MM` (or with `:SS`) as an RFC 3339 UTC instant,
+/// or `None` when `raw` is not in that form.
+fn local_not_before(raw: &str) -> Result<Option<String>, OrbitError> {
+    use chrono::{LocalResult, NaiveDateTime, TimeZone};
+    let trimmed = raw.trim();
+    let Some(naive) = ["%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"]
+        .iter()
+        .find_map(|format| NaiveDateTime::parse_from_str(trimmed, format).ok())
+    else {
+        return Ok(None);
+    };
+    let local = match chrono::Local.from_local_datetime(&naive) {
+        LocalResult::Single(local) => local,
+        // A wall-clock time a DST change repeats: the earlier one.
+        LocalResult::Ambiguous(earlier, _) => earlier,
+        LocalResult::None => {
+            return Err(OrbitError::InvalidInput(format!(
+                "`--not-before {trimmed}` names a local time this host's time zone skips (a \
+                 daylight-saving change); pick another time or give an RFC 3339 instant with \
+                 an offset"
+            )));
+        }
+    };
+    Ok(Some(orbit_types::task::format_not_before(
+        local.with_timezone(&chrono::Utc),
+    )))
+}
+
+/// The line `orbit task add|update` prints for a scheduled task: the time in
+/// UTC and in this host's time zone.
+pub(crate) fn not_before_line(task: &orbit_core::Task) -> Option<String> {
+    let not_before = task.not_before?;
+    let local = not_before.with_timezone(&chrono::Local);
+    Some(format!(
+        "Not before: {} (local {})",
+        orbit_types::task::format_not_before(not_before),
+        local.format("%Y-%m-%d %H:%M:%S %:z")
+    ))
+}

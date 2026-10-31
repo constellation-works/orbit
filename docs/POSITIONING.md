@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Positioning"
-last_validated: 2026-10-19
+last_validated: 2026-10-23
 ---
 
 # Orbit Positioning
@@ -22,7 +22,7 @@ Orbit's own repository uses feature-scoped design docs for load-bearing decision
 
 ## Who Orbit is for
 
-The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, Cursor, OpenCode, or Pi — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, audit, sandboxing, and parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../website/src/content/docs/concepts/agents.md).
+The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, or Muse Code — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, audit, sandboxing, and parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../website/src/content/docs/concepts/agents.md) (the Cursor, Pi, and OpenCode lanes were [retired](../website/src/content/docs/concepts/agents.md#retired-providers)).
 
 Staff and principal engineers, tech leads, and founding engineers fit the same profile. If they bring Orbit into their team's workflow, that's a natural extension — but the project is not positioned for team conversion. Orbit optimizes for the individual engineer who refuses to vibe-code their way through agent-driven development.
 
@@ -69,14 +69,14 @@ When auditability conflicts with performance, ergonomics, or feature surface, au
 
 ## Delivery philosophy
 
-**Delivery runs in one direction and does not stop: land fast, then remediate.** The rigor lives in the record (task, audit trail, independent review), not in gates that hold work back.
+**Delivery moves forward after required checks pass; after-landing findings become follow-up work.** The task and audit record keep work traceable. Required PR checks protect merges to `agent-main`; when after-landing review is enabled, findings on landed work become follow-up tasks rather than reopening the delivery.
 
-- **No required CI gates on the landing branch.** Orbit's own repository lands agent work on `agent-main` without required status checks. Its ruleset blocks branch deletion and merge commits, but does not gate merges on CI. Gating merges on CI would stall parallel dispatch, which is the opposite of the design. The release branch `main` is a separate question.
-- **CI is a signal, not a gate.** Failures feed the queue instead of blocking it: the `ci-failure-sweep` routine files and pilots CI findings, while the `qa-sweep` auto-task exercises recent changes and files tasks for non-duplicate QA issues. Improving CI quality means improving that failure → task loop, not adding a blocker.
+- **Required PR checks gate merges on `agent-main`.** The required checks are `Check / Clippy / Test` and `Test shard 1/3`, `Test shard 2/3`, and `Test shard 3/3`. The release branch `main` has a separate role.
+- **Post-landing CI and QA findings become follow-up work.** Required PR checks block a merge until they pass. After landing, the `ci-failure-sweep` routine files and pilots CI findings, while the `qa-sweep` auto-task exercises recent changes and files tasks for non-duplicate QA issues.
 - **Review is independent; after-landing is the preferred mode when enabled.** An implementer reviewing its own work is not review. The `delivery-code-review` auto-task reviews landed deliveries in batches, records confirmed findings as follow-up bug tasks, and does not change an already-landed delivery. It is disabled by default. `review.timing` selects an optional review layer before landing, `before_pr` or `before_landing`, and defaults to `off`; before-landing review must approve the settled head before the pipeline merges it. A landing that reproduces an already-reviewed tree is not reviewed twice. See the [review gate](design/review-gate/1_overview.md).
-- **Humans control admission, not landing.** Filing a task is not dispatch: new tasks land in `proposed`, and promotion to the backlog is a separate approval. Tasks should carry a file footprint into the backlog. Orbit still admits selector-free backlog tasks in some paths, but an empty context holds no file lock; declared footprints let parallel runs use isolated worktrees without overlapping edits.
+- **Humans control admission; required checks and configured review govern landing.** Filing a task is not dispatch: new tasks land in `proposed`, and promotion to the backlog is a separate approval. Tasks should carry a file footprint into the backlog. Orbit still admits selector-free backlog tasks in some paths, but an empty context holds no file lock; declared footprints let parallel runs use isolated worktrees without overlapping edits.
 
-The trade is deliberate: a defect that lands is cheap to find and fix because every change is a task with an audit trail, while a gate that blocks a fleet of parallel agents costs throughput on every run.
+The trade is deliberate: required checks catch build and test failures before merge, while after-landing review and QA handle other findings without holding declared file footprints through review.
 
 ## The decision lens
 

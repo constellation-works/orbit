@@ -1,5 +1,5 @@
 ---
-title: Run a Delivery Window
+title: Run a delivery window
 description: "Prepare and approve tasks, check readiness, start a bounded drain from the dashboard or CLI, retune or stop it, and recover failures."
 sidebar:
   order: 3
@@ -27,7 +27,8 @@ CLI as the fallback.
 
 The task pilot fills in each task's `context_files` (the files and directories
 it will work in) and assesses its complexity. It does not approve or dispatch
-anything.
+anything. For a bug a review filed, it can also reject the task with its
+evidence when the code disproves the finding.
 
 - **Agent:** ask your agent to pilot the proposed tasks.
 - **Dashboard:** in **Automation → Jobs**, click **Run ▸** on
@@ -110,11 +111,11 @@ Readiness is a read-only snapshot of what a window would start now and why the
 rest would wait. It reserves and submits nothing, so an eligible task is not
 guaranteed to start.
 
-- **Dashboard:** the **Drain** page shows what a window started now would
-  admit, how many tasks are eligible or waiting, and why each one waits. The task list's
+- **Dashboard:** the Tasks dock's **Drain** tab shows what a window started now
+  would admit and how many tasks are eligible or waiting. The task list's
   **Backlog** card sorts the backlog into **Eligible now**, **Waiting on
   locks**, **Waiting on capacity**, and **Waiting, other**, and each row's
-  tooltip names what it waits on. **Locks held** on the Drain page shows held
+  tooltip names what it waits on. **Locks held** in the Tasks dock shows held
   locks (`orbit task locks list`).
 - **CLI**, for the reason behind each task:
 
@@ -204,8 +205,8 @@ end with some tasks still in the backlog.
 
 ## 4. Start a bounded window
 
-- **Dashboard:** on **Drain → Start**, pick a **Window length** (one pass, or
-  `30m` to `12h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
+- **Dashboard:** on **Drain → Start**, pick a **Window length** (`1h`, `2h`, `4h`,
+  `8h`, `12h`, or `24h`), set **Parallel tasks**, and turn on **Mark shipped tasks done** to
   complete them (off stops at review). Optionally turn on **Approve qualifying
   proposals** (`--approve-proposed`) or **Auto-fix PR blockers** to repair the
   window's blocked PRs. Click **Start … window** and
@@ -251,8 +252,10 @@ orbit run auto --for 4h --auto-fix
 orbit run auto --for 4h --auto-fix --complete
 ```
 
-The drain keeps watching each PR. Pending checks wait. A failed required check
-or a conflict goes to the existing repair step, which runs as a crew from
+The drain keeps watching each PR. Pending checks wait. A check that failed for a
+network or runner reason is rerun once first, and one that cites only files the
+PR did not change waits for base evidence. A failed required check or a conflict
+then goes to the existing repair step, which runs as a crew from
 `workflow.purpose_crews.auto_fix`, else `workflow.low_complexity_crews`
 (narrowed by `--allow-crew`). The repair then
 passes your required validation and is pushed, and the drain checks the new

@@ -1,0 +1,27 @@
+Capture the working tree beside each of a task's mocks.
+
+For every `mocks/` artifact of the task (or only `--mock`), the mock's name gives the view, state, theme and width; the view manifest in `visual_review.manifests` gives the route and fixture that serve it from this checkout, uncommitted changes included. Writes `<out>/<mock-name>/mock.png`, `capture.png` and `side-by-side.png` (mock left, capture right, common height, labelled), plus `<out>/rules.json` with the workspace's UI rule results for those captures. Attaches nothing and records nothing on the task.
+
+Usage: orbit visual capture [OPTIONS] --task <ID>
+
+Options:
+      --task <ID>
+          Task whose mocks name the views to capture
+
+      --mock <MOCK>
+          Capture only this mock artifact instead of every mock
+
+      --out <OUT>
+          Directory the captures are written under
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+Needs a verified browser kit (`orbit browser-kit install`) and a view manifest in `visual_review.manifests`; without either the command fails naming what is missing. The captures are a self-check aid, not evidence of record: a delivery captures its own on the final candidate.

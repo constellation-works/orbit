@@ -15,7 +15,11 @@ workspace = true
 clap = ["orbit-types/clap"]
 # Test-only hooks for downstream crates' tests (`orbit_core::test_support`).
 # Enable it only from `[dev-dependencies]`, never in a shipped build.
-test-support = ["orbit-engine/test-support", "orbit-store/test-support"]
+test-support = [
+  "orbit-engine/test-support",
+  "orbit-runtime/test-support",
+  "orbit-store/test-support",
+]
 
 [dependencies]
 getrandom.workspace = true
@@ -31,11 +35,13 @@ orbit-types = { path = "../orbit-types" }
 orbit-search = { path = "../orbit-search" }
 orbit-engine = { path = "../orbit-engine" }
 orbit-exec = { path = "../orbit-exec" }
-orbit-policy = { path = "../orbit-policy" }
 orbit-registry = { path = "../orbit-registry" }
+orbit-runtime = { path = "../orbit-runtime" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 regex.workspace = true
+reqwest.workspace = true
+rsa.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 serde.workspace = true
@@ -51,4 +57,15 @@ libc.workspace = true
 [dev-dependencies]
 # Integration tests substitute the detached pipeline worker (`test_support`).
 orbit-core = { path = ".", features = ["test-support"] }
+# The nested-Seatbelt regression tests force an apply refusal in a spawned
+# test child through orbit-exec's test-only setter, installed explicitly by
+# the test harness. Dev-only: the shipped `orbit` binary has no caller for
+# the setter and no reader for the variable that prompts the harness, even
+# when a workspace test build unifies this feature into its orbit-exec.
+orbit-exec = { path = "../orbit-exec", features = ["test-support"] }
+orbit-policy = { path = "../orbit-policy" }
+# The decision-channel tests sign DKIM fixture messages with a test key.
+rsa.workspace = true
+sha2.workspace = true
+base64.workspace = true
 tracing-subscriber.workspace = true

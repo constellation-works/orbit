@@ -12,7 +12,12 @@ export async function assertRunDetailActions(page, evidence) {
     const { setWorkspace, describePullSettlements } = await import('/js/common.js');
     setWorkspace('one');
     const previousFetch = globalThis.fetch;
-    const settlements = [{ outcome: 'settled' }, { outcome: 'pending_delivery' }, { outcome: 'pending_delivery' }];
+    const settlements = [
+      { outcome: 'settled' },
+      { outcome: 'pending_delivery' },
+      { outcome: 'pending_delivery' },
+      { outcome: 'launch_uncertain', task_id: 'ORB-42' },
+    ];
     const fixture = globalThis.runActionFixture = {
       state: 'running', detailReads: 0, detailStatus: 200, cancelStatus: 200, requests: [],
       activeRuns: [],
@@ -101,12 +106,23 @@ export async function assertRunDetailActions(page, evidence) {
     await notice.waitFor({ state: 'visible', timeout: 5000 });
     await page.waitForFunction(async () => (await import('/js/run-detail.js')).getActiveRunDetail()?.run.state === 'cancelled');
     const expected = await page.evaluate(() => globalThis.runActionFixture.expectedSettlements);
-    if (!(await notice.textContent()).includes(expected) || !await notice.evaluate(node => node.classList.contains('error'))) {
+    const noticeText = await notice.textContent();
+    const safeRecoveryExplained = noticeText.includes('the leaf may still be running')
+      && noticeText.includes("recover the claim on the owner's dashboard")
+      && noticeText.includes('do not start another attempt');
+    if (!noticeText.includes(expected) || !safeRecoveryExplained
+      || !await notice.evaluate(node => node.classList.contains('error') && node.getAttribute('role') === 'status')) {
       throw new Error('Cancel settlement report must show the delivered and undelivered counts after the refresh');
     }
     await poll();
     if (!(await notice.isVisible()) || !(await notice.textContent()).includes(expected)) throw new Error('Scheduled poll erased the cancel settlement report');
-    await page.screenshot({ path: path.join(evidence, 'run-cancel-settlement.png'), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await notice.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, 'run-cancel-launch-uncertain-dark-1440.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 375, height: 812 });
+    await notice.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, 'run-cancel-launch-uncertain-dark-375.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 1440, height: 1000 });
     await notice.locator('button').click();
     await refresh();
     if (await notice.count()) throw new Error('Dismissed settlement report returned after a refresh');

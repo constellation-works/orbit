@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Lessons Learned While Building Orbit
-last_validated: 2026-10-19
+last_validated: 2026-10-29
 ---
 
 # Lessons Learned While Building Orbit
@@ -91,7 +91,7 @@ tree survived after the task completed and accumulated across repeated tests.
 Cancelling the stale run removed the tree; blocked processes fell to zero and
 the host returned to 90--96% CPU idle. The incident is recorded as
 F2026-09-042; the full causal account is in the
-[incident RCA](rca/2026-09-06-recursive-test-worker-fork-storm.md).
+[incident RCA](dev/rca/2026-09-06-recursive-test-worker-fork-storm.md).
 
 **Lesson**: Test synchronization must be bounded and preferably in-process,
 not a short-interval shell loop that repeatedly forks. Every fixture that

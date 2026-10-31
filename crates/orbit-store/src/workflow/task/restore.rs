@@ -13,6 +13,7 @@ use crate::driver::file::task_bundle::{
 };
 use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
 
+use super::git::remotes_match;
 use super::inspect::{ValidatedPublicationBundle, load_validated_publication};
 use super::log_rollback_failure;
 use super::{OmittedAttachment, PublicationInspectRequest};
@@ -215,7 +216,12 @@ fn assert_destination_pairing(
         ));
     }
     match binding.repo_fingerprint.as_deref() {
-        Some(fingerprint) if fingerprint == request.publication.source_repository_fingerprint => {
+        Some(fingerprint)
+            if remotes_match(
+                fingerprint,
+                &request.publication.source_repository_fingerprint,
+            ) =>
+        {
             Ok(())
         }
         Some(fingerprint) => Err(restore_error(format!(

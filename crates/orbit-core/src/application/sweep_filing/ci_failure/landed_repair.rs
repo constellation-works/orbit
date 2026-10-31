@@ -12,11 +12,13 @@ use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::cluster::FailureCluster;
-use super::filing::{CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_TAG};
+use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
+use super::identity::CiTaskIdentities;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
-use crate::application::sweep_filing::{full_revision, landed_task_commit};
+use crate::application::sweep_filing::{digest, display, full_revision, landed_task_commit};
 
 /// Why a cluster was deferred rather than filed.
 pub(super) const DESCENDANT_LANDING_REASON: &str = "repaired_by_descendant_landing";
@@ -46,21 +48,23 @@ impl<'a> LandedRepairs<'a> {
         &mut self,
         cluster: &FailureCluster,
         lookup: &L,
+        identities: &CiTaskIdentities<'_>,
     ) -> Result<Option<Value>, OrbitError> {
         if !full_revision(&cluster.tested_commit) {
             return Ok(None);
         }
         let tasks = lookup.list_tasks()?;
         let cutoff = chrono::Utc::now() - chrono::Duration::days(LOOKBACK_DAYS);
-        let mut candidates = tasks
-            .iter()
-            .filter(|task| {
-                task.status == TaskStatus::Done
-                    && task.updated_at >= cutoff
-                    && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
-                    && same_root_cause(task, cluster)
-            })
-            .collect::<Vec<_>>();
+        let mut candidates = Vec::new();
+        for task in tasks.iter().filter(|task| {
+            task.status == TaskStatus::Done
+                && task.updated_at >= cutoff
+                && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+        }) {
+            if same_root_cause(task, cluster, identities)? {
+                candidates.push(task);
+            }
+        }
         candidates.sort_by_key(|task| std::cmp::Reverse(task.updated_at));
         for task in candidates {
             if self.remaining == 0 {
@@ -85,14 +89,28 @@ impl<'a> LandedRepairs<'a> {
     }
 }
 
-fn same_root_cause(task: &Task, cluster: &FailureCluster) -> bool {
+fn same_root_cause(
+    task: &Task,
+    cluster: &FailureCluster,
+    identities: &CiTaskIdentities<'_>,
+) -> Result<bool, OrbitError> {
     let key_tag = format!("{CI_FAILURE_KEY_TAG_PREFIX}{}", cluster.failure_key);
-    task.tags.contains(&key_tag)
-        || cluster.signature_line().is_some_and(|expected| {
-            task.description
-                .lines()
-                .any(|line| line.trim_end() == expected)
-        })
+    if task.tags.contains(&key_tag) {
+        return Ok(true);
+    }
+    let Some(record) = identities.for_task(task)? else {
+        return Ok(false);
+    };
+    Ok(match &cluster.compiler_cause {
+        Some(cause) => record.identity.compiler_cause_digest.as_ref() == Some(&digest(&[cause])),
+        None if cluster.signature_is_step_fallback => false,
+        None => {
+            // Compiler tasks carry a display signature too; only their cause
+            // digest proves a completed repair, as in the original renderer.
+            record.identity.compiler_cause_digest.is_none()
+                && record.identity.signature.as_deref() == Some(display(&cluster.signature))
+        }
+    })
 }
 
 fn pending_entry(cluster: &FailureCluster, task: &Task, landed: &str) -> Value {

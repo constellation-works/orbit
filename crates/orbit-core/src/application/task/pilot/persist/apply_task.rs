@@ -6,16 +6,18 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus, normalize_task_tags,
+    Task, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus, normalize_task_tags,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::super::apply::admission::{
     Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask,
 };
+use super::super::explore_brief::{BriefProvenance, store_explore_brief};
 use super::atomic::{
     applied_material, apply_atomic_with_retries, resulting_fingerprint, with_task_locks,
 };
@@ -43,6 +45,7 @@ pub(in super::super) enum ApplyTaskOutcome {
     AlreadyApplied(Option<String>),
     Stale(&'static str, String),
     Superseded(Value),
+    AdmissionRefused(Value),
     /// The final assessed tags and crew cannot run on any host, so the
     /// assessment is refused as invalid without writing any task material.
     Invalid(String),
@@ -67,6 +70,12 @@ pub(in super::super) fn apply_task(
     task: &mut ValidatedTask,
     prepared: &Value,
     policy: &PreparationPolicy,
+    ci_sweep: bool,
+    mut admit: impl FnMut(
+        &Task,
+        &ValidatedTask,
+        &super::super::blockers::PilotDependencyGraph,
+    ) -> Result<Option<Admission>, Value>,
 ) -> Result<ApplyTaskOutcome, OrbitError> {
     if !matches!(snapshot.status, TaskStatus::Proposed | TaskStatus::Backlog) {
         return Ok(ApplyTaskOutcome::Stale(
@@ -78,12 +87,16 @@ pub(in super::super) fn apply_task(
     let mut snapshot = snapshot.clone();
     // Local named targets are locked before their status is read at
     // publication. Missing and other-workspace IDs remain warning text.
-    let mut local_blockers = BTreeSet::new();
-    for id in &named_blockers {
-        if runtime.stores().tasks().get_task(id)?.is_some() {
-            local_blockers.insert(id.clone());
+    let mut local_findings = BTreeSet::new();
+    for id in super::super::promotion::promotion_task_ids(&task.assessment) {
+        if runtime.stores().tasks().get_task(&id)?.is_some() {
+            local_findings.insert(id);
         }
     }
+    let local_blockers = named_blockers
+        .intersection(&local_findings)
+        .cloned()
+        .collect();
     let mut attempt = 0;
     let mut graph_locks = 0;
     loop {
@@ -92,7 +105,7 @@ pub(in super::super) fn apply_task(
         // locks would take a later task's lock out of order and could wait
         // forever on another application doing the same [ORB-15408].
         let graph = runtime
-            .discover_pilot_dependency_graph(&runtime.get_task(&task.task_id)?, &local_blockers)?;
+            .discover_pilot_dependency_graph(&runtime.get_task(&task.task_id)?, &local_findings)?;
         let mut lock_ids = vec![task.task_id.clone()];
         lock_ids.extend(graph.task_ids().cloned());
         lock_ids.sort();
@@ -102,38 +115,30 @@ pub(in super::super) fn apply_task(
         let mut outcome = None;
         let mut retry_fingerprint = None;
         let mut graph_changed = false;
+        let write_task_id = task.task_id.clone();
+        let mut entered = false;
         let mut operation = || {
+            entered = true;
             #[cfg(test)]
             lock_hook::fire(lock_hook::Point::Locked);
-            let claim = crate::application::automation::members::claim(runtime, prepared)?;
+            let claim = runtime.state_claim(prepared)?;
             // Re-checked under the task locks: the branch may have moved
             // under this task's material since apply's own check [ORB-14476].
             if let Some(claim) = &claim
-                && let Some(detail) = crate::application::automation::members::stale_tasks(
-                    runtime,
-                    claim,
-                    policy,
-                    prepared,
-                    std::slice::from_ref(&task.task_id),
-                    &BTreeMap::from([(task.task_id.clone(), task.after.clone())]),
-                )?
-                .remove(&task.task_id)
+                && let Some(detail) = runtime
+                    .stale_claimed_tasks(
+                        claim,
+                        policy,
+                        prepared,
+                        std::slice::from_ref(&task.task_id),
+                        &BTreeMap::from([(task.task_id.clone(), task.after.clone())]),
+                    )?
+                    .remove(&task.task_id)
             {
                 outcome = Some(ApplyTaskOutcome::Superseded(source_superseded(
                     &task.task_id,
                     &detail,
                 )));
-                return Ok(());
-            }
-            if operation_was_applied(runtime, &task.task_id, &task.operation_id)? {
-                task.applied_material =
-                    applied_material(runtime, &task.task_id, &task.operation_id)?;
-                outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
-                    runtime,
-                    &task.task_id,
-                    &snapshot,
-                    policy,
-                )?));
                 return Ok(());
             }
             let mut current = match runtime.get_task(&task.task_id) {
@@ -147,15 +152,50 @@ pub(in super::super) fn apply_task(
                 }
                 Err(error) => return Err(error),
             };
-            if let Some(superseded) = superseded_task(
-                runtime,
-                &task.task_id,
-                &snapshot,
-                policy,
-                matches!(&task.admission, Some(Admission::CiSweep(_))),
-            )? {
+            // Re-read under the discovered locks even on replay. A replay
+            // may approve only dependencies actually stored, never edges the
+            // original write skipped or edges it would add on a new apply.
+            let Some(graph) =
+                runtime.reread_pilot_dependency_graph(&current, &local_findings, &graph)?
+            else {
+                graph_changed = true;
+                return Ok(());
+            };
+            if operation_was_applied(runtime, &task.task_id, &task.operation_id)? {
+                match admit(&current, task, &graph) {
+                    Ok(admission) => task.set_admission(admission),
+                    Err(refusal) => {
+                        outcome = Some(ApplyTaskOutcome::AdmissionRefused(refusal));
+                        return Ok(());
+                    }
+                }
+                task.applied_material =
+                    applied_material(runtime, &task.task_id, &task.operation_id)?;
+                outcome = Some(ApplyTaskOutcome::AlreadyApplied(resulting_fingerprint(
+                    runtime,
+                    &task.task_id,
+                    &snapshot,
+                    policy,
+                )?));
+                return Ok(());
+            }
+            if let Some(superseded) =
+                superseded_task(runtime, &task.task_id, &snapshot, policy, ci_sweep)?
+            {
                 outcome = Some(ApplyTaskOutcome::Superseded(superseded));
                 return Ok(());
+            }
+            if ci_sweep && current.status != TaskStatus::Proposed {
+                // A different CI operation must settle a prior promotion as
+                // superseded before the pilot's own selector changes look
+                // like drift. The receipt case above already handled replay.
+                match admit(&current, task, &graph) {
+                    Ok(admission) => task.set_admission(admission),
+                    Err(refusal) => {
+                        outcome = Some(ApplyTaskOutcome::AdmissionRefused(refusal));
+                        return Ok(());
+                    }
+                }
             }
             if let Some(reason) = task_snapshot_drift(runtime, &current, &snapshot, policy) {
                 if attempt == 0 && matches!(reason.0, "material_changed" | "status_changed") {
@@ -192,14 +232,6 @@ pub(in super::super) fn apply_task(
                 return Ok(());
             }
 
-            // The locks cover the discovered graph. When the locked task now
-            // reaches past it, release them and discover again.
-            let Some(graph) =
-                runtime.reread_pilot_dependency_graph(&current, &local_blockers, &graph)?
-            else {
-                graph_changed = true;
-                return Ok(());
-            };
             let add_dependencies = graph.blocker_dependencies(&current, &local_blockers)?;
             current
                 .relations
@@ -208,6 +240,13 @@ pub(in super::super) fn apply_task(
                     target: target.clone(),
                     regression: None,
                 }));
+            match admit(&current, task, &graph) {
+                Ok(admission) => task.set_admission(admission),
+                Err(refusal) => {
+                    outcome = Some(ApplyTaskOutcome::AdmissionRefused(refusal));
+                    return Ok(());
+                }
+            }
             let target_status = if task.promote {
                 TaskStatus::Backlog
             } else {
@@ -248,16 +287,16 @@ pub(in super::super) fn apply_task(
                 assessed.tags = tags_after.clone();
                 assessed.complexity = Some(task.complexity);
                 assessed.status = target_status;
-                let fingerprint = crate::application::automation::preparation::pilot_fingerprint(
-                    runtime,
-                    &assessed,
-                    snapshot
-                        .material
-                        .as_ref()
-                        .map(|(_, revision)| revision.as_str()),
-                    policy,
-                )
-                .map_err(orbit_automation::automation_error_to_orbit)?;
+                let fingerprint = runtime
+                    .task_pilot_fingerprint(
+                        &assessed,
+                        snapshot
+                            .material
+                            .as_ref()
+                            .map(|(_, revision)| revision.as_str()),
+                        policy,
+                    )
+                    .map_err(orbit_automation::automation_error_to_orbit)?;
                 history_summary.push_str(&format!(
                     " [no-target-assessed:{}:{fingerprint}]",
                     target_status.cli_name()
@@ -277,8 +316,7 @@ pub(in super::super) fn apply_task(
             let mut assessed = current.clone();
             assessed.context_files = task.after.clone();
             assessed.tags = tags_after.clone();
-            let crew_redraw_history =
-                runtime.rerate_task_crew(&mut assessed, Some(task.complexity))?;
+            let crew_redraw_history = runtime.rerated_crew(&mut assessed, Some(task.complexity))?;
             assessed.complexity = Some(task.complexity);
             assessed.status = target_status;
             // The final crew (kept, or redrawn for the assessed complexity)
@@ -301,10 +339,9 @@ pub(in super::super) fn apply_task(
                 .material
                 .as_ref()
                 .map(|(_, revision)| {
-                    crate::application::automation::preparation::fingerprints(
-                        runtime, &assessed, revision, policy,
-                    )
-                    .map_err(orbit_automation::automation_error_to_orbit)
+                    runtime
+                        .task_pilot_fingerprints(&assessed, revision, policy)
+                        .map_err(orbit_automation::automation_error_to_orbit)
                 })
                 .transpose()?;
             let written = AppliedTaskMaterial {
@@ -352,6 +389,25 @@ pub(in super::super) fn apply_task(
                     task.post_deploy.clone(),
                 )
             });
+            // Artifact first, receipt second. The brief names this receipt and
+            // the material it seals, so a crash between the two writes leaves
+            // a brief no receipt matches, which is never delivered.
+            let explore_brief = task.explore_brief.as_ref().map(|decision| {
+                store_explore_brief(
+                    runtime,
+                    decision,
+                    &BriefProvenance {
+                        task_id: &task.task_id,
+                        material_fingerprint: written
+                            .material
+                            .as_ref()
+                            .map(|(fingerprint, _)| fingerprint.as_str()),
+                        receipt_operation_id: &task.operation_id,
+                        pilot_run_id: task.pilot_run_id.as_deref(),
+                        pilot_crew: task.pilot_crew.as_deref(),
+                    },
+                )
+            });
             let mutation_params = AtomicTaskMutationParams {
                 actor: super::super::PILOT_ACTOR.to_string(),
                 operation_id: task.operation_id.clone(),
@@ -394,6 +450,7 @@ pub(in super::super) fn apply_task(
                     "complexity_after": task.complexity,
                     "applied_material": written,
                     "pilot_run_id": task.pilot_run_id,
+                    "explore_brief": explore_brief,
                 }))
                 .map_err(|error| {
                     OrbitError::Execution(format!("serialize task-pilot audit: {error}"))
@@ -432,19 +489,22 @@ pub(in super::super) fn apply_task(
             }
             Ok(())
         };
-        if let Err(error) = with_task_locks(runtime, &task.task_id, &lock_ids, 0, &mut operation) {
-            // Claim admission fences ordinary writers before the closure can
-            // run. Re-read durable ownership instead of matching error prose.
-            if let Some(outcome) = superseded_task(
-                runtime,
-                &task.task_id,
-                &snapshot,
-                policy,
-                matches!(&task.admission, Some(Admission::CiSweep(_))),
-            )? {
-                return Ok(ApplyTaskOutcome::Superseded(outcome));
+        if let Err(error) = with_task_locks(runtime, &write_task_id, &lock_ids, 0, &mut operation) {
+            if !entered && matches!(error, OrbitError::NotFound { .. }) {
+                // A discovered prerequisite disappeared before its read lock.
+                // No mutation ran: rediscover without that bundle so its
+                // unedged finding becomes a warnings hold under the locks.
+                graph_changed = true;
+            } else {
+                // Claim admission fences ordinary writers before the closure can
+                // run. Re-read durable ownership instead of matching error prose.
+                if let Some(outcome) =
+                    superseded_task(runtime, &task.task_id, &snapshot, policy, ci_sweep)?
+                {
+                    return Ok(ApplyTaskOutcome::Superseded(outcome));
+                }
+                return Err(error);
             }
-            return Err(error);
         }
         if graph_changed {
             graph_locks += 1;

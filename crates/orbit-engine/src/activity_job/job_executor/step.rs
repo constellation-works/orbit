@@ -41,7 +41,10 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
         Ok(StepOutcome { success: true, .. }) => ("success", None),
         Ok(StepOutcome { message, .. }) => ("failed", message.clone()),
         Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
-        Err(error @ DispatchError::ForgeUnavailableHold(_)) => ("held", Some(error.to_string())),
+        Err(
+            error
+            @ (DispatchError::ForgeUnavailableHold(_) | DispatchError::DeliveryRefused { .. }),
+        ) => ("held", Some(error.to_string())),
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {
             ("cancelled", Some(error.to_string()))
         }
@@ -244,6 +247,15 @@ pub(super) fn run_step_body(
 ) -> Result<StepOutcome, DispatchError> {
     match &step.body {
         JobV2StepBody::Target(t) => run_target(step, t, ctx),
+        // A resolved `script:` ref is retained as a TargetRef: the load
+        // validated its manifest, and each attempt checks the grant against
+        // a fresh snapshot of the bytes before the host runs them.
+        JobV2StepBody::TargetRef(r)
+            if r.target
+                .starts_with(orbit_types::workflow::activity_job::SCRIPT_REF_PREFIX) =>
+        {
+            run_script_target(step, r, ctx)
+        }
         JobV2StepBody::TargetRef(r) => Err(DispatchError::JobValidation(format!(
             "step `{}`: target ref `{}` was not resolved — caller must run \
              `resolve_job_target_refs` at load time before dispatch",

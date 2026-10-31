@@ -8,9 +8,11 @@ mod options;
 
 pub(crate) use acquisition::acquire_shared_file_lock;
 pub use acquisition::{
-    FileLockGuard, FileLockProbe, acquire_exclusive_file_lock, probe_file_lock,
+    FileLockGuard, FileLockProbe, ReportScopedFileLockGuard, acquire_exclusive_file_lock,
+    acquire_exclusive_file_lock_with_report_scope, probe_file_lock,
     try_acquire_exclusive_file_lock,
 };
+pub(crate) use hold::LockReportScope;
 pub use hold::hold_step;
 #[cfg(test)]
 pub(crate) use holders::read_file_lock_holder_after_resolve;

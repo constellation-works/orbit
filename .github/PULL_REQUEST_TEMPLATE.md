@@ -35,6 +35,21 @@ docs in the same PR.
 
 - [ ] N/A — this PR does not touch any code referenced by `docs/design/*`
 
+## Screenshots
+
+<!--
+Optional. For a UI change, add a Before/After table with one row per view and
+viewport width. Name shots `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`:
+a file with no suffix is an After shot, and the Before shot is optional.
+Orbit fills this section in place when `pr.body_template = "repo"` and
+`pr.screenshot_section` applies, so leave the heading and delete this comment
+when Orbit publishes the table for you. Example row:
+
+| | Before | After |
+|---|---|---|
+| <view>, 1440 | <img src="https://github.com/<owner>/<repo>/blob/<sha>/screenshots/<view>-<theme>-1440-before.png?raw=true" width="420"> | <img src="https://github.com/<owner>/<repo>/blob/<sha>/screenshots/<view>-<theme>-1440-after.png?raw=true" width="420"> |
+-->
+
 ## Notes for reviewers
 
 <!--

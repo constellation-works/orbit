@@ -5,12 +5,14 @@ use crate::contracts::AutomationStoreBackend;
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::recovery::RecoveryRecord;
-use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState};
+use orbit_types::workflow::automation::{
+    AcceptedCoverage, AutomationState, ConditionAudit, ConditionState,
+};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use super::codec::{decode, encode};
 use super::transition::validate_transition;
-use super::{checkpoint, intents, recovery, waivers};
+use super::{checkpoint, condition, intents, recovery, waivers};
 
 impl AutomationStoreBackend for Store {
     fn automation_waive(
@@ -151,26 +153,7 @@ impl AutomationStoreBackend for Store {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let conn = tx.connection();
 
-            let Some(previous_json) = checkpoint::previous_json(conn, previous)? else {
-                return Ok(false);
-            };
-
-            // Fence on the stored bytes after matching the decoded snapshot,
-            // so non-canonical JSON does not strand a legacy consumer.
-            let changed = conn
-                .execute(
-                    "UPDATE automation_consumers SET generation=?1,state_json=?2 WHERE consumer=?3 AND generation=?4 AND state_json=?5",
-                    params![
-                        next.generation,
-                        encode(next)?,
-                        previous.consumer,
-                        previous.generation,
-                        previous_json
-                    ],
-                )
-                .map_err(sqlite_store_error)?;
-
-            if changed == 0 {
+            if !checkpoint::advance(conn, previous, next)? {
                 return Ok(false);
             }
 
@@ -197,29 +180,6 @@ impl AutomationStoreBackend for Store {
             }
 
             Ok(true)
-        })
-    }
-
-    fn automation_states(
-        &self,
-        prefix: &str,
-        limit: usize,
-    ) -> Result<Vec<AutomationState>, OrbitError> {
-        self.with_read_connection(|conn| {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT state_json FROM automation_consumers WHERE consumer LIKE ?1 ESCAPE '\\' ORDER BY consumer LIMIT ?2",
-                )
-                .map_err(sqlite_store_error)?;
-            let pattern = format!("{}%", prefix.replace('%', "\\%").replace('_', "\\_"));
-            let rows = stmt
-                .query_map(params![pattern, limit.min(100)], |row| row.get::<_, String>(0))
-                .map_err(sqlite_store_error)?;
-            rows.map(|row| {
-                row.map_err(sqlite_store_error)
-                    .and_then(|raw| decode(&raw))
-            })
-            .collect()
         })
     }
 
@@ -284,5 +244,51 @@ impl AutomationStoreBackend for Store {
             rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
                 .collect()
         })
+    }
+
+    fn condition_state(&self, consumer: &str) -> Result<Option<ConditionState>, OrbitError> {
+        condition::load(self, consumer)
+    }
+
+    fn condition_states_page(
+        &self,
+        prefix: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ConditionState>, OrbitError> {
+        condition::page(self, prefix, after, limit)
+    }
+
+    fn condition_initialize(&self, state: &ConditionState) -> Result<bool, OrbitError> {
+        condition::initialize(self, state)
+    }
+
+    fn condition_commit(
+        &self,
+        previous: &ConditionState,
+        next: &ConditionState,
+    ) -> Result<bool, OrbitError> {
+        condition::commit(self, previous, next)
+    }
+
+    fn condition_commit_audited(
+        &self,
+        previous: &ConditionState,
+        next: &ConditionState,
+        audit: &ConditionAudit,
+    ) -> Result<bool, OrbitError> {
+        condition::commit_audited(self, previous, next, audit)
+    }
+
+    fn condition_audits(
+        &self,
+        consumer: &str,
+        limit: usize,
+    ) -> Result<Vec<ConditionAudit>, OrbitError> {
+        condition::audits(self, consumer, limit)
+    }
+
+    fn condition_delete(&self, consumer: &str) -> Result<(), OrbitError> {
+        condition::delete(self, consumer)
     }
 }

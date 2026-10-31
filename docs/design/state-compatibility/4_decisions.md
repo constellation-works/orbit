@@ -1,8 +1,8 @@
 ---
 title: State Compatibility — Decisions
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 feature: state-compatibility
 doc_role: decisions
@@ -21,7 +21,7 @@ Record non-obvious decisions here by title. Task references carry provenance; su
 ## Compatibility is declared by the binary that migrates, never inferred from the version number
 
 **Recorded:** 2026-09 · [ORB-12434]
-**Code anchors:** `crates/orbit-store/src/contracts/compat.rs::evaluate_newer_state`, `crates/orbit-store/src/workflow/layout/marker.rs::write_compat_record`, `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::write_compat_record`
+**Code anchors:** `crates/orbit-store/src/contracts/compat.rs::evaluate_newer_state`, `crates/orbit-store/src/workflow/layout/marker.rs::write_compat_record`, `crates/orbit-store/src/driver/sqlite/migration/ledger/compatibility.rs::write_compat_record`
 
 ### Context
 
@@ -166,7 +166,7 @@ applies this rule.
 ## One versioned ledger per SQLite database, with frozen migration bodies
 
 **Recorded:** 2026-10-12 · [ORB-15729]
-**Code anchors:** `crates/orbit-store/src/driver/sqlite/migration/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/migration/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/migration/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_registry/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/task_registry/baseline.rs::apply_registry_baseline`, `crates/orbit-store/src/driver/sqlite/migration/feature.rs::FeatureMigration`
+**Code anchors:** `crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/migration/baseline.rs::apply_baseline_schema`, `crates/orbit-store/src/driver/sqlite/migration/audit_events.rs::ensure_audit_events_schema_v15`, `crates/orbit-store/src/driver/sqlite/task_registry/ledger.rs::MIGRATIONS`, `crates/orbit-store/src/driver/sqlite/task_registry/baseline.rs::apply_registry_baseline`, `crates/orbit-store/src/driver/sqlite/migration/feature.rs::FeatureMigration`
 
 ### Context
 
@@ -218,7 +218,7 @@ The alternatives considered:
 ### Decision
 
 There is one schema-evolution mechanism: the store ledger engine in
-`migration/ledger.rs`. It is an append-only registry of
+`migration/ledger/mod.rs`. It is an append-only registry of
 `Migration { version, name, compat, apply }` entries. Each entry commits in one
 `BEGIN IMMEDIATE` transaction with its `schema_meta` ledger row and its
 `migration.compat` record. The rules, for any Orbit SQLite database whose
@@ -374,13 +374,14 @@ registry ledger and the feature absorption copy its engine and golden.
 
 ## Task References
 
-- [ORB-12434] introduced the forward-compatibility contract.
-- [ORB-11994] and [ORB-12078] removed the task checkout projections whose
-  older writers motivated the enforced read-only open.
-- [ORB-15732] recorded the 30-day compatibility-path window and its four
-  conditions.
-- [ORB-15729] decided on one versioned ledger per SQLite database with frozen
-  migration bodies; [ORB-15821], [ORB-15822], [ORB-15823] and [ORB-15824]
-  implement it.
+- [ORB-11994] removed task checkout projections that older binaries could recreate.
+- [ORB-12078] completed removal of task checkout projections and their compatibility paths.
+- [ORB-12434] introduced declared state compatibility and enforced read-only newer-store opens.
+- [ORB-15729] designed one versioned ledger per authoritative SQLite database.
+- [ORB-15732] recorded the 30-day, release-gated compatibility support window.
+- [ORB-15821] froze shipped store migration bodies and added per-version schema goldens.
+- [ORB-15822] implemented the task registry ledger and baseline envelope stamps.
+- [ORB-15823] absorbed and froze automation, review and local-pull feature ledgers.
+- [ORB-15824] moved recovery authority onto its own versioned schema ledger.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

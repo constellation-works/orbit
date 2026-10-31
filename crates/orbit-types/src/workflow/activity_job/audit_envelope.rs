@@ -11,6 +11,8 @@ pub const AUDIT_ENVELOPE_SCHEMA_VERSION: u32 = 1;
 pub const V2_EVENT_TYPE_FS_CALL_DENIED: &str = "fs.call.denied";
 pub const V2_EVENT_TYPE_TOOL_DENIED: &str = "tool.denied";
 pub const V2_EVENT_TYPE_STEP_DENIED: &str = "step.denied";
+/// Event type of one script step attempt (`script_execution` body).
+pub const V2_EVENT_TYPE_SCRIPT_EXECUTION: &str = "script.execution";
 pub const V2_DENIAL_EVENT_TYPES: &[&str] = &[
     V2_EVENT_TYPE_FS_CALL_DENIED,
     V2_EVENT_TYPE_TOOL_DENIED,
@@ -251,6 +253,44 @@ pub enum V2AuditEventKind {
         task_id: String,
         instructions: Vec<crate::workflow::TagInstructionRecord>,
     },
+    /// What an implement dispatch did with the task's explore brief, emitted
+    /// once per dispatch of an activity that declares an
+    /// `explore_brief_instruction`, before the subprocess starts, whatever
+    /// the outcome (`absent` included). The brief itself is not recorded:
+    /// its hash and revision identify it.
+    ExploreBriefApplied {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        task_id: String,
+        brief: crate::workflow::ExploreBriefRecord,
+    },
+    /// Whether an image-input invocation returned its canary code, emitted
+    /// once per invocation whose provider finished its turn. Two misses in a
+    /// row hold the crew for visual purposes; the code itself is never
+    /// recorded.
+    ImageCanaryChecked {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        provider: String,
+        /// The crew the activity input named, when it named one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crew: Option<String>,
+        /// The lane's `spec.image_input` mode.
+        mode: crate::workflow::ImageInputMode,
+        seen: bool,
+    },
+    /// What live experiment arms changed in a CLI backend invocation, emitted
+    /// once per invocation before the subprocess starts, and only when an arm
+    /// applied. Each record carries the digest of what the dispatch received.
+    ExperimentOverlayApplied {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        task_id: String,
+        overlays: Vec<crate::workflow::ExperimentOverlayRecord>,
+    },
     /// [ORB-11354] An operator-admitted provider subprocess is about to run
     /// **outside** the executor's filesystem sandbox.
     ///
@@ -282,6 +322,17 @@ pub enum V2AuditEventKind {
     /// time this event fires.
     CliInvocationStarted {
         provider: String,
+        /// Resolved dispatch effort, never reconstructed from a later crew.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<String>,
+        /// SHA-256 of the resolved dispatch specification (no credential values).
+        /// Absent on historical events; not the experiment overlay digest.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        configuration_fingerprint: Option<String>,
+        /// Bounded, redacted task scope as delivered at dispatch, not a later
+        /// mutable task projection. Missing for old or oversized envelopes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_scope_blob_ref: Option<String>,
         argv_redacted: Vec<String>,
         stdin_blob_ref: Option<String>,
         model: Option<String>,
@@ -385,6 +436,15 @@ pub enum V2AuditEventKind {
         harness_version: Option<String>,
         timed_out: bool,
     },
+    /// One attempt of a `target: script:<name>` step: what the grant
+    /// authorized, what the script profile ran and how it ended, or the
+    /// refusal that stopped it before anything was spawned. `orbit run
+    /// show` and `orbit script history` read these.
+    ScriptExecution {
+        step_id: String,
+        #[serde(flatten)]
+        record: Box<super::script::ScriptExecutionRecord>,
+    },
     /// [ORB-10367] A telemetry write failed (e.g. persisting an invocation
     /// trace). The run continues — telemetry is observability, not
     /// correctness — but the failure is recorded on the run so the gap in
@@ -431,6 +491,11 @@ impl V2AuditEventKind {
                 "trusted_host.execution_admitted"
             }
             V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
+            V2AuditEventKind::ExploreBriefApplied { .. } => "activity.explore_brief_applied",
+            V2AuditEventKind::ImageCanaryChecked { .. } => "activity.image_canary_checked",
+            V2AuditEventKind::ExperimentOverlayApplied { .. } => {
+                "activity.experiment_overlay_applied"
+            }
             V2AuditEventKind::CliInvocationStarted { .. } => "cli.invocation.started",
             V2AuditEventKind::CliInvocationProcess { .. } => "cli.invocation.process",
             V2AuditEventKind::CliInvocationActivity { .. } => "cli.invocation.activity",
@@ -439,6 +504,7 @@ impl V2AuditEventKind {
             }
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
             V2AuditEventKind::CliInvocationBuildBudget { .. } => "cli.invocation.build_budget",
+            V2AuditEventKind::ScriptExecution { .. } => V2_EVENT_TYPE_SCRIPT_EXECUTION,
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }
     }

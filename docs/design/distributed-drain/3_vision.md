@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Vision
 owner: claude
-last_updated: 2026-10-06
-last_validated: 2026-10-19
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 feature: distributed-drain
 doc_role: vision
@@ -16,8 +16,8 @@ related_artifacts: [ORB-12488]
 
 # Distributed Drain — Vision
 
-V1 distributes execution while retaining one coordination authority. Explicit drains and retained
-ship-sweep entry points share claim admission, while authorized landing follows durable handoff
+The contract [ORB-12488] authored distributes execution while retaining one coordination authority. Explicit drains and ship
+entry points share claim admission, while authorized landing follows durable handoff
 requests. Its required scope includes idempotent admission, attempt ownership, manual recovery,
 routed task reads/writes, and durable landing handoff. The questions below extend that contract;
 they are not prerequisites hidden as future work.
@@ -31,11 +31,12 @@ when the executor declares `review_gate`; the executor's own switch is diagnosti
    deliberate revocation. It does not infer death from reservation expiry or absent owner-local
    runs. A later heartbeat could improve diagnosis, but automatic reassignment would still need
    the current attempt fencing and external-side-effect reconciliation contracts.
-2. **Crew assignment and execution eligibility.** V1 requires every participating host to satisfy
-   the full workspace execution requirements. Future owner-evaluated eligibility could select the
-   first task a host can execute while preserving canonical priority among eligible tasks. Crew
-   auto-assignment and OS/toolchain eligibility are separate concerns; neither requires delegating
-   priority order to followers.
+2. **Crew assignment and execution eligibility.** Per-executor eligibility is shipped:
+   [ORB-13941] added crew filtering, [ORB-14005] added OS filtering, and [ORB-18316]
+   added machine capability labels. [ORB-17304] made owner ordering scarcity-aware
+   through the live executor census. Each host must still satisfy the sandbox and
+   toolchain requirements of the task it receives. Automatic reassignment of a task's
+   crew remains a separate question; the owner keeps admission and priority authority.
 3. **Follower-side merge.** V1 stops delivery at `pr_open` + `review`. Letting the follower run
    `pr_complete` needs the merge authority and `gh` credentials on every host, and reintroduces the
    PR-handoff recovery races that are currently owner-local.
@@ -59,9 +60,10 @@ when the executor declares `review_gate`; the executor's own switch is diagnosti
 
 ### Orbit's own drain
 
-`workspace_auto_pipeline` already refills slots from the whole backlog as each child finishes and
-treats a live wrapper run as the claim. The distributed drain keeps that throughput model, moves
-the claim into authoritative store transactions and drops the epic branch of the loop.
+Before distributed admission, `workspace_auto_pipeline` refilled slots using host-local
+wrapper runs as claim evidence. [ORB-12528] moved admission into authoritative store
+transactions, and [ORB-12617] unified occupancy across legacy wrappers and claimed leaves.
+The distributed drain keeps slot refill and drops the epic branch of the loop.
 
 ### Federated MCP and remote authority
 
@@ -95,8 +97,8 @@ There is no fleet registry, heartbeat service, or message bus. Durable request r
 identities are still required: ordinary task status and reservation TTL cannot distinguish a lost
 response from a new pull, or an obsolete attempt from its replacement.
 
-The first implementation should measure completed throughput and time spent waiting on locks,
-CI, and landing before adding placement policy or automatic recovery.
+Further placement policy or automatic recovery should be justified by measured completed
+throughput and time spent waiting on locks, CI, and landing in the shipped implementation.
 
 ## 4. References
 
@@ -114,5 +116,12 @@ CI, and landing before adding placement policy or automatic recovery.
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
+- [ORB-12528] — landed the transactional task/reservation admission boundary.
+- [ORB-12564] — removed destination caller authorization and made SSH sessions honor argv authority.
+- [ORB-12617] — unified legacy/claimed occupancy and completed the end-to-end fixture slice.
+- [ORB-13941] — filtered pull admission by runnable executor crews and provider availability.
+- [ORB-14005] — routed tasks by validated executor OS requirements.
+- [ORB-17304] — implemented scarcity-aware admission against the live executor census.
+- [ORB-18316] — added task placement by required machine capability labels.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

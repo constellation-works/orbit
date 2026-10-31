@@ -13,6 +13,10 @@ use thiserror::Error;
 
 use crate::OrbitError;
 
+/// Compatibility path; the definition lives with its siblings in
+/// [`crate::fs::physical`].
+pub use super::physical::canonicalize_existing_prefix;
+
 /// Error returned when a selector or legacy path-like scope cannot be parsed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Error)]
 #[error("invalid selector `{input}`: {reason}")]
@@ -126,7 +130,9 @@ impl FromStr for Selector {
     type Err = SelectorParseError;
 
     fn from_str(selector: &str) -> Result<Self, Self::Err> {
-        let trimmed = selector.trim();
+        // Anchored paths may carry meaningful leading/trailing whitespace in
+        // a filename, so only leading selector whitespace is discarded.
+        let trimmed = selector.trim_start();
         if let Some(path) = trimmed.strip_prefix("dir:") {
             return Ok(Self::Dir {
                 path: normalize_selector_path(selector, path)?,
@@ -376,6 +382,26 @@ impl OverlapScope {
             _ => false,
         }
     }
+
+    /// Where two overlapping anchored scopes meet: the common anchor when
+    /// they are equal, else the narrower (descendant) one. `None` when either
+    /// side is anchor-less or they do not overlap.
+    pub fn overlap_point<'a>(&'a self, other: &'a Self) -> Option<&'a str> {
+        match (self, other) {
+            (Self::Anchored { path: left, .. }, Self::Anchored { path: right, .. })
+                if self.overlaps(other) =>
+            {
+                // Overlapping unequal anchors are an ancestor and its
+                // descendant; the descendant is the narrower one.
+                Some(if is_path_ancestor(left, right) {
+                    right.as_str()
+                } else {
+                    left.as_str()
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,22 +422,23 @@ enum ParsedScope {
 
 impl ParsedScope {
     fn parse(input: &str) -> Result<Self, SelectorParseError> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
+        if input.trim().is_empty() {
             return Err(SelectorParseError {
                 input: input.to_string(),
                 reason: "selector input must not be empty".to_string(),
             });
         }
 
-        if trimmed.starts_with("dir:")
-            || trimmed.starts_with("file:")
-            || trimmed.starts_with("symbol:")
-            || trimmed.starts_with("module:")
-            || trimmed.starts_with("command:")
+        let start = input.trim_start();
+        if start.starts_with("dir:")
+            || start.starts_with("file:")
+            || start.starts_with("symbol:")
+            || start.starts_with("module:")
+            || start.starts_with("command:")
         {
-            return Ok(Self::Selector(trimmed.parse()?));
+            return Ok(Self::Selector(start.parse()?));
         }
+        let trimmed = input.trim();
 
         let (path_like, _had_position_suffix) = strip_position_suffix(trimmed);
         let path = normalize_path_text(path_like).map_err(|reason| SelectorParseError {
@@ -527,34 +554,9 @@ fn normalize_workspace_anchor(
     Ok((relative, contained))
 }
 
-fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
-    if let Ok(canonical) = path.canonicalize() {
-        return canonical;
-    }
-
-    let mut missing = Vec::new();
-    let mut ancestor = path;
-    while let Some(parent) = ancestor.parent() {
-        if parent == ancestor {
-            break;
-        }
-        if let Some(name) = ancestor.file_name() {
-            missing.push(name.to_os_string());
-        }
-        if let Ok(canonical) = parent.canonicalize() {
-            let mut resolved = canonical;
-            for name in missing.iter().rev() {
-                resolved.push(name);
-            }
-            return resolved;
-        }
-        ancestor = parent;
-    }
-    path.to_path_buf()
-}
-
 fn normalize_path_text(raw: &str) -> Result<String, String> {
-    let normalized = raw.trim().replace('\\', "/");
+    // Filename whitespace is meaningful; do not trim the path.
+    let normalized = raw.replace('\\', "/");
     if normalized.is_empty() {
         return Err("selector path must not be empty".to_string());
     }

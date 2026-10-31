@@ -66,7 +66,15 @@ pub(in crate::executor::automation::vcs) fn status(status: &PullRequestStatus) -
     let review = match &status.review_decision {
         ReviewDecision::NotApplicable => json!({"state":"not_applicable"}),
         ReviewDecision::Unavailable => json!({"state":"unavailable"}),
-        ReviewDecision::Reported(value) => text(value),
+        ReviewDecision::Approved
+        | ReviewDecision::ReviewRequired
+        | ReviewDecision::ChangesRequested
+        | ReviewDecision::Other(_) => text(
+            status
+                .review_decision
+                .provider_spelling()
+                .unwrap_or_default(),
+        ),
     };
     json!({"state":"collected", "number":status.number,
     "head":optional_text(status.head_sha.as_deref()),

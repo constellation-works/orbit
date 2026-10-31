@@ -16,6 +16,35 @@ use orbit_types::task::{LIGHT_DELIVERY_TAGS, LightDeliveryDecision, Task, TaskHi
 use orbit_types::workflow::handoff::HandoffCandidate;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskJobPort;
+
+/// This host's mapped review-skip decisions for the candidate `head` on
+/// `base`: one per `workflow.review_skip_tags` tag at least one of
+/// `tasks` carries, judged against that tag's paths and guard. On a
+/// claimed leaf the profiles are the owner's captured copy.
+pub(crate) fn review_skip_decisions(
+    runtime: &OrbitRuntime,
+    workspace: &Path,
+    base: &str,
+    head: &str,
+    tasks: &[Task],
+) -> Result<Vec<LightDeliveryDecision>, OrbitError> {
+    let profiles = runtime
+        .candidate_validation_gates()
+        .review_skip_tags()
+        .clone();
+    let task_ids = tasks.iter().map(|task| task.id.clone()).collect::<Vec<_>>();
+    let mut decisions = Vec::new();
+    for (tag, profile) in &profiles {
+        if !tasks.iter().any(|task| carries(task, tag)) {
+            continue;
+        }
+        decisions.extend(orbit_engine::review_skip_decision(
+            runtime, workspace, base, head, &task_ids, tag, profile,
+        )?);
+    }
+    Ok(decisions)
+}
 
 /// The decision for `tag` over `tasks` and the candidate `head` on `base`
 /// in `workspace`, or `None` when no task carries the tag.
@@ -34,7 +63,7 @@ pub(crate) fn light_delivery_decision(
         workspace,
         base,
         head,
-        runtime.host_validation_gates().light_delivery_paths(),
+        runtime.candidate_validation_gates().light_delivery_paths(),
     )?;
     let tagged = tasks
         .iter()
@@ -123,6 +152,13 @@ impl OrbitRuntime {
                 tag,
             )?);
         }
+        decisions.extend(review_skip_decisions(
+            self,
+            &self.paths().repo_root,
+            &candidate.base.commit,
+            &candidate.candidate.commit,
+            &tasks,
+        )?);
         Ok(decisions)
     }
 }

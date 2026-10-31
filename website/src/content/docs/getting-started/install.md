@@ -39,7 +39,9 @@ Releases also attach a desktop app, a native window for the dashboard, to the
 and `.AppImage` bundles for Linux on x64 and arm64. The app starts
 `orbit web serve` from your installed `orbit`, so it needs the CLI install
 above. macOS bundles are attached only when the release was built with Apple
-signing credentials, so a release may have none.
+signing credentials, so a release may have none. See
+[Use the desktop app](../../how-to/desktop/) for first launch, tray controls,
+and fleet notifications.
 
 ## Install as an agent plugin
 
@@ -59,6 +61,10 @@ codex plugin add orbit@orbit
 # Cursor (local plugin from a checkout)
 mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/local/orbit
 ```
+
+In Claude Code, the plugin also adds an in-session UI with a live task band,
+interactive board, and ship view. See
+[Use the Claude Code mod](../../how-to/claude-code/) to learn how to use it.
 
 Want to be walked through setup? Ask your agent to **set up Orbit for this
 repo**; the bundled `orbit-setup` skill takes it from there.
@@ -93,8 +99,8 @@ orbit workspace init --mcp
 
 `orbit init` sets up this machine under `~/.orbit/`. It asks for a **machine
 name**, which you can rename later, and a **task-ID prefix** of 2–5 uppercase
-letters, such as `ABC`, which can never change (`ORB` and `ADR` are reserved).
-For an unattended setup, pass both:
+letters, such as `ABC`, which can never change (`ORB`, `ADR`, `L` and `F` are
+reserved). For an unattended setup, pass both:
 
 ```bash
 orbit init --non-interactive --machine-name build-01 --task-prefix ABC
@@ -115,6 +121,12 @@ By default, pull requests target the branch checked out when you run
 `orbit workspace init`, or `main` if none is. Add `--base-branch <branch>` to
 choose another, or `--ship-mode local` to merge in place instead of opening
 pull requests.
+
+If a distribution supplies a workspace preset, apply it with
+`orbit workspace init --preset <file>`. The TOML preset selects shipped
+routines and auto-tasks, enables definitions from an already enabled plugin,
+and sets workspace config. Orbit validates the whole file before writing
+anything. See [Workspace presets](../../reference/config/#workspace-presets).
 
 ### Prepare the sandbox
 

@@ -114,7 +114,7 @@ pub(super) fn run_target(
         &dispatch.output,
     );
     let (success, message) =
-        reject_malformed_implementer_findings(step, t, success, message, &dispatch.output);
+        reject_malformed_implementer_output(step, t, success, message, &dispatch.output);
     let (success, message) = accept_implementer_deferral(
         step,
         t,
@@ -231,6 +231,16 @@ fn dispatch_once(
         },
         t.activity_name.as_deref(),
     );
+    if let Err(DispatchError::LocalShellFailed { output, .. }) = &dispatch {
+        record_pipeline(ctx, &step.id, output.as_ref().clone());
+        if let Err(error) = ctx
+            .host
+            .checkpoint_step_diagnostic(&ctx.run_id, &step.id, output)
+        {
+            ctx.audit
+                .note_telemetry_failure("step_diagnostic", Some(&step.id), &error);
+        }
+    }
     if let Err(DispatchError::RecoverableVcsConflict(conflict)) = &dispatch {
         let diagnostic = serde_json::json!({
             "conflicting_paths": conflict.conflicting_paths,
@@ -302,15 +312,13 @@ fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
         })
 }
 
-/// Fail an implementer step whose `unfiled_findings` breaks the shape
-/// `agent_implement` declares [ORB-14927], or whose `regression_from` is not
-/// a list of task IDs.
+/// Fail an implementer step whose output fields break the declared shape.
 ///
 /// The engine does not enforce `output_schema_json`, and the claim handoff
 /// would otherwise be the first to reject the field, after the candidate is
 /// committed, pushed and opened. Failing here keeps those side effects from
 /// running; the step's retry and recovery are the repair attempt.
-fn reject_malformed_implementer_findings(
+fn reject_malformed_implementer_output(
     step: &JobV2Step,
     target: &TargetStep,
     success: bool,
@@ -330,16 +338,55 @@ fn reject_malformed_implementer_findings(
             )),
         );
     }
-    match orbit_types::workflow::implementer_regression_from(output) {
-        Err(defect) => (
+    if let Err(defect) = orbit_types::workflow::implementer_regression_from(output) {
+        return (
             false,
             Some(format!(
-                "{}: {defect}. Return `regression_from` as `[\"<culprit task ID>\"]`.",
+                "{}: {defect}. Return `regression_from` as `[\"<culprit task ID>\"]` \
+                 when a culprit relation is filed.",
                 orbit_types::workflow::CONTRACT_REFUSAL_MARKER
             )),
-        ),
-        Ok(_) => (success, message),
+        );
     }
+    if let Some((field, defect)) = claimed_artifact_array_shape_error(output) {
+        return (
+            false,
+            Some(format!(
+                "{}: {defect}. Return `{field}` as `[{{\"path\": ..., \"source_path\": ...}}]`.",
+                orbit_types::workflow::CONTRACT_REFUSAL_MARKER
+            )),
+        );
+    }
+    (success, message)
+}
+
+/// Return the first malformed claimed artifact array, preserving omitted and
+/// `null` fields for artifact-free and non-claimed implementations.
+fn claimed_artifact_array_shape_error(output: &Value) -> Option<(&'static str, String)> {
+    for field in ["task_artifacts", "no_diff_artifacts"] {
+        let Some(artifacts) = output.get(field).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        let Some(entries) = artifacts.as_array() else {
+            return Some((field, format!("`{field}` must be an array")));
+        };
+        for (index, entry) in entries.iter().enumerate() {
+            let valid = entry.as_object().is_some_and(|object| {
+                object.len() == 2
+                    && object.get("path").is_some_and(Value::is_string)
+                    && object.get("source_path").is_some_and(Value::is_string)
+            });
+            if !valid {
+                return Some((
+                    field,
+                    format!(
+                        "`{field}[{index}]` must be an object with exactly string `path` and `source_path` fields"
+                    ),
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Derive an implementer step's deferred sandbox validation from the gate

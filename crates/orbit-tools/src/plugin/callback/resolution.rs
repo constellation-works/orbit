@@ -21,6 +21,11 @@ pub fn resolve_plugin_callback(
 pub fn resolve_plugin_callback_session(
     global_root: &Path,
 ) -> Result<CallbackResolution, OrbitError> {
+    // The host answering a routed call resolves the session it minted for
+    // the child that made it, never the process's own descriptor.
+    if let Some(record) = super::host_route::routed_callback_record() {
+        return Ok(CallbackResolution::Identified(identity_from(&record)));
+    }
     let dir = callback_dir(global_root);
     // Only the host-issued descriptor authorizes a callback. It survives
     // `setsid` and a cleared environment without relying on process ancestry.
@@ -174,7 +179,7 @@ fn callback_descriptor() -> i32 {
 /// is refused separately when its marker, live ancestry, or sandbox identifies
 /// it as a plugin child.
 #[cfg(unix)]
-fn credential_from_descriptor(dir: &Path) -> Option<SessionRecord> {
+pub(super) fn credential_from_descriptor(dir: &Path) -> Option<SessionRecord> {
     use std::os::fd::FromRawFd;
     use std::os::unix::fs::{FileExt, MetadataExt};
 
@@ -206,7 +211,7 @@ fn credential_from_descriptor(dir: &Path) -> Option<SessionRecord> {
 /// Descriptor inheritance is a Unix contract, and so is every sandbox Orbit
 /// runs a plugin under.
 #[cfg(not(unix))]
-fn credential_from_descriptor(_dir: &Path) -> Option<SessionRecord> {
+pub(super) fn credential_from_descriptor(_dir: &Path) -> Option<SessionRecord> {
     None
 }
 

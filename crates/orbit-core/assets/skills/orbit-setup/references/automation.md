@@ -1,8 +1,10 @@
 # Automation: the host clock, routines, and auto-tasks
 
-How scheduled work happens, and what to turn on. A fresh workspace has the whole
-automation layer installed and **switched off** — this is the reference for
-opting in deliberately.
+How scheduled work happens, and what to turn on. A fresh workspace carries the
+defaults selected by its [seeding policy](configuration.md#seeding-policy).
+Scheduled work requires a host clock and enabled definitions; the seeded
+`crew-performance-refresh` exception below no-ops while crew performance is off.
+This is the reference for opting in deliberately.
 
 ## The chain
 
@@ -83,26 +85,67 @@ checkout already made the workspace a routine source; an older `.orbit/config.to
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
-## The seven seeded routines
+<a id="the-nine-seeded-routines"></a>
+<a id="the-ten-seeded-routines"></a>
+<a id="the-eleven-seeded-routines"></a>
+## The seeded routines
 
-`orbit workspace init` seeds all seven, **all disabled**, with a workspace-unique
-name (`<base>-<workspace>`) resolved at seed time. The five cron routines resolve
-nothing else per machine, so two hosts seed identical bytes. `task-pilot` and
-`finding-verification` are state-triggered and additionally resolve this host's
+`orbit workspace init` seeds the routines selected by `seeding.routines`
+(`"all"` by default) from this catalog, with a workspace-unique name
+(`<base>-<workspace>`) resolved at seed time. See [Seeding policy](configuration.md#seeding-policy)
+to change that selection and reconcile an existing workspace. Every default starts disabled
+except `crew-performance-refresh`, which is seeded enabled because it
+no-ops while `workflow.crew_performance` is `off`. The cron routines
+resolve nothing else per machine, so two hosts seed identical bytes.
+`task-pilot`, `finding-verification`, `pilot-warning-triage` and
+`blocked-task-triage` are state-triggered and additionally resolve this host's
 machine id as `trigger.state.owner_machine` and the registered base branch as
-`trigger.state.branch`;
-a second host registering the same workspace seeds itself as owner of its own
-copy. Run `orbit routine list` to see their names on this host.
+`trigger.state.branch`; a second host registering the same workspace seeds
+itself as owner of its own copy. Run `orbit routine list` to see their names
+on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
 | `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for `worktree.parked_reclaim_after_hours` (default 336), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
 | `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
+| `pilot-warning-triage` | state trigger (`pilot_warnings_held`) | `escalation_triage_pipeline` | Disabled by default; once per assessment, a hard-tier triager reads each proposed task whose task-pilot assessment holds promotion on warnings and records a decision proposal or the human action that settles the hold. It only proposes: it never approves, promotes, clears a hold or edits the task. Approve with `orbit task update <task-id> --approve --note "<evidence>"`. |
+| `blocked-task-triage` | state trigger (`block_escalated`) | `escalation_triage_pipeline` | Disabled by default; once per block episode, a hard-tier triager reads each blocked task whose block final recovery escalated (or that stayed undecided past 72 hours) and requeues, proposes or reports it — [Blocked-task triage](#blocked-task-triage). Replaces the retired `blocked-task-triage` auto-task. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
+| `crew-performance-refresh` | hourly at :23 | `crew_performance_refresh_pipeline` | Rebuilds this workspace's crew-performance snapshot (the implementer by-type cell matrix) that performance-weighted crew draws read. The one routine seeded enabled: while `workflow.crew_performance` is `off` (the default) it skips the scan, records `skipped: crew_performance_off` and writes no snapshot; once the feature is on, keeps the snapshot fresh — [Crew performance snapshot](#crew-performance-snapshot). |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
-| `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history older than 30 days. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
-| `ship-sweep` | every 30m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. The 30-minute cadence leaves 10 minutes of slack past the job's 20-minute drain, so `overlap: forbid` does not skip the next fire. |
+| `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
+| `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
+| `ux-rules` | daily at 06:40 | `ux_rules_pipeline` | Disabled by default. Runs the UX rules on each surface in `ux_rules.surfaces` through an operator-granted `ux_rules_runner` script step, then files proposed bug tasks for failing rules, capped by `ux_rules.max_new_tasks`. With no grant or no surfaces it does no work. |
+
+### Crew performance snapshot
+
+A crew draw must never run the scorecard scan, so the by-type cell matrix is
+persisted as a per-workspace snapshot: one row per `(crew, model, tier, type)`
+cell with its raw score, sample count, crew mean and shrunk score, plus the
+evidence window, a hash of the type list, and `computed_at`. The seeded
+`crew-performance-refresh` routine runs hourly (`cron: "23 * * * *"`, target
+`job:crew_performance_refresh_pipeline`) to rebuild it atomically. Run it on
+demand with:
+
+```bash
+orbit run job crew_performance_refresh_pipeline
+```
+
+While `workflow.crew_performance` is `off` (the default) the refresh writes no
+snapshot, records `skipped: crew_performance_off`, and skips the scan (the hourly
+routine still records a job run). `off` is the only mode that skips the scan;
+`absolute`, `comparative`, `shadow_absolute` and `shadow_comparative` all build
+snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`).
+
+A stored snapshot is usable only while fresh: a reader gets the typed reason
+`missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a
+different `workflow.crew_performance_types` list) otherwise; performance-weighted
+draws treat any unusable reason as factor 1.
+
+Verify the snapshot with `orbit run readiness`: the output prints one line for
+the snapshot (its computed time, window, type list or the unusable reason), and
+`orbit run readiness --json` carries the same details under `crew_performance`.
 
 ## Built in: final recovery of blocked tasks
 
@@ -134,18 +177,26 @@ it to `[]`; this also turns off final recovery inside the delivery pipelines.
 
 ### Blocked-task triage
 
-What final recovery escalates stays blocked for a human. The bundled
-`blocked-task-triage` auto-task (disabled until you enable it, hourly) re-reads
-those blocks once each. A block episode — the task's latest move to `blocked` —
-awaits triage when its final-recovery decision was an escalation, or when it
-has none and is older than the 72 hours after which the backstop above never
-decides it. An episode is skipped when a human set the block or commented,
-changed the status, attached an artifact or made an unattributed edit after
-it, and once triaged; a later block is a new episode. With nothing waiting the
-tick mints nothing and records a `no_blocked_candidates` skip
-([auto-tasks.md](auto-tasks.md#skipping-a-tick-when-nothing-is-blocked)).
+What final recovery escalates stays blocked for a human. The seeded
+`blocked-task-triage` routine (disabled until you set `enabled: true` in
+`.orbit/routines/blocked_task_triage.yaml`) reads those blocks once each,
+shortly after they appear. A block episode — the task's latest move to
+`blocked` — awaits triage when its final-recovery decision was an escalation,
+or when it has none and is older than the 72 hours after which the backstop
+above never decides it. An episode is skipped when a human set the block or
+commented, changed the status, attached an artifact or made an unattributed
+edit after it, and once triaged; a later block is a new episode. Its
+`block_escalated` trigger waits two minutes for an episode to settle, then
+submits up to five episodes that share one stored crew into one
+`escalation_triage_pipeline` run, whose triager is drawn from
+`workflow.hard_complexity_crews`. With nothing waiting it stays quiet.
 
-The minted task records exactly one disposition per episode through
+It replaces the `blocked-task-triage` auto-task, which Orbit no longer seeds.
+`orbit workspace sync` removes an unedited copy of that auto-task (with its
+settings), keeps a copy you edited, and, when the copy was enabled, tells you
+the routine replaces it. It never enables the routine for you.
+
+The triager records exactly one disposition per episode through
 `orbit.task.block_triage`, whose `candidates` action lists what qualifies:
 
 - **Mechanical** — a cause with a supported recovery. `requeue` moves the task
@@ -156,21 +207,32 @@ The minted task records exactly one disposition per episode through
   nothing is written. An Orbit defect with no supported recovery gets a
   friction record and a report, never a requeue.
 - **Decision** — a scope or requirements choice. `propose` writes one comment
-  quoting the blocker, with two or three options, their consequences,
-  ready-to-apply replacement text and a recommendation; nothing else on the
-  task changes.
+  quoting the blocker, with two or three options, their consequences, a
+  `target` field (`acceptance_criteria` or `description`) and the ready-to-apply
+  replacement text for it, and a recommendation; nothing else on the task
+  changes. Answering an option through the decision channel writes that
+  replacement as the field's whole new value and returns the task to
+  `backlog` in one human update; an option with no target, or one that would
+  change nothing, is refused and the task stays blocked.
 - **Human-only** — credentials or login, a named owner sign-off, a `security`
   or `security-review` tag, a run another machine executed, or an OS or
   browser-kit requirement. `report` names the human action and changes
   nothing else. The tool itself refuses to requeue a security-tagged task or
   one whose run executed on another machine.
 
-The triage holds no operator-only tool and no `--force` path: it never
-completes, rejects or archives a task, resumes a run, or merges or closes a
-pull request. A recovery that needs one of those is reported with the exact
-operator command. Its task's execution summary lists every block it read,
-with the block's age, the quoted escalation reason, the disposition and the
-action.
+The triager holds no task-update, requeue or run-resume tool and no `--force`
+path: it never completes, rejects or archives a task, resumes a run, or merges
+or closes a pull request. A recovery that needs one of those is reported with
+the exact operator command. To triage one blocked task now, run
+`orbit run job escalation_triage_pipeline --input 'subject="block"' --input
+'task_ids=["<task-id>"]'`. The dashboard's task details panel offers the
+same explicit submission as a **Triage** action — on a blocked task with
+`subject="block"`, and on a proposed task held by pilot warnings with the
+default `pilot_warning` subject (`orbit run job escalation_triage_pipeline
+--input 'task_ids=["<task-id>"]'`). The action is enabled only while the
+task currently qualifies and is otherwise disabled with the reason; on
+success it links the submitted run, whose triage comment appears on the
+refreshed task.
 
 ## Built in: re-checking tasks held for a red base
 
@@ -216,8 +278,8 @@ without the ones after it; **the reverse is not true.**
 
 1. **`worktree-gc` first.** It is the only one that reclaims disk, and every
    implementation workflows create runs that can leave worktrees behind.
-   Deterministic evidence-filing sweeps do not create worktrees. Turning on
-   scheduled shipping without GC is how a workspace fills a disk. Watch one
+   Deterministic evidence-filing sweeps do not create worktrees. Running
+   unattended drains without GC is how a workspace fills a disk. Watch one
    cycle with `orbit gc worktrees --dry-run` before enabling. →
    [maintenance.md](maintenance.md)
 2. **`task-pilot`.** Its agent inspection is read-only; its apply step writes validated task selectors, and it makes everything downstream safer:
@@ -226,13 +288,11 @@ without the ones after it; **the reverse is not true.**
    or a material edit (debounced two minutes, at most ten) rather than on a
    clock, so an unchanged backlog costs nothing. See
    [Tuning which tasks task-pilot prepares](#tuning-which-tasks-task-pilot-prepares).
-3. **`ship-sweep` last, and only deliberately.** This is the one that commits,
-   pushes, and opens PRs without a human present. Its `enabled: true` is the
-   only switch: the routine does not read `workflow.auto_ship`, which gates only
-   the cross-workspace `orbit run ship-sweep` command. It never grants
-   `--complete`, so shipped work stops in `review`. Do not enable it in the same
-   change as anything above; let the earlier ones prove themselves against real
-   traffic first.
+
+No routine ships work. Dispatch the backlog with `orbit run auto` drains or
+`orbit run ship` once the steps above have proved themselves against real
+traffic. A workspace that still holds the retired `ship-sweep` routine loads it,
+warns, and never runs it; `orbit workspace sync` retires the seeded copy.
 
 ## Authoring a routine
 
@@ -260,6 +320,70 @@ load error. It never fires with defaults.
 Use `orbit routine show <name>` for a complete installed example and effective
 state; `orbit routine --help` lists the management commands. Keep the schema
 version and field names from the installed definition when authoring one.
+
+### Changing a routine's trigger
+
+An operator can replace a routine's `trigger:` block without opening the file:
+the dashboard's **Automation › Routines** row has an **edit** link beside the
+cadence, and `orbit.routine.control` takes `action: "set_trigger"` with the
+observed `target` and `expected_trigger` and the replacement `trigger`. Both run
+the same write: it refuses a target or trigger that changed since you read it,
+checks the new trigger as the loader would (exactly one of `cron`, `state`,
+`deliveries_landed` or `condition`; a cron that parses; a state kind whose job
+is the routine's target; `overlap: forbid` for state and delivery triggers; a
+condition or `when` guard that type-checks), and rewrites only
+the `trigger:` block. Comments inside that block are not kept; the rest of the
+file is. Name, target, policy and `enabled` are not editable this way. Editing a
+seeded routine makes it a local edit: `orbit workspace sync` keeps your file and
+stops refreshing it from Orbit's template.
+
+### Condition triggers
+
+A routine's `trigger.condition` or an auto-task's `schedule.condition` is a CEL
+predicate over task and workspace state. Orbit type-checks it when the file
+loads and refuses, per file, an unknown field, a non-`bool` result, a computed
+`tasks[...]` or `board.by_tag[...]` index, a task scope without a top-level
+status or literal-tag conjunct, an optional field (`task.origin`, `task.crew`,
+`self.last_fired`, ...) read without `has()`, `matches()`, and an expression
+over 4 KiB, 200 nodes or two nested comprehensions. The error names the file,
+the clause and the line:column in the expression.
+
+Only the workspace owner fires a condition; followers and replica checkouts
+write and admit nothing. A `task` or `workspace` subject fires once per edge
+(true for `for_minutes`, then held fired until `rearm`), under a durable fire
+ID that a crash, restart or second clock cannot repeat. An auto-task files one
+task, a routine submits one job run with the subject and fire in its input.
+Unknown values never fire. Enabling baselines subjects already true unless
+`on_enable: fire_existing`; `orbit auto-task toggle <name> on --dry-run`
+previews the count, and an enable over `max_matches` is refused (a routine
+stalls as `too_many_matches`). Fire caps and cooldown defer fires; a match
+storm, a chain deeper than 5 (`loop_suspected`) or a subject oscillating more
+than three times an hour stalls the definition until
+`orbit automation clear-stall <name> --reason <text>` (operator, audited).
+`host` and `file` scopes are refused.
+
+`orbit automation explain <name>` (MCP `orbit.automation.explain`) shows
+matches with arm state and holds, closest misses, one subject's clause tree,
+and the durable tracking (stall, last pass and skip, recent fires with their
+chain, `self`), read-only. `orbit auto-task list`, `orbit routine list` and the
+dashboard show the condition state and any stall.
+
+A cron, interval, delivery or state trigger also takes a `when` guard (a
+workspace predicate without `self`). A false or unknown guard holds the fire:
+a cron or interval slot waits (`guard_miss: wait`, default) or is skipped
+(`guard_miss: skip`), delivery debt and state members are kept, and the skip
+records `guard_false` or `guard_unknown`. The keys and the readable schema are
+in the website's Scheduling YAML reference, Condition triggers.
+
+A job may also name an auto-task as a step (`target: auto-task:<name>`) with
+CEL `wait_until`, `expire_when` and `reuse_when` fields. These steps are
+checked when the job loads and explained by `orbit automation explain
+job:<name>`, but cannot run yet: such a job must stay `state: disabled`, and
+submitting it is refused. It declares `schemaVersion: 3`, and keeps those
+restrictions until its author declares 2 again; the same fields under
+`schemaVersion: 2` fail to load, even when null, so an older Orbit refuses the
+file instead of dropping its waits. The keys are in the website's Activity and job
+YAML reference, Auto-task steps.
 
 ## Routines a plugin seeds
 
@@ -432,14 +556,20 @@ Secret values must not be copied into task prose or logs.
 
 A missing GitHub client, authentication, or API permission is a capability gap,
 not evidence of a clean repository. Read the collect/file step outcomes. CI
-filing honors exact-key operator `covered_by` relations and timed archive/reject
-suppression (`ci_failure.operator_suppression_hours`, default 6; see
+filing honors operator `covered_by` relations and timed archive/reject
+suppression of the same evidenced cause
+(`ci_failure.operator_suppression_hours`, default 6; see
 [recovery](../../orbit-orchestrate/references/recovery.md)). Equal normalized
 failing-test signatures consolidate across jobs with every job retained.
-Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then a rejected
-exact-key task whose comment names one still-open covering owner, then a
-high-confidence material match (generated workflow/job/step labels, or a
-specific error together with the failing command or the same run and job).
+Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then follows
+a rejected exact-key task's inbound `Supersedes` relation to its covering owner,
+preferring a still-open owner and then the lowest task ID if several supersede
+the source. Any inbound relation suppresses the legacy comment reader, even
+when its superseder is terminal; a terminal superseder does not fall through to
+a legacy comment. Covering-task comments are read only when no inbound
+`Supersedes` relation exists. Filing then tries a high-confidence material
+match (generated workflow/job/step labels, or a specific error together with
+the failing command or the same run and job).
 That is not fuzzy title similarity: a shared workflow, generic npx/cargo
 exit, or the same affected file is not enough, and completion alone
 does not suppress a later recurrence. Completed owners can cover an exact pre-fix
@@ -451,5 +581,5 @@ filing, and dedupe-lookup errors must remain visible and retryable. A previous d
 to inspect, not blanket dedupe: an old failed release already fixed on the
 current integration branch stays proposed as already-landed, while a distinct
 defect that still reproduces at the current revision remains eligible. Choose
-these routines independently of `ship-sweep`; admission to backlog does not
-authorize implementation or completion.
+these routines independently of how you dispatch; admission to backlog does
+not authorize implementation or completion.

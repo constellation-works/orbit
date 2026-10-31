@@ -43,7 +43,9 @@ use crate::runtime::host_resource::delivery::work_class;
 use crate::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastGap, GapMiss, GapResource, HostLoadForecast,
 };
-use crate::runtime::host_resource::profile::{ProfileLookup, ResourceProfile};
+use crate::runtime::host_resource::profile::{
+    ProfileLookup, ProfileMatch, ProfileSet, ResourceProfile,
+};
 
 /// How far, in percentage points, a head's miss must fall below the one its
 /// stall is measured against to count as an improvement. Smaller moves are
@@ -166,14 +168,21 @@ impl HeadWait<'_> {
 }
 
 /// The profile lookup that prices `task` in `workspace_id`: its work class
-/// from its tags now, its complexity, and `no-diff-expected` for a
-/// template's base class.
-pub(crate) fn task_lookup(workspace_id: &str, task: &Task) -> ProfileLookup {
+/// from its tags now, its complexity, `no-diff-expected` for a template's
+/// base class, and the model of its assigned crew in `profiles`' crews. A
+/// task without a crew runs the default crew or a later draw, so its crew
+/// model is unknown and the key's union prices it.
+pub(crate) fn task_lookup(workspace_id: &str, task: &Task, profiles: &ProfileSet) -> ProfileLookup {
     ProfileLookup::new(
         workspace_id,
         work_class(&task.tags),
         task.complexity.map(|complexity| complexity.to_string()),
         task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
+    )
+    .with_crew_model(
+        profiles
+            .crew_model(task.crew.as_deref())
+            .map(str::to_string),
     )
 }
 
@@ -219,8 +228,22 @@ impl<'a> GapFit<'a> {
     /// from now on; one that does not, or that the starvation guard holds,
     /// is recorded with why.
     pub(crate) fn admits(&mut self, task: &Task) -> bool {
-        let lookup = task_lookup(self.workspace_id, task);
+        let lookup = task_lookup(self.workspace_id, task, &self.forecast.profiles);
         let found = self.forecast.profiles.lookup(&lookup);
+        if !self.admits_priced(task, &found) {
+            return false;
+        }
+        self.reservations.push(AdmissionReservationRequest {
+            task_id: task.id.clone(),
+            lookup,
+        });
+        true
+    }
+
+    /// [`Self::admits`] for a candidate already priced by `found`, reserving
+    /// nothing: the backlog forecast's simulated passes [ORB-18689], which
+    /// price each task once per forecast.
+    pub(crate) fn admits_priced(&mut self, task: &Task, found: &ProfileMatch) -> bool {
         let profile_source = found.source.as_str().to_string();
         if let Some(head) = self.head.as_ref().filter(|head| head.protected) {
             self.skipped.push(GapFitSkip {
@@ -268,10 +291,6 @@ impl<'a> GapFit<'a> {
             task_id: task.id.clone(),
             profile_source,
             idle_host: idle_host.map(|admission| admission.describe()),
-        });
-        self.reservations.push(AdmissionReservationRequest {
-            task_id: task.id.clone(),
-            lookup,
         });
         true
     }

@@ -9,16 +9,21 @@
 //! `rate_limits {limit_id, primary, secondary, plan_type, …}`, and each
 //! window is `{used_percent, window_minutes, resets_at (epoch s)}`
 //! (codex-cli 0.161.0).
+//!
+//! The same `token_count` payload's `info.last_token_usage` is the usage of
+//! the one model request that just finished, which prompt-size price tiers
+//! need; stdout's `turn.completed` only totals the turn.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
-use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
+use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource, TokenUsage};
 use serde_json::{Map, Value};
 
 use super::super::usage_window::{percent, top_level_frames};
+use crate::types::request_usage;
 
 /// The most of a rollout's end Orbit reads. A long session's rollout runs to
 /// megabytes, and its last `token_count` is near the end.
@@ -148,4 +153,63 @@ pub(crate) fn codex_usage_windows(
         .into_iter()
         .filter_map(|window| reading(window, limits.get(window)?.as_object()?))
         .collect()
+}
+
+/// The usage of each model request in the run's rollout whose prompt may
+/// reach a prompt-size price tier, or `None` when the rollout cannot be found
+/// or read.
+///
+/// The whole rollout is scanned, since a long session's first requests are
+/// far from its end. Codex can repeat a `token_count` without a new request
+/// (a rate-limit refresh); its `total_token_usage` has not moved, so it is
+/// skipped.
+pub(crate) fn codex_long_prompt_requests(
+    stdout: &[u8],
+    codex_home: &Path,
+    now: DateTime<Utc>,
+) -> Option<Vec<TokenUsage>> {
+    let thread_id = run_thread_id(stdout)?;
+    let path = rollout_path(codex_home, &thread_id, now)?;
+    let reader = BufReader::new(File::open(path).ok()?);
+    let mut requests = Vec::new();
+    let mut last_total: Option<Value> = None;
+    for line in reader.split(b'\n') {
+        let line = line.ok()?;
+        // Only `token_count` events matter; skip parsing every other frame.
+        if !line
+            .windows(b"token_count".len())
+            .any(|w| w == b"token_count")
+        {
+            continue;
+        }
+        let Ok(frame) = serde_json::from_slice::<Value>(line.trim_ascii()) else {
+            continue;
+        };
+        if frame.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        let Some(payload) = frame.get("payload") else {
+            continue;
+        };
+        if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+            continue;
+        }
+        let Some(info) = payload.get("info").and_then(Value::as_object) else {
+            continue;
+        };
+        let total = info.get("total_token_usage").cloned();
+        if total.is_some() && total == last_total {
+            continue;
+        }
+        last_total = total;
+        if let Some(usage) = info
+            .get("last_token_usage")
+            .and_then(Value::as_object)
+            .and_then(request_usage)
+            .filter(TokenUsage::may_reach_long_prompt_floor)
+        {
+            requests.push(usage);
+        }
+    }
+    Some(requests)
 }

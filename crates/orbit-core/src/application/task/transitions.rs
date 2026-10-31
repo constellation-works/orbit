@@ -18,7 +18,8 @@ use super::lifecycle::{
     in_progress_transition_requires_plan,
 };
 use super::params::TaskUpdateParams;
-use super::update::admit_agent_artifact;
+use super::update::admit_task_artifact;
+use crate::application::task::TaskRecords;
 
 /// Status event recorded when `orbit task recheck-blocked --confirm` returns a
 /// task blocked by a missing provider launcher to backlog because the launcher
@@ -179,11 +180,16 @@ impl OrbitRuntime {
             if task.status == TaskStatus::Review {
                 super::lifecycle::ensure_post_deploy_criteria_met(self, &task)?;
                 super::lifecycle::ensure_completion_run_stopped(self, &task, None, None)?;
+                self.ensure_mutation_proposals_applied(&task)?;
                 self.ensure_resolves_are_workspace_local(&task)?;
             }
 
             if task.status == TaskStatus::Proposed {
                 self.ensure_finding_verified(&task)?;
+                // Tool, operator and drain approvals land here, so the mock
+                // check runs over the stored artifacts and tags. The desktop
+                // edit path repeats the check in `desktop_task_write`.
+                self.ensure_backlog_mock_admission(&task, None)?;
             }
 
             result = Some(match task.status {
@@ -397,7 +403,7 @@ impl OrbitRuntime {
             // A start accepts the same caller-supplied artifacts as an ordinary
             // update. Admit the whole batch before approval or record writes.
             for artifact in &mut start_edits.upsert_artifacts {
-                admit_agent_artifact(artifact)?;
+                admit_task_artifact(self, &task, artifact)?;
             }
             // A start has no operator-decision grant. An attributed agent or
             // model, or an agent envelope, still cannot add a light-delivery
@@ -567,6 +573,19 @@ impl OrbitRuntime {
         id: &str,
         workflow: &str,
     ) -> Result<Task, OrbitError> {
+        self.ensure_task_can_enter_workflow_honouring_schedule(id, workflow, true)
+    }
+
+    /// [`Self::ensure_task_can_enter_workflow_as_system`], skipping the
+    /// scheduled hold when `honour_schedule` is false: only the explicit
+    /// ship's operator override passes false, and it records the override
+    /// before its run starts.
+    pub(crate) fn ensure_task_can_enter_workflow_honouring_schedule(
+        &self,
+        id: &str,
+        workflow: &str,
+        honour_schedule: bool,
+    ) -> Result<Task, OrbitError> {
         let task = self.get_task(id)?;
         if matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress) {
             match self.pilot_admission_hold(id)? {
@@ -598,6 +617,13 @@ impl OrbitRuntime {
                 }
                 _ => {}
             }
+        }
+        // A `backlog` task scheduled ahead is started by no dispatcher until
+        // its time, unless an operator's `--ignore-schedule` override names
+        // that time. This one check covers explicit ship, the gate's dispatch
+        // re-check and worktree admission.
+        if honour_schedule && let Some(hold) = self.schedule_hold(&task)? {
+            return Err(hold.refusal(id));
         }
         if Self::workflow_admissible_statuses().contains(&task.status) {
             return Ok(task);
@@ -640,20 +666,43 @@ impl OrbitRuntime {
         } else {
             workflow
         };
+        // A `verify-mock-ui` task whose mocks no longer validate is refused
+        // before it starts, on every local route that reaches this shared
+        // transition (explicit ship, automatic discovery, local drains).
+        let before = self.get_task(id)?;
+        if let Err(detail) = self.mock_admission_check(&before) {
+            return Err(OrbitError::InvalidInput(format!(
+                "task '{id}' is not admitted for workflow '{workflow}': {detail}"
+            )));
+        }
         let mut admitted = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             admitted = Some(self.admit_task_for_workflow_locked(id, workflow)?);
             Ok(())
         })?;
-        admitted
-            .ok_or_else(|| OrbitError::Execution("workflow admission lock body did not run".into()))
+        let (admitted, transitioned) = admitted.ok_or_else(|| {
+            OrbitError::Execution("workflow admission lock body did not run".into())
+        })?;
+        // Freeze the admitted mocks before implementation begins. A task
+        // this call started gets a new delivery's baseline (kept when a
+        // live ship run already froze this delivery's); an already
+        // `in-progress` task keeps its active baseline.
+        self.freeze_mock_digests_at_workflow_admission(&admitted, transitioned)?;
+        Ok(admitted)
     }
 
-    fn admit_task_for_workflow_locked(&self, id: &str, workflow: &str) -> Result<Task, OrbitError> {
+    /// Admit under the per-task write lock. The bool reports whether this
+    /// call performed the `backlog -> in-progress` transition (a new
+    /// delivery) rather than finding the task already started.
+    fn admit_task_for_workflow_locked(
+        &self,
+        id: &str,
+        workflow: &str,
+    ) -> Result<(Task, bool), OrbitError> {
         let task = self.ensure_task_can_enter_workflow_as_system(id, workflow)?;
 
         if task.status == TaskStatus::InProgress {
-            return Ok(task);
+            return Ok((task, false));
         }
 
         let note = Some(format!("workflow admission: {workflow}"));
@@ -685,7 +734,7 @@ impl OrbitRuntime {
             ))
         })?;
 
-        Ok(updated)
+        Ok((updated, true))
     }
 
     /// Return every task blocked by a missing provider launcher that now

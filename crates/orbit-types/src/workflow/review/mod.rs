@@ -16,7 +16,9 @@ mod ledger;
 mod records;
 mod refusal;
 mod report;
+mod selective;
 mod verdict;
+mod visual;
 
 #[cfg(test)]
 mod tests;
@@ -46,7 +48,15 @@ pub use ledger::{
 pub use records::{RecordGap, RetiredValidation, record_gap};
 pub use refusal::ReviewGateRefusal;
 pub use report::{FindingDisposition, ReviewFinding, ReviewReport};
+pub use selective::{
+    REVIEW_SELECTION_ARTIFACT, SELECTIVE_RECEIPT_MATCH_LIMIT, SELECTIVE_REVIEW_RECEIPT_VERSION,
+    SelectiveBeforeLandingMode, SelectiveBeforeLandingPolicy, SelectiveEvaluationInputs,
+    SelectiveMatchedPath, SelectiveReviewReceipt, SelectiveReviewResult, SelectiveTaskRisk,
+    SelectiveUnknownRisk, evaluate_selective_review, selective_path_matches,
+    validate_risk_threshold, validate_selective_path_glob,
+};
 pub use verdict::{
     NegativeControl, RetainedObligation, ReviewAssurance, ReviewBaselineClaim, ReviewValidation,
     ReviewVerdict, ValidationOutcome, ValidationRole,
 };
+pub use visual::{ReviewVisualFinding, ReviewVisualResolution};

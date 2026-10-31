@@ -8,7 +8,10 @@
 //! verification state does not gate it. Either way, a REJECTED verdict moves
 //! it to `rejected` with its evidence. The trusted record is the `finding_verified` history entry the
 //! verification actor writes; its comment is the human-readable copy that
-//! `orbit task show` prints. The design is
+//! `orbit task show` prints. With the job opt-in, a finding is usually
+//! rejected by the work that already reads its code: the task pilot's
+//! `finding_invalid` result, or an implementer's `finding-invalid.json`
+//! report ([`OrbitRuntime::reject_invalid_finding`]). The design is
 //! `docs/design/finding-verification/2_design.md`.
 
 use chrono::{DateTime, Utc};
@@ -18,17 +21,18 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::identity::{Crew, agent_family_from_cli, infer_agent_family_from_model};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskComment, TaskComplexity, TaskHistoryEntry, TaskStatus, TaskType,
+    DefectSeverity, SeveritySource, Task, TaskComment, TaskComplexity, TaskHistoryEntry,
+    TaskRelation, TaskRelationType, TaskStatus, TaskType,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{InspectionPool, seeded_crew_ticket, weighted_draw};
+use crate::application::contracts::FINDING_VERIFICATION_JOB;
+use crate::application::contracts::InspectionPool;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
-/// The job that verifies review-filed findings.
-pub const FINDING_VERIFICATION_JOB: &str = "finding_verification_pipeline";
 /// The actor every verdict write is attributed to.
 pub(crate) const FINDING_VERIFICATION_ACTOR: &str = "finding-verification";
 /// The trusted history event carrying a verdict record.
@@ -43,11 +47,12 @@ pub(crate) const UNVERIFIED_REVIEW_FINDING: &str = "unverified_review_finding";
 pub const FINDING_VERIFICATION_SCHEMA_VERSION: u32 = 1;
 
 /// Tags a review job files its findings with.
-pub const REVIEW_FINDING_TAGS: [&str; 4] = [
+pub const REVIEW_FINDING_TAGS: [&str; 5] = [
     "code-review",
     "delivery-code-review",
     "security-review",
     "qa-sweep",
+    orbit_types::task::VISUAL_REVIEW_TAG,
 ];
 
 /// Statuses in which a finding is verified and held: those before promotion
@@ -121,15 +126,6 @@ pub enum VerdictConfidence {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FindingSeverity {
-    Critical,
-    High,
-    Medium,
-    Low,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RejectionReason {
     /// The code does not behave the way the finding claims.
@@ -142,7 +138,42 @@ pub enum RejectionReason {
     Duplicate,
 }
 
-/// One cited location: `path:line` at the verified revision, and why it matters.
+/// Which route decided a verdict. Records the job wrote before the other
+/// routes existed carry no source and read as [`Self::Verification`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerdictSource {
+    /// `finding_verification_pipeline`.
+    #[default]
+    Verification,
+    /// The task pilot's `finding_invalid` result.
+    TaskPilot,
+    /// An implementer's `finding-invalid.json` report at its claim base.
+    Implementer,
+    /// A delivery's in-line visual verification, carried to the follow-up
+    /// filed for a confirmed visual finding after landing.
+    VisualReview,
+}
+
+impl VerdictSource {
+    fn is_verification(&self) -> bool {
+        *self == Self::Verification
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Verification => "verification",
+            Self::TaskPilot => "task-pilot",
+            Self::Implementer => "implementer",
+            Self::VisualReview => "visual-review",
+        }
+    }
+}
+
+/// One cited location: `path:line` at the verified revision, or — the
+/// visual review extension (visual-review design §11.2) — an image
+/// region `<image>#<x>,<y>,<w>,<h>` in a delivery's capture, and why
+/// it matters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindingEvidence {
     pub location: String,
@@ -177,6 +208,23 @@ impl FindingEvidence {
         }
         Ok((path, line))
     }
+
+    /// The image and `[x, y, w, h]` region `location` names when it is
+    /// a visual evidence location (§11.2), else `None`. Whether the
+    /// image is in a delivery's capture and the region inside it is
+    /// the caller's check against that delivery's catalog
+    /// (`validate_visual_region_location`).
+    pub(crate) fn visual_region(&self) -> Option<(String, [u32; 4])> {
+        orbit_types::task::parse_visual_region_location(&self.location)
+    }
+
+    /// Whether `location` is either evidence form this schema admits.
+    fn well_formed(&self) -> Result<(), String> {
+        if self.visual_region().is_some() {
+            return Ok(());
+        }
+        self.path_and_line().map(|_| ())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,26 +252,30 @@ pub struct VerifierReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reproduction: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub severity: Option<FindingSeverity>,
+    pub severity: Option<DefectSeverity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rejection: Option<FindingRejection>,
 }
 
 impl VerifierReport {
     /// The structural contract of a verdict. A CONFIRMED verdict cites at
-    /// least one `path:line` and rates severity; a REJECTED one names its
-    /// reason, with the fixing commit or the duplicate task it needs.
+    /// least one evidence location — `path:line`, or an image region for
+    /// a visual finding (§11.2) — and rates severity; a REJECTED one
+    /// names its reason, with the fixing commit or the duplicate task it
+    /// needs.
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.reasoning.trim().is_empty() {
             return Err("reasoning must not be empty".into());
         }
         for evidence in &self.evidence {
-            evidence.path_and_line()?;
+            evidence.well_formed()?;
         }
         match self.verdict {
             FindingVerdict::Confirmed => {
                 if self.evidence.is_empty() {
-                    return Err("a CONFIRMED verdict must cite `path:line` evidence".into());
+                    return Err(
+                        "a CONFIRMED verdict must cite `path:line` or image-region evidence".into(),
+                    );
                 }
                 if self.severity.is_none() {
                     return Err("a CONFIRMED verdict must rate severity".into());
@@ -281,6 +333,9 @@ pub struct VerifierVerdict {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindingVerification {
     pub schema_version: u32,
+    /// The route that decided it; absent for the verification job.
+    #[serde(default, skip_serializing_if = "VerdictSource::is_verification")]
+    pub source: VerdictSource,
     pub verdict: FindingVerdict,
     pub confidence: VerdictConfidence,
     /// The commit the verifiers inspected and the evidence cites.
@@ -291,7 +346,7 @@ pub struct FindingVerification {
     pub finding_fingerprint: Option<String>,
     pub base_branch: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub severity: Option<FindingSeverity>,
+    pub severity: Option<DefectSeverity>,
     pub evidence: Vec<FindingEvidence>,
     pub reasoning: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,6 +373,7 @@ impl FindingVerification {
     ) -> Self {
         Self {
             schema_version: FINDING_VERIFICATION_SCHEMA_VERSION,
+            source: VerdictSource::Verification,
             verdict: report.verdict,
             confidence: report.confidence,
             verified_sha: verified_sha.to_string(),
@@ -362,13 +418,37 @@ impl FindingVerification {
                     .and_then(|value| value.as_str().map(ToOwned::to_owned))
                     .unwrap_or_default();
                 format!(
-                    "finding rejected at {} ({reason}): {}",
-                    self.verified_sha, rejection.detail
+                    "finding rejected by {} at {} ({reason}): {}",
+                    self.source.label(),
+                    self.verified_sha,
+                    rejection.detail
                 )
             }
-            None => format!("finding rejected at {}", self.verified_sha),
+            None => format!(
+                "finding rejected by {} at {}",
+                self.source.label(),
+                self.verified_sha
+            ),
         }
     }
+}
+
+/// A review finding the task pilot or an implementer judged absent at
+/// `verified_sha`: the code does not do what the finding claims, or the
+/// claimed consequence cannot happen. Recorded as a REJECTED verdict with
+/// reason `premise_wrong`.
+pub(crate) struct InvalidFinding<'a> {
+    pub(crate) source: VerdictSource,
+    pub(crate) verified_sha: &'a str,
+    pub(crate) base_branch: &'a str,
+    pub(crate) confidence: VerdictConfidence,
+    /// Why the defect does not exist, with its `path:line` citations.
+    pub(crate) detail: &'a str,
+    /// Structured citations, when the route reports them separately.
+    pub(crate) evidence: Vec<FindingEvidence>,
+    /// The crew that judged it, when known.
+    pub(crate) crew: Option<&'a str>,
+    pub(crate) run_id: Option<&'a str>,
 }
 
 /// The latest verdict `history` records, read only from the verification
@@ -381,6 +461,35 @@ pub(crate) fn latest_verification(history: &[TaskHistoryEntry]) -> Option<Findin
             entry.event == FINDING_VERIFIED_EVENT && entry.by == FINDING_VERIFICATION_ACTOR
         })
         .find_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok())
+}
+
+/// `relations` with every classified `regression_from` link rated at the
+/// CONFIRMED verdict's `severity`, source `verified`, so the verified value
+/// is the one shown and scored. An operator's rating stands. `None` when no
+/// link changes.
+fn verified_relations(
+    relations: &[TaskRelation],
+    severity: DefectSeverity,
+) -> Option<Vec<TaskRelation>> {
+    let mut changed = false;
+    let relations = relations
+        .iter()
+        .cloned()
+        .map(|mut relation| {
+            if relation.relation_type == TaskRelationType::RegressionFrom
+                && let Some(regression) = relation.regression.as_mut()
+                && regression.severity_source != SeveritySource::Operator
+                && (regression.severity, regression.severity_source)
+                    != (severity, SeveritySource::Verified)
+            {
+                regression.severity = severity;
+                regression.severity_source = SeveritySource::Verified;
+                changed = true;
+            }
+            relation
+        })
+        .collect();
+    changed.then_some(relations)
 }
 
 /// Whether `history` past `boundary` records a verdict another run wrote.
@@ -428,10 +537,12 @@ pub(crate) enum VerdictWrite {
 }
 
 /// One verifier dispatched for a task: its crew and the tier it was drawn from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct VerifierAssignment {
     pub(crate) crew: String,
     pub(crate) tier: TaskComplexity,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) eligible_pool: Vec<orbit_types::workflow::ActivityCrewPoolMember>,
 }
 
 /// The tier a task is first verified at: its complexity, with an unassessed
@@ -487,7 +598,7 @@ impl OrbitRuntime {
     ) -> Result<Option<VerifierAssignment>, OrbitError> {
         let Some(InspectionPool {
             tier, candidates, ..
-        }) = self.inspection_capable_pool(tier)?
+        }) = self.inspection_pool(tier)?
         else {
             return Ok(None);
         };
@@ -507,11 +618,12 @@ impl OrbitRuntime {
         };
         let source = format!("pool:{tier}");
         let mut ticket =
-            seeded_crew_ticket(format!("{FINDING_VERIFICATION_JOB}:{}:{tier}", task.id));
-        let selected = weighted_draw(&candidates, &source, &mut ticket)?;
+            self.seeded_crew_draw_tickets(format!("{FINDING_VERIFICATION_JOB}:{}:{tier}", task.id));
+        let draw = self.crew_pool_draw(candidates, &source, &mut *ticket)?;
         Ok(Some(VerifierAssignment {
-            crew: selected.crew.name.clone(),
+            crew: draw.crew.name,
             tier,
+            eligible_pool: draw.eligible_pool,
         }))
     }
 
@@ -528,10 +640,11 @@ impl OrbitRuntime {
         if let Some(assignment) = self.draw_finding_verifier(task, tier, &[filer])? {
             return Ok(assignment);
         }
-        let crew = self.inspection_capable_default_crew(tier)?;
+        let crew = self.inspection_default_crew(tier)?;
         Ok(VerifierAssignment {
             crew: crew.name,
             tier,
+            eligible_pool: Vec::new(),
         })
     }
 
@@ -589,10 +702,89 @@ impl OrbitRuntime {
         Ok(latest_verification(&self.get_task_history(task_id)?))
     }
 
+    /// Record that `task_id`'s review finding does not exist at
+    /// `finding.verified_sha`: the same REJECTED verdict and move to
+    /// `rejected` as [`Self::record_finding_verification`], attributed to the
+    /// route that judged it. A task that is not a review finding is refused.
+    /// A replay of a rejection this run already recorded returns
+    /// `Recorded(rejected)` without a second write.
+    pub(crate) fn reject_invalid_finding(
+        &self,
+        task_id: &str,
+        finding: &InvalidFinding<'_>,
+    ) -> Result<VerdictWrite, OrbitError> {
+        let task = self.get_task(task_id)?;
+        if !is_review_finding(&task) {
+            return Err(OrbitError::InvalidInput(format!(
+                "task {task_id} is not a review-filed bug (type bug tagged one of {}), so no \
+                 finding verdict can reject it",
+                REVIEW_FINDING_TAGS.join(", ")
+            )));
+        }
+        if finding.detail.trim().is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "task {task_id}: an invalid-finding rejection needs evidence"
+            )));
+        }
+        let history = self.get_task_history(task_id)?;
+        if task.status == TaskStatus::Rejected
+            && latest_verification(&history).is_some_and(|record| {
+                record.verdict == FindingVerdict::Rejected
+                    && record.source == finding.source
+                    && record.run_id.as_deref() == finding.run_id
+                    && record.verified_sha == finding.verified_sha
+            })
+        {
+            return Ok(VerdictWrite::Recorded(TaskStatus::Rejected));
+        }
+        let detail = redact_all(finding.detail.trim());
+        let record = FindingVerification {
+            schema_version: FINDING_VERIFICATION_SCHEMA_VERSION,
+            source: finding.source,
+            verdict: FindingVerdict::Rejected,
+            confidence: finding.confidence,
+            verified_sha: finding.verified_sha.to_string(),
+            finding_fingerprint: Some(finding_fingerprint(&task)),
+            base_branch: finding.base_branch.to_string(),
+            severity: None,
+            evidence: finding
+                .evidence
+                .iter()
+                .map(|evidence| FindingEvidence {
+                    location: evidence.location.trim().to_string(),
+                    note: redact_all(&evidence.note),
+                })
+                .collect(),
+            reasoning: detail.clone(),
+            reproduction: None,
+            rejection: Some(FindingRejection {
+                reason: RejectionReason::PremiseWrong,
+                fixed_at: None,
+                duplicate_of: None,
+                detail,
+            }),
+            crews: finding
+                .crew
+                .map(|crew| VerifierVerdict {
+                    crew: crew.to_string(),
+                    tier: verification_tier(&task),
+                    verdict: FindingVerdict::Rejected,
+                    confidence: finding.confidence,
+                })
+                .into_iter()
+                .collect(),
+            escalated: false,
+            run_id: finding.run_id.map(ToOwned::to_owned),
+            verified_at: Utc::now(),
+        };
+        self.record_finding_verification(task_id, &record, task.status, history.len())
+    }
+
     /// Record `record` on `task_id`, prepared in `prepared_status` with
     /// `history_len` history entries: the trusted history entry, the verdict
-    /// comment and, for REJECTED, the move to `rejected` — one write under
-    /// the task lock. A task that left that status, is no longer a review
+    /// comment and, for REJECTED, the move to `rejected`, or for CONFIRMED
+    /// the verified severity on its `regression_from` links — one write
+    /// under the task lock. A task that left that status, is no longer a review
     /// finding, changed its material, or was verified by another run since is
     /// left untouched. Legacy prepared records without a fingerprint are stale.
     pub(crate) fn record_finding_verification(
@@ -645,6 +837,12 @@ impl OrbitRuntime {
                 }
                 let now = Utc::now();
                 let rejected = record.verdict == FindingVerdict::Rejected;
+                let relations = match (record.verdict, record.severity) {
+                    (FindingVerdict::Confirmed, Some(severity)) => {
+                        verified_relations(&task.relations, severity)
+                    }
+                    _ => None,
+                };
                 let updated = self.with_mutation(|| {
                     let updated = self.stores().task_records().update(
                         task_id,
@@ -653,6 +851,7 @@ impl OrbitRuntime {
                             status: rejected.then_some(TaskStatus::Rejected),
                             status_event: rejected.then(|| FINDING_REJECTED_EVENT.to_string()),
                             status_note: rejected.then(|| record.rejection_note()),
+                            relations,
                             append_history: vec![TaskHistoryEntry {
                                 at: now,
                                 by: FINDING_VERIFICATION_ACTOR.to_string(),

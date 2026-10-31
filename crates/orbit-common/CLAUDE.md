@@ -7,6 +7,7 @@ Mechanisms every layer needs: `OrbitError` plus responsibility-named modules (`e
   - `security::child_env` — the only agent-subprocess env builder; allowlist over a cleared environment.
   - `security::release` — the release keys and manifest verification for the workspace crates. The desktop app, a separate workspace, keeps a copy in `desktop/src/update/trust.rs`; `scripts/check-installer-pubkey.sh` guards drift between them and the shell/npm installers.
   - `security::redaction` — the only redaction implementation (guardrail script forbids surface-local `fn redact_*`).
+  - `fs::physical` — the resolvers for a path whose tail may not exist yet (canonical existing prefix plus missing names). Pick a variant by its documented contract; add a variant here rather than a local walk.
   - `fs::selector` — owns `SelectorParseError` and its `OrbitError` translator; no caller crate may translate it.
   - `error` — owns the `impl From<orbit_types::…Error> for OrbitError` translators, since `orbit-types` cannot name `OrbitError`; each is listed in `from_registry` in `scripts/check-error-translation.sh`.
   - `migration` — forward-only, read-time YAML migration; no rollback, no write-back. One-shot importers belong in `orbit-store::workflow`.

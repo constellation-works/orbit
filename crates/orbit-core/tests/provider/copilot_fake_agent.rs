@@ -122,11 +122,13 @@ fn seed_copilot_executor(runtime: &OrbitRuntime, program: &Path) {
 
 fn spec(model: Option<&str>, timeout_seconds: u64) -> AgentLoopSpec {
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: model.map(str::to_string),
@@ -142,6 +144,7 @@ fn spec(model: Option<&str>, timeout_seconds: u64) -> AgentLoopSpec {
         trusted_host_execution: false,
         crew_env: Vec::new(),
         crew_account: None,
+        crew_vision_disabled: false,
     }
 }
 

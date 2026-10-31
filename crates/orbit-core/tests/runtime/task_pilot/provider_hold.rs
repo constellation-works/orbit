@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_core::application::automation::evaluate_routine;
-use orbit_core::application::distributed::PULL_DRAIN_JOB;
+use orbit_core::application::contracts::PULL_DRAIN_JOB;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType};
 use orbit_engine::RuntimeHost;
@@ -771,6 +771,33 @@ fn capacity_on_the_only_crew_withholds_and_a_probe_does_not_clear_it() {
     );
 }
 
+fn a_held_capacity_run_still_withholds_the_routine_until_its_backoff_ends() {
+    let workspace = Workspace::new();
+    let task = workspace.task("codex capacity run ends held");
+    let now = Utc::now();
+    let finished = now - Duration::minutes(5);
+    let run_id = "jrun-codex-capacity-held";
+    save_failure(
+        &workspace,
+        run_id,
+        now,
+        finished,
+        ProviderFailureClass::Capacity,
+        "codex",
+        "fixture",
+    );
+    let mut run = workspace.jobs.get_job_run(run_id).unwrap().unwrap();
+    run.state = JobRunState::Held;
+    save_run(&workspace, &run, None);
+    save_probe(&workspace, now, now - Duration::minutes(1), "codex");
+    let reason = assert_withheld(&workspace, now, &task.id);
+    assert!(
+        reason.contains(run_id) && reason.contains(&until_text(finished, 15)),
+        "{reason}"
+    );
+    assert_resumes(&workspace, finished + Duration::minutes(16), &task.id);
+}
+
 fn capacity_on_one_crew_leaves_another_crew_of_that_provider() {
     let workspace = workspace_with(
         r#"
@@ -1124,6 +1151,7 @@ crate::scenario_table!(
     another_providers_crew_is_drawn_and_the_routine_still_admits,
     a_probe_does_not_clear_provider_wide_capacity_but_a_later_success_does,
     capacity_on_the_only_crew_withholds_and_a_probe_does_not_clear_it,
+    a_held_capacity_run_still_withholds_the_routine_until_its_backoff_ends,
     capacity_on_one_crew_leaves_another_crew_of_that_provider,
     another_hosts_failure_does_not_withhold,
     limit_and_refusal_failures_do_not_withhold_the_routine,
