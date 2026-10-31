@@ -245,6 +245,24 @@ fn hidden_dashboard_polls_lightly_prefixes_failures_and_notifies_only_after_opt_
     );
 }
 
+#[test]
+fn dashboard_leases_off_workspace_reads_as_neutral_and_stops_polling_the_routes() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_leases_off.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard leases fixture");
+    assert!(
+        result.status.success(),
+        "dashboard leases off-state behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 /// Analytics › Experiments cumulative chart: three 5-minute buckets stay
 /// distinct on the dashboard clock, a finished bucket's hover ends at the
 /// next boundary, and the last open bucket ends at the response cutoff.
