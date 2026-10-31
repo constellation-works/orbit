@@ -154,7 +154,30 @@ impl OrbitRuntime {
                                     if s.action == "pr_prepare"))
                     })
                 });
-            if !preparation {
+            // A fresh preparation the host issued when the base moved during
+            // `sync_base` is the same routine preparation, refreshed: it still
+            // predates publication, names the exact initial preparation it
+            // supersedes, and leaves the candidate head unchanged. Its newer
+            // base is not drift; the receipts and review below stay bound to
+            // the published head and base, and the resumed `pr_complete`
+            // applies its own base-freshness gates before any merge.
+            let refreshed_preparation = checkpoint["kind"] == "delivery_preparation_refresh"
+                && step_id == "sync_base_preparation"
+                && checkpoint["step_id"] == "sync_base_preparation"
+                && checkpoint["run_id"] == run_id
+                && publication.is_some()
+                && state
+                    .rebase_recovery_checkpoints
+                    .get("prepare_branch")
+                    .is_some_and(|initial| {
+                        checkpoint["source_preparation"] == *initial
+                            && checkpoint["task_ids"] == initial["task_ids"]
+                            && checkpoint["workspace_path"] == initial["workspace_path"]
+                            && checkpoint["head"] == initial["head"]
+                            && checkpoint["head_sha"] == initial["head_sha"]
+                            && checkpoint["head_sha_before"] == initial["head_sha"]
+                    });
+            if !preparation && !refreshed_preparation {
                 return Err(refuse(format!(
                     "rebase recovery checkpoint at `{step_id}` requires governed candidate recovery"
                 )));
