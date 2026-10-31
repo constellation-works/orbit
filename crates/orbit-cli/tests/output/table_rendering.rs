@@ -503,3 +503,182 @@ fn config_keys_obeys_format_plain_and_header_and_table_and_ndjson() {
         assert!(doc.get("description").is_some());
     }
 }
+
+/// An all-fixed table wider than the terminal warns instead of overflowing
+/// silently [ORB-20485]: `orbit run history` builds only fixed columns, so the
+/// shared fitter's shrink-and-drop path never engages and no "columns hidden"
+/// notice fires. The renderer must still say the table does not fit and where
+/// the full row lives, while leaving identifier cells whole. Pinned sink
+/// widths stand in for a PTY, the way the doctor render fixtures do.
+#[test]
+fn all_fixed_overflow_warns_and_keeps_identifiers_whole() {
+    let narrow = render_overflow_fixture("narrow-fixed");
+    assert!(
+        narrow.stderr.contains("wider than the terminal"),
+        "an all-fixed overflow must say the table does not fit: {}",
+        narrow.stderr
+    );
+    assert!(
+        narrow.stderr.contains("--format plain") && narrow.stderr.contains("--json"),
+        "the overflow notice must name where the full row lives: {}",
+        narrow.stderr
+    );
+    assert!(
+        !narrow.stderr.contains("columns hidden"),
+        "no column was hidden, so none may be named: {}",
+        narrow.stderr
+    );
+    assert!(
+        narrow.stdout.contains("jrun-20261031-0843-c3"),
+        "the identifier cell stays whole under overflow: {}",
+        narrow.stdout
+    );
+    assert_eq!(
+        narrow.stdout.lines().count(),
+        2,
+        "one header line plus one record line: {}",
+        narrow.stdout
+    );
+
+    let wide = render_overflow_fixture("wide-fixed");
+    assert!(
+        !wide.stderr.contains("wider than the terminal") && !wide.stderr.contains("columns hidden"),
+        "a fitting table warns about nothing: {}",
+        wide.stderr
+    );
+
+    let flex = render_overflow_fixture("narrow-flex");
+    assert!(
+        flex.stderr
+            .contains("columns hidden to fit the terminal: TITLE"),
+        "a dropped flexible column is still named: {}",
+        flex.stderr
+    );
+    assert!(
+        !flex.stderr.contains("wider than the terminal"),
+        "once the drop fits, no overflow remains to report: {}",
+        flex.stderr
+    );
+
+    let plain = render_overflow_fixture("plain");
+    assert!(
+        !plain.stderr.contains("terminal"),
+        "piped plain output carries no terminal-fit notice: {}",
+        plain.stderr
+    );
+    assert!(
+        plain.stdout.contains('\t') && plain.stdout.contains("jrun-20261031-0843-c3"),
+        "piped plain output stays tab-separated and untruncated: {}",
+        plain.stdout
+    );
+}
+
+struct OverflowFixture {
+    stdout: String,
+    stderr: String,
+}
+
+fn render_overflow_fixture(case: &str) -> OverflowFixture {
+    use orbit_common::test_env;
+    let logs = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("child logs");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    command
+        .args([
+            "--exact",
+            "table_rendering::render_overflow_child",
+            "--nocapture",
+        ])
+        .env("ORBIT_TABLE_OVERFLOW_CASE", case);
+    let output = test_env::run_child_test(
+        &mut command,
+        "table_rendering::render_overflow_child",
+        logs.path(),
+    );
+    test_env::assert_child_test_passed(
+        "table_rendering::render_overflow_child",
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 child stdout");
+    let body = stdout
+        .split_once("BEGIN_TABLE\n")
+        .expect("start marker")
+        .1
+        .split_once("END_TABLE")
+        .expect("end marker")
+        .0
+        .to_string();
+    OverflowFixture {
+        stdout: body,
+        stderr: String::from_utf8(output.stderr).expect("utf-8 child stderr"),
+    }
+}
+
+#[test]
+fn render_overflow_child() {
+    use crate::output::{
+        payload::{Block, Payload},
+        sink::{FormatArg, OutputSink, SinkEnv},
+        table::{Column, Table},
+    };
+    use std::io::Write as _;
+    let Ok(case) = std::env::var("ORBIT_TABLE_OVERFLOW_CASE") else {
+        return;
+    };
+    // History-shaped: every column fixed, so the fitter can neither shrink
+    // nor drop its way to the sink width.
+    let mut history = Table::new(vec![
+        Column::new("RUN_ID").fixed(),
+        Column::new("JOB_ID").fixed(),
+        Column::new("TASK").fixed(),
+        Column::new("STARTED_AT").fixed(),
+        Column::new("FINISHED_AT").fixed(),
+        Column::new("DURATION").fixed(),
+    ]);
+    history.add_row(vec![
+        comfy_table::Cell::new("jrun-20261031-0843-c3"),
+        comfy_table::Cell::new("task_pr_pipeline"),
+        comfy_table::Cell::new("ORB-20463"),
+        comfy_table::Cell::new("2026-10-31T08:43:04Z"),
+        comfy_table::Cell::new("2026-10-31T08:44:46Z"),
+        comfy_table::Cell::new("1m 42s"),
+    ]);
+    // Task-list-shaped: one flexible column that must be dropped at a narrow
+    // width, so the existing "columns hidden" notice still fires by name.
+    let mut flexible = Table::new(vec![
+        Column::new("ID").fixed(),
+        Column::new("TITLE"),
+        Column::new("STATUS").fixed(),
+    ]);
+    flexible.add_row(vec![
+        comfy_table::Cell::new("ORB-1"),
+        comfy_table::Cell::new("a title far longer than any narrow terminal line should ever hold"),
+        comfy_table::Cell::new("proposed"),
+    ]);
+    let doc = serde_json::json!([]);
+    let (table, width, mode, is_tty) = match case.as_str() {
+        "wide-fixed" => (history, "120", FormatArg::Table, true),
+        "narrow-flex" => (flexible, "20", FormatArg::Table, true),
+        "plain" => (history, "0", FormatArg::Plain, false),
+        _ => (history, "80", FormatArg::Table, true),
+    };
+    let sink = OutputSink::resolve(
+        is_tty,
+        &SinkEnv {
+            columns: Some(width.into()),
+            no_color: Some("1".into()),
+            ..SinkEnv::default()
+        },
+        None,
+        Some(mode),
+        false,
+    );
+    writeln!(std::io::stdout(), "BEGIN_TABLE").expect("start marker");
+    crate::output::render::emit(
+        Payload::blocks(doc, vec![Block::table(table)]).into(),
+        &sink,
+    )
+    .expect("emit");
+    writeln!(std::io::stdout(), "END_TABLE").expect("end marker");
+}

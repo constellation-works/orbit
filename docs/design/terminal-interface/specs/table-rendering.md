@@ -28,6 +28,7 @@ Widths are computed from the result set, never declared as literals.
 2. If the sum of natural widths plus gutters fits the sink width, use natural widths and stop.
 3. Otherwise, shrink only columns marked *flexible*, largest first, until the total fits. Columns marked *fixed* (IDs, statuses, timestamps, durations) never shrink.
 4. A flexible column has a floor of 8 display columns. If the total still does not fit with every flexible column at its floor, drop flexible columns from the right until it does, and note the dropped columns on stderr.
+5. If the remaining columns still do not fit — an all-fixed layout wider than the sink, say — render every cell whole and note on stderr that the table is wider than the terminal and that `--format plain` or `--json` carries the full row. Fixed cells are never cut silently.
 
 **Invariant:** the same result set rendered at two terminal widths differs only in truncation and column presence — never in row count, row order, or the value of a fixed column.
 
