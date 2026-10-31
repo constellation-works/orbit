@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-30
+last_updated: 2026-10-31
 last_validated: 2026-10-29
 status: Accepted
 stage: shipped
@@ -294,6 +294,19 @@ definition of the same name.
   its run and settlement reads pass `--no-reconcile`, so an orphaned run it
   lists is not finalized — and a pass with nothing new is a successful no-op
   that still stores the report and cursor.
+- `pilot-block-patterns` — disabled-by-default daily upstream counterpart of
+  `run-failure-patterns`. Over the 14 days before scan start it reads the
+  dispositions `escalation_triage_pipeline` recorded (`pilot_warning_triaged` and
+  `blocked_task_triaged` markers and comments, grouped first by their recurring
+  human actions), then untriaged pilot holds and final-recovery escalations from
+  task history, `pilot_warnings` and run records. Each cause that recurs (at
+  least 3 occurrences across 2 tasks) is routed to its source: the filer, the
+  task-pilot activity, the final-recovery activity, `run-failure-patterns`
+  (where it only ensures a fix is open) or host setup. It dedupes against open
+  and 30-day-closed work, files at most 5 `proposed` fixes per pass, compares
+  groups with the prior pass's `pilot-block-report.json`, and files a regression
+  when a done fix did not reduce its group. It never acts on an individual
+  blocked or held task, and runs only on the owner (ORB-20516).
 - `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task
