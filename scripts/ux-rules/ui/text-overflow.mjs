@@ -29,10 +29,17 @@ export async function check(ctx) {
       }
       return false;
     };
-    const clippedByAncestor = (el) => {
+    const clippedByBox = (el, overflowRight) => {
       let node = el;
       while (node && node !== document.body) {
-        if (clippedX(getComputedStyle(node))) return true;
+        if (clippedX(getComputedStyle(node))) {
+          const box = H.rect(node);
+          // clientWidth excludes borders and any scrollbar; scale it into the
+          // same coordinate space as getBoundingClientRect.
+          const scale = node.offsetWidth ? box.width / node.offsetWidth : 1;
+          const clipRight = box.left + (node.clientLeft + node.clientWidth) * scale;
+          if (overflowRight > clipRight + 1) return true;
+        }
         node = node.parentElement;
       }
       return false;
@@ -62,8 +69,9 @@ export async function check(ctx) {
         // sibling; otherwise it hangs into empty padding.
       }
       const r = H.rect(el);
-      const overflowRight = r.left + el.scrollWidth;
-      const clipped = clippedX(style) || clippedByAncestor(el.parentElement);
+      const scale = el.offsetWidth ? r.width / el.offsetWidth : 1;
+      const overflowRight = r.left + (el.clientLeft + el.scrollWidth) * scale;
+      const clipped = clippedByBox(el, overflowRight);
       let hitsSibling = false;
       let siblingSelector = "";
       const parent = el.parentElement;
