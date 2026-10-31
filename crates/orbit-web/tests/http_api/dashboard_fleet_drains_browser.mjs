@@ -382,7 +382,7 @@ async function assertPollBudget(browser, port) {
     await page.waitForFunction(() => globalThis.fleetReady);
     await settleDashboard(page);
     await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('1 of 3 workspaces draining'));
-    await page.waitForFunction(() => document.querySelector('#auto-drain-body .drain-backlog-forecast-figures'));
+    await page.waitForFunction(() => document.querySelector('#auto-drain-body .drain-backlog-forecast-bars'));
     const backlogForecastReads = () => page.evaluate(() => globalThis.fleetRequests.filter(url =>
       new URL(url, location.href).pathname.endsWith('/diagnostics/backlog_forecast')).length);
     assert.ok(await backlogForecastReads() > 0, 'the Tasks dock loads its backlog forecast summary');
@@ -455,8 +455,8 @@ async function assertPollBudget(browser, port) {
       throw new Error(`navigation did not settle on drain: ${meta?.textContent}`);
     });
     assert.ok(await backlogForecastReads() > beforeDrainForecast, 'the Drain route refreshes its backlog forecast');
-    await page.waitForFunction(() => document.querySelector('#auto-drain-body .drain-backlog-forecast-figures'));
-    assert.ok(await page.locator('#auto-drain-body .drain-backlog-forecast-figures').textContent(), 'the Tasks dock paints its backlog forecast summary');
+    await page.waitForFunction(() => document.querySelector('#auto-drain-body .drain-backlog-forecast-bars'));
+    assert.ok(await page.locator('#auto-drain-body .drain-backlog-forecast-bars').textContent(), 'the Tasks dock paints its backlog forecast summary');
     const beforeCard = await fleetReads();
     await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator('#global-drain-state').click();
@@ -494,7 +494,7 @@ async function assertDrainForecastFreshness(browser, port) {
         freshnessVisible: Boolean(node.querySelector('.drain-backlog-forecast-freshness')?.getClientRects().length),
         title: node.title,
         accessibleText: node.textContent,
-        figures: node.querySelector('.drain-backlog-forecast-figures')?.textContent,
+        figures: node.querySelector('.drain-backlog-forecast-bars')?.textContent,
       }));
       assert.ok(rendered.freshness, `${scenario.source} forecast exposes a freshness label`);
       assert.match(rendered.freshness, scenario.expected, `${scenario.source} forecast shows its freshness`);

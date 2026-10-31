@@ -382,9 +382,12 @@ const regressionLink = compactLink(regressionSummary);
 assert.ok(regressionLink.getAttribute('href')?.includes('analytics/forecast') || String(regressionLink.href || '').includes('analytics/forecast'), 'compact regression link stays navigable');
 assert.equal(regressionLink.dataset.forecastReason, 'regression_history_missing');
 assert.ok(/regression/i.test(regressionLink.title), 'compact link keeps the reason in its tooltip');
-assert.ok(/^Time to drain /.test(regressionLink.querySelector('.drain-backlog-forecast-baseline')?.textContent || ''), `compact link shows only the baseline figures [ORB-20453]: ${regressionLink.textContent}`);
-assert.ok(regressionLink.querySelector('.visually-hidden')?.textContent.includes('36'), `compact accessible detail carries support counts: ${regressionLink.textContent}`);
-assert.ok(/excludes unsupported regression/i.test(regressionLink.querySelector('.visually-hidden')?.textContent || ''), `compact accessible detail labels the baseline: ${regressionLink.textContent}`);
+// The link's own accessible detail, not a bar row's spoken figures.
+const linkHidden = link => link.children.find(child => classesOf(child).includes('visually-hidden'));
+const baselineRows = regressionLink.querySelectorAll('.drain-backlog-forecast-bars.baseline .drain-backlog-forecast-row');
+assert.deepEqual(baselineRows.map(row => [row.dataset.metric, row.querySelector('.drain-forecast-figure-main')?.textContent]), [['drain', '2.7h – unknown'], ['cost', '$10 – $25']], `compact link draws only the baseline's rows [ORB-20453]: ${regressionLink.textContent}`);
+assert.ok(linkHidden(regressionLink)?.textContent.includes('36'), `compact accessible detail carries support counts: ${regressionLink.textContent}`);
+assert.ok(/excludes unsupported regression/i.test(linkHidden(regressionLink)?.textContent || ''), `compact accessible detail labels the baseline: ${regressionLink.textContent}`);
 
 const approvedFixture = unavailableFixture();
 approvedFixture.backlog.proposed = 2;
