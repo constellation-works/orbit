@@ -472,6 +472,7 @@ fn located(
     crew: Option<&str>,
 ) -> JobRun {
     JobRun {
+        build: None,
         run_id: String::new(),
         job_id: "fixture-provider".into(),
         attempt: 1,

@@ -94,6 +94,7 @@ impl Fixture {
         finished_at: Option<DateTime<Utc>>,
     ) -> String {
         let run = JobRun {
+            build: None,
             executed_on: None,
             run_id: self.run_id(),
             job_id: "task_pr_pipeline".into(),

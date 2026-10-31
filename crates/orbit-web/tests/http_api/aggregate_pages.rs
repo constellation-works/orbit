@@ -627,6 +627,7 @@ fn aggregate_task_page_opens_only_the_returned_bundles() {
 fn seed_run(runtime: &OrbitRuntime, run_id: &str, job_id: &str, state: JobRunState) -> JobRun {
     let now = Utc::now();
     let run = JobRun {
+        build: None,
         executed_on: None,
         run_id: run_id.to_string(),
         job_id: job_id.to_string(),

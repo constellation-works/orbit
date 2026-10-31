@@ -595,6 +595,7 @@ fn agents_show_ambiguous_crew_names_each_selector_and_its_candidate_models() {
                 .upsert_job_run_for_workspace(
                     &workspace,
                     &JobRun {
+                        build: None,
                         run_id: format!("jrun-sol-{index}"),
                         job_id: "task_pr_pipeline".into(),
                         attempt: 1,

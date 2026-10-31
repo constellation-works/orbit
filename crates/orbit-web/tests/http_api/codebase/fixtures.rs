@@ -552,6 +552,7 @@ pub(in super::super) fn pilot_run(
     finished: DateTime<Utc>,
 ) {
     let run = JobRun {
+        build: None,
         run_id: run_id.into(),
         job_id: "task_pilot_pipeline".into(),
         attempt: 1,

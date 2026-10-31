@@ -18,6 +18,21 @@ The detailed rules behind [CONTRIBUTING.md](../CONTRIBUTING.md). Read the sectio
 | Changing the desktop app in `desktop/` | [Desktop app](#desktop-app) |
 | Changing toolchains, platforms or dependencies | [MSRV](#toolchain-msrv), [Windows](#windows), [Supply-chain](#supply-chain-cargo-deny), [Vendored JS](#vendored-dashboard-javascript) |
 
+## Run build provenance
+
+New job runs store `build` with the compiled Orbit `version`, full `source_commit`,
+and `dirty` flag. `orbit run show --json` and `orbit run history --json` expose
+that record at `.run.build` and `.runs[].build`, respectively. Admission records the submitting build; the winning first
+start replaces it with the worker's build, and subsequent updates preserve it.
+Historical rows remain `null`, including after migration or inspection.
+
+`orbit-common/build.rs` embeds Git identity at compilation, watching worktree
+HEAD, branch refs and source changes so incremental builds refresh it. Builds
+from source archives without Git record a null source commit. Dirty builds
+identify their base commit but cannot prove a fix was included. Deployment
+analysis must use clean run builds and commit ancestry, never the current
+checkout, semantic version order, or today's installed binary.
+
 ## Validation and CI
 
 For tasks that deliver a diff, there is no required local gate. The required PR checks (Check / Clippy / Test and Test shard 1/3, 2/3 and 3/3) gate formatting, guardrails, lint, rustdoc, goldens and the whole test suite, so the targets below are focused tools, not blanket pre-handoff gates. Run the ones the change needs:

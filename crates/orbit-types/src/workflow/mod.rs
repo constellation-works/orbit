@@ -106,8 +106,8 @@ pub use image_input::{
 pub use job::{
     AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome, JobRunState, JobRunStep,
     JobRunTrigger, JobRunTriggerKind, JobScheduleState, JobStep, JobTargetType,
-    KnowledgeRunMetrics, RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs,
-    default_max_iterations, default_retry_backoff_seconds,
+    KnowledgeRunMetrics, OrbitBuild, RunEvent, RunStateUpdate, StepCondition,
+    default_job_max_active_runs, default_max_iterations, default_retry_backoff_seconds,
 };
 pub use pr_recovery::{
     PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CHECK_REPAIR_MARKER,

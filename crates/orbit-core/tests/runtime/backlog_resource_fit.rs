@@ -114,6 +114,7 @@ fn profile_delivery(runtime: &OrbitRuntime, cores: f64) {
     let workspace = runtime.workspace_id().unwrap();
     let admitted = Utc::now() - Duration::days(2);
     let run = JobRun {
+        build: None,
         executed_on: None,
         run_id: "jrun-profiled".into(),
         job_id: "task_pr_pipeline".into(),

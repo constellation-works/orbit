@@ -332,7 +332,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             }
             let now=Utc::now();
             let id=next_run_id_conn(conn,&self.workspace_id,RunIdRole::TopLevel,now)?;
-            let run=JobRun {executed_on: self.executed_on.clone(),run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
+            let run=JobRun {build: Some(orbit_common::process::build::current_orbit_build()), executed_on: self.executed_on.clone(),run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
             let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
             upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
             conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(sqlite_store_error)?;
@@ -425,6 +425,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 let run_id =
                     next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
+                    build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
                     run_id,
                     job_id: job_id.to_string(),
@@ -476,6 +477,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 let run_id =
                     next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
+                    build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
                     run_id,
                     job_id: job_id.to_string(),
@@ -533,6 +535,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 let run_id =
                     next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
+                    build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
                     run_id,
                     job_id: params.job_id.clone(),
@@ -617,6 +620,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                     params.scheduled_at,
                 )?;
                 let run = JobRun {
+                    build: Some(orbit_common::process::build::current_orbit_build()),
                     executed_on: self.executed_on.clone(),
                     run_id: run_id.clone(),
                     job_id: params.job_id.clone(),
