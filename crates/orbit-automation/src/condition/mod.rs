@@ -31,7 +31,8 @@ pub use firing::{
 pub use guard::{GUARD_FALSE, GUARD_UNKNOWN, GuardVerdict};
 pub use job_wait::{
     CheckedAutoTaskStep, CheckedJobExpiry, CheckedJobWaits, MAX_AUTO_TASK_STEPS,
-    MAX_JOB_EXPIRY_HOURS, OuterBound, READINESS_RESULT_CONTRACT, RESULT_CONTRACTS, check_job_waits,
+    MAX_JOB_EXPIRY_HOURS, OuterBound, READINESS_RESULT_CONTRACT, RESULT_CONTRACTS,
+    auto_task_step_deadline, check_job_waits,
 };
 pub use protocol::{
     ConditionAction, ConditionDiagnostic, ConditionEvaluation, ConditionHost, evaluate_condition,

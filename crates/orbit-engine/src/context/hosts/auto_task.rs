@@ -43,6 +43,8 @@ pub struct AutoTaskObservation {
     /// time boundary is recoverable). A receipt settled at or before it
     /// still discharges the step.
     pub deadline: Option<DateTime<Utc>>,
+    /// An expired dynamic step predicate has no reliable settlement boundary.
+    pub dynamic_expiry: bool,
     /// Why the step or job expired, when it did.
     pub expired: Option<String>,
     pub readiness: AutoTaskReadiness,

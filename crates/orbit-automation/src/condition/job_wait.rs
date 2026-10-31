@@ -308,6 +308,58 @@ fn outer_bound(expression: &CheckedExpression) -> Option<OuterBound> {
     }
 }
 
+/// Recover a step deadline only from simple, stable clock expressions.
+/// Other expressions may depend on changing facts and cannot be backdated.
+pub fn auto_task_step_deadline(
+    expression: &CheckedExpression,
+    job_started_at: DateTime<Utc>,
+    wait_started_at: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    if let Some(bound) = outer_bound(expression) {
+        return match bound {
+            OuterBound::At(at) => Some(at),
+            OuterBound::AfterStart(duration) => job_started_at.checked_add_signed(duration),
+        };
+    }
+    let Expr::Call(comparison) = &expression.ast.expr else {
+        return None;
+    };
+    let [now, deadline] = comparison.args.as_slice() else {
+        return None;
+    };
+    if comparison.target.is_some()
+        || comparison.func_name != "_>=_"
+        || path_of(now).as_deref() != Some("now")
+    {
+        return None;
+    }
+    let Expr::Call(add) = &deadline.expr else {
+        return None;
+    };
+    let [start, duration] = add.args.as_slice() else {
+        return None;
+    };
+    if add.target.is_some()
+        || add.func_name != "_+_"
+        || path_of(start).as_deref() != Some("self.wait_started_at")
+    {
+        return None;
+    }
+    let Expr::Call(call) = &duration.expr else {
+        return None;
+    };
+    let [literal] = call.args.as_slice() else {
+        return None;
+    };
+    if call.target.is_some() || call.func_name != "duration" || string_literal(literal).is_none() {
+        return None;
+    }
+    match cel::Value::resolve(duration, &cel::Context::default()).ok()? {
+        cel::Value::Duration(duration) => wait_started_at.checked_add_signed(duration),
+        _ => None,
+    }
+}
+
 /// One step's place in the job's structure.
 struct StepSite<'a> {
     step: &'a JobV2Step,
