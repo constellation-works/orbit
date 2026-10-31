@@ -128,12 +128,13 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 (files, macOS profile) is not yet filed | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (6)
+### Designing (7)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
+| [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions (ORB-20620) | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
@@ -227,6 +228,7 @@ a conservative title/status fallback.
 | [Operations as Data](./design/operations-as-data/1_overview.md) | One spec per operation drives the CLI, MCP, and runtime adapters; dashboard routes remain separately wired. Kernel v2 serves friction, auto-task, drain, workspace claim, task, workflow-run, search, codebase operations, and agent scorecards; deprecated orchestrator scorecard aliases share the registry. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional runtime, application, adapter, bootstrap, and composition boundaries across orbit-runtime and orbit-core. | Accepted | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
+| [Owner Failover](./design/owner-failover/1_overview.md) | Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower. | Proposed | claude |
 | [Path Leases](./design/path-leases/1_overview.md) | Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the listener's configured request and rate limits are implemented. | Draft | claude |
 | [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Implemented | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
