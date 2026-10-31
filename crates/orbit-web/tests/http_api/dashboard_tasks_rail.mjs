@@ -999,6 +999,32 @@ drainWaits.setDrainReadiness({ tasks: [] });
 
 context.fetch = () => new Promise(() => {});
 
+// Mixed-host owner diagnostics: the same public payload drives the row and
+// detail, including selectors, live holder runs and explicitly local OS scope.
+const mixedEntry = {
+  task_id: 'ORB-33', status: 'backlog', eligible: false, reason: 'context_lock_conflict',
+  conflicts: [{ requested_file: 'file:src/shared.rs', blocking_selector: 'dir:src', locking_task_id: 'ORB-77' }],
+  run_ids: ['jrun-holder'], host_scope: 'local',
+  host_os_wait: 'On this linux host: waits for a macos host (os:macos)',
+  executor_evidence: { status: 'compatible_recent', detail: 'Compatible executor hm_mac (run mac-drain) reported within 600s; follower admission remains unverified.' },
+};
+const mixedCard = entry => modules.get('task-readiness.js').namespace.buildReadinessBlock(readyGaps, { entry }, 'ws_orbit');
+const mixedView = drainWaits.drainReadinessView(mixedEntry);
+assert.equal(mixedView.pool, 'locks');
+assert.ok(mixedView.title.includes('file:src/shared.rs'), 'the row tooltip identifies the overlapping requested selector');
+assert.ok(mixedView.title.includes('dir:src'), 'the row tooltip identifies the held selector');
+assert.ok(mixedView.title.includes('On this linux host'), 'the owner mismatch is explicitly host-local');
+const mixedDetail = mixedCard(mixedEntry);
+assert.ok(mixedDetail.textContent.includes('file:src/shared.rs'), 'the detail identifies the overlapping selector');
+assert.ok(mixedDetail.textContent.includes('hm_mac'), 'the detail discloses compatible executor evidence');
+assert.deepEqual(mixedDetail.querySelectorAll('.readiness-drain a').map(link => link.textContent), ['ORB-77', 'jrun-holder']);
+for (const [reason, expected] of [['follower_admission_pending', 'waiting for follower admission'], ['host_os_mismatch', 'no recent compatible executor']]) {
+  const entry = { ...mixedEntry, reason, conflicts: [], run_ids: [], executor_evidence: { status: reason === 'host_os_mismatch' ? 'no_compatible_recent' : 'compatible_recent', detail: 'Current follower admission is unknown.' } };
+  const view = drainWaits.drainReadinessView(entry);
+  assert.equal(view.pool, 'other');
+  assert.ok(view.badge.text.includes(expected), `${reason} preserves the remaining executor wait`);
+}
+
 // Review approval runs the shipped row handler and request client. Hold the
 // response to observe pending state without timers or an optimistic status edit.
 const approvalStatuses = ['proposed', 'review', 'backlog', 'in-progress', 'blocked', 'someday', 'done', 'rejected', 'archived'];

@@ -258,6 +258,24 @@ A readable claim store with no recent claim reports that host as `not pulling
 the registered hosts with `claim records unreadable`; it cannot determine
 whether those hosts have pulled recently. Unreadable evidence also leaves only
 the owner's own OS serving creation-time crew draws.
+Workspace readiness scopes an owner's OS refusal with `host_scope: "local"`
+and `host_os_wait`. The executor census, recorded on each follower pull, supplies
+separate `executor_evidence`: OS, crew, browser-kit and label compatibility,
+report time and drain run. When a compatible report is recent, held selectors
+take precedence as `context_lock_conflict`, with holder task/run IDs and both
+selector sides. Without a held footprint it reports `follower_admission_pending`,
+never global eligibility. Local admission still rejects the OS mismatch.
+Registration and seven-day claim history alone cannot select this precedence.
+
+A report expires after 600 seconds without a new pull. It is an observation,
+not a live heartbeat: a remote stop may remain unknown until that expiry, and
+capacity, protocol and final admission are not verified by the census. A locally
+visible stopped run overrides a recent report. Missing, stale, ineligible or
+unreadable evidence retains the host wait and explains the uncertainty. The
+Tasks row and detail share this answer. Task/lock change notices and executor
+capability/freshness changes invalidate it automatically; executor changes are
+scanned at least every 15 seconds, with polling as a fallback.
+
 A task whose dependency is still open also shows that OS wait in readiness
 (`tasks[].host_os_wait`), after its dependency. Retag with `orbit.task.update` to reroute a
 backlog task; running or claimed work is not moved.

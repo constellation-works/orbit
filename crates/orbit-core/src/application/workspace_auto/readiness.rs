@@ -31,6 +31,7 @@ use super::drains::{
     ActiveDrain, DRAIN_JOB_NAME, LEAF_JOB_NAME, drain_ceiling, live_pull_drain,
     read_live_leaf_runs, shared_leaf_occupancy, workspace_drains,
 };
+use super::readiness_hosts::{self, FollowerEvidence};
 
 const MAX_READINESS_LIMIT: usize = 500;
 
@@ -276,6 +277,7 @@ pub fn explain_workspace_auto_readiness(
     // Advisory: unreadable executor definitions only drop the OS wait that a
     // dependency wait would otherwise hide.
     let host_os_limits = runtime.executor_host_os_limits().unwrap_or_default();
+    let follower_evidence = FollowerEvidence::read(runtime);
     let mut tasks = selected_ids
         .iter()
         .filter_map(|id| snapshot.task_lookup.get(id))
@@ -334,7 +336,11 @@ pub fn explain_workspace_auto_readiness(
                 // Admission checks dependencies first, so a task that also
                 // waits for another host's OS would show only its dependency.
                 if let Some(wait) = runtime.task_host_os_wait(task, &pools, &host_os_limits) {
-                    object.insert("host_os_wait".to_string(), json!(wait));
+                    object.insert("host_scope".to_string(), json!("local"));
+                    object.insert("host_os_wait".to_string(), json!(format!(
+                        "On this {} host: {wait}", runtime.host_os().map_or("unknown", |os| os.as_str())
+                    )));
+                    object.insert("executor_evidence".to_string(), follower_evidence.task_follower_evidence(task));
                     if let Some(fleet) = runtime.task_host_fleet_note(task) {
                         object.insert("host_fleet".to_string(), json!(fleet));
                     }
@@ -416,6 +422,39 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("host_os".to_string(), json!(runtime.host_os()));
+                        object.insert("host_scope".to_string(), json!("local"));
+                        object.insert("host_os_wait".to_string(), json!(format!(
+                            "On this {} host: {}", runtime.host_os().map_or("unknown", |os| os.as_str()),
+                            excluded.detail.as_deref().unwrap_or("OS requirement is not satisfied")
+                        )));
+                        let evidence = follower_evidence.task_follower_evidence(task);
+                        let compatible = evidence["status"] == "compatible_recent";
+                        object.insert("executor_evidence".to_string(), evidence);
+                        if compatible {
+                            // Diagnostic only: the local exclusion remains in
+                            // the snapshot and no follower is declared ready.
+                            object.insert("reason".to_string(), json!("follower_admission_pending"));
+                            if !snapshot.published_resumes.contains_key(&task.id) {
+                                let conflicts = readiness_hosts::follower_footprint_conflicts(runtime, task, &holders);
+                                if !conflicts.is_empty() {
+                                    let blocking_ids = conflicts.iter().map(|conflict| conflict.blocking_task_id.as_str()).collect::<BTreeSet<_>>();
+                                    let claims = claim_holders.json_for(blocking_ids.iter().copied());
+                                    let run_ids = blocking_ids.iter()
+                                        .flat_map(|id| claimed_by_task.get(*id).into_iter().flatten().cloned())
+                                        .chain(claims.iter().filter_map(|claim| claim["run_id"].as_str().map(str::to_string)))
+                                        .collect::<BTreeSet<_>>();
+                                    object.insert("reason".to_string(), json!("context_lock_conflict"));
+                                    object.insert("blocking_claims".to_string(), json!(claims));
+                                    object.insert("run_ids".to_string(), json!(run_ids));
+                                    object.insert("conflicts".to_string(), json!(conflicts.iter().map(|conflict| json!({
+                                        "requested_file": conflict.requested_selector,
+                                        "blocking_selector": conflict.blocking_selector,
+                                        "locking_task_id": conflict.blocking_task_id,
+                                        "provenance": conflict.provenance.as_str(),
+                                    })).collect::<Vec<_>>()));
+                                }
+                            }
+                        }
                         // Which registered hosts run the OS it needs, and
                         // whether each is pulling here.
                         let fleet = snapshot

@@ -277,7 +277,10 @@ impl AdmissionHolders {
         }
     }
 
-    fn conflicts_for(&self, requested_selector: &str) -> Vec<AdmissionConflict> {
+    pub(crate) fn footprint_conflicts_for_selector(
+        &self,
+        requested_selector: &str,
+    ) -> Vec<AdmissionConflict> {
         let held = self
             .held
             .overlapping(requested_selector, &self.lock_modes)
@@ -374,7 +377,7 @@ pub(crate) fn select_admissions(
         let mut conflicts = Vec::new();
         if !published_resumes.contains_key(candidate_id) {
             for requested_selector in &selectors {
-                conflicts.extend(holders.conflicts_for(requested_selector));
+                conflicts.extend(holders.footprint_conflicts_for_selector(requested_selector));
                 conflicts.extend(wave_conflicts(
                     requested_selector,
                     &wave,

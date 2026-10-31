@@ -62,6 +62,7 @@ const WAIT_LABELS = {
   active_pilot_preparation: "pilot preparing",
   task_pilot_preparation_required: "needs pilot",
   unmet_dependency: "waits on deps",
+  follower_admission_pending: "waiting for follower admission",
   baseline_red_hold: "base red",
   // A `ui` task on a host without a verified browser kit; the badge's title
   // carries the detail, which names the install command.
@@ -86,7 +87,11 @@ export function drainWaitBadge(entry) {
   let holders = [];
   let runIds = [];
   let dependencies = [];
+  const selectors = entry.host_scope === "local" ? (Array.isArray(entry.conflicts) ? entry.conflicts : [])
+    .map(conflict => ({ requested: conflict.requested_file || conflict.requested_selector, held: conflict.blocking_selector }))
+    .filter(conflict => typeof conflict.requested === "string" && conflict.requested) : [];
   let message = DRAIN_LOCK_REASONS.has(reason) ? "" : detail;
+  if (entry.host_scope === "local") message = entry.host_os_wait || message;
   if (DRAIN_LOCK_REASONS.has(reason)) {
     holders = drainHolders(entry);
     runIds = [...new Set((Array.isArray(entry.run_ids) ? entry.run_ids : [])
@@ -94,9 +99,13 @@ export function drainWaitBadge(entry) {
     text = holders.length ? `waits on ${holders.join(", ")}` : runIds.length ? "waits on live run" : "waits on lock";
     const blockers = [...holders, ...runIds];
     lines.push(blockers.length ? `Waits on ${blockers.join(", ")}` : "Lock holder unavailable");
+    for (const selector of selectors) if (selector.held === selector.requested) selector.held = "";
+    for (const selector of selectors) lines.push(`${selector.requested}${selector.held ? ` overlaps ${selector.held}` : ""}`);
   } else if (DRAIN_HOST_WAIT_REASONS.has(reason)) {
     const os = /\bos:([a-z0-9_-]+)/i.exec(detail)?.[1] || /\b(macos|linux|windows)\b/i.exec(detail)?.[1];
     text = os ? `needs ${os.toLowerCase()} host` : "needs other host";
+    if (entry.executor_evidence?.status === "unavailable") text = "executor evidence unavailable";
+    else if (entry.executor_evidence?.status === "no_compatible_recent") text = "no recent compatible executor";
   } else if (reason === "not_backlog") {
     // Only an explicit request names a task outside the backlog; a proposed
     // one waits for approval before any drain can take it.
@@ -118,9 +127,12 @@ export function drainWaitBadge(entry) {
       }
     }
   }
+  const notes = [message, entry.host_os_wait, entry.executor_evidence?.detail]
+    .filter(note => typeof note === "string" && note.trim());
+  message = [...new Set(notes)].join("\n");
   if (!lines.length) lines.push(text);
   if (message && !lines.includes(message)) lines.push(message);
-  return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holders, runIds, dependencies, detail: message, reason };
+  return { text, title: lines.join("\n"), pool: drainPoolKey(entry), holders, runIds, dependencies, selectors, detail: message, reason };
 }
 
 function drainCrewNames(crews) {

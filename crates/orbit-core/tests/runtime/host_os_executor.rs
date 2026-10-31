@@ -17,6 +17,8 @@ use orbit_types::workflow::{ExecutorDef, ExecutorType, JobRunState, JobRunTrigge
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod readiness;
+
 /// Muse weighs far more than sol. A Linux draw still selects sol, because the
 /// muse executor's `host_os` removes muse-wonder before the draw.
 const POOL: &str = r#"
@@ -1022,7 +1024,7 @@ fn a_linux_owner_with_a_macos_follower_draws_the_macos_only_crew() {
     let dependent = entry(&dependent.id);
     assert_eq!(dependent["reason"], "unmet_dependency", "{dependent}");
     assert_eq!(
-        dependent["host_os_wait"], "waits for a macos host (os:macos)",
+        dependent["host_os_wait"], "On this linux host: waits for a macos host (os:macos)",
         "{dependent}"
     );
     assert_eq!(dependent["host_fleet"], fleet, "{dependent}");

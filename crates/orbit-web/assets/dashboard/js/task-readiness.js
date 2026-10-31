@@ -403,7 +403,10 @@ function buildDrainReadiness(drain, workspace) {
         status ? el("span", { class: "readiness-fix", text: status }) : null,
       ]))));
   }
-  if (badge.detail) wrap.appendChild(el("div", { class: "readiness-message", text: badge.detail }));
+  for (const selector of badge.selectors) {
+    wrap.appendChild(line("Overlap", [el("span", { class: "mono", text: `${selector.requested}${selector.held ? ` overlaps ${selector.held}` : ""}` })]));
+  }
+  for (const text of badge.detail.split("\n").filter(Boolean)) wrap.appendChild(el("div", { class: "readiness-message", text }));
   return wrap;
 }
 
