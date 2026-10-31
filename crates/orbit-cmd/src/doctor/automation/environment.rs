@@ -14,7 +14,16 @@ use crate::doctor::*;
 /// same row: drains exclude that crew and its activities are refused.
 pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let unset = runtime.unset_env_pass_names();
-    let crew_unset = runtime.unset_crew_env();
+    // A `file:` source is reported below by the file's own state, so only
+    // variable sources are asked about this environment.
+    let crew_unset: Vec<_> = runtime
+        .unset_crew_env()
+        .into_iter()
+        .filter_map(|mut unset| {
+            unset.env.retain(|entry| entry.source.variable().is_some());
+            (!unset.env.is_empty()).then_some(unset)
+        })
+        .collect();
     let crews = runtime.configured_crew_env_sources();
     let service_warnings =
         crate::service_environment::crew_source_environment_warnings(runtime, &crews);

@@ -2,7 +2,9 @@
 use super::super::super::dispatcher::DispatchError;
 use super::super::spawn::{CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV};
 use crate::context::RuntimeHost;
-use orbit_common::security::child_env::{ACTIVITY_DEADLINE_ENV, CLAUDE_CREDENTIAL_ENV};
+use orbit_common::security::child_env::{
+    ACTIVITY_DEADLINE_ENV, CLAUDE_CREDENTIAL_ENV, crew_env_file_problem,
+};
 use orbit_types::identity::CrewEnvVar;
 use orbit_types::workflow::ExecutorSandboxKind;
 use std::path::{Path, PathBuf};
@@ -93,12 +95,10 @@ pub(super) fn require_crew_env(
                 .iter()
                 .any(|(key, value)| key == &entry.name && !value.is_empty())
         })
-        .map(|entry| {
-            if entry.is_mapped() {
-                format!("{} (from {})", entry.name, entry.source)
-            } else {
-                entry.name.clone()
-            }
+        .map(|entry| match crew_env_file_problem(entry) {
+            Some(problem) => format!("{} (from {}: {problem})", entry.name, entry.source),
+            None if entry.is_mapped() => format!("{} (from {})", entry.name, entry.source),
+            None => entry.name.clone(),
         })
         .collect();
     if missing.is_empty() {
@@ -108,7 +108,7 @@ pub(super) fn require_crew_env(
         "activity refused: its crew's `env` sets {}, but the source is unset or empty where \
          this run was launched, so the provider would fall back to another login. Export the \
          source before starting the run (for clock-started runs, put it in \
-         ~/.orbit/clock.env), or select another crew",
+         ~/.orbit/clock.env), fix the `file:` source, or select another crew",
         missing.join(", ")
     )))
 }

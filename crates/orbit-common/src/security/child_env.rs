@@ -25,7 +25,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbit_types::identity::CrewEnvVar;
+use orbit_types::identity::{CrewEnvSource, CrewEnvVar};
+
+use super::operator_env::read_secret_file;
 
 /// Runtime context every supported provider CLI needs in order to start.
 ///
@@ -232,15 +234,18 @@ pub fn unset_pass_names_from(parent: &[(String, String)], pass: &[String]) -> Ve
 pub const CLAUDE_CREDENTIAL_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 
 /// Overlay one crew's `[crews.<name>] env` entries on a composed child
-/// environment, taking values from `parent`.
+/// environment, taking values from `parent` or, for a `file:` source, from the
+/// file itself.
 ///
 /// Each entry's `name` replaces whatever `child` held for it (crew env wins
-/// over `pass`) with `parent`'s non-empty value of its `source`, or is
-/// removed when `parent` holds none: a crew whose credential is unset never
-/// falls back to the shared one. A mapped source is not forwarded under its
-/// own name to this crew. When the crew sets a Claude credential
-/// ([`CLAUDE_CREDENTIAL_ENV`]), the other one is removed. Privilege-bearing
-/// `ORBIT_*` names are never admitted, whoever asks.
+/// over `pass`) with `parent`'s non-empty value of its source variable, or
+/// the trimmed contents of its source file (read now, owner-only, see
+/// [`read_secret_file`]), or is removed when there is none: a crew whose
+/// credential is unset never falls back to the shared one. A mapped source
+/// variable is not forwarded under its own name to this crew. When the crew
+/// sets a Claude credential ([`CLAUDE_CREDENTIAL_ENV`]), the other one is
+/// removed. Privilege-bearing `ORBIT_*` names are never admitted, whoever
+/// asks.
 pub fn apply_crew_env_from(
     child: &mut Vec<(String, String)>,
     parent: &[(String, String)],
@@ -250,7 +255,10 @@ pub fn apply_crew_env_from(
         .iter()
         .filter(|entry| {
             !is_privilege_bearing_orbit_name(&entry.name)
-                && !is_privilege_bearing_orbit_name(&entry.source)
+                && entry
+                    .source
+                    .variable()
+                    .is_none_or(|source| !is_privilege_bearing_orbit_name(source))
         })
         .collect();
     if entries.is_empty() {
@@ -262,7 +270,7 @@ pub fn apply_crew_env_from(
         entries
             .iter()
             .filter(|entry| entry.is_mapped())
-            .map(|entry| entry.source.as_str()),
+            .filter_map(|entry| entry.source.variable()),
     );
     if CLAUDE_CREDENTIAL_ENV
         .iter()
@@ -272,31 +280,45 @@ pub fn apply_crew_env_from(
     }
     child.retain(|(key, _)| !removed.contains(key.as_str()));
     for entry in entries {
-        if let Some((_, value)) = parent
-            .iter()
-            .rev()
-            .find(|(key, value)| key == &entry.source && !value.is_empty())
-        {
-            child.push((entry.name.clone(), value.clone()));
+        if let Some(value) = crew_env_value(parent, entry) {
+            child.push((entry.name.clone(), value));
         }
     }
 }
 
-/// The crew `env` entries whose source `parent` holds no non-empty value for,
-/// in listed order. Names only, never values.
+/// The value one crew `env` entry resolves to: `parent`'s non-empty value of
+/// its source variable, or the contents of its source file. `None` when there
+/// is none.
+fn crew_env_value(parent: &[(String, String)], entry: &CrewEnvVar) -> Option<String> {
+    match &entry.source {
+        CrewEnvSource::Variable(source) => parent
+            .iter()
+            .rev()
+            .find(|(key, value)| key == source && !value.is_empty())
+            .map(|(_, value)| value.clone()),
+        CrewEnvSource::File(path) => read_secret_file(path).ok(),
+    }
+}
+
+/// The crew `env` entries that resolve to no value: a source variable
+/// `parent` holds no non-empty value for, or a source file that is missing,
+/// empty or refused. In listed order. Names and paths only, never values.
 pub fn unset_crew_env_from(
     parent: &[(String, String)],
     crew_env: &[CrewEnvVar],
 ) -> Vec<CrewEnvVar> {
     crew_env
         .iter()
-        .filter(|entry| {
-            !parent
-                .iter()
-                .any(|(key, value)| key == &entry.source && !value.is_empty())
-        })
+        .filter(|entry| crew_env_value(parent, entry).is_none())
         .cloned()
         .collect()
+}
+
+/// Why a file-backed crew `env` entry resolves to no value, for a warning that
+/// names the file's state. `None` for a variable source or a usable file.
+pub fn crew_env_file_problem(entry: &CrewEnvVar) -> Option<String> {
+    let path = entry.source.file()?;
+    read_secret_file(path).err().map(|error| error.to_string())
 }
 
 /// Full inheritance of the parent environment.
