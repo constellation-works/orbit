@@ -384,8 +384,9 @@ orbit experiment delete crew-ladder-hard-7 --reason "old shadow trial"
 arms, event log, and assignments. It refuses an experiment that is still
 running or paused. It also refuses one that ran live and assigned tasks to
 arms, because those tasks' crews and runs refer to it, and one concluded with
-an arm, because its promotion task names it. Shadow experiments never changed
-a task, so a finished one can always be deleted.
+an arm, because its promotion task names it, including a shadow experiment.
+Shadow experiments concluded without an arm never changed a task, so a
+finished one can be deleted.
 
 ## Watch it in the dashboard
 
