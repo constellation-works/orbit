@@ -385,8 +385,7 @@ fn ux_rules_pipeline_preserves_custom_manifest_defaults_when_config_unset() {
 /// through the granted script-step path: granting it records no `env_pass`,
 /// and a pipeline run is never refused for `env_pass`. On a host where the
 /// sandbox itself cannot start (for example nested in another sandbox) the
-/// run may refuse for that reason instead — only the `env_pass` refusal is
-/// the regression.
+/// run may refuse for that reason instead, but not for input validation.
 fn documented_ux_rules_runner_template_is_not_refused_for_env_pass() {
     let (_root, runtime) = fixture("");
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -459,11 +458,15 @@ fn documented_ux_rules_runner_template_is_not_refused_for_env_pass() {
         include_str!("../../assets/jobs/ux_rules_pipeline.yaml"),
     )
     .unwrap();
-    let outcome = runtime.run_job_v2_from_yaml(&job_path, json!({"surfaces": []}));
+    let outcome = runtime.run_job_v2_from_yaml(&job_path, json!({}));
     let rendered = format!("{outcome:?}");
     assert!(
         !rendered.contains("env_pass"),
         "the granted template step must not be refused for env_pass: {rendered}"
+    );
+    assert!(
+        !rendered.contains("script_input_invalid") && !rendered.contains("input_schema_json"),
+        "the default step input must satisfy the documented schema: {rendered}"
     );
 }
 

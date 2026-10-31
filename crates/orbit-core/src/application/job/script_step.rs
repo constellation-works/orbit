@@ -104,6 +104,8 @@ fn prepare_and_run(
     record.read_roots = grant.read_roots.clone();
     record.write_roots = grant.write_roots.clone();
 
+    let input_text = admitted_input(&snapshot, &request.input)?;
+
     // After the grant checks, so a refusal on a host without the profile
     // still records which script and grant it refused.
     let profile = orbit_exec::probe_script_sandbox().map_err(|reason| {
@@ -114,7 +116,6 @@ fn prepare_and_run(
     })?;
     record.profile = Some(profile.to_string());
 
-    let input_text = admitted_input(&snapshot, &request.input)?;
     let args = render_script_args(&asset.spec.args, &request.input)
         .map_err(|error| refuse(script_refusal::INPUT_INVALID, error.to_string()))?;
     for root in &grant.read_roots {
