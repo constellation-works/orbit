@@ -196,9 +196,10 @@ orbit config show
 
 Profiles summarize per-delivery CPU and memory by workspace, work class and
 complexity on this host; `auto-task:<template>` profiles omit complexity.
-They use each key's last `profile_window` completed deliveries, whatever their
-age, under the newest crew model and Orbit version, excluding resumed
-or retried deliveries. Sparse keys fall back to broader profiles; inspect
+Each key has a union window across crew models and a separate window per
+crew model, each using its last `profile_window` completed deliveries, whatever
+their age. Orbit versions never filter these windows. Resumed or retried
+deliveries are excluded. Sparse keys fall back to broader profiles; inspect
 sample counts and spread before drawing conclusions. `BUILD_FLAG` identifies
 no-diff work using more than one core for two consecutive minutes, with its
 deliveries listed; templates that build by design, such as QA sweeps, are exempt.

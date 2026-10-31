@@ -13,6 +13,7 @@ const clone = v => JSON.parse(JSON.stringify(v));
 
 let autoMinutes = { Alpha: 15, Beta: 20 };
 let schedulePost = null;
+const guardedSchedules = {};
 let routineTrigger = { Alpha: { cron: '0 9 * * *', missed_run: 'skip' }, Beta: { cron: '0 8 * * *', missed_run: 'skip' } };
 let routineTarget = { Alpha: 'job:alpha', Beta: 'job:beta' };
 let triggerPost = null;
@@ -33,10 +34,11 @@ globalThis.fetch = async (path, options = {}) => {
     schedulePost = JSON.parse(options.body);
     const lateSchedule = await heldUntilReleased();
     if (lateSchedule) return lateSchedule;
-    if (JSON.stringify(schedulePost.expected_schedule) !== JSON.stringify({ every_minutes: autoMinutes[schedulePost.name] })) {
+    if (JSON.stringify(schedulePost.expected_schedule) !== JSON.stringify(guardedSchedules[schedulePost.name] || { every_minutes: autoMinutes[schedulePost.name] })) {
       return response({ error: 'stale_auto_task_schedule: schedule changed since the editor opened' }, 409);
     }
-    autoMinutes[schedulePost.name] = schedulePost.schedule.every_minutes;
+    if (guardedSchedules[schedulePost.name]) guardedSchedules[schedulePost.name] = clone(schedulePost.schedule);
+    else autoMinutes[schedulePost.name] = schedulePost.schedule.every_minutes;
     return response({ message: 'Saved' });
   }
   if (url.pathname === '/api/routines/trigger' && options.method === 'POST') {
@@ -52,6 +54,7 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/auto-tasks') return response({
     cron_zone: { name: null, offset_seconds: 0 }, capabilities, definitions: [
+      ...Object.entries(guardedSchedules).map(([name, schedule]) => ({ name, enabled: true, schedule: clone(schedule), template: { title: name } })),
       { name: 'Alpha', enabled: true, schedule: { every_minutes: autoMinutes.Alpha }, schedule_summary: `every ${autoMinutes.Alpha} minutes`, template: { title: 'Alpha' }, template_summary: 'Alpha', next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } },
       { name: 'Beta', enabled: true, schedule: { every_minutes: autoMinutes.Beta }, schedule_summary: `every ${autoMinutes.Beta} minutes`, template: { title: 'Beta' }, template_summary: 'Beta', next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } },
     ],
@@ -59,6 +62,7 @@ globalThis.fetch = async (path, options = {}) => {
   if (url.pathname === '/api/routines') return response({
     machine_name: 'fixture-host', cron_zone: { name: null, offset_seconds: 0 }, capabilities, session_explanation: 'fixture',
     routines: [
+      ...Object.entries(routineTrigger).filter(([name]) => name.startsWith('Guarded')).map(([name, trigger]) => ({ name, source: 'one', target: routineTarget[name], enabled: true, trigger: clone(trigger), trigger_options: { kinds: ['cron', 'state', 'deliveries_landed'], state_kinds: ['preparation_eligible'] } })),
       { name: 'Alpha', source: 'one', target: routineTarget.Alpha, enabled: true, cron: routineTrigger.Alpha.cron, trigger: clone(routineTrigger.Alpha), next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } },
       { name: 'Beta', source: 'one', target: routineTarget.Beta, enabled: true, cron: routineTrigger.Beta.cron, trigger: clone(routineTrigger.Beta), next_evaluation: { state: 'scheduled', at: '2026-09-07T22:00:00Z' } },
     ],
@@ -191,4 +195,58 @@ for (const outcome of ['success', 'failure']) {
   assert(!routineEditorEl('Alpha'), `${outcome}: Cancel still closes the current routine editor`);
 }
 
+// Guard retention through both real Operations consumers, including stale
+// refusal/readback. Only the transport is replaced; editors and serializers
+// are the shipped modules. A changed guard is part of the observed value.
+const delivery = { branch: 'agent-main', threshold: 2, max_wait_minutes: 10, max_items: 5, retries: 0, coverage: 'landed_code_review_v1' };
+const state = { kind: 'preparation_eligible', owner_machine: 'fixture-host', branch: 'agent-main', debounce_minutes: 2, max_wait_minutes: 10, max_items: 5, retries: 0, deadline_minutes: 30 };
+const guards = { when: '  tasks.count == 0  ', guard_miss: 'skip' };
+for (const item of [
+  { kind: 'cron', value: { cron: '0 9 * * *', ...guards }, field: 'Cron', edit: '0 10 * * *' },
+  { kind: 'every_minutes', value: { every_minutes: 15, ...guards, guard_miss: 'wait' }, field: 'Every (minutes)', edit: '30' },
+  { kind: 'deliveries_landed', value: { deliveries_landed: delivery, when: guards.when }, field: 'Threshold', edit: '3' },
+  { kind: 'state', value: { state, when: guards.when }, field: 'Debounce (min)', edit: '3' },
+]) {
+  for (const scope of item.kind === 'state' ? ['routine'] : item.kind === 'every_minutes' ? ['auto-task'] : ['auto-task', 'routine']) {
+    const name = `Guarded-${scope}-${item.kind}`;
+    const values = scope === 'routine' ? routineTrigger : guardedSchedules;
+    values[name] = clone(scope === 'routine' ? { ...item.value, missed_run: 'skip' } : item.value);
+    routineTarget[name] = 'job:fixture';
+    const tab = scope === 'routine' ? 'routines' : 'auto-tasks';
+    closeEditors(scope);
+    const card = () => scope === 'routine' ? routineCard(name) : autoCard(name);
+    const editor = () => card()?.querySelector('.schedule-editor');
+    const input = () => [...editor().querySelectorAll('.schedule-field')]
+      .find(node => node.querySelector('.schedule-field-label')?.textContent === item.field)?.querySelector('input');
+    const open = async () => {
+      await fetchAndRenderOperations(tab);
+      card().querySelector('.schedule-edit').click();
+      assert(input(), `${name}: timing field ${item.field} exists`);
+      input().value = item.edit;
+      input().dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    await open();
+    const original = clone(values[name]);
+    values[name].when = 'false';
+    await fetchAndRenderOperations(tab);
+    editor().querySelector('.schedule-editor-controls button').click();
+    await tick();
+    const stalePost = scope === 'routine' ? triggerPost : schedulePost;
+    const expected = scope === 'routine' ? stalePost.expected_trigger : stalePost.expected_schedule;
+    const proposed = scope === 'routine' ? stalePost.trigger : stalePost.schedule;
+    assert(JSON.stringify(expected) === JSON.stringify(original), `${name}: stale compare includes original guard`);
+    assert(proposed.when === original.when && proposed.guard_miss === original.guard_miss, `${name}: timing edit retains exact guard fields`);
+    assert(editor()?.querySelector('.schedule-error')?.textContent.includes('stale'), `${name}: changed guard refuses the stale save`);
+    assert(input().value === item.edit && values[name].when === 'false', `${name}: refusal keeps draft and persisted guard`);
+    editor().querySelectorAll('.schedule-editor-controls button')[1].click();
+    await open();
+    const before = clone(values[name]);
+    editor().querySelector('.schedule-editor-controls button').click();
+    await tick();
+    assert(!editor(), `${name}: fresh timing edit saves`);
+    assert(values[name].when === before.when && values[name].guard_miss === before.guard_miss, `${name}: readback preserves the closed guard and its policy`);
+  }
+}
+// Leave a real editor visible for review evidence.
+routineCard('Guarded-routine-state').querySelector('.schedule-edit').click();
 globalThis.scheduleStaleTestsPassed = true;

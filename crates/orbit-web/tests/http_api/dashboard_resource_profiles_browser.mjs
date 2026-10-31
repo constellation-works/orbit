@@ -255,7 +255,7 @@ try {
   const history = body.getByRole('group', { name: 'Deliveries per profile' });
   assert.deepEqual(await history.getByRole('button').allTextContents(), ['Last 50', 'Last 200', 'Last 1,000']);
   const capped = history.getByRole('button', { name: 'Last 1,000', exact: true });
-  assert.match(await capped.getAttribute('title'), /Up to 1,000 retained completed deliveries.*newest crew model and Orbit version/);
+  assert.match(await capped.getAttribute('title'), /Up to 1,000 retained completed deliveries/, 'history tooltip discloses the retained delivery cap');
   await capped.click();
   await page.waitForFunction(() => document.querySelector('.rp-history [data-history="all"]')?.getAttribute('aria-pressed') === 'true');
   assert.equal(histories.at(-1), 'all');

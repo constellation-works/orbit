@@ -322,7 +322,7 @@ function historyPicker() {
       "aria-pressed": on ? "true" : "false",
       title: key == null
         ? `The last ${window} deliveries of each kind: the window admission prices with`
-        : `Up to ${Number(key === "all" ? maximum : key).toLocaleString("en-US")} retained completed deliveries of each kind, following the newest crew model and Orbit version; admission is unchanged`,
+        : `Up to ${Number(key === "all" ? maximum : key).toLocaleString("en-US")} retained completed deliveries of each kind across crew models (union), with separate per-crew model windows. Orbit versions do not filter history; admission is unchanged`,
     });
     button.dataset.history = key ?? "window";
     button.addEventListener("click", () => {
