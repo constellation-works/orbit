@@ -8,7 +8,7 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-10-27
+last_updated: 2026-10-30
 last_validated: 2026-10-26
 ---
 
@@ -597,7 +597,8 @@ It returns the plugin profile with these changes:
   `enforce_programs` does for any restricted caller.
 - A plugin profile that runs unsandboxed refuses the call (below).
 
-Landlock carves each read exclusion out beneath every remaining read root. The directory that
+Landlock carves each read exclusion out beneath every remaining read root and every host
+runtime or tool-state grant (`$RUSTUP_HOME`, `$GH_CONFIG_DIR`). The directory that
 holds an excluded path stays listable, as in the activity ruleset. An exact or subtree
 exclusion holds even for a name created after spawn. A wildcard exclusion (`**/.env`) is held
 only at the paths it matches when the ruleset is compiled. The same limit applies to a wildcard
@@ -606,10 +607,12 @@ agent has the same limit for a name created after spawn.
 
 A write root is not dropped for a read exclusion or a credential read deny. When the root is
 at or above one of those paths, Landlock carves it out of the write root's read rights, so the
-subtree stays writable and is not readable. A write root nested inside a broader deny, with
-nothing denied beneath it, stays read-write: that is the plugin's own state directory under
-`state/plugins`. A wildcard read exclusion has the same spawn-time limit under a write root as
-under a read root.
+subtree stays writable and is not readable. A write root or store file inside a read exclusion
+or a credential deny is granted write rights only, so a name the agent may modify but not read
+stays unreadable to the backend, including one created after spawn. The one write root that
+keeps read inside a deny is one beneath a read root the host names there: `{{plugin_state}}`
+under `state/plugins`. A wildcard read exclusion has the same spawn-time limit under a write
+root as under a read root. [ORB-20350]
 
 The seatbelt profile replays the caller's `modify` rules in their own order, after the
 plugin's grants. Each exclusion is replayed as written. Each grant is clipped to the roots the
