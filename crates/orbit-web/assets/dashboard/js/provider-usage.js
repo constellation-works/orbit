@@ -134,7 +134,14 @@ const accountLabel = pressure => pressure.account ? `${pressure.provider}/${pres
 /// Readings grouped by account when pressure is available, otherwise by
 /// provider and scope for older hosts. A group takes its worst reading's
 /// severity (then the more used window), and is stale or gating off only when
-/// every one of its readings is, since each window also flags itself.
+/// every one of its readings is, since each window also flags itself. A
+/// pressure whose account has no reading creates no row of its own when its
+/// provider already has a bare reading group: that group shows the pressure
+/// instead (per-model crew accounts of one login, such as `claude/fable`
+/// beside a bare `claude` reading, are not separate accounts in the bar).
+/// Pressures of a provider with no reading at all collapse to one
+/// pressure-only row per provider, or keep their account label when only one
+/// account is unmatched, so such an account shows once as no usage reported.
 function providerGroups(described, pressures) {
   const groups = new Map();
   for (const item of described) {
@@ -142,16 +149,32 @@ function providerGroups(described, pressures) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
-  for (const pressure of pressures || []) {
-    const label = accountLabel(pressure);
-    if (!groups.has(label)) groups.set(label, []);
+  const readingKeys = new Set(groups.keys());
+  if (pressures) {
+    const unmatched = new Map();
+    for (const pressure of pressures) {
+      if (readingKeys.has(accountLabel(pressure)) || groups.has(pressure.provider)) continue;
+      if (!unmatched.has(pressure.provider)) unmatched.set(pressure.provider, []);
+      unmatched.get(pressure.provider).push(pressure);
+    }
+    for (const [provider, list] of unmatched) {
+      const key = list.length === 1 ? accountLabel(list[0]) : provider;
+      if (!groups.has(key)) groups.set(key, []);
+    }
   }
   const byUsage = (a, b) => (b.used ?? -1) - (a.used ?? -1) || a.order - b.order;
   return [...groups].map(([provider, items]) => {
     items.sort(byUsage);
     const worst = items.reduce((a, b) => RANK[b.severity] > RANK[a.severity] ? b : a, items[0] || null);
+    // A bare-provider group (or a collapsed pressure-only provider group)
+    // falls back to an unmatched pressure of its provider; an account group
+    // (`provider/account`) never borrows another account's pressure.
+    const fallback = pressures && !provider.includes('/')
+      ? pressures.find(value => value.provider === provider && !readingKeys.has(accountLabel(value)))
+      : null;
     return {
-      provider, items, worst, pressure: pressures?.find(value => accountLabel(value) === provider) || null,
+      provider, items, worst,
+      pressure: pressures?.find(value => accountLabel(value) === provider) || fallback || null,
       severity: worst?.severity || 'unknown',
       stale: items.length > 0 && items.every(item => item.stale),
       gatingOff: items.length > 0 && items.every(item => item.gatingOff),
