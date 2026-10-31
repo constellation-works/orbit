@@ -97,6 +97,18 @@ states = ["default", "empty"]
 mask = []
 
 [[view]]
+id = "analytics-experiment-detail"
+app = "dashboard"
+title = "Experiment detail"
+route = "#analytics/experiments/{experiment}"
+fixture = "experiments"
+ready = ".ex-crew-rows"
+clip = ".ex-crew-rows"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
 id = "health-diagnostics"
 app = "dashboard"
 title = "Health diagnostics"

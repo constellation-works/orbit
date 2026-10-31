@@ -2,6 +2,311 @@
   "fixture": "experiments",
   "frozen_instant": "2026-01-01T12:00:00Z",
   "tasks": [
-    { "title": "Experiment fixture baseline task", "complexity": "low", "status": "backlog" }
-  ]
+    {
+      "title": "Experiment fixture baseline task",
+      "complexity": "low",
+      "status": "backlog"
+    }
+  ],
+  "experiment": {
+    "id": "exp-visual-fixture",
+    "name": "Fixture experiment",
+    "status": "running",
+    "mode": "shadow",
+    "segment": 0,
+    "hypothesis": "Compare delivery approaches.",
+    "primary_metric": "pass_rate",
+    "arms": [
+      {
+        "name": "control",
+        "control": true,
+        "weight": 1
+      },
+      {
+        "name": "candidate",
+        "control": false,
+        "weight": 1
+      }
+    ],
+    "events": []
+  },
+  "readout": {
+    "experiment": {
+      "primary_metric": "pass_rate",
+      "min_sample": 20
+    },
+    "verdict": {
+      "state": "collecting",
+      "label": "collecting"
+    },
+    "warnings": [],
+    "enrollment": {
+      "analysed": 15,
+      "forced_excluded": 0
+    },
+    "lagging": {
+      "open_tasks": 3
+    },
+    "arms": [
+      {
+        "name": "control",
+        "control": true,
+        "weight": 1,
+        "n": 8,
+        "crew_mix": [],
+        "effort_breakdown": [
+          {
+            "crew": null,
+            "model": "model-00",
+            "reasoning_effort": "unknown",
+            "invocations": 1
+          },
+          {
+            "crew": null,
+            "model": "model-01",
+            "reasoning_effort": "unknown",
+            "invocations": 2
+          },
+          {
+            "crew": null,
+            "model": "model-02",
+            "reasoning_effort": "unknown",
+            "invocations": 3
+          },
+          {
+            "crew": null,
+            "model": "model-03",
+            "reasoning_effort": "unknown",
+            "invocations": 4
+          },
+          {
+            "crew": null,
+            "model": "model-04",
+            "reasoning_effort": "unknown",
+            "invocations": 5
+          },
+          {
+            "crew": null,
+            "model": "model-05",
+            "reasoning_effort": "unknown",
+            "invocations": 1
+          },
+          {
+            "crew": null,
+            "model": "model-06",
+            "reasoning_effort": "unknown",
+            "invocations": 2
+          },
+          {
+            "crew": null,
+            "model": "model-07",
+            "reasoning_effort": "unknown",
+            "invocations": 3
+          },
+          {
+            "crew": null,
+            "model": "model-08",
+            "reasoning_effort": "unknown",
+            "invocations": 4
+          },
+          {
+            "crew": null,
+            "model": "model-09",
+            "reasoning_effort": "unknown",
+            "invocations": 5
+          },
+          {
+            "crew": null,
+            "model": "model-10",
+            "reasoning_effort": "unknown",
+            "invocations": 1
+          },
+          {
+            "crew": null,
+            "model": "model-11",
+            "reasoning_effort": "unknown",
+            "invocations": 2
+          },
+          {
+            "crew": null,
+            "model": "model-12",
+            "reasoning_effort": "unknown",
+            "invocations": 3
+          },
+          {
+            "crew": null,
+            "model": "model-13",
+            "reasoning_effort": "unknown",
+            "invocations": 4
+          },
+          {
+            "crew": null,
+            "model": "model-14",
+            "reasoning_effort": "unknown",
+            "invocations": 5
+          },
+          {
+            "crew": null,
+            "model": "model-15",
+            "reasoning_effort": "unknown",
+            "invocations": 1
+          },
+          {
+            "crew": null,
+            "model": "model-16",
+            "reasoning_effort": "unknown",
+            "invocations": 2
+          },
+          {
+            "crew": null,
+            "model": "model-17",
+            "reasoning_effort": "unknown",
+            "invocations": 3
+          },
+          {
+            "crew": null,
+            "model": "model-18",
+            "reasoning_effort": "unknown",
+            "invocations": 4
+          },
+          {
+            "crew": null,
+            "model": "model-19",
+            "reasoning_effort": "unknown",
+            "invocations": 5
+          },
+          {
+            "crew": null,
+            "model": "model-20",
+            "reasoning_effort": "unknown",
+            "invocations": 1
+          },
+          {
+            "crew": null,
+            "model": "model-21",
+            "reasoning_effort": "unknown",
+            "invocations": 2
+          },
+          {
+            "crew": null,
+            "model": "model-22",
+            "reasoning_effort": "unknown",
+            "invocations": 3
+          },
+          {
+            "crew": null,
+            "model": "model-23",
+            "reasoning_effort": "unknown",
+            "invocations": 4
+          },
+          {
+            "crew": null,
+            "model": "model-24",
+            "reasoning_effort": "unknown",
+            "invocations": 5
+          },
+          {
+            "crew": null,
+            "model": "model-25",
+            "reasoning_effort": "unknown",
+            "invocations": 1
+          },
+          {
+            "crew": null,
+            "model": "model-26",
+            "reasoning_effort": "unknown",
+            "invocations": 2
+          },
+          {
+            "crew": null,
+            "model": "model-27",
+            "reasoning_effort": "unknown",
+            "invocations": 3
+          },
+          {
+            "crew": null,
+            "model": "model-28",
+            "reasoning_effort": "unknown",
+            "invocations": 4
+          },
+          {
+            "crew": null,
+            "model": "model-29",
+            "reasoning_effort": "unknown",
+            "invocations": 5
+          },
+          {
+            "crew": null,
+            "model": "model-30",
+            "reasoning_effort": "unknown",
+            "invocations": 1
+          },
+          {
+            "crew": null,
+            "model": "model-31",
+            "reasoning_effort": "unknown",
+            "invocations": 2
+          },
+          {
+            "crew": null,
+            "model": "model-32",
+            "reasoning_effort": "unknown",
+            "invocations": 3
+          },
+          {
+            "crew": null,
+            "model": "model-33",
+            "reasoning_effort": "unknown",
+            "invocations": 4
+          },
+          {
+            "crew": null,
+            "model": "model-34",
+            "reasoning_effort": "unknown",
+            "invocations": 5
+          },
+          {
+            "crew": null,
+            "model": "model-35",
+            "reasoning_effort": "unknown",
+            "invocations": 1
+          },
+          {
+            "crew": null,
+            "model": "model-36",
+            "reasoning_effort": "unknown",
+            "invocations": 2
+          },
+          {
+            "crew": null,
+            "model": "model-37",
+            "reasoning_effort": "unknown",
+            "invocations": 3
+          },
+          {
+            "crew": null,
+            "model": "model-38",
+            "reasoning_effort": "unknown",
+            "invocations": 4
+          },
+          {
+            "crew": null,
+            "model": "model-39",
+            "reasoning_effort": "unknown",
+            "invocations": 5
+          }
+        ]
+      },
+      {
+        "name": "candidate",
+        "control": false,
+        "weight": 1,
+        "n": 7,
+        "crew_mix": [],
+        "effort_breakdown": []
+      }
+    ],
+    "guardrails": [],
+    "metrics": []
+  }
 }

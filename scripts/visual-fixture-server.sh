@@ -103,6 +103,11 @@ if [ "$seed_rows" = "1" ]; then
   first_task="$(head -n 1 "$scratch/task-ids" 2>/dev/null || true)"
 fi
 
+first_experiment=""
+if [ "$seed_rows" = "1" ] && [ "$fixture" = "experiments" ]; then
+  first_experiment="$(node -e 'const f=require(process.argv[1]); process.stdout.write(f.experiment.id)' "$seed")"
+fi
+
 if command -v faketime >/dev/null 2>&1; then
   server_clock="faketime"
   # `faketime -f` passes its argument directly as FAKETIME; it does not
@@ -149,6 +154,40 @@ if [ -z "$url" ]; then
   cat "$log" >&2 || true
   exit 1
 fi
-printf 'ORBIT_VISUAL_URL=%s\n' "$url"
-[ -n "$first_task" ] && printf 'ORBIT_VISUAL_TASK=%s\n' "$first_task"
-wait "$server_pid"
+# Serve the experiment API data from the fixture; all other requests use the
+# real disposable dashboard server. No experiment is created in the store.
+if [ -n "$first_experiment" ]; then
+  FIXTURE_TASK="$first_task" node - "$url" "$seed" "$first_experiment" <<'NODE' &
+const http = require("http");
+const fs = require("fs");
+const upstream = new URL(process.argv[2]);
+const seed = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const id = process.argv[4];
+http.createServer((req, res) => {
+  const path = req.url.split("?")[0];
+  const base = `/api/diagnostics/experiments/${encodeURIComponent(id)}`;
+  if (req.method === "GET" && (path === base || path === `${base}/readout`)) {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(path === base ? seed.experiment : seed.readout));
+    return;
+  }
+  const request = http.request(new URL(req.url, upstream), { method: req.method, headers: { ...req.headers, host: upstream.host } }, response => {
+    res.writeHead(response.statusCode, response.headers);
+    response.pipe(res);
+  });
+  request.on("error", error => { res.writeHead(502); res.end(String(error)); });
+  req.pipe(request);
+}).listen(0, "127.0.0.1", function () {
+  console.log(`ORBIT_VISUAL_TASK=${process.env.FIXTURE_TASK || ""}`);
+  console.log(`ORBIT_VISUAL_EXPERIMENT=${id}`);
+  console.log(`ORBIT_VISUAL_URL=http://127.0.0.1:${this.address().port}`);
+});
+NODE
+  proxy_pid=$!
+  trap 'kill "$proxy_pid" "$server_pid" 2>/dev/null || true' INT TERM EXIT
+  wait "$proxy_pid"
+else
+  [ -n "$first_task" ] && printf 'ORBIT_VISUAL_TASK=%s\n' "$first_task"
+  printf 'ORBIT_VISUAL_URL=%s\n' "$url"
+  wait "$server_pid"
+fi

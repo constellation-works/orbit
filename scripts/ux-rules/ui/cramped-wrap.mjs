@@ -3,15 +3,16 @@
 // When a label column is squeezed narrower than its longest word allows, a
 // two-to-five-word label stacks vertically ("Cost" / "coverage" / "...").
 // Count rendered line boxes with a Range over the element's text: a short
-// label whose line count reaches its word count (or averages ~1 word per
-// line across three or more lines) is cramped.
+// label averaging at most 1.5 words across 3+ lines is cramped. Long text
+// is cramped at 9+ lines averaging under 25 characters per line. Exclude
+// table cells and compact controls from both checks.
 import { measureInPage, verdict } from "../lib/ui-context.mjs";
 
 export const MAX_WORDS = 5;
 
 export const rule = {
   id: "ui.cramped-wrap",
-  title: "Short labels do not wrap to one word per line",
+  title: "Text is not squeezed into narrow columns",
   severity: "medium",
   surface: "ui",
   targets: { views: "*", widths: [1440, 375] },
@@ -53,8 +54,10 @@ export async function check(ctx) {
       );
       if (nested) continue;
       const words = own.split(/\s+/).filter(Boolean);
-      if (words.length < 2 || words.length > 5) continue;
-      if (own.length > 60) continue;
+      if (el.closest("table, button, select, option, [role=button], [role=cell], [role=columnheader], [role=rowheader], .pill, .chip, .badge")) continue;
+      const short = words.length >= 2 && words.length <= 5 && own.length <= 60;
+      const prose = words.length > 5;
+      if (!short && !prose) continue;
       const key = `${H.selectorOf(el)}|${own}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -62,18 +65,21 @@ export async function check(ctx) {
       rows.push({
         selector: H.selectorOf(el),
         words: words.length,
+        short,
+        chars: own.length,
+        chars_per_line: Math.round(own.length / Math.max(1, lines) * 100) / 100,
         lines,
         words_per_line: Math.round((words.length / Math.max(1, lines)) * 100) / 100,
         width_px: Math.round(H.rect(el).width),
         text: own.slice(0, 80),
       });
-      if (rows.length >= 300) break;
     }
     // A single wrap to two lines is normal responsive behavior; three or
     // more lines at about one word per line means the column is narrower
     // than the label's longest words allow.
     const failures = rows.filter(
-      (row) => row.lines >= 3 && row.words / row.lines <= 1.5,
+      (row) => (row.short && row.lines >= 3 && row.words / row.lines <= 1.5) ||
+        (!row.short && row.lines >= 9 && row.chars / row.lines < 25),
     );
     return { matched: rows.length, failures: failures.slice(0, 20) };
   });
