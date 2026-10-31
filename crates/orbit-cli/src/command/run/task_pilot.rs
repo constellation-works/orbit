@@ -15,7 +15,7 @@ pub(super) const TASK_PILOT_WORKFLOW: &str = "task-pilot";
     name = "task-pilot",
     about = "Preflight proposed/backlog tasks and persist validated selectors",
     override_usage = "orbit run task-pilot [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run task-pilot\n  orbit run task-pilot <TASK_ID> <TASK_ID>\n  orbit run task-pilot --wait --json\n\nPilots never promote or dispatch tasks. An omitted task list runs automatic\ndiscovery; explicit ids audit those tasks. Inspect submitted runs with\n`orbit run history -j task_pilot_pipeline` and `orbit run show <RUN_ID>`."
+    after_help = "Examples:\n  orbit run task-pilot\n  orbit run task-pilot <TASK_ID> <TASK_ID>\n  orbit run task-pilot --wait --json\n\nPilots never promote or dispatch tasks. An omitted task list runs automatic\ndiscovery; explicit ids audit those tasks. Explicit tasks with different stored\ncrews are submitted in separate runs. Inspect submitted runs with\n`orbit run history -j task_pilot_pipeline` and `orbit run show <RUN_ID>`."
 )]
 pub struct TaskPilotCommand {
     /// Optional task IDs to audit. Omit for automatic discovery of
@@ -47,12 +47,25 @@ impl Execute for TaskPilotCommand {
         )?;
         // Refuse the whole explicit selection before submitting a run. Prepare
         // repeats this check against current state for every other caller and
-        // for status changes after this read.
+        // for status changes after this read. Mixed stored crews are submitted
+        // as separate, homogeneous runs so no unanimous run fails at startup.
         let mut unsupported = Vec::new();
+        let mut by_crew: Vec<(Option<String>, Vec<String>)> = Vec::new();
         for task_id in &self.task_ids {
             let task = runtime.get_task(task_id)?;
             if !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog) {
                 unsupported.push(format!("{} (status {})", task.id, task.status));
+            }
+            let crew = task
+                .crew
+                .as_deref()
+                .map(str::trim)
+                .filter(|crew| !crew.is_empty())
+                .map(ToOwned::to_owned);
+            if let Some((_, ids)) = by_crew.iter_mut().find(|(existing, _)| existing == &crew) {
+                ids.push(task.id);
+            } else {
+                by_crew.push((crew, vec![task.id]));
             }
         }
         if !unsupported.is_empty() {
@@ -61,14 +74,39 @@ impl Execute for TaskPilotCommand {
                 unsupported.join(", ")
             )));
         }
-        let runs = dispatch_workflow(
-            runtime,
-            TASK_PILOT_WORKFLOW,
-            &input,
-            false,
-            timeout_seconds,
-            1,
-        )?;
+        let max_tasks = self.max_tasks.unwrap_or(50);
+        if self.task_ids.len() > max_tasks as usize {
+            return Err(OrbitError::InvalidInput(format!(
+                "explicit task-pilot selection contains {} tasks, exceeding max_tasks {max_tasks}",
+                self.task_ids.len()
+            )));
+        }
+        let selections = if self.task_ids.is_empty() {
+            vec![Vec::new()]
+        } else {
+            by_crew.into_iter().map(|(_, ids)| ids).collect()
+        };
+        let mut runs = Vec::new();
+        for task_ids in selections {
+            let run_input = if task_ids.is_empty() {
+                input.clone()
+            } else {
+                build_task_pilot_input(
+                    &task_ids,
+                    self.base_branch.as_deref(),
+                    self.max_tasks,
+                    self.max_partition_size,
+                )?
+            };
+            runs.extend(dispatch_workflow(
+                runtime,
+                TASK_PILOT_WORKFLOW,
+                &run_input,
+                false,
+                timeout_seconds,
+                1,
+            )?);
+        }
         workflow_dispatch_payload(TASK_PILOT_WORKFLOW, &runs)
     }
 }

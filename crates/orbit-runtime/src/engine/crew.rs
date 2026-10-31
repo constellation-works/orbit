@@ -731,10 +731,9 @@ impl RuntimeKernel {
     /// same-id local record, if any, is not it. Other ids read the local store;
     /// missing fixture ids are skipped so fake implementer ids do not fail
     /// resolution. Distinct crews — including a mix of set and unset — fail
-    /// closed instead of inheriting `workflow.default_crew`. An authenticated
-    /// preparation run ([`BundleCrews::PreparationPartitions`]) is the
-    /// exception: it keeps the first task's crew and prepare splits the rest
-    /// by crew.
+    /// closed instead of inheriting `workflow.default_crew`. Authenticated
+    /// preparation and auto-dispatch runs are exceptions: each keeps the
+    /// first task's crew, then partitions tasks before agent work.
     fn task_crew_from_run_input(
         &self,
         input: &Value,
@@ -767,15 +766,19 @@ impl RuntimeKernel {
             match &agreed {
                 None => agreed = Some(crew),
                 Some(existing) if existing == &crew => {}
-                // The live preparation attempt's own run is the pilot's own
-                // bundle. Tasks keep the crews they were drawn, and prepare
-                // splits the claim into one partition per crew before any
-                // pilot worker runs. The run records the first task's crew so
-                // startup still has a crew and does not inherit
-                // `workflow.default_crew`. Every other bundle, including one
-                // whose input merely carries a claim, fails closed below
-                // [ORB-16860].
-                Some(existing) if bundle == BundleCrews::PreparationPartitions => {
+                // The live preparation attempt's run keeps the first task's
+                // crew while prepare splits its claim by crew before pilot
+                // workers run. The auto-dispatch run also keeps the first
+                // task's crew; its backlog action emits singleton gate
+                // bundles before any task worker starts. Every other bundle,
+                // including one whose input merely carries a claim, fails
+                // closed below [ORB-16860].
+                Some(existing)
+                    if matches!(
+                        bundle,
+                        BundleCrews::PreparationPartitions | BundleCrews::AutoDispatchSingletons
+                    ) =>
+                {
                     return Ok(existing.clone());
                 }
                 Some(existing) => {
@@ -899,6 +902,9 @@ pub enum BundleCrews {
     /// It keeps the first task's crew, and prepare partitions the rest by
     /// crew before any pilot worker runs [ORB-16839].
     PreparationPartitions,
+    /// The task-auto pipeline's backlog action emits one task per gate bundle
+    /// before any task worker starts.
+    AutoDispatchSingletons,
 }
 
 fn mixed_bundle_crew_error(left: Option<&str>, right: Option<&str>) -> String {

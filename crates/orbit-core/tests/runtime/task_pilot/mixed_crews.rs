@@ -10,6 +10,7 @@ use orbit_core::application::automation::pin_attempt_source;
 use orbit_core::application::task::TaskAddParams;
 use orbit_store::contracts::KeyedJobRunAdmission;
 use orbit_types::resource::ExecutorResource;
+use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, JobRunState};
 use serde_json::json;
 
@@ -334,6 +335,85 @@ fn an_operator_mixed_crew_bundle_is_still_refused() {
     }
 }
 
+/// An explicit ship run is a dispatcher: `list_backlog_tasks` turns its
+/// selected tasks into singleton gate runs before any task work starts.
+fn auto_dispatch_runs_partition_mixed_crew_tasks_into_singleton_bundles() {
+    let workspace = workspace();
+    let haiku = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "haiku backlog task".into(),
+            description: "Ship this task.".into(),
+            acceptance_criteria: vec!["The task is dispatched alone.".into()],
+            plan: "Inspect README.md.".into(),
+            context_files: vec!["file:README.md".into()],
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Backlog),
+            crew: Some("haiku".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let sol = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "sol backlog task".into(),
+            description: "Ship this task.".into(),
+            acceptance_criteria: vec!["The task is dispatched alone.".into()],
+            plan: "Inspect README.md.".into(),
+            context_files: vec!["file:README.md".into()],
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Backlog),
+            crew: Some("sol".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let job = workspace.runtime.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&job).unwrap();
+    let activities = workspace.runtime.global_root().join("resources/activities");
+    std::fs::create_dir_all(&activities).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities/list_backlog_tasks.yaml"),
+        activities.join("list_backlog_tasks.yaml"),
+    )
+    .unwrap();
+    std::fs::write(
+        job.join("task_auto_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: list_backlog\n      target: activity:list_backlog_tasks\n      default_input:\n        task_ids: \"{{ input.task_ids }}\"\n        mode: pr\n",
+    )
+    .unwrap();
+    let queued = workspace
+        .jobs
+        .insert_job_run(
+            "task_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": [haiku.id, sol.id]})),
+            None,
+        )
+        .unwrap();
+
+    workspace
+        .runtime
+        .execute_pipeline_run_worker(&queued.run_id)
+        .unwrap_or_else(|error| {
+            panic!("auto dispatch must partition mixed crews before its run starts: {error}")
+        });
+
+    let run = workspace.runtime.show_job_run(&queued.run_id).unwrap();
+    assert_eq!(run.state, JobRunState::Success, "{run:?}");
+    let pipeline = workspace
+        .runtime
+        .read_run_state(&queued.run_id)
+        .unwrap()
+        .unwrap()
+        .pipeline;
+    assert_eq!(
+        pipeline["list_backlog"]["bundles"],
+        json!([[haiku.id], [sol.id]]),
+        "mixed crews must be split into singleton gate bundles"
+    );
+}
+
 /// Whether run start refused `input` as a mixed bundle: an invalid-input
 /// failure before the job's only step ran.
 fn assert_refused_at_start(result: Result<impl std::fmt::Debug, OrbitError>, case: &str) {
@@ -448,6 +528,7 @@ crate::scenario_table!(
     mixed_crew_task_pilot_bundles_scenarios,
     a_preparation_pass_assesses_two_crews_as_separate_partitions,
     an_operator_mixed_crew_bundle_is_still_refused,
+    auto_dispatch_runs_partition_mixed_crew_tasks_into_singleton_bundles,
     a_non_pilot_job_refuses_mixed_crews_under_any_unproven_claim,
     a_live_claim_admits_mixed_crews_only_in_its_own_pilot_run
 );
