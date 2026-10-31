@@ -77,6 +77,13 @@ A backlog task's readiness dot, the Backlog card's readiness bar and its legend 
 - **Density:** Padding remains tight (e.g., `12px 16px` for headers, `8px` gaps), but text is allowed to breathe more than in the legacy terminal theme.
 - **Animation:** Minimal, purposeful motion. Used primarily for loading indicators (e.g., `pulse-skeleton 1.5s infinite ease-in-out`).
 
+### Label/value lists
+Detail panes and side panels list facts as label/value pairs (for example a "Shown, not scored" list in a crew detail pane). A reviewer can check each of these from a screenshot:
+- **No collisions:** A label and its value never overlap or touch. A long value wraps inside its own column, and a long composite value (a count followed by a qualifier) wraps rather than running under the label.
+- **Whole labels:** A label never breaks into one word per line. When the label and value cannot sit side by side, the value moves under its label instead of squeezing the label column.
+- **Label column width:** The label column keeps a readable minimum width of about `12ch`, and a label that needs more room takes it from the value column.
+- **Numbers:** Numeric values stay right-aligned when they sit beside their label, so digits line up down the list.
+
 ## Mechanism-specific sections
 
 ### Expandable Rows
