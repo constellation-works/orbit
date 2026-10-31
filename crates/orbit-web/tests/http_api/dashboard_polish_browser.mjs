@@ -70,7 +70,7 @@ const server = http.createServer((req, res) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}/?workspace=ws_fixture`;
-const measurements = { navigation: [], observe: [], crews: [], tools: [] };
+const measurements = { navigation: [], keyboard: [], observe: [], crews: [], tools: [] };
 let browser;
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
@@ -152,6 +152,38 @@ try {
       `${route} ${visit}: scrolled destinations cue the earlier ones: ${JSON.stringify(layout)}`);
     measurements.navigation.push({ route, visit, ...layout });
   };
+  // ORB-20490: tabbing through Settings keeps the focused view and its outline
+  // visible even while Crews remains the active route.
+  await page.keyboard.press('Tab'); // establish keyboard focus modality
+  await page.locator('#config-subtabs [data-subtab="workflow"]').focus();
+  const keyboardPath = ['workflow', 'execution', 'review', 'crews', 'machine', 'hosts', 'all-keys'];
+  for (const [index, subtab] of keyboardPath.entries()) {
+    if (index > 0) await page.keyboard.press('Tab');
+    measurements.keyboard.push(await page.evaluate(() => {
+      const strip = document.getElementById('config-subtabs');
+      const button = document.activeElement;
+      const rect = button.getBoundingClientRect();
+      const stripRect = strip.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      const outlineOutset = Math.max(0, parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset));
+      return {
+        focused: button.dataset.subtab,
+        focusVisible: button.matches(':focus-visible'),
+        button: { left: rect.left, right: rect.right },
+        outline: { left: rect.left - outlineOutset, right: rect.right + outlineOutset },
+        strip: { left: stripRect.left + strip.clientLeft, right: stripRect.left + strip.clientLeft + strip.clientWidth },
+      };
+    }));
+  }
+  await page.screenshot({ path: path.join(evidence, 'keyboard-focus-settings-crews-all-keys-dark-375.png') });
+  for (const [index, layout] of measurements.keyboard.entries()) {
+    const subtab = keyboardPath[index];
+    const context = `keyboard focus on ${subtab}: ${JSON.stringify(layout)}`;
+    assert.equal(layout.focused, subtab, context);
+    assert.equal(layout.focusVisible, true, `${context}: keyboard focus outline is visible`);
+    assert.ok(layout.outline.left >= layout.strip.left - 1 && layout.outline.right <= layout.strip.right + 1,
+      `${context}: focused view and outline fit inside its scrolling strip`);
+  }
   // Counts arrive after the initial route, widening the active destination or
   // an earlier one. A direct load must keep both selections visible afterwards.
   const countRoutes = ['config/hosts', 'analytics/agents/pilots', 'diagnostics/doctor', 'operations/auto-tasks'];
