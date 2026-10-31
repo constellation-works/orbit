@@ -28,7 +28,8 @@ replay, prompt tuning, configuration change or API activation.
 The [service contract](specs/service.md) documents the host-only configuration,
 durable ledger and public application boundary. A new
 [delivery-quality grader proposal](specs/delivery-quality.md) defines a separate
-offline evaluation candidate; it is not implemented or activated by this design.
+offline evaluation candidate. Its offline contract and a default-off owner-clock shadow
+runtime are in the repository; this design does not activate it or authorize adoption.
 
 Bearing: builds on [activities and jobs](../activity-job/2_design.md),
 [auto-tasks](../auto-tasks/2_design.md), the shipped
@@ -123,7 +124,7 @@ every action; current implementation and parked status are recorded above.
 |---|---|---|---|
 | First | Failure-pattern categorization | Bounded failure evidence; choose one category from the existing taxonomy plus `insufficient_evidence`. | Failure-pattern report suggests categories; investigator verifies causes and dispositions. |
 | First | Task-creation quality checks | Title, description and individually numbered criteria; independent predicates for unclear outcomes, non-observable criteria, contradictory requirements and mixed outcomes. | Author and pilot see advisory flags; no task rejection or approval. |
-| Proposed, offline only | Delivery-quality grader | Frozen task/diff/contracts and validation evidence; independent anchored 1–5 choices for scope fit, robustness, structure, standards, verification and maintainability, with abstention. | Separate advisory quality profile; no scorecard term, routing change or review authority. See [proposal](specs/delivery-quality.md). |
+| Proposed; offline contract and default-off shadow runtime | Delivery-quality grader | Frozen task/diff/contracts and validation evidence; independent anchored 1–5 choices for scope fit, robustness, structure, standards, verification and maintainability, with abstention. | Separate advisory quality profile; no scorecard term, routing change or review authority. See [proposal](specs/delivery-quality.md). |
 | Later | Task tag suggestions | Task text and an approved workspace vocabulary; one predicate per tag because several may apply. | Suggest descriptive tags; separately evaluate automatic application and every tag with execution effects. |
 | Later | Backlog duplicate/landed candidates | Search-selected task pairs, scopes and available delivery evidence; choose same issue, partial overlap, distinct, or insufficient evidence. | Rank candidates in backlog hygiene; commit inspection establishes landed coverage. |
 | Later | Friction grouping and rejection classification | Retrieved report pairs and current rejection rationale; classify same mechanism and administrative versus terminal rejection. | Curator inspects current behavior and records canonical mappings; similarity cannot close a friction. |
