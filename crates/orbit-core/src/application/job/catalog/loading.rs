@@ -287,6 +287,19 @@ impl OrbitRuntime {
         }
     }
 
+    /// The `default_input` a named job runs with, read from the definition
+    /// execution loads, so a preflight checks the layer submission admits. A
+    /// name the catalog does not hold reads its shipped asset, as
+    /// `resolved_job_spec` does (ORB-11253).
+    pub fn job_default_input(&self, job_id: &str) -> Result<Option<Value>, OrbitError> {
+        let spec = match self.load_v2_job_asset_by_name(job_id) {
+            Ok((_, spec)) => spec,
+            Err(OrbitError::NotFound { .. }) => shipped_job_spec(job_id)?,
+            Err(error) => return Err(error),
+        };
+        Ok(spec.default_input)
+    }
+
     pub fn show_job_catalog_entry(&self, job_id: &str) -> Result<JobCatalogEntry, OrbitError> {
         let dirs = self.v2_job_asset_dirs();
         let (mut v2_jobs, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
