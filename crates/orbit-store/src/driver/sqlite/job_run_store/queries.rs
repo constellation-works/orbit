@@ -587,15 +587,15 @@ fn job_run_filter_sql(
     if let Some(task_id) = &query.task_id {
         // Ownership follows the same bindings the TASK column shows: a text
         // element of the top-level `task_ids` array, or a text top-level
-        // `task_id`. EXISTS and OR together avoid duplicate rows when a run
-        // names the same id both ways.
+        // `task_id`. `job_run_tasks` (v59) materializes exactly those
+        // bindings on every write, so the filter reads it instead of
+        // parsing every run's input: a per-task JSON walk over the whole
+        // workspace history cost ~90 ms per call on a 36k-run store, and
+        // the experiment readout makes two per enrolled task [ORB-20412].
         let placeholder = params.len() + 1;
         conditions.push(format!(
-            "((json_type(input_json, '$.task_ids') = 'array' AND EXISTS (\
-             SELECT 1 FROM json_each(input_json, '$.task_ids') AS task_binding \
-             WHERE task_binding.type = 'text' AND task_binding.value = ?{placeholder})) \
-             OR (json_type(input_json, '$.task_id') = 'text' \
-             AND json_extract(input_json, '$.task_id') = ?{placeholder}))"
+            "run_id IN (SELECT run_id FROM job_run_tasks \
+             WHERE workspace_id = ?1 AND task_id = ?{placeholder})"
         ));
         params.push(Box::new(task_id.clone()));
     }

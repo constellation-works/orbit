@@ -93,6 +93,19 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
         ["T-1".to_string(), "T-2".to_string()].into_iter().collect(),
         "task binding projection must not depend on large checkpoints"
     );
+    // A per-task listing honours the same bindings: text array elements and
+    // a text top-level `task_id`, never nested or non-text values.
+    for (task, owned) in [("T-1", true), ("T-2", true), (" T-1 ", true), ("T-3", false)] {
+        let runs = jobs
+            .list_job_runs_filtered(&orbit_store::contracts::JobRunQuery {
+                task_id: Some(task.into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let ids: Vec<_> = runs.iter().map(|run| run.run_id.as_str()).collect();
+        let expected: Vec<&str> = if owned { vec![child.run_id.as_str()] } else { vec![] };
+        assert_eq!(ids, expected, "runs owned by {task:?}");
+    }
     for query in [
         orbit_store::contracts::JobRunQuery {
             job_id: Some("task_auto_pipeline".into()),
