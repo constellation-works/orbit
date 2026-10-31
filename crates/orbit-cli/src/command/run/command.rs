@@ -69,7 +69,7 @@ Workflows:
   ship         Ship backlog or explicitly selected tasks through the gated task pipeline
   task-pilot   Preflight proposed/backlog tasks and persist validated selectors
   job          Run an arbitrary job by ID
-  agent        Invoke an agent on the host for exploration or debugging (operator only)
+  agent        Invoke an agent on the host for exploration or debugging (deprecated)
 
 Audits:
   history      Show recent job runs filtered by job, task, state or time
@@ -134,7 +134,7 @@ pub enum RunSubcommand {
     Extend(RunExtendArgs),
     /// Run an arbitrary job by ID
     Job(JobRunArgs),
-    /// Invoke an agent on the host for exploration or debugging (operator only)
+    /// Invoke an agent on the host for exploration or debugging (deprecated)
     Agent(RunAgentArgs),
 }
 

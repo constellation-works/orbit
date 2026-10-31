@@ -47,7 +47,8 @@ fn agent_wait_redacts_sensitive_warning_content_in_progress_and_output() {
     );
     // Mark an observed warning as a sensitive env value to exercise the real
     // CLI boundary without pinning its prose or injecting production warnings.
-    let sensitive = submission["warnings"][0].as_str().unwrap();
+    // The first warning is the fixed deprecation notice; mark the one after it.
+    let sensitive = submission["warnings"][1].as_str().unwrap();
     for as_json in [false, true] {
         let mut command = fixture.orbit();
         command
@@ -86,9 +87,15 @@ fn agent_wait_redacts_sensitive_warning_content_in_progress_and_output() {
             assert_eq!(result["state"], "success");
             assert_eq!(result["answer"]["summary"], "fixture answer");
             assert_eq!(result["provider_sandbox"], "codex:danger-full-access");
-            assert_eq!(result["warnings"].as_array().unwrap().len(), 1);
+            assert_eq!(result["warnings"].as_array().unwrap().len(), 2);
             assert!(
                 result["warnings"][0]
+                    .as_str()
+                    .unwrap()
+                    .contains("is deprecated")
+            );
+            assert!(
+                result["warnings"][1]
                     .as_str()
                     .unwrap()
                     .contains("[REDACTED_ENV]")

@@ -98,7 +98,8 @@ impl Tool for OrbitAgentInvokeTool {
                 "Submit an asynchronous agent invocation for exploration or debugging and return \
                  its run ID, or wait for its answer with `wait_seconds`. Queued submissions \
                  include `queued: true`, a one-based `queue_position` and a warning. \
-                 An operator's invocation runs on the host outside Orbit's filesystem sandbox, \
+                 An operator's invocation is deprecated and will be removed; it runs on the \
+                 host outside Orbit's filesystem sandbox, \
                  as the same OS user as Orbit, so it can reach anything that user can; it is \
                  admitted per invocation and requires operator capability — the same test for a \
                  session that arrived over SSH as for a local one. An implement or review-repair \

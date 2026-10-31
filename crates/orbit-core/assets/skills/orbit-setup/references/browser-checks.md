@@ -151,7 +151,7 @@ evidence and fix the kit.
 A host pass does not prove the worker path. The decisive check is a sandboxed
 worker run (a disposable task, or the first UI task) that sources
 `"$ORBIT_BROWSER_KIT_ENV"`, runs a browser check and attaches its screenshot.
-`orbit run agent` (MCP `orbit_agent_invoke`, tool `orbit.agent.invoke`) runs on
+The deprecated `orbit run agent` (tool `orbit.agent.invoke`) runs on
 the host outside Orbit's executor sandbox, so it is not that proof.
 
 ## Remove

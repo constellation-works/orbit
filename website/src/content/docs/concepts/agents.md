@@ -606,7 +606,7 @@ With `workflow.explore.enabled` and an eligible
 can ask bounded, read-only questions in their own worktree through
 `orbit.agent.invoke`. Explorers return the paths they read and cannot delegate
 again. This is separate from the operator's host investigation command,
-`orbit run agent`.
+`orbit run agent`, which is deprecated and will be removed.
 
 `workflow.mid_run_steering.enabled` lets operator comments added after dispatch
 reach later managed prompts. A bounded checkpoint holds promotion while new

@@ -613,6 +613,8 @@ enum Placement {
 
 /// Every governed tool operation paired with its expected MCP advertisement placement.
 const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
+    // Registered for MCP, but listed only by a server a managed run launched
+    // (explorer delegation); operator sessions no longer see it.
     ("orbit.agent.invoke", Placement::Advertised),
     ("orbit.auto_task.delete", Placement::Unadvertised),
     ("orbit.auto_task.reset", Placement::Unadvertised),

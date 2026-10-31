@@ -1,4 +1,4 @@
-Invoke an agent on the host for exploration or debugging (operator only)
+Invoke an agent on the host for exploration or debugging (deprecated)
 
 Usage: orbit run agent <PROMPT> [OPTIONS]
 
@@ -34,6 +34,10 @@ Global options (see 'orbit --help' for descriptions):
   --format <MODE>
   --json
   --header
+
+Deprecated: this command will be removed. Dispatch work through tasks and
+`orbit run ship`, or run your provider's CLI directly for a one-off question.
+Each submission repeats this as its first warning.
 
 The agent runs OUTSIDE Orbit's filesystem sandbox, as the same OS user as Orbit,
 so it can read and write anything that user can. That is the point of the

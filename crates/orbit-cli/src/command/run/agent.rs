@@ -13,9 +13,13 @@ use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 #[command(
-    about = "Invoke an agent on the host for exploration or debugging",
+    about = "Invoke an agent on the host for exploration or debugging (deprecated)",
     override_usage = "orbit run agent <PROMPT> [OPTIONS]",
     after_help = "\
+Deprecated: this command will be removed. Dispatch work through tasks and
+`orbit run ship`, or run your provider's CLI directly for a one-off question.
+Each submission repeats this as its first warning.
+
 The agent runs OUTSIDE Orbit's filesystem sandbox, as the same OS user as Orbit,
 so it can read and write anything that user can. That is the point of the
 command and it is not an isolation boundary — invoke it the way you would run a

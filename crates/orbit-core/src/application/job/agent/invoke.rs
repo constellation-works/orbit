@@ -131,6 +131,14 @@ pub struct AgentInvokeSubmission {
     pub warnings: Vec<String>,
 }
 
+/// Leads every trusted-host submission's warnings while the operator path is
+/// deprecated. Explorer delegation from a managed run is not covered: it is
+/// decided separately once the explore-first experiment concludes.
+const TRUSTED_HOST_INVOKE_DEPRECATION: &str = "warning: operator agent invocation \
+     (`orbit run agent`, `orbit.agent.invoke`) is deprecated and will be removed; \
+     dispatch work through tasks and `orbit run ship`, or run your provider's CLI \
+     directly for a one-off question";
+
 enum AgentInvokeSubmissionProfile {
     Cli,
     Tool,
@@ -150,14 +158,13 @@ impl AgentInvokeSubmission {
     }
 
     fn submission_json(&self, waited: bool, profile: AgentInvokeSubmissionProfile) -> Value {
-        let warnings = match profile {
-            AgentInvokeSubmissionProfile::Cli => self
-                .warnings
-                .iter()
-                .map(|warning| redact_all(warning))
-                .collect(),
-            AgentInvokeSubmissionProfile::Tool => self.warnings.clone(),
-        };
+        let mut warnings = vec![TRUSTED_HOST_INVOKE_DEPRECATION.to_owned()];
+        match profile {
+            AgentInvokeSubmissionProfile::Cli => {
+                warnings.extend(self.warnings.iter().map(|warning| redact_all(warning)));
+            }
+            AgentInvokeSubmissionProfile::Tool => warnings.extend(self.warnings.iter().cloned()),
+        }
         let mut response = json!({
             "run_id": self.run_id,
             "job_id": self.job_id,

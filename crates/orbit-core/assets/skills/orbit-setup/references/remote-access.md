@@ -137,6 +137,10 @@ them is the whole migration. `orbit mcp callers` no longer exists.
 
 ### Remote host-agent invocation
 
+Deprecated: the operator invocation will be removed and is no longer listed to
+operator MCP sessions. Prefer tasks and `orbit run ship`. Until removal, a
+direct call still behaves as below.
+
 Remote `orbit_agent_invoke` is admitted when the session holds `operator` — the
 same test as a local invocation, because the caller reached this machine through
 an SSH login that already lets it start any process it likes. Start the calling

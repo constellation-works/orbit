@@ -1619,9 +1619,9 @@ backlog. Check that the owner comment names the repair ref and that
 repair should not be continued, run
 `orbit task update <task> --discard-candidate --status backlog` instead. To
 judge whether the candidate is worth continuing, follow the orbit-orchestrate
-skill's "Salvage an incomplete candidate" procedure. It diagnoses with
-`orbit run agent --cwd <preserved worktree>`, which never commits, pushes or
-edits a pull request, and then routes the task by cause. Prune `-review`
+skill's "Salvage an incomplete candidate" procedure. It diagnoses the
+preserved worktree read-only, never committing, pushing or editing a pull
+request, and then routes the task by cause. Prune `-review`
 refs with the other carried refs once the task is done.
 
 An owner's own run stopped mid-review keeps the same commit and ref, and a

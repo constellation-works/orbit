@@ -373,8 +373,8 @@ procedure only when its authority and evidence qualify.
 ## Operator Agent Invocations
 
 A run of `agent_invoke_pipeline` is not a delivery pipeline. It is one operator
-invocation of an agent for exploration or debugging, submitted with
-`orbit run agent` / `orbit_agent_invoke`, and it changes no task, branch, or
+invocation of an agent for exploration or debugging, submitted with the
+deprecated `orbit run agent` / `orbit_agent_invoke`, and it changes no task, branch, or
 pull request — so do not look for a worktree, a task lifecycle, or a delivery
 tail when triaging one.
 

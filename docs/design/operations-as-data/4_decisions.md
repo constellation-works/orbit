@@ -288,7 +288,7 @@ the row, and the tool entry also refuses a managed run and a claimed worker.
 ### Consequences
 
 - The question "may this caller perform this?" has one answer and one place to look, on every surface. "Will this caller be shown it?" is a different question with a different owner, and neither now implies the other by accident.
-- **Amended 2026-10-26 ([ORB-18448]):** the filing measured twelve uncallable tools at 22% of the listed definition bytes, beyond the five originally accepted here. The current surface also includes operator-only routine and auto-drain controls. The shared MCP list adapter now uses the existing governed-operation catalog and the session's fixed capabilities to omit uncallable governed tools from `tools/list`. Operator sessions retain the full placed surface. Filtering is applied after the shared response cache and combined with workspace plugin hiding; it does not change registration, placement declarations, or call authorization. Calling an omitted name still reaches the same `capability_denied` refusal. `orbit.agent.invoke` remains discoverable because its managed-run explorer admission can allow an agent without operator capability; its catalog row alone cannot determine whether the call will be refused. Registered decision-channel callbacks retain their existing direct-call admission. The real MCP roundtrip checks cover agent/operator listings and direct calls, while the authorization matrix continues to guard registry placement and permission separately.
+- **Amended 2026-10-26 ([ORB-18448]):** the filing measured twelve uncallable tools at 22% of the listed definition bytes, beyond the five originally accepted here. The current surface also includes operator-only routine and auto-drain controls. The shared MCP list adapter now uses the existing governed-operation catalog and the session's fixed capabilities to omit uncallable governed tools from `tools/list`. Operator sessions retain the full placed surface. Filtering is applied after the shared response cache and combined with workspace plugin hiding; it does not change registration, placement declarations, or call authorization. Calling an omitted name still reaches the same `capability_denied` refusal. `orbit.agent.invoke` remains discoverable because its managed-run explorer admission can allow an agent without operator capability; its catalog row alone cannot determine whether the call will be refused. (Since [ORB-20382], it is listed only by a server a managed run launched; see the agent invoke deprecation below.) Registered decision-channel callbacks retain their existing direct-call admission. The real MCP roundtrip checks cover agent/operator listings and direct calls, while the authorization matrix continues to guard registry placement and permission separately.
 - **Experiments (2026-10-26, [ORB-18473]):** the nine `orbit.experiment.*` writes (`create`, `update`, `clone`, `start`, `pause`, `resume`, `reweight`, `conclude`, `abandon`) are governed `operator` and advertised, so an operator MCP session can define and steer experiments, while the filter above keeps them off an agent session's list. `show` and `list` are ungoverned reads an agent may call. `GOVERNED_TOOL_PLACEMENT` records all nine.
 - Cost: adding a governed tool now requires one more line — its placement — in the guardrail table. That is the intended friction: the line is where the advertise-or-not decision gets made explicitly.
 - An MCP session's capabilities are decided once, when its server process starts, and the process environment is never consulted per call: `orbit mcp serve` grants `agent`, `orbit mcp serve --operator` grants `agent` and `operator`, and `ORBIT_OPERATOR` in the server's environment grants nothing on this surface ([ORB-10927]). The flag is the only operator path over MCP — the deliberate act has to be in the argv the operator wrote, because an environment variable is inherited by whatever server an agent happens to launch. `orbit mcp listen` is agent-only for the stronger version of the same reason: the socket authenticates no client, so a listener started with operator authority would serve it to every accepted connection.
@@ -538,6 +538,25 @@ and Daniel asked for no MCP tool, so it is reached only through
 `orbit experiment delete` (and `orbit tool run`). It deletes only a draft,
 concluded or abandoned experiment with no live arm assignment and no
 concluded arm, so nothing a task or promotion task cites goes away.
+
+**Agent invoke: operator path deprecated ([ORB-20382]).** The operator's
+trusted-host `orbit.agent.invoke` had no workflow that needed it (work is
+dispatched through tasks, `orbit run ship` and drains), yet its schema cost about
+1k tokens in every operator MCP client's tool list. The shared MCP list adapter
+now omits it unless the server process declares an agent or managed-run
+envelope (`authorization::agent_context_declared`). A server a managed run
+launched keeps listing it, because implement and review-repair runs delegate
+read-only questions to explorers through it, and the live explore-first
+experiment measures those calls. Registration, `GOVERNED_TOOL_PLACEMENT`
+(still `Advertised`) and call authorization are unchanged, and a direct operator
+call still works. `orbit run agent` and every trusted-host submission lead
+their warnings with a deprecation notice naming the replacement.
+
+- The operator path is removed no earlier than 2026-12-01 (30 days after this
+  change merges), under [ORB-20383].
+- Whether the explorer route goes too is decided separately, after the
+  explore-first experiment's verdict (due around 2026-11-18). Until then the
+  tool stays registered for MCP.
 
 **Field-level rows ([ORB-18545]).** A governed `Tool` row may name an input
 rather than a tool: `orbit.task.grant_tools` is checked at the chokepoint, in
@@ -970,5 +989,8 @@ different contracts; a future equivalent surface can use this shape.
   sessions that can never call them.
 - [ORB-20156] — added the operator-only condition `clear_stall` tool.
 - [ORB-20370] — added the operator-only, unadvertised experiment `delete` tool.
+- [ORB-20382] — deprecated the operator `orbit.agent.invoke` path and hid it
+  from operator MCP sessions.
+- [ORB-20383] — removes the operator path and decides the explorer route.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

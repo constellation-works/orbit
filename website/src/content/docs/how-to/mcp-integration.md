@@ -111,7 +111,7 @@ Every tool schema a server lists costs context in each agent session, so
 
 | Toolset | Tools |
 |---|---|
-| `default` (always on) | Tasks, workflows and runs, `orbit.pipeline.invoke`, `orbit.agent.invoke`, routines and auto-tasks, `orbit.automation.explain`, `orbit.decision.list` and `orbit.decision.show`, codebase, friction, search, the UI and visual tools, `orbit.command.exec` and workspace discovery. |
+| `default` (always on) | Tasks, workflows and runs, `orbit.pipeline.invoke`, `orbit.agent.invoke` (listed only to a server a managed run launched), routines and auto-tasks, `orbit.automation.explain`, `orbit.decision.list` and `orbit.decision.show`, codebase, friction, search, the UI and visual tools, `orbit.command.exec` and workspace discovery. |
 | `leases` | `orbit.lease.*` |
 | `experiments` | `orbit.experiment.*` |
 | `analytics` | `orbit.agents.*`, `orbit.orchestrator.show`, `orbit.orchestrator.scorecard` and `orbit.crew.ladder` |

@@ -31,6 +31,8 @@ use super::structured::mcp_tool_call_result;
 use super::{OrbitToolServer, ToolSurface};
 use crate::error::tool_error_result;
 
+const AGENT_INVOKE_TOOL: &str = "orbit.agent.invoke";
+
 impl OrbitToolServer {
     /// Load and validate once per immutable or live host surface snapshot.
     fn load_tool_surface(&self) -> Result<Arc<ToolSurface>, OrbitError> {
@@ -157,11 +159,18 @@ impl OrbitToolServer {
                     operation.surface == OperationSurface::Tool
                         // The managed-run explorer admission can allow an agent
                         // without the operator capability required by this row.
-                        && operation.id != "orbit.agent.invoke"
+                        && operation.id != AGENT_INVOKE_TOOL
                         && authorization::authorize(operation, &caller).is_err()
                 })
                 .map(|operation| operation.id.to_owned()),
         );
+        // The operator path is deprecated, so an operator session no longer
+        // pays for its schema. A server an agent launched still lists it: a
+        // managed implement or review-repair run delegates read-only questions
+        // through it. Direct calls keep their authorization checks.
+        if !authorization::agent_context_declared() {
+            hidden.insert(AGENT_INVOKE_TOOL.to_owned());
+        }
         if presentation::reader(definitions, McpPresentationRead::Task)
             .is_some_and(|reader| hidden.contains(&reader.schema.name))
         {
