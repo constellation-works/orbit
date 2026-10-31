@@ -4,6 +4,15 @@ Use this when choosing task projections, editing context selectors, or setting
 dependencies, relations or additional tool requirements.
 The connected tool schema is authoritative for supported fields.
 
+## Refused proposed pickup
+
+Starting a proposed task records approval before the start. If the start fails
+once approval has landed, the refusal reports the fresh task status and the
+underlying reason. A backlog task can be selected by a drain: if it must not
+start, promptly move it to `blocked`, then resolve the refusal before retrying.
+If the status could not be read, inspect the task before taking further action.
+A separate approval continues to authorize backlog admission on its own.
+
 ## Context selectors
 
 `orbit.task.update` accepts `context_files` as a comma-separated string or an
