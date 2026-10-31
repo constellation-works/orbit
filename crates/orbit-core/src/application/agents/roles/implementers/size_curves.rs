@@ -14,8 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
-use super::{AgentFacts, Attempt, TaskFacts, counted, tier};
+use super::performance::{counted, tier};
+use crate::application::agents::AgentFacts;
 use crate::application::agents::CREW_UNKNOWN;
+use crate::application::agents::facts::{Attempt, TaskFacts};
 
 /// Days after completion a regression link is looked for, and the follow-up
 /// a task needs before it counts.

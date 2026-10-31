@@ -1,11 +1,15 @@
 //! Display-only diff discipline and regression comparisons. Expected size
 //! comes from the fleet's task cell, never an individual row's own diff.
 
-use super::{
-    AgentFacts, BTreeMap, DateTime, Key, RowInput, Stat, Tally, TaskFacts, Utc, configured_type,
-    number, stat, tier,
-};
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
 use serde_json::Value;
+
+use super::performance::{Key, configured_type, stat, tier};
+use crate::application::agents::AgentFacts;
+use crate::application::agents::facts::TaskFacts;
+use crate::application::agents::score::{RowInput, Stat, Tally, number};
 
 fn median(values: &mut [f64]) -> Option<f64> {
     if values.is_empty() {
