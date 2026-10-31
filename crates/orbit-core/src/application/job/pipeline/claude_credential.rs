@@ -19,7 +19,7 @@
 //! the dashboard can flag it before it starts.
 
 use orbit_common::OrbitError;
-use orbit_common::security::child_env::CLAUDE_CREDENTIAL_ENV;
+use orbit_common::security::child_env::{CLAUDE_CREDENTIAL_ENV, crew_env_file_problem};
 use orbit_engine::RuntimeHost;
 use orbit_engine::activity_job::cli_runner::{
     CLAUDE_WORKER_CREDENTIAL_REMEDY, claude_worker_credential_held,
@@ -63,9 +63,16 @@ impl OrbitRuntime {
         let policy = self.execution_env_policy();
         let unset = policy.unset_crew_env(&crew.env);
         if !unset.is_empty() {
+            let file_problems = unset
+                .iter()
+                .filter_map(|entry| {
+                    crew_env_file_problem(entry).map(|problem| (entry.name.clone(), problem))
+                })
+                .collect();
             return Some(Unrunnable::UnsetEnv(CrewEnvUnset {
                 crew: crew.name.clone(),
                 env: unset,
+                file_problems,
             }));
         }
         (is_claude(crew)

@@ -427,3 +427,67 @@ fn crew_env_reaches_only_its_crew_and_replaces_the_shared_claude_credential() {
         "the provider must not start on another login when the crew's source is unset"
     );
 }
+
+/// A `file:` source is read by the host when it starts the agent, so the
+/// launching environment holds nothing for it: the crew's agent gets the
+/// file's trimmed contents under the target name only, the shared credential
+/// is replaced, and a file that is group-readable or missing refuses the
+/// activity before its provider starts, without echoing the value.
+#[cfg(unix)]
+#[test]
+fn a_file_backed_crew_env_reaches_the_agent_without_any_launcher_environment() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if run_isolated_test_with_env(
+        std::any::type_name_of_val(
+            &a_file_backed_crew_env_reaches_the_agent_without_any_launcher_environment,
+        ),
+        &[("CLAUDE_CODE_OAUTH_TOKEN", FIXTURE_CLAUDE_WORKER_TOKEN)],
+    ) {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("fake claude tempdir");
+    let env_file = dir.path().join("env.txt");
+    let key_file = dir.path().join("credits-key");
+    std::fs::write(&key_file, format!("{FIXTURE_CREDITS_KEY}\n")).expect("write key file");
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let body = format!("env > '{}'\n{}", env_file.display(), envelope_turn());
+    let program = fake_claude(dir.path(), &body);
+    let root = tempfile::tempdir().expect("runtime root");
+    let config = format!(
+        "{CREW_ENV_CONFIG}\n[crews.opus-file]\nprovider = \"claude\"\nmodel = \"claude-opus-4-8\"\n\
+         env = [\"ANTHROPIC_API_KEY=file:{}\"]\n",
+        key_file.display()
+    );
+    let runtime = fixture_runtime(root.path(), &config, &program);
+
+    let child = crew_child_env(&runtime, "opus-file", &env_file).expect("opus-file runs");
+    assert_eq!(
+        child.get("ANTHROPIC_API_KEY").map(String::as_str),
+        Some(FIXTURE_CREDITS_KEY),
+        "the agent receives the file's contents, trailing newline trimmed"
+    );
+    assert!(
+        !child.contains_key("CLAUDE_CODE_OAUTH_TOKEN"),
+        "a crew that sets an API key drops the shared OAuth token"
+    );
+
+    std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o640)).expect("chmod");
+    let refused = crew_child_env(&runtime, "opus-file", &env_file)
+        .expect_err("a group-readable key file must refuse the activity")
+        .to_string();
+    assert!(
+        refused.contains("ANTHROPIC_API_KEY")
+            && refused.contains(&key_file.display().to_string())
+            && refused.contains("chmod 600")
+            && !refused.contains(FIXTURE_CREDITS_KEY),
+        "the refusal names the variable, path and file state: {refused}"
+    );
+    assert!(!env_file.exists(), "the provider must not start");
+
+    std::fs::remove_file(&key_file).expect("remove key file");
+    let refused = crew_child_env(&runtime, "opus-file", &env_file)
+        .expect_err("a missing key file must refuse the activity")
+        .to_string();
+    assert!(refused.contains("does not exist"), "{refused}");
+}

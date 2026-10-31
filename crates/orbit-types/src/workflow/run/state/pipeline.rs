@@ -20,13 +20,18 @@ use super::{
 };
 
 /// A crew whose `[crews.<name>] env` entries read sources the launching
-/// environment does not hold. Names only, never values.
+/// environment does not hold, or `file:` sources that cannot be read. Names
+/// and paths only, never values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrewEnvUnset {
     /// The crew name.
     pub crew: String,
     /// Its entries whose source is unset or empty.
     pub env: Vec<CrewEnvVar>,
+    /// For a `file:` source in `env`, why the file supplies no value, keyed by
+    /// the variable the entry feeds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub file_problems: BTreeMap<String, String>,
 }
 
 impl CrewEnvUnset {
@@ -36,12 +41,10 @@ impl CrewEnvUnset {
         let sources = self
             .env
             .iter()
-            .map(|entry| {
-                if entry.is_mapped() {
-                    format!("{} (for {})", entry.source, entry.name)
-                } else {
-                    entry.source.clone()
-                }
+            .map(|entry| match self.file_problems.get(&entry.name) {
+                Some(problem) => format!("{} (for {}: {problem})", entry.source, entry.name),
+                None if entry.is_mapped() => format!("{} (for {})", entry.source, entry.name),
+                None => entry.source.to_string(),
             })
             .collect::<Vec<_>>()
             .join(", ");

@@ -59,6 +59,107 @@ pub fn read_env_file(
     Ok(Some(parse_env_text(&text, pass)))
 }
 
+/// Why a crew's `file:` credential source supplies no value. Describes the
+/// file's state only, never its contents; the caller names the crew and path.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SecretFileError {
+    /// Nothing exists at the path.
+    #[error("the file does not exist")]
+    Missing,
+    /// The path is a symlink, which could redirect the read elsewhere.
+    #[error("refusing a symlink; point the config at the real file")]
+    Symlink,
+    /// The path exists but is not a regular file.
+    #[error("it is not a regular file")]
+    NotRegular,
+    /// Group or others can read the file.
+    #[error("refusing mode {mode:03o}: it lets other users read it; run `chmod 600`")]
+    Shared {
+        /// The permission bits found.
+        mode: u32,
+    },
+    /// Another user owns the file.
+    #[error("refusing it: it is not owned by the user running this process")]
+    ForeignOwner,
+    /// The file holds nothing but whitespace.
+    #[error("the file is empty")]
+    Empty,
+    /// The file could not be opened or read.
+    #[error("it cannot be read: {0}")]
+    Unreadable(String),
+}
+
+/// Read one credential from an owner-only file: the contents, with trailing
+/// newlines (and carriage returns) trimmed. `path` may start with `~/`, which
+/// expands to the invoking user's home directory.
+///
+/// Applies the same checks as the clock environment file, and fails closed for
+/// a symlink, a non-regular file, a file owned by another user, one readable
+/// by group or others, and a missing or empty one. The value never appears in
+/// an error.
+pub fn read_secret_file(path: &str) -> Result<String, SecretFileError> {
+    let path = expand_home(path);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => return Err(SecretFileError::Symlink),
+        Ok(metadata) if !metadata.is_file() => return Err(SecretFileError::NotRegular),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(SecretFileError::Missing);
+        }
+        Err(error) => return Err(SecretFileError::Unreadable(error.to_string())),
+    }
+    // `O_NOFOLLOW` closes the race between the check above and this open.
+    let file = crate::fs::io::open_read_only_no_follow(&path)
+        .map_err(|error| SecretFileError::Unreadable(error.to_string()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| SecretFileError::Unreadable(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(SecretFileError::NotRegular);
+    }
+    secret_file_permissions(&metadata)?;
+    let mut text = String::new();
+    file.take(MAX_ENV_FILE_BYTES)
+        .read_to_string(&mut text)
+        .map_err(|error| SecretFileError::Unreadable(error.to_string()))?;
+    let value = text.trim_end_matches(['\n', '\r']);
+    if value.trim().is_empty() {
+        return Err(SecretFileError::Empty);
+    }
+    Ok(value.to_string())
+}
+
+/// `path` with a leading `~/` replaced by the home directory. A path that
+/// cannot be expanded is returned as written and reads as missing.
+fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => {
+            crate::fs::path::home_dir().map_or_else(|_| PathBuf::from(path), |home| home.join(rest))
+        }
+        None => PathBuf::from(path),
+    }
+}
+
+#[cfg(unix)]
+fn secret_file_permissions(metadata: &std::fs::Metadata) -> Result<(), SecretFileError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(SecretFileError::Shared { mode });
+    }
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(SecretFileError::ForeignOwner);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn secret_file_permissions(_metadata: &std::fs::Metadata) -> Result<(), SecretFileError> {
+    Ok(())
+}
+
 #[cfg(unix)]
 fn require_owner_only(path: &Path, metadata: &std::fs::Metadata) -> Result<(), OrbitError> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};

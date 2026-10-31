@@ -66,8 +66,9 @@ pub struct ExecutionEnvPolicy {
     pub(crate) pass: Vec<String>,
     /// Immutable parent snapshot for a runtime supplied with credential defaults.
     parent: Option<Arc<Vec<(String, String)>>>,
-    /// The source names the configured crews' `[crews.<name>] env` entries
-    /// read, so runtime defaults (`clock.env`) and a detached worker's launch
+    /// The source variable names the configured crews' `[crews.<name>] env`
+    /// entries read (a `file:` source is read from disk, not the environment),
+    /// so runtime defaults (`clock.env`) and a detached worker's launch
     /// environment can supply them as well as `pass` names.
     crew_sources: Vec<String>,
 }
@@ -111,9 +112,12 @@ impl ExecutionEnvPolicy {
         mut self,
         entries: impl IntoIterator<Item = &'a CrewEnvVar>,
     ) -> Self {
-        for entry in entries {
-            if !self.crew_sources.contains(&entry.source) {
-                self.crew_sources.push(entry.source.clone());
+        for source in entries
+            .into_iter()
+            .filter_map(|entry| entry.source.variable())
+        {
+            if !self.crew_sources.iter().any(|held| held == source) {
+                self.crew_sources.push(source.to_string());
             }
         }
         self
@@ -202,8 +206,9 @@ impl ExecutionEnvPolicy {
         env
     }
 
-    /// The crew `env` entries whose source the effective parent environment,
-    /// runtime defaults included, holds no non-empty value for. Names only.
+    /// The crew `env` entries whose source variable the effective parent
+    /// environment, runtime defaults included, holds no non-empty value for,
+    /// or whose source file is missing, empty or refused. Names and paths only.
     pub fn unset_crew_env(&self, crew_env: &[CrewEnvVar]) -> Vec<CrewEnvVar> {
         if crew_env.is_empty() {
             return Vec::new();

@@ -910,7 +910,11 @@ env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]   # or a bare "NAME"
 
 `NAME=SOURCE` gives the agent `NAME` with the value of `SOURCE` from the
 launching shell (or `~/.orbit/clock.env` for clock-started runs); a bare `NAME`
-passes that variable to this crew only. The entry wins over `pass`, and setting
+passes that variable to this crew only. `NAME=file:/abs/path` (or `file:~/path`)
+reads the value from an owner-only file the host opens when it starts the agent,
+so no shell, service or `clock.env` has to export it (a symlink, a file owned by
+another user, a group- or world-readable, missing or empty file leaves the crew
+unavailable). The entry wins over `pass`, and setting
 one Claude credential removes the other from that crew. `env` is global-only:
 a workspace `config.toml` that sets it fails to load, and `orbit config set`
 needs `--global`. With the source unset, drain, ship and job starts warn, the

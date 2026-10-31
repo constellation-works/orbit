@@ -14,8 +14,9 @@ use std::time::Duration;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use orbit_common::process::run_bounded_capped;
+use orbit_common::security::child_env::crew_env_file_problem;
 use orbit_core::OrbitRuntime;
-use orbit_types::identity::CrewEnvVar;
+use orbit_types::identity::{CrewEnvSource, CrewEnvVar};
 
 /// Diagnose a successful `crews.<crew>.env` write using its newly resolved
 /// value, rather than the runtime's configuration from before the write.
@@ -42,6 +43,8 @@ pub fn crew_env_config_write_warnings(
 
 /// Warnings for declared crew sources missing from the current shell or a
 /// managed service. Probe failures are reported as unknown, never as success.
+/// A `file:` source is read by the host itself whatever launches it, so it is
+/// reported by the file's own state and no launcher is asked about it.
 pub fn crew_source_environment_warnings(
     runtime: &OrbitRuntime,
     crews: &[(String, Vec<CrewEnvVar>)],
@@ -54,13 +57,29 @@ pub fn crew_source_environment_warnings(
     let mut warnings = Vec::new();
     for (crew, entries) in crews {
         for entry in entries {
-            if std::env::var_os(&entry.source).is_none_or(|value| value.is_empty()) {
-                warnings.push(format!(
-                    "crew `{crew}` env source {} is unset or empty in the current shell",
-                    entry.source
-                ));
+            match &entry.source {
+                CrewEnvSource::Variable(source) => {
+                    if std::env::var_os(source).is_none_or(|value| value.is_empty()) {
+                        warnings.push(format!(
+                            "crew `{crew}` env source {source} is unset or empty in the current \
+                             shell"
+                        ));
+                    }
+                }
+                CrewEnvSource::File(_) => {
+                    if let Some(problem) = crew_env_file_problem(entry) {
+                        warnings.push(format!(
+                            "crew `{crew}` env source {} (for {}) is unusable: {problem}; the \
+                             crew is unavailable until the file is fixed",
+                            entry.source, entry.name
+                        ));
+                    }
+                }
             }
         }
+    }
+    if source_names(crews).is_empty() {
+        return warnings;
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
@@ -101,9 +120,9 @@ pub fn crew_source_environment_warnings(
         match held {
             Some(held) => {
                 for (crew, entries) in crews {
-                    for entry in entries {
-                        if !held.contains(&entry.source) {
-                            warnings.push(format!("crew `{crew}` env source {} is unset or empty in the managed service environment: {location}; export it in the service environment and restart the service before starting a new drain", entry.source));
+                    for source in entries.iter().filter_map(|entry| entry.source.variable()) {
+                        if !held.contains(source) {
+                            warnings.push(format!("crew `{crew}` env source {source} is unset or empty in the managed service environment: {location}; export it in the service environment and restart the service before starting a new drain"));
                         }
                     }
                 }
@@ -135,9 +154,9 @@ pub fn crew_source_environment_warnings(
         };
         match held {
             Some(held) => for (crew, entries) in crews {
-                for entry in entries {
-                    if !held.contains(&entry.source) {
-                        warnings.push(format!("crew `{crew}` env source {} is unset or empty in the managed service environment: {label} (launchd, {} EnvironmentVariables; clock runs also read {}/clock.env); provide the source there and reload the LaunchAgent before starting a new drain", entry.source, path.display(), runtime.global_root().display()));
+                for source in entries.iter().filter_map(|entry| entry.source.variable()) {
+                    if !held.contains(source) {
+                        warnings.push(format!("crew `{crew}` env source {source} is unset or empty in the managed service environment: {label} (launchd, {} EnvironmentVariables; clock runs also read {}/clock.env); provide the source there and reload the LaunchAgent before starting a new drain", path.display(), runtime.global_root().display()));
                     }
                 }
             },
@@ -147,11 +166,13 @@ pub fn crew_source_environment_warnings(
     warnings
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// The source variables the crews read, which a launcher's environment must
+/// supply; `file:` sources need nothing from a launcher.
 fn source_names(crews: &[(String, Vec<CrewEnvVar>)]) -> Vec<String> {
     crews
         .iter()
-        .flat_map(|(_, entries)| entries.iter().map(|entry| entry.source.clone()))
+        .flat_map(|(_, entries)| entries.iter().filter_map(|entry| entry.source.variable()))
+        .map(str::to_string)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()

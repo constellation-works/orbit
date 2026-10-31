@@ -191,6 +191,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
                 orbit_types::identity::CrewEnvVar::parse(&format!("OPENAI_API_KEY={SOURCE}"))
                     .unwrap(),
             ],
+            file_problems: Default::default(),
         });
     runtime.write_run_state(&drain, &state).unwrap();
     let readiness = default_readiness(&runtime);

@@ -203,3 +203,86 @@ fn sustained_pool_warning_reaches_run_show_and_readiness_text() {
         assert!(!text.contains(SECRET));
     }
 }
+
+/// A `file:` source is judged by the file itself, not by the shell or a
+/// managed service: its state is named by crew and path, never the value.
+#[cfg(unix)]
+#[test]
+fn doctor_and_config_report_a_file_source_by_its_file_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let key = fixture.home.join("credits-key");
+    let entry = format!("OPENAI_API_KEY=file:{}", key.display());
+    fixture.crew_env("sol-credits", &entry);
+    let set = [(SET, SECRET), (UNSET, SECRET)];
+    let doctor_row = |fixture: &Fixture| {
+        let output = fixture
+            .command(&set)
+            .args(["doctor", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains(SECRET),
+            "credential value escaped"
+        );
+        let rows: Value = serde_json::from_slice(&output.stdout).unwrap();
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["check"] == "env-pass")
+            .unwrap()
+            .clone()
+    };
+
+    let config_output = fixture
+        .command(&set)
+        .args([
+            "config",
+            "set",
+            "--global",
+            "crews.sol-credits.env",
+            &format!("[\"{entry}\"]"),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(config_output.status.success(), "{config_output:?}");
+    let config: Value = serde_json::from_slice(&config_output.stdout).unwrap();
+    let warning = config["warning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("sol-credits")
+            && warning.contains(&key.display().to_string())
+            && warning.contains("does not exist")
+            && !warning.contains("shell"),
+        "{config}"
+    );
+    let row = doctor_row(&fixture);
+    let message = row["message"].as_str().unwrap();
+    assert_eq!(row["status"], "warning", "{row}");
+    assert!(
+        message.contains("sol-credits")
+            && message.contains(&key.display().to_string())
+            && message.contains("does not exist")
+            && !message.contains("managed service"),
+        "{row}"
+    );
+
+    fs::write(&key, format!("{SECRET}\n")).unwrap();
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
+    let row = doctor_row(&fixture);
+    let message = row["message"].as_str().unwrap();
+    assert!(
+        row["status"] == "warning"
+            && message.contains("chmod 600")
+            && message.contains("sol-credits"),
+        "{row}"
+    );
+
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+    let row = doctor_row(&fixture);
+    assert_eq!(
+        row["status"], "ok",
+        "a usable file clears the warning: {row}"
+    );
+}

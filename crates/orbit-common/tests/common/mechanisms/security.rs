@@ -2,13 +2,18 @@
 //! release-manifest signature verification.
 
 use chrono::NaiveDate;
-use orbit_common::security::child_env::allowlisted_child_env_from;
-use orbit_common::security::operator_env::{parse_env_text, read_env_file};
+use orbit_common::security::child_env::{
+    allowlisted_child_env_from, apply_crew_env_from, crew_env_file_problem, unset_crew_env_from,
+};
+use orbit_common::security::operator_env::{
+    SecretFileError, parse_env_text, read_env_file, read_secret_file,
+};
 use orbit_common::security::redaction::{
     is_high_confidence_single_token_credential, redact_all, redact_sensitive_env_text,
 };
 use orbit_common::security::release::{TrustedReleaseKey, verify_checksum_signature};
 use orbit_common::test_env::scoped;
+use orbit_types::identity::CrewEnvVar;
 
 fn env_names(env: &[(String, String)]) -> Vec<&str> {
     env.iter().map(|(name, _)| name.as_str()).collect()
@@ -117,6 +122,146 @@ fn a_file_other_users_can_read_is_refused_and_an_owner_only_one_is_read() {
         read_env_file(&link, &pass).is_err(),
         "a symlinked env file is refused"
     );
+}
+
+#[cfg(unix)]
+fn secret_file(dir: &std::path::Path, contents: &str, mode: u32) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = dir.join("credits-key");
+    std::fs::write(&path, contents).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+#[test]
+fn a_secret_file_is_read_trimmed_and_every_unsafe_state_is_refused_without_the_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = secret_file(dir.path(), "sk-secret-value\n", 0o600);
+    let written = path.to_str().unwrap();
+    assert_eq!(read_secret_file(written).unwrap(), "sk-secret-value");
+    std::fs::write(&path, "sk-secret-value\r\n\n").unwrap();
+    assert_eq!(read_secret_file(written).unwrap(), "sk-secret-value");
+
+    for mode in [0o644, 0o640, 0o604, 0o660] {
+        let path = secret_file(dir.path(), "sk-secret-value\n", mode);
+        let error = read_secret_file(path.to_str().unwrap()).unwrap_err();
+        assert_eq!(error, SecretFileError::Shared { mode }, "mode {mode:o}");
+        assert!(!error.to_string().contains("sk-secret-value"), "{error}");
+    }
+
+    let real = secret_file(dir.path(), "sk-secret-value\n", 0o600);
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    assert_eq!(
+        read_secret_file(link.to_str().unwrap()).unwrap_err(),
+        SecretFileError::Symlink
+    );
+
+    assert_eq!(
+        read_secret_file(dir.path().join("absent").to_str().unwrap()).unwrap_err(),
+        SecretFileError::Missing
+    );
+    for empty in ["", "\n", "  \n"] {
+        let path = secret_file(dir.path(), empty, 0o600);
+        assert_eq!(
+            read_secret_file(path.to_str().unwrap()).unwrap_err(),
+            SecretFileError::Empty,
+            "{empty:?}"
+        );
+    }
+    assert_eq!(
+        read_secret_file(dir.path().to_str().unwrap()).unwrap_err(),
+        SecretFileError::NotRegular
+    );
+}
+
+/// Only root can hand a file to another user, so the foreign-owner refusal is
+/// exercised when the suite runs as root and is otherwise unreachable here.
+#[cfg(unix)]
+#[test]
+fn a_secret_file_owned_by_another_user_is_refused() {
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = secret_file(dir.path(), "sk-secret-value\n", 0o600);
+    let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+    // SAFETY: `c_path` is a valid NUL-terminated path for the call's duration.
+    assert_eq!(unsafe { libc::chown(c_path.as_ptr(), 65534, 65534) }, 0);
+    assert_eq!(
+        read_secret_file(path.to_str().unwrap()).unwrap_err(),
+        SecretFileError::ForeignOwner
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tilde_secret_path_expands_to_the_home_directory() {
+    let home = tempfile::tempdir().unwrap();
+    secret_file(home.path(), "sk-home-value\n", 0o600);
+    let _env = scoped([("HOME", Some(home.path().to_str().unwrap()))]);
+    assert_eq!(read_secret_file("~/credits-key").unwrap(), "sk-home-value");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_backed_crew_entry_sets_only_its_target_and_an_unusable_file_leaves_it_unset() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = secret_file(dir.path(), "sk-credits-value\n", 0o600);
+    let entry = CrewEnvVar::parse(&format!("ANTHROPIC_API_KEY=file:{}", path.display())).unwrap();
+    let shared = [
+        ("PATH".to_string(), "/usr/bin".to_string()),
+        ("ANTHROPIC_API_KEY".to_string(), "shared-key".to_string()),
+        (
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "shared-oauth".to_string(),
+        ),
+    ];
+
+    let mut child = shared.to_vec();
+    apply_crew_env_from(&mut child, &shared, std::slice::from_ref(&entry));
+    assert_eq!(
+        child,
+        [
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            (
+                "ANTHROPIC_API_KEY".to_string(),
+                "sk-credits-value".to_string()
+            ),
+        ],
+        "the file's trimmed contents replace the shared key and the other Claude credential goes"
+    );
+    assert!(unset_crew_env_from(&shared, std::slice::from_ref(&entry)).is_empty());
+    assert_eq!(crew_env_file_problem(&entry), None);
+
+    // The same entry once the file is group-readable: the crew never falls
+    // back to the shared credential.
+    secret_file(dir.path(), "sk-credits-value\n", 0o640);
+    let mut child = shared.to_vec();
+    apply_crew_env_from(&mut child, &shared, std::slice::from_ref(&entry));
+    assert!(
+        !child.iter().any(|(name, _)| name == "ANTHROPIC_API_KEY"),
+        "a refused file leaves the target unset: {child:?}"
+    );
+    assert_eq!(
+        unset_crew_env_from(&shared, std::slice::from_ref(&entry)),
+        std::slice::from_ref(&entry)
+    );
+    let problem = crew_env_file_problem(&entry).expect("a refused file has a reason");
+    assert!(
+        problem.contains("chmod 600") && !problem.contains("sk-credits-value"),
+        "{problem}"
+    );
+
+    // The variable form is unchanged.
+    let variable = CrewEnvVar::parse("ANTHROPIC_API_KEY=CREDITS_KEY").unwrap();
+    let parent = [("CREDITS_KEY".to_string(), "from-variable".to_string())];
+    let mut child = shared.to_vec();
+    apply_crew_env_from(&mut child, &parent, &[variable]);
+    assert!(child.contains(&("ANTHROPIC_API_KEY".to_string(), "from-variable".to_string())));
 }
 
 /// Credential/session classification and the numeric floor prevent the owner

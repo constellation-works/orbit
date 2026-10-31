@@ -162,7 +162,10 @@ agents receive `NAME` with the value of `SOURCE`, read from the launching
 process or, for clock-started runs, from `clock.env`. Keep the source under
 a name no CLI reads, such as `ANTHROPIC_CREDITS_API_KEY_1`, so other crews
 and interactive shells are unaffected; the agent never receives `SOURCE`
-itself. When a crew entry sets a Claude credential (`ANTHROPIC_API_KEY` or
+itself. `NAME=file:PATH` (absolute, or `~/…`) reads the value from an owner-only
+file (mode `600`, not a symlink) the host opens when it starts the agent, so no
+shell, service or `clock.env` has to export it; an unusable file makes the crew
+unavailable like an unset source. When a crew entry sets a Claude credential (`ANTHROPIC_API_KEY` or
 `CLAUDE_CODE_OAUTH_TOKEN`), the other Claude credential is removed from that
 crew's agents. An unset or empty source excludes that crew from drains and
 is reported by name — never by value — on the run and by `orbit doctor`.
