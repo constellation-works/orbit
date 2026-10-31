@@ -1059,10 +1059,12 @@ detail stacks below the ranking.
 Below the ranking, the **Regression rate by change size** panel is the tab's
 one role panel. It shows the share of landed tasks with a regression linked to
 them within 7 days of completion, by lines changed. Each task counts once,
-under the crew and model of its final implementation run in the window, and
-needs a recorded diff size and at least 7 days since completion. Each crew and
-model as dispatched is its own curve, so `opus@medium` and `opus@high` are
-separate. Buckets double in width, and each point shows its Wilson 95%
+under the crew reference of its final implementation run as dispatched in the
+window, and needs a recorded diff size and at least 7 days since completion.
+Each crew reference as dispatched is its own curve, pooling every model
+recorded under that reference (the picker entry names those models), so
+`opus@medium` and `opus@high` are separate. The ranking above stays one row
+per crew and model. Buckets double in width, and each point shows its Wilson 95%
 interval. Use **Complexity** to narrow the curves to one tier, and the crew
 checklist above the chart to choose which curves are drawn; crews with at least
 30 tasks and a drawn bucket start selected. Buckets with fewer than 10 tasks are
