@@ -1,8 +1,8 @@
 ---
 title: "Scope: conflict budget for footprint admission"
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-28
+last_updated: 2026-10-31
+last_validated: 2026-10-31
 status: Draft
 stage: designing
 next: "Settle the open questions (sum vs max, where weights live), then file phase 1"
@@ -19,11 +19,14 @@ Status: proposed.
 Bearing: admission holds a context lock for every declared `context_files` selector and defers a
 candidate on any overlap with a held claim, reservation or wave member
 (`footprints_block`, defined in [`lock_mode.rs`](../../../crates/orbit-common/src/fs/lock_mode.rs), is consulted by [`coordination/admission/footprint.rs`](../../../crates/orbit-store/src/repository/task/coordination/admission/footprint.rs),
-via the `overlaps` closure in `selection.rs`, and by `owner_wave.rs` and the runtime lock index). Two settings already relax
+via the `overlaps` closure in `selection.rs`, and by `owner_wave.rs` and the runtime lock index;
+a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Two settings already relax
 that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
 (globs, default `["**/*.md"]`) takes no lock, and
 [`workflow.generated_paths`](../../CONFIG.md#generated-paths-are-regenerated-not-merged)
-([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it. A
+([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it, and
+[`workflow.lock_modes`](../../CONFIG.md#footprint-lock-modes) ([ORB-18157], done) waives an
+overlap at a path whose mode is `shared`. A
 conflict that reaches landing is repaired by `pr_conflict_recovery`, whose crew comes from
 `workflow.purpose_crews.failure_recovery` ([ORB-15663]); ws_orbit draws it from
 `gemini-flash, haiku, luna, muse-spark`. This scope makes the lock a priced decision instead of a
@@ -47,8 +50,8 @@ broken `agent-main` would sit until morning.
 
 Orbit has no way to express that trade today:
 
-- The lock is binary. `unlocked_context_paths` is a static list that applies all day, and every
-  other path is fully exclusive however rarely it actually conflicts.
+- The lock is static. `unlocked_context_paths` and `workflow.lock_modes` are static lists that
+  apply all day, however rarely a given path actually conflicts.
 - Orbit does not know what a conflict on a given path costs, or how often overlapping work on it
   conflicts. What it records today:
 
@@ -242,10 +245,10 @@ nothing. Footprints are declared before the work, and a finer declaration is wro
    read.
 3. **Does a generated path need a lock at all?** Its repair is mechanical, so
    `workflow.generated_paths` could imply "unlocked" by default instead of being listed twice.
-4. **Glob or regex?** [ORB-18157] proposed regex lock modes. Every path setting here uses
-   `unlocked_context_paths` globs (`**/mod.rs` already covers every `mod.rs`); one pattern syntax
-   across settings is proposed, and ORB-18157 should be rescoped to what globs and this budget
-   do not cover.
+4. **Glob or regex?** [ORB-18157] landed regex lock modes as `workflow.lock_modes`. Every path
+   setting here uses `unlocked_context_paths` globs (`**/mod.rs` already covers every `mod.rs`);
+   one pattern syntax across settings is proposed, and this budget would layer on the landed
+   `workflow.lock_modes` rather than replace it.
 
 ## Acceptance (feature level)
 
@@ -267,6 +270,6 @@ nothing. Footprints are declared before the work, and a finer declaration is wro
 - [ORB-15191] — treated a footprint-less editing task as a whole-tree lock in multi-slot drains
 - [ORB-15663] — routed conflict recovery through the failure-recovery purpose pool
 - [ORB-16784] — regenerated configured generated paths at conflict recovery instead of merging them
-- [ORB-18157] — proposed per-path regex lock modes; to be rescoped against this design
+- [ORB-18157] — landed per-path regex lock modes as `workflow.lock_modes` (exclusive/shared)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

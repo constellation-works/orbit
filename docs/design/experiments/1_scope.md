@@ -1,11 +1,11 @@
 ---
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-10-31
+last_validated: 2026-10-31
 status: Draft
 stage: building
-next: "Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today)"
+next: "Raise a due experiment through the human decision channel (decision requests are task-bound today)"
 feature: experiments
 doc_role: scope
 type: design
@@ -325,16 +325,24 @@ Policy only. Experiment definitions are store records.
 
 ## Phasing
 
-1. **Records and shadow assignment.** An additive migration (`crates/orbit-store/src/driver/sqlite/migration/experiments.rs`), lifecycle, events, `orbit.experiment.*`
+1. **Records and shadow assignment.** Done ([ORB-18473] built the records, lifecycle and
+   `orbit.experiment.*` tools; [ORB-18474] added sticky shadow assignment at admission,
+   captured into claims). An additive migration (`crates/orbit-store/src/driver/sqlite/migration/experiments.rs`), lifecycle, events, `orbit.experiment.*`
    and CLI, sticky assignment at admission, claim capture of the arm, `task show` and
    `run show` lines. Overlays are recorded but not applied; the first experiment is an A/A
    test whose sample-ratio check must pass.
-2. **Instructions and tools.** Live mode for the two surfaces that reuse the most existing
+2. **Instructions and tools.** Done ([ORB-18475] made instruction and tool overlays live on
+   owner and claimed runs). Live mode for the two surfaces that reuse the most existing
    code: the tag-instruction slot and the tool allowlist, on owner and claimed runs, with
    digests.
-3. **Skills, crew and config keys.** The remaining surfaces, each validated at start.
-4. **Readout.** The analysis endpoint and Analytics › Experiments.
-5. **Decision and promotion.** Conclude stores the readout snapshot and files one promotion
+3. **Skills, crew and config keys.** Done ([ORB-18476] added crew and allowlisted config-key
+   overlays; [ORB-18477] added the per-run skill overlay). The remaining surfaces, each
+   validated at start.
+4. **Readout.** Done ([ORB-18478] built the per-arm readout; [ORB-18479] built the
+   Analytics › Experiments dashboard page; [ORB-19368] added create, edit and start there).
+   The analysis endpoint and Analytics › Experiments.
+5. **Decision and promotion.** Done in part ([ORB-18480] made conclude store the readout
+   snapshot and file one promotion task). Conclude stores the readout snapshot and files one promotion
    task. The decision-channel prompt at the horizon remains open: decision requests are
    task-bound today. The explore-brief trial becomes the first live experiment.
 
@@ -381,5 +389,14 @@ Policy only. Experiment definitions are store records.
 - [ORB-18363] — designs explore briefs and their three-arm trial
 - [ORB-18364] — charts tokens per task by complexity and tag
 - [ORB-18383] — records landed diff stats per delivery
+- [ORB-18473] — built experiment records, lifecycle and the `orbit.experiment.*` tools (phase 1)
+- [ORB-18474] — added sticky shadow assignment at admission, captured into claims (phase 1)
+- [ORB-18475] — made instruction and tool overlays live on owner and claimed runs (phase 2)
+- [ORB-18476] — added crew and allowlisted config-key overlays (phase 3)
+- [ORB-18477] — added the per-run skill overlay (phase 3)
+- [ORB-18478] — built the per-arm readout with intervals and the sample-ratio check (phase 4)
+- [ORB-18479] — built the Analytics › Experiments dashboard page (phase 4)
+- [ORB-18480] — made conclude store the readout snapshot and file the promotion task (phase 5)
+- [ORB-19368] — added create, edit and start for experiments on the dashboard page (phase 4)
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
