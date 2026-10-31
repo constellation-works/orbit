@@ -8,6 +8,7 @@ use orbit_types::workflow::activity_job::Provider;
 /// different runtime would defeat the point of the override.
 pub fn typed_crew_config(crew: &Crew) -> CrewConfig {
     CrewConfig {
+        name: Some(crew.name.clone()),
         env: crew.env.clone(),
         account: crew.account().map(ToOwned::to_owned),
         vision_disabled: !crew.vision,
@@ -49,6 +50,7 @@ fn typed_crew_config_from_assignment(raw: &CrewAssignment) -> CrewConfig {
     let model = (!model.is_empty()).then(|| model.to_string());
 
     CrewConfig {
+        name: None,
         provider,
         model,
         reasoning_effort: raw.effort,

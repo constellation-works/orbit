@@ -171,6 +171,7 @@ fn delivery(runtime: &OrbitRuntime) {
         .unwrap();
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: format!("delivery-{}", task.id),
             activity_id: "agent_implement".into(),
             agent: "codex".into(),

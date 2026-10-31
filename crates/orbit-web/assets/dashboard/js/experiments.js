@@ -894,6 +894,8 @@ function crewCard(readout, color) {
     return el("div", { class: "ex-crew-row" }, [
       el("span", { class: "ex-arm-name" }, [swatch(armColor(color(arm.name))), arm.name]),
       el("span", { class: "ex-crews" }, crews.length ? crews : [el("span", { class: "mx-muted", text: "no tasks" })]),
+      el("span", { class: "mx-muted", text: `Recorded effort: ${(arm.effort_breakdown || []).map(item =>
+        `${item.crew || "unknown crew"} · ${item.model || "unknown model"} · ${item.reasoning_effort === null ? "provider default" : item.reasoning_effort || "unknown"}: ${item.invocations} invocations`).join("; ") || "unknown"}` }),
     ]);
   });
   return card("Crew mix", [

@@ -479,7 +479,18 @@ fn mcp_shows_a_finished_runs_recorded_steps_with_their_provenance() {
     let projected = job_run_to_json(&run, Some(&fixture.state(&run.run_id)));
     for (surface, mcp) in mcp_views(&fixture.runtime, &run.run_id) {
         assert_eq!(mcp["steps_source"], "record", "{surface}: {mcp}");
-        assert_eq!(mcp["steps"], projected["steps"], "{surface}");
+        let mut expected_steps = projected["steps"].clone();
+        for step in expected_steps.as_array_mut().unwrap() {
+            step["agent_executions"] = json!([]);
+        }
+        if surface == "show" {
+            assert_eq!(
+                mcp["agent_executions"],
+                json!([]),
+                "a deterministic step has no provider execution identity"
+            );
+        }
+        assert_eq!(mcp["steps"], expected_steps, "{surface}");
         assert_eq!(mcp["error_code"], Value::Null, "{surface}");
         if surface == "show" {
             assert_eq!(

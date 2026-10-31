@@ -145,6 +145,7 @@ fn task_detail_attributes_the_producing_pilot_activity() {
                     fixture
                         .runtime
                         .insert_invocation_trace_record(&InvocationInsertParams {
+                            agent_execution_id: None,
                             job_run_id: run_id.clone(),
                             activity_id: activity.into(),
                             agent: "claude".into(),

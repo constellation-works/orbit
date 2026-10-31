@@ -419,6 +419,7 @@ fn pilot_cli_ranks_task_pilot_crews_against_the_landed_diff() {
         runtime.write_run_state(&run.run_id, &state).unwrap();
         runtime
             .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+                agent_execution_id: None,
                 job_run_id: run.run_id.clone(),
                 account: None,
                 activity_id: "pilot".into(),

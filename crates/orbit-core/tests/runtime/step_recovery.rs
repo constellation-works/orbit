@@ -341,6 +341,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
                     || key == "workflow.purpose_crews.auto_fix"
             });
         Ok(recovery.then(|| orbit_engine::CrewConfig {
+            name: None,
             provider: None,
             model: Some(model.to_string()),
             reasoning_effort: None,

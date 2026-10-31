@@ -628,3 +628,163 @@ fn agent_invocation_contracts_1() {
         check();
     }
 }
+
+/// The observed missing dispatch field made effort tuning blend history.
+/// Exercise the real provider argv and both public run-show boundaries.
+#[test]
+fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes() {
+    if !isolated_run_observation(
+        "run_observation::agent_invoke::agent_effort_is_recorded_after_resolution_and_survives_configuration_changes",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let args_path = fixture.home.join("provider-argv");
+    let frame = serde_json::json!({"type":"item.completed", "item":{"type":"agent_message", "text":AGENT_TEST_ANSWER}});
+    plant_invoke_provider(
+        &fixture,
+        &format!(
+            "printf '%s\\n' \"$@\" > '{}'\nprintf '%s\\n' '{}'\nprintf '%s\\n' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":100,\"output_tokens\":20}}}}'",
+            args_path.display(),
+            frame
+        ),
+    );
+    let config_path = fixture.home.join(".orbit/config.toml");
+    let original = fs::read_to_string(&config_path).unwrap();
+    let mut runs = Vec::new();
+    for effort in [Some("high"), Some("xhigh"), None, Some("unsupported-value")] {
+        let mut config: toml_edit::DocumentMut = original.parse().unwrap();
+        config["crews"]["sol"]
+            .as_table_mut()
+            .unwrap()
+            .remove("effort");
+        if let Some(effort) = effort {
+            config["crews"]["sol"]["effort"] = toml_edit::value(effort);
+        }
+        fs::write(&config_path, config.to_string()).unwrap();
+        let result = operator_json(
+            &fixture,
+            &[
+                "run",
+                "agent",
+                "effort probe",
+                "--crew",
+                "sol",
+                "--wait",
+                "--timeout",
+                "30s",
+                "--provider-sandbox",
+                "danger-full-access",
+                "--json",
+            ],
+        );
+        let run_id = result["run_id"].as_str().unwrap().to_string();
+        let argv = fs::read_to_string(&args_path).unwrap();
+        let expected = effort.filter(|effort| *effort != "unsupported-value");
+        assert_eq!(
+            argv.contains("model_reasoning_effort="),
+            expected.is_some(),
+            "record the rendered option, including omission: {argv}"
+        );
+        if let Some(expected) = expected {
+            assert!(
+                argv.contains(&format!("model_reasoning_effort=\"{expected}\"")),
+                "{argv}"
+            );
+        }
+        runs.push((run_id, expected));
+    }
+    // Read after the crew was changed again: historical provenance is immutable.
+    for (id, effort) in &runs {
+        let shown = fixture.show_json(id);
+        let launches = shown["run"]["agent_executions"].as_array().unwrap();
+        assert_eq!(launches.len(), 1, "{shown}");
+        assert_eq!(launches[0]["crew"], "sol");
+        assert_eq!(launches[0]["reasoning_effort"], serde_json::json!(effort));
+        let step_launches: Vec<_> = shown["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|step| step["agent_executions"].as_array().unwrap())
+            .collect();
+        assert_eq!(step_launches.len(), 1, "{shown}");
+        assert_eq!(
+            step_launches[0]["reasoning_effort"],
+            serde_json::json!(effort)
+        );
+        let mcp = operator_json(
+            &fixture,
+            &[
+                "tool",
+                "run",
+                "orbit.workflow.run.show",
+                "--input",
+                &serde_json::json!({"id":id}).to_string(),
+            ],
+        );
+        assert_eq!(
+            mcp["agent_executions"][0]["reasoning_effort"],
+            serde_json::json!(effort),
+            "{mcp}"
+        );
+    }
+    let runtime = fixture.registered_runtime();
+    runtime
+        .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: "historical-effort".into(),
+            activity_id: "implement_one".into(),
+            agent: "codex".into(),
+            provider: Some("codex".into()),
+            account: None,
+            model: Some("gpt-6-sol".into()),
+            task_ids: vec![],
+            trace: Default::default(),
+        })
+        .unwrap();
+    for (tool, input) in [
+        (
+            "orbit.agents.scorecard",
+            r#"{"role":"implementers","window":"30d"}"#,
+        ),
+        ("orbit.orchestrator.scorecard", r#"{"window":"30d"}"#),
+    ] {
+        let card = operator_json(&fixture, &["tool", "run", tool, "--input", input]);
+        let efforts: std::collections::BTreeSet<_> = card["effort_breakdown"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["reasoning_effort"].to_string())
+            .collect();
+        for expected in ["\"high\"", "\"xhigh\"", "null", "\"unknown\""] {
+            assert!(efforts.contains(expected), "{tool}: {card}");
+        }
+    }
+    let usage = serde_json::to_value(
+        runtime
+            .managed_execution_cost(orbit_core::runtime::cost::MetricsWindow::Month)
+            .unwrap(),
+    )
+    .unwrap();
+    let efforts: std::collections::BTreeSet<_> = usage["orchestration"]["buckets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row["effort_breakdown"].as_array().unwrap())
+        .map(|row| row["reasoning_effort"].to_string())
+        .collect();
+    for expected in ["\"high\"", "\"xhigh\"", "null", "\"unknown\""] {
+        assert!(efforts.contains(expected), "{usage}");
+    }
+    let ladder = operator_json(&fixture, &["crew", "ladder", "--json"]);
+    let efforts: std::collections::BTreeSet<_> = ladder["effort_breakdown"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["reasoning_effort"].to_string())
+        .collect();
+    assert!(
+        efforts.contains("\"high\"") && efforts.contains("\"xhigh\"") && efforts.contains("null"),
+        "{ladder}"
+    );
+}

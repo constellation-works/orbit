@@ -172,6 +172,7 @@ fn try_dispatch_spec(
 
 fn spec() -> AgentLoopSpec {
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,

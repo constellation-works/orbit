@@ -87,6 +87,9 @@ pub enum OrchestrationBucketKind {
 /// orchestration ownership rather than executor agent or model identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OrchestrationBucketSummary {
+    /// Completed usage by immutable dispatch crew, model and effective effort.
+    #[serde(default)]
+    pub effort_breakdown: Vec<orbit_types::telemetry::AgentEffortUsage>,
     pub kind: OrchestrationBucketKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orchestrator: Option<String>,

@@ -382,6 +382,7 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
     // A seven-day ledger reading with a live reset still stays neutral.
     runtime
         .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: "pressure-ledger-fixture".into(),
             account: None,
             activity_id: "implement_one".into(),

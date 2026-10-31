@@ -105,6 +105,7 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
         Column::new("RANK").number(),
         Column::new("CREW").fixed(),
         Column::new("MODEL"),
+        Column::new("EFFORT"),
         Column::new("UNITS").number(),
         Column::new("SCORE").number(),
     ];
@@ -128,6 +129,7 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
             },
             text(&row["crew"]),
             text(&row["model"]),
+            effort_labels(&row["effort_breakdown"]),
             number(&row["units"]),
             number(&row["score"]),
         ];
@@ -335,6 +337,11 @@ pub(crate) fn show_blocks(value: &Value) -> Vec<Block> {
         number(&value["fleet_average"]),
     ))];
 
+    blocks.push(Block::text(format!(
+        "Recorded effort: {}",
+        effort_labels(&row["effort_breakdown"])
+    )));
+
     let terms = value["terms"].as_array().cloned().unwrap_or_default();
     let normalised = row["expected"].is_object();
     if normalised {
@@ -474,5 +481,25 @@ fn number(value: &Value) -> String {
         }
         Value::Number(number) => number.to_string(),
         _ => "-".into(),
+    }
+}
+
+fn effort_labels(value: &Value) -> String {
+    let labels = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            if row["reasoning_effort"].is_null() {
+                "provider default".to_string()
+            } else {
+                text(&row["reasoning_effort"])
+            }
+        })
+        .collect::<Vec<_>>();
+    if labels.is_empty() {
+        "unknown".into()
+    } else {
+        labels.join(", ")
     }
 }

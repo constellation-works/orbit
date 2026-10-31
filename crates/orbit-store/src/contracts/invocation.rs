@@ -32,6 +32,9 @@ pub struct InvocationQuery {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InvocationInsertParams {
+    /// Dispatch record captured before launch; absent for historical callers.
+    #[serde(default)]
+    pub agent_execution_id: Option<i64>,
     pub job_run_id: String,
     pub activity_id: String,
     pub agent: String,
@@ -60,6 +63,9 @@ pub struct InvocationToolCallRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InvocationRecord {
+    /// Actual dispatch identity. None means historical effort is unknown.
+    #[serde(default)]
+    pub execution: Option<orbit_types::telemetry::AgentExecutionIdentity>,
     pub id: i64,
     pub ts: DateTime<Utc>,
     pub job_run_id: String,
@@ -110,6 +116,9 @@ pub struct InvocationAccountingQuery {
 /// One invocation and its distinct task linkage, without detailed tool calls.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InvocationAccountingFact {
+    /// Actual dispatch identity. None means historical effort is unknown.
+    #[serde(default)]
+    pub execution: Option<orbit_types::telemetry::AgentExecutionIdentity>,
     pub id: i64,
     /// Run identity within the queried workspace; absent on old serialized facts.
     #[serde(default)]
@@ -179,4 +188,103 @@ pub struct ToolInvocationMetrics {
     pub call_count: u64,
     pub avg_result_bytes: f64,
     pub total_result_bytes: u64,
+}
+
+/// One agent launch, retained independently of its completion telemetry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentExecutionRecord {
+    pub id: i64,
+    pub run_id: String,
+    pub activity_id: String,
+    pub provider: String,
+    pub model: Option<String>,
+    pub identity: orbit_types::telemetry::AgentExecutionIdentity,
+    pub started_at: DateTime<Utc>,
+}
+
+/// Aggregate completed invocations without consulting mutable crew configuration.
+/// Missing dispatch identity is a separate historical `unknown` population.
+pub fn agent_effort_usage<'a>(
+    facts: impl IntoIterator<Item = &'a InvocationAccountingFact>,
+) -> Vec<orbit_types::telemetry::AgentEffortUsage> {
+    let mut accumulator = AgentEffortUsageAccumulator::default();
+    for fact in facts {
+        record_agent_effort_usage(&mut accumulator, fact);
+    }
+    finish_agent_effort_usage(accumulator)
+}
+
+type AgentEffortKey = (Option<String>, Option<String>, Option<String>);
+type AgentEffortPopulation = (
+    orbit_types::telemetry::AgentEffortUsage,
+    std::collections::BTreeSet<String>,
+);
+
+/// Bounded by distinct crew/model/effort identities and linked task ids, without
+/// retaining another copy of the full invocation population.
+#[derive(Debug, Default)]
+pub struct AgentEffortUsageAccumulator {
+    rows: std::collections::BTreeMap<AgentEffortKey, AgentEffortPopulation>,
+}
+
+/// Add exactly one completed invocation to its recorded population.
+pub fn record_agent_effort_usage(
+    accumulator: &mut AgentEffortUsageAccumulator,
+    fact: &InvocationAccountingFact,
+) {
+    use orbit_types::telemetry::AgentEffortUsage;
+    let crew = fact
+        .execution
+        .as_ref()
+        .and_then(|execution| execution.crew.clone());
+    let effort = fact
+        .execution
+        .as_ref()
+        .map(|execution| execution.reasoning_effort.map(|effort| effort.to_string()))
+        .unwrap_or(Some("unknown".to_string()));
+    let (row, tasks) = accumulator
+        .rows
+        .entry((crew.clone(), fact.model.clone(), effort.clone()))
+        .or_insert_with(|| {
+            (
+                AgentEffortUsage {
+                    crew,
+                    model: fact.model.clone(),
+                    reasoning_effort: effort,
+                    invocations: 0,
+                    tasks: 0,
+                    duration_ms: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_cost_usd: 0.0,
+                    provider_cost_count: 0,
+                },
+                std::collections::BTreeSet::new(),
+            )
+        });
+    row.invocations += 1;
+    row.duration_ms = row.duration_ms.saturating_add(fact.duration_ms);
+    row.input_tokens = row.input_tokens.saturating_add(fact.input_tokens);
+    row.output_tokens = row.output_tokens.saturating_add(fact.output_tokens);
+    if let Some(cost) = fact
+        .provider_cost_usd
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
+    {
+        row.provider_cost_usd += cost;
+        row.provider_cost_count += 1;
+    }
+    tasks.extend(fact.task_ids.iter().cloned());
+}
+/// Stable identity order, with distinct task support for each population.
+pub fn finish_agent_effort_usage(
+    accumulator: AgentEffortUsageAccumulator,
+) -> Vec<orbit_types::telemetry::AgentEffortUsage> {
+    accumulator
+        .rows
+        .into_values()
+        .map(|(mut row, tasks)| {
+            row.tasks = tasks.len() as u64;
+            row
+        })
+        .collect()
 }

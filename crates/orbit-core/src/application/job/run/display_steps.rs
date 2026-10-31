@@ -148,6 +148,21 @@ impl RunDisplayStep {
         })
     }
 
+    /// A step's recorded launches, including retries, beside its normal output.
+    pub fn to_json_with_agent_execution(
+        &self,
+        state: Option<&PipelineState>,
+        evidence: &[super::ActivityInvocationEvidence],
+    ) -> Value {
+        let mut value = self.to_json_with_command_output(state);
+        value["agent_executions"] = json!(evidence.iter().filter(|record| record.activity_id == self.target_id).map(|record| json!({
+            "provider": record.provider, "model": record.model,
+            "crew": record.execution.as_ref().and_then(|identity| identity.crew.as_deref()),
+            "reasoning_effort": record.execution.as_ref().map(|identity| identity.reasoning_effort.map(|effort| effort.to_string())).unwrap_or(Some("unknown".to_string())),
+        })).collect::<Vec<_>>());
+        value
+    }
+
     /// A command's bounded result, excluding argv, environment and raw streams.
     /// Other checkpoint values (including provider responses) stay private to
     /// their existing projections. Older command checkpoints derive a tail

@@ -87,6 +87,7 @@ fn exhausted(account: Option<&str>, crew: &str) -> ProviderLimitObservation {
 fn spend(fx: &Fixture, account: Option<&str>, cost: f64) {
     fx.runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: "fixture-run".into(),
             account: account.map(ToOwned::to_owned),
             activity_id: "implement_one".into(),

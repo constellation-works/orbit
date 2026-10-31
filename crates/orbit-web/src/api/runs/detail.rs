@@ -161,7 +161,7 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         "pull_breaker": pull_breaker,
         "refused_settlements": refused_settlements,
         "crew_window": crew_window,
-        "steps": steps.to_json(),
+        "steps": steps.records.iter().map(|step| step.to_json_with_agent_execution(state.as_ref(), &evidence)).collect::<Vec<_>>(),
         "steps_source": steps.source.as_str(),
         "provider_processes": provider_processes
             .iter()

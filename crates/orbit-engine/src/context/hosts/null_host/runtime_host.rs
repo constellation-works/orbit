@@ -790,6 +790,17 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
             proc_allowed_programs,
         )
     }
+    fn begin_agent_execution(
+        &self,
+        run_id: &str,
+        activity_id: &str,
+        provider: &str,
+        model: Option<&str>,
+        identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<Option<i64>, OrbitError> {
+        NullRuntimeHost::begin_agent_execution(self, run_id, activity_id, provider, model, identity)
+    }
+
     fn persist_invocation_trace(
         &self,
         job_run_id: &str,

@@ -108,6 +108,7 @@ pub(super) fn map_invocation_record(row: &rusqlite::Row<'_>) -> rusqlite::Result
     });
 
     Ok(InvocationRecord {
+        execution: execution_identity(row.get(16)?)?,
         id: row.get(0)?,
         ts,
         job_run_id: row.get(2)?,
@@ -159,6 +160,7 @@ pub(super) fn map_invocation_accounting_fact(
     });
 
     Ok(InvocationAccountingFact {
+        execution: execution_identity(row.get(13)?)?,
         id: row.get(0)?,
         job_run_id: row.get(11)?,
         ts,
@@ -267,4 +269,19 @@ fn sql_placeholders(count: usize) -> String {
         .map(|index| format!("?{}", index + 1))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn execution_identity(
+    raw: Option<String>,
+) -> rusqlite::Result<Option<orbit_types::telemetry::AgentExecutionIdentity>> {
+    raw.map(|raw| {
+        serde_json::from_str(&raw).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                raw.len(),
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })
+    })
+    .transpose()
 }

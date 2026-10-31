@@ -41,6 +41,7 @@ fn record(
         .insert_invocation_trace_record(
             "ws_ledger",
             &InvocationInsertParams {
+                agent_execution_id: None,
                 job_run_id: "run".to_string(),
                 account: None,
                 activity_id: "implement_one".to_string(),

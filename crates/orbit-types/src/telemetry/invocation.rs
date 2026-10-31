@@ -88,3 +88,30 @@ pub struct InvocationTrace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_prompt_requests: Option<Vec<TokenUsage>>,
 }
+
+/// The immutable identity actually rendered to an agent provider. An absent
+/// identity on a historical invocation means unknown, while a present identity
+/// with null effort means the provider default was used.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AgentExecutionIdentity {
+    /// Resolved crew at dispatch, absent for an inline agent without a crew.
+    pub crew: Option<String>,
+    /// Effective provider-mapped effort; null when no effort was rendered.
+    pub reasoning_effort: Option<crate::identity::ReasoningEffort>,
+}
+
+/// Completed invocation usage grouped by the actual crew, model and effort.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentEffortUsage {
+    pub crew: Option<String>,
+    pub model: Option<String>,
+    /// `unknown` for historical invocations, null for the provider default.
+    pub reasoning_effort: Option<String>,
+    pub invocations: u64,
+    pub tasks: u64,
+    pub duration_ms: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub provider_cost_usd: f64,
+    pub provider_cost_count: u64,
+}

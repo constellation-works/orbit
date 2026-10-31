@@ -60,6 +60,7 @@ fn installed_grok_cli_backend_smoke_captures_stdout_artifact() {
     )
     .expect("build audit writer");
     let spec = AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,

@@ -17,6 +17,10 @@ use crate::OrbitRuntime;
 /// The whole ladder.
 #[derive(Debug, Clone, Serialize)]
 pub struct CrewLadderReport {
+    /// Completed invocations in the last 90 days, by actual crew/model/effort.
+    pub effort_breakdown: Vec<orbit_types::telemetry::AgentEffortUsage>,
+    /// Historical invocation population covered by the breakdown.
+    pub effort_window_days: u32,
     /// `workflow.crew_ladder.mode`.
     pub mode: String,
     /// `workflow.crew_ladder.rungs`, cheapest first.
@@ -119,7 +123,16 @@ impl OrbitRuntime {
                 })
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;
+        let facts = self.sqlite_store()?.list_invocation_accounting_facts(
+            &orbit_store::contracts::InvocationAccountingQuery {
+                workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
+                since: Some(chrono::Utc::now() - chrono::Duration::days(90)),
+                until: chrono::Utc::now(),
+            },
+        )?;
         Ok(CrewLadderReport {
+            effort_breakdown: orbit_store::contracts::agent_effort_usage(&facts),
+            effort_window_days: 90,
             mode: plan.settings.mode.as_str().to_string(),
             rungs: plan.settings.rungs.clone(),
             tiers: plan

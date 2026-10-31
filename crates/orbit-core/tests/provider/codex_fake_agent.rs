@@ -173,6 +173,7 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
     )
     .expect("build audit writer");
     let spec = ActivityV2Spec::AgentLoop(AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "Return the requested Orbit response envelope.".to_string(),
         steering_instruction: None,

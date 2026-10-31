@@ -218,6 +218,7 @@ fn arm_readout(
     });
     let run_digests: Vec<String> = run_digests.into_iter().flatten().cloned().collect();
     ReadoutArm {
+        effort_breakdown: Vec::new(),
         name: arm.name.clone(),
         control: arm.control,
         weight: arm.weight,
@@ -348,6 +349,29 @@ impl OrbitRuntime {
             unreadable: enrolled.len() - observed.tasks.len(),
         };
         let mut readout = build_readout(&record, enrollment, &observed, metric, now)?;
+        let facts = self.sqlite_store()?.list_invocation_accounting_facts(
+            &orbit_store::contracts::InvocationAccountingQuery {
+                workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
+                since: Some(record.experiment.created_at),
+                until: now,
+            },
+        )?;
+        for arm in &mut readout.arms {
+            let assigned = observed
+                .tasks
+                .iter()
+                .filter(|task| task.arm == arm.name)
+                .map(|task| (task.task_id.as_str(), task.assigned_at))
+                .collect::<BTreeMap<_, _>>();
+            arm.effort_breakdown =
+                orbit_store::contracts::agent_effort_usage(facts.iter().filter(|fact| {
+                    fact.task_ids.iter().any(|id| {
+                        assigned
+                            .get(id.as_str())
+                            .is_some_and(|assigned_at| fact.ts >= *assigned_at)
+                    })
+                }));
+        }
         readout
             .warnings
             .extend(self.crew_pool_mismatches(&record, &observed.tasks)?);

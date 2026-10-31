@@ -382,11 +382,12 @@ fn run_json_enriched(
             .collect_run_audit_steps(&run.run_id)
             .unwrap_or_default()
     });
+    let effort_evidence = evidence.unwrap_or_default();
     value["steps"] = json!(
         steps
             .records
             .iter()
-            .map(|step| step.to_json_with_command_output(state))
+            .map(|step| step.to_json_with_agent_execution(state, effort_evidence))
             .collect::<Vec<_>>()
     );
     value["steps_source"] = json!(steps.source.as_str());

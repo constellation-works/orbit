@@ -114,6 +114,34 @@ fn ladder_blocks(value: &Value) -> Vec<Block> {
         }
     }
     let mut blocks = vec![Block::text(header), Block::table(table)];
+    let effort = value["effort_breakdown"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            format!(
+                "{} · {} · {}: {} invocations",
+                text(&row["crew"]),
+                text(&row["model"]),
+                if row["reasoning_effort"].is_null() {
+                    "provider default".into()
+                } else {
+                    text(&row["reasoning_effort"])
+                },
+                text(&row["invocations"])
+            )
+        })
+        .collect::<Vec<_>>();
+    blocks.push(Block::text(format!(
+        "Recorded effort ({} days): {}",
+        text(&value["effort_window_days"]),
+        if effort.is_empty() {
+            "unknown".into()
+        } else {
+            effort.join("; ")
+        }
+    )));
+
     if !reasons.is_empty() {
         blocks.push(Block::text(format!("\nReasons:\n{}", reasons.join("\n"))));
     }

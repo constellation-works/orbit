@@ -13,7 +13,8 @@ pub use audit_actor::{
 };
 pub use audit_event::{AuditEvent, AuditEventStatus, AuditStats, audit_event_base_json};
 pub use invocation::{
-    InvocationTrace, LONG_PROMPT_CAPTURE_FLOOR_TOKENS, TokenUsage, ToolCallTrace,
+    AgentEffortUsage, AgentExecutionIdentity, InvocationTrace, LONG_PROMPT_CAPTURE_FLOOR_TOKENS,
+    TokenUsage, ToolCallTrace,
 };
 pub use metrics::MetricsEntry;
 pub use pricing::{

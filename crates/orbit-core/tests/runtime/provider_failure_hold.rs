@@ -776,6 +776,7 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 #[cfg(unix)]
 pub(super) fn implementation_job(provider: Provider) -> JobV2 {
     let spec = AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "implement the task".to_string(),
         steering_instruction: None,

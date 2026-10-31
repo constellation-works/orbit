@@ -1632,6 +1632,7 @@ fn the_explorer_sandbox_denies_writes_the_implementer_may_make() {
 fn implement_invocation(runtime: &OrbitRuntime, run_id: &str, activity: &str, ms: u64, usd: f64) {
     runtime
         .insert_invocation_trace_record(&orbit_store::contracts::InvocationInsertParams {
+            agent_execution_id: None,
             job_run_id: run_id.to_string(),
             account: None,
             activity_id: activity.to_string(),

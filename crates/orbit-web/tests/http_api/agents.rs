@@ -291,6 +291,26 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                 fixture
                     .runtime
                     .insert_invocation_trace_record(&InvocationInsertParams {
+                        agent_execution_id: Some(
+                            fixture
+                                .runtime
+                                .sqlite_store()
+                                .unwrap()
+                                .begin_agent_execution(
+                                    fixture.runtime.stores().jobs().workspace_id(),
+                                    &run,
+                                    "implement_one",
+                                    "codex",
+                                    Some(&model),
+                                    &orbit_types::telemetry::AgentExecutionIdentity {
+                                        crew: Some("crew".into()),
+                                        reasoning_effort: (index == 0).then_some(
+                                            orbit_types::identity::ReasoningEffort::High,
+                                        ),
+                                    },
+                                )
+                                .unwrap(),
+                        ),
                         job_run_id: run,
                         account: None,
                         activity_id: "implement_one".into(),
@@ -346,6 +366,26 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
             fixture
                 .runtime
                 .insert_invocation_trace_record(&InvocationInsertParams {
+                    agent_execution_id: Some(
+                        fixture
+                            .runtime
+                            .sqlite_store()
+                            .unwrap()
+                            .begin_agent_execution(
+                                fixture.runtime.stores().jobs().workspace_id(),
+                                "jrun-model-0",
+                                "implement_one",
+                                "codex",
+                                Some("model-0"),
+                                &orbit_types::telemetry::AgentExecutionIdentity {
+                                    crew: Some("crew".into()),
+                                    reasoning_effort: Some(
+                                        orbit_types::identity::ReasoningEffort::Xhigh,
+                                    ),
+                                },
+                            )
+                            .unwrap(),
+                    ),
                     job_run_id: "jrun-model-0".into(),
                     account: None,
                     activity_id: "implement_one".into(),
@@ -383,6 +423,22 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
             )));
             assert_eq!(http["status"], "ok");
             assert_eq!(http["row"], detail["row"]);
+            let efforts: std::collections::BTreeSet<_> = http["row"]["effort_breakdown"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["reasoning_effort"].to_string())
+                .collect();
+            assert_eq!(
+                efforts,
+                ["\"high\"".into(), "\"xhigh\"".into()]
+                    .into_iter()
+                    .collect()
+            );
+            assert_eq!(
+                repaired["effort_breakdown"][0]["reasoning_effort"],
+                Value::Null
+            );
         },
     );
 }
@@ -405,6 +461,7 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
                 fixture
                     .runtime
                     .insert_invocation_trace_record(&InvocationInsertParams {
+                        agent_execution_id: None,
                         job_run_id: run.into(),
                         account: None,
                         activity_id: "implement_one".into(),

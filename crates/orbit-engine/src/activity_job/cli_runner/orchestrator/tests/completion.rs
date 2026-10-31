@@ -65,6 +65,7 @@ fn project_stdout(
     let input = json!({});
     let redaction = PatternRedactor::http_default();
     project_completion(ProviderExit {
+        agent_execution_id: None,
         host: &host,
         spec: &spec,
         input: &input,

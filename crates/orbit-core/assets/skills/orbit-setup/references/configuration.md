@@ -731,6 +731,17 @@ list. Verify that record, rather than an agent's account of what changed.
 A crew is one named provider-and-model assignment. A task's `crew` field selects
 its executor; `workflow.default_crew` covers the rest.
 
+Optional `effort` tunes the existing provider-mapped reasoning vocabulary.
+Each launch records the effective value after crew/inline precedence and
+admission, alongside its resolved crew and model. Run show (`--json` and
+`orbit.workflow.run.show`) exposes `agent_executions` on the run and displayed
+steps: `reasoning_effort: null` means provider default, while `"unknown"` means
+historical execution without a record. Editing a crew never rewrites history.
+Scorecards, ladder reports, experiment arms and managed usage include effort
+breakdowns; inspect those populations when tuning a crew. Scorecard rankings
+retain their crew/model score, with effort shown as descriptive execution usage.
+
+
 ```toml
 [crews.reviewer]
 provider = "claude"

@@ -24,6 +24,7 @@ pub(super) fn persist_invocation_trace(
 ) -> Result<(), DispatchError> {
     let DispatchInvocationTrace {
         provider,
+        agent_execution_id,
         model,
         account,
         trace,
@@ -38,6 +39,7 @@ pub(super) fn persist_invocation_trace(
     );
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: *agent_execution_id,
             job_run_id: job_run_id.to_string(),
             activity_id: activity_id.to_string(),
             agent: agent.unwrap_or_else(|| provider.to_ascii_lowercase()),

@@ -1247,6 +1247,7 @@ fn agent_relay_uses_an_independent_persistent_feed() {
 
 pub(super) fn cli_agent_loop_spec(provider: Option<Provider>) -> AgentLoopSpec {
     AgentLoopSpec {
+        crew_name: None,
         tool_disallow_list: None,
         instruction: "cli smoke".to_string(),
         steering_instruction: None,
@@ -1362,6 +1363,7 @@ fn synthetic_loop_session_job() -> JobV2 {
         require_result: None,
         body: JobV2StepBody::Target(TargetStep {
             spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
+                crew_name: None,
                 tool_disallow_list: None,
                 instruction: String::new(),
                 steering_instruction: None,

@@ -35,6 +35,7 @@ fn agent_loop_activity(
         output_schema_json: Value::Null,
         fs_profile: None,
         spec: ActivityV2Spec::AgentLoop(AgentLoopSpec {
+            crew_name: None,
             instruction: "test".to_string(),
             steering_instruction: None,
             regression_risk_instruction: None,
