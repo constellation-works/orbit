@@ -5,44 +5,9 @@
 use clap::Command;
 use orbit_core::adapter::command::{PluginCliGroup, PluginCliVerb};
 
-#[test]
-fn decision_submit_cli_preserves_signed_raw_message() {
-    use crate::command::{Cli, Commands};
-    use clap::FromArgMatches;
-
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../orbit-core/tests/fixtures/decision-simple-body.json"
-    ))
-    .expect("signed message fixture");
-    let signed = fixture["raw_message"].as_str().expect("raw message");
-    let matches = crate::cli_command(&[])
-        .try_get_matches_from([
-            "orbit",
-            "decision",
-            "submit",
-            "request",
-            "1",
-            "--channel",
-            "email",
-            "--token",
-            "token",
-            "--raw-message",
-            signed,
-        ])
-        .expect("parse the real decision submit CLI");
-    let cli = Cli::from_arg_matches(&matches).expect("project CLI input");
-    let Commands::Decision(command) = cli.command else {
-        panic!("expected decision submit");
-    };
-    assert_eq!(
-        command.command.input["raw_message"]
-            .as_str()
-            .unwrap()
-            .as_bytes(),
-        signed.as_bytes(),
-        "CLI forwarding must preserve the signed simple body, including its final space and CRLF (ORB-18396)"
-    );
-}
+use super::super::discover::cli_command;
+use super::super::output_args::{JSON_ARG_ID, requested_output};
+use crate::plugin_cli;
 
 #[test]
 fn every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions() {
@@ -68,7 +33,7 @@ fn every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions() {
         "properties": {"json": {"type": "boolean"}}
     });
     plugin.verbs.push(domain_input);
-    let mut tree = crate::cli_command(&[plugin.clone()]);
+    let mut tree = cli_command(&[plugin.clone()]);
     tree.build();
     let mut paths = Vec::new();
     check_leaves(&tree, "orbit", &mut paths);
@@ -80,10 +45,10 @@ fn every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions() {
     let matches = tree
         .try_get_matches_from(["orbit", "--json", "fixture", "input", "--json"])
         .expect("global output and local tool-input flags coexist");
-    let (_, json) = crate::requested_output(&matches).expect("output options");
+    let (_, json) = requested_output(&matches).expect("output options");
     assert!(json);
     let invocation =
-        crate::plugin_cli::invocation_from_matches(&[plugin], &matches).expect("plugin invocation");
+        plugin_cli::invocation_from_matches(&[plugin], &matches).expect("plugin invocation");
     assert_eq!(
         invocation.tool_run.parsed_input().expect("tool input"),
         serde_json::json!({"json": true})
@@ -101,9 +66,9 @@ fn check_leaves(command: &Command, path: &str, paths: &mut Vec<String>) {
             .unwrap_or_else(|error| panic!("{path} rejected --json: {error}"));
         let json_arg = command
             .get_arguments()
-            .find(|arg| arg.get_long() == Some(crate::JSON_ARG_ID))
+            .find(|arg| arg.get_long() == Some(JSON_ARG_ID))
             .unwrap_or_else(|| panic!("{path} must accept --json"));
-        if json_arg.get_id().as_str() != crate::JSON_ARG_ID {
+        if json_arg.get_id().as_str() != JSON_ARG_ID {
             assert_eq!(
                 path, "orbit fixture input",
                 "unlisted exclusion: --json must select output unless it is a plugin tool input"

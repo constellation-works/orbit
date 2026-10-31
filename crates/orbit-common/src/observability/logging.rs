@@ -374,7 +374,7 @@ fn json_field_name(field: &Field) -> &str {
 
 /// Install the default fmt + env-filter subscriber. Safe to call multiple
 /// times — subsequent calls are no-ops (mirrors the current behaviour in
-/// `orbit-cli/src/main.rs`).
+/// `orbit-cli/src/entry/run.rs`).
 ///
 /// `default_filter` is applied when `RUST_LOG` is unset (e.g. `"warn"`,
 /// `"orbit=debug"`).
