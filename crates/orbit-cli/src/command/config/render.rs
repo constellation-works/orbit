@@ -653,10 +653,21 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
             if default_crew.as_deref() == Some(name.as_str()) {
                 annotation.push("workflow.default_crew");
             }
+            // A human crew has no provider or model: it names an operator.
+            let human = crew
+                .get("kind")
+                .is_some_and(|(kind, _)| kind == orbit_types::identity::HUMAN_CREW_KIND);
+            if human {
+                annotation.push("human crew: operator work, never dispatched");
+            }
             CrewRow {
                 enabled: cell("enabled"),
                 layer: layers.join("+"),
-                provider: cell("provider"),
+                provider: if human {
+                    orbit_types::identity::HUMAN_CREW_KIND.to_string()
+                } else {
+                    cell("provider")
+                },
                 model: cell("model"),
                 effort: cell("effort"),
                 tags: cell("tags"),

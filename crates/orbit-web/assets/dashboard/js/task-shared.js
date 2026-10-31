@@ -9,7 +9,7 @@ export const $ = (id) => document.getElementById(id);
 // Module-level state more than one task module reads or reassigns. An ES
 // module cannot reassign an imported `let`, so each value is a property here.
 export const taskState = {
-  lastCrewPayload: { default_crew: null, crews: [] },
+  lastCrewPayload: { default_crew: null, crews: [], human_crews: [], viewer_human_crew: null },
   // The list row whose detail the side pane shows. One task at a time: the pane
   // beside the list replaces the inline accordion, so selecting another row
   // moves the pane to it and the list itself never reflows around a detail.

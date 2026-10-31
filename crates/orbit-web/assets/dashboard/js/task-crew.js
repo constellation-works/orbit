@@ -47,10 +47,40 @@ export function normalizeCrewPayload(payload) {
       }))
     : [];
   crews.sort((a, b) => a.name.localeCompare(b.name));
+  // Human crews name operators: tasks assigned to one wait for that person,
+  // and no drain or task pilot picks them up.
+  const humanCrews = Array.isArray(payload && payload.human_crews)
+    ? payload.human_crews
+      .filter((crew) => crew && crew.name)
+      .map((crew) => ({
+        name: String(crew.name),
+        description: crew.description == null ? "" : String(crew.description),
+      }))
+    : [];
+  humanCrews.sort((a, b) => a.name.localeCompare(b.name));
+  const viewer = payload && payload.viewer_human_crew ? String(payload.viewer_human_crew) : null;
   return {
     default_crew: payload && payload.default_crew ? String(payload.default_crew) : null,
     crews,
+    human_crews: humanCrews,
+    viewer_human_crew: humanCrews.some((crew) => crew.name === viewer) ? viewer : null,
   };
+}
+
+// The human crew a task is assigned to, or null for an agent crew or none.
+export function humanCrewFor(task) {
+  const name = explicitCrewValue(task);
+  const humans = taskState.lastCrewPayload.human_crews || [];
+  return (name && humans.find((crew) => crew.name === name)) || null;
+}
+
+// The human crews the "My work" filter keeps: the viewer's own when the
+// server recognised it, else every human crew.
+export function myWorkCrewNames() {
+  const payload = taskState.lastCrewPayload;
+  const humans = payload.human_crews || [];
+  if (payload.viewer_human_crew) return [payload.viewer_human_crew];
+  return humans.map((crew) => crew.name);
 }
 
 export function cacheCrewPayload(payload) {
@@ -81,7 +111,8 @@ export function explicitCrewValue(task) {
 
 export function isConfiguredCrewValue(value) {
   const name = value ? String(value) : "";
-  return Boolean(name) && taskState.lastCrewPayload.crews.some((crew) => crew.name === name);
+  return Boolean(name) && (taskState.lastCrewPayload.crews.some((crew) => crew.name === name)
+    || (taskState.lastCrewPayload.human_crews || []).some((crew) => crew.name === name));
 }
 
 export function hasStaleExplicitCrew(task) {

@@ -4,6 +4,7 @@ import { captureWorkspaceVisit, panelCanRender, raiseMessageSlot, el, fetchJson,
 import { $, taskState, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, STATUS_LABELS } from './task-shared.js';
 import { forgetTaskDetailLoad } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
+import { myWorkCrewNames } from './task-crew.js';
 
 let settleMergedInFlight = false;
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
@@ -24,6 +25,10 @@ export function stopRowInteraction(node) {
 let notReadyOnly = false;
 let pilotWarningsOnly = false;
 export function taskPilotWarningsFilter() { return pilotWarningsOnly; }
+// "My work" keeps tasks assigned to the viewer's human crew (every human crew
+// when the server could not tell whose browser this is): operator work no
+// drain picks up. The chip shows only when the workspace has a human crew.
+let myWorkOnly = false;
 
 export function filterTasks(tasks, context) {
   const q = searchQueryValue(context);
@@ -32,6 +37,7 @@ export function filterTasks(tasks, context) {
     if (!activeStatuses.has(t.status)) return false;
     if (notReadyOnly && !taskReadiness.isNotReady(t)) return false;
     if (pilotWarningsOnly && !taskReadiness.pilotWarnings(t).length) return false;
+    if (myWorkOnly && !myWorkCrewNames().includes(t.crew)) return false;
     if (!q) return true;
     return (
       (t.id && t.id.toLowerCase().includes(q)) ||
@@ -344,8 +350,10 @@ export function refreshChips(context) {
     const on = chip.dataset.role === "not-ready"
       ? notReadyOnly
       : chip.dataset.role === "pilot-warnings" ? pilotWarningsOnly
+      : chip.dataset.role === "my-work" ? myWorkOnly
       : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
+    if (chip.dataset.role === "my-work") chip.hidden = myWorkCrewNames().length === 0 && !myWorkOnly;
     // ORB-10874: chip state must not rely on the active/inactive color
     // difference alone — aria-pressed exposes it to assistive tech too.
     chip.setAttribute("aria-pressed", on ? "true" : "false");
@@ -385,6 +393,7 @@ function buildTasksListHash(context) {
   }
   if (notReadyOnly) sp.set("ready", "not");
   if (pilotWarningsOnly) sp.set("pilot", "warnings");
+  if (myWorkOnly) sp.set("crew", "mine");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
   if (taskState.openTaskId) sp.set("open", taskState.openTaskId);
@@ -452,6 +461,7 @@ export function applyTasksHashQuery(query, context, page = null) {
   }
   notReadyOnly = query.get("ready") === "not";
   pilotWarningsOnly = query.get("pilot") === "warnings";
+  myWorkOnly = query.get("crew") === "mine";
   setSearchQuery(context, (query.get("q") || "").trim().toLowerCase());
 }
 
@@ -585,6 +595,13 @@ export function buildChips(context) {
     });
     (defaults.has(status) ? primary : secondary).appendChild(node);
   }
+  const myWork = chip("My work", { role: "my-work" }, false, "Open tasks assigned to your human crew: operator work no drain or task pilot picks up");
+  myWork.classList.add("my-work-filter");
+  myWork.addEventListener("click", () => {
+    myWorkOnly = !myWorkOnly;
+    navigateTasksHash(context);
+  });
+  primary.appendChild(myWork);
   const allChip = chip("All", { role: "all" }, true);
   allChip.addEventListener("click", () => {
     setActiveStatuses(context, new Set(statusOrder(context)));
@@ -659,6 +676,7 @@ export function renderFilterSummary(context) {
   }
   if (notReadyOnly) parts.push("not ready");
   if (pilotWarningsOnly) parts.push("pilot warnings");
+  if (myWorkOnly) parts.push(`my work (${myWorkCrewNames().join(", ") || "no human crew"})`);
   const q = searchQueryValue(context);
   if (q) parts.push(`search: "${q}"`);
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";

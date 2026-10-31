@@ -110,6 +110,10 @@ export function drainWaitBadge(entry) {
     // Only an explicit request names a task outside the backlog; a proposed
     // one waits for approval before any drain can take it.
     text = entry.status === "proposed" ? "awaits approval" : "not in backlog";
+  } else if (reason === "human_crew") {
+    // Operator work: no drain takes it, whatever its allowlist says.
+    const crew = typeof entry.crew === "string" && entry.crew ? entry.crew : "";
+    text = crew ? `human crew ${crew}` : "human crew";
   } else if (reason === "crew_not_allowed") {
     // The live drain's `--allow-crew` set leaves out the crew this task
     // would run as; another drain, or reassigning the task, takes it.

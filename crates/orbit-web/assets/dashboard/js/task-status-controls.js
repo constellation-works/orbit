@@ -125,6 +125,22 @@ export function buildCrewUpdateControl(task, context, { withChip = true } = {}) 
     select.appendChild(option);
   }
 
+  // Human crews are listed apart: assigning one hands the task to that
+  // operator, and no agent picks it up.
+  const humanCrews = taskState.lastCrewPayload.human_crews || [];
+  if (humanCrews.length > 0) {
+    const group = el("optgroup", { label: "Human crews (operator work)" });
+    for (const crew of humanCrews) {
+      const option = el("option", {
+        text: crew.name,
+        title: crew.description || "Operator work: no drain or task pilot picks it up",
+      });
+      option.value = crew.name;
+      group.appendChild(option);
+    }
+    select.appendChild(group);
+  }
+
   if (staleCurrentValue) {
     const option = el("option", {
       text: `${currentValue} (missing)`,

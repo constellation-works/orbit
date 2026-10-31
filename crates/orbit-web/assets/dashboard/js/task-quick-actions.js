@@ -4,7 +4,7 @@ import { captureWorkspaceVisit, getWorkspace, el, postJson, isAggregateView, run
 import { drainReadinessFor } from './drain-waits.js';
 import { claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole, registeredMachineHost } from './distributed.js';
 import { taskState, rerender, refreshTasks, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, pullRequestLink } from './task-shared.js';
-import { scheduleFeedbackExpiry } from './task-crew.js';
+import { humanCrewFor, scheduleFeedbackExpiry } from './task-crew.js';
 import * as taskShared from './task-shared.js';
 import { stopRowInteraction } from './task-nav.js';
 import { APPROVE_STATUSES, PULL_REQUEST_LINK_STATUSES, SHIP_STATUSES } from './task-actions.js';
@@ -60,7 +60,8 @@ export function hasQuickAction(task) {
     if (summaryExecutionLocation(task.job_run_machine).known) return true;
   }
   if (PULL_REQUEST_LINK_STATUSES.has(task.status) && pullRequestLink(task)) return true;
-  return APPROVE_STATUSES.has(task.status) || SHIP_STATUSES.has(task.status);
+  // A human crew's task is operator work no drain admits, so it has no Ship.
+  return APPROVE_STATUSES.has(task.status) || (SHIP_STATUSES.has(task.status) && !humanCrewFor(task));
 }
 
 function canRunQuickAction(task) {
@@ -125,7 +126,7 @@ export function buildQuickAction(task, context) {
     spec = { kind: "approve", text: "Approve", title: `Approve ${task.id}: move it to backlog so it can run` };
   } else if (task.status === "review") {
     spec = { kind: "approve", text: "Approve", title: `Approve ${task.id}: close it as done` };
-  } else if (SHIP_STATUSES.has(task.status)) {
+  } else if (SHIP_STATUSES.has(task.status) && !humanCrewFor(task)) {
     spec = { kind: "ship", text: "Ship", title: `Ship ${task.id}: dispatch it through the pipeline with its own crew` };
   }
   if (!spec) return cell;

@@ -422,6 +422,8 @@ pub struct OrbitRuntimeSettings {
     /// routine's `trigger.state.freshness` overrides [ORB-13638].
     task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
     crews: std::collections::BTreeMap<String, Crew>,
+    /// Operator crews (`[crews.<name>] kind = "human"`), apart from `crews`.
+    human_crews: std::collections::BTreeMap<String, orbit_types::identity::HumanCrew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
     /// Admitted `workflow.purpose_crews.final_recovery`; empty disables final recovery.
@@ -523,6 +525,7 @@ impl OrbitRuntimeSettings {
         admission_affinity: orbit_types::task::AdmissionAffinityReach,
         task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
         crews: std::collections::BTreeMap<String, Crew>,
+        human_crews: std::collections::BTreeMap<String, orbit_types::identity::HumanCrew>,
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
         final_recovery_crews: Vec<String>,
@@ -579,6 +582,7 @@ impl OrbitRuntimeSettings {
             admission_affinity,
             task_pilot_freshness,
             crews,
+            human_crews,
             default_crew,
             complexity_crews,
             final_recovery_crews,
@@ -803,6 +807,13 @@ impl OrbitRuntimeSettings {
 
     pub fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {
         &self.crews
+    }
+
+    /// Operator crews, which no dispatch, pool or redraw ever selects.
+    pub fn human_crews(
+        &self,
+    ) -> &std::collections::BTreeMap<String, orbit_types::identity::HumanCrew> {
+        &self.human_crews
     }
 
     pub fn complexity_crews(&self) -> &orbit_config::ComplexityCrewPools {

@@ -5,14 +5,17 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::Crew;
+use orbit_types::identity::{Crew, HumanCrew};
 
 use super::compatibility::{
     CompatibilityKeys, RETIRED_BACKEND_ENV, deprecated_keys_present,
     reject_retired_backend_overrides, reject_stale_agent_tables, removed_keys_present,
     validate_task_artifact_store_from_raw,
 };
-use super::crew::{IgnoredCrewProperty, crews_from_raw, default_crews};
+use super::crew::{
+    IgnoredCrewProperty, crews_from_raw, default_crews, explain_human_crew_reference,
+    human_crews_from_raw, reject_human_crew_name_collisions,
+};
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
 use crate::layering::load_layered_resolved;
@@ -81,6 +84,10 @@ pub struct ResolvedConfig {
     /// Named provider-model assignments from `[crews.<name>]`, disabled crews
     /// included (see [`Crew::enabled`]).
     pub crews: BTreeMap<String, Crew>,
+    /// Operator crews from `[crews.<name>] kind = "human"`. Kept apart from
+    /// [`Self::crews`], so no pool, default, overlay or redraw resolves one;
+    /// a task may still name one, and then waits for that person.
+    pub human_crews: BTreeMap<String, HumanCrew>,
     /// Crew used when a task declares none and no override is given.
     pub default_crew: Option<String>,
     /// Automatic admission pools; explicit task assignments take precedence.
@@ -134,6 +141,7 @@ impl ResolvedConfig {
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
             crews: default_crews(),
+            human_crews: BTreeMap::new(),
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),
@@ -293,14 +301,16 @@ impl ResolvedConfig {
             &document,
             std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),
         )?;
+        let human_crews = human_crews_from_raw(parsed.crews.as_ref(), config_path)?;
         let (crews, ignored_crew_properties) =
             crews_from_raw(parsed.crews.as_ref(), config_path, crew_field_path)?;
-        let snapshot = if options.scoped {
-            ConfigSnapshot::admit_scoped(&document, config_path, &crews)?
+        reject_human_crew_name_collisions(&crews, &human_crews)?;
+        let admitted = if options.scoped {
+            ConfigSnapshot::admit_scoped(&document, config_path, &crews)
         } else {
             match options.auto_memory_threshold {
                 AutoConcurrencyMemoryThreshold::EffectiveLayer => {
-                    ConfigSnapshot::admit(&document, config_path, &crews)?
+                    ConfigSnapshot::admit(&document, config_path, &crews)
                 }
                 AutoConcurrencyMemoryThreshold::Global(memory_high) => {
                     ConfigSnapshot::admit_with_global_memory_high(
@@ -308,13 +318,17 @@ impl ResolvedConfig {
                         config_path,
                         &crews,
                         memory_high,
-                    )?
+                    )
                 }
                 AutoConcurrencyMemoryThreshold::Skip => {
-                    ConfigSnapshot::admit_workspace(&document, config_path, &crews)?
+                    ConfigSnapshot::admit_workspace(&document, config_path, &crews)
                 }
             }
         };
+        // A pool, default or review crew naming a human crew fails as an
+        // unknown agent crew; say why instead.
+        let snapshot =
+            admitted.map_err(|error| explain_human_crew_reference(error, &human_crews))?;
         // One document is one layer. The layered loader replaces this with
         // the exact global/workspace resolution; a store passes the scope of
         // its file so pre-write validation reports accurate provenance.
@@ -365,6 +379,7 @@ impl ResolvedConfig {
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
             crews,
+            human_crews,
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),

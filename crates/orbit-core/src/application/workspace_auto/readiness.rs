@@ -493,6 +493,13 @@ pub fn explain_workspace_auto_readiness(
                             object.insert("placement_wait".to_string(), json!(wait));
                         }
                     }
+                    // Operator work: the human crew it waits for, never
+                    // `crew_not_allowed`, whatever the allowlist says.
+                    BacklogTaskExclusionReason::HumanCrew => {
+                        object.insert("reason".to_string(), json!(excluded.reason));
+                        object.insert("crew".to_string(), json!(excluded.crew));
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::CrewNotAllowed | BacklogTaskExclusionReason::CrewEnvUnset => {
                         object.insert("detail".to_string(), json!(excluded.detail));
                         object.insert("reason".to_string(), json!(excluded.reason));

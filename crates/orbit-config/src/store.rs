@@ -232,6 +232,11 @@ impl ConfigStore {
         &self.opened
     }
 
+    /// The document as staged in memory, edits included.
+    pub(crate) fn staged_text(&self) -> String {
+        self.doc.to_string()
+    }
+
     /// Whether the file backing this store exists on disk.
     pub fn exists_on_disk(&self) -> bool {
         self.path.exists()
@@ -840,10 +845,19 @@ fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonV
     let Some(parsed) = registry::parse_crew_field_key(key)? else {
         return Ok(None);
     };
+    if let Some(human) = resolved.human_crews.get(parsed.name) {
+        return Ok(Some(match parsed.field {
+            "kind" => serde_json::json!(orbit_types::identity::HUMAN_CREW_KIND),
+            "description" => serde_json::json!(human.description),
+            "tags" => serde_json::json!(human.tags),
+            _ => JsonValue::Null,
+        }));
+    }
     let Some(crew) = resolved.crews.get(parsed.name) else {
         return Ok(Some(JsonValue::Null));
     };
     Ok(Some(match parsed.field {
+        "kind" => serde_json::json!(orbit_types::identity::AGENT_CREW_KIND),
         "model" => serde_json::json!(crew.assignment.model),
         "provider" => serde_json::json!(crew.assignment.provider),
         "effort" => serde_json::json!(crew.assignment.effort),

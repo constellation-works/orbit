@@ -203,7 +203,7 @@ impl OrbitRuntime {
         let mut crew_assignment = None;
         let mut crew_redraw_history = None;
         if let Some(crew) = &mut params.crew {
-            *crew = self.canonical_crew_name(crew.as_deref())?;
+            *crew = self.canonical_task_crew_name(crew.as_deref())?;
             if crew.is_none() {
                 crew_assignment = self.creation_crew(
                     params.complexity.or(task.complexity),
@@ -224,7 +224,10 @@ impl OrbitRuntime {
                     .map(|assignment| assignment.crew.clone());
             } else {
                 // An explicit update must not pin a disabled crew onto a task.
-                self.resolve_crew_for_task(None, crew.as_deref())?;
+                // A human crew is no agent: it is assigned, never dispatched.
+                if !self.is_human_crew(crew.as_deref()) {
+                    self.resolve_crew_for_task(None, crew.as_deref())?;
+                }
                 crew_assignment = crew.as_ref().map(|crew| CreationCrewAssignment {
                     crew: crew.clone(),
                     source: "explicit".to_string(),
@@ -279,7 +282,9 @@ impl OrbitRuntime {
                 Some(crew) => crew.clone(),
                 None => task.crew.clone(),
             };
-            if let Some(crew) = crew.as_deref() {
+            if let Some(crew) = crew.as_deref()
+                && !self.is_human_crew(Some(crew))
+            {
                 self.refuse_unsatisfiable_os_crew(tags, crew)?;
             }
         }

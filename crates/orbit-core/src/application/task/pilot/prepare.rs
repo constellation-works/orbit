@@ -33,6 +33,9 @@ const MAX_EXCLUDED_SAMPLE: usize = 20;
 /// checkout names a network host. Preparing it would only stage work that
 /// fails at `pr_open`.
 const PR_FORGE_REMOTE_MISSING: &str = "pr_forge_remote_missing";
+/// A task assigned to a human crew: operator work the pilot never assesses,
+/// warns on or holds.
+const HUMAN_CREW_EXCLUSION: &str = "human_crew";
 
 pub(crate) fn prepare(
     runtime: &OrbitRuntime,
@@ -180,7 +183,11 @@ pub(crate) fn prepare(
             .into_iter()
             .filter(|task| !superseded.contains_key(&task.id))
             .filter(|task| {
-                if active_preparations.contains_key(&task.id) {
+                if runtime.is_human_crew(task.crew.as_deref()) {
+                    // Operator work: no pilot assessment, warning or hold.
+                    excluded.record(&task.id, HUMAN_CREW_EXCLUSION, &active_preparations);
+                    false
+                } else if active_preparations.contains_key(&task.id) {
                     excluded.record(&task.id, "already_preparing", &active_preparations);
                     false
                 } else if forge_refused(&task.tags) {
@@ -231,18 +238,23 @@ pub(crate) fn prepare(
         let mut selected = Vec::new();
         let mut excluded = ExcludedEvidence::default();
         for envelope in &envelopes {
-            let reason = automatic_exclusion_reason(
-                envelope.status,
-                &envelope.context_files,
-                envelope.complexity,
-                &envelope.tags,
-            )
-            .or_else(|| {
-                active_preparations
-                    .contains_key(&envelope.id)
-                    .then_some("active_pilot_prepared")
-            })
-            .or_else(|| forge_refused(&envelope.tags).then_some(PR_FORGE_REMOTE_MISSING));
+            let reason = runtime
+                .is_human_crew(envelope.crew.as_deref())
+                .then_some(HUMAN_CREW_EXCLUSION)
+                .or_else(|| {
+                    automatic_exclusion_reason(
+                        envelope.status,
+                        &envelope.context_files,
+                        envelope.complexity,
+                        &envelope.tags,
+                    )
+                })
+                .or_else(|| {
+                    active_preparations
+                        .contains_key(&envelope.id)
+                        .then_some("active_pilot_prepared")
+                })
+                .or_else(|| forge_refused(&envelope.tags).then_some(PR_FORGE_REMOTE_MISSING));
             let reason = if reason.is_none()
                 && envelope.context_files.is_empty()
                 && fresh_no_target_assessment(

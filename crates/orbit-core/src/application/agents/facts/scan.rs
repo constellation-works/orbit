@@ -68,6 +68,11 @@ pub(in crate::application::agents) fn scan(
         if task.created_at < horizon && task.updated_at < horizon {
             continue;
         }
+        // A human crew's task is operator work: its outcome scores no agent
+        // crew, ranking or usage row.
+        if runtime.is_human_crew(task.crew.as_deref()) {
+            continue;
+        }
         let id = task.id.to_string();
         let history = runtime.get_task_history(&id).unwrap_or_else(|error| {
             tracing::warn!(task_id = %id, %error, "agent scorecards: task history unreadable");

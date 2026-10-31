@@ -161,7 +161,7 @@ impl OrbitRuntime {
         if !requested.is_empty() {
             let kept: Vec<String> = requested
                 .into_iter()
-                .filter(|name| runnable(name))
+                .filter(|name| runnable(name) || self.is_human_crew(Some(name)))
                 .collect();
             if kept.is_empty() {
                 return Err(OrbitError::InvalidInput(format!(

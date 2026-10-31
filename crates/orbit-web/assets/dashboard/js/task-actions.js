@@ -5,6 +5,7 @@ import { renderMarkdown } from './markdown.js';
 import { claimedReviewApproval, handoffApprovalRequest, invalidateDistributedConsole } from './distributed.js';
 import { $, taskState, rerender, refreshTasks, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, actionErrorNode } from './task-shared.js';
 import * as taskShared from './task-shared.js';
+import { humanCrewFor } from './task-crew.js';
 import { collapseTask } from './task-nav.js';
 import { appendFixPrControls, appendPilotControls, appendRecoveryControls, appendTriageControls, escalationTriage, refreshFixPrControls, taskPullRequestNumber } from './task-agent-actions.js';
 
@@ -23,7 +24,8 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
   const kind = includeComment ? "comment-actions" : "lifecycle-actions";
   const actions = el("div", { class: `actions task-action-row ${kind}` });
   const mutable = canMutateTask(task);
-  if (includeLifecycle && SHIP_STATUSES.has(task.status)) {
+  // A human crew's task is operator work no drain admits, so it has no Ship.
+  if (includeLifecycle && SHIP_STATUSES.has(task.status) && !humanCrewFor(task)) {
     const shipped = taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task));
     const btn = el("button", {
       class: "action ship",

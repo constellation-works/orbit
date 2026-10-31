@@ -362,6 +362,42 @@ and `muse-wonder-full` to `low`, `medium`, and `hard`. Other
 providers leave the pools empty, which routes to `default_crew`. Init only
 seeds a new file; an existing config is not rewritten.
 
+### Human crews
+
+A human crew holds operator work: tasks you do yourself, such as approving a
+contract or renewing a domain. You track them in Orbit beside agent work, and
+nothing dispatches them.
+
+```toml
+[crews.dk]
+kind = "human"
+description = "My own work"
+```
+
+`kind` is `"agent"` by default. A human crew takes only `description` and
+`tags`. Setting `provider`, `model`, `effort` or `env` on it fails load, and
+so does giving it the name of an agent crew. A human crew:
+
+- is never admitted. Drains and pull followers skip its tasks, even under
+  `--allow-crew` naming it, and `orbit run readiness` reports each one with
+  reason `human_crew`;
+- is never assessed by the task pilot, which records nothing on its tasks;
+- is never drawn. `default_crew`, the crew pools, `purpose_crews` and
+  experiment arms may not name it, and a redraw never picks it;
+- is closed only by you. An agent's `orbit.task.update` cannot move its task
+  to `done`;
+- is left out of crew analytics, performance rankings and provider usage.
+
+The dashboard tags these tasks `for <name>`. The **My work** chip on the Tasks
+page shows only your human crew's open tasks.
+
+`orbit init` adds a human crew named after your OS user when the global config
+has none. At a terminal it asks you to confirm or change the name. Without a
+terminal, or with `--non-interactive`, it uses the OS user name. Pass
+`--human-name <name>` to choose the name. If the name is already an agent
+crew, init asks again at a terminal and otherwise fails without writing
+anything. Running init again keeps the existing human crew.
+
 ### Reasoning effort
 
 `effort` is unset by default, which keeps the provider's own default. A

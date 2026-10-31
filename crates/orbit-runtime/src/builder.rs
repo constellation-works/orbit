@@ -354,6 +354,7 @@ pub(crate) fn build_context_from_roots(
             admission_affinity,
             runtime_config.snapshot.task_pilot_freshness(),
             crews,
+            runtime_config.human_crews.clone(),
             default_crew,
             runtime_config.complexity_crews.clone(),
             runtime_config.snapshot.final_recovery_crews().to_vec(),

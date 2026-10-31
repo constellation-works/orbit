@@ -500,7 +500,8 @@ impl OrbitRuntime {
                     "crew name in the allowlist must not be empty".to_string(),
                 ));
             }
-            let Some(resolved) = self.canonical_crew_name(Some(name))? else {
+            // A human crew is accepted and admits nothing; readiness names it.
+            let Some(resolved) = self.canonical_task_crew_name(Some(name))? else {
                 return Err(OrbitError::InvalidInput(
                     "crew name in the allowlist must not be empty".to_string(),
                 ));

@@ -3,7 +3,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::{
-    Crew, CrewAssignment, all_agent_families, infer_agent_family_from_model, resolve_crew,
+    Crew, CrewAssignment, HumanCrew, all_agent_families, find_human_crew, human_crew_refusal,
+    infer_agent_family_from_model, resolve_crew,
 };
 use orbit_types::record::{CREW_DISCOVERY_SCHEMA_VERSION, CrewDiscoveryEntryV1, CrewDiscoveryV1};
 use orbit_types::task::{Task, TaskComplexity, is_valid_orb_task_id};
@@ -175,6 +176,11 @@ pub fn crew_allowlist_names_from_input(input: &Value) -> Result<Vec<String>, Orb
 pub struct ConfiguredCrewRegistryProjection {
     pub default_crew: Option<String>,
     pub crews: Vec<ConfiguredCrewProjection>,
+    /// Operator crews, listed apart: they are never a dispatch choice.
+    pub human_crews: Vec<HumanCrew>,
+    /// The human crew of the person viewing: the only one configured, else
+    /// the one named after the OS user. `None` when neither applies.
+    pub viewer_human_crew: Option<String>,
 }
 
 /// Named crew and model string from the active runtime configuration.
@@ -310,14 +316,52 @@ impl RuntimeKernel {
             })
             .collect::<Vec<_>>();
         crews.sort_by(|left, right| left.name.cmp(&right.name));
+        let human_crews = self
+            .context
+            .settings()
+            .human_crews()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let viewer_human_crew = match human_crews.as_slice() {
+            [only] => Some(only.name.clone()),
+            _ => orbit_config::os_user_human_crew_name()
+                .filter(|name| human_crews.iter().any(|human| human.name == *name)),
+        };
         ConfiguredCrewRegistryProjection {
             default_crew,
             crews,
+            human_crews,
+            viewer_human_crew,
         }
     }
 
     pub fn validate_crew_name(&self, crew: Option<&str>) -> Result<(), OrbitError> {
         self.canonical_crew_name(crew).map(|_| ())
+    }
+
+    /// The human crew `crew` names, if it names one.
+    pub fn human_crew(&self, crew: Option<&str>) -> Option<&HumanCrew> {
+        find_human_crew(crew, self.context.settings().human_crews())
+    }
+
+    /// Whether `crew` names a human crew (`[crews.<name>] kind = "human"`):
+    /// operator work that no drain, follower or task pilot picks up.
+    pub fn is_human_crew(&self, crew: Option<&str>) -> bool {
+        self.human_crew(crew).is_some()
+    }
+
+    /// Canonicalize the crew a task is assigned. A task, unlike a dispatch,
+    /// may name a human crew; anything else must name a configured agent
+    /// crew, as [`Self::canonical_crew_name`] requires.
+    pub fn canonical_task_crew_name(
+        &self,
+        crew: Option<&str>,
+    ) -> Result<Option<String>, OrbitError> {
+        match self.human_crew(crew) {
+            Some(human) => Ok(Some(human.name.clone())),
+            None => self.canonical_crew_name(crew),
+        }
     }
 
     /// Build the run-scoped allowlist for `names` [ORB-11242].
@@ -330,6 +374,13 @@ impl RuntimeKernel {
         let mut allowed_names = BTreeSet::new();
         let mut identities = BTreeSet::new();
         for name in names {
+            // A human crew permits nothing: its name joins the list as named,
+            // with no agent identity, so its tasks report `human_crew` rather
+            // than an unknown crew. Names cannot collide with agent crews.
+            if let Some(human) = self.human_crew(Some(name)) {
+                allowed_names.insert(human.name.clone());
+                continue;
+            }
             let crew = resolve_crew(name.trim(), self.context.settings().crews())?;
             identities.insert(crew_identity(&crew));
             allowed_names.insert(crew.name);
@@ -483,6 +534,18 @@ impl RuntimeKernel {
                     .to_string(),
             ));
         };
+        // A human crew is never an agent: refuse it by name rather than as an
+        // undefined crew, and never fall back to another crew for it.
+        if self.is_human_crew(Some(selected)) {
+            let subject = match source {
+                ProviderSource::TaskConfig => "task.crew",
+                _ => "the selected crew",
+            };
+            return Err(OrbitError::PolicyDenied(human_crew_refusal(
+                subject,
+                selected.trim(),
+            )));
+        }
         let crew = resolve_crew(selected, self.context.settings().crews())?;
         Ok((crew, source))
     }
@@ -545,7 +608,8 @@ impl RuntimeKernel {
 
         let has_resolvable_name =
             task.crew.is_some() || self.context.settings().default_crew().is_some();
-        if !has_resolvable_name {
+        // A human crew has no agent assignment to project.
+        if !has_resolvable_name || self.is_human_crew(task.crew.as_deref()) {
             return Ok(None);
         }
 

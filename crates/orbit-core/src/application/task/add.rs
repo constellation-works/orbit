@@ -197,7 +197,9 @@ impl OrbitRuntime {
         let planned_by = authored_role_value(params.plan.as_str(), &create_label);
         let comments = build_task_comments(params.comment.clone(), create_label.as_str())?;
         let dependencies = normalize_task_dependencies(params.dependencies.clone())?;
-        self.validate_crew_name(params.crew.as_deref())?;
+        // A task may name a human crew: it then waits for that operator, and
+        // no drain, follower or pilot picks it up.
+        self.canonical_task_crew_name(params.crew.as_deref())?;
         // [ORB-12717] Crew is initially decided here, and never by a later status
         // transition. A caller-supplied crew is kept verbatim; otherwise the
         // purpose pool its tags name, then the complexity pools (then
@@ -221,7 +223,9 @@ impl OrbitRuntime {
         params.crew = crew_assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
-        if let Some(crew) = params.crew.as_deref() {
+        if let Some(crew) = params.crew.as_deref()
+            && !self.is_human_crew(Some(crew))
+        {
             // An explicit crew is kept, including one this host cannot run: it
             // waits for a host that can. An empty intersection with the task's
             // `os:` tags is refused here, before the task is stored.

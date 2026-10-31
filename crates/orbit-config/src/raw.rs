@@ -48,6 +48,12 @@ pub(crate) struct RawCrewEntry {
     /// only a TOML boolean here, so a mistyped value fails the load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) enabled: Option<bool>,
+    /// `agent` (the default when absent) or `human`. A human crew names an
+    /// operator: it sets no provider, model, effort, env or vision, and
+    /// nothing dispatches it. A dedicated key rather than the retired
+    /// `backend`, whose migration guard stays as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

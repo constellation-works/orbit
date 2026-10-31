@@ -84,6 +84,7 @@ mod crew_ladder;
 mod crew_performance;
 mod crew_pools;
 mod experiment_keys;
+mod human_crew_seed;
 mod layering;
 mod lock_modes;
 mod memory_limit;
@@ -136,6 +137,10 @@ pub use crew_pools::{
     type_complexity_crews_key,
 };
 pub use experiment_keys::ExperimentConfigKey;
+pub use human_crew_seed::{
+    AgentCrewNames, HumanCrewSeedOutcome, human_crew_seed_collides, normalize_human_crew_name,
+    os_user_human_crew_name, seed_operator_human_crew,
+};
 pub use layering::{
     ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
     load_effective_config,

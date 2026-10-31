@@ -118,6 +118,27 @@ pub(super) fn mock_validation_exclusion(
     })
 }
 
+/// The exclusion for a task assigned to a human crew: operator work no drain
+/// or ship admits. Shared by automatic selection and the explicit ship
+/// override, like [`scheduled_exclusion`].
+pub(super) fn human_crew_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Option<BacklogTaskExclusion> {
+    let human = runtime.human_crew(task.crew.as_deref())?;
+    Some(BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::HumanCrew,
+        conflicts: Vec::new(),
+        crew: Some(human.name.clone()),
+        detail: Some(format!(
+            "assigned to human crew `{}`: operator work that no drain, follower or task pilot \
+             picks up; the operator completes it, or reassigns it to an agent crew",
+            human.name
+        )),
+    })
+}
+
 /// The exclusion for a `backlog` task whose `not_before` is still ahead.
 /// Shared by automatic selection and the explicit ship override, like
 /// [`host_os_exclusion`]. A hold that cannot be read is not one: the

@@ -6,7 +6,7 @@ import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } 
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
 import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag } from './task-shared.js';
-import { buildMutationFeedback, crewOptionsSignature, feedbackSignature } from './task-crew.js';
+import { buildMutationFeedback, crewOptionsSignature, feedbackSignature, humanCrewFor } from './task-crew.js';
 import { invalidateDistributedConsole } from './distributed.js';
 import { recoveryRefusals } from './task-agent-actions.js';
 export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
@@ -360,6 +360,18 @@ function buildBacklogReadiness(group, context) {
   return strip;
 }
 
+// Operator work: the task's crew is a human crew, so it waits for that person
+// and no drain or task pilot picks it up.
+function buildHumanCrewBadge(task) {
+  const human = humanCrewFor(task);
+  if (!human) return null;
+  return el("span", {
+    class: "human-crew-badge",
+    text: `for ${human.name}`,
+    title: `Operator work for human crew ${human.name}: no drain or task pilot picks it up`,
+  });
+}
+
 // A card whose rows the readiness filter hid entirely still says so.
 function buildFilteredEmpty(status) {
   const note = el("div", { class: "group-empty", text: `No ${(GROUP_LABELS[status] || status).toLowerCase()} tasks match this readiness filter.` });
@@ -497,6 +509,7 @@ export function renderTasks(tasks, context) {
             ? el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` })
             : null,
           ...buildOsBadges(t),
+          buildHumanCrewBadge(t),
           buildScheduledChip(t, context),
           ...taskReadiness.buildReadinessBadge(t),
           ...taskReadiness.buildPilotWarningBadge(t),
