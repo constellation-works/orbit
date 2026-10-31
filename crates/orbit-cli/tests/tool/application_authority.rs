@@ -307,6 +307,90 @@ spec:
     );
 }
 
+/// Regression: without an application, a plugin granted a completion tool
+/// keeps running it in its own sandbox instead of being forwarded to a host
+/// route that refuses every unbound completion call.
+#[test]
+fn unbound_plugin_completion_callbacks_run_in_the_backend_sandbox() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "unbound_plugin_completion_callbacks_run_in_the_backend_sandbox",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let task = fixture.json([
+        "task",
+        "add",
+        "--title",
+        "Plugin callback target",
+        "--complexity",
+        "low",
+        "--description",
+        "Check an unbound plugin callback.",
+    ]);
+    let id = task["id"].as_str().unwrap();
+    let update = json!({"id":id,"comment":"Updated by a granted plugin"});
+    let source = fixture.source("plaincallback");
+    let root = super::write_shell_backend(
+        &source,
+        format!(
+            r#"#!/bin/sh
+cat >/dev/null
+orbit tool run orbit.task.update --input '{}' >/dev/null || exit 71
+printf '{{"ok":true,"output":{{"callback":"ran"}}}}\n'
+"#,
+            update
+        ),
+    );
+    std::fs::write(
+        root.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: plaincallback
+  version: 0.1.0
+  description: Unbound completion callback fixture.
+spec:
+  permissions:
+    orbit_tools: [orbit.task.update]
+  backend:
+    type: exec
+    command: bin/backend.sh
+  tools:
+    - name: apply
+      description: Update a task through a granted callback.
+      execution_kind: mutating
+      mcp_scope: workspace
+"#,
+    )
+    .unwrap();
+    fixture.add(&source, &["--enable", "--grant", "orbit_tools"]);
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_orbit"))
+        .parent()
+        .expect("binary directory");
+    fixture
+        .orbit_as_operator()
+        .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
+        .args([
+            "tool",
+            "run",
+            "plaincallback.apply",
+            "--input",
+            "{}",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("\"ran\""));
+    assert!(
+        fixture
+            .json(["task", "show", id])
+            .to_string()
+            .contains("Updated by a granted plugin")
+    );
+}
+
 /// Exercise the inherited host route without spawning a sandboxed backend.
 /// The separate backend case above proves the real confinement integration.
 #[test]

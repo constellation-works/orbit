@@ -51,6 +51,18 @@ impl ApplicationCredential {
         orbit_types::identity::lower_hex(Sha256::digest(self.value.as_bytes()))
     }
 
+    /// Whether `stored` is this credential's fingerprint, compared in time
+    /// independent of where the strings first differ.
+    pub fn matches_fingerprint(&self, stored: &str) -> bool {
+        let actual = self.fingerprint();
+        actual.len() == stored.len()
+            && actual
+                .bytes()
+                .zip(stored.bytes())
+                .fold(0u8, |diff, (a, b)| diff | (a ^ b))
+                == 0
+    }
+
     /// Consume the mint result into a new owner-only credential file. Never
     /// overwrites an existing file or prints the credential.
     pub fn provision(self, path: &Path) -> Result<(), OrbitError> {

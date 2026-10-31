@@ -48,6 +48,10 @@ pub(super) const MAX_SESSION_BYTES: usize = 8 * 1024;
 /// surface mentions [ORB-12879].
 pub(super) const SESSION_SCHEMA_VERSION: u32 = 4;
 
+/// The previous schema, still read so callbacks from backends a pre-upgrade
+/// host started keep resolving. It carries no application binding.
+pub(super) const PREVIOUS_SESSION_SCHEMA_VERSION: u32 = 3;
+
 /// Live callback session the host minted for one backend child.
 #[derive(Debug)]
 pub struct PluginCallbackSession {
@@ -259,7 +263,7 @@ impl PluginCallbackSession {
                 .record
                 .effective_tools
                 .iter()
-                .any(|tool| super::is_host_routed_callback_tool(tool))
+                .any(|tool| super::host_route::routes_on_host(&self.record, tool))
         {
             self.host_route = Some(super::host_route::HostRoute::start(
                 self.record.clone(),

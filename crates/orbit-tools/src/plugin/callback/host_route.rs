@@ -62,6 +62,19 @@ pub fn is_host_routed_callback_tool(tool: &str) -> bool {
     HOST_ROUTED_CALLBACK_TOOLS.contains(&tool)
 }
 
+/// Whether `tool` is an application completion callback: host-routed only
+/// for a session the host bound to an application. Without one, a plugin
+/// granted the tool keeps calling it in its own sandbox, as before.
+pub(super) fn is_application_completion_tool(tool: &str) -> bool {
+    matches!(tool, "orbit.task.update" | "orbit.decision.answer")
+}
+
+/// Whether `record`'s child sends `tool` over the host route.
+pub(super) fn routes_on_host(record: &SessionRecord, tool: &str) -> bool {
+    is_host_routed_callback_tool(tool)
+        && (!is_application_completion_tool(tool) || record.application.is_some())
+}
+
 thread_local! {
     /// The session a host-route call runs under, set only by the route's own
     /// server thread for the length of one call.
@@ -352,11 +365,7 @@ mod unix {
             .and_then(|body| parse_request(&body))
         {
             Err(error) => unanswered_response(&error),
-            Ok((tool, _))
-                if !is_host_routed_callback_tool(&tool)
-                    || (matches!(tool.as_str(), "orbit.task.update" | "orbit.decision.answer")
-                        && record.application.is_none()) =>
-            {
+            Ok((tool, _)) if !routes_on_host(record, &tool) => {
                 unanswered_response(&OrbitError::PolicyDenied(format!(
                     "the plugin host route admits only {}; completion operations require an \
                      application-bound host session; '{tool}' is refused",
@@ -408,10 +417,15 @@ mod unix {
             return None;
         }
         // Only a process holding a credential the host wrote forwards: an
-        // ordinary caller may have any socket on the number.
-        crate::plugin::callback::resolution::credential_from_descriptor(
+        // ordinary caller may have any socket on the number. A completion
+        // tool forwards only under an application-bound record; otherwise it
+        // runs in the backend's own sandbox like any granted callback.
+        let record = crate::plugin::callback::resolution::credential_from_descriptor(
             &crate::plugin::callback::resolution::callback_dir(global_root),
         )?;
+        if !super::routes_on_host(&record, tool) {
+            return None;
+        }
         Some(match call_host(tool, input) {
             Ok(body) => outcome_from_response(&body),
             Err(error) => HostRouteOutcome::Unanswered(OrbitError::Execution(format!(

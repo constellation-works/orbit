@@ -330,7 +330,7 @@ impl RuntimeKernel {
             let record = self
                 .sqlite_store()?
                 .get_application_consent(credential.consent_id())?
-                .filter(|record| record.fingerprint == credential.fingerprint())
+                .filter(|record| credential.matches_fingerprint(&record.fingerprint))
                 .ok_or_else(|| {
                     OrbitError::CapabilityDenied("unrecognized application credential".into())
                 })?;

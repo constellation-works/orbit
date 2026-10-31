@@ -94,9 +94,18 @@ pub(super) fn session_process_is_live(record: &SessionRecord) -> bool {
     process_start_key(record.pid).is_some_and(|key| key.starttime == record.starttime)
 }
 
+/// The current schema, or the previous one without an application binding
+/// (which that schema cannot express), so an upgrade keeps running backends'
+/// callbacks working.
+fn record_schema_is_readable(record: &SessionRecord) -> bool {
+    record.schema_version == SESSION_SCHEMA_VERSION
+        || (record.schema_version == PREVIOUS_SESSION_SCHEMA_VERSION
+            && record.application.is_none())
+}
+
 pub(super) fn parse_session(bytes: &[u8]) -> Option<SessionRecord> {
     let record: SessionRecord = serde_json::from_slice(bytes).ok()?;
-    (record.schema_version == SESSION_SCHEMA_VERSION
+    (record_schema_is_readable(&record)
         && !record.plugin.trim().is_empty()
         && is_token_hex(&record.token))
     .then_some(record)
