@@ -260,7 +260,8 @@ impl OrbitRuntime {
             .get("crew")
             .and_then(Value::as_str)
             .and_then(non_empty);
-        let (candidates, source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
+        let (candidates, source) =
+            self.auto_task_crew_candidates(task, &pools, explicit, Some(allowlist))?;
         if let [only] = candidates.as_slice()
             && only.weight > 0
         {
@@ -334,7 +335,8 @@ impl OrbitRuntime {
         } else {
             None
         };
-        let (mut crews, mut source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
+        let (mut crews, mut source) =
+            self.auto_task_crew_candidates(task, &pools, explicit, allowlist.as_ref())?;
         // [verify-mock-ui §5.3] The implementer of a mock-driven task is
         // drawn from the pool's image-capable crews (native image read,
         // not `vision = false`) so it can use the `orbit visual capture`
@@ -418,6 +420,21 @@ impl OrbitRuntime {
                     &automatic,
                     &selected.crew.name,
                     weighting,
+                ),
+                original: original.to_string(),
+                source: automatic,
+                replacement: selected.crew.name.clone(),
+            });
+        }
+        if source.contains("; allowlist redraw")
+            && let Some(original) = task.crew.as_deref()
+            && original != selected.crew.name
+            && let Some(automatic) = self.task_crew_source(task)?
+        {
+            usage_pressure = Some(UsagePressureRedraw {
+                note: format!(
+                    "crew redrawn from {automatic} (`{original}`) to {automatic} (`{}`) at admission under the crew allowlist",
+                    selected.crew.name
                 ),
                 original: original.to_string(),
                 source: automatic,

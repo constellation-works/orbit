@@ -86,6 +86,8 @@ impl AdmittedCrewSource {
             "provider_hold"
         } else if selection.contains("; provider limit:") {
             "provider_limit"
+        } else if selection.contains("allowlist redraw") {
+            "allowlist"
         } else if selection.contains("usage pressure") {
             "usage_pressure"
         } else if selection.contains("image-capable implementer") {
