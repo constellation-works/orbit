@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::*;
 
 pub(super) fn run_parallel(
@@ -218,10 +220,15 @@ fn restored_compound_branch(stored: &Value) -> Option<(Value, serde_json::Map<St
     Some((output, exposed))
 }
 
-/// Checkpoint value for a succeeded compound branch: its output, plus every
-/// other pipeline entry the branch owns. Step ids are unique, and this runs
-/// after the branch returns, so sibling branches cannot still be writing
-/// these keys.
+/// Checkpoint value for a succeeded compound branch: its output, plus the
+/// other parent-pipeline entries the branch exposed.
+///
+/// Step ids are unique, but a fan-in alias may equal another step id, and
+/// `collect_step_keys` also names each fan-out worker and its descendants.
+/// Those workers write a private copy-on-write pipeline, so a parent entry
+/// under a worker id belongs to another producer. Skip that private
+/// namespace unless this branch's own fan-in alias uses the id: that alias
+/// is a parent write, even when it collides with a worker id.
 fn compound_branch_checkpoint_value(
     branch: &JobV2Step,
     ctx: &ExecCtx<'_>,
@@ -229,10 +236,15 @@ fn compound_branch_checkpoint_value(
 ) -> Value {
     let mut keys = Vec::new();
     super::execute::collect_step_keys(branch, &mut keys);
+    let private_worker_keys = fan_out_worker_local_keys(branch);
+    let owned_aliases = parent_fan_in_alias_keys(branch);
     let pipeline = ctx.pipeline_snapshot();
     let mut exposed = serde_json::Map::new();
     for key in keys {
         if key == branch.id {
+            continue;
+        }
+        if private_worker_keys.contains(key) && !owned_aliases.contains(key) {
             continue;
         }
         if let Some(value) = pipeline.get(key) {
@@ -244,6 +256,71 @@ fn compound_branch_checkpoint_value(
         "output": output,
         "exposed": Value::Object(exposed),
     })
+}
+
+/// Step ids a fan-out worker and its descendants write only into that
+/// worker's copy-on-write pipeline. A parent entry under one of these ids
+/// was produced by someone else.
+fn fan_out_worker_local_keys(step: &JobV2Step) -> HashSet<&str> {
+    let mut keys = HashSet::new();
+    collect_fan_out_worker_local_keys(step, &mut keys);
+    keys
+}
+
+fn collect_fan_out_worker_local_keys<'a>(step: &'a JobV2Step, keys: &mut HashSet<&'a str>) {
+    match &step.body {
+        JobV2StepBody::Parallel { parallel } => {
+            for branch in &parallel.branches {
+                collect_fan_out_worker_local_keys(branch, keys);
+            }
+        }
+        JobV2StepBody::Loop { loop_ } => {
+            for nested in &loop_.steps {
+                collect_fan_out_worker_local_keys(nested, keys);
+            }
+        }
+        JobV2StepBody::FanOut { fan_out, .. } => {
+            let mut worker_keys = Vec::new();
+            // The worker's own fan-outs, including their aliases, record into
+            // this private map. Do not walk them as parent-visible writers.
+            super::execute::collect_step_keys(&fan_out.worker, &mut worker_keys);
+            keys.extend(worker_keys);
+        }
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+    }
+}
+
+/// Fan-in `collect` and `errors` aliases this step records on the parent
+/// pipeline. A fan-out nested inside a worker is omitted: that fan-out
+/// records into the worker map. An alias may equal a worker id.
+fn parent_fan_in_alias_keys(step: &JobV2Step) -> HashSet<&str> {
+    let mut aliases = HashSet::new();
+    collect_parent_fan_in_alias_keys(step, &mut aliases);
+    aliases
+}
+
+fn collect_parent_fan_in_alias_keys<'a>(step: &'a JobV2Step, aliases: &mut HashSet<&'a str>) {
+    match &step.body {
+        JobV2StepBody::Parallel { parallel } => {
+            for branch in &parallel.branches {
+                collect_parent_fan_in_alias_keys(branch, aliases);
+            }
+        }
+        JobV2StepBody::Loop { loop_ } => {
+            for nested in &loop_.steps {
+                collect_parent_fan_in_alias_keys(nested, aliases);
+            }
+        }
+        JobV2StepBody::FanOut { fan_in, .. } => {
+            if let Some(alias) = fan_in.collect.as_deref() {
+                aliases.insert(alias);
+            }
+            if let Some(alias) = fan_in.errors.as_deref() {
+                aliases.insert(alias);
+            }
+        }
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
+    }
 }
 
 /// Checkpoint a succeeded branch of a job with auto-task steps before the

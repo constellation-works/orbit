@@ -618,3 +618,249 @@ fn parked_replay_keeps_succeeded_compound_branch_at_one_execution() {
     assert_eq!(done.pipeline["tick"]["n"], json!(1));
     assert_eq!(done.pipeline["gathered"], json!([{"mark": "once"}]));
 }
+
+fn step_with_body(id: &str, body: JobV2StepBody) -> JobV2Step {
+    JobV2Step {
+        id: id.to_string(),
+        stage: None,
+        when: None,
+        retry: None,
+        recovery_activity: None,
+        resolved_recovery_activity: None,
+        wait_until: None,
+        expire_when: None,
+        reuse_when: None,
+        require_result: None,
+        body,
+    }
+}
+
+fn fan_out_branch(
+    id: &str,
+    items: &str,
+    worker_id: &str,
+    action: &str,
+    collect: &str,
+) -> JobV2Step {
+    step_with_body(
+        id,
+        JobV2StepBody::FanOut {
+            fan_out: FanOutBlock {
+                items: items.to_string(),
+                max_workers: 1,
+                worker: Box::new(target_step(worker_id, action)),
+            },
+            fan_in: FanInSpec {
+                join: JoinMode::All,
+                collect: Some(collect.to_string()),
+                errors: None,
+            },
+        },
+    )
+}
+
+/// Seed writes `shared=[]`. The parked all-join then runs an empty fan-out
+/// whose private worker id is that alias, beside the fan-out that actually
+/// publishes `shared`.
+fn alias_collision_replay_job() -> JobV2 {
+    let seed = fan_out_branch("seed", "[]", "seed_worker", "seed_mark", "shared");
+    // Worker id collides with the sibling alias. This branch never writes
+    // parent `shared`; its collection is `b_results`.
+    let empty = fan_out_branch("b", "[]", "shared", "b_mark", "b_results");
+    let producer = fan_out_branch("a", "[\"one\"]", "a_worker", "a_mark", "shared");
+    // Alias equals this fan-out's own worker id, which remains a parent write.
+    let own_alias = fan_out_branch("c", "[\"one\"]", "c_kept", "c_mark", "c_kept");
+    let mut hold = step_with_body(
+        "hold",
+        JobV2StepBody::TargetRef(TargetRef {
+            target: "auto-task:hold".to_string(),
+            default_input: None,
+            timeout_seconds: 0,
+            session: None,
+        }),
+    );
+    hold.wait_until = Some("board.empty".to_string());
+    let gate = step_with_body(
+        "gate",
+        JobV2StepBody::Parallel {
+            parallel: ParallelBlock {
+                join: JoinMode::All,
+                branches: vec![empty, producer, own_alias, hold],
+            },
+        },
+    );
+    let mut read_back = target_step("read_back", "read_back");
+    if let JobV2StepBody::Target(target) = &mut read_back.body {
+        target.default_input = Some(json!({
+            "shared": "{{ steps.shared.output }}",
+            "b_results": "{{ steps.b_results.output }}",
+            "kept": "{{ steps.c_kept.output }}",
+        }));
+    }
+    job_with_steps(vec![seed, gate, read_back])
+}
+
+fn resume_alias_collision(host: &CompoundReplayHost, run_id: &str) -> PipelineState {
+    let mut state = host.resume_state(run_id);
+    // The seed fan-out completed before the park. Replaying it would publish
+    // `shared=[]` again; resuming from its checkpoint leaves that inherited
+    // empty collection for the parked block to correct.
+    state.record_step(0, JobRunState::Success, Some(json!([])), None);
+    state
+}
+
+fn assert_alias_collision_preserved(
+    outcome: &JobOutcome,
+    executions: usize,
+    host: &CompoundReplayHost,
+) {
+    assert!(
+        outcome.parked.is_some(),
+        "an all-join with a still-waiting branch stays parked"
+    );
+    assert!(!outcome.success);
+    assert_eq!(
+        host.inner.call_count("a_mark"),
+        executions,
+        "the fan-out that publishes shared must stay at one execution across parked replay"
+    );
+    assert_eq!(
+        host.inner.call_count("c_mark"),
+        executions,
+        "a fan-out whose alias equals its own worker id must stay at one execution"
+    );
+    assert_eq!(
+        host.inner.call_count("b_mark"),
+        0,
+        "the empty fan-out never runs its private worker"
+    );
+    assert_eq!(host.inner.call_count("seed_mark"), 0);
+    assert_eq!(
+        outcome.pipeline["shared"],
+        json!([{"tag": "new"}]),
+        "restoring the empty fan-out must not replace the producer's collection"
+    );
+    assert_eq!(outcome.pipeline["b_results"], json!([]));
+    assert_eq!(outcome.pipeline["c_kept"], json!([{"tag": "kept"}]));
+}
+
+/// [ORB-20452] A fan-in alias may equal another branch's fan-out worker id.
+/// The empty fan-out's checkpoint must not capture the inherited value under
+/// that private id, and replay must keep the real producer's collection no
+/// matter which succeeded branch is restored first. Succeeded compound work
+/// stays at one execution. An alias equal to the publishing fan-out's own
+/// worker id is still checkpointed.
+#[test]
+fn parked_alias_equal_to_sibling_worker_id_keeps_the_producer_collection() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::parked_alias_equal_to_sibling_worker_id_keeps_the_producer_collection"
+    )) {
+        return;
+    }
+
+    let host = CompoundReplayHost::new(ScriptedHost::new([
+        (
+            "a_mark",
+            vec![
+                Action::Ok(json!({"tag": "new"})),
+                Action::Ok(json!({"tag": "reran"})),
+            ],
+        ),
+        (
+            "c_mark",
+            vec![
+                Action::Ok(json!({"tag": "kept"})),
+                Action::Ok(json!({"tag": "reran"})),
+            ],
+        ),
+        ("read_back", vec![Action::Ok(json!({"read": true}))]),
+    ]));
+    let job = alias_collision_replay_job();
+    assert_eq!(job.steps[0].id, "seed");
+    let run_id = "run-alias-worker-checkpoint";
+    let writer = std::sync::Arc::new(test_writer(run_id));
+
+    let first = execute_job_with_resume(&job, Value::Null, run_id, writer.clone(), &host, None)
+        .expect("first pass parks");
+    assert_alias_collision_preserved(&first, 1, &host);
+    assert_eq!(host.observe_count(), 1);
+    let branches = host.branches();
+    let empty_checkpoint = &branches["gate"]["b"];
+    assert_eq!(empty_checkpoint["kind"], json!("compound_branch"));
+    assert_eq!(
+        empty_checkpoint["exposed"],
+        json!({"b_results": []}),
+        "an empty fan-out must not checkpoint the inherited value under its private worker id"
+    );
+    let producer_checkpoint = &branches["gate"]["a"];
+    assert_eq!(
+        producer_checkpoint["exposed"],
+        json!({"shared": [{"tag": "new"}]}),
+        "only the fan-out that writes the alias checkpoints that collection"
+    );
+    let own_alias_checkpoint = &branches["gate"]["c"];
+    assert_eq!(
+        own_alias_checkpoint["exposed"],
+        json!({"c_kept": [{"tag": "kept"}]}),
+        "a fan-in alias equal to the same fan-out's worker id is still a parent entry"
+    );
+    assert!(
+        !branches["gate"].contains_key("hold"),
+        "a waiting branch is not checkpointed as succeeded"
+    );
+    // `b` does not record `shared`, so restoring `b` before or after `a`
+    // cannot put the inherited empty collection back.
+
+    let second = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer.clone(),
+        &host,
+        Some(&resume_alias_collision(&host, run_id)),
+    )
+    .expect("second pass parks again");
+    assert_alias_collision_preserved(&second, 1, &host);
+    assert_eq!(host.observe_count(), 2);
+
+    host.set_phase(CompoundReplayPhase::Admit);
+    let third = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer.clone(),
+        &host,
+        Some(&resume_alias_collision(&host, run_id)),
+    )
+    .expect("admission still parks on the bound task");
+    assert_alias_collision_preserved(&third, 1, &host);
+    assert_eq!(host.observe_count(), 3);
+
+    host.set_phase(CompoundReplayPhase::Receipt);
+    let done = execute_job_with_resume(
+        &job,
+        Value::Null,
+        run_id,
+        writer,
+        &host,
+        Some(&resume_alias_collision(&host, run_id)),
+    )
+    .expect("accepted receipt lets the all-join finish");
+    assert!(done.success);
+    assert!(done.parked.is_none());
+    assert_eq!(host.inner.call_count("a_mark"), 1);
+    assert_eq!(host.inner.call_count("c_mark"), 1);
+    assert_eq!(host.inner.call_count("b_mark"), 0);
+    assert_eq!(host.inner.call_count("seed_mark"), 0);
+    assert_eq!(host.inner.call_count("read_back"), 1);
+    assert_eq!(host.observe_count(), 4);
+    assert_eq!(done.pipeline["shared"], json!([{"tag": "new"}]));
+    assert_eq!(done.pipeline["b_results"], json!([]));
+    assert_eq!(done.pipeline["c_kept"], json!([{"tag": "kept"}]));
+    let read_back = &host.inputs_for("read_back")[0];
+    assert_eq!(read_back["shared"], json!([{"tag": "new"}]));
+    assert_eq!(read_back["b_results"], json!([]));
+    assert_eq!(read_back["kept"], json!([{"tag": "kept"}]));
+    assert_eq!(read_back["step_id"], json!("read_back"));
+}
