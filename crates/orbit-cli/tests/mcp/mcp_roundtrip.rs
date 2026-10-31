@@ -1139,11 +1139,7 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     let mut sorted = names.clone();
     sorted.sort_unstable();
     assert_eq!(names, sorted, "tools/list must be name-sorted");
-    for expected in [
-        "orbit_friction_update",
-        "orbit_task_show",
-        "orbit_agent_invoke",
-    ] {
+    for expected in ["orbit_friction_update", "orbit_task_show"] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
 
@@ -1302,15 +1298,19 @@ fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials(
     for definition in orbit_mcp::canonical_mcp_tool_definitions().expect("canonical definitions") {
         let canonical = definition.schema.name.as_str();
         let name = mcp_advertised_tool_name(canonical);
+        // agent.invoke is listed only to a server a managed run launched, for
+        // explorer delegation; the operator path is deprecated.
+        if canonical == "orbit.agent.invoke" {
+            assert!(!operator_names.contains(&name.as_str()));
+            assert!(!names.contains(&name.as_str()));
+            continue;
+        }
         assert!(
             operator_names.contains(&name.as_str()),
             "operator missing {name}"
         );
-        // agent.invoke has a separate managed-run explorer admission: its
-        // operator-only catalog row does not make it unconditionally denied.
-        let uncallable = canonical != "orbit.agent.invoke"
-            && governed_tool(canonical)
-                .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent));
+        let uncallable = governed_tool(canonical)
+            .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent));
         assert_eq!(
             names.contains(&name.as_str()),
             !uncallable,
@@ -2579,6 +2579,11 @@ fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirem
         .filter(|definition| definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired)
     {
         let name = definition.schema.name.as_str();
+        // Listed only by a server a managed run launched, so this operator
+        // session has no advertised schema to hold it to.
+        if name == "orbit.agent.invoke" {
+            continue;
+        }
         let advertised_name = orbit_types::tool::mcp_advertised_tool_name(name);
         let requires_selector = advertised
             .iter()
@@ -5456,7 +5461,10 @@ fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
         &["--operator"],
         &[],
     );
-    let tool = client.listed_tool("orbit_agent_invoke");
+    // Only a server a managed run launched lists the tool.
+    let tool = workspace
+        .serve_with_args_and_env(&[], &[("ORBIT_MANAGED_RUN_CONTEXT", "1")])
+        .listed_tool("orbit_agent_invoke");
     let properties = &tool["inputSchema"]["properties"];
     assert_eq!(properties["wait_seconds"]["minimum"], 0);
     assert_eq!(properties["wait_seconds"]["maximum"], 600);

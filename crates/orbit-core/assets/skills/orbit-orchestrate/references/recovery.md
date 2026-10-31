@@ -135,10 +135,9 @@ request of a task with no live run back to its stopped leaf's completion step,
 unless an operator holds the task. When you
 must decide what happens next, follow these steps:
 
-1. **Diagnose with `orbit_agent_invoke`.** Run it on the host that owns the
-   preserved worktree, with `cwd` set to that worktree (`orbit run show
-   <run-id> --json` names it), or `orbit run agent --cwd <worktree>
-   "<prompt>"`. Ask for a verdict:
+1. **Diagnose the preserved worktree.** On the host that owns it (`orbit run
+   show <run-id> --json` names it), read it yourself or run your provider's
+   CLI read-only in it. Reach a verdict:
    - Is the candidate salvageable?
    - Which review findings still hold?
    - What work remains?
@@ -146,8 +145,8 @@ must decide what happens next, follow these steps:
 
    Point it at the candidate head, the kept repair ref and the task's
    `review-report.json`. Record its answer on the task as a comment or as
-   remaining work. The invocation is diagnosis only. It must not commit,
-   push, edit a pull request, or change the task. Say so in the prompt, and
+   remaining work. The diagnosis is read-only. It must not commit, push,
+   edit a pull request, or change the task. Say so to any agent you run, and
    check afterwards that it did not.
 2. **Route by cause.**
    - **Transient** (host restart, provider outage, a killed worker, a forge

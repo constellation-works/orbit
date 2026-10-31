@@ -489,7 +489,7 @@ Cancelling a task leaf returns its task to the backlog with the reason and keeps
 ## Operator agent invocations
 
 A run of `agent_invoke_pipeline` is one operator invocation of an agent for exploration
-or debugging (`orbit run agent <prompt>`, or the `orbit.agent.invoke` tool). It is a
+or debugging (the deprecated `orbit run agent <prompt>`, or the `orbit.agent.invoke` tool). It is a
 single-step run that creates no worktree, has no task ownership or delivery tail, so most of
 this runbook's task-recovery steps do not apply to one.
 

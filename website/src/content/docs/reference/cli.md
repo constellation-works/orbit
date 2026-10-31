@@ -160,7 +160,7 @@ keyed by the requested field names.
 | `orbit run readiness [task_id ...]` | Explain, read-only, why backlog tasks can or cannot start. `--concurrency` overrides the ceiling; omit it to use the live local drain's ceiling, else a live pull drain's (including `orbit run concurrency --set`), else 5. `--json` names that choice as `capacity.limit_source` and carries weekly usage pressure per provider account and crew (`provider_pressures`, `crew_pressures`). `--allow-crew`, `--limit`. |
 | `orbit run task-pilot [task_id ...]` | Preflight `proposed` and `backlog` tasks and save validated selectors. Omit IDs to discover tasks automatically. `--base-branch`, `--max-tasks`, `--max-partition-size`, `--wait`. |
 | `orbit run job <job_id>` | Run any job by ID or YAML path. `--input key=value`, `--wait`. |
-| `orbit run agent <prompt>` | Operator only. Run an agent on the host to investigate and report. It runs outside the filesystem sandbox, changes no task, and dispatches nothing. `--cwd`, `--crew`, `--timeout` (default 1800 s, max 7200), `--wait`, `--idempotency-key`, `--provider-sandbox`. Returns a run ID to read with `orbit run show` or `logs`; `--wait` blocks and prints the answer instead. |
+| `orbit run agent <prompt>` | Deprecated and will be removed; prefer tasks and `orbit run ship`. Operator only. Run an agent on the host to investigate and report. It runs outside the filesystem sandbox, changes no task, and dispatches nothing. `--cwd`, `--crew`, `--timeout` (default 1800 s, max 7200), `--wait`, `--idempotency-key`, `--provider-sandbox`. Returns a run ID to read with `orbit run show` or `logs`; `--wait` blocks and prints the answer instead. |
 
 See [Delivery Workflows](../../getting-started/workflows/).
 

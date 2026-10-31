@@ -71,7 +71,7 @@ const RUN_WORKFLOWS: &[GroupedRow] = &[
     ("job", "Run an arbitrary job by ID"),
     (
         "agent",
-        "Invoke an agent on the host for exploration or debugging (operator only)",
+        "Invoke an agent on the host for exploration or debugging (deprecated)",
     ),
 ];
 
