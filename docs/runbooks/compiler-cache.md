@@ -96,7 +96,8 @@ and Cargo's own fingerprints decide freshness. No source mtimes are rewritten.
   The same path covers a single-PR merge and a literal fast-forward. No cache
   deletion, permission expansion or extra validation is required. Hosted
   writer/reuse outcomes and rolling full Check p90 still need collection
-  after normal publication; local fixtures do not establish the <600 s goal.
+  after normal publication; local fixtures do not establish the at-most-400 s
+  p90 budget.
 - **Other Linux consumers.** The coverage workflow caches only registry/git
   data (`cache-targets: false`), so it holds no compiled profile artifacts.
   Desktop check/bundle caches use `desktop/`, whose root is a real package
