@@ -9,7 +9,7 @@ spec:
     - --permission-mode
     - bypassPermissions
     - --output-format
-    - json
+    - streaming-json
     - --no-plan
     - --prompt-file
     - /dev/stdin

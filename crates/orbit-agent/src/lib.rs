@@ -25,8 +25,9 @@ pub use agent::{Agent, AgentConfig};
 pub use providers::{
     antigravity_background_task_diagnostic, antigravity_print_timeout_diagnostic,
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
-    latest_assistant_message, muse_terminal_failure_diagnostic, normalize_cli_stdout,
-    project_cli_response, provider_long_prompt_requests, provider_usage_windows,
+    assign_recorded_tool_calls, latest_assistant_message, muse_terminal_failure_diagnostic,
+    normalize_cli_stdout, project_cli_response, provider_long_prompt_requests,
+    provider_usage_windows, recorded_tool_calls,
 };
 pub use types::{AgentOperation, AgentRequest, AgentResponseStatus};
 pub use types::{

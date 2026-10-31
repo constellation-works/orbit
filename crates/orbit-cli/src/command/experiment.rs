@@ -243,6 +243,7 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
         Column::new("CONTROL"),
         Column::new("WEIGHT").number(),
         Column::new("N").number(),
+        Column::new("EXPLORER").number(),
         Column::new("SEGMENTS"),
         Column::new("CREW MIX"),
         Column::new("RECORDED EFFORT"),
@@ -273,6 +274,7 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
             },
             text(&arm["weight"]),
             text(&arm["n"]),
+            text(&arm["tasks_with_explorer_call"]),
             segments,
             crews,
             arm["effort_breakdown"]

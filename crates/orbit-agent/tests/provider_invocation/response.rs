@@ -4,8 +4,8 @@ mod envelope;
 mod projection;
 
 use orbit_agent::{
-    AgentResponseStatus, ParsedStdout, normalize_cli_stdout, project_cli_response,
-    provider_long_prompt_requests,
+    AgentResponseStatus, ParsedStdout, assign_recorded_tool_calls, normalize_cli_stdout,
+    project_cli_response, provider_long_prompt_requests,
 };
 use orbit_types::telemetry::TokenUsage;
 use orbit_types::tool::ExecutionResult;
@@ -457,9 +457,12 @@ fn codex_file_change_telemetry_dedupes_by_item_id_and_keeps_order() {
     ].iter().map(Value::to_string).collect::<Vec<_>>().join("\n");
     let normalized = normalize_cli_stdout("codex", raw.as_bytes());
     let stdout = String::from_utf8(normalized.into_owned()).unwrap();
-    let (_, _, trace) = ParsedStdout::parse(&stdout)
+    let (_, _, mut trace) = ParsedStdout::parse(&stdout)
         .parse_and_validate(&execution(stdout.clone()))
         .unwrap();
+    // Codex file_change is already on the normalized stdout. The provider
+    // overlay must leave those calls in place.
+    assign_recorded_tool_calls("codex", raw.as_bytes(), &mut trace);
     let actual = trace
         .tool_calls
         .iter()
@@ -918,6 +921,259 @@ fn codex_rollout_keeps_each_long_prompt_request() {
         None,
         "Grok reports invocation totals only"
     );
+}
+
+/// Trace from the reduced stdout, then the tool calls the raw capture recorded.
+fn traced(provider: &str, raw: &str) -> orbit_types::telemetry::InvocationTrace {
+    let normalized = normalize_cli_stdout(provider, raw.as_bytes());
+    let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+    let (_, _, mut trace) = ParsedStdout::parse(&stdout)
+        .parse_and_validate(&execution(stdout.clone()))
+        .unwrap();
+    assign_recorded_tool_calls(provider, raw.as_bytes(), &mut trace);
+    trace
+}
+
+fn reduced_tool_names(provider: &str, raw: &str) -> Vec<String> {
+    let normalized = normalize_cli_stdout(provider, raw.as_bytes());
+    let stdout = String::from_utf8(normalized.into_owned()).unwrap();
+    let (_, _, trace) = ParsedStdout::parse(&stdout)
+        .parse_and_validate(&execution(stdout.clone()))
+        .unwrap();
+    trace
+        .tool_calls
+        .into_iter()
+        .map(|call| call.tool_name)
+        .collect()
+}
+
+// [ORB-20534] Claude's answer reduction keeps only the terminal result, so a
+// stored trace had no Edit even though the stream recorded one. Usage stays
+// the result's; assistant messages repeat a request's starting usage.
+#[test]
+fn claude_stream_edit_is_recorded_without_summing_assistant_usage() {
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
+    let patch = "CLAUDE_PATCH_SECRET";
+    let assistant = json!({"type": "assistant", "message": {
+        "usage": {"input_tokens": 9999, "output_tokens": 8888},
+        "content": [
+            {"type": "tool_use", "id": "bash-1", "name": "Bash", "input": {"command": "ls"}},
+            {"type": "tool_use", "id": "edit-1", "name": "Edit", "input": {"old_string": patch}},
+        ],
+    }});
+    let user = json!({"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "bash-1", "content": "listed"},
+        {"type": "tool_result", "tool_use_id": "edit-1", "content": "patched"},
+    ]}});
+    let result = json!({"type": "result", "result": answer.to_string(), "usage": {
+        "input_tokens": 10, "output_tokens": 2,
+    }});
+    let result_line = result.to_string();
+    let raw = format!("{assistant}\n{user}\n{result_line}");
+
+    let projected = project_cli_response("claude", raw.as_bytes());
+    assert_eq!(
+        projected.as_ref(),
+        result_line.as_bytes(),
+        "the answer stays the terminal result"
+    );
+    assert!(
+        reduced_tool_names("claude", &raw).is_empty(),
+        "the reduced result stores no tool calls"
+    );
+    let trace = traced("claude", &raw);
+    assert_eq!(
+        trace.usage,
+        TokenUsage {
+            input: 10,
+            output: 2,
+            ..Default::default()
+        },
+        "assistant usage is not added to the result"
+    );
+    let actual = trace
+        .tool_calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                1,
+                "Bash",
+                serde_json::to_vec(&json!("listed")).unwrap().len() as u64
+            ),
+            (
+                2,
+                "Edit",
+                serde_json::to_vec(&json!("patched")).unwrap().len() as u64
+            ),
+        ]
+    );
+    assert!(
+        trace
+            .tool_calls
+            .iter()
+            .all(|call| call.result_payload.is_none())
+    );
+    assert!(!format!("{:?}", trace.tool_calls).contains(patch));
+}
+
+// [ORB-20534] Muse's answer reduction keeps only the terminal text. Live edits
+// are tool.result records; side_effect_intent is not a tool call, and the
+// result text is counted rather than stored.
+#[test]
+fn muse_tool_result_records_edit_file_without_keeping_result_text() {
+    let answer = json!({"schemaVersion": 1, "status": "success", "result": {}, "error": null});
+    let secret = "MUSE_RESULT_SECRET";
+    let raw = [
+        json!({"payload_type": "tool.result", "payload": {
+            "call_id": "bash-1",
+            "correlation_facts": {"tool_name": "bash"},
+            "text": "listed",
+        }}),
+        json!({"payload_type": "tool.result", "payload": {
+            "call_id": "edit-1",
+            "correlation_facts": {"tool_name": "edit_file"},
+            "text": "short",
+        }}),
+        json!({"payload_type": "tool.result", "payload": {
+            "call_id": "edit-1",
+            "correlation_facts": {"tool_name": "edit_file"},
+            "text": secret,
+        }}),
+        json!({"payload_type": "task.lifecycle.side_effect_intent", "payload": {
+            "call_id": "intent-1",
+            "correlation_facts": {"tool_name": "write_file"},
+            "text": secret,
+        }}),
+        json!({"payload_type": "run.terminal.completed", "payload": {
+            "terminal": "completed",
+            "text": answer.to_string(),
+        }}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    let projected = project_cli_response("muse", raw.as_bytes());
+    assert_eq!(
+        projected.as_ref(),
+        answer.to_string().as_bytes(),
+        "the answer stays the completed terminal text"
+    );
+    assert!(
+        reduced_tool_names("muse", &raw).is_empty(),
+        "the reduced terminal text stores no tool calls"
+    );
+    let trace = traced("muse", &raw);
+    let actual = trace
+        .tool_calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (1, "bash", "listed".len() as u64),
+            (2, "edit_file", secret.len() as u64)
+        ]
+    );
+    assert!(
+        trace
+            .tool_calls
+            .iter()
+            .all(|call| call.result_payload.is_none())
+    );
+    assert!(!format!("{:?}", trace.tool_calls).contains(secret));
+}
+
+// [ORB-20534] `grok --output-format json` has no tool calls. streaming-json
+// records them, while spend stays the final end event and the answer is the
+// concatenated text chunks.
+#[test]
+fn grok_streaming_json_records_hashline_edit_from_the_end_event() {
+    let envelope = r#"{"schemaVersion":1,"status":"success","result":{},"error":null}"#;
+    let split = envelope.len() / 2;
+    let (left, right) = envelope.split_at(split);
+    let thought = "GROK_THOUGHT_SECRET";
+    let patch = "GROK_PATCH_SECRET";
+    let output = json!({"applied": true});
+    let raw = [
+        json!({"type": "text", "data": left}),
+        json!({"type": "thought", "data": thought}),
+        json!({"type": "usage", "usage": {"input_tokens": 9999, "output_tokens": 8888}, "total_cost_usd": 99.0}),
+        json!({"type": "tool_call", "toolCallId": "call-1", "toolName": "hashline_edit", "rawInput": {"secret": patch}}),
+        json!({"type": "tool_call_update", "toolCallId": "call-1", "rawOutput": output}),
+        json!({"type": "tool_call", "toolCallId": "call-1", "toolName": "hashline_edit"}),
+        json!({"type": "text", "data": right}),
+        json!({"type": "tool_call", "toolCallId": "call-2", "toolName": "search_replace"}),
+        json!({"type": "tool_call_update", "toolCallId": "unseen", "rawOutput": {"dropped": true}}),
+        json!({"type": "end", "stopReason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 2}, "total_cost_usd": 0.5, "num_turns": 2}),
+    ]
+    .iter()
+    .map(Value::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    let projected = project_cli_response("grok", raw.as_bytes());
+    assert_eq!(
+        projected.as_ref(),
+        envelope.as_bytes(),
+        "text chunks concatenate with no separator"
+    );
+    assert!(
+        !projected
+            .as_ref()
+            .windows(thought.len())
+            .any(|window| window == thought.as_bytes())
+    );
+    let normalized = normalize_cli_stdout("grok", raw.as_bytes());
+    let normalized = String::from_utf8(normalized.into_owned()).unwrap();
+    assert!(
+        !normalized.contains("9999"),
+        "a per-response usage line is not added to the end event"
+    );
+    assert!(!normalized.contains(thought));
+    assert!(
+        !normalized.contains("hashline_edit"),
+        "the usage document does not carry tool frames"
+    );
+    let trace = traced("grok", &raw);
+    assert_eq!(
+        trace.usage,
+        TokenUsage {
+            input: 10,
+            output: 2,
+            ..Default::default()
+        }
+    );
+    assert_eq!(trace.provider_cost_usd, Some(0.5));
+    let actual = trace
+        .tool_calls
+        .iter()
+        .map(|call| (call.seq, call.tool_name.as_str(), call.result_bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (
+                1,
+                "hashline_edit",
+                serde_json::to_vec(&output).unwrap().len() as u64
+            ),
+            (2, "search_replace", 0),
+        ]
+    );
+    assert!(
+        trace
+            .tool_calls
+            .iter()
+            .all(|call| call.result_payload.is_none())
+    );
+    assert!(!format!("{:?}", trace.tool_calls).contains(patch));
 }
 
 fn execution(stdout: String) -> ExecutionResult {

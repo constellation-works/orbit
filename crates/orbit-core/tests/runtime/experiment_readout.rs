@@ -551,6 +551,12 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             expected: FirstEdit::Measured(2.0, 30.0),
         },
         Case {
+            name: "read-then-hashline-edit",
+            calls: Some(&[("read_file", 8), ("hashline_edit", 0)]),
+            terminal: true,
+            expected: FirstEdit::Measured(1.0, 8.0),
+        },
+        Case {
             name: "edit-at-first-call",
             calls: Some(&[("edit", 40)]),
             terminal: true,
@@ -669,6 +675,190 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             "{}: primary observations",
             case.name
         );
+    }
+}
+
+/// [ORB-20534] Seeded implement tool-call records: an arm counts tasks, not
+/// calls, that recorded an explorer delegation under any stored name.
+#[test]
+fn readout_counts_tasks_with_a_recorded_explorer_call() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_counts_tasks_with_a_recorded_explorer_call",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "explorer-uptake",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("implement_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let seed = |arm: &str, activity: &str, calls: &[(&str, u64)], suffix: &str| {
+        let task_id = enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
+        runtime
+            .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: format!("fixture-{task_id}-{suffix}"),
+                account: None,
+                activity_id: activity.into(),
+                agent: "codex".into(),
+                provider: None,
+                model: Some("gpt-6.1-sol".into()),
+                task_ids: vec![task_id.clone()],
+                trace: InvocationTrace {
+                    tool_calls: calls
+                        .iter()
+                        .enumerate()
+                        .map(|(seq, &(tool_name, result_bytes))| ToolCallTrace {
+                            seq: seq as u32,
+                            tool_name: tool_name.into(),
+                            result_bytes,
+                            ..ToolCallTrace::default()
+                        })
+                        .collect(),
+                    ..InvocationTrace::default()
+                },
+            })
+            .unwrap();
+        runtime.archive_task(&task_id).unwrap();
+    };
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("orbit_task_show", 2), ("orbit.agent.invoke", 0)],
+        "dotted",
+    );
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("orbit_agent_invoke", 4)],
+        "stored",
+    );
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("mcp__orbit__orbit_agent_invoke", 0)],
+        "mcp",
+    );
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("Orbit.Agent.Invoke", 0)],
+        "case",
+    );
+    seed(
+        "treatment",
+        "agent_implement",
+        &[("orbit_task_show", 3)],
+        "other-tool",
+    );
+    seed(
+        "treatment",
+        "review",
+        &[("orbit_agent_invoke", 1)],
+        "not-implement",
+    );
+    let twice = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+    for turn in 0..2 {
+        runtime
+            .insert_invocation_trace_record(&InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: format!("fixture-{twice}-{turn}"),
+                account: None,
+                activity_id: "agent_implement".into(),
+                agent: "codex".into(),
+                provider: None,
+                model: Some("gpt-6.1-sol".into()),
+                task_ids: vec![twice.clone()],
+                trace: InvocationTrace {
+                    tool_calls: vec![ToolCallTrace {
+                        seq: 1,
+                        tool_name: "orbit_agent_invoke".into(),
+                        result_bytes: 0,
+                        ..ToolCallTrace::default()
+                    }],
+                    ..InvocationTrace::default()
+                },
+            })
+            .unwrap();
+    }
+    runtime.archive_task(&twice).unwrap();
+    seed(
+        "treatment",
+        "implement_one",
+        &[("mcp__orbit__orbit.agent.invoke", 0)],
+        "implement-one",
+    );
+    seed(
+        "control",
+        "agent_implement",
+        &[("orbit_agent_invoke", 0)],
+        "control-yes",
+    );
+    seed("control", "agent_implement", &[], "control-no");
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let arm = |name: &str| {
+        readout
+            .arms
+            .iter()
+            .find(|arm| arm.name == name)
+            .unwrap_or_else(|| panic!("missing arm {name}"))
+    };
+    assert_eq!(readout.schema_version, 1);
+    assert_eq!(readout.enrollment.analysed, 10);
+    assert_eq!(readout.enrollment.interactive_excluded, 0);
+    assert_eq!(
+        arm("treatment").n,
+        8,
+        "every enrolled treatment task is analysed"
+    );
+    assert_eq!(
+        arm("treatment").tasks_with_explorer_call,
+        6,
+        "a non-delegation tool and a non-implement activity do not count, and two calls are one task"
+    );
+    assert_eq!(arm("control").n, 2);
+    assert_eq!(arm("control").tasks_with_explorer_call, 1);
+
+    let json = serde_json::to_value(&readout).unwrap();
+    assert_eq!(json["schema_version"], 1);
+    for (name, tasks) in [("treatment", 6), ("control", 1)] {
+        let row = json["arms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap();
+        assert_eq!(row["tasks_with_explorer_call"], tasks, "{name}");
     }
 }
 

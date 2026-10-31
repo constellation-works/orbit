@@ -28,12 +28,28 @@ pub(super) const REGRESSION_WINDOW_DAYS: i64 = 14;
 const READ_SLACK: Duration = Duration::days(1);
 /// Invocation records read per implement activity.
 const INVOCATION_LIMIT: usize = 100_000;
+/// Stored names of an explorer delegation. Matched case-insensitively on
+/// the full tool name and on the tail after the last `__`.
+const EXPLORER_DELEGATION: &[&str] = &["orbit.agent.invoke", "orbit_agent_invoke"];
 /// Audit rows read per page.
 const AUDIT_PAGE: usize = 2_000;
 /// The step recovery activity that resolves rebase conflicts.
 const CONFLICT_RECOVERY_ACTIVITY: &str = "pr_conflict_recovery";
 /// The task history event of an auto-fix started outside the run.
 const AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
+
+/// Whether `name` is an explorer delegation, including the tool's own name
+/// on the tail of an MCP identifier (`mcp__orbit__orbit_agent_invoke`).
+fn is_explorer_delegation(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let tail = match lower.rsplit_once("__") {
+        Some((_, tail)) => tail,
+        None => lower.as_str(),
+    };
+    EXPLORER_DELEGATION
+        .iter()
+        .any(|known| *known == tail || *known == lower.as_str())
+}
 
 /// Whether an arm does better with a lower or a higher value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,6 +214,9 @@ pub(super) struct TaskOutcome {
     /// `task.crew`, the crew of the task's latest delivery [ORB-19416].
     pub(super) crew: String,
     pub(super) terminal: bool,
+    /// An implement invocation at or after assignment recorded an
+    /// explorer-delegation tool call.
+    pub(super) explorer_call: bool,
     pub(super) assigned_at: DateTime<Utc>,
     pub(super) assignment_digest: Option<String>,
     /// Present only for settled tasks with complete invocation cost coverage.
@@ -392,6 +411,11 @@ impl OrbitRuntime {
             });
         }
         let since = created_at - READ_SLACK;
+        let assigned_at: BTreeMap<String, DateTime<Utc>> = enrolled
+            .iter()
+            .map(|row| (row.task_id.clone(), row.assigned_at))
+            .collect();
+        let explorer_tasks = self.tasks_with_explorer_call(&ids, &assigned_at, since)?;
         let all_tasks = self.list_task_metadata()?;
         let tasks: BTreeMap<&str, &Task> = all_tasks
             .iter()
@@ -589,6 +613,7 @@ impl OrbitRuntime {
                 admitted_pool_label,
                 crew: crew_name,
                 terminal,
+                explorer_call: explorer_tasks.contains(id),
                 assigned_at: row.assigned_at,
                 assignment_digest: row.digest.clone(),
                 cost_source,
@@ -650,6 +675,43 @@ impl OrbitRuntime {
             }
         }
         Ok(spend)
+    }
+
+    /// Analysed-task ids with at least one explorer-delegation tool call on
+    /// an implement invocation at or after that task's assignment.
+    fn tasks_with_explorer_call(
+        &self,
+        ids: &BTreeSet<String>,
+        assigned_at: &BTreeMap<String, DateTime<Utc>>,
+        since: DateTime<Utc>,
+    ) -> Result<BTreeSet<String>, OrbitError> {
+        let mut found = BTreeSet::new();
+        for activity in IMPLEMENT_INVOCATION_IDS {
+            let records = self.workspace_invocation_records(InvocationQuery {
+                since: Some(since),
+                activity_id: Some((*activity).to_string()),
+                limit: INVOCATION_LIMIT,
+                ..Default::default()
+            })?;
+            for record in records {
+                if !record
+                    .tool_calls
+                    .iter()
+                    .any(|call| is_explorer_delegation(&call.tool_name))
+                {
+                    continue;
+                }
+                for id in record.task_ids.iter().filter(|id| ids.contains(*id)) {
+                    let Some(assigned) = assigned_at.get(id) else {
+                        continue;
+                    };
+                    if record.ts >= *assigned {
+                        found.insert(id.clone());
+                    }
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// Lines added plus deleted over every landed delivery, per task.

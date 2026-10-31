@@ -196,9 +196,13 @@ fn arm_readout(
     let mut segments: BTreeMap<u32, usize> = BTreeMap::new();
     let mut crews: BTreeMap<&str, usize> = BTreeMap::new();
     let mut assignment_digests = BTreeSet::new();
+    let mut tasks_with_explorer_call = 0usize;
     for task in &mine {
         *segments.entry(task.segment).or_default() += 1;
         *crews.entry(task.crew.as_str()).or_default() += 1;
+        if task.explorer_call {
+            tasks_with_explorer_call += 1;
+        }
         if let Some(digest) = &task.assignment_digest {
             assignment_digests.insert(digest.clone());
         }
@@ -224,6 +228,7 @@ fn arm_readout(
         weight: arm.weight,
         retired_segment: arm.retired_segment,
         n: mine.len(),
+        tasks_with_explorer_call,
         segments: segments
             .into_iter()
             .map(|(segment, n)| SegmentCount { segment, n })

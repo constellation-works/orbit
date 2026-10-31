@@ -195,6 +195,16 @@ overlay digest.
 | Escaped regressions | `regression_from` relations within 14 days of landing, any escape class (the scorecards charge only some classes; the experiment counts them all) |
 | Lines changed | Landed diff stats ([ORB-18383]) |
 
+Each arm also reports `tasks_with_explorer_call`: the number of analysed
+enrolled tasks that recorded at least one explorer-delegation call on an
+implement invocation at or after assignment. A call matches when its stored
+name is `orbit.agent.invoke` or `orbit_agent_invoke`, compared
+case-insensitively as the full name or as the tail after the last `__`, so
+an MCP tool such as `mcp__orbit__orbit_agent_invoke` counts. A task counts
+once. The readout reads those stored tool-call records and does not make a
+delegation call. `orbit experiment readout` JSON and `orbit.experiment.readout`
+both serialize the field; the schema version stays 1.
+
 `cost_usd` uses each invocation's valid provider-reported dollars first, then
 its token-derived estimate from the shared, versioned configuration data in
 `crates/orbit-common/assets/model_prices.yaml`. Rates are keyed by model and
