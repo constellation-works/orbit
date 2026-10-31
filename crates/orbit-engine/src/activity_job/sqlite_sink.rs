@@ -63,23 +63,22 @@ impl V2SqliteSink {
     }
 
     pub fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError> {
-        let payload_json = serde_json::to_string(event)
-            .map_err(|err| OrbitError::Store(format!("serialize v2 audit event: {err}")))?;
-        self.store
-            .insert_v2_audit_event(&V2AuditEventInsertParams {
-                workspace_id: self.workspace_id.clone(),
-                event_id: event.envelope.event_id.clone(),
-                source: "v2_envelope".to_string(),
-                schema_version: event.envelope.schema_version,
-                event_type: event.envelope.event_type.clone(),
-                ts: event.envelope.ts,
-                run_id: event.envelope.run_id.clone(),
-                agent_identity: event.envelope.agent_identity.clone(),
-                parent_event_id: event.envelope.parent_event_id.clone(),
-                workspace_path: event.envelope.workspace_path.clone(),
-                payload_json: payload_json.clone(),
-            })?;
-        self.blob_store.clear_published(&payload_json);
+        let payload_json = serialize_envelope_payload(event)?;
+        let params = V2AuditEventInsertParams {
+            workspace_id: self.workspace_id.clone(),
+            event_id: event.envelope.event_id.clone(),
+            source: "v2_envelope".to_string(),
+            schema_version: event.envelope.schema_version,
+            event_type: event.envelope.event_type.clone(),
+            ts: event.envelope.ts,
+            run_id: event.envelope.run_id.clone(),
+            agent_identity: event.envelope.agent_identity.clone(),
+            parent_event_id: event.envelope.parent_event_id.clone(),
+            workspace_path: event.envelope.workspace_path.clone(),
+            payload_json,
+        };
+        self.store.insert_v2_audit_event(&params)?;
+        self.blob_store.clear_published(&params.payload_json);
         Ok(())
     }
 
@@ -112,21 +111,21 @@ impl V2SqliteSink {
         let event_id = self.next_loop_event_id()?;
         let payload_json = serde_json::to_string(event)
             .map_err(|err| OrbitError::Store(format!("serialize loop audit event: {err}")))?;
-        self.store
-            .insert_v2_audit_event(&V2AuditEventInsertParams {
-                workspace_id: self.workspace_id.clone(),
-                event_id,
-                source: "loop_event".to_string(),
-                schema_version: 1,
-                event_type: loop_event_type(event).to_string(),
-                ts: loop_event_ts(event),
-                run_id: loop_event_run_id(event).unwrap_or(&self.run_id).to_string(),
-                agent_identity: self.agent_identity.clone(),
-                parent_event_id: None,
-                workspace_path: self.workspace_path.clone(),
-                payload_json: payload_json.clone(),
-            })?;
-        self.blob_store.clear_published(&payload_json);
+        let params = V2AuditEventInsertParams {
+            workspace_id: self.workspace_id.clone(),
+            event_id,
+            source: "loop_event".to_string(),
+            schema_version: 1,
+            event_type: loop_event_type(event).to_string(),
+            ts: loop_event_ts(event),
+            run_id: loop_event_run_id(event).unwrap_or(&self.run_id).to_string(),
+            agent_identity: self.agent_identity.clone(),
+            parent_event_id: None,
+            workspace_path: self.workspace_path.clone(),
+            payload_json,
+        };
+        self.store.insert_v2_audit_event(&params)?;
+        self.blob_store.clear_published(&params.payload_json);
         Ok(())
     }
 
@@ -138,6 +137,30 @@ impl V2SqliteSink {
         *counter += 1;
         Ok(format!("loopevt-{}-{:08x}", self.run_id, *counter))
     }
+}
+
+/// Serialize one envelope event to its persisted `payload_json` form.
+///
+/// Serialize the envelope and internally tagged kind directly, avoiding
+/// flattened-map serialization for their fields. Both objects use the
+/// same field order the derived `V2AuditEvent` form emits, so joining them
+/// at their boundary produces identical bytes —
+/// including a body key that repeats an envelope key
+/// (`TrustedHostExecutionAdmitted`'s `workspace_path`), which the
+/// flattened form also emits twice. Any unexpected serialized shape
+/// falls back to the derived form.
+fn serialize_envelope_payload(event: &V2AuditEvent) -> Result<String, OrbitError> {
+    let serialize_error =
+        |err: serde_json::Error| OrbitError::Store(format!("serialize v2 audit event: {err}"));
+    let mut payload = serde_json::to_string(&event.envelope).map_err(serialize_error)?;
+    let kind = serde_json::to_string(&event.kind).map_err(serialize_error)?;
+    if payload.ends_with('}') && kind.starts_with('{') && kind.len() > 2 {
+        payload.truncate(payload.len() - 1);
+        payload.push(',');
+        payload.push_str(&kind[1..]);
+        return Ok(payload);
+    }
+    serde_json::to_string(event).map_err(serialize_error)
 }
 
 /// What [`AuditSink::write_blob`] returns in place of a ref when the blob

@@ -182,24 +182,19 @@ pub fn allowlisted_child_env_from(
     pass: &[String],
     extras: &[&str],
 ) -> Vec<(String, String)> {
-    let admitted: BTreeSet<&str> = AGENT_SUBPROCESS_BASELINE_VARS
-        .iter()
-        .copied()
-        .chain(
-            pass.iter()
-                .map(String::as_str)
-                .filter(|name| !is_privilege_bearing_orbit_name(name)),
-        )
-        .chain(
-            extras
-                .iter()
-                .copied()
-                .filter(|name| !is_privilege_bearing_orbit_name(name)),
-        )
-        .collect();
+    // Admission is membership in the baseline, `pass`, or `extras` lists
+    // (the latter two minus privilege-bearing `ORBIT_` names), or the named
+    // envelope. The lists are short, so test membership directly instead
+    // of allocating a set of every admitted name on each call: this runs
+    // on every deterministic activity dispatch as well as at spawn time.
+    let admitted = |name: &str| {
+        AGENT_SUBPROCESS_BASELINE_VARS.contains(&name)
+            || ((pass.iter().any(|entry| entry == name) || extras.contains(&name))
+                && !is_privilege_bearing_orbit_name(name))
+    };
     let mut env: BTreeMap<String, String> = parent
         .iter()
-        .filter(|(name, _)| admitted.contains(name.as_str()) || is_orbit_envelope_name(name))
+        .filter(|(name, _)| admitted(name) || is_orbit_envelope_name(name))
         .cloned()
         .collect();
     backfill_login_identity(&mut env);

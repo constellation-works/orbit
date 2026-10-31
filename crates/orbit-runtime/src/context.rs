@@ -1,5 +1,5 @@
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use orbit_common::OrbitError;
 use orbit_engine::PrConfig;
@@ -206,9 +206,20 @@ impl Default for ActorIdentity {
     }
 }
 
+/// A runtime snapshot shared by tool hosts and detached execution contexts.
+/// Mutating a clone detaches its snapshot; store handles retain their existing
+/// shared connections, so reads still observe current persisted state.
 #[derive(Clone)]
 pub struct OrbitContext {
+    snapshot: Arc<OrbitContextSnapshot>,
+}
+
+#[derive(Clone)]
+struct OrbitContextSnapshot {
     paths: WorkspacePaths,
+    /// First successful canonicalization of `paths.repo_root`, resolved
+    /// lazily by [`OrbitContext::canonical_repo_root`].
+    canonical_repo_root: OnceLock<PathBuf>,
     stores: OrbitStores,
     execution: OrbitExecutionAssets,
     policy: OrbitPolicyContext,
@@ -839,22 +850,25 @@ impl OrbitContext {
         runtime: OrbitRuntimeSettings,
     ) -> Self {
         Self {
-            paths,
-            stores,
-            execution,
-            policy,
-            runtime,
+            snapshot: Arc::new(OrbitContextSnapshot {
+                paths,
+                canonical_repo_root: OnceLock::new(),
+                stores,
+                execution,
+                policy,
+                runtime,
+            }),
         }
     }
 
     /// Returns the shared .orbit/ data directory.
     pub(crate) fn shared_root(&self) -> &Path {
-        &self.paths.orbit_dir
+        &self.snapshot.paths.orbit_dir
     }
 
     /// Returns the worktree-local .orbit/ data directory.
     pub(crate) fn local_root(&self) -> &Path {
-        &self.paths.local_dir
+        &self.snapshot.paths.local_dir
     }
 
     /// Returns the .orbit/ data directory (backward-compatible alias).
@@ -863,46 +877,72 @@ impl OrbitContext {
     }
 
     pub(crate) fn global_root(&self) -> &Path {
-        &self.paths.global_dir
+        &self.snapshot.paths.global_dir
     }
 
     pub fn paths(&self) -> &WorkspacePaths {
-        &self.paths
+        &self.snapshot.paths
+    }
+
+    /// The canonical repo root for tool contexts.
+    ///
+    /// A snapshot's paths are fixed at construction, so the first
+    /// successful canonicalization is reused instead of repeating the
+    /// filesystem walk on every activity dispatch. Until a
+    /// canonicalization succeeds the unresolved root is returned, exactly
+    /// as the per-dispatch fallback did.
+    pub(crate) fn canonical_repo_root(&self) -> PathBuf {
+        if let Some(root) = self.snapshot.canonical_repo_root.get() {
+            return root.clone();
+        }
+        match self.snapshot.paths.repo_root.canonicalize() {
+            Ok(root) => {
+                let _ = self.snapshot.canonical_repo_root.set(root.clone());
+                self.snapshot
+                    .canonical_repo_root
+                    .get()
+                    .cloned()
+                    .unwrap_or(root)
+            }
+            Err(_) => self.snapshot.paths.repo_root.clone(),
+        }
     }
 
     pub(crate) fn set_execution_location(
         &mut self,
         location: Option<orbit_types::task::ExecutionLocation>,
     ) {
-        self.stores.job_run = self.stores.job_run.with_execution_location(location);
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.stores.job_run = snapshot.stores.job_run.with_execution_location(location);
     }
 
     pub(crate) fn stores(&self) -> &OrbitStores {
-        &self.stores
+        &self.snapshot.stores
     }
 
     pub(crate) fn policy(&self) -> &PolicyEngine {
-        &self.policy.policy
+        &self.snapshot.policy.policy
     }
 
     pub(crate) fn registry(&self) -> &ToolRegistry {
-        self.execution.registry.as_ref()
+        self.snapshot.execution.registry.as_ref()
     }
 
     pub(crate) fn skill_catalog(&self) -> &SkillCatalog {
-        &self.execution.skill_catalog
+        &self.snapshot.execution.skill_catalog
     }
 
     pub(crate) fn plugin_load(&self) -> &PluginHostLoad {
-        &self.execution.plugins
+        &self.snapshot.execution.plugins
     }
 
     pub(crate) fn execution_env_policy(&self) -> &ExecutionEnvPolicy {
-        &self.policy.execution_env_policy
+        &self.snapshot.policy.execution_env_policy
     }
 
     pub fn apply_child_env_defaults(&mut self, defaults: &[(String, String)]) {
-        self.policy.execution_env_policy = self
+        let snapshot = Arc::make_mut(&mut self.snapshot);
+        snapshot.policy.execution_env_policy = snapshot
             .policy
             .execution_env_policy
             .clone()
@@ -910,39 +950,43 @@ impl OrbitContext {
     }
 
     pub(crate) fn codex_execution_policy(&self) -> &CodexExecutionPolicy {
-        &self.policy.codex_execution_policy
+        &self.snapshot.policy.codex_execution_policy
     }
 
     pub(crate) fn proc_spawn_max_timeout_ms(&self) -> u64 {
-        self.policy.proc_spawn_max_timeout_ms
+        self.snapshot.policy.proc_spawn_max_timeout_ms
     }
 
     pub fn agent_stall_minutes(&self) -> u32 {
-        self.policy.agent_stall_minutes
+        self.snapshot.policy.agent_stall_minutes
     }
 
     pub fn persistence(&self) -> &PersistenceConfig {
-        &self.runtime.persistence
+        &self.snapshot.runtime.persistence
     }
 
     pub(crate) fn actor(&self) -> &ActorIdentity {
-        &self.runtime.actor
+        &self.snapshot.runtime.actor
     }
 
     pub(crate) fn set_actor(&mut self, actor: ActorIdentity) {
-        self.runtime.actor = actor;
+        Arc::make_mut(&mut self.snapshot).runtime.actor = actor;
     }
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {
-        self.runtime.set_host_shutdown_hold_minutes(minutes);
+        Arc::make_mut(&mut self.snapshot)
+            .runtime
+            .set_host_shutdown_hold_minutes(minutes);
     }
 
     pub(crate) fn set_machine_labels(&mut self, labels: Vec<String>) {
-        self.runtime.set_machine_labels(labels);
+        Arc::make_mut(&mut self.snapshot)
+            .runtime
+            .set_machine_labels(labels);
     }
 
     pub fn settings(&self) -> &OrbitRuntimeSettings {
-        &self.runtime
+        &self.snapshot.runtime
     }
 }
 

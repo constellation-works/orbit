@@ -250,11 +250,7 @@ pub(super) fn tool_context_for_activity(
     fs_audit: Option<Arc<dyn FsAuditLogger>>,
     proc_allowed_programs: Option<&[String]>,
 ) -> ToolContext {
-    let workspace_root = runtime
-        .paths()
-        .repo_root
-        .canonicalize()
-        .unwrap_or_else(|_| runtime.paths().repo_root.clone());
+    let workspace_root = runtime.canonical_workspace_root();
 
     // Every context built here belongs to a v2 activity, so `proc.spawn` is
     // always activity-scoped: a missing program policy denies every program

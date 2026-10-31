@@ -45,6 +45,13 @@ impl RuntimeKernel {
         self.context.paths()
     }
 
+    /// The canonical repo root, resolved once per runtime snapshot after
+    /// its first successful canonicalization (see
+    /// `OrbitContext::canonical_repo_root` in `crate::context`).
+    pub fn canonical_workspace_root(&self) -> std::path::PathBuf {
+        self.context.canonical_repo_root()
+    }
+
     pub fn data_root_path(&self) -> &Path {
         self.shared_root_path()
     }
