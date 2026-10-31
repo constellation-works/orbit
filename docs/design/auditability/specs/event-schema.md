@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec: Audit Event Schema
-last_validated: 2026-10-29
+last_validated: 2026-10-31
 ---
 
 # Spec: Audit Event Schema
@@ -37,6 +37,7 @@ Required invariants:
 - Command rows do not embed full provider request/response bodies.
 - Legacy `host`, `session_id`, and `job_run_id` retain their meanings: executing-process hostname, legacy session correlation, and canonical run correlation respectively.
 - MCP rows may add `workspace_id`, caller/process machine and display-host IDs, transport, the complete effective capability set, `origin_session_id`, `mcp_call_id`, and `lease_id`.
+- Host-authorized application calls add an optional `application` object containing the non-secret consent record and the active scope index/callback flag; the credential secret is not included.
 - `mcp_call_id` is generated once before preflight and is shared by the call's denial or dispatch outcome. Two calls in one origin session have distinct call IDs.
 - MCP capability authorization and filters use set membership. There is no authorizing member, ordinal, ceiling, or max-capability field.
 - External MCP JSON may populate only the legacy workspace address selector. Trusted audit identity and correlation come from the adapter/runtime and authenticated managed envelope; standalone MCP role is `unverified`.

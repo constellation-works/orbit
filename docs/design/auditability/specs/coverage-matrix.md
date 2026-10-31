@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Audit Coverage Matrix"
-last_validated: 2026-10-29
+last_validated: 2026-10-31
 ---
 
 # Spec: Audit Coverage Matrix
@@ -18,6 +18,7 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 |-----------------|------------------------|----------------|
 | Top-level CLI command | Command audit row | command, subcommand, role, status, duration, cwd |
 | Orbit tool mutation | Command audit row or targeted runtime row | tool/action name, target type/id, actor, status |
+| Application-authorized tool invocation | Command audit row | application id, non-secret consent provenance, scope index, entry/callback flag, tool/action, status |
 | MCP tool preflight or dispatch | Command audit row | tool, status, trusted workspace/caller/process, transport, full capability set, origin session, unique call id, optional run/lease |
 | Task lifecycle update | Command/tool audit plus task history | task id, actor, status transition or document field changed |
 | Task lock reservation/check/release | Targeted command audit row | reservation target, files payload, status, conflict/denial state |
