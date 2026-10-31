@@ -444,7 +444,7 @@ function syncRailScrollCues() {
 // edge cuts mid-word: scroll just past entries the edge already covers, so the
 // first visible label starts cleanly while the active view stays in sight. The
 // left fade then says the earlier views exist.
-function snapRailSubtabStrip(strip) {
+function snapRailSubtabStrip(strip, focusedSubtab = null) {
   if (!window.matchMedia("(max-width: 760px)").matches) return;
   for (let guard = 0; guard < 16; guard += 1) {
     if (strip.scrollWidth <= strip.clientWidth + 1) return;
@@ -457,7 +457,7 @@ function snapRailSubtabStrip(strip) {
     // At the strip's end there is nowhere further to scroll: the fade cue
     // carries the hidden views instead of a partial label pretending to fit.
     const before = strip.scrollLeft;
-    if (first.classList.contains("active")) {
+    if (first === focusedSubtab || (!focusedSubtab && first.classList.contains("active"))) {
       strip.scrollLeft = Math.max(0, strip.scrollLeft + (rect.left - view.left));
     } else {
       const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
@@ -780,7 +780,7 @@ function initTabsImpl(ctx) {
       // ORB-20479: keyboard scrolling can rest a sub-view strip mid-label;
       // snap the edge back to an item start and refresh the overflow fades.
       const strip = event.target.closest(".rail-subtabs");
-      if (strip) snapRailSubtabStrip(strip);
+      if (strip) snapRailSubtabStrip(strip, event.target.matches(":focus-visible") ? event.target : null);
       syncRailScrollCues();
     }
   });
