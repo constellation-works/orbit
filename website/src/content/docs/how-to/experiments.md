@@ -347,12 +347,22 @@ Read the warnings before the verdict:
   outcomes remain open. These values contribute no samples to estimates,
   comparisons, the primary metric's chart, or the verdict and its guardrails.
   Other metrics remain available.
+  A provider stream that outgrows the output capture bound keeps only its
+  final lines, so its recorded tool calls are a suffix and a first edit in them
+  would be misplaced. Such an invocation is marked incomplete: a task whose
+  first implement invocation is incomplete is unmeasured for both first-edit
+  metrics, and the readout reports a `tool_trace_incomplete` warning. Raising
+  `ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES` avoids truncation for later runs;
+  already-recorded invocations are not re-marked.
 - **Explorer uptake.** Each arm reports `tasks_with_explorer_call`: how many
   of its analysed tasks recorded at least one explorer-delegation call during
   an implement invocation at or after they were assigned. A task counts once.
   The stored name matches `orbit.agent.invoke` or `orbit_agent_invoke`,
   including an MCP name whose last segment is one of those. The count is read
-  from the invocation's recorded tool calls.
+  from the invocation's recorded tool calls. A task with no recorded call whose
+  implement invocation lost its early tool calls to the output capture bound
+  cannot show that it never delegated, so it is counted in the arm's
+  `tasks_explorer_unobserved` rather than treated as a confirmed zero.
 
 The readout is descriptive, not a significance oracle. It reports no
 p-value for the treatment difference itself; the interval excluding zero

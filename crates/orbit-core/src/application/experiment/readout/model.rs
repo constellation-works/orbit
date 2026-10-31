@@ -86,6 +86,11 @@ pub struct ReadoutArm {
     /// during an implement invocation at or after assignment. A task counts
     /// once, however many such calls it recorded.
     pub tasks_with_explorer_call: usize,
+    /// Analysed tasks with no recorded explorer call whose implement
+    /// invocation at or after assignment lost early tool calls to the bounded
+    /// output capture: their uptake is unknown, so `tasks_with_explorer_call`
+    /// is a lower bound by this many tasks at most.
+    pub tasks_explorer_unobserved: usize,
     pub segments: Vec<SegmentCount>,
     /// Tasks per implementing crew, most first.
     pub crew_mix: Vec<CrewCount>,
@@ -259,7 +264,8 @@ pub struct Verdict {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutWarning {
     /// `sample_ratio`, `drift`, `lagging`, `primary_unmeasured`,
-    /// `first_edit_incomplete`, `crew_mismatch` or `crew_mismatch_unavailable`.
+    /// `first_edit_incomplete`, `tool_trace_incomplete`, `crew_mismatch` or
+    /// `crew_mismatch_unavailable`.
     pub kind: &'static str,
     pub message: String,
 }

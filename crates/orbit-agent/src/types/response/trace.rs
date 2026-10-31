@@ -9,6 +9,8 @@ pub(super) fn extract_invocation_trace(documents: &[Value], duration_ms: u64) ->
     InvocationTrace {
         usage,
         tool_calls,
+        // The caller knows whether the capture it parsed was cut short.
+        tool_calls_incomplete: false,
         duration_ms,
         provider_model: extract_provider_model(documents),
         provider_cost_usd: extract_provider_cost_usd(documents),

@@ -53,6 +53,19 @@ fn build_readout(
         });
     }
 
+    let incomplete_traces = tasks
+        .iter()
+        .filter(|task| task.explorer_unobserved || task.first_edit_trace_incomplete)
+        .count();
+    if incomplete_traces > 0 {
+        warnings.push(ReadoutWarning {
+            kind: "tool_trace_incomplete",
+            message: format!(
+                "{incomplete_traces} task(s) have an implement invocation whose provider output outgrew the bounded capture, so only the end of its tool calls was kept. Their first-edit metrics are unmeasured, and `tasks_with_explorer_call` cannot rule out an explorer call for the tasks counted in `tasks_explorer_unobserved`."
+            ),
+        });
+    }
+
     let arms: Vec<ReadoutArm> = record
         .arms
         .iter()
@@ -197,11 +210,15 @@ fn arm_readout(
     let mut crews: BTreeMap<&str, usize> = BTreeMap::new();
     let mut assignment_digests = BTreeSet::new();
     let mut tasks_with_explorer_call = 0usize;
+    let mut tasks_explorer_unobserved = 0usize;
     for task in &mine {
         *segments.entry(task.segment).or_default() += 1;
         *crews.entry(task.crew.as_str()).or_default() += 1;
         if task.explorer_call {
             tasks_with_explorer_call += 1;
+        }
+        if task.explorer_unobserved {
+            tasks_explorer_unobserved += 1;
         }
         if let Some(digest) = &task.assignment_digest {
             assignment_digests.insert(digest.clone());
@@ -229,6 +246,7 @@ fn arm_readout(
         retired_segment: arm.retired_segment,
         n: mine.len(),
         tasks_with_explorer_call,
+        tasks_explorer_unobserved,
         segments: segments
             .into_iter()
             .map(|(segment, n)| SegmentCount { segment, n })

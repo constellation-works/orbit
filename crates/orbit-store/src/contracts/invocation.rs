@@ -86,6 +86,11 @@ pub struct InvocationRecord {
     pub tool_call_count: u64,
     pub task_ids: Vec<String>,
     pub tool_calls: Vec<InvocationToolCallRecord>,
+    /// The provider's output outgrew the bounded capture, so `tool_calls`
+    /// holds only the suffix that survived it (`InvocationTrace::tool_calls_incomplete`).
+    /// A first edit or an absent tool read from it is unproven.
+    #[serde(default)]
+    pub tool_calls_incomplete: bool,
     /// Provider-reported total cost in USD, persisted verbatim from
     /// [`InvocationInsertParams::trace`] for monthly manual reconciliation.
     /// Never overwritten by `derived_cost_usd`.

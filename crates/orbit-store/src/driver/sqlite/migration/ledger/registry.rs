@@ -759,12 +759,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_job_run_build,
     },
+    // Defaulted flag only: an older binary inserts without it and reads every
+    // row as a complete tool trace.
+    Migration {
+        version: 83,
+        name: "invocation_tool_calls_incomplete",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_invocation_tool_calls_incomplete,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 82;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 83;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

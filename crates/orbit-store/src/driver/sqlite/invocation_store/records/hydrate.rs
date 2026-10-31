@@ -91,6 +91,7 @@ pub(super) fn map_invocation_record(row: &rusqlite::Row<'_>) -> rusqlite::Result
     let output_tokens = row.get::<_, i64>(11)? as u64;
     let provider_cost_usd: Option<f64> = row.get(13)?;
     let long_prompt_requests = long_prompt_requests(row.get(15)?);
+    let tool_calls_incomplete = row.get::<_, i64>(18)? != 0;
 
     let derived_cost_usd = model.as_deref().and_then(|model| {
         derive_cost_usd(
@@ -126,6 +127,7 @@ pub(super) fn map_invocation_record(row: &rusqlite::Row<'_>) -> rusqlite::Result
         tool_call_count: row.get::<_, i64>(12)? as u64,
         task_ids: Vec::new(),
         tool_calls: Vec::new(),
+        tool_calls_incomplete,
         provider_cost_usd,
         derived_cost_usd,
         account: row.get(14)?,

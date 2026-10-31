@@ -217,6 +217,13 @@ pub(super) struct TaskOutcome {
     /// An implement invocation at or after assignment recorded an
     /// explorer-delegation tool call.
     pub(super) explorer_call: bool,
+    /// No explorer call was recorded, but an implement invocation at or after
+    /// assignment lost its early tool calls to the bounded output capture, so
+    /// the absence is unproven [ORB-20572].
+    pub(super) explorer_unobserved: bool,
+    /// The task's first implement invocation holds only the suffix of its tool
+    /// calls, so its first-edit score is withheld rather than measured.
+    pub(super) first_edit_trace_incomplete: bool,
     pub(super) assigned_at: DateTime<Utc>,
     pub(super) assignment_digest: Option<String>,
     /// Present only for settled tasks with complete invocation cost coverage.
@@ -228,6 +235,13 @@ pub(super) struct TaskOutcome {
 pub(super) enum CostSource {
     Reported,
     Estimated,
+}
+
+/// Which analysed tasks the implement invocations' tool calls show delegating
+/// to an explorer.
+struct ExplorerObservations {
+    found: BTreeSet<String>,
+    unobserved: BTreeSet<String>,
 }
 
 /// What the records say about the enrolled tasks.
@@ -415,7 +429,7 @@ impl OrbitRuntime {
             .iter()
             .map(|row| (row.task_id.clone(), row.assigned_at))
             .collect();
-        let explorer_tasks = self.tasks_with_explorer_call(&ids, &assigned_at, since)?;
+        let explorer = self.explorer_observations(&ids, &assigned_at, since)?;
         let all_tasks = self.list_task_metadata()?;
         let tasks: BTreeMap<&str, &Task> = all_tasks
             .iter()
@@ -613,7 +627,12 @@ impl OrbitRuntime {
                 admitted_pool_label,
                 crew: crew_name,
                 terminal,
-                explorer_call: explorer_tasks.contains(id),
+                explorer_call: explorer.found.contains(id),
+                explorer_unobserved: explorer.unobserved.contains(id),
+                first_edit_trace_incomplete: first_edits
+                    .by_task
+                    .get(id)
+                    .is_some_and(|edit| edit.incomplete_trace),
                 assigned_at: row.assigned_at,
                 assignment_digest: row.digest.clone(),
                 cost_source,
@@ -678,19 +697,22 @@ impl OrbitRuntime {
     }
 
     /// Analysed-task ids with at least one explorer-delegation tool call on
-    /// an implement invocation at or after that task's assignment.
+    /// an implement invocation at or after that task's assignment, and those
+    /// with none whose absence is unproven because an invocation at or after
+    /// assignment lost early tool calls to the bounded output capture.
     ///
     /// Each task is read on its own: the store applies the `task_id` filter
     /// before its newest-first limit, so unrelated workspace invocations,
     /// however many and however new, cannot evict an enrolled task's
     /// recorded call the way one workspace-wide scan could [ORB-20573].
-    fn tasks_with_explorer_call(
+    fn explorer_observations(
         &self,
         ids: &BTreeSet<String>,
         assigned_at: &BTreeMap<String, DateTime<Utc>>,
         since: DateTime<Utc>,
-    ) -> Result<BTreeSet<String>, OrbitError> {
+    ) -> Result<ExplorerObservations, OrbitError> {
         let mut found = BTreeSet::new();
+        let mut incomplete = BTreeSet::new();
         for id in ids {
             let Some(assigned) = assigned_at.get(id) else {
                 continue;
@@ -707,19 +729,25 @@ impl OrbitRuntime {
                     ..Default::default()
                 })?;
                 for record in records {
-                    if record.ts >= *assigned
-                        && record
-                            .tool_calls
-                            .iter()
-                            .any(|call| is_explorer_delegation(&call.tool_name))
+                    if record.ts < *assigned {
+                        continue;
+                    }
+                    if record
+                        .tool_calls
+                        .iter()
+                        .any(|call| is_explorer_delegation(&call.tool_name))
                     {
                         found.insert(id.clone());
                         break;
                     }
+                    if record.tool_calls_incomplete {
+                        incomplete.insert(id.clone());
+                    }
                 }
             }
         }
-        Ok(found)
+        let unobserved = incomplete.difference(&found).cloned().collect();
+        Ok(ExplorerObservations { found, unobserved })
     }
 
     /// Lines added plus deleted over every landed delivery, per task.
