@@ -158,9 +158,10 @@ fn settle(record: &mut AutoTaskStepRecord, observation: &AutoTaskObservation) ->
     if let Some(receipt) = &observation.receipt
         && record.task_id.as_deref() == Some(receipt.task_id.as_str())
     {
-        let in_time = observation
-            .deadline
-            .is_none_or(|deadline| receipt.settled_at <= deadline);
+        let in_time = !observation.dynamic_expiry
+            && observation
+                .deadline
+                .is_none_or(|deadline| receipt.settled_at <= deadline);
         let receipt = AutoTaskReceipt {
             observed_at: record
                 .receipt

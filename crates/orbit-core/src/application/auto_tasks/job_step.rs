@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Duration, Utc};
 use orbit_automation::condition::{
     CheckedAutoTaskStep, ConditionCarrier, ConditionEvaluator, JobWaitFacts, OuterBound, StepFacts,
-    Truth, check_job_waits,
+    Truth, auto_task_step_deadline, check_job_waits,
 };
 use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -527,18 +527,28 @@ fn observe_with(
     };
     let facts = wait_facts(runtime, step, now)?;
     let evaluator = ConditionEvaluator::for_job_wait(&facts);
-    let deadline = step.checkpoint.expires_at;
-    let expired = if now >= deadline {
+    let outer_deadline = step.checkpoint.expires_at;
+    let step_deadline = step.checked.expire_when.as_ref().and_then(|expression| {
+        auto_task_step_deadline(
+            expression,
+            step.checkpoint.started_at,
+            facts.wait_started_at,
+        )
+    });
+    let deadline = step_deadline.map_or(outer_deadline, |at| at.min(outer_deadline));
+    let step_expired = step
+        .checked
+        .expire_when
+        .as_ref()
+        .filter(|expression| evaluator.truth(expression, None) == Truth::True);
+    let dynamic_expiry = step_expired.is_some() && step_deadline.is_none();
+    let expired = if now >= outer_deadline {
         Some(format!(
             "the job expired at {} (spec.expire_when)",
-            deadline.to_rfc3339()
+            outer_deadline.to_rfc3339()
         ))
     } else {
-        step.checked
-            .expire_when
-            .as_ref()
-            .filter(|expression| evaluator.truth(expression, None) == Truth::True)
-            .map(|expression| format!("expire_when `{}` is true", expression.source))
+        step_expired.map(|expression| format!("expire_when `{}` is true", expression.source))
     };
     let readiness = match &step.checked.wait_until {
         None => AutoTaskReadiness::Ready,
@@ -559,6 +569,7 @@ fn observe_with(
         receipt,
         bound_status,
         deadline: Some(deadline),
+        dynamic_expiry,
         expired,
         readiness,
         recheck_at: (now + Duration::seconds(RECHECK_SECONDS)).min(deadline.max(now)),

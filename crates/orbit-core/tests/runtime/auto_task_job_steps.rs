@@ -283,8 +283,150 @@ fn a_schema_version_3_job_keeps_its_version_without_its_fields() {
     );
 }
 
+// Exercise the owner's observation and engine settlement together, with the
+// child already complete when the parked run resumes.
+fn receipts_respect_step_expiry_after_downtime() {
+    use chrono::{Duration, Utc};
+    use orbit_core::application::task::TaskAddParams;
+    use orbit_engine::{V2AuditWriter, execute_job_with_resume};
+    use orbit_types::workflow::{
+        AUTO_TASK_CHECKPOINT_VERSION, AutoTaskRunCheckpoint, AutoTaskStepRecord,
+        AutoTaskStepStatus, PipelineState,
+    };
+    use std::sync::Arc;
+
+    struct ReceiptHost<'a> {
+        runtime: &'a OrbitRuntime,
+        backdate_hours: i64,
+    }
+    impl orbit_engine::test_support::NullRuntimeHost for ReceiptHost<'_> {
+        fn observe_auto_task_step(
+            &self,
+            run: &str,
+            request: &orbit_engine::AutoTaskStepRequest,
+        ) -> Result<orbit_engine::AutoTaskObservation, orbit_engine::DispatchError> {
+            let mut observation =
+                orbit_engine::RuntimeHost::observe_auto_task_step(self.runtime, run, request)?;
+            if let Some(receipt) = &mut observation.receipt {
+                receipt.settled_at -= Duration::hours(self.backdate_hours);
+            }
+            Ok(observation)
+        }
+        fn checkpoint_auto_task_step(
+            &self,
+            run: &str,
+            step: &str,
+            record: &AutoTaskStepRecord,
+        ) -> Result<(), orbit_engine::DispatchError> {
+            orbit_engine::RuntimeHost::checkpoint_auto_task_step(self.runtime, run, step, record)
+        }
+    }
+    for (expiry, age_hours, backdate_hours, expected) in [
+        (
+            "now >= self.wait_started_at + duration('8h')",
+            10,
+            0,
+            AutoTaskStepStatus::Timeout,
+        ),
+        (
+            "now >= self.wait_started_at + duration('8h')",
+            10,
+            3,
+            AutoTaskStepStatus::Done,
+        ),
+        ("board.empty", 10, 3, AutoTaskStepStatus::Timeout),
+    ] {
+        let runtime = OrbitRuntime::in_memory().unwrap();
+        let child = runtime
+            .add_task(TaskAddParams {
+                title: "completed child".into(),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap();
+        // The receipt's real timestamp fixes the relative clock without sleeps.
+        let started = child.updated_at - Duration::hours(age_hours);
+        let yaml = format!(
+            "schemaVersion: 3\nkind: Job\nmetadata: {{ name: fixture }}\nspec:\n  state: enabled\n  expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n    - id: qa\n      target: auto-task:full-qa-sweep\n      expire_when: \"{expiry}\"\n"
+        );
+        let job = orbit_engine::activity_job::load_job_asset(&yaml)
+            .unwrap()
+            .spec;
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            runtime.sqlite_store().unwrap(),
+            runtime.workspace_id().unwrap(),
+        );
+        let run = jobs
+            .insert_job_run("fixture", 1, started, Some(json!({})), None)
+            .unwrap();
+        jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+        let record = AutoTaskStepRecord {
+            auto_task: "full-qa-sweep".into(),
+            activated_at: started,
+            action_key: "fixture".into(),
+            input_digest: "fixture".into(),
+            status: AutoTaskStepStatus::Queued,
+            reserved_at: Some(started),
+            task_id: Some(child.id),
+            minted: false,
+            receipt: None,
+            settled_at: None,
+            diagnostic: None,
+        };
+        state.auto_task = Some(AutoTaskRunCheckpoint {
+            version: AUTO_TASK_CHECKPOINT_VERSION,
+            frozen_job: yaml,
+            frozen_targets: Default::default(),
+            started_at: started,
+            source_revision: None,
+            expires_at: started + Duration::hours(24),
+            steps: [("qa".into(), record)].into(),
+            branches: Default::default(),
+            parked: None,
+        });
+        jobs.write_run_state(&run.run_id, &state).unwrap();
+        let audit_dir =
+            tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let audit = V2AuditWriter::with_disk_sinks(
+            audit_dir.path(),
+            Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+            "fixture",
+            &run.run_id,
+            "fixture",
+            None,
+        )
+        .unwrap();
+        let outcome = execute_job_with_resume(
+            &job,
+            json!({}),
+            &run.run_id,
+            audit,
+            &ReceiptHost {
+                runtime: &runtime,
+                backdate_hours,
+            },
+            None,
+        )
+        .unwrap();
+        let result = runtime
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .auto_task
+            .unwrap();
+        assert_eq!(
+            result.steps["qa"].status, expected,
+            "{expiry}, age {age_hours}: {outcome:?}"
+        );
+        assert_eq!(outcome.success, expected == AutoTaskStepStatus::Done);
+    }
+}
+
 crate::scenario_table!(
     auto_task_job_steps_scenarios,
+    receipts_respect_step_expiry_after_downtime,
     a_disabled_auto_task_job_loads_explains_and_is_not_submitted,
     ill_typed_auto_task_jobs_do_not_load,
     a_schema_version_3_job_keeps_its_version_without_its_fields
