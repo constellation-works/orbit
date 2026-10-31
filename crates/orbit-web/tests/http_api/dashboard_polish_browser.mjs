@@ -105,10 +105,19 @@ try {
       const row = document.getElementById('tabs');
       const tab = row.querySelector('.tab.active');
       const subtab = row.querySelector('.rail-subtabs:not(.dimmed) .subtab.active');
+      const strip = row.querySelector('.rail-subtabs:not(.dimmed)');
+      const faded = node => {
+        const style = getComputedStyle(node);
+        const mask = style.maskImage === 'none' ? style.webkitMaskImage : style.maskImage;
+        return /linear-gradient/.test(mask || '');
+      };
       return {
         row: rect(row), tab: rect(tab), subtab: subtab && rect(subtab), views: subtab && rect(subtab.parentElement),
         selected: tab.dataset.tab, hash: location.hash, focus: document.activeElement.tagName,
         pageWidth: document.scrollingElement.scrollWidth,
+        rowScroll: { left: row.scrollLeft, width: row.scrollWidth, client: row.clientWidth, faded: faded(row) },
+        stripScroll: strip && { left: strip.scrollLeft, width: strip.scrollWidth, client: strip.clientWidth, faded: faded(strip) },
+        stripViews: strip && [...strip.querySelectorAll('.subtab')].map(view => ({ view: view.dataset.subtab, ...rect(view) })),
       };
     });
     for (const [name, box] of Object.entries({ tab: layout.tab, subtab: layout.subtab })) {
@@ -120,6 +129,27 @@ try {
       `${route} ${visit}: active view fits its scroller: ${JSON.stringify(layout)}`);
     assert.equal(layout.pageWidth, 375, `${route} ${visit}: no page overflow`);
     if (!visit.startsWith('click')) assert.equal(layout.focus, 'BODY', 'route scrolling preserves focus on a direct load');
+    // ORB-20479: the section pill and its views read as a unit. The strip's
+    // left edge starts on a view boundary wherever the strip can still scroll
+    // there; at the strip's end (showing the last view) the fade toward the
+    // hidden earlier views carries them instead of a partial label.
+    if (layout.stripViews) {
+      const atEnd = layout.stripScroll.left + layout.stripScroll.client >= layout.stripScroll.width - 1;
+      for (const view of layout.stripViews) {
+        const leftCut = view.left < layout.views.left - 1 && view.right > layout.views.left + 1;
+        assert.ok(!leftCut || (atEnd && layout.stripScroll.faded),
+          `${route} ${visit}: ${view.view} starts cleanly at the strip edge: ${JSON.stringify(layout)}`);
+      }
+      if (layout.stripScroll.left > 1) assert.ok(layout.stripScroll.faded,
+        `${route} ${visit}: scrolled views cue the earlier ones: ${JSON.stringify(layout)}`);
+      if (layout.stripScroll.left + layout.stripScroll.client < layout.stripScroll.width - 1) {
+        const peek = layout.stripViews.some(view => view.right > layout.views.right + 1 && view.left < layout.views.right - 1);
+        assert.ok(layout.stripScroll.faded || peek,
+          `${route} ${visit}: scrolled views cue the later ones: ${JSON.stringify(layout)}`);
+      }
+    }
+    if (layout.rowScroll.left > 1) assert.ok(layout.rowScroll.faded,
+      `${route} ${visit}: scrolled destinations cue the earlier ones: ${JSON.stringify(layout)}`);
     measurements.navigation.push({ route, visit, ...layout });
   };
   // Counts arrive after the initial route, widening the active destination or

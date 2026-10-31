@@ -602,8 +602,6 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     padding: 2px;
     gap: 2px;
     scrollbar-width: none;
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
   .rail .tabs::-webkit-scrollbar,
   .rail .rail-subtabs::-webkit-scrollbar,
@@ -629,14 +627,31 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     padding: 0 4px;
     gap: 2px;
     scrollbar-width: none;
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
   }
   .rail-subtabs .subtab {
     padding: 0 10px;
     white-space: nowrap;
     flex: 0 0 auto;
   }
+  /* ORB-20479: a scrolled strip fades only toward hidden content, so a label
+     resting at an edge reads as overflow instead of a rendering glitch. */
+  .rail .tabs.has-overflow-end,
+  .rail .rail-subtabs.has-overflow-end {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
+  }
+  .rail .tabs.has-overflow-start,
+  .rail .rail-subtabs.has-overflow-start {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px);
+  }
+  .rail .tabs.has-overflow-start.has-overflow-end,
+  .rail .rail-subtabs.has-overflow-start.has-overflow-end {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+  }
+  /* Free scrolling can rest mid-label; the fades above mark it as overflow,
+     while the router snaps the strip to an item start after every reveal. */
   .topbar { flex-wrap: wrap; height: auto; padding: 4px 8px; row-gap: 2px; column-gap: 6px; }
   .topbar .rail-brand { order: 0; height: 34px; }
   .topbar-spacer { display: block; order: 1; }
