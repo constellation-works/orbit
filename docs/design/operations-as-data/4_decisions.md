@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-30
+last_updated: 2026-10-31
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -531,6 +531,14 @@ governed `operator` and unadvertised (`mcp_scope: None`), and
 fire again, so only an operator decides it, with a required reason kept in the
 condition audit.
 
+**Experiment delete ([ORB-20370]).** `orbit.experiment.delete` is governed
+`operator` and unadvertised (`mcp_scope: None`), and `GOVERNED_TOOL_PLACEMENT`
+records it: deleting an experiment removes its record and event log for good,
+and Daniel asked for no MCP tool, so it is reached only through
+`orbit experiment delete` (and `orbit tool run`). It deletes only a draft,
+concluded or abandoned experiment with no live arm assignment and no
+concluded arm, so nothing a task or promotion task cites goes away.
+
 **Field-level rows ([ORB-18545]).** A governed `Tool` row may name an input
 rather than a tool: `orbit.task.grant_tools` is checked at the chokepoint, in
 `authorize_registered_tool`, beside `orbit.task.add`'s or `orbit.task.update`'s
@@ -961,5 +969,6 @@ different contracts; a future equivalent surface can use this shape.
 - [ORB-18448] — stopped advertising operator-only tools to agent MCP
   sessions that can never call them.
 - [ORB-20156] — added the operator-only condition `clear_stall` tool.
+- [ORB-20370] — added the operator-only, unadvertised experiment `delete` tool.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

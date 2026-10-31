@@ -48,3 +48,5 @@ mod automation;
 pub use automation::*;
 mod review;
 pub use review::*;
+mod application_consent;
+pub use application_consent::*;

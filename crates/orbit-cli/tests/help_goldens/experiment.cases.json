@@ -10,6 +10,7 @@
   {"argv": ["experiment", "assign"], "golden": "experiment/assign.txt"},
   {"argv": ["experiment", "conclude"], "golden": "experiment/conclude.txt"},
   {"argv": ["experiment", "abandon"], "golden": "experiment/abandon.txt"},
+  {"argv": ["experiment", "delete"], "golden": "experiment/delete.txt"},
   {"argv": ["experiment", "show"], "golden": "experiment/show.txt"},
   {"argv": ["experiment", "list"], "golden": "experiment/list.txt"},
   {"argv": ["experiment", "readout"], "golden": "experiment/readout.txt"}

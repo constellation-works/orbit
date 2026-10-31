@@ -7,6 +7,30 @@ impl Commands {
     /// that keeps new CLI commands from silently inheriting policy defaults.
     pub fn operation(&self) -> CommandOperation {
         match self {
+            Commands::Application(command) => {
+                use super::super::application::ApplicationSubcommand;
+                let (subcommand, id) = match &command.command {
+                    ApplicationSubcommand::Consent(_) => ("consent", None),
+                    ApplicationSubcommand::Rotate(args) => {
+                        ("rotate", Some(args.consent_id.as_str()))
+                    }
+                    ApplicationSubcommand::Revoke(args) => {
+                        ("revoke", Some(args.consent_id.as_str()))
+                    }
+                };
+                CommandOperation::new(
+                    RuntimeNeed::Required,
+                    Some(admin_meta(
+                        "application",
+                        Some(subcommand),
+                        Some("application_consent"),
+                        id,
+                    )),
+                    None,
+                    runtime_dispatch!(Application),
+                )
+                .governed_when(true, "application", subcommand)
+            }
             Commands::Init(_) => CommandOperation::new(
                 RuntimeNeed::Forbidden,
                 Some(admin_meta("init", None, Some("config"), None)),

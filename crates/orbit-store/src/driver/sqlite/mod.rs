@@ -110,5 +110,6 @@ mod codec {
     }
 }
 
+mod application_consent;
 #[cfg(test)]
 mod tests;

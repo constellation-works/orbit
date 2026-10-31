@@ -51,6 +51,9 @@ impl FromStr for AuditEventStatus {
 /// event log entry produced by the runtime for internal observability.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AuditEvent {
+    /// Authenticated application and operator-consent facts, never a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application: Option<crate::tool::ApplicationInvocation>,
     pub id: i64,
     pub execution_id: String,
     pub timestamp: DateTime<Utc>,
@@ -203,6 +206,7 @@ pub fn audit_event_base_json(event: &AuditEvent) -> Value {
         "pid": event.pid,
         "session_id": event.session_id,
         "workspace_id": event.workspace_id,
+        "application": event.application,
         "caller_machine_id": event.caller_machine_id,
         "caller_machine_name": event.caller_machine_name,
         "process_machine_id": event.process_machine_id,
