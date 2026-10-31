@@ -56,7 +56,7 @@ Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
 - **Keyed actions.** Members claim attempts with an `action_key`. Before a job is
   submitted, the job store resolves that key to any existing run
   (`automation_job_for_key`,
-  `crates/orbit-core/src/application/automation/members/member_host/host.rs`). Task
+  `crates/orbit-store/src/contracts/job_run.rs`). Task
   creation can reserve a key, its input digest and the task ID before it writes the
   bundle (`add_task_admitted_guarded`, `crates/orbit-core/src/application/task/add.rs`).
   Time-scheduled auto-tasks use a different method. They claim a slot in a cursor
@@ -116,7 +116,7 @@ The current code shapes the fix in four ways:
   worktree GC (`worktree_gc_pipeline`) and store GC (`store_gc_pipeline`); every
   other routine, auto-task and recovery stays owner-only (`runs_in_replica`,
   `crates/orbit-core/src/application/routines/loader.rs`; `collect_host_routines`
-  consumed at `crates/orbit-core/src/application/routines/sweep.rs:217`).
+  consumed at `crates/orbit-core/src/application/routines/sweep.rs:255`).
 - **Any path to tag or publish must keep release authority with Daniel.** RELEASING.md
   and the constellation rules forbid an agent from tagging or publishing unasked.
   npm publish needs Daniel's OTP.
@@ -372,7 +372,8 @@ Condition auto-tasks mint through the keyed task path, not the slot cursor
 recorded, for this kind.
 
 Fired-subject tombstones keep each fire for `fired_retention_days` (default 30)
-or up to the 1,000-record cap (`MEMBER_CAPACITY`, `members.rs`). This stops a file
+or up to the 1,000-record cap (`CONDITION_RETAINED_RECORDS`,
+`crates/orbit-types/src/workflow/automation/condition_state.rs`). This stops a file
 moved out and back in, or a task archived and restored, from firing again
 within the window. Missing or corrupt condition state fails closed as a
 diagnostic, never as a fresh baseline
@@ -451,7 +452,7 @@ is the shipped exception:
   both owner entries and replica checkouts and keeps only the replica-local cron
   routines targeting worktree GC or store GC (`collect_host_routines` and
   `runs_in_replica`, `crates/orbit-core/src/application/routines/loader.rs`,
-  consumed at `crates/orbit-core/src/application/routines/sweep.rs:217`).
+  consumed at `crates/orbit-core/src/application/routines/sweep.rs:255`).
   Delivery and state triggers stay owner-only even for those jobs.
 - Every coordination-state action write passes `ensure_coordination_task_write_permitted`
   (`crates/orbit-runtime/src/orbit_runtime/identity.rs`), so a replica checkout
@@ -496,9 +497,9 @@ side-effect-free and not Turing complete. Its only iteration is over finite
 collections, through macros. It has a gradual type system designed for checking
 against a declared environment, and it already gates admission in Kubernetes,
 Envoy and Firebase rules. The Rust implementation is the cel-rust project,
-published as the `cel` crate (`cel-interpreter` in older releases). Neither crate
-is an Orbit dependency today, so adding one follows the ARCHITECTURE.md dependency
-rule.
+published as the `cel` crate (`cel-interpreter` in older releases). The `cel` crate
+is already an Orbit dependency (`orbit-automation`), and `cel-interpreter` is not used.
+Adding or changing a dependency follows the ARCHITECTURE.md dependency rule.
 
 Orbit declares one CEL environment per scope: the variables and field types in
 §2, with no user-defined functions and no `dyn`. The admitted subset is literals,
@@ -874,8 +875,8 @@ through the records the first one's action leaves.
   is owed. A human can't stop the chain between A and B by acting on a record. A
   link held in memory doesn't survive a restart. The repository rule says
   activities never rely on agent output, only on the durable artifacts it leaves
-  (AGENTS.md, "Release and Orbit design rules"). Chaining through state follows that
-  rule.
+  (constellation root `AGENTS.md`, "Release and Orbit design rules"). Chaining
+  through state follows that rule.
 - **Time-correlation rules ("B fires within 1 hour of A").** They need a retained
   event window and its own identity rules. A condition over state already covers
   the real cases. For example,
