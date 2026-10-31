@@ -38,5 +38,6 @@ Examples:
   orbit run task-pilot --wait --json
 
 Pilots never promote or dispatch tasks. An omitted task list runs automatic
-discovery; explicit ids audit those tasks. Inspect submitted runs with
+discovery; explicit ids audit those tasks. Explicit tasks with different stored
+crews are submitted in separate runs. Inspect submitted runs with
 `orbit run history -j task_pilot_pipeline` and `orbit run show <RUN_ID>`.

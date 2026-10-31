@@ -2,8 +2,8 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-10-31
+last_validated: 2026-10-31
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -893,9 +893,11 @@ admission. Task-pilot preparation admits every due crew in that batch
 into groups of at most five, so two crews are assessed in that one run as
 separate partitions instead of one rejected bundle. Run start admits the mix
 only for the run the live attempt admitted, checked against that attempt and
-its action key [ORB-16860]. A hand-assembled `orbit run task-pilot` list that
-mixes crews, or any other job whose input merely carries a claim, is still
-refused at run start.
+its action key [ORB-16860]. The supported `orbit run task-pilot` command groups
+explicit ids by stored crew and submits one homogeneous run per crew. A
+hand-assembled direct `orbit run job task_pilot_pipeline` with mixed crews, or
+any other job whose input merely carries a claim, is still refused at run
+start.
 A burst of *N* same-crew eligible tasks still yields one run with ⌈N/5⌉ pilot
 partitions and up to five concurrent workers instead of *N* serial runs;
 members beyond the batch stay pending for the next admission. The attempt's

@@ -413,6 +413,9 @@ orbit run task-pilot <id> <id>                  # audit exactly these
 orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 ```
 
+When explicit ids store different crews, `orbit run task-pilot` submits one
+homogeneous run per crew. Each run audits only its own task group.
+
 The shipped pilot steps draw their crew from `workflow.purpose_crews.task_pilot`,
 or from `workflow.low_complexity_crews` while that is unset.
 Neither a `--crew` flag nor `--input crew=<name>` changes those steps. Inspect
