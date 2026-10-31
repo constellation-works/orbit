@@ -621,6 +621,12 @@ export function runPanelPoll(poll, start) {
   }
 }
 
+/// True while a background poll tick starts its panel requests, so a panel can
+/// skip a read that a refresh would make but a tick should not repeat.
+export function isPanelPoll() {
+  return pollingPanels;
+}
+
 export async function requestPanel(bodyId, scope, request, render, countId) {
   const revision = getWorkspaceRevision();
   const previous = panelRequests.get(bodyId);

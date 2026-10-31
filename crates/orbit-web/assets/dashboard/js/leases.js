@@ -6,7 +6,7 @@
 // no operator session and no lease token. Requesting, renewing and releasing
 // stay on `orbit lease` and the lease tools. Every node is built with `el()`.
 
-import { el, fetchJson, formatClock, formatDateTime, getWorkspaceRevision, isAggregateView, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { el, fetchJson, formatClock, formatDateTime, getWorkspaceRevision, isAggregateView, isPanelPoll, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,17 +21,51 @@ let landings = { revision: null, cursor: 0, notices: [], caughtUp: false, readin
 const text = (value) => (typeof value === "string" ? value : "");
 const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === "string") : []);
 
+// While `lease.enabled` is false, every lease route answers 400 with an error
+// naming that key. That is the feature's state, not a failed load: the panels
+// show it as a neutral note, and a poll tick stops asking until a refresh (or a
+// workspace change) rechecks it.
+const OFF = { off: true };
+let leasesOffRevision = null;
+
+function leasesOff() {
+  return leasesOffRevision === getWorkspaceRevision();
+}
+
+function isLeasesOffError(error) {
+  return error?.status === 400 && /\blease\.enabled\b/.test(String(error.message));
+}
+
+// Reads one lease route for the workspace `revision` it was started in. A
+// disabled workspace resolves to `OFF`; a success clears the flag, and any other
+// failure still throws to the panel's error state.
+async function readLeaseRoute(revision, read) {
+  try {
+    const payload = await read();
+    if (leasesOffRevision === revision) leasesOffRevision = null;
+    return payload;
+  } catch (error) {
+    if (!isLeasesOffError(error)) throw error;
+    leasesOffRevision = revision;
+    return OFF;
+  }
+}
+
 export async function fetchAndRenderLeases() {
   if (isAggregateView()) {
     renderPanelPlaceholder("leases-body");
     $("leases-count").textContent = "—";
     return;
   }
+  if (isPanelPoll() && leasesOff()) return;
+  const revision = getWorkspaceRevision();
   await requestPanel(
     "leases-body",
-    `leases:${getWorkspaceRevision()}`,
-    () => fetchJson("/api/leases"),
-    (payload) => renderLeases(Array.isArray(payload?.leases) ? payload.leases : []),
+    `leases:${revision}`,
+    () => readLeaseRoute(revision, () => fetchJson("/api/leases")),
+    (payload) => (payload === OFF
+      ? renderLeasesOff()
+      : renderLeases(Array.isArray(payload?.leases) ? payload.leases : [])),
     "leases-count",
   );
 }
@@ -42,11 +76,13 @@ export async function fetchAndRenderLeaseLandings() {
     $("lease-landings-count").textContent = "—";
     return;
   }
+  if (isPanelPoll() && leasesOff()) return;
+  const revision = getWorkspaceRevision();
   await requestPanel(
     "lease-landings-body",
-    `lease-landings:${getWorkspaceRevision()}`,
-    readLandings,
-    renderLandings,
+    `lease-landings:${revision}`,
+    () => readLeaseRoute(revision, readLandings),
+    (state) => (state === OFF ? renderLandingsOff() : renderLandings(state)),
     "lease-landings-count",
   );
 }
@@ -205,6 +241,30 @@ function renderLeases(leases) {
     lease.expires_at, lease.mode, lease.priority, lease.principal, lease.principal_class,
   ]));
   syncNodes(body, [summary, table]);
+}
+
+// The leases panel names the setting; the landings panel only says it is off, so
+// the explanation is not repeated in both panels.
+function renderLeasesOff() {
+  const body = $("leases-body");
+  if (!body) return;
+  const count = $("leases-count");
+  if (count) count.textContent = "—";
+  const note = el("div", { class: "panel-placeholder", text: "Path leases are off in this workspace. Set `lease.enabled = true` to accept lease operations." });
+  note.dataset.key = "leases-off";
+  note.dataset.hash = "off";
+  syncNodes(body, [note]);
+}
+
+function renderLandingsOff() {
+  const body = $("lease-landings-body");
+  if (!body) return;
+  const count = $("lease-landings-count");
+  if (count) count.textContent = "—";
+  const note = el("div", { class: "panel-placeholder", text: "Off while path leases are disabled." });
+  note.dataset.key = "landings-off";
+  note.dataset.hash = "off";
+  syncNodes(body, [note]);
 }
 
 function renderLandings(state) {
