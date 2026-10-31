@@ -53,15 +53,26 @@ fn build_readout(
         });
     }
 
-    let incomplete_traces = tasks
+    let incomplete_first_edits = tasks
         .iter()
-        .filter(|task| task.explorer_unobserved || task.first_edit_trace_incomplete)
+        .filter(|task| task.first_edit_trace_incomplete)
         .count();
-    if incomplete_traces > 0 {
+    if incomplete_first_edits > 0 {
         warnings.push(ReadoutWarning {
             kind: "tool_trace_incomplete",
             message: format!(
-                "{incomplete_traces} task(s) have an implement invocation whose provider output outgrew the bounded capture, so only the end of its tool calls was kept. Their first-edit metrics are unmeasured, and `tasks_with_explorer_call` cannot rule out an explorer call for the tasks counted in `tasks_explorer_unobserved`."
+                "{incomplete_first_edits} task(s) have a first implement invocation whose provider output outgrew the bounded capture, so only the end of its tool calls was kept. Their first-edit metrics are unmeasured."
+            ),
+        });
+    }
+    // A truncated later invocation leaves a complete first edit measured, so
+    // only the explorer uptake is in doubt for these tasks [ORB-20590].
+    let explorer_unobserved = tasks.iter().filter(|task| task.explorer_unobserved).count();
+    if explorer_unobserved > 0 {
+        warnings.push(ReadoutWarning {
+            kind: "explorer_trace_incomplete",
+            message: format!(
+                "{explorer_unobserved} task(s) have an implement invocation at or after assignment whose provider output outgrew the bounded capture, so only the end of its tool calls was kept. `tasks_with_explorer_call` cannot rule out an explorer call for the tasks counted in `tasks_explorer_unobserved`."
             ),
         });
     }

@@ -3,7 +3,7 @@
 
 use chrono::{Duration, Utc};
 use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+    ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentReadout,
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
@@ -504,6 +504,44 @@ fn enroll_first_edit_sample(
     task_id
 }
 
+/// Records one implement invocation for `task_id` whose tool calls are
+/// `calls`, in order. `tool_calls_incomplete` marks a suffix that outgrew the
+/// output capture. Inserts made in sequence get increasing `(ts, id)`, so the
+/// first one is the task's earlier invocation.
+fn insert_implement_calls(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    job_run_id: &str,
+    calls: &[&str],
+    tool_calls_incomplete: bool,
+) {
+    runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: job_run_id.into(),
+            account: None,
+            activity_id: "agent_implement".into(),
+            agent: "grok".into(),
+            provider: None,
+            model: None,
+            task_ids: vec![task_id.into()],
+            trace: InvocationTrace {
+                tool_calls: calls
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tool_name)| ToolCallTrace {
+                        seq: index as u32 + 1,
+                        tool_name: (*tool_name).into(),
+                        ..ToolCallTrace::default()
+                    })
+                    .collect(),
+                tool_calls_incomplete,
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+}
+
 /// What a first-edit case's treatment arm settles to.
 #[derive(Clone, Copy)]
 enum FirstEdit {
@@ -908,31 +946,13 @@ fn readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace() {
 
     let seed = |arm: &str, calls: &[&str], tool_calls_incomplete: bool| {
         let task_id = enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
-        runtime
-            .insert_invocation_trace_record(&InvocationInsertParams {
-                agent_execution_id: None,
-                job_run_id: format!("fixture-{task_id}"),
-                account: None,
-                activity_id: "agent_implement".into(),
-                agent: "grok".into(),
-                provider: None,
-                model: None,
-                task_ids: vec![task_id.clone()],
-                trace: InvocationTrace {
-                    tool_calls: calls
-                        .iter()
-                        .enumerate()
-                        .map(|(index, tool_name)| ToolCallTrace {
-                            seq: index as u32 + 1,
-                            tool_name: (*tool_name).into(),
-                            ..ToolCallTrace::default()
-                        })
-                        .collect(),
-                    tool_calls_incomplete,
-                    ..InvocationTrace::default()
-                },
-            })
-            .unwrap();
+        insert_implement_calls(
+            &runtime,
+            &task_id,
+            &format!("fixture-{task_id}"),
+            calls,
+            tool_calls_incomplete,
+        );
         runtime.archive_task(&task_id).unwrap();
     };
     // The early explorer and read were lost; only the late editor survives.
@@ -967,6 +987,141 @@ fn readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace() {
         "a suffix's surviving editor is not a measured first edit"
     );
     assert_eq!(first_edit("control"), (1, Some(1.0), 0));
+    assert!(
+        readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "tool_trace_incomplete"),
+        "{:?}",
+        readout.warnings
+    );
+}
+
+/// [ORB-20590] A truncated later invocation leaves a task's complete first
+/// edit measured: only its explorer uptake is unconfirmed. A truncated first
+/// invocation is the case whose first edit stays unmeasured, so it alone
+/// raises `tool_trace_incomplete`.
+#[test]
+fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "complete-first-then-truncated-retry",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("turns_before_first_edit".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let first_edit = |readout: &ExperimentReadout, arm_name: &str| {
+        let metric = readout
+            .metrics
+            .iter()
+            .find(|metric| metric.metric == "turns_before_first_edit")
+            .unwrap();
+        let arm = metric.arms.iter().find(|arm| arm.arm == arm_name).unwrap();
+        (arm.estimate.n, arm.estimate.mean, arm.unmeasured)
+    };
+
+    // The complete invocation is recorded first, so it is the task's first
+    // edit; the truncated retry only leaves its explorer delegation unproven.
+    let retried = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+    insert_implement_calls(
+        &runtime,
+        &retried,
+        "retry-first",
+        &["read_file", "hashline_edit"],
+        false,
+    );
+    insert_implement_calls(&runtime, &retried, "retry-later", &["hashline_edit"], true);
+    runtime.archive_task(&retried).unwrap();
+    let control = enroll_arm_task(&runtime, &experiment.id, "control", TaskComplexity::Low);
+    insert_implement_calls(
+        &runtime,
+        &control,
+        "control",
+        &["read_file", "hashline_edit"],
+        false,
+    );
+    runtime.archive_task(&control).unwrap();
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let arm = |name: &str| readout.arms.iter().find(|arm| arm.name == name).unwrap();
+    assert_eq!(
+        first_edit(&readout, "treatment"),
+        (1, Some(1.0), 0),
+        "the complete first invocation is the measured first edit"
+    );
+    assert_eq!(first_edit(&readout, "control"), (1, Some(1.0), 0));
+    assert_eq!(arm("treatment").tasks_with_explorer_call, 0);
+    assert_eq!(
+        arm("treatment").tasks_explorer_unobserved,
+        1,
+        "the truncated retry may have held an explorer delegation"
+    );
+    assert!(
+        readout
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == "explorer_trace_incomplete"),
+        "{:?}",
+        readout.warnings
+    );
+    assert!(
+        readout
+            .warnings
+            .iter()
+            .all(|warning| warning.kind != "tool_trace_incomplete"),
+        "no first edit is unmeasured in this readout: {:?}",
+        readout.warnings
+    );
+
+    // A truncated first invocation on a second task leaves that task's first
+    // edit unmeasured, while the complete task's sample is still kept.
+    let truncated = enroll_arm_task(&runtime, &experiment.id, "treatment", TaskComplexity::Low);
+    insert_implement_calls(
+        &runtime,
+        &truncated,
+        "truncated-first",
+        &["hashline_edit"],
+        true,
+    );
+    runtime.archive_task(&truncated).unwrap();
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert_eq!(
+        first_edit(&readout, "treatment"),
+        (1, Some(1.0), 1),
+        "a truncated first invocation is unmeasured; the complete one still counts"
+    );
     assert!(
         readout
             .warnings

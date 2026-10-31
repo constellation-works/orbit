@@ -48,6 +48,7 @@ const WARNING_LABELS = {
   primary_unmeasured: "Primary unmeasured",
   first_edit_incomplete: "First-edit coverage incomplete",
   tool_trace_incomplete: "Tool trace truncated",
+  explorer_trace_incomplete: "Explorer uptake unconfirmed",
   crew_mismatch: "Crew outside arm pool",
   crew_mismatch_unavailable: "Crew admission pool unavailable",
   forced: "Forced assignments",

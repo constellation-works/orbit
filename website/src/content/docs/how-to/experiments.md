@@ -362,7 +362,10 @@ Read the warnings before the verdict:
   from the invocation's recorded tool calls. A task with no recorded call whose
   implement invocation lost its early tool calls to the output capture bound
   cannot show that it never delegated, so it is counted in the arm's
-  `tasks_explorer_unobserved` rather than treated as a confirmed zero.
+  `tasks_explorer_unobserved` rather than treated as a confirmed zero. The
+  readout reports an `explorer_trace_incomplete` warning for those tasks. A
+  later truncated invocation does not make a complete first invocation's
+  first-edit metrics unmeasured.
 
 The readout is descriptive, not a significance oracle. It reports no
 p-value for the treatment difference itself; the interval excluding zero
