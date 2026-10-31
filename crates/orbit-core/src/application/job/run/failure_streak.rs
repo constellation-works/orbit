@@ -3,9 +3,10 @@
 //! A streak is the newest finished runs of one job whose state is `failed` or
 //! `interrupted`, read newest first until the first `success`. Operator cancels,
 //! designed holds, timeouts and skips are neither failures nor successes: they
-//! are not in the query, so they neither extend nor break a streak. That is the
-//! failure set the daily run-failure-patterns pass counts, so the two views
-//! agree. A streak only describes; nothing here pauses or changes a job.
+//! are not in the query, so they neither extend nor break a streak. This is not
+//! the failure set the daily run-failure-patterns pass counts: that pass also
+//! counts a `cancelled` run that recorded an error, which this streak never
+//! reads. A streak only describes; nothing here pauses or changes a job.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
