@@ -50,6 +50,83 @@ class VisualFixtureServerTest(unittest.TestCase):
                         os.killpg(server.pid, signal.SIGTERM)
                     server.wait(timeout=15)
 
+    def test_faketime_launch_uses_frozen_absolute_timestamp(self):
+        # Launch-boundary regression for ORB-20505: the script used to run
+        # `faketime -f "$scratch/faketime.rc"` and write "@<epoch>" there.
+        # `-f` passes its argument directly as FAKETIME (no file is read),
+        # so a pathname is rejected, and "@..." is a running clock.
+        # A stub faketime first on PATH records argv/env and execs the
+        # real orbit; it does not emulate libfaketime.
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        for frozen_env, expected in (
+            (None, "2026-01-01 12:00:00"),
+            ("2027-06-15T08:30:00Z", "2027-06-15 08:30:00"),
+        ):
+            with self.subTest(frozen=frozen_env or "default"), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                stub_bin = Path(tmp) / "stub-bin"
+                stub_bin.mkdir()
+                record = Path(tmp) / "faketime.argv"
+                stub = stub_bin / "faketime"
+                stub.write_text(
+                    "#!/bin/sh\n"
+                    "printf '%s\\n' \"$@\" > \"$FAKETIME_STUB_RECORD\"\n"
+                    "printf 'FAKETIME_DONT_FAKE_MONOTONIC=%s\\nTZ=%s\\n' "
+                    "\"${FAKETIME_DONT_FAKE_MONOTONIC:-}\" \"${TZ:-}\" "
+                    "> \"$FAKETIME_STUB_RECORD.env\"\n"
+                    "while [ $# -gt 0 ]; do\n"
+                    "  case \"$1\" in\n"
+                    "    -f) shift 2; break ;;\n"
+                    "    --exclude-monotonic) shift ;;\n"
+                    "    *) break ;;\n"
+                    "  esac\n"
+                    "done\n"
+                    "exec \"$@\"\n"
+                )
+                stub.chmod(0o755)
+                env = {
+                    **os.environ,
+                    "ORBIT_SCRATCH_DIR": tmp,
+                    "FAKETIME_STUB_RECORD": str(record),
+                    "PATH": str(stub_bin) + os.pathsep + os.environ.get("PATH", ""),
+                }
+                if frozen_env is None:
+                    env.pop("ORBIT_VISUAL_FROZEN_INSTANT", None)
+                else:
+                    env["ORBIT_VISUAL_FROZEN_INSTANT"] = frozen_env
+                with open(Path(tmp) / "stdout", "w+") as stdout, open(Path(tmp) / "stderr", "w+") as stderr:
+                    server = subprocess.Popen([str(SCRIPT), "busy-workspace"], cwd=ROOT, env=env,
+                                              stdout=stdout, stderr=stderr, start_new_session=True)
+                    try:
+                        deadline = time.monotonic() + 90
+                        output = ""
+                        while time.monotonic() < deadline:
+                            stdout.seek(0)
+                            output = stdout.read()
+                            if "ORBIT_VISUAL_URL=" in output or server.poll() is not None:
+                                break
+                            time.sleep(0.1)
+                        stderr.seek(0)
+                        diagnostics = stderr.read()
+                        self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                        self.assertIn("server_clock=faketime", diagnostics)
+                        argv = record.read_text().splitlines()
+                        self.assertGreaterEqual(len(argv), 3, argv)
+                        self.assertEqual(argv[0], "-f", argv)
+                        self.assertEqual(argv[1], expected, argv)
+                        self.assertRegex(argv[1], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+                        self.assertNotIn("/", argv[1], argv)
+                        self.assertFalse(argv[1].startswith("@"), argv)
+                        # Remaining argv is the real orbit serve command.
+                        self.assertIn("web", argv)
+                        self.assertIn("serve", argv)
+                        recorded_env = (Path(str(record) + ".env")).read_text()
+                        self.assertIn("FAKETIME_DONT_FAKE_MONOTONIC=1", recorded_env)
+                        self.assertIn("TZ=UTC", recorded_env)
+                    finally:
+                        if server.poll() is None:
+                            os.killpg(server.pid, signal.SIGTERM)
+                        server.wait(timeout=15)
+
     def test_seed_failure_never_announces_readiness(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)
         for operation, response in (
