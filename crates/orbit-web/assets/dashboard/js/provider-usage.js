@@ -1,5 +1,5 @@
 // Provider usage in the top bar: the selected host's readings, one compact chip
-// per provider account. A chip opens a dialog with the detail the old title
+// per provider login. A chip opens a dialog with the detail the old title
 // tooltip held: every window with its gate and reset, the weekly pressure and
 // the crews held back. Hover previews it, focus or click opens it and a click
 // or the Pin button keeps it open. The readings ride the host resource poll
@@ -131,55 +131,66 @@ function pressureValue(pressure) {
 
 const accountLabel = pressure => pressure.account ? `${pressure.provider}/${pressure.account}` : pressure.provider;
 
+const sharesDefaultLogin = pressure => pressure?.shares_default_login === true;
+
 /// Readings grouped by account when pressure is available, otherwise by
 /// provider and scope for older hosts. A group takes its worst reading's
 /// severity (then the more used window), and is stale or gating off only when
-/// every one of its readings is, since each window also flags itself. A
-/// pressure whose account has no reading creates no row of its own when its
-/// provider already has a bare reading group: that group shows the pressure
-/// instead (per-model crew accounts of one login, such as `claude/fable`
-/// beside a bare `claude` reading, are not separate accounts in the bar).
-/// Pressures of a provider with no reading at all collapse to one
-/// pressure-only row per provider, or keep their account label when only one
-/// account is unmatched, so such an account shows once as no usage reported.
+/// every one of its readings is, since each window also flags itself. The host
+/// marks per-model crews of one shared credential with `shares_default_login`;
+/// only those readings and pressures fold into the provider's row. Any other
+/// account with no reading is its own row (`no usage reported`), even when
+/// that provider already has one, and a row never takes a pressure from a
+/// different account than the readings it shows.
 function providerGroups(described, pressures) {
+  const sharing = new Set((pressures || []).filter(sharesDefaultLogin).map(accountLabel));
   const groups = new Map();
+  const ensure = key => { if (!groups.has(key)) groups.set(key, []); };
   for (const item of described) {
-    const key = pressures ? item.account : item.provider;
-    if (!groups.has(key)) groups.set(key, []);
+    const key = pressures && sharing.has(item.account) ? item.account.split('/')[0] : (pressures ? item.account : item.provider);
+    ensure(key);
     groups.get(key).push(item);
   }
-  const readingKeys = new Set(groups.keys());
   if (pressures) {
-    const unmatched = new Map();
     for (const pressure of pressures) {
-      if (readingKeys.has(accountLabel(pressure)) || groups.has(pressure.provider)) continue;
-      if (!unmatched.has(pressure.provider)) unmatched.set(pressure.provider, []);
-      unmatched.get(pressure.provider).push(pressure);
-    }
-    for (const [provider, list] of unmatched) {
-      const key = list.length === 1 ? accountLabel(list[0]) : provider;
-      if (!groups.has(key)) groups.set(key, []);
+      const label = accountLabel(pressure);
+      if (groups.has(label)) continue;
+      if (sharesDefaultLogin(pressure)) {
+        ensure(pressure.provider);
+        continue;
+      }
+      // A bare pressure belongs to the provider row when that row exists.
+      // An unflagged account is its own row, never folded into another login.
+      if (!pressure.account && groups.has(pressure.provider)) continue;
+      ensure(label);
     }
   }
   const byUsage = (a, b) => (b.used ?? -1) - (a.used ?? -1) || a.order - b.order;
   return [...groups].map(([provider, items]) => {
     items.sort(byUsage);
     const worst = items.reduce((a, b) => RANK[b.severity] > RANK[a.severity] ? b : a, items[0] || null);
-    // A bare-provider group (or a collapsed pressure-only provider group)
-    // falls back to an unmatched pressure of its provider; an account group
-    // (`provider/account`) never borrows another account's pressure.
-    const fallback = pressures && !provider.includes('/')
-      ? pressures.find(value => value.provider === provider && !readingKeys.has(accountLabel(value)))
-      : null;
     return {
       provider, items, worst,
-      pressure: pressures?.find(value => accountLabel(value) === provider) || fallback || null,
+      pressure: pressureFor(provider, pressures),
       severity: worst?.severity || 'unknown',
       stale: items.length > 0 && items.every(item => item.stale),
       gatingOff: items.length > 0 && items.every(item => item.gatingOff),
     };
   }).sort((a, b) => RANK[b.severity] - RANK[a.severity]);
+}
+
+/// The pressure of the login `provider` names. A bare row prefers the
+/// account-null pressure, then a `shares_default_login` pressure of that
+/// provider. An account row uses only its own unflagged pressure.
+function pressureFor(provider, pressures) {
+  if (!pressures) return null;
+  if (!provider.includes('/')) {
+    return pressures.find(value => value.provider === provider && !value.account)
+      || pressures.find(value => value.provider === provider && sharesDefaultLogin(value))
+      || null;
+  }
+  const own = pressures.find(value => accountLabel(value) === provider);
+  return own && !sharesDefaultLogin(own) ? own : null;
 }
 
 function pillFor(group) {

@@ -59,7 +59,9 @@ const dkShape = () => {
     observed_at: now.toISOString(), age_seconds: 30, stale: false, gating: true, partial: false, threshold: 90,
     gated: false, until: null, crews: [], ...extra,
   });
-  const accountPressure = (provider, account, value) => ({ provider, account, pressure: value, pressure_window: null });
+  const accountPressure = (provider, account, value) => ({
+    provider, account, pressure: value, pressure_window: null, shares_default_login: true,
+  });
   return {
     provider_limits: [
       reading('antigravity', 'gemini-argon-wtu-weekly', 100, { scope: 'argon' }),
@@ -442,6 +444,81 @@ try {
   assert.equal((await dialogRows()).length, 5, 'the all-providers dialog at 375px lists real accounts only');
   const dkPlaced = await dialog.boundingBox();
   await shoot('provider-dk-shape-dark-375.png', 375, Math.min(900, Math.round(dkPlaced.y + dkPlaced.height + 16)));
+  await page.keyboard.press('Escape');
+
+  // A bare reading and its pressure beside a distinct credential account
+  // with no reading: that account is its own row, and the default-login
+  // row keeps the pressure of the readings it shows.
+  override = (() => {
+    const now = new Date();
+    return {
+      provider_limits: [{
+        provider: 'claude', account: null, scope: null, window: 'seven_day', used_percent: 19,
+        exhausted: false, resets_at: null, source: 'native', observed_at: now.toISOString(),
+        age_seconds: 30, stale: false, gating: true, partial: false, threshold: 90, gated: false,
+        until: null, crews: [],
+      }],
+      provider_pressures: [
+        { provider: 'claude', pressure: 1.1, pressure_window: { window: 'seven_day', used_percent: 19, resets_at: new Date(now.getTime() + 52 * 3600e3).toISOString() } },
+        { provider: 'claude', account: 'opus-credits', pressure: 0.8, pressure_window: null },
+      ],
+    };
+  })();
+  await load(1920, () => document.querySelectorAll('#provider-usage-chips .provider-usage-item').length === 2);
+  const separateChips = await page.evaluate(() => [...document.querySelectorAll('#provider-usage-chips .provider-usage-item')].map(node => node.innerText.replace(/\s+/g, ' ').trim()));
+  assert.deepEqual(separateChips.map(text => text.split(' ').slice(0, 3).join(' ')), ['claude 19% ×1.1', 'claude/opus-credits - ×0.8']);
+  await chip('claude/opus-credits').click();
+  await dialog.waitFor({ state: 'visible' });
+  assert.equal(await page.evaluate(() => document.querySelector('#provider-usage-dialog .usage-pill').textContent), 'no usage reported');
+  assert.match(await dialog.innerText(), /×0\.8/);
+  assert.doesNotMatch(await dialog.innerText(), /×1\.1/);
+  await shoot('provider-separate-account-dark-1920.png', 900, 560);
+  await page.keyboard.press('Escape');
+  await chip('claude').click();
+  await dialog.waitFor({ state: 'visible' });
+  assert.match(await dialog.innerText(), /19%/);
+  assert.match(await dialog.innerText(), /×1\.1/);
+  assert.doesNotMatch(await dialog.innerText(), /×0\.8/, 'the default-login row does not show the other account\'s pressure');
+  await page.keyboard.press('Escape');
+  await load(375, () => document.querySelectorAll('#provider-usage-chips .provider-usage-summary').length === 1);
+  assert.equal(await page.evaluate(() => document.querySelector('#provider-usage-chips .provider-usage-count')?.textContent ?? null), '+1');
+  await page.locator('#provider-usage-chips .provider-usage-summary').scrollIntoViewIfNeeded();
+  await chip('*').click();
+  await dialog.waitFor({ state: 'visible' });
+  assert.equal((await dialogRows()).length, 2, 'the phone dialog lists the distinct account');
+  const separatePlaced = await dialog.boundingBox();
+  await shoot('provider-separate-account-dark-375.png', 375, Math.min(900, Math.round(separatePlaced.y + separatePlaced.height + 16)));
+  await page.keyboard.press('Escape');
+
+  // Readings for one account, and pressures for two others that do not share
+  // its login, stay three rows. The reading's row shows only its own pressure.
+  override = (() => {
+    const now = new Date();
+    const reading = account => ({
+      provider: 'claude', account, scope: null, window: 'seven_day', used_percent: 10,
+      exhausted: false, resets_at: null, source: 'native', observed_at: now.toISOString(),
+      age_seconds: 30, stale: false, gating: true, partial: false, threshold: 90, gated: false,
+      until: null, crews: [account],
+    });
+    const pressure = (account, value) => ({ provider: 'claude', account, pressure: value, pressure_window: null });
+    return {
+      provider_limits: [reading('a')],
+      provider_pressures: [pressure('a', 1.4), pressure('c', 2.2), pressure('d', 3.3)],
+    };
+  })();
+  await load(1920, () => document.querySelectorAll('#provider-usage-chips .provider-usage-item').length === 3);
+  const splitChips = await page.evaluate(() => [...document.querySelectorAll('#provider-usage-chips .provider-usage-item')].map(node => node.innerText.replace(/\s+/g, ' ').trim()));
+  assert.deepEqual(splitChips, ['claude/a 10% ×1.4', 'claude/c - ×2.2', 'claude/d - ×3.3'], 'unmatched accounts are not collapsed into one provider row');
+  await chip('claude/a').click();
+  await dialog.waitFor({ state: 'visible' });
+  assert.match(await dialog.innerText(), /×1\.4/);
+  assert.doesNotMatch(await dialog.innerText(), /×2\.2|×3\.3/);
+  await page.keyboard.press('Escape');
+  await chip('claude/c').click();
+  await dialog.waitFor({ state: 'visible' });
+  assert.equal(await page.evaluate(() => document.querySelector('#provider-usage-dialog .usage-pill').textContent), 'no usage reported');
+  assert.match(await dialog.innerText(), /×2\.2/);
+  assert.doesNotMatch(await dialog.innerText(), /×1\.4|×3\.3/);
   await page.keyboard.press('Escape');
 
   // ---- A stale-by-date reading that is still gated lists its gate and held crews.

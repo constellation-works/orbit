@@ -659,4 +659,49 @@ assert.deepEqual(dialogRows().map(row => row.split(' gate')[0]), ['opus 7-day 40
 outsideClick();
 renderProviderUsage({ provider_limits: [], provider_pressures: [{ provider: 'codex', pressure: 0, pressure_window: null }] });
 assert.deepEqual(providerItems().map(line), ['codex - ×0'], 'zero pressure is displayed, not treated as missing');
+
+// A distinct credential with no reading stays visible beside a default login
+// that has one, and neither row shows the other's pressure.
+renderProviderUsage({
+  provider_limits: [usage({ window: 'seven_day', used_percent: 19 })],
+  provider_pressures: [
+    { provider: 'claude', pressure: 1.1, pressure_window: { window: 'seven_day', used_percent: 19, resets_at: '2099-01-02T03:04:00Z' } },
+    { provider: 'claude', account: 'opus-credits', pressure: 0.8, pressure_window: null },
+  ],
+});
+assert.deepEqual(providerItems().map(line), ['claude 19% ×1.1', 'claude/opus-credits - ×0.8']);
+clickChip(providerItems()[1]);
+assert.equal(pill().textContent, 'no usage reported');
+assert.match(dialogText(), /Weekly pressure ×0\.8/);
+assert.doesNotMatch(dialogText(), /×1\.1/);
+outsideClick();
+clickChip(providerItems()[0]);
+assert.match(dialogText(), /Weekly pressure ×1\.1/);
+assert.doesNotMatch(dialogText(), /×0\.8/);
+outsideClick();
+
+// Unmatched accounts of one provider stay separate rows. The account that
+// has a reading does not borrow either other pressure.
+renderProviderUsage({
+  provider_limits: [usage({ account: 'a', used_percent: 10, window: 'seven_day' })],
+  provider_pressures: [
+    { provider: 'claude', account: 'a', pressure: 1.4, pressure_window: null },
+    { provider: 'claude', account: 'c', pressure: 2.2, pressure_window: null },
+    { provider: 'claude', account: 'd', pressure: 3.3, pressure_window: null },
+  ],
+});
+assert.deepEqual(providerItems().map(line), ['claude/a 10% ×1.4', 'claude/c - ×2.2', 'claude/d - ×3.3']);
+clickChip(providerItems()[0]);
+assert.match(dialogText(), /Weekly pressure ×1\.4/);
+assert.doesNotMatch(dialogText(), /×2\.2|×3\.3/);
+outsideClick();
+
+// Per-model crews the host marks as one login still render as one row.
+renderProviderUsage({
+  provider_limits: [usage({ window: 'seven_day', used_percent: 19 })],
+  provider_pressures: ['fable', 'haiku', 'opus', 'sonnet'].map(account => ({
+    provider: 'claude', account, pressure: 1, pressure_window: null, shares_default_login: true,
+  })),
+});
+assert.deepEqual(providerItems().map(line), ['claude 19% ×1']);
 console.log('weekly pressure: raw values, account isolation, neutral and zero display passed');

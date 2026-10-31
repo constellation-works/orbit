@@ -617,7 +617,9 @@ impl DashboardState {
         }
         Some(serde_json::json!({
             "provider_limits": view.readings,
-            "provider_pressures": view.providers,
+            // The bar list, not readiness's `providers`: it adds the
+            // default-login pressure the merged per-model row shows.
+            "provider_pressures": view.bar_pressures,
             "crew_pressures": view.crew_pressures,
         }))
     }
