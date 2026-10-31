@@ -47,6 +47,7 @@ mod readout;
 pub(in crate::application::task) use readout::block_json;
 pub(crate) mod steps;
 mod triage;
+mod triage_recovery;
 
 pub use episode::{
     BlockEpisode, BlockSource, EpisodeDisposition, FinalRecoveryRecord, episode_disposition,
@@ -57,11 +58,13 @@ pub use next_step::BlockedNextStep;
 pub(crate) use triage::block_triaged_at;
 pub use triage::{
     BLOCKED_TASK_TRIAGED_EVENT, BlockTriageDecision, BlockTriageRequest, BlockedTriageView,
-    TriageBasis, TriageCandidacy, TriageEpisode, TriageOption, TriageTarget, triage_candidacy,
+    TriageBasis, TriageCandidacy, TriageEpisode, TriageFriction, TriageOption, TriageTarget,
+    triage_candidacy,
 };
 pub(in crate::application::task) use triage::{
     proposal_text, quote, triage_text, validated_proposal,
 };
+pub use triage_recovery::BLOCKED_TASK_TRIAGE_RESUMED_EVENT;
 
 use std::path::{Path, PathBuf};
 

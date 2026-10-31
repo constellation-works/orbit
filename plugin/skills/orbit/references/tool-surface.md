@@ -430,6 +430,24 @@ completes, rejects or archives a task.
   consequences and ready-to-apply replacement text, and a recommendation. It
   changes nothing else.
 - `report` records the human action. It changes nothing else.
+- `resume_run` resumes the episode's own failed run (`run_id`, as the candidate
+  lists it) from its checkpoints, as `orbit job resume` does, and counts within
+  the same 2-per-24-hours bound. It is refused for another run, a run that is
+  not resumable, an exhausted or unreadable bound, a `security` or
+  `security-review` tag, or a run another machine executed.
+- `rerun_ci` re-requests the checks that failed on the task's recorded pull
+  request at `head_sha`, through the workspace's forge, then requeues the task
+  within the bound so its next run continues the publication. It is refused when
+  the task records no pull request, the head moved, no required check failed, or
+  the history records the head's failure as inherited from the base
+  (`pr_auto_fix_base_red`, `ci_base_suspect`), plus every refusal a requeue has.
+- `friction_reported` links an existing friction record (`friction_id`) or files
+  one during the task (`friction_title` and `friction_body`), records its id on
+  the episode marker and comment with the human action, and leaves the task
+  blocked.
+
+A refused `resume_run`, `rerun_ci` or `friction_reported` changes nothing and
+records nothing, so the episode still awaits triage.
 
 With `subject` `pilot_warning`, the same actions read `proposed` tasks whose
 latest task-pilot assessment holds promotion on warning findings. `candidates`

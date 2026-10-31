@@ -1,7 +1,8 @@
 //! The `gh` requests that close a task's Orbit-authored pull requests once the
 //! task reaches a terminal decision, and that read the merged ones a task
-//! settles from. Core decides which PRs qualify; this module only owns what
-//! each invocation looks like.
+//! settles from, and that rerun the failed checks on a blocked task's PR head.
+//! Core decides which PRs qualify; this module only owns what each invocation
+//! looks like.
 use orbit_exec::ExecRequest;
 
 use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_SLOW_MS};
@@ -145,6 +146,42 @@ pub fn close_pull_request(number: u64, comment: &str) -> ExecRequest {
             number.to_string(),
             "--comment".into(),
             comment.into(),
+        ],
+        None,
+        TIMEOUT_SLOW_MS,
+    )
+}
+
+/// How many workflow runs on one commit a check rerun reads.
+const COMMIT_RUN_LIMIT: &str = "100";
+
+/// The workflow runs on exactly commit `head_sha`, with the fields a rerun of
+/// the failed ones needs.
+pub fn commit_workflow_runs(head_sha: &str) -> ExecRequest {
+    super::gh_exec_request(
+        vec![
+            "run".into(),
+            "list".into(),
+            "--commit".into(),
+            head_sha.into(),
+            "--limit".into(),
+            COMMIT_RUN_LIMIT.into(),
+            "--json".into(),
+            "databaseId,workflowName,headSha,status,conclusion".into(),
+        ],
+        None,
+        TIMEOUT_DEFAULT_MS,
+    )
+}
+
+/// Rerun the failed jobs of one workflow run.
+pub fn rerun_failed_jobs(run_id: u64) -> ExecRequest {
+    super::gh_exec_request(
+        vec![
+            "run".into(),
+            "rerun".into(),
+            run_id.to_string(),
+            "--failed".into(),
         ],
         None,
         TIMEOUT_SLOW_MS,

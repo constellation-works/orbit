@@ -110,7 +110,7 @@ on this host.
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
 | `finding-verification` | state trigger (`finding_unverified`) | `finding_verification_pipeline` | Disabled by default; verifies review-filed bug findings still owed a verdict in proposed, someday, or backlog, recording confirmation or rejection with evidence. |
 | `pilot-warning-triage` | state trigger (`pilot_warnings_held`) | `escalation_triage_pipeline` | Disabled by default; once per assessment, a hard-tier triager reads each proposed task whose task-pilot assessment holds promotion on warnings and records a decision proposal or the human action that settles the hold. It only proposes: it never approves, promotes, clears a hold or edits the task. Approve with `orbit task update <task-id> --approve --note "<evidence>"`. |
-| `blocked-task-triage` | state trigger (`block_escalated`) | `escalation_triage_pipeline` | Disabled by default; once per block episode, a hard-tier triager reads each blocked task whose block final recovery escalated (or that stayed undecided past 72 hours) and requeues, proposes or reports it — [Blocked-task triage](#blocked-task-triage). Replaces the retired `blocked-task-triage` auto-task. |
+| `blocked-task-triage` | state trigger (`block_escalated`) | `escalation_triage_pipeline` | Disabled by default; once per block episode, a hard-tier triager reads each blocked task whose block final recovery escalated (or that stayed undecided past 72 hours) and resumes, reruns CI, requeues, links a friction, proposes or reports it — [Blocked-task triage](#blocked-task-triage). Replaces the retired `blocked-task-triage` auto-task. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `crew-performance-refresh` | hourly at :23 | `crew_performance_refresh_pipeline` | Rebuilds this workspace's crew-performance snapshot (the implementer by-type cell matrix) that performance-weighted crew draws read. The one routine seeded enabled: while `workflow.crew_performance` is `off` (the default) it skips the scan, records `skipped: crew_performance_off` and writes no snapshot; once the feature is on, keeps the snapshot fresh — [Crew performance snapshot](#crew-performance-snapshot). |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
@@ -204,8 +204,13 @@ The triager records exactly one disposition per episode through
   (2 requeues per 24 hours, one count shared with final recovery), and the
   comment records `requeue n of 2 per 24h`. Past the bound it is refused and
   the task stays blocked with the bound named; when the count cannot be read
-  nothing is written. An Orbit defect with no supported recovery gets a
-  friction record and a report, never a requeue.
+  nothing is written. `resume_run` resumes the episode's own failed run from
+  its checkpoints, and `rerun_ci` re-requests the failed checks on the task's
+  pull request at an unchanged head and then requeues it; both count within
+  the same bound and are refused, recording nothing, when their preconditions
+  fail. An Orbit defect with no supported recovery gets `friction_reported`,
+  which links or files its friction record on the episode and leaves the task
+  blocked, never a requeue.
 - **Decision** — a scope or requirements choice. `propose` writes one comment
   quoting the blocker, with two or three options, their consequences, a
   `target` field (`acceptance_criteria` or `description`) and the ready-to-apply

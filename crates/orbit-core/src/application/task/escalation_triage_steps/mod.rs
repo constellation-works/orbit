@@ -25,9 +25,10 @@
 //! The same job reads escalated blocks (`subject: block`). The seeded
 //! `blocked_task_triage` routine (`kind: block_escalated`) admits each block
 //! episode the shared [`triage_candidacy`](super::triage_candidacy) rule
-//! qualifies, once, and the triager records its requeue, proposal or report
-//! through [`OrbitRuntime::record_block_triage`], whose
-//! `blocked_task_triaged` marker settles the member.
+//! qualifies, once, and the triager records its resume, CI rerun, requeue,
+//! linked friction, proposal or report through
+//! [`OrbitRuntime::record_block_triage`], whose `blocked_task_triaged` marker
+//! settles the member.
 
 mod prepare;
 mod proof;

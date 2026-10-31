@@ -6,8 +6,8 @@
 //! decision escalated, plus blocks the backstop never decides (older than
 //! [`MAX_EPISODE_AGE_HOURS`]). The seeded `blocked_task_triage` routine
 //! (`kind: block_escalated`) admits each such episode once into
-//! `escalation_triage_pipeline`, whose hard-tier triager records one of three
-//! dispositions through [`OrbitRuntime::record_block_triage`]:
+//! `escalation_triage_pipeline`, whose hard-tier triager records one
+//! disposition through [`OrbitRuntime::record_block_triage`]:
 //!
 //! - **requeue** (mechanical): back to `backlog` as a final-recovery requeue,
 //!   counted against the same [`FinalRecoveryRequeueBound`] and recorded with
@@ -19,6 +19,10 @@
 //!   the ready-to-apply replacement text. Nothing else on the task changes
 //!   until an operator answers an option.
 //! - **report** (human-only): one comment naming the human action.
+//! - **resume_run**, **rerun_ci** and **friction_reported**: the mechanical
+//!   recoveries a report would otherwise ask a human for, each applied only
+//!   while its preconditions hold (see `triage_recovery`). A refused one
+//!   changes nothing and records nothing.
 //!
 //! Each records a [`BLOCKED_TASK_TRIAGED_EVENT`] in the task history, which
 //! is what marks the episode triaged. A requeue never applies to a task
@@ -307,6 +311,47 @@ pub enum BlockTriageDecision {
         /// The specific human action.
         human_action: String,
     },
+    /// Mechanical: resume the episode's own failed run from its checkpoints
+    /// through the supported resume path.
+    ResumeRun {
+        /// The run to resume; must be the episode's run.
+        run_id: String,
+        /// Why the run can continue now.
+        reason: String,
+    },
+    /// Mechanical: re-request the failed checks on the task's pull request at
+    /// `head_sha`, then requeue the task so its next run continues the
+    /// publication.
+    RerunCi {
+        /// The head the failed checks ran on.
+        head_sha: String,
+        /// Why a rerun can pass.
+        reason: String,
+    },
+    /// Human-only, with the Orbit defect linked: the friction record that
+    /// describes the cause, and the human action.
+    FrictionReported {
+        /// The friction to link, or to file.
+        friction: TriageFriction,
+        /// The specific human action.
+        human_action: String,
+    },
+}
+
+/// The friction a `friction_reported` triage links.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TriageFriction {
+    /// An existing friction record, by id.
+    Existing(String),
+    /// A new friction record, filed during the task.
+    File {
+        /// One-line handle for the problem.
+        title: String,
+        /// What happened and why it is an Orbit defect.
+        body: String,
+        /// Agent family the record is attributed to.
+        model: String,
+    },
 }
 
 /// One option of a decision proposal.
@@ -374,14 +419,23 @@ pub struct BlockTriageRequest {
 }
 
 /// What [`OrbitRuntime::record_block_triage`] wrote.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TriageWrite {
-    disposition: &'static str,
-    outcome: &'static str,
-    comment: String,
-    requeue: Option<(usize, FinalRecoveryRequeueBound)>,
-    refusal: Option<String>,
-    decision_answers: Option<Vec<DecisionAnswer>>,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) struct TriageWrite {
+    pub(super) disposition: &'static str,
+    pub(super) outcome: &'static str,
+    pub(super) comment: String,
+    pub(super) requeue: Option<(usize, FinalRecoveryRequeueBound)>,
+    pub(super) refusal: Option<String>,
+    pub(super) decision_answers: Option<Vec<DecisionAnswer>>,
+    /// Fields the marker note adds after the episode, such as `friction=`.
+    pub(super) marker_fields: String,
+    /// History the write appends before the marker.
+    pub(super) history: Vec<TaskHistoryEntry>,
+    /// The recovery already moved the task out of `blocked` (a resume
+    /// readmits it), so the write expects no status.
+    pub(super) readmitted: bool,
+    /// What the recovery did, for the answer.
+    pub(super) applied: Option<Value>,
 }
 
 impl OrbitRuntime {
@@ -448,6 +502,7 @@ impl OrbitRuntime {
                         "requeues_in_window": requeues.as_ref().ok(),
                         "requeue_count_error": requeues.as_ref().err().map(ToString::to_string),
                         "requeue_bound": bound_json(bound),
+                        "pr_number": task.github_pr_number(),
                     }));
                 }
                 other => excluded.push(json!({
@@ -490,14 +545,29 @@ impl OrbitRuntime {
                     )));
                 }
             };
-            let write = self.plan_triage(&task, &episode, &blocker, &decision, request)?;
+            let write = match &decision {
+                BlockTriageDecision::ResumeRun { .. }
+                | BlockTriageDecision::RerunCi { .. }
+                | BlockTriageDecision::FrictionReported { .. } => {
+                    self.apply_triage_recovery(&task, &episode, &blocker, &decision, request)?
+                }
+                _ => self.plan_triage(&task, &episode, &blocker, &decision, request)?,
+            };
             self.write_triage(&task, &episode, &write)?;
+            let status = if write.readmitted {
+                self.get_task(id)?.status
+            } else if write.requeue.is_some() {
+                TaskStatus::Backlog
+            } else {
+                TaskStatus::Blocked
+            };
             answer = Some(json!({
                 "task_id": id,
                 "episode": episode.key(),
                 "disposition": write.disposition,
                 "outcome": write.outcome,
-                "status": if write.outcome == "requeued" { TaskStatus::Backlog } else { TaskStatus::Blocked },
+                "status": status,
+                "applied": write.applied,
                 "requeue": write.requeue.map(|(count, bound)| json!({
                     "count": count,
                     "max_requeues": bound.max_requeues,
@@ -521,13 +591,7 @@ impl OrbitRuntime {
         request: &BlockTriageRequest,
     ) -> Result<TriageWrite, OrbitError> {
         let header = |disposition: &str, outcome: &str| {
-            format!(
-                "blocked_task_triage disposition={disposition} outcome={outcome} episode={} by={}",
-                episode
-                    .blocked_at
-                    .to_rfc3339_opts(SecondsFormat::Secs, true),
-                request.requested_by
-            )
+            triage_header(episode, request, disposition, outcome)
         };
         let quoted = quote(blocker);
         Ok(match decision {
@@ -542,6 +606,7 @@ impl OrbitRuntime {
                     requeue: None,
                     refusal: Some(reason),
                     decision_answers: None,
+                    ..Default::default()
                 };
                 if let Some(reason) = operator_only_requeue(self, task) {
                     return Ok(refused(
@@ -591,6 +656,7 @@ impl OrbitRuntime {
                     requeue: Some((recent + 1, bound)),
                     refusal: None,
                     decision_answers: None,
+                    ..Default::default()
                 }
             }
             BlockTriageDecision::Propose {
@@ -609,6 +675,7 @@ impl OrbitRuntime {
                 requeue: None,
                 refusal: None,
                 decision_answers: Some(proposal_answers(options)),
+                ..Default::default()
             },
             BlockTriageDecision::Report { human_action } => TriageWrite {
                 disposition: "human_only",
@@ -620,7 +687,15 @@ impl OrbitRuntime {
                 requeue: None,
                 refusal: None,
                 decision_answers: None,
+                ..Default::default()
             },
+            BlockTriageDecision::ResumeRun { .. }
+            | BlockTriageDecision::RerunCi { .. }
+            | BlockTriageDecision::FrictionReported { .. } => {
+                return Err(OrbitError::Execution(
+                    "a triage recovery is applied, not planned".into(),
+                ));
+            }
         })
     }
 
@@ -642,10 +717,11 @@ impl OrbitRuntime {
             by: SYSTEM_ACTOR_LABEL.to_string(),
             event: BLOCKED_TASK_TRIAGED_EVENT.to_string(),
             note: Some(format!(
-                "disposition={} outcome={} episode={}",
+                "disposition={} outcome={} episode={}{}",
                 write.disposition,
                 write.outcome,
-                episode.key()
+                episode.key(),
+                write.marker_fields
             )),
             from_status: None,
             to_status: None,
@@ -653,7 +729,7 @@ impl OrbitRuntime {
             decision: None,
         };
         let requeued = write.requeue.is_some();
-        let mut history = Vec::new();
+        let mut history = write.history.clone();
         // A requeue is the final-recovery requeue of the blocking run: the
         // same typed decision and publication record the applier writes, so
         // the next run resumes exactly what a final-recovery requeue resumes.
@@ -711,7 +787,7 @@ impl OrbitRuntime {
                     status_note: status_note.clone(),
                     append_comments: vec![comment.clone()],
                     append_history: history.clone(),
-                    expected_status: Some(vec![TaskStatus::Blocked]),
+                    expected_status: (!write.readmitted).then(|| vec![TaskStatus::Blocked]),
                     ..Default::default()
                 },
             )?;
@@ -724,6 +800,22 @@ impl OrbitRuntime {
         })?;
         Ok(())
     }
+}
+
+/// The first line of a triage comment.
+pub(super) fn triage_header(
+    episode: &TriageEpisode,
+    request: &BlockTriageRequest,
+    disposition: &str,
+    outcome: &str,
+) -> String {
+    format!(
+        "blocked_task_triage disposition={disposition} outcome={outcome} episode={} by={}",
+        episode
+            .blocked_at
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        request.requested_by
+    )
 }
 
 /// Allowed answers for a decision proposal: the option numbers its
@@ -749,7 +841,7 @@ fn proposal_answers(options: &[TriageOption]) -> Vec<DecisionAnswer> {
 /// Why only an operator may requeue `task`, when only one may: a security
 /// tag, or a run another machine executed whose evidence this owner cannot
 /// read.
-fn operator_only_requeue(runtime: &OrbitRuntime, task: &Task) -> Option<String> {
+pub(super) fn operator_only_requeue(runtime: &OrbitRuntime, task: &Task) -> Option<String> {
     if let Some(tag) = task
         .tags
         .iter()
@@ -787,6 +879,28 @@ fn validated(decision: &BlockTriageDecision) -> Result<BlockTriageDecision, Orbi
         } => BlockTriageDecision::Propose {
             options: validated_proposal(options, *recommended)?,
             recommended: *recommended,
+        },
+        BlockTriageDecision::ResumeRun { run_id, reason } => BlockTriageDecision::ResumeRun {
+            run_id: text(run_id, "run_id")?,
+            reason: text(reason, "reason")?,
+        },
+        BlockTriageDecision::RerunCi { head_sha, reason } => BlockTriageDecision::RerunCi {
+            head_sha: text(head_sha, "head_sha")?,
+            reason: text(reason, "reason")?,
+        },
+        BlockTriageDecision::FrictionReported {
+            friction,
+            human_action,
+        } => BlockTriageDecision::FrictionReported {
+            friction: match friction {
+                TriageFriction::Existing(id) => TriageFriction::Existing(text(id, "friction_id")?),
+                TriageFriction::File { title, body, model } => TriageFriction::File {
+                    title: text(title, "friction_title")?,
+                    body: text(body, "friction_body")?,
+                    model: model.clone(),
+                },
+            },
+            human_action: text(human_action, "reason")?,
         },
     })
 }
@@ -883,7 +997,7 @@ pub(crate) fn proposal_text(options: &[TriageOption], recommended: usize) -> Str
 }
 
 /// `requeue n of 2 per 24h`, as the comment and the run summary state it.
-fn requeue_summary(count: usize, bound: FinalRecoveryRequeueBound) -> String {
+pub(super) fn requeue_summary(count: usize, bound: FinalRecoveryRequeueBound) -> String {
     format!(
         "requeue {count} of {} per {}h",
         bound.max_requeues,
