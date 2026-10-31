@@ -539,15 +539,22 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
 - **`pilot-block-patterns`** (`medium`) — daily. The upstream counterpart of
-  `run-failure-patterns`: over the 14 days before scan start it reads task-pilot
-  warnings and holds and the blocks final recovery escalated. Its first input is
-  the disposition `escalation_triage_pipeline` recorded on each (the
-  `pilot_warning_triaged` and `blocked_task_triaged` markers and comments, whose
-  named human actions recur), then task history, `pilot_warnings` and run
-  records for what triage did not cover. It groups them by cause and routes each group that recurs (at least 3
-  occurrences across 2 tasks) to its source: the filer that writes unverifiable
-  tasks, the task-pilot activity for holds that proved harmless, the
-  final-recovery activity for blocks a cheap step later resolved,
+  `run-failure-patterns`. A first pass, with no prior cursor, reads the 3 days
+  before scan start; a later pass reads the 14 days before scan start, unless
+  the prior cursor still has `resume_after`, in which case the pass continues
+  that window instead of advancing it. It takes candidates from
+  `escalation_triage_pipeline` and `blocked_task_recovery_pipeline` run history
+  plus the current proposed and blocked tasks, and it reads at most 60 tasks
+  per pass, oldest first. A pass that hits the cap still completes: it stores
+  `pilot-block-report.json` with `partial` true and `pilot-block-cursor.json`
+  with `resume_after` set to the last processed event. Its first input is the
+  disposition `escalation_triage_pipeline` recorded (the `pilot_warning_triaged`
+  and `blocked_task_triaged` markers and comments, whose named human actions
+  recur), then task history, `pilot_warnings` and run records for what triage
+  did not cover. It groups them by cause and routes each group that recurs (at
+  least 3 occurrences across 2 tasks) to its source: the filer that writes
+  unverifiable tasks, the task-pilot activity for holds that proved harmless,
+  the final-recovery activity for blocks a cheap step later resolved,
   `run-failure-patterns` for run failures (where it only makes sure a fix is
   open), or a friction or setup chore for the host. It comments on open coverage
   and files at most 5 `proposed` fix tasks per pass, tagged
