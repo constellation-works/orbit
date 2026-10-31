@@ -37,7 +37,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Windows host (Orbit runs inside WSL2) | [Windows through WSL2](references/windows-wsl2.md) |
 | macOS: Claude worker token and the clock env file | [macOS](references/macos.md) |
 | Headless browser kit (`orbit browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
-| Scheduled execution | [Automation](references/automation.md) |
+| Scheduled execution | [Automation](references/automation.md), including [UX rules checks](references/automation.md#ux-rules-checks) |
 | Workspace scripts (`target: script:<name>` job steps): what a script is, granting or revoking one, grant staleness, network and root grants, or verifying a grant | [Automation — Workspace scripts](references/automation.md#workspace-scripts) |
 | Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
 | Prompt-size cost estimates, token usage and unknown cost | [Operational logs — Prompt-size cost accounting](references/operational-logs.md#prompt-size-cost-accounting) |
