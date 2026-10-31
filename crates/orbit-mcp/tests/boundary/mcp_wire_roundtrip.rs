@@ -175,7 +175,12 @@ struct EchoHost {
 impl McpHost for EchoHost {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
         *self.list_calls.lock().expect("list calls") += 1;
-        Ok(vec![definition("demo.echo"), definition("demo.inspect")])
+        Ok(vec![
+            definition("demo.echo"),
+            definition("demo.inspect"),
+            definition("demo.unbound_workspace"),
+            definition("demo.missing_workspace"),
+        ])
     }
 
     fn call_tool(
@@ -184,6 +189,18 @@ impl McpHost for EchoHost {
         input: Value,
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        if name == "demo.unbound_workspace" {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Workspace,
+                "ws_unbound-data-dir",
+            ));
+        }
+        if name == "demo.missing_workspace" {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Workspace,
+                "ws_missing-project",
+            ));
+        }
         if name != "demo.echo" && name != "demo.inspect" {
             return Err(OrbitError::not_found(
                 orbit_common::NotFoundKind::Tool,
@@ -336,7 +353,12 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
             .iter()
             .map(|tool| tool.name.as_ref())
             .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["demo_echo", "demo_inspect"])
+        BTreeSet::from([
+            "demo_echo",
+            "demo_inspect",
+            "demo_unbound_workspace",
+            "demo_missing_workspace",
+        ])
     );
     assert_eq!(listed_again, listed);
     let tool = listed
@@ -409,6 +431,30 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         missing.structured_content.as_ref().unwrap()["code"],
         "tool_not_found"
     );
+
+    let unbound_workspace = client
+        .peer()
+        .call_tool(call("demo_unbound_workspace", json!({ "value": "x" })))
+        .await
+        .expect("workspace not-found result crosses the MCP boundary");
+    assert_eq!(unbound_workspace.is_error, Some(true));
+    let message = unbound_workspace.structured_content.as_ref().unwrap()["message"]
+        .as_str()
+        .expect("structured workspace error message");
+    assert!(message.contains("workspace not found"), "{message}");
+    assert!(message.contains("orbit workspace init"), "{message}");
+    assert!(message.contains("--workspace"), "{message}");
+    assert!(!message.contains("ws_unbound-data-dir"), "{message}");
+
+    let missing_workspace = client
+        .peer()
+        .call_tool(call("demo_missing_workspace", json!({ "value": "x" })))
+        .await
+        .expect("real workspace not-found result crosses the MCP boundary");
+    let message = missing_workspace.structured_content.as_ref().unwrap()["message"]
+        .as_str()
+        .expect("structured missing workspace message");
+    assert!(message.contains("ws_missing-project"), "{message}");
 
     let contexts = host.contexts.lock().expect("contexts");
     assert_eq!(contexts.len(), 1);
