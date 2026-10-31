@@ -1,55 +1,118 @@
-/* Analytics › Forecast: backlog quantiles, coverage and calibration, built
-   from the Metrics card, series-card and table classes in health.css. */
+/* Analytics › Forecast: the answer first, then tasks, data gaps and
+   calibration, with the rest in collapsed sections. Built from the Metrics
+   card, series-card and table classes in health.css. */
 .panel > .body.forecast-body {
   display: flex; flex-direction: column; gap: 16px;
   padding: 16px; background: var(--bg);
 }
 .fc-view { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.fc-view .mx-card { min-width: 0; }
+.fc-line { margin: 0; color: var(--fg-dim); font: 13px/1.5 var(--font-sans); }
+
+/* Header: what was forecast and when, beside its controls. */
+.fc-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.fc-meta { margin: 0; color: var(--fg-dim); font: 13px var(--font-sans); }
+.fc-source { white-space: nowrap; }
+.fc-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fc-history { display: inline-flex; align-items: center; gap: 8px; }
+.fc-control-label { color: var(--fg-dim); font: 13px var(--font-sans); }
+
+/* Answer: three headline figures, p50 large with p90 beside it. Read-outs,
+   not series toggles. */
+.fc-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.fc-minor-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+.mx-sc.fc-fig { cursor: default; }
+.mx-sc.fc-fig:hover { border-color: var(--hair); }
+.fc-kpi-pair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.fc-q { display: inline-flex; align-items: baseline; gap: 6px; }
+.fc-figures .mx-sc-value { font-size: 32px; }
+.fc-minor .mx-sc-value { font-size: 18px; }
+.fc-p90-value { color: var(--fg-dim); font: 500 15px var(--font-mono); font-variant-numeric: tabular-nums; }
+.fc-warning {
+  margin: 0; padding: 10px 12px; border: 1px solid var(--warn-line); border-radius: 8px;
+  background: var(--warn-wash); color: var(--warn-fg); font: 13px/1.5 var(--font-sans);
+}
+.fc-link {
+  padding: 0; border: 0; background: none; color: var(--accent);
+  font: inherit; text-decoration: underline; cursor: pointer;
+}
+.fc-link:hover { color: var(--accent-hover); }
+.fc-subset strong { color: var(--fg); font-weight: 500; }
+
+/* Tasks: one table, with a muted second line under a cell. Wide tables
+   scroll in their own box. */
+.fc-table th, .fc-table td { vertical-align: top; }
+.fc-table td.fc-state { white-space: nowrap; }
+.fc-table td.fc-basis { color: var(--fg-mute); font: 12px var(--font-mono); white-space: nowrap; }
+.fc-tasks .fc-table { min-width: 680px; }
+.fc-tasks .fc-table tbody th { min-width: 220px; white-space: normal; }
+.fc-sub { display: block; margin-top: 2px; color: var(--fg-mute); font: 12px var(--font-sans); white-space: nowrap; }
+.fc-history-table-wrap { max-height: 420px; border: 1px solid var(--hair); border-radius: 8px; }
+.fc-history-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.fc-history-page-status { color: var(--fg-dim); font: 12px var(--font-sans); }
+
+/* Data gaps: one label/count tile per non-zero check. */
+.fc-gaps-card:focus { outline: none; }
+.fc-gaps-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fc-gaps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.fc-gap {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--hair); border-radius: 8px; background: var(--bg-sunk);
+  font: 13px var(--font-sans); color: var(--fg);
+}
+.fc-gap-count { color: var(--fg-dim); font: 600 13px var(--font-mono); font-variant-numeric: tabular-nums; }
+.fc-gap.fc-gap-key { border-color: var(--warn-line); background: var(--warn-wash); }
+.fc-gap.fc-gap-key .fc-gap-count { color: var(--warn-fg); }
+
+/* Calibration: a bar per percentile with its target marked. */
+.fc-cals { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px 24px; }
+.fc-cal { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fc-cal-head { display: flex; justify-content: space-between; gap: 8px; color: var(--fg); font: 13px var(--font-sans); }
+.fc-cal-n { color: var(--fg-mute); }
+.fc-cal-row { display: grid; grid-template-columns: 30px minmax(0, 1fr) 40px; align-items: center; gap: 8px; color: var(--fg-mute); font: 12px var(--font-mono); }
+.fc-cal-track { position: relative; height: 8px; border-radius: 4px; background: var(--bg-sunk); }
+.fc-cal-fill { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--accent); }
+.fc-cal-target { position: absolute; top: -3px; width: 2px; height: 14px; margin-left: -1px; background: var(--fg); }
+.fc-cal-value { color: var(--state-success); text-align: right; }
+.fc-cal-row.fc-miss .fc-cal-fill { background: var(--warn-fg); }
+.fc-cal-row.fc-miss .fc-cal-value { color: var(--warn-fg); }
+
+/* Collapsed detail. */
+.fc-more-list { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.fc-more { border-bottom: 1px solid var(--border); min-width: 0; }
+.fc-more-summary {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 4px;
+  color: var(--fg); font: 500 14px var(--font-sans); cursor: pointer; list-style: none;
+}
+.fc-more-summary::-webkit-details-marker { display: none; }
+.fc-more-summary::before { content: "›"; display: inline-block; color: var(--fg-mute); transition: transform 0.15s; }
+.fc-more[open] > .fc-more-summary::before { transform: rotate(90deg); }
+.fc-more-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fc-more-meta { color: var(--fg-mute); font: 12px var(--font-sans); }
+.fc-more-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 4px 4px 20px; }
+.fc-more-body .mx-blurb { margin: 0; line-height: 1.5; }
+.fc-sub-title { margin: 8px 0 0; color: var(--fg); font: 600 13px var(--font-sans); }
 /* Split wait reasons only when each table can keep its labels and ranges legible. */
-.fc-waits-card { container: fc-waits-card / inline-size; }
-.fc-waits { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fc-waits { display: flex; flex-direction: column; gap: 8px; min-width: 0; container: fc-waits / inline-size; }
 .fc-waits-caption { margin: 0; }
 .fc-waits-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
 .fc-waits-grid > .mx-table-wrap { min-width: 0; }
 .fc-waits-grid .fc-table { min-width: 0; }
-@container fc-waits-card (min-width: 1080px) {
+@container fc-waits (min-width: 1080px) {
   .fc-waits-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-/* The forecast's source and age, beside its Refresh control. */
-.fc-source-tools { display: inline-flex; align-items: center; gap: 8px; }
-.fc-source { font: 12px var(--font-sans); white-space: nowrap; }
-/* Quantile tiles are read-outs, not series toggles. */
-.mx-sc.fc-kpi { cursor: default; }
-.mx-sc.fc-kpi:hover { border-color: var(--hair); }
-.fc-kpi-pair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; }
-.fc-q { display: inline-flex; align-items: baseline; gap: 6px; }
-.fc-q .mx-sc-value.fc-p90 { color: var(--fg-dim); font-size: 20px; }
-.fc-assume {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
-  padding: 10px 12px; border: 1px dashed #2e343c; border-radius: 8px;
-  font: 13px var(--font-sans);
-}
-.fc-unavailable { border-color: var(--warn-line, #2e343c); flex-direction: column; align-items: flex-start; }
-.fc-baseline { flex-direction: column; align-items: flex-start; }
-.fc-approved-unavailable { display: flex; flex-direction: column; gap: 8px; }
-.fc-assume-head { color: var(--fg); font-weight: 500; }
-.fc-assume-rate { color: var(--fg-mute); }
-.fc-approved { margin: 0; color: var(--fg-dim); font: 13px var(--font-sans); }
-.fc-table td.fc-state, .fc-table td.fc-review { white-space: nowrap; }
-.fc-table td.fc-basis { color: var(--fg-mute); font: 12px var(--font-mono); white-space: nowrap; }
-.fc-history-table-wrap { max-height: 420px; border: 1px solid var(--hair); border-radius: 8px; }
-.fc-history-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
-.fc-history-page-status { color: var(--fg-dim); font: 12px var(--font-sans); }
-/* Coverage counts: one cell per count, wrapping on narrow screens. */
+/* The full coverage checklist: count, label and definition per check. */
 .fc-coverage {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 0;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 0;
   font: 13px var(--font-sans);
 }
 .fc-cov {
-  position: relative; display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 4px;
   padding: 10px 12px; border: 1px solid var(--hair); border-radius: 8px; background: var(--bg-sunk);
 }
-.fc-cov dt { color: var(--fg-dim); }
+.fc-cov dt { color: var(--fg); }
 /* The count reads first; dt stays first in the markup, as a dl requires. */
-.fc-cov dd { order: -1; margin: 0; color: var(--fg); font: 600 20px var(--font-mono); font-variant-numeric: tabular-nums; }
-.fc-cov dd.fc-warn { color: #f2c46d; }
+.fc-cov dd { margin: 0; }
+.fc-cov dd.fc-cov-count { order: -1; color: var(--fg); font: 600 20px var(--font-mono); font-variant-numeric: tabular-nums; }
+.fc-cov dd.fc-warn { color: var(--warn-fg); }
+.fc-cov dd.fc-cov-def { color: var(--fg-mute); font-size: 12px; line-height: 1.45; }

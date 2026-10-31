@@ -157,6 +157,7 @@ function task(fields) {
   return {
     id: 'ORB-1',
     title: 'Forecast a change',
+    complexity: 'medium',
     status: 'backlog',
     predicted_start_hours: { p50: 1, p90: 3 },
     predicted_start_rank: { p50: 1, p90: 2 },
@@ -279,7 +280,8 @@ assert.ok(supported.includes(keptOrder), `the sampling explanation states the sh
 assert.deepEqual(coverageRow('Review mode dropped'), { text: '0', warn: false });
 assert.deepEqual(coverageRow('Unknown review assumption'), { text: '0', warn: false });
 assert.deepEqual(coverageRow('History with unknown review'), { text: '0', warn: false });
-assert.ok(headers().includes('Review'), `the schedule names the review assumption: ${headers().join(', ')}`);
+assert.ok(supported.includes('Medium · Before landing · mode kept'), `the tasks table names complexity and review assumption per task: ${supported}`);
+for (const column of ['Task', 'Status', 'Starts in', 'Work hours', 'Cost', 'Finishes']) assert.ok(headers().includes(column), `the tasks table has ${column}: ${headers().join(', ')}`);
 
 await render(payload({
   coverage: { thin_cell_fallbacks: 1, review_mode_fallbacks: 1 },
@@ -341,7 +343,7 @@ assert.ok(!older.includes('Review mode dropped'), `older responses do not invent
 assert.ok(!older.includes('Unknown review assumption') && !older.includes('Unknown assumption'), `older responses do not invent unknown review evidence: ${older}`);
 assert.ok(!older.includes('keeps the review mode'), `older responses do not describe the review-mode pool order: ${older}`);
 assert.ok(!older.includes('mode_pooled_cell'), `older responses do not show a review-mode wire key: ${older}`);
-assert.ok(!headers().includes('Review'), `older schedules omit the review column: ${headers().join(', ')}`);
+assert.ok(!older.includes('Medium ·'), `older schedules name no review assumption: ${older}`);
 assert.deepEqual(coverageRow('Thin-cell fallbacks'), { text: '1', warn: true });
 
 function unavailableFixture({ flags = { regression_history_missing: true }, baseline = { time_to_drain_hours: { p50: 2.68, p90: null }, usd: { p50: 10, p90: 25 }, tokens: { p50: null, p90: null } }, support = { missing_fix_history: 36, history_fixes: 4, history_bundles: 5, history_thin: false } } = {}) {
@@ -365,11 +367,12 @@ const regressionBlock = body().querySelector('.fc-unavailable');
 const baselineBlockNode = body().querySelector('.fc-baseline');
 assert.ok(regressionBlock, `regression gap renders a visible reason block: ${regressionText}`);
 assert.equal(regressionBlock.dataset.forecastReason, 'regression_history_missing');
-assert.ok(/regression/i.test(regressionBlock.textContent) && regressionBlock.textContent.includes('36'), `regression reason names missing evidence and support: ${regressionBlock.textContent}`);
+assert.ok(/regression history/i.test(regressionBlock.textContent) && regressionBlock.textContent.includes('8 tasks'), `regression warning names the missing evidence: ${regressionBlock.textContent}`);
+assert.ok(body().querySelector('.fc-gap-note')?.textContent.includes('36'), `data gaps carry the regression support counts: ${regressionText}`);
 assert.ok(!/90-day horizon/i.test(regressionBlock.textContent), `regression gap is not labelled horizon exceedance: ${regressionBlock.textContent}`);
 assert.ok(baselineBlockNode && baselineBlockNode.dataset.forecastBaseline === 'pre-regression', `baseline is labelled separately: ${regressionText}`);
-assert.ok(/excludes unsupported regression/i.test(baselineBlockNode.textContent) && /not the regression-adjusted/i.test(baselineBlockNode.textContent), `baseline states its limitation: ${baselineBlockNode.textContent}`);
-assert.ok(baselineBlockNode.textContent.includes('2.7h') && /p90 unknown/i.test(baselineBlockNode.textContent), `baseline keeps a missing p90 unknown, not zero: ${baselineBlockNode.textContent}`);
+assert.ok(/excludes unsupported regression/i.test(regressionText) && /not the regression-adjusted/i.test(regressionText), `baseline states its limitation: ${regressionText}`);
+assert.ok(baselineBlockNode.textContent.includes('2.7h') && /p90\s*unknown/i.test(baselineBlockNode.textContent), `baseline keeps a missing p90 unknown, not zero: ${baselineBlockNode.textContent}`);
 assert.ok(!body().querySelector('.fc-kpi'), 'unavailable adjusted forecast does not present null KPIs as figures');
 assert.deepEqual(coverageRow('Missing regression history'), { text: '8', warn: true });
 const regressionSummary = forecast.backlogForecastSummary(unavailableFixture());
@@ -382,6 +385,19 @@ assert.ok(/regression/i.test(regressionLink.title), 'compact link keeps the reas
 assert.ok(/^Time to drain /.test(regressionLink.querySelector('.drain-backlog-forecast-baseline')?.textContent || ''), `compact link shows only the baseline figures [ORB-20453]: ${regressionLink.textContent}`);
 assert.ok(regressionLink.querySelector('.visually-hidden')?.textContent.includes('36'), `compact accessible detail carries support counts: ${regressionLink.textContent}`);
 assert.ok(/excludes unsupported regression/i.test(regressionLink.querySelector('.visually-hidden')?.textContent || ''), `compact accessible detail labels the baseline: ${regressionLink.textContent}`);
+
+const approvedFixture = unavailableFixture();
+approvedFixture.backlog.proposed = 2;
+approvedFixture.if_approved = {
+  time_to_drain_hours: { p50: null, p90: null },
+  unavailable: { regression_history_missing: true },
+  pre_regression_baseline: { time_to_drain_hours: { p50: 3.5, p90: 9 }, usd: { p50: 14, p90: 30 }, tokens: { p50: null, p90: null } },
+};
+await render(approvedFixture);
+assert.equal(body().querySelectorAll('.fc-unavailable').length, 1, `the unavailable warning appears once, not again for the if-approved figure: ${text()}`);
+const approvedFigure = body().querySelector('.fc-approved-fig')?.textContent ?? '';
+assert.ok(approvedFigure.includes('3.5h') && /baseline/.test(approvedFigure) && !/unavailable/i.test(approvedFigure), `the if-approved figure shows its baseline without restating the warning: ${approvedFigure}`);
+assert.ok(/If approved, the adjusted forecast is also unavailable/.test(body().querySelector('.fc-gap-note')?.textContent ?? ''), 'data gaps still say why the if-approved forecast is unavailable');
 
 for (const [flags, kind] of [[{ risk_unestimated: true }, 'risk_unestimated'], [{ arrival_conflict_unknown: true }, 'arrival_conflict_unknown']]) {
   const fixture = unavailableFixture({ flags, baseline: null });
