@@ -424,6 +424,47 @@ function revealActiveRailSelection() {
   if (!subtab || window.matchMedia("(max-width: 760px)").matches) {
     tab.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+  for (const strip of document.querySelectorAll(".rail-subtabs:not(.dimmed)")) snapRailSubtabStrip(strip);
+  syncRailScrollCues();
+}
+
+// ORB-20479: on phones the destination and its views share one scrolling row.
+// Each scrolled strip fades only toward hidden content, so an edge-resting
+// label reads as overflow instead of a rendering glitch.
+function syncRailScrollCues() {
+  const phone = window.matchMedia("(max-width: 760px)").matches;
+  for (const strip of document.querySelectorAll(".rail .tabs, .rail .rail-subtabs")) {
+    const canScroll = strip.scrollWidth > strip.clientWidth + 1;
+    strip.classList.toggle("has-overflow-start", phone && canScroll && strip.scrollLeft > 1);
+    strip.classList.toggle("has-overflow-end", phone && canScroll && strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1);
+  }
+}
+
+// ORB-20479: after revealing the active view, hide any label the strip's left
+// edge cuts mid-word: scroll just past entries the edge already covers, so the
+// first visible label starts cleanly while the active view stays in sight. The
+// left fade then says the earlier views exist.
+function snapRailSubtabStrip(strip) {
+  if (!window.matchMedia("(max-width: 760px)").matches) return;
+  for (let guard = 0; guard < 16; guard += 1) {
+    if (strip.scrollWidth <= strip.clientWidth + 1) return;
+    const view = strip.getBoundingClientRect();
+    const first = [...strip.querySelectorAll(".subtab")]
+      .find((btn) => btn.getBoundingClientRect().right > view.left + 0.5);
+    if (!first) return;
+    const rect = first.getBoundingClientRect();
+    if (rect.left >= view.left - 0.5) return;
+    // At the strip's end there is nowhere further to scroll: the fade cue
+    // carries the hidden views instead of a partial label pretending to fit.
+    const before = strip.scrollLeft;
+    if (first.classList.contains("active")) {
+      strip.scrollLeft = Math.max(0, strip.scrollLeft + (rect.left - view.left));
+    } else {
+      const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
+      strip.scrollLeft += rect.right - view.left + gap;
+    }
+    if (strip.scrollLeft === before) return;
+  }
 }
 
 function setActiveTabImpl(ctx, raw, opts = {}) {
@@ -736,8 +777,17 @@ function initTabsImpl(ctx) {
   $("tabs")?.addEventListener("focusin", (event) => {
     if (event.target.matches('.tab, .subtab')) {
       event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      // ORB-20479: keyboard scrolling can rest a sub-view strip mid-label;
+      // snap the edge back to an item start and refresh the overflow fades.
+      const strip = event.target.closest(".rail-subtabs");
+      if (strip) snapRailSubtabStrip(strip);
+      syncRailScrollCues();
     }
   });
+  // ORB-20479: keep the overflow fades truthful while the user scrolls.
+  for (const strip of document.querySelectorAll(".rail .tabs, .rail .rail-subtabs")) {
+    strip.addEventListener("scroll", () => syncRailScrollCues(), { passive: true });
+  }
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", (event) => {
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
