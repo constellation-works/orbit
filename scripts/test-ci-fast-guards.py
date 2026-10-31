@@ -168,6 +168,21 @@ else:
                               env=dict(self.env, **(env_overrides or {})),
                               text=True, capture_output=True)
 
+    def partition_listing(self, archive):
+        """Return the listing the partition guard proves after its one extraction.
+
+        The guard extracts the archive once (the last cargo call logged) and
+        lists every selection from that extraction's metadata."""
+        *_, extract = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(extract[:-1], ["nextest", "list", "--archive-file", archive,
+                                        "--workspace-remap", str(self.root), "--extract-to"])
+        extracted = extract[-1]
+        self.assertTrue(extracted.startswith(f"{self.root}/.orbit/tmp/"), "the guard extracts inside the checkout")
+        return ["--", "cargo", "nextest", "list",
+                "--binaries-metadata", f"{extracted}/target/nextest/binaries-metadata.json",
+                "--cargo-metadata", f"{extracted}/target/nextest/cargo-metadata.json",
+                "--workspace-remap", str(self.root), "--target-dir-remap", f"{extracted}/target"]
+
     def prepare_ci(self):
         source = (SCRIPTS / "ci-guardrails.sh").read_text()
         for name in re.findall(r'\$repo_root/scripts/([\w.-]+)', source):
@@ -965,23 +980,22 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
                                 env_overrides={"NEXTEST_SHARDS": "3"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.log.read_text(), "", "the partition guard neither builds nor archives")
+        self.assertEqual(len(self.log.read_text().splitlines()), 1,
+                         "the partition guard neither builds nor archives; it extracts once")
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
-                         ["--shards", "3", "--", "cargo", "nextest", "list", "--archive-file", archive,
-                          "--workspace-remap", str(self.root)])
-        # Hosted CI has three shard jobs but four partitions: the build job
-        # runs one. An explicit partition count takes precedence over the
-        # legacy shard-count fallback exercised above.
+                         ["--shards", "3", *self.partition_listing(archive)])
+        # Hosted CI has three shard jobs but five partitions: the build job
+        # and the extra partition job run one each. An explicit partition
+        # count takes precedence over the legacy shard-count fallback above.
         result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
-                                env_overrides={"NEXTEST_SHARDS": "3", "NEXTEST_PARTITIONS": "4"})
+                                env_overrides={"NEXTEST_SHARDS": "3", "NEXTEST_PARTITIONS": "5"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
-                         ["--shards", "4", "--", "cargo", "nextest", "list", "--archive-file", archive,
-                          "--workspace-remap", str(self.root)])
+                         ["--shards", "5", *self.partition_listing(archive)])
         self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
                          {"check-nextest-partitions.py"}, "no repository guard or self-test runs")
         phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
-        self.assertEqual(phases, [("workspace-test-partitions", "0")])
+        self.assertEqual(phases, [("workspace-test-archive-extract", "0"), ("workspace-test-partitions", "0")])
         # A partition gap fails the job with the guard's status.
         self.write_executable(self.scripts / "check-nextest-partitions.py", "#!/bin/sh\nexit 7\n")
         result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
@@ -1046,7 +1060,6 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                               'import os, sys\n'
                               'assert sys.argv[1:] == ["--test-build-packages", "orbit-types"], sys.argv\n'
                               'print(os.environ["GUARD_TEST_BUILD_SET"])\n')
-        listing = ["--", "cargo", "nextest", "list", "--archive-file", archive, "--workspace-remap", str(self.root)]
         cases = (
             ("orbit-types\n-p orbit-types --lib --bins --tests\nfeature anchors: none",
              ["-p", "orbit-types", "--lib"], ["--allow-empty"]),
@@ -1070,7 +1083,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                                         env_overrides={"NEXTEST_SHARDS": "3"})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
-                                 ["--shards", "3", *partition_options, *listing])
+                                 ["--shards", "3", *partition_options, *self.partition_listing(archive)])
 
     def test_macos_check_defaults_to_per_package_listing(self):
         # Without --workspace-build (the macOS job and local runs, whose `-p`

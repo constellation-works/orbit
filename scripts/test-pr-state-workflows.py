@@ -567,8 +567,11 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          sorted(f"count:{k}/{partition_count}" for k in range(1, partition_count + 1)),
                          "the shard jobs and the test build must select every count partition "
                          "of NEXTEST_PARTITIONS")
+        # The literal shard names are the agent-main ruleset's; the extra
+        # partition job runs the shard steps under a name outside it.
         self.assertEqual(sorted(name for name in partitions.values() if name != jobs["test-build"]["name"]),
-                         sorted(f"Test shard {k}/{shards}" for k in range(1, shards + 1)))
+                         sorted([f"Test shard {k}/{shards}" for k in range(1, shards + 1)]
+                                + [jobs["test-extra"]["name"]]))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
@@ -587,7 +590,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
     def test_an_affected_crates_archive_passes_empty_partitions_and_gates_only_orbit_exec(self):
         jobs = self.document["jobs"]
         for job_id, step in (("test-1", "Run nextest shard"), ("test-2", "Run nextest shard"),
-                             ("test-3", "Run nextest shard"),
+                             ("test-3", "Run nextest shard"), ("test-extra", "Run nextest shard"),
                              ("test-build", "Run nextest partition on the test build")):
             with self.subTest(job=job_id):
                 [nextest] = self.run_step(jobs[job_id], step)
@@ -597,6 +600,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
         gate = next(step for step in jobs["test-1"]["steps"]
                     if step.get("name") == "Linux sandbox/policy enforcement gate")
         for shard, mode, runs in (("1", "full", True), ("1", "", True), ("2", "full", False),
+                                  ("extra", "full", False),
                                   ("1", "affected:orbit-cli,orbit-web", False),
                                   ("1", "affected:orbit-cli,orbit-core,orbit-policy,orbit-tools", False),
                                   ("1", "affected:orbit-cli,orbit-exec,orbit-tools", True)):
@@ -780,7 +784,8 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 self.assertEqual(mode, "full", "a Markdown delta cannot hide untested code in BEFORE")
                 admitted = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
-                self.assertEqual(admitted, {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"})
+                self.assertEqual(admitted, {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3",
+                                            "test-extra"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -803,9 +808,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
-            "affected:orbit-cli": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
-            "": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3"},
+            "full": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3", "test-extra"},
+            "affected:orbit-cli": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3", "test-extra"},
+            "": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3", "test-extra"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }

@@ -434,8 +434,10 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   is capped at the same 512 MiB window the encoder may emit. The job uploads
   each part as its own one-day artifact, then runs
   `ci-guardrails.sh --test-partitions PATH`:
+  it extracts the archive once, and
   [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
-  the archive once unpartitioned and once per `--partition count:k/N`
+  that extraction (`--binaries-metadata` and `--cargo-metadata`) once
+  unpartitioned and once per `--partition count:k/N`
   (`NEXTEST_PARTITIONS` in `ci.yml`). It fails unless every test the full list
   selects is in exactly one partition, every partition selects at least one
   test (except for an [affected-crates archive](#pr-test-selection)), and no
@@ -444,7 +446,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   After the doctests below, the build job also runs one of the partitions
   itself from the archive it built (no transfer), with the same ripgrep, uv
   and Bubblewrap preparation and the same nextest command as a shard; the
-  shard jobs run the remaining partitions. Its failure fails `Test build`
+  shard jobs and the `Test extra partition` job run the remaining partitions. Its failure fails `Test build`
   exactly like a shard failure, and it uploads its JUnit report as
   `nextest-junit-build`.
   The build job then runs workspace doctests through `with-test-build-lint.sh`,
@@ -470,7 +472,11 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
   `cargo nextest run --profile ci --partition count:k/N`
   from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`
-  (the build job runs the remaining partition, above). Profile `ci`
+  (the build job runs one more partition, above). The `Test extra partition`
+  job runs the same steps on a fourth runner with its own partition and
+  uploads `nextest-junit-extra`. It is not a `Test shard k/N` job, so it
+  leaves `NEXTEST_SHARDS` and the ruleset's names unchanged; the Check job
+  awaits it like a shard. Profile `ci`
   starts the measured long tests first, using nextest's per-test priority
   (requires nextest 0.9.91 or newer).
   This changes scheduling within each shard, keeping every test identity,
@@ -499,18 +505,18 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   name needs the same ruleset change before merge. Requiring only
   `Check / Clippy / Test`, which awaits every shard, would not depend on the
   shard count. `scripts/test-pr-state-workflows.py` runs each shard's nextest
-  step and wait, the build job's own partition step and the Check job's wait
-  with stub tools, and fails unless the shards and the build together select
-  `count:1/N` through `count:N/N` once each, each shard waits for the upload
-  step ahead of the partition guard, and the Check job's wait names the build
-  and every shard. After a change to this layout, re-measure the budget over
+  step and wait (the extra partition job's too), the build job's own
+  partition step and the Check job's wait with stub tools, and fails unless
+  those jobs together select `count:1/N` through `count:N/N` once each, each
+  shard waits for the upload step ahead of the partition guard, and the Check
+  job's wait names the build, every shard and the extra partition job. After a change to this layout, re-measure the budget over
   the latest 20 completed PR runs with `scripts/ci-p90.py` (nearest-rank p90
   of the executed Check jobs against 600 s, with skipped and cancelled runs
   reported as gaps).
 - `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting, every
   repository guard and self-test, production Clippy, documentation
   and the supply-chain gate, with no workspace test build or nextest. It then
-  waits for `Test build` and every shard, and fails as soon as one of them
+  waits for `Test build`, every shard and `Test extra partition`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
   10-minute budget and the `ci-budget-watch` auto-task measure, and its

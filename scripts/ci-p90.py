@@ -26,7 +26,7 @@ import sys
 from datetime import datetime
 
 CHECK = "Check / Clippy / Test"
-AWAITED = ("Test build", "Test shard 1/3", "Test shard 2/3", "Test shard 3/3")
+AWAITED = ("Test build", "Test shard 1/3", "Test shard 2/3", "Test shard 3/3", "Test extra partition")
 
 
 def parse_time(value):
