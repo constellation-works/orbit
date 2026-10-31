@@ -9,7 +9,8 @@
 //! enabled on this machine, or a host that runs no required validation. CLI,
 //! MCP and the dashboard all render the same [`SubmissionNotices`].
 
-use orbit_types::workflow::ResourceThrottle;
+use chrono::Utc;
+use orbit_types::workflow::{ResourceThrottle, SubmissionNoticeRecord};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -145,6 +146,31 @@ impl OrbitRuntime {
                 .is_drain()
                 .then(|| self.required_validation_note())
                 .flatten(),
+        }
+    }
+
+    /// Record on a drain's run the warnings and notes its receipt reported
+    /// [ORB-20446], so readiness can show them for the life of the window.
+    /// The run is already admitted, so a failed write is logged and never
+    /// fails the submission; nothing is written when there are none.
+    pub fn record_submission_notices(&self, run_id: &str, warnings: &[String], notes: &[String]) {
+        if warnings.is_empty() && notes.is_empty() {
+            return;
+        }
+        let record = SubmissionNoticeRecord {
+            recorded_at: Utc::now(),
+            warnings: warnings.to_vec(),
+            notes: notes.to_vec(),
+        };
+        if let Err(error) = self
+            .stores()
+            .jobs()
+            .update_run_state(run_id, &mut |_, state| {
+                state.submission_notices = Some(record.clone());
+                Ok(())
+            })
+        {
+            tracing::warn!(run_id, "drain submission notices not recorded: {error}");
         }
     }
 }
