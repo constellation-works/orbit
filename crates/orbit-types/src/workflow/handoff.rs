@@ -6,10 +6,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    ReviewTiming, ReviewVerdict, SelectiveReviewReceipt, SelectiveReviewResult,
-    automation::SourceRevision,
-};
+use super::{ReviewTiming, ReviewVerdict, SelectiveReviewReceipt, automation::SourceRevision};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -119,14 +116,6 @@ impl HandoffReview {
             disposition: HandoffReviewDisposition::NotRequired,
             selective_receipt: None,
         }
-    }
-
-    /// Whether this handoff carries a selective decision that no review
-    /// was required for its candidate.
-    pub fn selective_not_required(&self) -> bool {
-        self.selective_receipt
-            .as_ref()
-            .is_some_and(|receipt| receipt.result == SelectiveReviewResult::NotRequired)
     }
 
     /// The review evidence this handoff carries, before-PR or
