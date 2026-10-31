@@ -1,6 +1,6 @@
 //! Read-only delegation at dispatch [ORB-16814]: an implementing activity's
-//! `explore_instruction` reaches the agent only while its host offers
-//! delegation, an explorer's unwrapped Codex runs in its read-only inner
+//! `explore_instruction` reaches the agent, with the agent-invoke MCP toolset,
+//! only while its host offers delegation, an explorer's unwrapped Codex runs in its read-only inner
 //! sandbox, and an explorer whose provider has no read-only mode is refused
 //! before spawn when Orbit's executor sandbox does not wrap it.
 
@@ -74,16 +74,19 @@ impl orbit_engine::test_support::NullRuntimeHost for ExploreHost {
     }
 }
 
-/// Dispatch `agent_implement` through a fake Claude that saves its prompt,
-/// and return the instruction its execution envelope carried.
-fn implement_instruction(offered: bool) -> Value {
+/// Dispatch `agent_implement` through a fake Claude that saves its prompt and
+/// the MCP toolsets it was stamped, and return the instruction its execution
+/// envelope carried with those toolsets.
+fn implement_instruction(offered: bool) -> (Value, String) {
     let temp = tempfile::tempdir().unwrap();
     let prompt = temp.path().join("prompt");
+    let toolsets = temp.path().join("toolsets");
     let fake = fake_cli(
         "claude",
         &format!(
-            "#!/bin/sh\ncat > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
-            prompt.display()
+            "#!/bin/sh\ncat > '{}'\nprintf '%s' \"$ORBIT_ACTIVITY_MCP_TOOLSETS\" > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+            prompt.display(),
+            toolsets.display()
         ),
     )
     .unwrap();
@@ -114,19 +117,24 @@ fn implement_instruction(offered: bool) -> Value {
             .trim(),
     )
     .expect("the envelope is JSON");
-    envelope["instruction"].clone()
+    let toolsets = fs::read_to_string(toolsets).expect("the provider recorded its toolsets");
+    (envelope["instruction"].clone(), toolsets)
 }
 
 #[test]
 fn delegation_is_offered_only_while_the_host_enables_it() {
     assert_eq!(
         implement_instruction(true),
-        format!("cli smoke\n\n{INSTRUCTION}"),
-        "an enabled host appends the delegation instruction once"
+        (
+            json!(format!("cli smoke\n\n{INSTRUCTION}")),
+            "agent-invoke".to_string()
+        ),
+        "an enabled host appends the delegation instruction once and opts the agent's MCP \
+         server into orbit.agent.invoke"
     );
     assert_eq!(
         implement_instruction(false),
-        "cli smoke",
+        (json!("cli smoke"), String::new()),
         "with exploration off, or no explorer crew, the agent is offered no delegation"
     );
 }

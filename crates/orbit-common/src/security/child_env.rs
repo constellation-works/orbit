@@ -68,6 +68,12 @@ pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
 pub const ACTIVITY_DEADLINE_ENV: &str = "ORBIT_ACTIVITY_DEADLINE_UNIX_MS";
 /// Original activity budget, bounding build-admission deadline credit.
 pub const ACTIVITY_TIMEOUT_ENV: &str = "ORBIT_ACTIVITY_TIMEOUT_MS";
+/// Opt-in MCP toolsets the activity's nested `orbit mcp serve` advertises
+/// beside its own selection, comma-separated as `--toolset` takes them. The
+/// dispatch stamps `agent-invoke` for a run it offers explorer delegation. A
+/// toolset changes advertisement only and grants nothing: every call keeps
+/// its own admission.
+pub const ACTIVITY_MCP_TOOLSETS_ENV: &str = "ORBIT_ACTIVITY_MCP_TOOLSETS";
 
 /// Where a sandboxed agent's run plugin broker listens. A nested
 /// `orbit mcp serve` reaches brokered tools (the claimed before-PR review
@@ -94,6 +100,7 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     ACTIVITY_NAME_ENV,
     ACTIVITY_DEADLINE_ENV,
     ACTIVITY_TIMEOUT_ENV,
+    ACTIVITY_MCP_TOOLSETS_ENV,
     crate::process::build_budget::WAIT_DIRECTORY_ENV,
     "ORBIT_ACTIVITY_FS_PROFILE",
     "ORBIT_PROC_ALLOWED_PROGRAMS",

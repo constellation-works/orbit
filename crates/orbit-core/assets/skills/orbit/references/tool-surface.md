@@ -139,7 +139,7 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Condition explain | `orbit.automation.explain` (read only; `definition`, optional `subject`) | `orbit automation explain <definition> [--subject <key>] [--json]`: a routine's or auto-task's condition over live state with its scope, prefilter, ownership verdict, up to 20 matches (with arm state and remaining hold) and closest misses, one subject's clause tree with operand values, and its durable tracking: stall, last pass and skip, recent fires with their upstream chain, and `self`. Writes nothing. `job:<name>` shows a job's auto-task steps instead: outer bound, revision pin, each step's resolved target auto-task (digest, enabled, own condition guard) and its waits and step reads; such jobs cannot run yet. |
 | Condition stall clear | `orbit.automation.clear_stall` is operator-only; agents report a stalled condition instead | `orbit automation clear-stall <definition> --reason <text>`: clears `match_storm`, `too_many_matches`, `loop_suspected` or `oscillating` on the workspace owner, audited. |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
-| Host agent invocation | Deprecated; not listed to operator sessions | `orbit run agent <prompt>` still works and warns; dispatch work through tasks and `orbit run ship`, or run your provider's CLI directly for a one-off question |
+| Host agent invocation | Deprecated; opt-in `agent-invoke` MCP toolset | `orbit run agent <prompt>` still works and warns; dispatch work through tasks and `orbit run ship`, or run your provider's CLI directly for a one-off question |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval is an owner-dashboard action with no CLI verb or tool. Handoff revocation and claim recovery are operator-only: `orbit task revoke-handoff` and `orbit task recover-claim`, with the tools `orbit.task.revoke_handoff` and `orbit.task.recover_claim`, which managed runs cannot call. See [distributed-drain.md](setup/distributed-drain.md). |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, filesystem profiles, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
@@ -268,14 +268,17 @@ subprocess, and external authentication checks.
 `orbit mcp serve` and `orbit mcp listen` advertise the `default` toolset plus
 the opt-in toolsets the host enables: `leases` (path leases), `experiments`
 (experiment tools), `analytics` (agent scorecards, orchestrator scorecard and
-show, crew ladder) and `decision-channel` (decision submit and digest; decision
-list and show stay default). Enable them per server with
+show, crew ladder), `decision-channel` (decision submit and digest; decision
+list and show stay default) and `agent-invoke` (`orbit.agent.invoke`). Enable them per server with
 `--toolset leases,analytics` (or `all`), or for the host with
 `orbit config set --global machine.mcp.toolsets '["experiments"]'`; the flag
 replaces the config. A call to a tool outside the server's toolsets is refused
 `toolset_not_enabled`, naming the tool's `toolset` and the `enable` flag and
 config key. A federated mux filters every row the same way. The toolset of each
-tool is in `orbit tool show <name> --json` (`mcp_toolset`).
+tool is in `orbit tool show <name> --json` (`mcp_toolset`). A managed run
+offered explorer delegation gets `agent-invoke` added to its own server: the
+dispatch stamps it in `ORBIT_ACTIVITY_MCP_TOOLSETS`, which adds to the
+server's selection.
 
 Toolsets change only what an MCP server lists. `orbit tool run`, CLI commands,
 activity `required_tools` and task grants, and a decision-channel plugin's
@@ -283,11 +286,12 @@ callback session reach every tool regardless.
 
 ### Host agent invocation
 
-**Deprecated for operators.** The operator path will be removed: it is no
-longer listed to operator MCP sessions, and `orbit run agent` warns on every
-submission. Dispatch work through tasks and `orbit run ship`, or run your
-provider's CLI directly for a one-off question. A server a managed run
-launched still lists the tool for read-only explorers (below).
+**Deprecated for operators.** The operator path will be removed: it is in the
+opt-in `agent-invoke` toolset, which a default server does not list, and
+`orbit run agent` warns on every submission. Dispatch work through tasks and
+`orbit run ship`, or run your provider's CLI directly for a one-off question.
+A managed run offered read-only explorers (below) gets the toolset on its own
+server.
 
 `orbit_agent_invoke` submits one asynchronous agent run for exploration or
 debugging and returns its run ID. It is the surface for a question that cannot

@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use orbit_agent::{Agent, AgentConfig, AgentOperation, AgentRequest};
 use orbit_common::process::build_budget::WAIT_DIRECTORY_ENV;
-use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV};
+use orbit_common::security::child_env::{
+    ACTIVITY_MCP_TOOLSETS_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
+};
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
+use orbit_types::tool::McpToolset;
 use orbit_types::workflow::activity_job::{EXPLORE_ACTIVITY, V2AuditEventKind};
 use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind, render_tag_instructions};
 
@@ -126,12 +129,12 @@ pub(super) fn dispatch_prepared_provider(
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
     }
-    if let Some(instruction) = spec
+    let explore_instruction = spec
         .explore_instruction
         .as_deref()
         .filter(|instruction| !instruction.trim().is_empty())
-        .filter(|_| host.explore_delegation_available())
-    {
+        .filter(|_| host.explore_delegation_available());
+    if let Some(instruction) = explore_instruction {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
     }
@@ -530,6 +533,14 @@ pub(super) fn dispatch_prepared_provider(
         &activity_tools.effective_tools,
         fs_profile,
     ));
+    // A run offered explorer delegation gets `orbit.agent.invoke` on its
+    // nested MCP server, which a default server does not advertise.
+    if explore_instruction.is_some() {
+        dispatch_env.push((
+            ACTIVITY_MCP_TOOLSETS_ENV.to_string(),
+            McpToolset::AgentInvoke.as_str().to_string(),
+        ));
+    }
     dispatch_env.extend(orbit_env);
     // Spawned CLI agents resolve the Orbit registry from $HOME unless a
     // managed registry locator is set. A dispatching run already knows its

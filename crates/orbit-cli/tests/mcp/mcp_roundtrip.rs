@@ -272,7 +272,10 @@ impl McpWorkspace {
         admit_fixture_claude_worker_token(self);
         let mut env = env.to_vec();
         env.push((FIXTURE_CLAUDE_WORKER_TOKEN_ENV, FIXTURE_CLAUDE_WORKER_TOKEN));
-        self.serve_with_args_and_env(args, &env)
+        // `orbit.agent.invoke` is in the opt-in agent-invoke toolset.
+        let mut args = args.to_vec();
+        args.extend(["--toolset", "agent-invoke"]);
+        self.serve_with_args_and_env(&args, &env)
     }
 
     /// A session marked as SSH-originated from machine `hm_caller`-style
@@ -969,13 +972,14 @@ fn set_host_toolsets(workspace: &McpWorkspace, toolsets: &[&str]) {
 /// `machine.mcp.toolsets` host config restores exactly the named groups.
 #[test]
 fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
-    const OPT_IN: [(&str, &str); 6] = [
+    const OPT_IN: [(&str, &str); 7] = [
         ("orbit_lease_list", "leases"),
         ("orbit_experiment_list", "experiments"),
         ("orbit_agents_scorecard", "analytics"),
         ("orbit_orchestrator_show", "analytics"),
         ("orbit_crew_ladder", "analytics"),
         ("orbit_decision_digest", "decision-channel"),
+        ("orbit_agent_invoke", "agent-invoke"),
     ];
     let workspace = McpWorkspace::init();
     for (case, args) in [
@@ -1013,7 +1017,7 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
     let mut flagged = workspace.serve_with_args(&[
         "--operator",
         "--toolset",
-        "leases,experiments,analytics,decision-channel",
+        "leases,experiments,analytics,decision-channel,agent-invoke",
     ]);
     let listed = flagged.tools_list();
     let names = tool_names(&listed);
@@ -1030,6 +1034,22 @@ fn opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config() {
             names.contains(&tool),
             toolset == "leases",
             "machine.mcp.toolsets = [\"leases\"] must restore exactly the lease tools: {tool}"
+        );
+    }
+
+    // A managed run's dispatch stamps the toolsets it offers its agent; they
+    // add to the host config rather than replace it.
+    let mut stamped = workspace.serve_with_args_and_env(
+        &["--operator"],
+        &[("ORBIT_ACTIVITY_MCP_TOOLSETS", "agent-invoke")],
+    );
+    let listed = stamped.tools_list();
+    let names = tool_names(&listed);
+    for (tool, toolset) in OPT_IN {
+        assert_eq!(
+            names.contains(&tool),
+            matches!(toolset, "leases" | "agent-invoke"),
+            "a stamped agent-invoke toolset must add to the configured leases: {tool}"
         );
     }
 }
@@ -1298,19 +1318,15 @@ fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials(
     for definition in orbit_mcp::canonical_mcp_tool_definitions().expect("canonical definitions") {
         let canonical = definition.schema.name.as_str();
         let name = mcp_advertised_tool_name(canonical);
-        // agent.invoke is listed only to a server a managed run launched, for
-        // explorer delegation; the operator path is deprecated.
-        if canonical == "orbit.agent.invoke" {
-            assert!(!operator_names.contains(&name.as_str()));
-            assert!(!names.contains(&name.as_str()));
-            continue;
-        }
         assert!(
             operator_names.contains(&name.as_str()),
             "operator missing {name}"
         );
-        let uncallable = governed_tool(canonical)
-            .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent));
+        // agent.invoke has a separate managed-run explorer admission: its
+        // operator-only catalog row does not make it unconditionally denied.
+        let uncallable = canonical != "orbit.agent.invoke"
+            && governed_tool(canonical)
+                .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent));
         assert_eq!(
             names.contains(&name.as_str()),
             !uncallable,
@@ -2556,9 +2572,10 @@ fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirem
     let workspace = McpWorkspace::init();
     let scratch = workspace.scratch("scratch");
     // Use the operator surface to keep checking every canonical tool's
-    // selector contract, including tools omitted from agent listings.
+    // selector contract, including tools omitted from agent listings and
+    // agent invocation's opt-in toolset.
     let child = McpWorkspace::orbit_command(&scratch, &workspace.home)
-        .args(["mcp", "serve", "--operator"])
+        .args(["mcp", "serve", "--operator", "--toolset", "agent-invoke"])
         .spawn_piped();
     let mut client = McpClient::initialized(
         child,
@@ -2579,11 +2596,6 @@ fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirem
         .filter(|definition| definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired)
     {
         let name = definition.schema.name.as_str();
-        // Listed only by a server a managed run launched, so this operator
-        // session has no advertised schema to hold it to.
-        if name == "orbit.agent.invoke" {
-            continue;
-        }
         let advertised_name = orbit_types::tool::mcp_advertised_tool_name(name);
         let requires_selector = advertised
             .iter()
@@ -5461,10 +5473,7 @@ fn agent_invoke_wait_deadline_is_bounded_and_leaves_the_run_observable() {
         &["--operator"],
         &[],
     );
-    // Only a server a managed run launched lists the tool.
-    let tool = workspace
-        .serve_with_args_and_env(&[], &[("ORBIT_MANAGED_RUN_CONTEXT", "1")])
-        .listed_tool("orbit_agent_invoke");
+    let tool = client.listed_tool("orbit_agent_invoke");
     let properties = &tool["inputSchema"]["properties"];
     assert_eq!(properties["wait_seconds"]["minimum"], 0);
     assert_eq!(properties["wait_seconds"]["maximum"], 600);

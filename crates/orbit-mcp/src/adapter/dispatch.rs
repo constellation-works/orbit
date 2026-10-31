@@ -164,13 +164,6 @@ impl OrbitToolServer {
                 })
                 .map(|operation| operation.id.to_owned()),
         );
-        // The operator path is deprecated, so an operator session no longer
-        // pays for its schema. A server an agent launched still lists it: a
-        // managed implement or review-repair run delegates read-only questions
-        // through it. Direct calls keep their authorization checks.
-        if !authorization::agent_context_declared() {
-            hidden.insert(AGENT_INVOKE_TOOL.to_owned());
-        }
         if presentation::reader(definitions, McpPresentationRead::Task)
             .is_some_and(|reader| hidden.contains(&reader.schema.name))
         {

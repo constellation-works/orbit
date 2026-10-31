@@ -43,8 +43,14 @@ pub fn register(registry: &mut ToolRegistry) {
     // serve` toolsets; `orbit tool run` and activities reach them regardless.
     operation::register_noun_in_toolset(registry, &LEASE, McpToolset::Leases);
     // Agent invocation is workspace-scoped: the admission is made against the
-    // checkout that owns it, and Core is where that decision lives.
-    registry.register_mcp(agent::OrbitAgentInvokeTool, McpToolScope::WorkspaceRequired);
+    // checkout that owns it, and Core is where that decision lives. Its
+    // toolset is opt-in: a managed run offered explorer delegation enables
+    // it, and the deprecated operator path reaches the tool through the CLI.
+    registry.register_mcp_in_toolset(
+        agent::OrbitAgentInvokeTool,
+        McpToolScope::WorkspaceRequired,
+        McpToolset::AgentInvoke,
+    );
     // Command execution is workspace-scoped; Core retains its domain and claim
     // validation.
     registry.register_mcp(
