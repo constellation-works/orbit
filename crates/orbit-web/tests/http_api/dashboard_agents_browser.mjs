@@ -2,9 +2,9 @@
 // Analytics › Agents through the shipped app, router, renderer and CSS, fed
 // contract-shaped `/api/agents` payloads: `#analytics/orchestrators` opening
 // `#analytics/agents/orchestrators`, the role tabs and their counts, row selection
-// driving scorecard detail, no detail API reads, the disclosure surviving a refresh, no
-// Implementers role panel or the empty grid row and gap that track would
-// reserve (16px at 1440, 12px at 375), the Reviewers provisional
+// driving scorecard detail, no detail API reads, the disclosure surviving a refresh, the
+// Implementers regression-by-size panel in its row under the disclosure with
+// its default series drawn and sparse buckets hollow, the Reviewers provisional
 // banner, `accepts often` tag, unjudged row and verdict-outcome bars, the Pilots
 // tier-calibration matrices, the empty state, and the 375px layout (ranking
 // scrolling in its own box, detail stacked below, 44px touch targets). The
@@ -140,7 +140,28 @@ function attribution(url) {
   };
 }
 
+// Contract-shaped size curves: one series with enough tasks (drawn by
+// default, one bucket sparse, one under the minimum sample) and one without.
+function sizeCurves(url) {
+  const bucket = (index, tasks, regressed, low, high) => ({
+    bucket: index, lines_from: 2 ** index - 1, lines_to: 2 ** (index + 1) - 2, tasks, regressed,
+    rate: regressed / tasks, low, high, drawn: tasks >= 10, sparse: regressed < 5,
+  });
+  return {
+    window: '30d', requested_window: url.searchParams.get('window'), since: '2026-09-19T08:00:00Z', computed_at: computedAt,
+    cache_ttl_seconds: 300, role: 'implementers', complexity: url.searchParams.get('complexity'),
+    complexities: [{ tier: 'low', tasks: 0 }, { tier: 'medium', tasks: 44 }, { tier: 'hard', tasks: 0 }, { tier: 'xhard', tasks: 0 }, { tier: 'unassessed', tasks: 0 }],
+    follow_up_days: 7, min_bucket_tasks: 10, min_series_tasks: 30, sparse_outcomes: 5, excluded: { immature: 3, no_size: 1 },
+    series: [
+      { crew: 'opus@medium', models: ['model-b'], tasks: 38, regressed: 9, default_selected: true,
+        buckets: [bucket(5, 12, 1, 0.0149, 0.3536), bucket(6, 20, 6, 0.1455, 0.5190), bucket(7, 6, 2, 0.0968, 0.7000)] },
+      { crew: 'opus@high', models: ['model-b'], tasks: 6, regressed: 1, default_selected: false, buckets: [bucket(8, 6, 1, 0.0301, 0.5635)] },
+    ],
+  };
+}
+
 function payloadFor(url) {
+  if (url.pathname === '/api/agents/implementers/size-curves') return sizeCurves(url);
   if (url.pathname === '/api/agents/implementers/by-type') return { ...implementerMatrix(), requested_window: url.searchParams.get('window') };
   const agents = url.pathname.match(/^\/api\/agents\/(\w+)\/(scorecard|detail)$/);
   if (agents) {
@@ -300,13 +321,6 @@ try {
     };
   });
 
-  const assertNoEmptyPanelTrack = tail => {
-    assert.equal(tail.panelAreas, 0, `implementers reserve no panel area: ${JSON.stringify(tail)}`);
-    assert.equal(tail.rows, 4, `the layout has only strip, ranking, detail/disclosure and the desktop stretch track: ${JSON.stringify(tail)}`);
-    assert.ok(Math.abs(tail.excess) <= 1,
-      `an empty panel track adds the row gap after the disclosure (16px at desktop, 12px at 375px); measured excess ${tail.excess}px: ${JSON.stringify(tail)}`);
-  };
-
   // A rendered panel occupies the row under the disclosure, one gap below it.
   // A banner, when that role has one, sits one gap under the strip.
   const assertPanelOccupiesItsRow = async label => {
@@ -461,18 +475,22 @@ try {
   await body.locator('.agents-how').scrollIntoViewIfNeeded();
   await body.locator('.agents-how').screenshot({ path: path.join(evidence, 'agents-reviewers-how-dark-1440.png'), animations: 'disabled' });
 
-  // Implementers uses the shared ranking/detail and shows no role panel.
+  // Implementers uses the shared ranking/detail plus the regression-by-size panel.
   await page.locator('#agents-roles [data-view="implementers"]').click();
   await body.locator('.agents-row').first().waitFor();
   assert.equal(await body.locator('.agents-penalty').count(), 0);
   assert.equal(await page.locator('#agents-count-implementers').textContent(), '5 ranked', 'the tab labels the ranked subset without hover');
   assert.equal(await page.locator('#agents-count').textContent(), '6 rows · 5 ranked', 'the panel labels all rows and the ranked subset');
   assert.equal(await body.locator('.agents-row').count(), 6);
-  assert.equal(await body.locator('.agents-role-panel').count(), 0, 'no role panel and no empty container');
+  await body.locator('.agents-curves-plot').waitFor();
+  assert.deepEqual(await body.locator('.agents-curves-series').evaluateAll(nodes => nodes.map(node => node.dataset.crew)), ['opus@medium'], 'only default-selected crews are drawn');
+  assert.equal(await body.locator('.agents-curves-marker').count(), 2, 'a bucket under the minimum sample is not drawn');
+  assert.equal(await body.locator('.agents-curves-marker.is-sparse').count(), 1, 'a bucket with fewer than five regressed tasks is hollow');
+  assert.equal(await body.locator('.agents-curves-band').count(), 1, 'consecutive drawn buckets share one Wilson band');
   assert.equal(await body.locator('.agents-cost-plot, .agents-cost-point, .agents-cost-frontier, .agents-cost-axis, .agents-cost-legend, .agents-tier-table').count(), 0);
   const implementersText = await body.textContent();
   assert.ok(!implementersText.includes('Score against cost') && !implementersText.includes('First reviews by tier'), 'no chart, frontier or tier copy');
-  assert.equal(await body.evaluate(node => node.lastElementChild.classList.contains('agents-how')), true, 'nothing reserves space past the disclosure');
+  assert.equal(await body.evaluate(node => node.lastElementChild.classList.contains('agents-role-panel')), true, 'the panel follows the disclosure');
   assert.match(await body.locator('.agents-stats').textContent(), /Cost per landed task/, 'cost stays in Shown, not scored');
   for (const label of ['Escaped regressions', 'Regression residual', 'Diff economy']) assert.ok((await body.locator('.agents-stats').textContent()).includes(label));
   assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
@@ -589,7 +607,7 @@ try {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.waitForTimeout(100);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-  assert.equal(await body.locator('.agents-role-panel').count(), 0, 'no role panel at 375px either');
+  assert.equal(await body.locator('.agents-curves-plot').getAttribute('viewBox'), '0 0 360 240', 'the chart redraws on its phone canvas');
   const phoneRanking = await rankingVisibility();
   assert.deepEqual(phoneRanking.headersInside.filter(([, visible]) => !visible), [], `rank, crew · model and score are visible at 375px: ${JSON.stringify(phoneRanking)}`);
   assert.equal(phoneRanking.scoreInsideEveryRow, true, 'every row shows its score at 375px');
@@ -624,8 +642,8 @@ try {
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.setViewportSize({ width: 1440, height: 1100 });
   fs.writeFileSync(path.join(evidence, 'implementers-track.json'), JSON.stringify(implementersTails, null, 2));
-  for (const tail of implementersTails) assertNoEmptyPanelTrack(tail);
-  pass('implementers ranking and detail without a role panel at desktop and phone widths', { tails: implementersTails });
+  for (const tail of implementersTails) assert.equal(tail.panelAreas, 1, `implementers keep one panel area: ${JSON.stringify(tail)}`);
+  pass('implementers ranking, detail and size-curve panel at desktop and phone widths', { tails: implementersTails, panel: await assertPanelOccupiesItsRow('implementers') });
 
   // An unavailable optional matrix leaves the all-tier ranking usable.
   matrixUnavailable = true;

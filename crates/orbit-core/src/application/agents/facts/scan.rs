@@ -143,6 +143,7 @@ pub(in crate::application::agents) fn scan(
         run_costs,
         credits,
         pilots,
+        regressions,
         landed_lines,
         performance_types: runtime.crew_performance_types().to_vec(),
     })

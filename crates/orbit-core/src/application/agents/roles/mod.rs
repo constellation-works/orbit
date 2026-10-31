@@ -54,6 +54,19 @@ pub(super) fn implementer_by_type_cells(
     implementers::by_type_cells(facts, since, types)
 }
 
+/// The implementer regression rate by landed change size, per crew
+/// reference, optionally narrowed to one tier.
+pub(super) fn implementer_size_curves(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    complexity: Option<&str>,
+) -> serde_json::Map<String, serde_json::Value> {
+    implementers::size_curves(facts, since, complexity)
+}
+
+/// The tiers [`implementer_size_curves`] can narrow to.
+pub(super) const SIZE_CURVE_TIERS: &[&str] = implementers::SIZE_CURVE_TIERS;
+
 pub(super) fn spec(role: AgentRole) -> &'static RoleSpec {
     match role {
         AgentRole::Orchestrators => &orchestrators::ROLE,
