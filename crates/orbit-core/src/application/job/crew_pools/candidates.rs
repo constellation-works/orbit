@@ -289,20 +289,6 @@ impl OrbitRuntime {
                 "explicit".to_string(),
             ));
         }
-        // An allowlist never redirects an explicit or legacy task pin, even
-        // when provider-limit policy would otherwise offer a fallback pool.
-        if let Some(allowed) = allowlist
-            && let Some(name) = task.crew.as_deref().and_then(non_empty)
-            && self
-                .task_crew_source(task)?
-                .as_deref()
-                .is_none_or(|source| source == "explicit")
-        {
-            let crew = self.resolve_crew_for_task(None, Some(name))?;
-            if !allowed.permits(&crew) {
-                return Ok((vec![sole_candidate(crew)], "task.crew".to_string()));
-            }
-        }
         let result = match self.usage_pressure_redraw_view(task)? {
             Some(redraw) => self.admissible_crew_candidates(&redraw, pools)?,
             None => self.admissible_crew_candidates(task, pools)?,
@@ -350,6 +336,14 @@ impl OrbitRuntime {
                 .is_none_or(|hold| !hold.excludes(&candidate.crew.name))
                 && gate.limit_for(&candidate.crew).is_none()
         });
+        // A redraw that offers no allowed crew leaves the hold and limit
+        // fallbacks' own draw in place.
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.weight > 0 && allowlist.permits(&candidate.crew))
+        {
+            return Ok(result);
+        }
         Ok((candidates, format!("{pool_source}; allowlist redraw")))
     }
 
