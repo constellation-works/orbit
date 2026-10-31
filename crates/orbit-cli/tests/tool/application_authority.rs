@@ -9,8 +9,14 @@ fn app_command(
     tool: &str,
     input: &Value,
 ) -> assert_cmd::Command {
+    // The built binary's directory leads `PATH`, which a confined backend
+    // inherits, so its callbacks run the same `orbit` the sandbox exposes.
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_orbit"))
+        .parent()
+        .expect("binary directory");
     let mut command = fixture.pinned(assert_cmd::Command::new("/bin/sh"));
     command
+        .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()))
         .args([
             "-c",
             "exec 9<\"$1\"; shift; export ORBIT_APPLICATION_CREDENTIAL_FD=9; exec \"$@\"",
@@ -241,14 +247,11 @@ fn application_consent_bounds_host_completion_callbacks() {
         format!(
             r#"#!/bin/sh
 cat >/dev/null
-'{}' tool run orbit.task.update --input '{}' >/dev/null 2>&1 || exit 71
-if '{}' tool run orbit.task.update --input '{}' >/dev/null 2>&1; then exit 72; fi
+orbit tool run orbit.task.update --input '{}' >/dev/null || exit 71
+if orbit tool run orbit.task.update --input '{}' >/dev/null 2>&1; then exit 72; fi
 printf '{{"ok":true,"output":{{"callback":"applied-and-bounded"}}}}\n'
 "#,
-            env!("CARGO_BIN_EXE_orbit"),
-            approved,
-            env!("CARGO_BIN_EXE_orbit"),
-            refused
+            approved, refused
         ),
     );
     std::fs::write(

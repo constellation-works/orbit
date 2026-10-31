@@ -161,7 +161,7 @@ impl PluginChildFixture {
         std::fs::write(
             &record,
             serde_json::json!({
-                "schema_version": 3,
+                "schema_version": 4,
                 "plugin": "graph",
                 "version": "0.4.1",
                 "manifest_digest": "0".repeat(64),
