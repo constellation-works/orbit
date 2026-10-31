@@ -15,5 +15,5 @@ pub(super) use atomic::{record_applied_assessment, task_operation_id, with_task_
 pub(super) use drift::assessed_material_drift;
 pub(super) use history::no_target_assessment_marker;
 pub(super) use reports::{
-    failed_partition, source_superseded, stale_task, superseded_task, task_outcome,
+    failed_partition, source_superseded, stale_task, superseded_with_current, task_outcome,
 };

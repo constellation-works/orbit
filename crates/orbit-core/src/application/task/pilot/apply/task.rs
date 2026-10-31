@@ -23,7 +23,7 @@ use super::super::explore_brief::{BriefScope, decide_explore_brief, take_explore
 use super::super::no_diff::VerifiedNoDiff;
 use super::super::persist::{
     ApplyTaskOutcome, apply_task, operation_was_applied, record_applied_assessment,
-    source_superseded, stale_task, superseded_task, task_operation_id, task_outcome,
+    source_superseded, stale_task, superseded_with_current, task_operation_id, task_outcome,
 };
 use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
@@ -86,19 +86,65 @@ pub(super) fn settle_task(
         return Err(source_superseded(task_id, detail));
     }
     let ci_sweep = matches!(context.authority, PromotionAuthority::CiSweep(..));
-    if let Some(outcome) =
-        superseded_task(context.runtime, task_id, snapshot, context.policy, ci_sweep)
+    // One pre-lock read covers the superseded, scope and assess checks below.
+    // The locked write re-reads under the task locks, so sharing here changes
+    // no decision, only work performed.
+    let pre_current = match context.runtime.get_task(task_id) {
+        Ok(task) => Some(task),
+        Err(OrbitError::NotFound { .. }) => None,
+        Err(error) => {
+            return Err(task_outcome(
+                task_id,
+                "apply_failed",
+                Some(format!("reload task {task_id}: {error}")),
+            ));
+        }
+    };
+    let pre_history = if pre_current.is_some() {
+        context
+            .runtime
+            .get_task_history(task_id)
             .map_err(refused(task_id, "apply_failed"))?
+    } else {
+        Vec::new()
+    };
+    if let Some(current) = pre_current.as_ref()
+        && let Some(outcome) = superseded_with_current(
+            context.runtime,
+            current,
+            &pre_history,
+            snapshot,
+            context.policy,
+            ci_sweep,
+        )
+        .map_err(refused(task_id, "apply_failed"))?
     {
         return Err(outcome);
     }
+    // A deleted task cannot be superseded (the helper returns None without
+    // a task to compare), so it falls through to scope/assess, which settle
+    // it stale like before.
     // The brief is the artifact's, never the receipt's: it is removed before
     // the assessment is validated, fingerprinted or audited.
     let mut assessment = assessment.clone();
     let brief = take_explore_brief(&mut assessment);
-    let scope = scope(context, task_id, &mut assessment, snapshot)?;
+    let scope = scope_with(
+        context,
+        task_id,
+        &mut assessment,
+        snapshot,
+        pre_current.as_ref(),
+        &pre_history,
+    )?;
     let authorized_creation = scope.authorized_creation.clone();
-    let assessed = assess(context, task_id, &assessment, snapshot, scope)?;
+    let assessed = assess_with(
+        context,
+        task_id,
+        &assessment,
+        snapshot,
+        scope,
+        pre_current.as_ref(),
+    )?;
     // Decided only once the assessment itself is valid, so an invalid brief
     // never makes the task `invalid` or spends the repair pass.
     let explore_brief = decide_explore_brief(
@@ -139,11 +185,13 @@ pub(super) fn settle_task(
     write(context, applied, validated, snapshot)
 }
 
-fn scope(
+fn scope_with(
     context: &ApplyContext<'_>,
     task_id: &str,
     assessment: &mut Value,
     snapshot: &PreparedTaskSnapshot,
+    pre_current: Option<&Task>,
+    pre_history: &[orbit_types::task::TaskHistoryEntry],
 ) -> Settled<Scope> {
     let action = context.action;
     let mut disposition = required_string(assessment, "disposition", action)
@@ -154,22 +202,21 @@ fn scope(
     // The grant is read from the task, never from the prepared payload or the
     // agent's result. The write boundary refuses a grant that moved since
     // preparation, after its replay receipt check, so a retried apply still
-    // settles as already applied.
-    let (current, creation) = match context.runtime.get_task(task_id).and_then(|task| {
-        let creation = context.runtime.context_creation_state(&task)?;
-        Ok((Some(task), creation))
-    }) {
-        Ok(creation) => creation,
-        Err(OrbitError::NotFound { .. }) => (None, ContextCreationState::Absent),
-        Err(error) => {
-            return Err(task_outcome(
-                task_id,
-                "apply_failed",
-                Some(format!(
-                    "read task {task_id} creation authorization: {error}"
-                )),
-            ));
+    // settles as already applied. The caller shares its pre-lock read, so no
+    // second task or history read happens here.
+    let (current, creation) = match pre_current {
+        Some(task) => {
+            let creation = ContextCreationState::resolve(
+                &task.id,
+                &task.context_files,
+                task.updated_at,
+                pre_history
+                    .iter()
+                    .map(|entry| (entry.event.as_str(), entry.note.as_deref())),
+            );
+            (Some(task.clone()), creation)
         }
+        None => (None, ContextCreationState::Absent),
     };
     let authorized_creation = creation.selectors();
     let mut selectors = validate_after_selectors(
@@ -353,12 +400,13 @@ fn landed_creation_scope(
     Ok(selectors.values)
 }
 
-fn assess(
+fn assess_with(
     context: &ApplyContext<'_>,
     task_id: &str,
     assessment: &Value,
     snapshot: &PreparedTaskSnapshot,
     scope: Scope,
+    pre_current: Option<&Task>,
 ) -> Settled<Assessed> {
     let action = context.action;
     let mut assessment = assessment.clone();
@@ -375,22 +423,14 @@ fn assess(
     let complexity = validate_recommendations(action, task_id, &assessment)
         .map_err(refused(task_id, "invalid"))?;
     let complexity = resolve_applied_complexity(complexity, snapshot.complexity);
-    let current = match context.runtime.get_task(task_id) {
-        Ok(task) => task,
-        Err(OrbitError::NotFound { .. }) => {
-            return Err(stale_task(
-                task_id,
-                "task_deleted",
-                "task no longer exists after preparation",
-            ));
-        }
-        Err(error) => {
-            return Err(task_outcome(
-                task_id,
-                "apply_failed",
-                Some(format!("reload task {task_id}: {error}")),
-            ));
-        }
+    // The caller shares its pre-lock task read; the locked write re-reads
+    // under the task locks, so no decision changes here.
+    let Some(current) = pre_current.cloned() else {
+        return Err(stale_task(
+            task_id,
+            "task_deleted",
+            "task no longer exists after preparation",
+        ));
     };
     invalid_finding_target(context, task_id, &assessment, &current)?;
     let criteria = current.acceptance_criteria.len();
