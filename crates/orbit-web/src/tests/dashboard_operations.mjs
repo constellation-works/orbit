@@ -421,9 +421,8 @@ const started = requests.find(r => r.path === '/api/workflows/auto');
 assert(started && started.workspace === 'one' && started.body.for_duration === '2h' && started.body.concurrency === 2 && started.body.complete === true && started.body.approve_proposed === false && started.body.auto_concurrency === 'enforce', `start posts the chosen window: ${JSON.stringify(started)}`);
 assert(confirmations.at(-1).includes('Duration: 2h · Concurrency: 2') && confirmations.at(-1).includes('WARNING'), 'start confirms the window and warns about completion');
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted (completion: done).'), 'start result lands in the card status line');
-// The green receipt keeps only its receipt lines; the start's warnings and
-// notes belong to the warnings box above the dock's tabs [ORB-20446].
-assert(get('auto-drain-operation-feedback').textContent.split('\n').slice(1).join('|') === 'Auto-concurrency: enforce (explicit).', `the receipt carries no warnings or notes: ${get('auto-drain-operation-feedback').textContent}`);
+// The receipt's notices are shown one per line, as `orbit run auto` prints them.
+assert(get('auto-drain-operation-feedback').textContent.split('\n').slice(1).join('|') === 'Auto-concurrency: enforce (explicit).|Warning: Admissions throttled: memory 95%. Running work is not touched.|Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set|Note: no `workflow.required_validation_commands` configured', `start warnings and note follow the result: ${get('auto-drain-operation-feedback').textContent}`);
 setSwitch(completeSwitch(), false);
 assert(!completeSwitch().checked, 'completion returns to review');
 
@@ -684,12 +683,19 @@ assert(!drainButton('Start 2h window').disabled, 'the guard is released after a 
 failReadiness = false;
 await fetchAndRenderOperations();
 
-// Confirmation lines clear about 60s after appearing.
+// Confirmation lines clear about 60s after appearing, while warnings and notes stay visible.
 assert(get('auto-drain-operation-feedback').textContent.includes('Run jrun-20260923-0400-a1 submitted'), 'start confirmation present before timeout');
+assert(get('auto-drain-operation-feedback').textContent.includes('Warning: Admissions throttled'), 'warnings present before timeout');
 triggerFeedbackClear('auto-drain-operation-feedback');
 const remainingAfterClear = get('auto-drain-operation-feedback').textContent;
 assert(!remainingAfterClear.includes('submitted'), `confirmation lines cleared after timeout: ${remainingAfterClear}`);
 assert(!remainingAfterClear.includes('Auto-concurrency:'), `concurrency confirmation cleared after timeout: ${remainingAfterClear}`);
+assert(remainingAfterClear.includes('Warning: Admissions throttled: memory 95%. Running work is not touched.'), `throttling warning stays: ${remainingAfterClear}`);
+assert(remainingAfterClear.includes('Warning: FIXTURE_TOKEN is listed in execution.env.pass but not set'), `token warning stays: ${remainingAfterClear}`);
+assert(remainingAfterClear.includes('Note: no `workflow.required_validation_commands` configured'), `note stays: ${remainingAfterClear}`);
+// A second timeout trigger does nothing; warnings stay until another action.
+triggerFeedbackClear('auto-drain-operation-feedback');
+assert(get('auto-drain-operation-feedback').textContent === remainingAfterClear, 'warnings stay until another action');
 
 // Send pending results delivers recorded settlements and reports each outcome; a
 // settlement that did not reach its owner is never reported as plain success.

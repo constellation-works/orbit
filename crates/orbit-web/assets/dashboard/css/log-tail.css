@@ -105,8 +105,6 @@
 }
 .log-line:hover { background: rgba(255,255,255,0.025); }
 .log-line.expanded { background: rgba(255,255,255,0.02); }
-/* A line the warnings box opened, marked briefly so the eye finds it. */
-.log-line.located { box-shadow: inset 0 0 0 1px var(--warn-line); background: var(--warn-wash); }
 .log-line .t {
   color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; line-height: 20px;
   font-feature-settings: "tnum"; white-space: nowrap;

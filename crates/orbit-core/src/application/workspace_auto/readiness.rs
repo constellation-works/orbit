@@ -28,7 +28,7 @@ use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 use super::approvals::readiness_approvals;
 use super::classify::{DEFAULT_CANDIDATE_POOL, candidate_pool_limit};
 use super::drains::{
-    ActiveDrain, DRAIN_JOB_NAME, LEAF_JOB_NAME, LivePullDrain, drain_ceiling, live_pull_drain,
+    ActiveDrain, DRAIN_JOB_NAME, LEAF_JOB_NAME, drain_ceiling, live_pull_drain,
     read_live_leaf_runs, shared_leaf_occupancy, workspace_drains,
 };
 use super::readiness_hosts::{self, FollowerEvidence};
@@ -841,13 +841,6 @@ pub fn explain_workspace_auto_readiness(
                 .filter(|_| drain_phase == "draining")
                 .and_then(|state| state.pull_drain.drain_last_pass.as_ref())
                 .and_then(|pass| pass.task_pilot_warning.clone()),
-            // [ORB-20446] The live window's submission warnings and notes, so
-            // the dashboard keeps them until the window ends.
-            "submission_notices": live_submission_notices(
-                runtime,
-                active_drain.as_ref().and(status_state.as_ref()),
-                pull_drain.as_ref(),
-            ),
         },
         "approvals": approvals,
         "provider_limits": provider_limits.readings,
@@ -898,42 +891,6 @@ pub fn explain_workspace_auto_readiness(
         payload["out_of_run_auto_fix"] = json!(repairs);
     }
     Ok(payload)
-}
-
-/// The live window's recorded submission warnings and notes, with its run id:
-/// the local drain's while one is live, else this replica's live pull
-/// drain's. `null` when neither is live or its submission reported none. An
-/// unreadable pull-drain state reads as none; readiness is an observation.
-fn live_submission_notices(
-    runtime: &OrbitRuntime,
-    live_state: Option<&PipelineState>,
-    pull_drain: Option<&LivePullDrain>,
-) -> Value {
-    let project = |state: &PipelineState| {
-        state.submission_notices.as_ref().map(|record| {
-            json!({
-                "run_id": state.run_id,
-                "recorded_at": record.recorded_at.to_rfc3339_opts(SecondsFormat::Secs, true),
-                "warnings": record.warnings,
-                "notes": record.notes,
-            })
-        })
-    };
-    match live_state {
-        Some(state) => project(state),
-        None => pull_drain
-            .and_then(|drain| {
-                runtime
-                    .stores()
-                    .jobs()
-                    .read_run_state(&drain.run_id)
-                    .ok()
-                    .flatten()
-            })
-            .as_ref()
-            .and_then(project),
-    }
-    .unwrap_or(Value::Null)
 }
 
 /// The status drain's progress: the most recent finished drain when no local

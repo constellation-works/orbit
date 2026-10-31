@@ -553,9 +553,8 @@ try {
   await page.evaluate(() => globalThis.dockReview.release());
   await page.locator('#tasks-dock #auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
   const receipt = await dockStatus.textContent();
-  // Start warnings go to the warnings box, not the green receipt [ORB-20446].
-  if (!receipt.includes('submitted') || receipt.includes('Warning:')) {
-    throw new Error(`Tasks dock receipt must confirm the start without its warnings: ${receipt}`);
+  if (!receipt.includes('submitted') || !receipt.includes('Warning: Admissions throttled')) {
+    throw new Error(`Tasks dock receipt lost its confirmation or warnings: ${receipt}`);
   }
   if (await page.evaluate(() => globalThis.dockReview.posts()) !== postsBeforeSuccess + 1) {
     throw new Error('A Start from Tasks must send exactly one POST');
@@ -957,19 +956,19 @@ try {
   }
 
   // Operation feedback timeout in real Chromium browser: start a window,
-  // observe the receipt without warnings or notes, trigger clear, verify the
-  // confirmation cleared.
+  // observe confirmation and warnings, trigger clear, verify confirmation
+  // cleared while warning lines stay.
   await page.evaluate(() => {
     const start = document.querySelector('#auto-drain-quick-start-body .drain-start');
     if (start) start.click();
   });
   await page.waitForFunction(() => {
     const node = document.getElementById('auto-drain-operation-feedback');
-    return node && node.textContent.includes('submitted');
+    return node && node.textContent.includes('submitted') && node.textContent.includes('Warning:');
   });
   const beforeFeedbackTimeout = await page.evaluate(() => document.getElementById('auto-drain-operation-feedback').textContent);
-  if (/Warning:|Note:/.test(beforeFeedbackTimeout)) {
-    throw new Error(`Auto-drain start receipt must not carry warnings or notes: ${beforeFeedbackTimeout}`);
+  if (!beforeFeedbackTimeout.includes('submitted') || !beforeFeedbackTimeout.includes('Warning: Admissions throttled')) {
+    throw new Error(`Auto-drain start feedback missing confirmation or warnings: ${beforeFeedbackTimeout}`);
   }
   await page.evaluate(() => {
     globalThis.triggerFeedbackClear('auto-drain-operation-feedback');
@@ -978,7 +977,10 @@ try {
   if (afterFeedbackTimeout.includes('submitted') || afterFeedbackTimeout.includes('Auto-concurrency:')) {
     throw new Error(`Confirmation lines not cleared after feedback timeout: ${afterFeedbackTimeout}`);
   }
-  await page.screenshot({ path: path.join(evidence, 'drain-feedback-cleared.png') });
+  if (!afterFeedbackTimeout.includes('Warning: Admissions throttled') || !afterFeedbackTimeout.includes('FIXTURE_TOKEN') || !afterFeedbackTimeout.includes('Note: no')) {
+    throw new Error(`Warning or note lines missing after feedback timeout: ${afterFeedbackTimeout}`);
+  }
+  await page.screenshot({ path: path.join(evidence, 'drain-feedback-warnings-retained.png') });
 
   // The scoped dock still identifies pull drains and stopped admissions;
   // the chrome keeps the fleet visible when this workspace becomes idle.
