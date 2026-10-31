@@ -657,7 +657,10 @@ impl OrbitRuntime {
         let registry = self.context.settings().crews();
         let enabled = entries
             .iter()
-            .filter(|entry| registry.get(&entry.name).is_some_and(|crew| crew.enabled))
+            .filter(|entry| {
+                orbit_types::identity::find_crew(&entry.name, registry)
+                    .is_some_and(|crew| crew.enabled)
+            })
             .map(|entry| {
                 Ok(CrewCandidate {
                     crew: self.resolve_crew_for_task(Some(&entry.name), None)?,

@@ -3,7 +3,7 @@ use rusqlite::Connection;
 
 use super::introspect::add_column_if_missing;
 
-/// v79: additive application authority and non-secret audit provenance.
+/// v80: additive application authority and non-secret audit provenance.
 /// Idempotent, so a replay over a store that already holds either part
 /// (a lost ledger, a rewound test fixture) converges instead of failing.
 pub(super) fn apply_application_consent(conn: &Connection) -> Result<(), OrbitError> {

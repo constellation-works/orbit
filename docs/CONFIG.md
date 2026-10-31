@@ -1315,6 +1315,8 @@ provider = "antigravity"
 
 An unsupported `effort` (`max` on Grok, `effort = "hard"`) is ignored for that crew, never remapped, with a warning naming the file, crew, value and accepted values. `orbit doctor` lists ignored properties; `orbit config set` refuses a value load would drop. A selected crew's provider, model and effort each override an activity's inline baseline.
 
+**Crew references.** Wherever a crew is named — the complexity, type, purpose, review and final-recovery pools, `workflow.default_crew`, `workflow.crew_ladder.rungs`, a task or auto-task `crew`, `--crew` and MCP `crew` inputs — it can carry an effort: `<crew>@<effort>`, followed in pools by the usual `:<weight>` (`hard_complexity_crews = ["opus@medium:100", "opus:100", "sol:100"]`). The reference runs that crew at that effort, ahead of the crew's own `effort` and the activity's inline baseline; without `@effort` the crew's own `effort` applies, as before. `opus@medium` and `opus` are distinct pool members with their own weights, and runs, scorecards, experiments and the crew ladder record them under those names. They share the crew's provider account, holds and limits. Unlike a crew table's `effort`, a reference effort the provider or model does not accept (`grok@max`, `luna@hard`) is refused at load and by `orbit config set`, naming the reference and the accepted values. Crew names may therefore contain neither `:` nor `@`.
+
 **Recorded effort.** Each provider launch records its resolved crew, model and
 `reasoning_effort` before the process starts, after crew/inline precedence and
 configuration admission. `null` means no effort option was rendered (provider
@@ -1417,7 +1419,7 @@ Final recovery keeps its own rules (no fallback; `[]` turns it off), and automat
 
 - `model` and `provider` must be non-empty.
 - `default_crew` must name a defined crew. Left unset with crews defined, Orbit uses `opus` (or a legacy `claude` crew), else refuses to load.
-- A crew name may not contain `:`, which the pool grammar reserves ([repair](#repairing-a-config-that-already-names-a-crew-with-a-colon)).
+- A crew name may not contain `:` or `@`, which the crew-reference grammar reserves ([repair](#repairing-a-config-that-already-names-a-crew-with-a-colon)).
 - An Antigravity crew needs an `agy models` slug; a bare Gemini CLI ID such as `gemini-3.8-flash` fails with migration guidance.
 
 **Retired crew shapes** fail load with migration guidance: `planner` / `implementer` / `reviewer` sub-tables (use flat `model` and `provider`); `backend` (`cli` is ignored, `http` and `auto` refused, likewise in `ORBIT_BACKEND` and `[runtime] backend`; remove it); `[agent.<role>]` tables (use `[crews.<name>]` plus `workflow.default_crew`).
@@ -1451,7 +1453,7 @@ env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]
 Every command, `orbit config set` included, refuses to load, so edit the file by hand. Layers are checked before merging, so the error names the defining file:
 
 ```
-error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':'; ...
+error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':' or '@'; ...
 Edit '~/.orbit/config.toml' and rename or remove the [crews."gpt-5:codex"] table, then rerun the command
 ```
 
@@ -1803,7 +1805,7 @@ final_recovery = ["sol:100", "opus:20"]
 ```
 
 - **Unset:** `["sol:100", "opus:20"]`, filtered to crews defined in `[crews.*]`. With neither defined the pool is empty and final recovery is off, without a validation error.
-- **Explicit:** standard pool grammar (`name` or `name:weight`); every named crew must exist in `[crews.*]`.
+- **Explicit:** standard pool grammar (`crew[@effort]` or `crew[@effort]:weight`); every named crew must exist in `[crews.*]`.
 - **`[]`** disables final recovery.
 
 A final-recovery `resume` records its rationale and the failed step's refusal
@@ -2723,6 +2725,8 @@ For an implementation-only skill overlay with an arm crew pool, `start` checks e
 Each dispatch a live arm changes records an `activity.experiment_overlay_applied` audit row: the arm, the instruction's hash and source, the tools actually added and removed, a map of skill names to bundle digests, and a `sha256:` digest over the received surfaces. A bundle digest covers sorted relative paths, file contents and executable bits. `orbit run show` prints one `Experiment applied:` line per row, including each skill's digest, after the run's `Tag instructions:` lines; its JSON includes the same map.
 
 `orbit experiment assign <experiment> --task <task> --arm <arm>` forces a task without an arm assignment, or one with an `explicit_crew` exclusion for that experiment, into an active arm and records `forced=true`. It works in either shadow or live mode while the experiment is running; a draft, paused, concluded or abandoned experiment is refused. Existing arm assignments and other exclusions for that experiment remain sticky, and overlapping surfaces owned by another experiment still refuse the force. `orbit task show --fields experiments` exposes the assignments and exclusions. `orbit run show` prints each captured arm as `shadow` or `live` with its overlay digest. Owner claims carry a task-bound overlay capture, limited to 256 KiB, with each live arm's instruction files and complete skill bundles read at the claim base; followers apply those captured bytes, refuse missing, malformed or digest-mismatched captures, and never consult local experiment configuration or skill bundle files. A live instruction file the owner cannot read is captured as a refusal that stops the claimed run in that role. An unreadable or oversized skill bundle refuses claim capture itself.
+
+`orbit experiment delete <experiment> --reason <text>` (operator CLI only; not advertised over MCP) removes a draft, concluded or abandoned experiment with its arms, event log and assignment rows. It refuses a running or paused experiment, one that ran live and assigned tasks to arms (their `task.crew` and run captures cite it), and one concluded with an arm (its promotion task names it). Shadow experiments applied nothing, so they can always be deleted once finished, crew-ladder trials included. The event log goes with the experiment, so the deletion is logged by the CLI process with its actor and reason.
 
 `orbit experiment readout <experiment> [--metric <name>]` (tool `orbit.experiment.readout`, web `GET /api/diagnostics/experiments/<id>/readout?metric=<name>`) computes each arm's outcomes on read from the assignments, one task per unit, intention-to-treat; forced assignments and exclusions (`surface_conflict_excluded`, `explicit_crew_excluded`) are counted and left out. Each metric reports per-arm n, mean and median with seeded bootstrap 95% intervals (Wilson intervals for rates), and the difference from control overall (post-stratified by complexity) and per complexity. The readout also reports crew mix from each task's `task.crew`, a `crew_mismatch` warning naming each task whose crew is outside its arm's crew pool (for an arm without a crew overlay, such as control, the pool recorded at admission for the task's delivery — its frozen crew selection, including any run-level pool override and its admission-tier, purpose or type route — so later workspace pool changes or a complexity rerate neither invent nor erase a historical mismatch; when that recorded admission pool is unavailable, a `crew_mismatch_unavailable` warning reports it instead of a confirmed mismatch) when any arm overlays the crew surface, a sample-ratio chi-square over each segment's weights (p < 0.001 warns and withholds the verdict), a drift warning when an arm saw more than one overlay digest, open lagging outcomes (unfinished tasks and 14-day regression windows), and guardrail checks. The verdict is `collecting` until `max_days` have passed or every active arm has `min_sample` settled primary outcomes, then `winner <arm>` when a treatment's primary interval excludes zero in the better direction and no guardrail is breached or undecided, `no difference`, or `inconclusive`. The JSON carries `schema_version`; an unknown experiment or metric is refused. The dashboard's Analytics › Experiments page shows the list with per-arm enrollment and each experiment's readout; its endpoint response adds a `cumulative` per-arm series of the primary metric. An operator session also offers conclude on a running or paused experiment, and New experiment, Edit and Start for drafts.
 

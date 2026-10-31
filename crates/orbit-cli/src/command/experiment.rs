@@ -31,6 +31,13 @@ impl Execute for ExperimentCommand {
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
             ExperimentVerb::Assign => vec![Block::text(value.to_string())],
+            ExperimentVerb::Delete => vec![Block::text(format!(
+                "deleted {} {} ({}, {})",
+                text(&value["deleted"]),
+                text(&value["name"]),
+                text(&value["status"]),
+                text(&value["mode"]),
+            ))],
             ExperimentVerb::List => vec![Block::table(list_table(&value))],
             ExperimentVerb::Readout => readout_blocks(&value),
             ExperimentVerb::Create

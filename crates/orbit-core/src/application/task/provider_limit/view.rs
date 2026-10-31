@@ -357,7 +357,7 @@ impl ProviderLimitsView {
             .collect();
 
         let lane_limit = |setting: &'static str, name: &str| {
-            let crew = settings.crews().get(name.trim())?;
+            let crew = orbit_types::identity::find_crew(name, settings.crews())?;
             let until = readings
                 .iter()
                 .filter(|reading| {
@@ -366,7 +366,7 @@ impl ProviderLimitsView {
                             &reading.provider,
                             reading.account.as_deref(),
                             reading.scope.as_deref(),
-                            crew,
+                            &crew,
                         )
                 })
                 .map(|reading| reading.until)

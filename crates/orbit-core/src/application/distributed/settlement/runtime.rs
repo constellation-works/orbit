@@ -579,11 +579,13 @@ impl crate::OrbitRuntime {
     /// unparsable or unknown crew stays a single name.
     fn crews_sharing_account(&self, failed: &str) -> Vec<String> {
         let registry = self.context.settings().crews();
-        let Some((provider, account)) = registry.get(failed).and_then(|crew| {
-            orbit_types::workflow::Provider::parse(&crew.assignment.provider)
-                .ok()
-                .map(|provider| (provider, crew.account()))
-        }) else {
+        let Some((provider, account)) = orbit_types::identity::find_crew(failed, registry)
+            .and_then(|crew| {
+                orbit_types::workflow::Provider::parse(&crew.assignment.provider)
+                    .ok()
+                    .map(|provider| (provider, crew.account().map(ToOwned::to_owned)))
+            })
+        else {
             return vec![failed.to_string()];
         };
         let mut names = registry
@@ -591,7 +593,7 @@ impl crate::OrbitRuntime {
             .filter(|crew| {
                 orbit_types::workflow::Provider::parse(&crew.assignment.provider).ok()
                     == Some(provider)
-                    && crew.account() == account
+                    && crew.account() == account.as_deref()
             })
             .map(|crew| crew.name.clone())
             .collect::<Vec<_>>();

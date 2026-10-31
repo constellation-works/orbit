@@ -125,6 +125,47 @@ impl ExperimentStoreBackend for Store {
         })
     }
 
+    fn delete_experiment(
+        &self,
+        workspace_id: &str,
+        experiment_id: &str,
+        expected_revision: u32,
+    ) -> Result<bool, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn = tx.connection();
+            let stored: Option<u32> = conn
+                .query_row(
+                    "SELECT revision FROM experiments WHERE workspace_id = ?1 AND id = ?2",
+                    params![workspace_id, experiment_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(sqlite_store_error)?;
+            if stored != Some(expected_revision) {
+                return Ok(false);
+            }
+            // The experiment row goes first: its events are append-only
+            // while it exists (v79).
+            conn.execute(
+                "DELETE FROM experiments WHERE workspace_id = ?1 AND id = ?2",
+                params![workspace_id, experiment_id],
+            )
+            .map_err(sqlite_store_error)?;
+            for table in [
+                "experiment_events",
+                "experiment_arms",
+                "experiment_assignments",
+            ] {
+                conn.execute(
+                    &format!("DELETE FROM {table} WHERE workspace_id = ?1 AND experiment_id = ?2"),
+                    params![workspace_id, experiment_id],
+                )
+                .map_err(sqlite_store_error)?;
+            }
+            Ok(true)
+        })
+    }
+
     fn experiment_record(
         &self,
         workspace_id: &str,

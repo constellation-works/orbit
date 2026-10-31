@@ -39,6 +39,8 @@ operation_registry! {
         Conclude => CONCLUDE,
         /// Abandon an experiment without a conclusion.
         Abandon => ABANDON,
+        /// Delete a finished experiment that never applied a treatment.
+        Delete => DELETE,
         /// One experiment with its arms and event log.
         Show => SHOW,
         /// The workspace's experiments.
@@ -380,6 +382,21 @@ const ABANDON: OperationSpec<ExperimentVerb> = OperationSpec {
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const DELETE: OperationSpec<ExperimentVerb> = OperationSpec {
+    verb: ExperimentVerb::Delete,
+    cli_path: &["delete"],
+    tool_name: "orbit.experiment.delete",
+    tool_description: "Delete a draft, concluded or abandoned experiment with its arms, events and assignments. Refused for a running or paused experiment, for one that ran live and assigned tasks to arms (their crews and runs cite it), and for one concluded with an arm (its promotion task names it). Shadow experiments, such as crew-ladder trials, applied nothing and can be deleted. Operator CLI only.",
+    cli_about: "Delete a finished experiment that never applied a treatment",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[ID, REQUIRED_REASON, MODEL],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
 };
 
 const SHOW: OperationSpec<ExperimentVerb> = OperationSpec {

@@ -830,6 +830,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "abandoning an experiment ends it without a decision, so only an operator may do it",
     },
+    GovernedOperation {
+        id: "orbit.experiment.delete",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "deleting an experiment removes its record and event log for good, so only an operator may do it",
+    },
     // Script grants (script steps phase 1): the operator's host-local
     // consent to run one workspace script at one content digest. No Agent
     // capability, so `classify_agent_tool_grant` makes both tools

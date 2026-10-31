@@ -54,7 +54,8 @@ use condition_triggers::apply_condition_triggers;
 use crew_performance::apply_crew_performance_snapshot;
 use executor_census::apply_executor_census;
 use experiments::{
-    apply_experiment_admissions, apply_experiments, apply_reopen_legacy_experiment_admissions,
+    apply_experiment_admissions, apply_experiment_delete, apply_experiments,
+    apply_reopen_legacy_experiment_admissions,
 };
 use feature::apply_feature_schema_ledger;
 use feature_ledgers::apply_absorb_feature_ledgers;

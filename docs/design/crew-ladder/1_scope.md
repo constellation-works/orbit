@@ -133,16 +133,16 @@ today. A workspace without a ladder behaves exactly as now.
 ```toml
 [workflow.crew_ladder]
 mode = "shadow"             # implemented: off | shadow; proposed: propose | auto
-rungs = ["haiku", "luna", "sol-medium", "sol", "opus-high", "opus"]   # cheapest first
+rungs = ["haiku", "luna", "sol@medium", "sol", "opus@high", "opus"]   # cheapest first
 tiers = ["low", "medium", "hard"]   # default: none
 explore_rate = 0.10
 delivery_quality = "off"   # only off is currently admitted; shadow/guardrail are proposed
 ```
 
-- **A rung is a crew.** Effort rungs are crews that differ only in `effort`, for example
-  `opus-high` (`model = "claude-opus-5-5", effort = "high"`) beside `opus` (`effort =
-  "xhigh"`). One ladder covers models and effort levels together, so there is no second
-  mechanism for effort.
+- **A rung is a crew reference.** Effort rungs are `<crew>@<effort>` references, for example
+  `opus@high` beside `opus` (`effort = "xhigh"`), so no near-duplicate crew tables are
+  needed and each effort keeps its own scorecard and trial evidence. One ladder covers
+  models and effort levels together, so there is no second mechanism for effort.
 - **The order is the operator's.** It is the cost and capability order the operator believes;
   Orbit does not infer it. A rung missing from the ladder is never trialled.
 - **A tier's floor** is its cheapest rung in the effective pool (configured members plus
@@ -393,8 +393,8 @@ Ladder trials count toward `experiments.max_running`, and need `experiments.enab
 ## Open questions
 
 1. **Quality score.** Is 1 / 0.5 / 0 the right scale, and should a `low` regression count?
-2. **First slice: effort or models?** Starting with effort rungs only (`opus-high` under
-   `opus` in hard, `sol-medium` under `sol` in medium) is the safest first trial: same model,
+2. **First slice: effort or models?** Starting with effort rungs only (`opus@high` under
+   `opus` in hard, `sol@medium` under `sol` in medium) is the safest first trial: same model,
    lower cost, quick evidence. Should phase 2 start there before cross-model rungs?
 3. **Learned weight.** Should a learned member start at its peers' weight, or ramp up over
    its first watch window?

@@ -55,7 +55,8 @@ impl TaskOsReadout {
             .filter(|name| !name.is_empty());
         let mut effective = tags.clone();
         if let Some(name) = crew {
-            let canonical = match self.crews.get(&name.to_ascii_lowercase()) {
+            let base = orbit_types::identity::crew_reference_base(name).to_ascii_lowercase();
+            let canonical = match self.crews.get(&base) {
                 Some(Ok(name)) => name,
                 unresolved => {
                     source["crew"] = json!(name);
