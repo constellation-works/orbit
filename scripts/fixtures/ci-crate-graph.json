@@ -1,7 +1,11 @@
 {
-  "comment": "Workspace crates and their path dependencies, recorded from cargo metadata on 2026-10-18 for the Change scope selection cases in test-pr-state-workflows.py.",
+  "comment": "Workspace crates and their path dependencies, recorded from cargo metadata on 2026-10-30 for the Change scope selection cases in test-pr-state-workflows.py.",
   "crates": {
     "orbit-agent": [
+      "orbit-common",
+      "orbit-types"
+    ],
+    "orbit-auth": [
       "orbit-common",
       "orbit-types"
     ],
@@ -11,6 +15,7 @@
       "orbit-types"
     ],
     "orbit-cli": [
+      "orbit-auth",
       "orbit-cmd",
       "orbit-common",
       "orbit-config",
@@ -44,10 +49,12 @@
       "orbit-automation",
       "orbit-common",
       "orbit-config",
+      "orbit-core",
       "orbit-engine",
       "orbit-exec",
       "orbit-policy",
       "orbit-registry",
+      "orbit-runtime",
       "orbit-search",
       "orbit-store",
       "orbit-tools",
@@ -56,6 +63,7 @@
     "orbit-engine": [
       "orbit-agent",
       "orbit-common",
+      "orbit-engine",
       "orbit-exec",
       "orbit-store",
       "orbit-tools",
@@ -67,6 +75,7 @@
     ],
     "orbit-mcp": [
       "orbit-common",
+      "orbit-mcp",
       "orbit-registry",
       "orbit-tools",
       "orbit-types"
@@ -78,6 +87,18 @@
     "orbit-registry": [
       "orbit-common",
       "orbit-config",
+      "orbit-types"
+    ],
+    "orbit-runtime": [
+      "orbit-common",
+      "orbit-config",
+      "orbit-engine",
+      "orbit-exec",
+      "orbit-policy",
+      "orbit-runtime",
+      "orbit-search",
+      "orbit-store",
+      "orbit-tools",
       "orbit-types"
     ],
     "orbit-search": [
@@ -96,8 +117,10 @@
     ],
     "orbit-types": [],
     "orbit-web": [
+      "orbit-auth",
       "orbit-cmd",
       "orbit-common",
+      "orbit-config",
       "orbit-core",
       "orbit-engine",
       "orbit-registry",

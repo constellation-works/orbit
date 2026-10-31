@@ -174,7 +174,7 @@ coverage priorities, retirement evidence and timing.
   incident invariant. Low coverage alone is not one.
 - **It supplies retirement candidates, not retirements.** A retirement still follows
   [Retiring a unit test](../../design-patterns/test_strategy.md#retiring-a-unit-test) and the
-  10-minute budget's rules: name the surviving coverage, measure the cost before and after,
+  CI budget's rules: name the surviving coverage, measure the cost before and after,
   and never retire the only guard of a security invariant, recovery path or known incident.
   The unit-test growth ratchet is unchanged.
 

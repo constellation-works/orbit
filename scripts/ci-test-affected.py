@@ -98,7 +98,19 @@ FILE_READERS = (
     (Path("plugin/hooks"), ("orbit-cli",)),
     (Path("server.json"), ("orbit-cli",)),
     (Path("website/src/content/docs/reference/config.md"), ("orbit-cli",)),
+    # The skill mirror: orbit-core's default_catalog test reads its reference pages.
+    (Path("plugin/skills"), ("orbit-core",)),
+    # Read only by scripts/test-qa-full-sweep.py, which the guardrails run.
+    (Path("scripts/qa-full-sweep-inventory.json"), ()),
 )
+
+# Security and recovery invariants every pull request runs, whatever it
+# changed: the sandbox and Bubblewrap boundary (orbit-exec, whose presence also
+# admits shard 1's Linux sandbox gate), authorization (orbit-policy,
+# orbit-auth) and store migrations (orbit-store). The partition guard runs on
+# every test build. Their tests are about 2% of the suite's test time. A
+# pushed agent-main commit still runs every crate.
+ALWAYS_RUN = ("orbit-auth", "orbit-exec", "orbit-policy", "orbit-store")
 
 # ci-macos.yml names test paths and filters that a moved or deleted test leaves
 # stale. Only check-ci-macos.sh reads them, so the gate runs it whenever a
@@ -180,18 +192,20 @@ def workspace_packages(metadata):
 
 def pull_request_scope(metadata, paths):
     """The tests a pull request's CI runs: `(None, reason)` for the full suite,
-    or `(packages, reason)` for the changed crates and their reverse dependents.
+    or `(packages, reason)` for the changed crates, their reverse dependents
+    and the ALWAYS_RUN crates.
 
-    Stricter than the local gate. Every path outside crates/ runs everything
+    Stricter than the local gate. A path outside crates/ runs everything
     (workspace manifests, toolchain, .cargo/, .github/, scripts/, plugin/ and
-    any other repository file a test may read), except Markdown outside
-    crates/ and plugin/: no Cargo test reads it, and the one such page a test
-    reads is a FILE_READERS entry that selects its reader. The workspace-wide
-    Check job still runs the scripts/test-* self-tests that read Markdown, such
-    as test-release-promotion.py. A member manifest can change the features of
-    the whole workspace build, so it runs everything too. Inside crates/,
-    affected_packages adds FILE_READERS' cross-crate readers and runs
-    everything for a path no member owns.
+    any other repository file a test may read) unless FILE_READERS declares
+    which crates read it, or it is Markdown outside crates/ and plugin/: no
+    Cargo test reads that, and the one such page a test reads is a
+    FILE_READERS entry that selects its reader. The CI guardrails job still
+    runs the scripts/test-* self-tests whose inputs changed, such as
+    test-release-promotion.py for RELEASING.md. A member manifest can change
+    the features of the whole workspace build, so it runs everything too.
+    Inside crates/, affected_packages adds FILE_READERS' cross-crate readers
+    and runs everything for a path no member owns.
     """
     crate_paths = set()
     for raw_path in sorted(paths):
@@ -200,17 +214,21 @@ def pull_request_scope(metadata, paths):
             if len(path.parts) == 3 and path.name == "Cargo.toml":
                 return None, f"{raw_path} can change the workspace's dependency features"
             crate_paths.add(raw_path)
-        elif path.suffix == ".md" and path.parts[0] not in ("crates", "plugin"):
-            if any(path.is_relative_to(prefix) for prefix, _ in FILE_READERS):
-                crate_paths.add(raw_path)
-        else:
+        elif any(path.is_relative_to(prefix) for prefix, _ in FILE_READERS):
+            crate_paths.add(raw_path)
+        elif path.suffix != ".md" or path.parts[0] in ("crates", "plugin"):
             return None, f"{raw_path} is outside a crate"
     if not crate_paths:
         return None, "no crate changed"
-    packages = affected_packages(metadata, crate_paths)
-    if packages == workspace_packages(metadata):
+    workspace = workspace_packages(metadata)
+    missing = [name for name in ALWAYS_RUN if name not in workspace]
+    if missing:
+        raise ValueError(f"ALWAYS_RUN names unknown workspace crates: {', '.join(missing)}")
+    affected = affected_packages(metadata, crate_paths)
+    packages = sorted({*affected, *ALWAYS_RUN})
+    if packages == workspace:
         return None, "every workspace crate is affected"
-    return packages, f"{len(packages)} affected crate(s)"
+    return packages, f"{len(affected)} affected crate(s) and {len(packages) - len(affected)} always-run"
 
 
 def feature_units(cargo, packages=None):

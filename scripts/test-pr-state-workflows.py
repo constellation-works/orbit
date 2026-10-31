@@ -247,7 +247,8 @@ class CiCacheWorkflowTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-        self.job = self.document["jobs"]["ci"]
+        # The namespace regression's sccache setup runs in the guardrails job.
+        self.job = self.document["jobs"]["guardrails"]
         self.steps = {step["id"]: step for step in self.job["steps"] if "id" in step}
         self.output = self.root / "output"
         self.envfile = self.root / "env"
@@ -302,7 +303,7 @@ class CiCacheWorkflowTests(unittest.TestCase):
                 for event in ("push", "pull_request", "pull_request_target", "workflow_dispatch", "schedule"):
                     with self.subTest(job=name, event=event):
                         self.assertEqual(evaluate(condition, event), event == "push")
-        self.assertEqual(sorted(set(writers)), ["ci", "msrv", "test-build"])
+        self.assertEqual(sorted(set(writers)), ["ci", "guardrails", "msrv", "test-build"])
         self.assertEqual(self.document.get("on", self.document.get(True, {}))["push"]["branches"], ["main", "agent-main"],
                          "push-only saves are trusted only while pushes come from protected branches")
 
@@ -576,8 +577,8 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
         self.assertEqual(wait[1::2], ["--job"] * len(awaited))
-        self.assertEqual(sorted(awaited), sorted(set(partitions.values())),
-                         "the Check job's elapsed time must cover the test build and every shard")
+        self.assertEqual(sorted(awaited), sorted({*partitions.values(), jobs["guardrails"]["name"]}),
+                         "the Check job's elapsed time must cover the test build, every shard and the guardrails")
 
     def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
         for job, step in (("test-build", "Pack nextest archive for transfer"),
@@ -716,24 +717,36 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.pull_request("README.md", "docs/guide.md"), "docs")
         # Markdown compiled into a crate or mirrored into the plugin is code,
         # and orbit-cli's tests read the configuration reference page.
+        # Every selection adds the always-run security and recovery crates.
         self.assertEqual(self.pull_request("docs/guide.md", "crates/orbit-core/assets/skills/x.md"),
-                         "affected:orbit-cli,orbit-cmd,orbit-core,orbit-web")
-        self.assertEqual(self.pull_request("plugin/skills/x.md"), "full")
-        self.assertEqual(self.pull_request("website/src/content/docs/reference/config.md"), "affected:orbit-cli")
+                         "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-exec,orbit-policy,orbit-store,orbit-web")
+        # The skill mirror is read by orbit-core's catalog test; other plugin/ paths run in full.
+        self.assertEqual(self.pull_request("plugin/skills/x.md"),
+                         "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-exec,orbit-policy,orbit-store,orbit-web")
+        self.assertEqual(self.pull_request("plugin/plugin.json"), "full")
+        self.assertEqual(self.pull_request("website/src/content/docs/reference/config.md"),
+                         "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store")
+        # A path no crate reads runs the always-run crates alone.
+        self.assertEqual(self.pull_request("scripts/qa-full-sweep-inventory.json"),
+                         "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
         # Markdown that a scripts/test-* self-test reads is code too: test-release-promotion.py
         # executes RELEASING.md's procedures, and test-qa-full-sweep.py digests npm/README.md.
         self.assertEqual(self.pull_request("RELEASING.md"), "full")
         self.assertEqual(self.pull_request("RELEASING.md", "README.md"), "full")
         self.assertEqual(self.pull_request("npm/README.md"), "full")
-        self.assertEqual(self.pull_request("RELEASING.md", "crates/orbit-cli/src/main.rs"), "affected:orbit-cli")
+        self.assertEqual(self.pull_request("RELEASING.md", "crates/orbit-cli/src/main.rs"),
+                         "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store")
         # A listing that disagrees with the reported count is not trusted.
         self.assertEqual(self.pull_request("docs/guide.md", count=2), "full")
         self.assertEqual(self.classify("pull_request", {}, PR="7"), "full", "an API error runs the full gate")
 
     def test_pull_request_test_selection(self):
         selections = {
-            "leaf crate": (["crates/orbit-cli/src/main.rs", "docs/guide.md"], "affected:orbit-cli"),
-            "mid-graph crate": (["crates/orbit-mcp/src/lib.rs"], "affected:orbit-cli,orbit-cmd,orbit-mcp,orbit-web"),
+            "leaf crate": (["crates/orbit-cli/src/main.rs", "docs/guide.md"],
+                           "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store"),
+            "mid-graph crate": (["crates/orbit-mcp/src/lib.rs"],
+                                "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-exec,orbit-mcp,orbit-policy,"
+                                "orbit-store,orbit-web"),
             "core crate": (["crates/orbit-types/src/lib.rs"], "full"),
             "workspace-level file": (["crates/orbit-cli/src/main.rs", "Cargo.lock"], "full"),
             "toolchain file": (["crates/orbit-cli/src/main.rs", "rust-toolchain.toml"], "full"),
@@ -743,9 +756,11 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
             "path no crate owns": (["crates/orbit-retired/src/lib.rs"], "full"),
             # Read across crates by tests the dependency graph cannot see.
             "cross-crate fixture": (["crates/orbit-web/assets/dashboard/vendor/marked.umd.js"],
-                                    "affected:orbit-cli,orbit-cmd,orbit-mcp,orbit-web"),
+                                    "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-exec,orbit-mcp,orbit-policy,"
+                                    "orbit-store,orbit-web"),
             "cross-crate asset": (["crates/orbit-core/assets/activities/task_pilot.yaml"],
-                                  "affected:orbit-cli,orbit-cmd,orbit-core,orbit-engine,orbit-web"),
+                                  "affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-engine,orbit-exec,"
+                                  "orbit-policy,orbit-runtime,orbit-store,orbit-web"),
         }
         for case, (paths, mode) in selections.items():
             with self.subTest(case=case):
@@ -784,8 +799,8 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                 self.assertEqual(mode, "full", "a Markdown delta cannot hide untested code in BEFORE")
                 admitted = {name for name, job in jobs.items() if name != "pr-state" and evaluate(
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
-                self.assertEqual(admitted, {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3",
-                                            "test-extra"})
+                self.assertEqual(admitted, {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2",
+                                            "test-3", "test-extra"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -808,9 +823,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3", "test-extra"},
-            "affected:orbit-cli": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3", "test-extra"},
-            "": {"scope", "msrv", "ci", "test-build", "test-1", "test-2", "test-3", "test-extra"},
+            "full": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra"},
+            "affected:orbit-cli": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra"},
+            "": {"scope", "msrv", "ci", "guardrails", "test-build", "test-1", "test-2", "test-3", "test-extra"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }

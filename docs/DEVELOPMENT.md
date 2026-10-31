@@ -393,7 +393,7 @@ Two workspace checkouts that name different commits stay ambiguous.
 In `ci.yml`, a `Change scope` job ([ci-change-scope.sh](../scripts/ci-change-scope.sh)) narrows each run before build runners start:
 
 - **`docs`**: every changed path, on a PR or in a push, is Markdown outside `crates/` and `plugin/`. A push additionally requires a successful completed GitHub Actions `Check / Clippy / Test` on its `before` commit. A missing, pending, cancelled, failed or skipped check, or an API error, runs the full gate instead: the previous tip may contain code whose pending run was replaced. Markdown under `crates/` is compiled in as assets, `plugin/` is the generated skill mirror, `orbit-cli`'s tests read `website/src/content/docs/reference/config.md`, and the `scripts/test-*` self-tests execute or digest `RELEASING.md` and `npm/README.md`, so each still takes the full gate. Only `Docs guards` runs (`ci-guardrails.sh --static`: doc links and indexes, the skill mirror and the other file and metadata guards).
-- **`affected:<crate>,...`**: a PR whose changed paths all sit inside workspace crates, apart from Markdown outside `crates/` and `plugin/`. Every job runs, but `Test build` compiles and archives only the tests of the changed crates and their reverse dependents, so the shards run only those (see [PR test selection](#pr-test-selection)). Pushes are never narrowed this way.
+- **`affected:<crate>,...`**: a PR whose changed paths all sit inside workspace crates or are declared in `FILE_READERS`, apart from Markdown outside `crates/` and `plugin/`. Every job runs, but `Test build` compiles and archives only the build set of the changed crates, their reverse dependents and the always-run crates, and every partition runs only those crates' tests (see [PR test selection](#pr-test-selection)). Pushes are never narrowed this way.
 - **`skip`**: a push whose commit has exactly the tree of the merged PR's head, when that head's latest `Check / Clippy / Test` succeeded in a run that tested every crate. The same bytes already passed the full gate, so nothing reruns. A PR run that tests every crate says so in its `Change scope` job with a `Test selection` notice reading `full`, and the push requires that notice from the same run (check suite) as the passing check. An `affected:` PR run, or a head whose run left no notice, gets a full push run. A merge whose tree differs from what the PR tested also runs in full. With non-strict required checks, most merges differ: the PR was tested against an older base.
 - **`full`**: everything else, including any classification error. The job never fails, and an empty mode admits the full run.
 
@@ -482,7 +482,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   This changes scheduling within each shard, keeping every test identity,
   ignored-test rule, count partition, group cap and isolated process. The
   default local profile keeps its ordinary order. See the
-  [timing notes](design-patterns/test_strategy.md#quality-and-the-10-minute-budget)
+  [timing notes](design-patterns/test_strategy.md#quality-and-the-400-second-budget)
   before interpreting a local replay as hosted budget evidence.
   A build that fails before the upload fails the wait at once.
   Repacking preserves every tar byte; it never extracts members or replaces
@@ -509,17 +509,28 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   partition step and the Check job's wait with stub tools, and fails unless
   those jobs together select `count:1/N` through `count:N/N` once each, each
   shard waits for the upload step ahead of the partition guard, and the Check
-  job's wait names the build, every shard and the extra partition job. After a change to this layout, re-measure the budget over
+  job's wait names the build, every shard, the extra partition job and `CI guardrails`. After a change to this layout, re-measure the budget over
   the latest 20 completed PR runs with `scripts/ci-p90.py` (nearest-rank p90
-  of the executed Check jobs against 600 s, with skipped and cancelled runs
+  of the executed Check jobs against 400 s, with skipped and cancelled runs
   reported as gaps).
-- `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting, every
-  repository guard and self-test, production Clippy, documentation
-  and the supply-chain gate, with no workspace test build or nextest. It then
-  waits for `Test build`, every shard and `Test extra partition`, and fails as soon as one of them
+- `CI guardrails` runs `ci-guardrails.sh --guards` on its own runner, beside
+  `Test build`: every repository guard and, with the bundled auto-task body
+  history, the self-tests. On a pull request (`CI_SELF_TESTS=changed`) it runs
+  the `scripts/test-*` self-tests only when their inputs changed against the
+  PR base, by the rule `make ci-fast` uses (`scripts/`, `.github/`, `Makefile`,
+  `.cargo/`, the root manifests, `install.sh`, `RELEASING.md`, `plugin/`,
+  `npm/`, `.agents/`, `.claude-plugin/`); `test-qa-full-sweep.py --check`
+  always runs its inventory check and runs its fixture self-test under the
+  same rule. A push runs every self-test. It builds no workspace target, so
+  it carries the compiler-cache namespace regression's sccache and Bubblewrap
+  setup.
+- `Check / Clippy / Test` runs `ci-guardrails.sh --checks`: formatting,
+  production Clippy, documentation and the supply-chain gate, with no
+  workspace test build, guard or nextest. It then
+  waits for `Test build`, every shard, `Test extra partition` and `CI guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
-  10-minute budget and the `ci-budget-watch` auto-task measure, and its
+  400-second budget and the `ci-budget-watch` auto-task measure, and its
   conclusion is the gate's result. The wait prints one
   `ci-await: <job> succeeded started=... completed=... elapsed_s=...` line per
   job. A shard's wait prints `ci-await: Test build step 'Upload nextest
@@ -567,8 +578,9 @@ supply-chain checks and repository guards. `--test-archive` mode records only
 `workflow-test-list-build` and `workspace-test-archive`, `--test-partitions`
 mode `workspace-test-archive-extract` followed by `workspace-test-partitions`,
 and `--test-doctests` mode only `doctests`. An extraction failure stops before
-the proof, so no `workspace-test-partitions` record is emitted. `--checks` mode records every phase except the workflow test build,
-the workspace test phases and doctests: the hosted Check job leaves doctests to
+the proof, so no `workspace-test-partitions` record is emitted. `--checks` mode records `fmt`, `clippy-production`,
+`documentation` and `supply-chain`, and `--guards` mode (the CI guardrails job)
+`guard-pool`, `exclusive-self-tests` and `repository-guards`: the hosted Check job leaves doctests to
 the Test build job. That job runs them through `with-test-build-lint.sh`
 directly and logs a `doctests_seconds=` timing, with no `ci-guardrails-phase`
 record. `--test-doctests` runs the same command through the guard and records
@@ -631,19 +643,23 @@ save on a non-push event.
 
 #### PR test selection
 
-On a pull request that is not docs-only, the `Change scope` job runs `scripts/ci-test-affected.py --pull-request-scope`, the same graph walk as `make ci-test-affected`, over the PR's changed paths and the merge ref's Cargo metadata (read with the runner's stable toolchain). It selects the changed crates, their transitive reverse workspace dependents, and the crates `FILE_READERS` declares as readers of a changed path, and outputs `affected:<crate>,...`. It runs every test instead (`full`) when any of these holds:
+On a pull request that is not docs-only, the `Change scope` job runs `scripts/ci-test-affected.py --pull-request-scope`, the same graph walk as `make ci-test-affected`, over the PR's changed paths and the merge ref's Cargo metadata (read with the runner's stable toolchain). It selects the changed crates, their transitive reverse workspace dependents, the crates `FILE_READERS` declares as readers of a changed path, and the `ALWAYS_RUN` crates, and outputs `affected:<crate>,...`.
 
-- a path outside `crates/`: the root `Cargo.toml` or `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `scripts/`, `plugin/` or any other repository file, since a test may read it at run time. Markdown outside `crates/` and `plugin/` is the exception unless `FILE_READERS` names a reader for it.
+`ALWAYS_RUN` is the security and recovery set every PR runs whatever it changed: `orbit-exec` (the sandbox and Bubblewrap boundary; its presence also admits shard 1's Linux sandbox gate), `orbit-policy` and `orbit-auth` (authorization), and `orbit-store` (store migrations). The partition guard runs on every test build. Their tests are about 2% of the suite's test time. In the 2026-10-28 to 10-31 CI history, every failing migration test was in `orbit-store`; the other failures were in `orbit-engine`, `orbit-mcp`, `orbit-cli` and `orbit-web`, which the reverse-dependency walk selects for any change they can observe.
+
+It runs every test instead (`full`) when any of these holds:
+
+- a path outside `crates/` that `FILE_READERS` does not declare: the root `Cargo.toml` or `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `scripts/`, `plugin/` or any other repository file, since a test may read it at run time. Markdown outside `crates/` and `plugin/` is the exception. A declared path selects its readers, or no crate (`scripts/qa-full-sweep-inventory.json`, read only by a guardrail self-test), so its PR runs the always-run set alone.
 - a member's `Cargo.toml`, which can change the features of every crate in the workspace build;
 - a path under `crates/` that no current member owns, such as a removed crate;
 - every workspace crate is selected anyway (for example, a change to `orbit-types` or `orbit-common`);
 - the PR file listing is incomplete, or the selection fails for any reason, including unreadable Cargo metadata.
 
-Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` (workflows, `scripts/`, `server.json`, `plugin/hooks/`) are covered by the outside-`crates/` rule.
+Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` are declared there too (`scripts/build-budget.py`, `server.json`, `plugin/hooks/`, `plugin/skills/` for `orbit-core`'s catalog test, the configuration reference page); any other such path runs the full suite.
 
 `Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in every selection, and `orbit-web`'s dev-dependency features on `tokio` and `rusqlite` usually add `orbit-web`. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
 
-The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, doctests, documentation, the guardrails and the MSRV check stay workspace-wide, and the `Check / Clippy / Test` wait is unchanged: every test job still runs, and a failed or skipped one fails it.
+The archive holds the build set's tests, but every partition (the shards, the extra partition and the build job's own) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, doctests, documentation, the repository guards and the MSRV check stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait.
 
 A PR run can still miss a failure only the full suite shows, such as a test reading another crate's file through a path neither a dependency edge nor `FILE_READERS` records. The `agent-main` push run after the merge is the check of the merged tree and always tests every crate.
 
@@ -707,7 +723,7 @@ fn fixture_orbit(work: &Path, home: &Path) -> Command {
 
 `clear_inherited_authority` removes the managed-run routing, identity and grant variables, including `ORBIT_WORKER_CONTEXT_REQUIRED`. [`tool_list.rs`](../crates/orbit-cli/tests/tool/tool_list.rs) uses this pattern; [`isolated_cli_fixture.rs`](../crates/orbit-cli/tests/support/isolated_cli_fixture.rs) is a shared disposable home, registry and workspace. Orbit core's libtest fixtures use `application::tests::run_isolated_test`, which re-executes one exact test this way and verifies it passed in the child. CLI MCP and output bodies that write databases or change process authority use [`isolated_test::run_in_child`](../crates/orbit-cli/tests/support/isolated_test.rs) before any setup; it verifies exactly one passed test and supplies a private home under the checkout's `.orbit/tmp/`, outside Bubblewrap's `/tmp` overlay. It includes ignored entry points only when their parent has already been selected by the caller.
 
-Runtime integration permutations use `scenario_table!` in the existing runtime binary. Each named row keeps its setup and assertions; the shared [table fixture](../crates/orbit-core/tests/runtime/scenarios.rs) re-executes one isolated table with inherited authority cleared, gives each sequential row a fresh HOME/cwd, restores its environment, and verifies one passed child. Families that install process-wide worker substitutions retain a separate child per row. Keep self-reexecuting entry points as standalone tests, since their exact libtest names are part of their fixture protocol. Table failures report the original row identity, and sandbox deferrals still reach the gate output. Each row and child prints its elapsed time, and a fixture may copy setup from a per-process template under the [fixture template rules](design-patterns/test_strategy.md#quality-and-the-10-minute-budget).
+Runtime integration permutations use `scenario_table!` in the existing runtime binary. Each named row keeps its setup and assertions; the shared [table fixture](../crates/orbit-core/tests/runtime/scenarios.rs) re-executes one isolated table with inherited authority cleared, gives each sequential row a fresh HOME/cwd, restores its environment, and verifies one passed child. Families that install process-wide worker substitutions retain a separate child per row. Keep self-reexecuting entry points as standalone tests, since their exact libtest names are part of their fixture protocol. Table failures report the original row identity, and sandbox deferrals still reach the gate output. Each row and child prints its elapsed time, and a fixture may copy setup from a per-process template under the [fixture template rules](design-patterns/test_strategy.md#quality-and-the-400-second-budget).
 
 Runtime fixtures create write-heavy temporary roots with `bulk_write_temp_dir()`. Runtime tables use the host build budget's resolved test-thread count, without a binary-wide serialization group. Record both wall and summed time under matched host build-budget settings when measuring the binary. The owner-read retry fixture uses the feature-gated `with_owner_read_retry_wait` hook to exercise the same retries in milliseconds; production keeps its one- and three-second waits. Outcome fixtures may opt into `with_pipeline_poll_wait` while retaining real elapsed time, deadlines and child/process transitions. Immutable proc fixtures use `with_host_load_sampling_wait` only when sampling cannot gain tick data by waiting; raw reads, CPU unknowns and reservation behavior remain real, and native `/proc` keeps the production interval. These callbacks have independent thread-local scopes and restore the previous callback on return or unwind. Changing-proc, polling-cadence and deadline controls keep system waits.
 

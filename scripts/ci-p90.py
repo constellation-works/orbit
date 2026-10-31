@@ -104,7 +104,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--limit", type=int, default=20,
                         help="latest completed PR CI runs to read (default 20)")
-    parser.add_argument("--budget-seconds", type=float, default=600)
+    parser.add_argument("--budget-seconds", type=float, default=400)
     parser.add_argument("--from-json", help="replay a saved run list instead of calling gh")
     args = parser.parse_args()
 

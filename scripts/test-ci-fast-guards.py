@@ -361,6 +361,27 @@ exec {shlex.quote(sys.executable)} "$@"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_self_tests(True)
 
+    def test_pull_request_guards_select_self_tests_by_their_inputs(self):
+        """The CI guardrails job on a pull request (CI_SELF_TESTS=changed)
+        selects self-tests as --fast does; a push runs every one. The QA
+        sweep's inventory check always runs, its fixture self-test only with
+        the others."""
+        self.prepare_ci()
+        self.init_ci_git()
+        result = self.run_guard("ci-guardrails.sh", "--guards", env_overrides={"CI_SELF_TESTS": "changed"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(False)
+        self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check", "--static"])
+        result = self.run_guard("ci-guardrails.sh", "--guards", env_overrides={"CI_SELF_TESTS": "all"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+        target = self.root / "scripts/new-guard.sh"
+        target.write_text("# changed self-test input\n")
+        result = self.run_guard("ci-guardrails.sh", "--guards", env_overrides={"CI_SELF_TESTS": "changed"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+        self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
+
     def test_unresolvable_base_runs_every_self_test(self):
         self.prepare_ci()
         self.init_ci_git()
@@ -992,6 +1013,15 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
                          ["--shards", "5", *self.partition_listing(archive)])
+        # An `affected:` scope lists the shards' package filter and admits
+        # empty shards.
+        result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
+                                env_overrides={"NEXTEST_PARTITIONS": "5",
+                                               "CI_TEST_SCOPE": "affected:orbit-cli,orbit-exec"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.guard_calls / "check-nextest-partitions.py").read_text().splitlines(),
+                         ["--shards", "5", "--allow-empty", *self.partition_listing(archive),
+                          "-E", "package(orbit-cli) | package(orbit-exec)"])
         self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
                          {"check-nextest-partitions.py"}, "no repository guard or self-test runs")
         phases = re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr)
@@ -1022,15 +1052,16 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 9, result.stderr)
         self.assertRegex(result.stderr, r"ci-guardrails-phase: doctests wall_seconds=\d+ exit=9")
 
-        # --checks: everything else, with no doctests, test build or nextest.
+        # --checks: formatting, production Clippy and documentation, with no
+        # guard, self-test, doctests, test build or nextest.
         for call in self.guard_calls.iterdir():
             call.unlink()
         self.log.write_text("")
         env_log.write_text("")
         result = self.run_guard("ci-guardrails.sh", "--checks")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_self_tests(True)
-        self.assertTrue((self.guard_calls / "test-ci-download-verified.py").exists())
+        self.assertEqual({path.name for path in self.guard_calls.iterdir()} - {"require-python.sh"},
+                         set(), "the CI guardrails job runs the guards and self-tests")
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertNotIn(folded, calls)
         self.assertFalse(any(call[:1] == ["nextest"] for call in calls), calls)
@@ -1039,8 +1070,23 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
             self.assertIn(expected, calls)
         self.assertFalse(any("--doc" in call for call in calls), calls)
         phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
-        for phase in ("fmt", "clippy-production", "documentation", "repository-guards"):
+        for phase in ("fmt", "clippy-production", "documentation"):
             self.assertEqual(phases.get(phase), "0", result.stderr)
+        self.assertNotIn("repository-guards", phases)
+
+        # --guards: every repository guard and self-test, and no Cargo build.
+        self.log.write_text("")
+        result = self.run_guard("ci-guardrails.sh", "--guards")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True)
+        self.assertTrue((self.guard_calls / "test-ci-download-verified.py").exists())
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any(call[:1] in (["fmt"], ["check"], ["doc"], ["nextest"]) or folded == call
+                             for call in calls), calls)
+        phases = dict(re.findall(r"ci-guardrails-phase: (\S+) wall_seconds=\d+ exit=(\d+)", result.stderr))
+        self.assertEqual(phases, {"guard-pool": "0", "exclusive-self-tests": "0", "repository-guards": "0"},
+                         result.stderr)
+        self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
         # The check chain shares the host with the exclusive suites, so it runs
         # lowered like the build it replaces there.
         observed = [json.loads(line) for line in env_log.read_text().splitlines()]
