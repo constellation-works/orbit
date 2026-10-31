@@ -2126,9 +2126,9 @@ The dashboard reports the same `pull_settlements` list after **Stop** and
 after **cancel**: a one-line summary counting each outcome, with any
 settlement that has not reached its owner called out (`owner_unreachable` and
 `pending_delivery` say to run Stop again once the owner is reachable;
-`launch_uncertain` says it needs manual recovery, below). With no live window
-the auto card's button reads **Send pending results** and runs the same settle-only
-pass; it stays available because the pass needs no active drain.
+`launch_uncertain` says it needs manual recovery, below). When no window is admitting, the auto
+card offers **Send pending results** only on a replica checkout and runs the same settle-only pass.
+An owner checkout with no live window shows no stop or settle control.
 
 Leaf delivery can still fail — the owner was unreachable when the leaf ended,
 or when `--force` released it. The settlement stays recorded on the follower
