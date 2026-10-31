@@ -224,6 +224,14 @@ fn declared_context_files(runtime: &OrbitRuntime, result: &Value) -> Vec<String>
         .collect()
 }
 
+fn result_surface<'a>(result: &'a Value, fallback: &'a str) -> &'a str {
+    result
+        .get("surface")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback)
+}
+
 fn result_tags(surface: &str, rule: &str, result: &Value, error_task: bool) -> Vec<String> {
     let mut tags = vec![
         "ux-rules".to_string(),
@@ -455,12 +463,12 @@ pub(crate) fn file_rule_findings(
                     "The rule runner reported `error` for rule `{rule}` on {} target(s). An error is a rule defect, never a product finding.\n\n{}\n\nReproduce:\n\n```sh\n{}\n```\n\nFingerprint: `{fingerprint}`",
                     group.len(),
                     targets.join("\n"),
-                    reproduce_command(&settings.runner, &surface, rule, &first_target),
+                    reproduce_command(&settings.runner, result_surface(&group[0], &surface), rule, &first_target),
                 ),
                 acceptance_criteria: vec![
                     format!("Running the runner for rule `{rule}` reports pass, fail or skipped per target, never error."),
                 ],
-                tags: result_tags(&surface, rule, &group[0], true),
+                tags: result_tags(result_surface(&group[0], &surface), rule, &group[0], true),
                 priority: priority_for_rank(rank),
                 complexity: TaskComplexity::Low,
                 task_type: Some(TaskType::Bug),
@@ -567,12 +575,12 @@ pub(crate) fn file_rule_findings(
                     } else {
                         evidence.join(", ")
                     },
-                    reproduce_command(&settings.runner, &surface, &rule, &target),
+                    reproduce_command(&settings.runner, result_surface(result, &surface), &rule, &target),
                 ),
                 acceptance_criteria: vec![
                     format!("Re-running rule `{rule}` for this target reports pass."),
                 ],
-                tags: result_tags(&surface, &rule, result, false),
+                tags: result_tags(result_surface(result, &surface), &rule, result, false),
                 priority: priority_for_rank(rank),
                 complexity: TaskComplexity::Unassessed,
                 task_type: Some(TaskType::Bug),

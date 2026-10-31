@@ -532,7 +532,7 @@ orbit script history <name>        # recent attempts, newest first, refusals inc
 3. After a run, `orbit script history <name>` lists each attempt, including the
    refused ones.
 
-For the ux-rules routine, verify `ux_rules_runner` in step 2 before enabling it.
+For the ux-rules routine, copy and adapt the `ux_rules_runner` Script template in the UX rules README to `.orbit/resources/scripts/ux_rules_runner.yaml`, including the host's Node, Orbit and browser-kit paths and service environment. Set `ux_rules.surfaces` with `orbit config set ux_rules.surfaces '["cli", "ui"]'`, then an operator runs `orbit script grant ux_rules_runner` and `orbit run job ux_rules_pipeline`. Verify `ux_rules_runner` in step 2 before enabling the routine. UI uses a fixture server inside the isolated network namespace; it requires working loopback, the browser kit and the Orbit binary. See the README for sandbox limitations.
 
 ## Tuning which tasks task-pilot prepares
 
