@@ -1,7 +1,7 @@
 ---
 title: "Scope: UX rules"
 owner: claude
-last_updated: 2026-10-29
+last_updated: 2026-11-01
 last_validated: 2026-11-01
 status: Draft
 stage: designing
@@ -140,7 +140,7 @@ Seeded from the two prompts. Each line is one rule.
 | ui | `aligned-starts` | Neighbouring columns' first content starts at the same top. |
 | ui | `even-row-panels` | Panels side by side in one row have equal heights. |
 | ui | `bounded-length` | Page `scrollHeight` at most N viewports, and lists past N rows paginated or capped. |
-| ui | `nested-card` | No bordered or filled box directly inside a bordered panel without a grouping role. |
+| ui | `nested-card` | No bordered or filled box directly inside a bordered panel without a grouping role or label, except a full-bleed unframed panel band. A full-width framed or separated card still counts. The measured rule is in `scripts/ux-rules/README.md`. |
 | ui | `contrast` | Text at least 4.5:1 (3:1 for large text) against its effective background; text inside natively disabled controls is exempt (inactive components). |
 | ui | `accessible-name` | Buttons, links, inputs and images have an accessible name. |
 | ui | `console-clean` | No page errors, console errors or failed same-origin requests while rendering. |

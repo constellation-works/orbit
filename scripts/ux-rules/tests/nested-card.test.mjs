@@ -94,4 +94,39 @@ test("nested-card reports bordered and filled direct children while retaining ex
 
     assert.equal(result.status, "pass");
   });
+
+  await t.test("a measured panel band is not a nested card", async () => {
+    const result = await checkChildren([
+      {
+        selector: "#agents-controls",
+        tag: "DIV",
+        bordered: false,
+        filled: true,
+        role: "",
+        labelled: false,
+        band: true,
+      },
+    ]);
+
+    assert.equal(result.status, "pass");
+    assert.equal(result.fingerprint, "ui.nested-card|dashboard|dark|1440|default");
+  });
+
+  await t.test("a full-width framed card is not exempted", async () => {
+    const result = await checkChildren([
+      {
+        selector: "div.fullwidth-card",
+        tag: "DIV",
+        bordered: true,
+        filled: true,
+        role: "",
+        labelled: false,
+        band: false,
+      },
+    ]);
+
+    assert.equal(result.status, "fail");
+    assert.equal(result.fingerprint, "ui.nested-card|dashboard|dark|1440|default");
+    assert.deepEqual(result.measurements.failures.map((item) => item.selector), ["div.fullwidth-card"]);
+  });
 });
