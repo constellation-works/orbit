@@ -207,6 +207,42 @@ pub fn load_script_snapshot(
     })
 }
 
+/// The step output an exit-0 script answered with, or why it is invalid
+/// (§4): stdout within the cap, UTF-8, one JSON document (`{}` for empty
+/// stdout without a schema) that passes `output_schema_json`. The host
+/// asks the same question before it keeps any output file, so a set is
+/// only ever stored for an output the step accepts.
+pub fn script_stdout_output(
+    stdout: &[u8],
+    over_cap: bool,
+    schema: &Value,
+) -> Result<Value, String> {
+    if over_cap {
+        return Err(format!(
+            "stdout is larger than its {} byte cap",
+            orbit_types::workflow::activity_job::SCRIPT_STDOUT_CAP_BYTES
+        ));
+    }
+    let text = std::str::from_utf8(stdout)
+        .map_err(|error| format!("stdout is not UTF-8: {error}"))?
+        .trim();
+    let has_schema = !schema.is_null();
+    let output = if text.is_empty() && !has_schema {
+        Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str::<Value>(text)
+            .map_err(|error| format!("stdout is not one JSON document: {error}"))?
+    };
+    if has_schema {
+        let validator = orbit_tools::plugin::CompiledSchema::compile(schema.clone())
+            .map_err(|error| format!("output_schema_json {error}"))?;
+        if let Some(violations) = validator.violations(&output) {
+            return Err(format!("stdout fails output_schema_json: {violations}"));
+        }
+    }
+    Ok(output)
+}
+
 /// Why a templated script argument did not render.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ScriptArgError {

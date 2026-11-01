@@ -571,6 +571,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> crate::context::ScriptStepRun {
         NullRuntimeHost::run_script_step(self, request)
     }
+    fn verify_script_output_set(
+        &self,
+        consumer_run_id: &str,
+        set: &orbit_types::workflow::activity_job::ScriptOutputSet,
+    ) -> Result<(), String> {
+        NullRuntimeHost::verify_script_output_set(self, consumer_run_id, set)
+    }
     fn resolve_local_shell_executor(
         &self,
         executor: &str,
@@ -716,6 +723,7 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         step_id: &str,
         output: &Value,
         compound_outputs: &BTreeMap<String, Value>,
+        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
         NullRuntimeHost::checkpoint_step(
             self,
@@ -724,6 +732,7 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
             step_id,
             output,
             compound_outputs,
+            script_outputs,
         )
     }
     fn checkpoint_step_diagnostic(

@@ -11,7 +11,7 @@ use crate::contracts::MigrationCompatibility;
 
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new `LAYOUT_MIGRATIONS` entry — never without one.
-pub const SUPPORTED_LAYOUT_VERSION: u32 = 7;
+pub const SUPPORTED_LAYOUT_VERSION: u32 = 8;
 
 /// One entry in the layout-migration registry.
 pub(crate) struct LayoutMigration {
@@ -102,6 +102,18 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         // with pending obligations. An older binary deserializes run state
         // without it and its next checkpoint write would silently drop it,
         // and it would report a deliberately parked run as interrupted.
+        compat: MigrationCompatibility::Breaking,
+        apply: apply_baseline_layout,
+    },
+    LayoutMigration {
+        version: 8,
+        name: "script-output-set-checkpoints",
+        description: "fence clients that cannot preserve kept script output file references and parallel script-branch checkpoints; preserve existing records unchanged",
+        // ORB-20866: run state may carry `script_output_sets` and a parallel
+        // branch checkpointed as a `script_branch` envelope. An older binary
+        // deserializes run state without the sets, so its next checkpoint
+        // write silently drops the run's only references to the kept files,
+        // and it reads the envelope as the branch's own output on resume.
         compat: MigrationCompatibility::Breaking,
         apply: apply_baseline_layout,
     },

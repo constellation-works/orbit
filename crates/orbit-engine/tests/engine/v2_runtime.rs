@@ -681,6 +681,10 @@ fn incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpo
             step_id: &str,
             output: &Value,
             _: &BTreeMap<String, Value>,
+            _: &std::collections::BTreeMap<
+                String,
+                orbit_types::workflow::activity_job::ScriptOutputSet,
+            >,
         ) -> Result<(), DispatchError> {
             let mut state = self.state.lock().unwrap();
             state.record_step(index, JobRunState::Success, Some(output.clone()), None);
@@ -801,6 +805,10 @@ impl orbit_engine::test_support::NullRuntimeHost for GraphHost {
         _step_id: &str,
         output: &Value,
         compound_outputs: &BTreeMap<String, Value>,
+        _: &std::collections::BTreeMap<
+            String,
+            orbit_types::workflow::activity_job::ScriptOutputSet,
+        >,
     ) -> Result<(), DispatchError> {
         let mut compounds = self.compound_outputs.lock().unwrap();
         compounds.insert(step_index, compound_outputs.clone());

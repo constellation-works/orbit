@@ -24,8 +24,9 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_engine::activity_job::{ScriptAsset, V2ScriptCatalog};
 use orbit_types::identity::lower_hex;
 use orbit_types::workflow::activity_job::{
-    ScriptGrant, ScriptGrantLimits, ScriptHostRole, ScriptNetwork, is_valid_script_name,
-    script_content_digest, script_grant_id, script_sha256_hex,
+    SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES, SCRIPT_OUTPUT_HARD_MAX_FILES, ScriptGrant,
+    ScriptGrantLimits, ScriptHostRole, ScriptNetwork, is_valid_script_name, script_content_digest,
+    script_grant_id, script_sha256_hex,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -261,6 +262,39 @@ pub struct ScriptGrantOptions {
     pub write_roots: Vec<PathBuf>,
     pub env_pass: Vec<String>,
     pub follower: bool,
+    /// The most output files one step may keep. Unset keeps the default
+    /// ceiling; a re-grant never inherits or widens it on its own.
+    pub output_max_files: Option<u32>,
+    /// The largest output file one step may keep, in bytes.
+    pub output_max_file_bytes: Option<u64>,
+}
+
+/// The output limits one grant records: the defaults, with each
+/// acknowledged override checked against the hard ceilings.
+fn grant_output_limits(
+    name: &str,
+    options: &ScriptGrantOptions,
+) -> Result<ScriptGrantLimits, OrbitError> {
+    let mut limits = ScriptGrantLimits::default();
+    if let Some(files) = options.output_max_files {
+        if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILES).contains(&files) {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` output file count {files} is outside 1..={SCRIPT_OUTPUT_HARD_MAX_FILES}; \
+                 nothing was granted"
+            )));
+        }
+        limits.output_max_files = files;
+    }
+    if let Some(bytes) = options.output_max_file_bytes {
+        if !(1..=SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES).contains(&bytes) {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` output file size {bytes} is outside \
+                 1..={SCRIPT_OUTPUT_HARD_MAX_FILE_BYTES} bytes; nothing was granted"
+            )));
+        }
+        limits.output_max_file_bytes = bytes;
+    }
+    Ok(limits)
 }
 
 impl RuntimeKernel {
@@ -406,6 +440,7 @@ impl RuntimeKernel {
                 asset.manifest_path.display()
             )));
         }
+        let limits = grant_output_limits(name, options)?;
         let interpreter_paths = resolve_grant_interpreter_paths(asset)?;
         let mut read_roots = asset.spec.requests.read_roots.clone();
         read_roots.extend(options.read_roots.iter().cloned());
@@ -438,7 +473,7 @@ impl RuntimeKernel {
             read_roots,
             write_roots,
             env_pass,
-            limits: ScriptGrantLimits::default(),
+            limits,
             host_role: if options.follower {
                 ScriptHostRole::Follower
             } else {

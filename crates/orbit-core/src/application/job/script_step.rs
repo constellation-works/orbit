@@ -5,13 +5,18 @@
 //! Every check that can refuse runs before anything is spawned, and each
 //! refusal names its `script_refusal` code. The job executor decides what
 //! the answer means for the step and writes the `script_execution` entry.
+//! A manifest that declares output files gets them kept as one run-owned
+//! set ([`super::script_outputs`]) after a successful attempt whose stdout
+//! the step accepts, before the scratch directory is removed.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use orbit_common::security::redaction::{argv_redactor, redact_all_and_home};
 use orbit_engine::activity_job::{ScriptSnapshot, load_script_snapshot, render_script_args};
-use orbit_engine::{ScriptStepEnd, ScriptStepRan, ScriptStepRequest, ScriptStepRun};
+use orbit_engine::{
+    ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun,
+};
 use orbit_exec::{
     SCRIPT_SANDBOX_MOUNT, SCRIPT_SCRATCH_DIRS, ScriptRunEnd, ScriptSandboxRequest,
     ScriptSandboxSpec,
@@ -25,6 +30,7 @@ use crate::OrbitRuntime;
 use crate::application::job::pipeline::{
     ScriptScopeLauncher, USER_BUS_LOCATOR_ENV_VARS, script_scope_launcher,
 };
+use crate::application::job::script_outputs::keep_declared_outputs;
 
 /// The timeout a step gets when neither the step nor the manifest sets one.
 const DEFAULT_SCRIPT_TIMEOUT_SECONDS: u64 = 600;
@@ -182,7 +188,7 @@ fn prepare_and_run(
     };
 
     let scratch = ScriptScratch::create(runtime, request)?;
-    let result = run_in_scratch(RunPlan {
+    let mut result = run_in_scratch(RunPlan {
         runtime,
         request,
         snapshot: &snapshot,
@@ -197,6 +203,17 @@ fn prepare_and_run(
         stdin: input_text.into_bytes(),
         record,
     });
+    // Keep declared outputs while `out/` still exists.
+    if let Ok(ran) = result.as_mut() {
+        keep_declared_outputs(
+            runtime,
+            &asset.spec.files.outputs,
+            &grant,
+            request,
+            &scratch.path.join("out"),
+            ran,
+        );
+    }
     scratch.remove();
     result
 }
@@ -396,6 +413,27 @@ fn check_requests_within_grant(
     {
         return Err(beyond(format!("a {seconds}s timeout")));
     }
+    // Output caps are never widened for the worker: a manifest asking for
+    // more than the operator acknowledged refuses before anything runs.
+    let outputs = &asset.spec.files.outputs;
+    if let Some(files) = outputs.max_files
+        && files > grant.limits.output_max_files
+    {
+        return Err(beyond(format!(
+            "{files} output files (the grant allows {}; acknowledge them with \
+             `orbit script grant {} --output-max-files {files}`)",
+            grant.limits.output_max_files, asset.name
+        )));
+    }
+    if let Some(bytes) = outputs.max_file_bytes
+        && bytes > grant.limits.output_max_file_bytes
+    {
+        return Err(beyond(format!(
+            "output files of {bytes} bytes (the grant allows {}; acknowledge them with \
+             `orbit script grant {} --output-max-file-bytes {bytes}`)",
+            grant.limits.output_max_file_bytes, asset.name
+        )));
+    }
     let unsupported = |what: &str| {
         refuse(
             script_refusal::SANDBOX_UNAVAILABLE,
@@ -486,7 +524,7 @@ impl ScriptScratch {
     }
 }
 
-fn path_segment(value: &str) -> String {
+pub(super) fn path_segment(value: &str) -> String {
     value
         .chars()
         .take(128)
@@ -635,6 +673,7 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         output_schema: asset.spec.output_schema_json.clone(),
         log,
         record: record.clone(),
+        outputs: ScriptStepOutputs::None,
     })
 }
 

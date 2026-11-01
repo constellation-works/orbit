@@ -106,6 +106,7 @@ fn a_finished_ci_sweep_stores_child_summaries_and_no_resume_state() {
             "pilots",
             &collected,
             &BTreeMap::from([("pilot_results".to_string(), collected.clone())]),
+            &BTreeMap::new(),
         )
         .expect("fan-in checkpoint");
     jobs.finalize_job_run(&parent.run_id, JobRunState::Success, Utc::now(), Some(0))

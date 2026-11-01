@@ -478,6 +478,18 @@ orbit script revoke <name>                         # revoke this host's grant
 | `--write-root <path>` | Extra absolute write root to grant. Repeatable. |
 | `--env-pass <NAME>` | Extra environment variable name to pass to the script. Repeatable. |
 | `--follower` | Grant for a pull follower host instead of the workspace owner. |
+| `--output-max-files <n>` | Most declared output files one step may keep, 1 to 64. Default 8. |
+| `--output-max-file-bytes <b>` | Largest output file one step may keep, up to 64 MiB. Default 1 MiB. |
+
+A script that declares `files.outputs` in its manifest keeps the regular files it
+writes at the top level of `out/`, and later steps read them as
+`steps.<id>.files` (`name`, `path`, `bytes`, `media_type`, `sha256`). The
+manifest's caps must fit the grant: asking for more than the grant allows
+refuses the step with `grant_insufficient` and names the flag to grant again
+with. Each grant states its output limits again, so granting without the flags
+returns to the defaults. A step's whole set never exceeds 256 MiB. Output over
+the caps, a symlink, a subdirectory or an unsafe file name fails the step and
+exposes none of its files.
 
 A granted script step runs only on Linux, under a sandbox with no network.
 Other hosts refuse the step. This build's script profile does not run network

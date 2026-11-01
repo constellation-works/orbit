@@ -10,11 +10,14 @@
 //! refusals included, leaves one `script.execution` audit event.
 
 use orbit_types::workflow::activity_job::{
-    SCRIPT_REF_PREFIX, SCRIPT_STDOUT_CAP_BYTES, ScriptExecutionRecord, TargetRef, script_failure,
+    SCRIPT_REF_PREFIX, ScriptExecutionRecord, TargetRef, script_failure,
 };
 
 use super::*;
-use crate::context::{ScriptStepEnd, ScriptStepRan, ScriptStepRequest, ScriptStepRun};
+use crate::activity_job::script_stdout_output;
+use crate::context::{
+    ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun,
+};
 
 /// Lines of the log tail a failed attempt's message carries.
 const FAILURE_LOG_TAIL_LINES: usize = 20;
@@ -82,6 +85,7 @@ fn settle_script_run(
         output_schema,
         log,
         mut record,
+        outputs,
     } = ran;
     record.log_blob_ref = ctx.audit.write_blob(&log);
     record.stdout_bytes = Some(stdout.len() as u64);
@@ -102,16 +106,40 @@ fn settle_script_run(
     .to_string();
 
     if end == ScriptStepEnd::Exited(0) {
-        return match script_output(&stdout, stdout_over_cap, &output_schema) {
-            Ok(output) => {
-                emit_script_execution(ctx, &step.id, record);
-                record_pipeline(ctx, &step.id, output.clone());
-                Ok(StepOutcome {
-                    success: true,
-                    output,
-                    message: None,
-                })
-            }
+        return match script_stdout_output(&stdout, stdout_over_cap, &output_schema) {
+            Ok(output) => match outputs {
+                ScriptStepOutputs::Rejected { code, message } => {
+                    let message = format!("script `{script}` exited 0 but {message}");
+                    record.failure_code = Some(code.to_string());
+                    record.message = Some(message.clone());
+                    emit_script_execution(ctx, &step.id, record);
+                    Err(DispatchError::ScriptOutputFiles {
+                        code,
+                        step_id: step.id.clone(),
+                        message,
+                    })
+                }
+                ScriptStepOutputs::Kept(set) => {
+                    record.output_set_id = Some(set.set_id.clone());
+                    record.output_files = set.files.clone();
+                    emit_script_execution(ctx, &step.id, record);
+                    record_pipeline_with_files(ctx, &step.id, output.clone(), &set);
+                    Ok(StepOutcome {
+                        success: true,
+                        output,
+                        message: None,
+                    })
+                }
+                ScriptStepOutputs::None => {
+                    emit_script_execution(ctx, &step.id, record);
+                    record_pipeline(ctx, &step.id, output.clone());
+                    Ok(StepOutcome {
+                        success: true,
+                        output,
+                        message: None,
+                    })
+                }
+            },
             Err(reason) => {
                 record.failure_code = Some(script_failure::OUTPUT_INVALID.to_string());
                 record.message = Some(reason.clone());
@@ -160,34 +188,6 @@ fn settle_script_run(
         output,
         message: Some(message),
     })
-}
-
-/// The step output an exit-0 script answered with, or why it is invalid.
-fn script_output(stdout: &[u8], over_cap: bool, schema: &Value) -> Result<Value, String> {
-    if over_cap {
-        return Err(format!(
-            "stdout is larger than its {} byte cap",
-            SCRIPT_STDOUT_CAP_BYTES
-        ));
-    }
-    let text = std::str::from_utf8(stdout)
-        .map_err(|error| format!("stdout is not UTF-8: {error}"))?
-        .trim();
-    let has_schema = !schema.is_null();
-    let output = if text.is_empty() && !has_schema {
-        Value::Object(serde_json::Map::new())
-    } else {
-        serde_json::from_str::<Value>(text)
-            .map_err(|error| format!("stdout is not one JSON document: {error}"))?
-    };
-    if has_schema {
-        let validator = orbit_tools::plugin::CompiledSchema::compile(schema.clone())
-            .map_err(|error| format!("output_schema_json {error}"))?;
-        if let Some(violations) = validator.violations(&output) {
-            return Err(format!("stdout fails output_schema_json: {violations}"));
-        }
-    }
-    Ok(output)
 }
 
 /// The last lines of a failed attempt's log, bounded.

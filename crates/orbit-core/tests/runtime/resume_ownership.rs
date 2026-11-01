@@ -345,6 +345,7 @@ fn checkpoint_resume_preserves_the_later_interrupted_review_repair() {
                     "HEAD",
                 ),
                 &Default::default(),
+                &Default::default(),
             )
             .unwrap();
         std::fs::write(repo.join("repair.rs"), "// first repair\n// later repair\n").unwrap();

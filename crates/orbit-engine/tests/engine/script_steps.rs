@@ -351,6 +351,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ScriptedRunHost {
                 duration_ms: Some(7),
                 ..ScriptExecutionRecord::default()
             },
+            outputs: orbit_engine::ScriptStepOutputs::None,
         }))
     }
 }

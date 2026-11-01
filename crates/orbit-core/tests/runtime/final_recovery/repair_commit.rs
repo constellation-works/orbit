@@ -230,6 +230,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         step_id: &str,
         output: &Value,
         compound: &BTreeMap<String, Value>,
+        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
         if step_id == "commit" {
             self.commits.lock().unwrap().push(output.clone());
@@ -240,9 +241,14 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 git(self.fixture, &["status", "--porcelain"]),
             ));
         }
-        self.fixture
-            .runtime
-            .checkpoint_step(run_id, index, step_id, output, compound)
+        self.fixture.runtime.checkpoint_step(
+            run_id,
+            index,
+            step_id,
+            output,
+            compound,
+            script_outputs,
+        )
     }
 
     fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {

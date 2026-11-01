@@ -179,6 +179,15 @@ pub struct ScriptGrantArgs {
     /// Grant for a pull follower host instead of the workspace owner.
     #[arg(long)]
     pub follower: bool,
+    /// Most output files one step may keep, up to 64 (default 8). Each
+    /// grant states it again; a re-grant without it returns to the default.
+    #[arg(long, value_name = "COUNT")]
+    pub output_max_files: Option<u32>,
+    /// Largest output file one step may keep, in bytes, up to 67108864
+    /// (64 MiB; default 1048576). A step's whole output set is also
+    /// bounded by files times bytes and never exceeds 256 MiB.
+    #[arg(long, value_name = "BYTES")]
+    pub output_max_file_bytes: Option<u64>,
 }
 
 fn parse_script_network(value: &str) -> Result<ScriptNetwork, String> {
@@ -197,6 +206,8 @@ impl ScriptGrantArgs {
                 write_roots: self.write_roots,
                 env_pass: self.env_pass,
                 follower: self.follower,
+                output_max_files: self.output_max_files,
+                output_max_file_bytes: self.output_max_file_bytes,
             },
         )?;
         let status = runtime.script_status(&self.name)?;
@@ -223,6 +234,26 @@ impl ScriptGrantArgs {
                 asset.spec.requests.network, grant.network
             ));
         }
+        if let Some(asset) = asset
+            && asset.spec.files.outputs.declared()
+        {
+            let declared = &asset.spec.files.outputs;
+            let requested = |value: Option<String>| value.unwrap_or_else(|| "-".to_string());
+            text.push_str(&format!(
+                "requested output files: {} of at most {} bytes\n",
+                requested(declared.max_files.map(|files| files.to_string())),
+                requested(declared.max_file_bytes.map(|bytes| bytes.to_string())),
+            ));
+        }
+        text.push_str(&format!(
+            "granted output files: {} of at most {} bytes (set total at most {} bytes)\n",
+            grant.limits.output_max_files,
+            grant.limits.output_max_file_bytes,
+            orbit_types::workflow::activity_job::script_output_total_cap(
+                grant.limits.output_max_files,
+                grant.limits.output_max_file_bytes,
+            ),
+        ));
         if !grant.interpreter_paths.is_empty() {
             let rendered: Vec<String> = grant
                 .interpreter_paths

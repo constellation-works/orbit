@@ -23,6 +23,7 @@ mod review_hook;
 mod run;
 mod run_stage;
 mod run_worktree;
+pub(crate) mod script_outputs;
 pub(crate) mod script_step;
 mod task_port;
 mod triage_submit;
