@@ -12,7 +12,7 @@ use orbit_automation::{
     },
 };
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task};
+use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::collections::BTreeMap;
@@ -108,7 +108,7 @@ fn task_outcome(
         }
         Err(error) => return Err(error.into()),
     };
-    let stopped = task.status.is_terminal();
+    let stopped = task.status.is_terminal() || blocked_run_stopped(runtime, &task)?;
     let artifact = runtime.get_task_artifact(id, COVERAGE_ARTIFACT)?;
 
     if let Some(artifact) = artifact {
@@ -156,6 +156,57 @@ fn task_outcome(
     }
 
     Ok(ActionOutcome::Pending)
+}
+
+/// [F2026-10-694] A frozen review whose executor exits early with a
+/// declared `incomplete_*` failure ends its run `failed`, which blocks the
+/// task rather than closing it. Task-terminal alone therefore never proved
+/// the action stopped: settlement saw the retained incomplete evidence as
+/// still replaceable and held the batch `admitted` forever, so the bounded
+/// retry over the same frozen batch never fired. A task blocked by its own
+/// coupled run's failure is that proof — the block is written only at run
+/// terminalization, after final recovery settled, and a blocked task admits
+/// no executor that could still submit evidence for that run. Cancellation,
+/// timeout, interruption and holds keep their existing explicit-recovery
+/// paths and are not proven stopped here.
+fn blocked_run_stopped(runtime: &OrbitRuntime, task: &Task) -> Result<bool, AutomationError> {
+    if task.status != TaskStatus::Blocked {
+        return Ok(false);
+    }
+    let Some(run_id) = task.job_run_id.as_deref() else {
+        return Ok(false);
+    };
+    // The history coupling is owner-side evidence, so it proves a claimed
+    // (foreign) run stopped as well as a local one.
+    if blocked_by_failed_run(&runtime.get_task_history(&task.id)?, run_id) {
+        return Ok(true);
+    }
+    if !runtime.task_run_is_local(task) {
+        return Ok(false);
+    }
+    let run = runtime.show_job_run(run_id)?;
+    Ok(run.state == JobRunState::Failed
+        && crate::application::job::run_owner_liveness(&run)
+            == crate::application::job::RunOwnerLiveness::Stopped)
+}
+
+/// Whether the task's latest status transition is the block its coupled
+/// run's failure wrote (`workflow_run_failed` naming `run_id`). Only the
+/// latest transition counts: a later move — a requeue, a resume, an
+/// operator's block — supersedes the failure's block.
+pub(super) fn blocked_by_failed_run(history: &[TaskHistoryEntry], run_id: &str) -> bool {
+    history
+        .iter()
+        .rev()
+        .find(|entry| entry.to_status.is_some())
+        .is_some_and(|entry| {
+            entry.event == "workflow_run_failed"
+                && entry.to_status == Some(TaskStatus::Blocked)
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains(&format!("run_id={run_id},")))
+        })
 }
 
 const CONSUMER_PAGE_LIMIT: usize = 100;
