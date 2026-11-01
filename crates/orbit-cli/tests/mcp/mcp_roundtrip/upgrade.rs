@@ -891,10 +891,10 @@ fn a_replaced_drain_hands_its_run_to_the_installed_executable() {
     drain.armed = false;
 }
 
-/// `distinct_candidate` already staged and assessed this disposable image.
-/// Rename that same inode over the installation, leaving the running old inode
-/// intact. Copying and assessing it a second time adds no handover coverage.
-/// The local-candidate update row still exercises the production installer.
+/// Direct inode replacement. `distinct_candidate` already staged this
+/// disposable image; renaming it over the installation leaves the running old
+/// inode intact. This does not run update admission or convergence. The
+/// public installer is [`local_candidate_update`].
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn install_prepared_candidate(candidate: &Path, installed: &Path) {
     std::fs::rename(candidate, installed).expect("install prepared candidate");
@@ -1016,6 +1016,295 @@ fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes
     assert_eq!(
         tasks["total"], 1,
         "the completed request must not be replayed"
+    );
+}
+
+/// Partition id the running checkout reports as `runtime.workspace_id()`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn checkout_partition_id(workspace: &McpWorkspace) -> String {
+    let raw = std::fs::read_to_string(workspace.work.join(".orbit/config.yaml"))
+        .expect("workspace config");
+    raw.lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key.trim() == "workspace_id").then(|| value.trim().trim_matches('"').to_string())
+        })
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| panic!("workspace_id missing from {raw}"))
+}
+
+/// Successful `orbit.task.list` audit rows, oldest first, while the server is live.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn successful_task_list_audits(workspace: &McpWorkspace) -> Vec<Value> {
+    let connection = Connection::open(workspace.home.join(".orbit/orbit.db")).expect("audit db");
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .expect("audit busy timeout");
+    let mut statement = connection
+        .prepare(
+            "SELECT self_reported_actor, capabilities_json, transport, \
+             caller_machine_id, workspace_id \
+             FROM audit_events \
+             WHERE tool_name = 'orbit.task.list' AND status = 'success' \
+             ORDER BY rowid",
+        )
+        .expect("audit query");
+    statement
+        .query_map([], |row| {
+            Ok(json!({
+                "self_reported_actor": row.get::<_, Option<String>>(0)?,
+                "capabilities_json": row.get::<_, Option<String>>(1)?,
+                "transport": row.get::<_, Option<String>>(2)?,
+                "caller_machine_id": row.get::<_, Option<String>>(3)?,
+                "workspace_id": row.get::<_, Option<String>>(4)?,
+            }))
+        })
+        .expect("audit rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read audit rows")
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_negotiated_session(
+    client: &mut McpClient,
+    workspace: &McpWorkspace,
+    task_id: &str,
+    partition: &str,
+    prior_audits: usize,
+) {
+    let ping = client.request("ping", Value::Null);
+    assert_eq!(ping["result"], json!({}), "{ping}");
+
+    let tasks = client.call_tool_ok("orbit_task_list", json!({}));
+    assert_eq!(tasks["total"], 1, "{tasks}");
+    assert_eq!(tasks["tasks"][0]["id"], task_id, "{tasks}");
+    assert_eq!(
+        tasks["tasks"][0]["title"], "Negotiated handover seed",
+        "{tasks}"
+    );
+    let shown = client.show_task(task_id);
+    assert_eq!(shown["id"], task_id, "{shown}");
+    assert_eq!(shown["title"], "Negotiated handover seed", "{shown}");
+
+    // MCP does not advertise task deletion, so a guessed name cannot show the
+    // capability strip. The audit row can: `--operator` without this binding
+    // would record operator beside agent.
+    let audits = successful_task_list_audits(workspace);
+    assert_eq!(
+        audits.len(),
+        prior_audits + 1,
+        "one new list audit: {audits:?}"
+    );
+    let row = audits.last().expect("list audit");
+    assert_eq!(row["self_reported_actor"], "negotiated-handover", "{row}");
+    assert_eq!(row["transport"], "ssh-mcp", "{row}");
+    assert_eq!(row["caller_machine_id"], "hm_worker", "{row}");
+    assert_eq!(row["workspace_id"], partition, "{row}");
+    let capabilities: Value = serde_json::from_str(
+        row["capabilities_json"]
+            .as_str()
+            .expect("capabilities json"),
+    )
+    .expect("capabilities");
+    assert_eq!(capabilities, json!(["agent"]), "{row}");
+}
+
+/// A live stdio server that already accepted 2026-07-28 down to 2025-11-25.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct NegotiatedHandover {
+    workspace: McpWorkspace,
+    task_id: String,
+    partition: String,
+    server_stderr: ServerStderr,
+    client: McpClient,
+    pid: u32,
+    installed: PathBuf,
+    old_digest: String,
+}
+
+/// Start `orbit mcp serve` from a private installation, initialize at
+/// 2026-07-28, and require the agreed 2025-11-25 session to ping and audit
+/// once before anything replaces the image. No resume payload is injected.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_negotiated_handover(stderr_name: &str) -> NegotiatedHandover {
+    let workspace = McpWorkspace::init();
+    let task_id = super::add_task_cli(
+        &workspace,
+        "Negotiated handover seed",
+        "Visible before and after the executable handover",
+    );
+    let partition = checkout_partition_id(&workspace);
+    let (machine_id, _) = super::machine_identity(&workspace.home);
+    let binding = orbit_types::tool::WorkerInvocation {
+        owner_machine_id: machine_id.clone(),
+        owner_workspace_id: partition.clone(),
+        owner_destination: format!("{machine_id}/{partition}"),
+        task_id: "ORB-HANDOVER".into(),
+        claim_id: "claim-negotiated-handover".into(),
+        execution: orbit_types::task::ExecutionLocation {
+            machine_id: "hm_worker".into(),
+            machine_name: None,
+        },
+        bound_run_id: "run-negotiated-handover".into(),
+    };
+    let params = json!({
+        "protocolVersion": "2026-07-28",
+        "capabilities": {},
+        "clientInfo": { "name": "negotiated-handover", "version": "0" },
+        "_meta": {
+            "orbit": {
+                "workspace": super::utf8(&workspace.work),
+                "worker_invocation": binding,
+            }
+        }
+    });
+
+    let install = workspace.home.join("installation");
+    std::fs::create_dir_all(&install).expect("installation");
+    let installed = install.join("orbit");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &installed).expect("install old executable");
+    let old_digest = executable_generation(&installed).expect("old digest");
+    let (server_stderr, stderr) = ServerStderr::create(&workspace, stderr_name);
+    let mut command =
+        McpWorkspace::orbit_program_command(&installed, &workspace.work, &workspace.home);
+    command
+        .args([
+            "mcp",
+            "serve",
+            "--operator",
+            "--remote-caller-machine-id",
+            "hm_worker",
+            "--workspace",
+            "ws_mcp-roundtrip",
+        ])
+        .env(orbit_mcp::LIFECYCLE_INTERVAL_ENV, "50")
+        .env("RUST_LOG", ServerStderr::RUST_LOG)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(stderr);
+    let child = spawn_copied_orbit(&mut command).expect("old server");
+    let pid = child.id();
+    let mut client = McpClient::new(child);
+    let response = client.initialize(params);
+    assert!(
+        response.get("error").is_none(),
+        "initialize refused: {response}; {}",
+        server_stderr.tail()
+    );
+    assert_eq!(
+        response["result"]["protocolVersion"], "2025-11-25",
+        "{response}"
+    );
+    assert_eq!(
+        running_digest(&workspace, pid).as_deref(),
+        Some(old_digest.as_str())
+    );
+    assert_negotiated_session(&mut client, &workspace, &task_id, &partition, 0);
+    NegotiatedHandover {
+        workspace,
+        task_id,
+        partition,
+        server_stderr,
+        client,
+        pid,
+        installed,
+        old_digest,
+    }
+}
+
+/// Same pid and pipes after the installed image is already the candidate.
+/// The client does not initialize again.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn assert_resumed_negotiated_session(
+    session: &mut NegotiatedHandover,
+    new_digest: &str,
+    what: &str,
+) {
+    let NegotiatedHandover {
+        workspace,
+        task_id,
+        partition,
+        server_stderr,
+        client,
+        pid,
+        ..
+    } = session;
+    server_stderr.wait_until(&mut client.child, what, || {
+        running_digest(workspace, *pid).as_deref() == Some(new_digest)
+    });
+    assert_eq!(client.child.id(), *pid);
+    assert_negotiated_session(client, workspace, task_id, partition, 1);
+    assert_eq!(running_digest(workspace, *pid).as_deref(), Some(new_digest));
+}
+
+/// Direct inode replacement, not the updater.
+///
+/// The client asked for 2026-07-28, accepted 2025-11-25, and keeps that
+/// agreement, its metadata and its worker binding when
+/// [`install_prepared_candidate`] renames a distinct copy over the
+/// installation. Same pid and pipes, and the client does not initialize
+/// again. This does not exercise update admission or convergence; that public
+/// path is [`a_negotiated_protocol_survives_a_local_candidate_update`].
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_negotiated_protocol_answers_ping_after_stdio_handover() {
+    let mut session = open_negotiated_handover("negotiated-direct-handover");
+    let candidate = distinct_candidate(&session.workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    assert_ne!(
+        new_digest, session.old_digest,
+        "the fixture must replace the image"
+    );
+    install_prepared_candidate(&candidate, &session.installed);
+    assert_resumed_negotiated_session(
+        &mut session,
+        &new_digest,
+        "the idle server to hand the negotiated session to the directly replaced executable",
+    );
+}
+
+/// The same negotiated fallback, through `orbit update --local-candidate`.
+///
+/// [`write_candidate_manifest`] and [`local_candidate_update`] are the public
+/// installer. After that update reports success, the original client pings
+/// and repeats the audited list on the same pid without a second initialize.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_negotiated_protocol_survives_a_local_candidate_update() {
+    let mut session = open_negotiated_handover("negotiated-local-candidate");
+    let candidate = distinct_candidate(&session.workspace);
+    let new_digest = executable_generation(&candidate).expect("candidate digest");
+    assert_ne!(
+        new_digest, session.old_digest,
+        "the fixture must replace the image"
+    );
+    let manifest = write_candidate_manifest(&session.workspace, &candidate);
+    let output = local_candidate_update(
+        &session.workspace,
+        &candidate,
+        &manifest,
+        &session.installed,
+    );
+    assert!(
+        output.status.success(),
+        "local candidate update failed: {output:?}; {}",
+        session.server_stderr.tail()
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("update report");
+    assert_eq!(report["outcome"], "updated", "{report}");
+    let handover = report["handover"].as_array().expect("handover list");
+    assert_eq!(handover.len(), 1, "{report}");
+    assert_eq!(handover[0]["pid"], session.pid, "{report}");
+    assert_eq!(handover[0]["role"], "mcp_serve", "{report}");
+    assert_eq!(handover[0]["resume"], "mcp-stdio-v1", "{report}");
+    assert_eq!(
+        executable_generation(&session.installed).expect("installed digest"),
+        new_digest
+    );
+    assert_resumed_negotiated_session(
+        &mut session,
+        &new_digest,
+        "the idle server to hand the negotiated session to the local-candidate update",
     );
 }
 
