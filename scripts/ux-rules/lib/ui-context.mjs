@@ -462,19 +462,20 @@ async function resolveFailureLocator(ctx, candidate) {
 }
 
 async function captureScrollState(page) {
-  return page.evaluate(() => {
+  return page.evaluateHandle(() => {
     // Every element is recorded, including zero offsets: framing can
     // scroll an ancestor that started at zero, and restoring only the
     // initially-nonzero entries would leave that scroll behind.
     const elements = [...document.querySelectorAll("*")];
-    const entries = elements.map((element, index) => ({
-      index,
+    const entries = elements.map((element) => ({
+      element,
       top: element.scrollTop,
       left: element.scrollLeft,
     }));
     return {
       x: window.scrollX,
       y: window.scrollY,
+      scrollingElement: document.scrollingElement,
       scrollingTop: document.scrollingElement?.scrollTop ?? 0,
       scrollingLeft: document.scrollingElement?.scrollLeft ?? 0,
       entries,
@@ -486,27 +487,31 @@ async function restoreScrollState(page, saved) {
   const apply = () =>
     page
       .evaluate((state) => {
-        const elements = [...document.querySelectorAll("*")];
-        for (const entry of state.entries) {
-          const element = elements[entry.index];
-          if (element) {
-            element.scrollTop = entry.top;
-            element.scrollLeft = entry.left;
+        for (const { element, top, left } of state.entries) {
+          // Detached or replaced nodes must not transfer their offsets to a
+          // different element that happens to occupy the same DOM position.
+          if (element.isConnected && element.ownerDocument === document) {
+            element.scrollTop = top;
+            element.scrollLeft = left;
           }
         }
-        if (document.scrollingElement) {
-          document.scrollingElement.scrollTop = state.scrollingTop;
-          document.scrollingElement.scrollLeft = state.scrollingLeft;
+        if (state.scrollingElement?.isConnected && state.scrollingElement === document.scrollingElement) {
+          state.scrollingElement.scrollTop = state.scrollingTop;
+          state.scrollingElement.scrollLeft = state.scrollingLeft;
+          window.scrollTo(state.x, state.y);
         }
-        window.scrollTo(state.x, state.y);
       }, saved)
       .catch(() => {});
-  await apply();
-  // A smooth scroll started by framing can still be in flight and
-  // overwrite the first restore. The page clock is frozen, so wait on
-  // the runner's real clock and apply again once it has settled.
-  await new Promise((resolve) => setTimeout(resolve, 600));
-  await apply();
+  try {
+    await apply();
+    // A smooth scroll started by framing can still be in flight and
+    // overwrite the first restore. The page clock is frozen, so wait on
+    // the runner's real clock and apply again once it has settled.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await apply();
+  } finally {
+    await saved.dispose().catch(() => {});
+  }
 }
 
 // Scroll the measured element so its start sits below the top of its

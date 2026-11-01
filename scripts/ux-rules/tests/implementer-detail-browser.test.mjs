@@ -110,6 +110,56 @@ function pngSize(file) {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
 
+test("screenshot restores scroll by element identity when the DOM changes", {
+  timeout: 30000,
+  skip: !process.env.PLAYWRIGHT_MODULE,
+}, async () => {
+  const root = process.cwd();
+  const outDir = path.join(root, ".orbit/tmp/ux-scroll-mutation");
+  const ctx = await createUiContext({ repoRoot: root, outDir });
+  const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+  const browser = await chromium.launch();
+  try {
+    ctx.page = await browser.newPage();
+    await ctx.page.setContent(`
+      <div id="removed" style="height:100px;overflow:auto"><div style="height:600px"></div></div>
+      <div id="outer" style="height:100px;overflow:auto">
+        <div style="height:600px"></div>
+        <div id="inner" style="height:100px;overflow:auto">
+          <div style="height:600px"></div><span id="target">Target</span><div style="height:200px"></div>
+        </div><div style="height:200px"></div>
+      </div>`);
+    const target = { view: "mutation", theme: "dark", width: 1280, state: "default", viewDef: {} };
+    const originalShot = ctx.page.screenshot.bind(ctx.page);
+    for (const initial of [77, 0]) {
+      await ctx.page.evaluate((offset) => {
+        document.querySelector("#outer").scrollTop = offset;
+        document.querySelector("#inner").scrollTop = offset;
+      }, initial);
+      ctx.page.screenshot = async (options) => {
+        await ctx.page.evaluate(() => {
+          document.querySelector("#removed")?.remove();
+          const unrelated = document.createElement("div");
+          unrelated.id = "unrelated";
+          unrelated.style.cssText = "height:100px;overflow:auto";
+          unrelated.innerHTML = '<div style="height:600px"></div>';
+          document.body.prepend(unrelated);
+          unrelated.scrollTop = 42;
+        });
+        return originalShot(options);
+      };
+      await ctx.screenshotFor(rule, target, { measurements: { evidence_selector: "#target" } });
+      assert.equal(await ctx.page.locator("#outer").evaluate((e) => e.scrollTop), initial, "outer scroll restored");
+      assert.equal(await ctx.page.locator("#inner").evaluate((e) => e.scrollTop), initial, "inner scroll restored");
+      assert.equal(await ctx.page.locator("#unrelated").first().evaluate((e) => e.scrollTop), 42, "new unrelated scroll unchanged");
+      await ctx.page.locator("#unrelated").evaluateAll((nodes) => nodes.forEach((node) => node.remove()));
+    }
+  } finally {
+    await browser.close();
+    await ctx.close();
+  }
+});
+
 test("experiment detail Recorded effort passes and evidence machinery is covered", {
   timeout: 240000,
   skip: !process.env.PLAYWRIGHT_MODULE || !process.env.ORBIT_VISUAL_ORBIT,
