@@ -368,7 +368,7 @@ plugin being removed.
 
 <a id="the-twenty-three-seeded-definitions"></a>
 
-## The 26 seeded definitions
+## The 27 seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
@@ -538,6 +538,10 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   established, never both. It runs on the owner: preparation records a
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
+- **`host-health`** (`medium`) — disabled-by-default daily review of host-local
+  `orbit doctor --json` findings and Orbit service logs. It groups normalized
+  signatures, files standing doctor findings and recurring log errors, and
+  routes operator fixes with runnable `## Resolve` steps.
 - **`pilot-block-patterns`** (`medium`) — daily. The upstream counterpart of
   `run-failure-patterns`. A first pass, with no prior cursor, reads the 3 days
   before scan start; a later pass reads the 14 days before scan start, unless
