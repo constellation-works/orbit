@@ -494,8 +494,11 @@ Orbit process joins behind them, and then treat each live participant by its rol
   While admission waits, a new Orbit process queues behind it, and refuses as an
   upgrade in progress once the update holds the generation.
 - A **long-lived** process — `mcp serve`, `mcp listen`, the dashboard, a drain or pipeline
-  worker — refuses at once, unless the admission names a candidate it will hand over to
-  (below).
+  worker — refuses at once unless it is eligible for the update's handover or in-place
+  refresh path. A compatible `mcp serve` can hand over to a candidate that replaces the
+  executable (below). When the target is already installed, a participant already running
+  that executable's digest and compatibility identity can refresh in place if it supports
+  the resume contract; the report lists it in `same_generation` (see the table below).
 - A holder that **never registered** (an `executable-generation-v1` binary, or a
   sandboxed child that cannot write the root) refuses at once: it cannot be named by
   role or asked to hand over. A registered process keeps its record, renamed to
@@ -505,21 +508,24 @@ Orbit process joins behind them, and then treat each live participant by its rol
 
 Each refusal names every blocker by pid, role and start time with the remedy for its
 role — let a command finish; let a tick finish or `orbit clock pause`; close the MCP
-client of a server that cannot hand over; stop and restart `mcp listen` or the
-dashboard; let a run finish or cancel it — for example:
+client of a server that cannot hand over or refresh in place; stop and restart `mcp listen`
+or the dashboard; let a run finish or cancel it — for example:
 
 ```text
 upgrade admission refused: Orbit clients or commands are still running: pid 3772 (mcp serve,
 started 2026-10-07T06:14:52Z) — it hands over (mcp-stdio-v1) only to a candidate renamed over
 the executable, which `orbit update` (a newer release) and `orbit update --local-candidate`
-admit and then install; nothing is renamed here, so close its MCP client to proceed without
-one; and any processes that did not register (…); leave the installation and stores
-unchanged. …
+admit and then install; this bare preflight names no candidate, so close its MCP client
+before retrying; and any processes that did not register (…); leave the installation and
+stores unchanged. …
 ```
 
-That remedy appears where nothing is renamed: a `--preflight` without `--candidate`, or an
-update whose target is already installed. The updates it names admit the server and hand
-it over.
+This no-rename refusal example describes a bare `orbit update --preflight` without
+`--candidate`: it does not request refresh, and no executable is renamed. An update whose
+target is already installed takes a different path: it refreshes a holder already running
+the installed digest and compatibility identity when that holder supports the resume
+contract; incompatible or nonresumable holders are refused. The installing updates above
+admit a compatible server and hand it over to the replacement candidate.
 
 **Candidate-aware preflight.** `orbit update --preflight --candidate <path>` observes the
 admission an update that renames `<path>` over the executable would take. It first asks the
