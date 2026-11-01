@@ -32,17 +32,7 @@ impl OrbitRuntime {
     /// The workspace's current base commit: base branch as last fetched,
     /// else the local branch, else `HEAD` (as experiment overlays read it).
     pub(crate) fn mock_base_revision(&self) -> Result<String, String> {
-        let root = &self.paths().repo_root;
-        let branch = self.workspace_base_branch();
-        let branch = branch.strip_prefix("origin/").unwrap_or(branch);
-        crate::application::tag_instructions::commit_at(
-            root,
-            &format!("refs/remotes/origin/{branch}"),
-        )
-        .or_else(|_| {
-            crate::application::tag_instructions::commit_at(root, &format!("refs/heads/{branch}"))
-        })
-        .or_else(|_| crate::application::tag_instructions::commit_at(root, "HEAD"))
+        self.workspace_base_revision()
     }
 
     /// Configured manifests parsed at the base revision. A manifest that

@@ -232,6 +232,21 @@ impl OrbitRuntime {
         }
     }
 
+    /// The workspace's current base revision: its base branch as last
+    /// fetched from `origin`, else the local branch, else this checkout's
+    /// `HEAD`. This is the pinned integration revision corpus injection
+    /// resolves through a run's recorded base; a caller with no run (such
+    /// as precedent auto-answer) pins to the same base this way, never to
+    /// the live working tree.
+    pub(crate) fn workspace_base_revision(&self) -> Result<String, String> {
+        let root = &self.paths().repo_root;
+        let branch = self.workspace_base_branch();
+        let branch = branch.strip_prefix("origin/").unwrap_or(branch);
+        commit_at(root, &format!("refs/remotes/origin/{branch}"))
+            .or_else(|_| commit_at(root, &format!("refs/heads/{branch}")))
+            .or_else(|_| commit_at(root, "HEAD"))
+    }
+
     /// Match delivery worktree base spelling and mode without fetching during
     /// admission. An unavailable authoritative ref is a refusal, never another
     /// branch or this checkout's unrelated HEAD.
@@ -330,6 +345,38 @@ pub(crate) fn commit_at(root: &Path, revision: &str) -> Result<String, String> {
                 error.message()
             )
         })
+}
+
+/// The sorted repository-relative paths of the files directly under `dir`
+/// in the tree of commit `revision`.
+pub(crate) fn list_blob_paths_at(
+    root: &Path,
+    revision: &str,
+    dir: &str,
+) -> Result<Vec<String>, String> {
+    let repo = git2::Repository::open(root)
+        .map_err(|error| format!("the repository cannot be opened: {}", error.message()))?;
+    let tree = repo
+        .revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| format!("revision cannot be read: {}", error.message()))?;
+    let entry = tree
+        .get_path(Path::new(dir))
+        .map_err(|_| "the directory is not in that commit".to_string())?;
+    let subtree = entry
+        .to_object(&repo)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|_| "the path is not a directory".to_string())?;
+    let mut paths = Vec::new();
+    for entry in subtree.iter() {
+        if entry.kind() == Some(git2::ObjectType::Blob)
+            && let Ok(name) = std::str::from_utf8(entry.name_bytes())
+        {
+            paths.push(format!("{dir}/{name}"));
+        }
+    }
+    paths.sort();
+    Ok(paths)
 }
 
 /// The bytes of `path` in the tree of commit `revision`. The admission, not

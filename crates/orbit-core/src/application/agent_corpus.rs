@@ -143,7 +143,7 @@ impl OrbitRuntime {
             .collect()
     }
 
-    fn corpus_digest_at_revision(
+    pub(crate) fn corpus_digest_at_revision(
         &self,
         revision: &str,
         dependency: &CorpusRuleDependency,

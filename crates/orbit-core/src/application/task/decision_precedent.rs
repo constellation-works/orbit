@@ -28,6 +28,7 @@ use super::decision_rules::{
 };
 use super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
+use crate::application::tag_instructions::{list_blob_paths_at, read_blob_at};
 use crate::application::task::TaskRecords;
 
 const CORPUS_REL: &str = "docs/agents/corpus";
@@ -36,6 +37,11 @@ impl OrbitRuntime {
     /// Answer `request` from a matching operator-approved rule, or return it
     /// unchanged when nothing matches. A missing or unreadable corpus leaves
     /// the request open. The caller holds the task write lock.
+    ///
+    /// Rules and path dependency digests are read at the workspace's pinned
+    /// base revision (see `workspace_base_revision`), the same revision
+    /// corpus injection reads at, never from the live working tree: an
+    /// uncommitted or unmerged rule cannot answer a request.
     pub(crate) fn auto_answer_from_precedent(
         &self,
         task_status: TaskStatus,
@@ -47,8 +53,11 @@ impl OrbitRuntime {
         if request.gate != DecisionGate::AgentRequest {
             return Ok(request.clone());
         }
-        let documents = self.read_corpus_decision_documents();
-        let digests = self.corpus_digests_for(&documents);
+        let Ok(revision) = self.workspace_base_revision() else {
+            return Ok(request.clone());
+        };
+        let documents = self.read_corpus_decision_documents_at(&revision);
+        let digests = self.corpus_digests_at_revision(&documents, &revision);
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let option_ids = request
             .answers
@@ -380,6 +389,57 @@ impl OrbitRuntime {
         }
         documents.sort_by(|left, right| left.path.cmp(&right.path));
         documents
+    }
+
+    /// Decision documents at `revision`, in the same shape the working-tree
+    /// read returns. A corpus absent at that revision reads as empty.
+    fn read_corpus_decision_documents_at(&self, revision: &str) -> Vec<CorpusDecisionDocument> {
+        let dir = format!("{CORPUS_REL}/decisions");
+        let Ok(paths) = list_blob_paths_at(&self.paths().repo_root, revision, &dir) else {
+            return Vec::new();
+        };
+        let mut documents = Vec::new();
+        for path in paths {
+            let Some(name) = path.rsplit('/').next() else {
+                continue;
+            };
+            if !name.ends_with(".md") {
+                continue;
+            }
+            let Ok(bytes) = read_blob_at(&self.paths().repo_root, revision, &path) else {
+                continue;
+            };
+            let Ok(markdown) = String::from_utf8(bytes) else {
+                continue;
+            };
+            documents.push(CorpusDecisionDocument {
+                path: format!("decisions/{name}"),
+                markdown,
+            });
+        }
+        documents.sort_by(|left, right| left.path.cmp(&right.path));
+        documents
+    }
+
+    fn corpus_digests_at_revision(
+        &self,
+        documents: &[CorpusDecisionDocument],
+        revision: &str,
+    ) -> Vec<CorpusDigest> {
+        let mut digests = Vec::new();
+        for document in documents {
+            for rule in parse_decision_rules(&document.markdown) {
+                for dependency in rule.depends_on {
+                    if digests.iter().any(|digest: &CorpusDigest| {
+                        digest.kind == dependency.kind && digest.name == dependency.name
+                    }) {
+                        continue;
+                    }
+                    digests.push(self.corpus_digest_at_revision(revision, &dependency));
+                }
+            }
+        }
+        digests
     }
 
     fn corpus_digests_for(&self, documents: &[CorpusDecisionDocument]) -> Vec<CorpusDigest> {
