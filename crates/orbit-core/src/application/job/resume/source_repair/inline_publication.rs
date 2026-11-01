@@ -22,6 +22,34 @@ pub(super) fn requires_fresh_rework_authority(source: &JobRun, state: &PipelineS
         || (source.state == JobRunState::Failed && kept_inline_publication(state))
 }
 
+/// The kept publication's own run applied a final-recovery `resume` in place
+/// and later failed again, after which the final-recovery receipt it inherited
+/// kept the run from settling (`escalated` or `requeued`). Only the host's
+/// receipt on the run's own checkpoints proves this: the decision was applied
+/// to this task by this very run, resumed no host repair commit, and still
+/// stands as that run's one final recovery. Repair of the published head and
+/// its recorded auto-fix chain is then explicit operator work, like any other
+/// kept inline publication; nothing here grants completion or auto-fix.
+pub(super) fn resumed_in_place_publication(
+    source: &JobRun,
+    state: &PipelineState,
+    task_id: &str,
+) -> bool {
+    source.state == JobRunState::Failed
+        && kept_inline_publication(state)
+        && state.run_id == source.run_id
+        && state.final_recovery.as_ref().is_some_and(|checkpoint| {
+            checkpoint.task_id == task_id
+                && checkpoint.key.run_id == source.run_id
+                && checkpoint.outcome.as_deref() == Some("resume")
+                && checkpoint.repair_commit.is_none()
+                && matches!(
+                    checkpoint.decision,
+                    Some(orbit_types::workflow::FinalRecoveryDecision::Resume { .. })
+                )
+        })
+}
+
 /// A kept receipt certifies scope and preservation only. The ordinary host
 /// commit/review/push/PR chain independently authenticates the publication.
 pub(super) fn authenticate_kept_inline_receipt(

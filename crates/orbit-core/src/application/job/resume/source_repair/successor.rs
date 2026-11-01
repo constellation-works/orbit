@@ -30,6 +30,15 @@ impl OrbitRuntime {
                         self.recorded_final_recovery(task, &source.run_id)?,
                         Some(FinalRecoveryOutcome::Requeued | FinalRecoveryOutcome::Escalated { .. })
                     ))
+                // A final-recovery `resume` applied in place settles nothing on
+                // the task either: the run it resumed failed again, and the
+                // receipt it inherited keeps final recovery from running twice.
+                || (source.state == JobRunState::Failed
+                    && self.read_run_state(&source.run_id)?.is_some_and(|state| {
+                        super::inline_publication::resumed_in_place_publication(
+                            source, &state, task,
+                        )
+                    }))
                 // A resume's applied repair settles nothing on the task; its
                 // stopped failure-hook publication is repairable only through
                 // the authenticated owner lineage.

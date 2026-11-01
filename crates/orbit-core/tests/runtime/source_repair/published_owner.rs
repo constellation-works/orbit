@@ -1384,7 +1384,7 @@ pub(super) fn legacy_publication_behind_a_stopped_successor_cannot_start_fresh()
 
 /// Commit `content` on the published branch in its retained checkout and push
 /// it, as Orbit's auto-fix does, and point the PR at the new head.
-fn move_published_branch(f: &Fixture, checkout: &Path, content: &str) -> String {
+pub(super) fn move_published_branch(f: &Fixture, checkout: &Path, content: &str) -> String {
     std::fs::write(checkout.join("auto-fix.txt"), content).unwrap();
     git(checkout, &["add", "auto-fix.txt"]);
     git(checkout, &["commit", "-qm", "repair the failed check"]);
@@ -1397,7 +1397,7 @@ fn move_published_branch(f: &Fixture, checkout: &Path, content: &str) -> String 
 }
 
 /// Record a repaired head published on the PR, as the completion watcher does.
-fn record_auto_fix_push(f: &Fixture, by: &str, from: &str, to: &str, run_id: &str) {
+pub(super) fn record_auto_fix_push(f: &Fixture, by: &str, from: &str, to: &str, run_id: &str) {
     f.runtime
         .apply_task_automation_update(
             &f.task,
