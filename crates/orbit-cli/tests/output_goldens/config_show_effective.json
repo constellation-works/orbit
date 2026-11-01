@@ -1198,6 +1198,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.purpose_crews.pilot_warning_triage": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.purpose_crews.pre_landing_review": {
       "scope": "built-in",
       "state": "unset",

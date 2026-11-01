@@ -57,7 +57,7 @@ pub(super) fn fixture() -> Fixture {
     fixture_with_config("")
 }
 
-fn fixture_with_config(config: &str) -> Fixture {
+pub(super) fn fixture_with_config(config: &str) -> Fixture {
     fixture_in(&orbit_common::test_env::bulk_write_temp_dir(), config)
 }
 

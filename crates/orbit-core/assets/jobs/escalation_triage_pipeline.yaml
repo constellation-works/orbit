@@ -1,5 +1,5 @@
 # Turn escalated holds into ready-to-choose decisions or precise human
-# actions, one hard-tier read per hold. Propose-only: it never edits task
+# actions, one read per hold. Propose-only: it never edits task
 # material, approves, promotes, clears a hold, rejects or archives.
 #
 # One run reads one `subject`:
@@ -32,14 +32,19 @@
 # as task pilot does, and triagers read the supplied filesystem.
 #
 # Crew resolution
-# - Every triager is drawn from `workflow.hard_complexity_crews`, keeping
-#   only crews whose provider executor declares `inspection_args` (a tier
-#   without one passes to xhard), or is `workflow.default_crew` when its
-#   executor declares them and no pool has one. For a pilot warning, the crew that wrote the held
-#   assessment (the pilot run's frozen draw) is passed over while the pool
-#   offers another. Prepare
-#   records every draw; the triager step names the crew of its partition, so
-#   tasks are partitioned by crew, at most five per partition.
+# - `pilot_warning`: while `workflow.purpose_crews.pilot_warning_triage` is
+#   set, each triager is drawn from it, keeping only crews whose provider
+#   executor declares `inspection_args`; the draw's source is recorded as
+#   `purpose:pilot_warning_triage`. The crew that wrote the held assessment
+#   (the pilot run's frozen draw) is passed over while the pool offers
+#   another.
+# - Otherwise (an unset pool, a pool with no such crew, and every `block`
+#   task) the triager is drawn from `workflow.hard_complexity_crews` under the
+#   same filter (a tier without one passes to xhard), or is
+#   `workflow.default_crew` when its executor declares them and no pool has
+#   one.
+# - Prepare records every draw; the triager step names the crew of its
+#   partition, so tasks are partitioned by crew, at most five per partition.
 #
 # There is no apply step. Each triager records its decision through
 # `orbit.task.block_triage` with the run's subject, which writes one comment

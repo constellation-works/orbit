@@ -22,12 +22,15 @@ spec:
     state claim must be of the subject's trigger kind. It pins one
     landing-branch revision without changing the primary HEAD, index or
     working files; outside a Git work tree it pins none and reports a null
-    `source_revision`. Each task's triager is drawn from the hard complexity
-    pool's crews whose executor declares `inspection_args` (or the next tier
-    up, or the default crew when its executor declares them), passing over
-    the crew that wrote a held assessment when the pool offers another.
-    Tasks are partitioned by crew, at most max_partition_size per
-    partition. Nothing is written.
+    `source_revision`. Each pilot-warning task's triager is drawn from
+    workflow.purpose_crews.pilot_warning_triage while it is set, keeping only
+    crews whose executor declares `inspection_args`. An unset pool, a pool
+    with no such crew, and every block task draw from the hard complexity
+    pool's inspection-capable crews (or the next tier up, or the default crew
+    when its executor declares them). Either draw passes over the crew that
+    wrote a held assessment when the pool offers another, and each task's row
+    and partition record the draw's source. Tasks are partitioned by crew, at
+    most max_partition_size per partition. Nothing is written.
   input_schema_json:
     type: object
     properties:
@@ -81,8 +84,9 @@ spec:
         items:
           type: object
           # A pilot warning row carries operation_id and findings; a block
-          # row carries episode, blocked_at, basis and run_id.
-          required: [task_id, crew, tier]
+          # row carries episode, blocked_at, basis and run_id. `tier` is null
+          # for a purpose-pool draw; `crew_source` names the pool drawn from.
+          required: [task_id, crew, tier, crew_source]
       partition_size:
         type: number
       partition_count:

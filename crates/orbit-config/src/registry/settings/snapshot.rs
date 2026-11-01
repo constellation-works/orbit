@@ -167,6 +167,10 @@ impl ConfigSnapshot {
                 "workflow.purpose_crews.failure_recovery",
             ),
             (
+                &mut self.workflow_purpose_crews_pilot_warning_triage,
+                "workflow.purpose_crews.pilot_warning_triage",
+            ),
+            (
                 &mut self.workflow_purpose_crews_sweep_tasks,
                 "workflow.purpose_crews.sweep_tasks",
             ),
@@ -330,6 +334,10 @@ impl ConfigSnapshot {
             (
                 CrewPurpose::VisualReview,
                 self.workflow_purpose_crews_visual_review.clone(),
+            ),
+            (
+                CrewPurpose::PilotWarningTriage,
+                self.workflow_purpose_crews_pilot_warning_triage.clone(),
             ),
         ])
     }

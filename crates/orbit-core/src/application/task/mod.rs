@@ -118,7 +118,8 @@ pub use finding_verification::{
 };
 pub(crate) use finding_verification::{
     InvalidFinding, UNVERIFIED_REVIEW_FINDING, VERIFIABLE_STATUSES, VerdictWrite,
-    VerifierAssignment, finding_fingerprint, latest_verification, needs_verification, next_tier,
+    VerifierAssignment, crew_named_by, finding_fingerprint, latest_verification,
+    needs_verification, next_tier,
 };
 use job_port::CrewPools;
 pub(in crate::application) use job_port::TaskJobPort;
