@@ -90,7 +90,7 @@ pub struct StateTrigger {
 
 /// The task predicate a `preparation_eligible` consumer evaluates. Every
 /// field defaults to the previously hard-coded rule: unstarted work
-/// (`proposed` or `backlog`) that an explicit no-diff tag has not opted out.
+/// (`proposed` or `backlog`) that an excluded tag has not opted out.
 ///
 /// The same resolved value gates observation, admission, promotion and the
 /// material fingerprint, so a changed predicate invalidates stale
@@ -113,7 +113,11 @@ impl Default for PreparationEligibility {
     fn default() -> Self {
         Self {
             statuses: vec![TaskStatus::Proposed, TaskStatus::Backlog],
-            exclude_tags: vec!["no-diff-expected".into(), "no-diff-needed".into()],
+            exclude_tags: vec![
+                "no-diff-expected".into(),
+                "no-diff-needed".into(),
+                "no-pilot".into(),
+            ],
             require_tags: Vec::new(),
             task_types: Vec::new(),
         }

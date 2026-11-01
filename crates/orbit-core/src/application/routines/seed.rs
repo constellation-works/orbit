@@ -147,6 +147,10 @@ pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/superseded/task_pilot.2026-09-21.yaml"),
     ),
     (
+        "task_pilot",
+        include_str!("../../../assets/routines/superseded/task_pilot.2026-11-01.yaml"),
+    ),
+    (
         "worktree_gc",
         include_str!("../../../assets/routines/superseded/worktree_gc.2026-07-12.yaml"),
     ),

@@ -413,7 +413,9 @@ orbit run task-pilot <id> <id>                  # audit exactly these
 orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 ```
 
-The first pilot is automatic once. Every later assessment requires an explicit
+The first pilot is automatic once for eligible tasks. Creators can add `no-pilot`
+when the footprint, complexity, testable criteria and deduplication are already
+settled; readiness still applies and an explicit pilot remains available. Every later assessment requires an explicit
 request: `orbit task repilot <id>`, `orbit.task.repilot` with `id` and the
 owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
 with `repilot: true`. These operator requests submit one pending pilot and

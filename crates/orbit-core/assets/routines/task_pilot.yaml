@@ -31,7 +31,7 @@
 # old one.
 #
 # `eligibility` is optional and defaults to the values shown: proposed or
-# backlog tasks not tagged `no-diff-expected` / `no-diff-needed`, of any type,
+# backlog tasks not tagged `no-diff-expected` / `no-diff-needed` / `no-pilot`, of any type,
 # with no required tags. Narrow it here; changing it invalidates assessments
 # accepted under the old predicate. See
 # docs/design/automation-triggers/5_operations.md.
@@ -70,7 +70,7 @@ trigger:
     deadline_minutes: 90
     eligibility:
       statuses: [proposed, backlog]
-      exclude_tags: [no-diff-expected, no-diff-needed]
+      exclude_tags: [no-diff-expected, no-diff-needed, no-pilot]
       require_tags: []
       task_types: []
 target: job:task_pilot_pipeline

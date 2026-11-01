@@ -620,11 +620,11 @@ fn unqualified_and_pilot_held_tasks_stay_proposed_with_their_reasons() {
     let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
     let unassessed = workspace.task(
         "unassessed",
-        &[],
+        &["no-pilot"],
         &["file:README.md"],
         TaskComplexity::Unassessed,
     );
-    let bare = workspace.task("bare", &[], &[], TaskComplexity::Low);
+    let bare = workspace.task("bare", &["no-pilot"], &[], TaskComplexity::Low);
     let original = workspace.task("original", &[], &["file:README.md"], TaskComplexity::Low);
     let duplicate = workspace.task("duplicate", &[], &["file:README.md"], TaskComplexity::Low);
 
