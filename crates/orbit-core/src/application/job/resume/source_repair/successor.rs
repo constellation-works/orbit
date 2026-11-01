@@ -8,7 +8,7 @@ use orbit_types::workflow::SourceRepairSuccessor;
 pub(super) const SUCCESSOR_CHAIN_WINDOW: usize = 64;
 
 /// The candidate and publication checkpoints a newer execution must not hold.
-const PUBLICATION_KEYS: [&str; 4] = ["commit", "push", "pr_open", "landing_push"];
+pub(super) const PUBLICATION_KEYS: [&str; 4] = ["commit", "push", "pr_open", "landing_push"];
 
 /// A run of this job can bind the task. A gate or auto-dispatch wrapper also
 /// carries the task, but its delivery child is the binding.

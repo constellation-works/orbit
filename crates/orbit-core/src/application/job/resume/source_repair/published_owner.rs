@@ -640,7 +640,8 @@ impl OrbitRuntime {
 
     /// The authenticated fresh `candidate_resume` output of `member`, when it
     /// is a conclusively stopped owner-local attempt set up on `older_id`
-    /// that published nothing; `None` otherwise.
+    /// that published nothing and left no commit checkpoint or uncommitted
+    /// work; `None` otherwise.
     fn unpublished_fresh_attempt(
         &self,
         task: &Task,
@@ -662,18 +663,34 @@ impl OrbitRuntime {
             return Ok(None);
         };
         // A failure handoff commits and publishes whatever the run left; only
-        // its recorded no-candidate outcome published nothing.
+        // its recorded no-candidate outcome published nothing. A commit
+        // checkpoint is candidate evidence the next adoption would not resume,
+        // so it fails the same bar `observe_successor_member` applies.
         if state.run_id != member.run_id
             || state.job_id != member.job_id
-            || ["push", "pr_open", "landing_push"]
+            || super::successor::PUBLICATION_KEYS
                 .iter()
                 .any(|k| state.pipeline.get(k).is_some_and(|v| !v.is_null()))
+            || member
+                .steps
+                .iter()
+                .any(|s| super::successor::PUBLICATION_KEYS.contains(&s.target_id.as_str()))
             || state
                 .failure_activity_checkpoint
                 .as_ref()
                 .is_some_and(|c| c.output["decision"] != "no_candidate")
         {
             return Ok(None);
+        }
+        // Work the attempt left uncommitted is a resume candidate the next
+        // run's new worktree would not carry; unreadable changes are unproven.
+        match self.retained_candidate(task, Some(&member.run_id), Some(member)) {
+            crate::application::task::RetainedCandidate::Present {
+                changed_paths: Ok(paths),
+                ..
+            } if paths.is_empty() => {}
+            crate::application::task::RetainedCandidate::Absent { .. } => {}
+            crate::application::task::RetainedCandidate::Present { .. } => return Ok(None),
         }
         let definition = self.source_repair_definition(member)?;
         let checkpoint = |id, action| {
