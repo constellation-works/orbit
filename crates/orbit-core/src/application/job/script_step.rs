@@ -22,7 +22,9 @@ use orbit_types::workflow::activity_job::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::job::pipeline::{ScriptScopeLauncher, script_scope_launcher};
+use crate::application::job::pipeline::{
+    ScriptScopeLauncher, USER_BUS_LOCATOR_ENV_VARS, script_scope_launcher,
+};
 
 /// The timeout a step gets when neither the step nor the manifest sets one.
 const DEFAULT_SCRIPT_TIMEOUT_SECONDS: u64 = 600;
@@ -140,10 +142,15 @@ fn prepare_and_run(
         })?;
     }
 
+    // One environment for both the availability probe and the launch, so
+    // the probe answers for the environment `systemd-run` will actually
+    // get [ORB-20661].
+    let mut launcher_env = script_launcher_env();
     let scope = script_scope_launcher(
         &request.run_id,
         &request.step_id,
         runtime.context.settings().worker_containment(),
+        &launcher_env,
     )
     .map_err(|reason| {
         refuse(
@@ -167,6 +174,9 @@ fn prepare_and_run(
                 reason,
                 "script step runs without its own systemd scope, in the worker's cgroup",
             );
+            // No `systemd-run` runs, so the bus locators have no consumer:
+            // the wrapper keeps the plain allowlisted environment.
+            launcher_env = orbit_common::security::child_env::allowlisted_child_env(&[], &[]);
             Vec::new()
         }
     };
@@ -183,6 +193,7 @@ fn prepare_and_run(
         cwd_writable,
         scratch: &scratch.path,
         launcher: &launcher,
+        launcher_env: &launcher_env,
         stdin: input_text.into_bytes(),
         record,
     });
@@ -500,6 +511,7 @@ struct RunPlan<'a> {
     cwd_writable: bool,
     scratch: &'a Path,
     launcher: &'a [String],
+    launcher_env: &'a [(String, String)],
     stdin: Vec<u8>,
     record: &'a mut ScriptExecutionRecord,
 }
@@ -516,6 +528,7 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         cwd_writable,
         scratch,
         launcher,
+        launcher_env,
         stdin,
         record,
     } = plan;
@@ -565,8 +578,6 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         .collect();
 
     let env = script_env(request, asset.digest.as_str(), grant);
-    let launcher_env: Vec<(String, String)> =
-        orbit_common::security::child_env::allowlisted_child_env(&[], &[]);
     let mut readable: Vec<PathBuf> = grant
         .interpreter_paths
         .first()
@@ -599,7 +610,7 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
         argv: &argv,
         env: &env,
         launcher,
-        launcher_env: &launcher_env,
+        launcher_env,
         stdin,
         timeout: Duration::from_secs(timeout_seconds),
         scratch_cap_bytes: grant.limits.scratch_max_bytes,
@@ -627,8 +638,31 @@ fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
     })
 }
 
+/// The environment of the scope launcher (`systemd-run --user`) and the
+/// sandbox wrapper it execs, composed from this process's environment.
+///
+/// The user-bus locators are admitted here, and only here: without them the
+/// launcher cannot reach the user manager (jrun-20261101-0131-t1, every
+/// contained script step exiting 1 in ~2 ms). They never reach the script,
+/// whose environment is exactly [`script_env`]; the wrapper clears its
+/// environment and sets only that inside the sandbox.
+fn script_launcher_env() -> Vec<(String, String)> {
+    orbit_common::security::child_env::allowlisted_child_env(&[], &USER_BUS_LOCATOR_ENV_VARS)
+}
+
+/// Snapshot-driven form of [`script_launcher_env`], so a test states the
+/// ambient environment it is reasoning about.
+#[cfg(test)]
+pub(crate) fn script_launcher_env_from(parent: &[(String, String)]) -> Vec<(String, String)> {
+    orbit_common::security::child_env::allowlisted_child_env_from(
+        parent,
+        &[],
+        &USER_BUS_LOCATOR_ENV_VARS,
+    )
+}
+
 /// The script's whole environment (§3): fixed values and the step context.
-fn script_env(
+pub(crate) fn script_env(
     request: &ScriptStepRequest,
     digest: &str,
     grant: &ScriptGrant,
