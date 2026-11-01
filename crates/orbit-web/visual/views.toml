@@ -75,6 +75,18 @@ states = ["default"]
 mask = []
 
 [[view]]
+id = "analytics-implementer-detail"
+app = "dashboard"
+title = "Analytics implementer detail"
+route = "#analytics/agents/implementers"
+fixture = "implementers-scorecard"
+ready = "#agents-detail"
+clip = "#agents-detail"
+responsive = true
+states = ["default"]
+mask = []
+
+[[view]]
 id = "analytics-forecast"
 app = "dashboard"
 title = "Analytics forecast"
