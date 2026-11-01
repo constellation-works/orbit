@@ -8,6 +8,7 @@ mod handoff;
 mod identity;
 mod inline_publication;
 mod observation;
+mod proof;
 mod publication;
 mod published_owner;
 mod reconciliation;

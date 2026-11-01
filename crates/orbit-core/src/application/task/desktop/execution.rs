@@ -139,7 +139,7 @@ impl OrbitRuntime {
 }
 
 /// A handed-off pull request as the provider reports it now, checked against
-/// the handoff's repository, number and landing branch.
+/// the handoff's repository, number, source branch and landing branch.
 pub(crate) struct HandoffPullRequest {
     pub(crate) number: u64,
     pub(crate) url: String,
@@ -179,8 +179,8 @@ impl OrbitRuntime {
     }
 
     /// The accepted handoff's pull request, read by number. The provider's
-    /// answer must identify that delivery: its number, repository and landing
-    /// branch.
+    /// answer must identify that delivery: its number, repository, source
+    /// branch and landing branch.
     pub(crate) fn observe_handoff_pull_request(
         &self,
         number: u64,
@@ -211,6 +211,12 @@ pub(super) fn handoff_pull_request(
             candidate.repository
         )));
     };
+    if status.head_branch.as_deref() != Some(candidate.source_branch.as_str()) {
+        return Err(invalid(&format!(
+            "pull request #{number} no longer matches the handoff's source branch {}",
+            candidate.source_branch
+        )));
+    }
     if status.base_branch.as_deref() != Some(candidate.landing_branch.as_str()) {
         return Err(invalid(&format!(
             "pull request #{number} no longer targets the handoff's landing branch {}",

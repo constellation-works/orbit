@@ -56,12 +56,63 @@ fn publication_inner(
     auto_fix: bool,
     successful: bool,
 ) -> PathBuf {
+    publication_number(f, validated, auto_fix, successful, "17", false)
+}
+
+pub(super) fn publication_number(
+    f: &mut Fixture,
+    validated: bool,
+    auto_fix: bool,
+    successful: bool,
+    number: &str,
+    discarded: bool,
+) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let gh = f._root.path().join("bin/gh");
-    let created = f._root.path().join("created");
+    let created = f._root.path().join(format!("created-{number}"));
     let denied = f._root.path().join("observation-denied");
-    std::fs::write(&gh, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1 $2\" in\n 'pr list') if [ -f '{}' ]; then printf '['; cat '{}'; printf ']'; else printf '[]'; fi;;\n 'pr create') touch '{}'; echo https://github.com/owner/repository/pull/17;;\n 'pr view') if [ -f '{}' ]; then echo 'TLS handshake timeout' >&2; exit 1; fi; cat '{}';;\n *) exit 99;;\nesac\n", f._root.path().join("gh-calls").display(), created.display(), f.answer.display(), created.display(), denied.display(), f.answer.display())).unwrap();
+    let historical = f._root.path().join("historical-pr.json");
+    if discarded {
+        std::fs::copy(&f.answer, &historical).unwrap();
+    }
+    std::fs::write(&gh, format!(r#"#!/bin/sh
+printf '%s\n' "$*" >> '{calls}'
+case "$1 $2" in
+ 'pr list') if [ -f '{created}' ]; then printf '['; cat '{answer}'; printf ']'; else printf '[]'; fi;;
+ 'pr create')
+   shift 2
+   while [ "$#" -gt 0 ]; do
+     case "$1" in --body) printf '%s' "$2" > '{body}'; shift 2;; --draft) shift;; *) shift 2;; esac
+   done
+   touch '{created}'; echo https://github.com/owner/repository/pull/{number};;
+ 'pr edit') [ "$3 $4" = "{number} --body" ] || exit 99; printf '%s' "$5" > '{body}';;
+ 'pr ready') [ "$3" = '{number}' ] || exit 99;;
+ 'pr view')
+   if [ -f '{denied}' ]; then echo 'TLS handshake timeout' >&2; exit 1; fi
+   case "$3" in
+     {number}|https://github.com/owner/repository/pull/{number}) cat '{answer}';;
+     17) [ -f '{historical}' ] || exit 99; cat '{historical}';;
+     *) exit 99;;
+   esac;;
+ 'pr close') [ "$3" = 17 ] && [ -f '{historical}' ] || exit 99
+   sed 's/"state":"OPEN"/"state":"CLOSED"/' '{historical}' > '{historical}.closed'
+   mv '{historical}.closed' '{historical}';;
+ *) exit 99;;
+esac
+"#, calls=f._root.path().join("gh-calls").display(), created=created.display(), answer=f.answer.display(), denied=denied.display(), historical=historical.display(), body=f._root.path().join("pr-body").display())).unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if discarded {
+        f.runtime
+            .run_private_vcs_operation("pr.close", json!({"pr":"17", "workspace_path":f.repo, "comment":"Discarded before the fresh delivery."}))
+            .unwrap();
+        assert_eq!(
+            f.runtime
+                .run_private_vcs_operation("pr.status", json!({"pr":"17", "workspace_path":f.repo}))
+                .unwrap()["pull_request"]["state"],
+            "CLOSED"
+        );
+    }
+
     // Replace the fixture's illustrative historical run with one whose host
     // actions actually produce every candidate/publication checkpoint.
     let mut run = f
@@ -103,9 +154,21 @@ fn publication_inner(
     );
     checkpoint(f, &run.run_id, 0, "worktree", setup.clone());
     let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    if discarded {
+        let resumed = f.action(
+            "candidate_resume",
+            json!({"job_run_id":run.run_id,
+            "task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"],
+            "prior_job_run_id":setup["prior_job_run_id"]}),
+        );
+        assert_eq!(resumed["outcome"], "fresh");
+        assert_eq!(resumed["implement"], true);
+        assert!(resumed["prior_pull_request"].is_null());
+        checkpoint(f, &run.run_id, 6, "resume_candidate", resumed);
+    }
     std::fs::write(
         checkout.join("source.txt"),
-        "complete published candidate\n",
+        format!("complete published candidate {number}\n"),
     )
     .unwrap();
     f.runtime.apply_task_automation_update(&f.task, TaskAutomationUpdate { execution_summary:Some("Outcome: success\nChanges: complete the source repair and preserve its public behavior.\nAssessment: candidate ready for host validation.".into()), ..Default::default() }).unwrap();
@@ -153,11 +216,18 @@ fn publication_inner(
     let push = f.action("git_push", json!({"job_run_id":run.run_id,"workspace_path":checkout,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]}));
     checkpoint(f, &run.run_id, if validated { 6 } else { 4 }, "push", push);
     let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["number"] = json!(number.parse::<u64>().unwrap());
+    answer["url"] = json!(format!("https://github.com/owner/repository/pull/{number}"));
     answer["headRefName"] = json!(f.branch);
     answer["headRefOid"] = json!(f.head);
     std::fs::write(&f.answer, answer.to_string()).unwrap();
     let opened = f.action("pr_open", json!({"job_run_id":run.run_id,"workspace_path":checkout,"completed_task_ids":[f.task],"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":f.base}));
     assert_eq!(opened["pr_created"], true);
+    // Reflect the body the public create operation actually sent to the forge.
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["body"] = json!(std::fs::read_to_string(f._root.path().join("pr-body")).unwrap());
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+
     checkpoint(
         f,
         &run.run_id,
@@ -167,13 +237,13 @@ fn publication_inner(
     );
     if validated {
         checkpoint(f, &run.run_id, 8, "resume_candidate", Value::Null);
-        let promoted = f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":f.base,"pr_number":"17","pr_url":"https://github.com/owner/repository/pull/17"}));
+        let promoted = f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":f.base,"pr_number":number,"pr_url":format!("https://github.com/owner/repository/pull/{number}")}));
         checkpoint(f, &run.run_id, 9, "promote", promoted);
     }
     if successful {
         // As in the review-mode pipeline, promotion finishes the delivery
         // without asking for a merge or running the done-only completion step.
-        f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"],"pr_number":"17","pr_url":"https://github.com/owner/repository/pull/17"}));
+        f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"],"pr_number":number,"pr_url":format!("https://github.com/owner/repository/pull/{number}")}));
         run.state = JobRunState::Success;
         run.pid = None;
         run.finished_at = Some(Utc::now());
@@ -195,7 +265,7 @@ fn publication_inner(
         || {
             execute_deterministic_action(&f.runtime, "pr_complete", &json!({}),
             &json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,
-                "pr_number":"17","completion":"done","auto_fix":auto_fix,"head":f.branch,
+                "pr_number":number,"completion":"done","auto_fix":auto_fix,"head":f.branch,
                 "published_head_sha":f.head,"base":"main","max_wait_seconds":0}),
             false, &HashMap::new(), None).unwrap_err()
         },
@@ -293,7 +363,7 @@ fn next_with(f: &Fixture, input: Value) -> (JobRun, Value) {
     (run, setup)
 }
 
-fn rework_request(f: &Fixture) -> Value {
+pub(super) fn rework_request(f: &Fixture) -> Value {
     let inspection = f
         .runtime
         .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))

@@ -2637,7 +2637,7 @@ At claim admission the owner captures `review.timing` as the contract's `before_
 
 | Key | Default | What it does |
 |---|---|---|
-| `pr.task_url_template` | unset | **Advanced.** URL template linking a task ID in PR descriptions. |
+| `pr.task_url_template` | unset | **Advanced.** Stable task URL template linking a task ID in PR descriptions (`{task_id}`). New pull requests use this URL or a plain task ID; historical PR and other external-reference URLs never select the link. An authenticated same-PR continuation may link its verified target when this is unset. |
 | `pr.close_on_terminal` | `true` | **Advanced.** Close a task's open Orbit-authored delivery and `[BLOCKED]` preservation PRs when it lands (`done`), is rejected or archived, when an operator or agent moves it back to `backlog` or `someday`, and when a newer delivery attempt opens its own PR (rules below). `false` disables all of these. |
 | `pr.delivery_authors` | `[]` | **Advanced.** Forge logins (case-insensitive) whose PRs count as Orbit-authored, for closing them and for settling a task from its delivery PR merged outside Orbit ([stuck job runs](runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)). Empty: the login `gh` is authenticated as on this machine. Add a follower's login if it opens PRs this owner has not accepted as a handoff. |
 | `pr.title_template` | unset | **Advanced.** Single-task PR title template ([delivery templates](#delivery-templates-pr-commit-and-branch)). Unset: the task title. |

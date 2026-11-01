@@ -745,3 +745,48 @@ fn pr_open_ignores_a_visual_settle_for_another_candidate() {
         },
     );
 }
+
+/// Historical PRs and arbitrary external systems cannot select a new PR's
+/// task link before its number exists.
+#[test]
+fn fresh_pr_task_links_use_stable_task_urls_or_plain_ids() {
+    isolated(
+        "conventions::fresh_pr_task_links_use_stable_task_urls_or_plain_ids",
+        |sandbox| {
+            for template in [None, Some("https://tasks.example/task/{task_id}")] {
+                let (fx, host) = fx_host(sandbox);
+                let historical = vec![
+                    ExternalRef {
+                        system: "other".into(),
+                        id: "old".into(),
+                        url: Some("https://unrelated.example/old".into()),
+                    },
+                    ExternalRef {
+                        system: "github-pr".into(),
+                        id: "12".into(),
+                        url: Some("https://github.com/owner/repository/pull/12".into()),
+                    },
+                ];
+                locked(&host.tasks).get_mut(TASK_ID).unwrap().external_refs = historical.clone();
+                locked(&host.pr_config).task_url_template = template.map(String::from);
+                let opened = open_ok(&fx, &host);
+                assert_eq!(opened["pr_created"], true);
+                let body = fx.forge_state("pr-body").unwrap();
+                let expected = template.map_or_else(
+                    || TASK_ID.to_string(),
+                    |template| format!("[{TASK_ID}]({})", template.replace("{task_id}", TASK_ID)),
+                );
+                assert!(
+                    body.starts_with(&format!("## Task\n\n{expected} —")),
+                    "{body}"
+                );
+                assert!(!body.contains("https://unrelated.example/old"), "{body}");
+                assert!(
+                    !body.contains("https://github.com/owner/repository/pull/12"),
+                    "{body}"
+                );
+                assert_eq!(host.get_task(TASK_ID).unwrap().external_refs, historical);
+            }
+        },
+    );
+}

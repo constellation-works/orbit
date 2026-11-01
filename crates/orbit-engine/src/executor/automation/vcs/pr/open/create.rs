@@ -120,7 +120,14 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?;
     }
 
-    let pr_config = host.pr_config();
+    let mut pr_config = host.pr_config();
+    // A continuation has already authenticated this exact target. A new PR
+    // has no number yet, and historical references cannot supply its URL.
+    if pr_config.task_url_template.is_none()
+        && let Some(binding) = &publication
+    {
+        pr_config.task_url_template = Some(binding.pull_request_url.clone());
+    }
     let title = input_string_field(input, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| pr_title(&context.tasks, &pr_config));
