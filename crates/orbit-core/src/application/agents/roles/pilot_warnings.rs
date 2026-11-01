@@ -4,10 +4,11 @@
 //! An assessment is one task-pilot receipt: the audit comment the apply
 //! boundary sealed with the assessment it persisted. It is held when that
 //! assessment carries at least one finding that holds promotion (a
-//! `blocked_by`, ADR conflict, utility, surface or validation-tool finding;
-//! advisory ones never count), and clean otherwise. Nothing else is read
-//! from it: how it settled comes only from task history (edits, status
-//! transitions) and blocked-task triage markers.
+//! `blocked_by`, ADR conflict, `contract_conflicts`, utility, surface or
+//! validation-tool finding; advisory ones never count), and clean
+//! otherwise. Nothing else is read from it: how it settled comes only
+//! from task history (edits, status transitions) and blocked-task triage
+//! markers.
 //!
 //! A held assessment is **confirmed** when, before the task leaves
 //! `proposed`, a writer other than the pilot or `system` edits the

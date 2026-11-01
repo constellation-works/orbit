@@ -223,10 +223,12 @@ Free text, missing tasks and
 other-workspace prerequisites still hold. Admission decides from the edges in the atomic pilot
 write and completion statuses read under the dependency locks; replay uses
 only already stored edges. A drain rechecks named prerequisites under their
-locks before approval. `adr_conflicts` and deterministic
-`validation_tool_warnings` entries always hold. Surface and
-utility findings use `{text, holds_promotion}`: true holds for wrong behavior,
-contract conflicts or an unreachable validation requirement; false preserves an
+locks before approval. `adr_conflicts`, `contract_conflicts` and deterministic
+`validation_tool_warnings` entries always hold; `contract_conflicts` entries carry
+no `holds_promotion` field and have no opt-out. A criterion that contradicts the
+pinned code or contract goes in `contract_conflicts`, never in a surface or utility
+finding. Surface and utility findings use `{text, holds_promotion}`: true holds for
+wrong behavior or an unreachable validation requirement; false preserves an
 advisory observation without holding promotion or showing it as held. Legacy
 plain-string surface and utility warnings still hold unless they name only
 recorded dependencies or done tasks. Advisory findings remain
