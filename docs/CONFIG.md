@@ -2180,6 +2180,15 @@ existing recovery activities, final validation and push do the repair:
   this journal and includes a current refusal in the stop diagnostic, including
   when the original completion budget expires. A diagnostic write failure is
   reported in a warning and never grants recovery permission.
+- A rerun-planner hold in owner-local `auto_fix=true` completion is bounded.
+  The owning task records `pr_auto_fix_ci_rerun_hold` with the head and
+  reason when a hold begins on a head. After 15 minutes on that head, or on
+  the completion's last poll, the hold expires: `pr_auto_fix_ci_rerun_hold_expired`
+  is recorded and the failed checks take the ordinary repair path, whose
+  known-red-base and evidence gates still admit a repair or stop with a
+  reason. A dependency-only record holds only when no other job failed: a
+  failed sibling the logs cannot tie to a changed file (for example a
+  guardrail check) is still a candidate failure and goes to repair.
 - Final recovery after `complete_pr` re-reads required checks on the current
   head and receives each failed check's name and diagnostic evidence in
   `required_check_failures`, independently of the earlier step error. The
