@@ -7,7 +7,7 @@
 
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -232,7 +232,7 @@ export async function createUiContext(options) {
   };
   ctx.openTarget = (target, baseUrl, placeholders) =>
     openTarget(ctx, browser, target, baseUrl, placeholders);
-  ctx.screenshotFor = (rule, target) => screenshotFor(ctx, rule, target);
+  ctx.screenshotFor = (rule, target, result) => screenshotFor(ctx, rule, target, result);
   ctx.writeEvidence = (ruleId, targetId, label, text) =>
     writeEvidence(ctx, ruleId, targetId, label, text);
   ctx.fetchJson = async (urlPath) => {
@@ -376,21 +376,292 @@ export async function closeTarget(ctx) {
   }
 }
 
-async function screenshotFor(ctx, rule, target) {
+// Failing-element handles a result can carry, in preference order: an
+// explicit unique `evidence_selector` a rule stamped on the measured node,
+// then the failure rows `verdict` records (`selector` plus the measured
+// `text`/`width_px`, which together disambiguate a non-unique selector),
+// then a lone measurements selector.
+export class EvidenceCaptureError extends Error {
+  constructor(message, diagnostic) {
+    super(message);
+    this.name = "EvidenceCaptureError";
+    this.code = "evidence_capture_failed";
+    this.diagnostic = diagnostic;
+  }
+}
+
+export function evidenceCaptureDiagnostic(result, reason, candidates) {
+  return {
+    status: "failed",
+    kind: "evidence_capture_failed",
+    reason,
+    rule: result?.rule ?? "",
+    fingerprint: result?.fingerprint ?? "",
+    candidates: candidates.map((candidate) =>
+      candidate.evidence_selector
+        ? { evidence_selector: candidate.evidence_selector }
+        : { selector: candidate.selector, text: candidate.text ?? "", width_px: candidate.width_px ?? null },
+    ),
+    action:
+      "No screenshot is attached for this finding. Re-run the rule on a fresh page and confirm the measured element still resolves uniquely; the underlying finding, fingerprint and severity are preserved without screenshot proof.",
+  };
+}
+
+export function failureEvidenceCandidates(result) {
+  const candidates = [];
+  const measurements = result?.measurements ?? {};
+  if (typeof measurements.evidence_selector === "string" && measurements.evidence_selector) {
+    candidates.push({ evidence_selector: measurements.evidence_selector });
+  }
+  if (Array.isArray(measurements.failures)) {
+    for (const failure of measurements.failures) {
+      if (!failure || typeof failure !== "object") continue;
+      if (typeof failure.evidence_selector === "string" && failure.evidence_selector) {
+        candidates.push({ evidence_selector: failure.evidence_selector });
+      } else if (typeof failure.selector === "string" && failure.selector) {
+        candidates.push({
+          selector: failure.selector,
+          text: typeof failure.text === "string" ? failure.text : "",
+          width_px: typeof failure.width_px === "number" ? failure.width_px : null,
+        });
+      }
+    }
+  }
+  if (candidates.length === 0 && typeof measurements.selector === "string" && measurements.selector) {
+    candidates.push({ selector: measurements.selector, text: "", width_px: null });
+  }
+  return candidates;
+}
+
+async function resolveFailureLocator(ctx, candidate) {
+  if (candidate.evidence_selector) {
+    const locator = ctx.page.locator(candidate.evidence_selector);
+    return (await locator.count().catch(() => 0)) === 1 ? locator : null;
+  }
+  const locator = ctx.page.locator(candidate.selector);
+  const count = await locator.count().catch(() => 0);
+  if (count === 0) return null;
+  if (count === 1) return locator.first();
+  if (!candidate.text && candidate.width_px == null) return null;
+  const wantedText = candidate.text.replace(/\s+/g, " ").trim().slice(0, 80);
+  const matches = [];
+  for (let index = 0; index < count; index += 1) {
+    const item = locator.nth(index);
+    const facts = await item
+      .evaluate((element) => ({
+        text: (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
+        width: Math.round(element.getBoundingClientRect().width),
+      }))
+      .catch(() => null);
+    if (!facts) continue;
+    if (wantedText && facts.text !== wantedText) continue;
+    if (candidate.width_px != null && Math.abs(facts.width - candidate.width_px) > 1) continue;
+    matches.push(item);
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+async function captureScrollState(page) {
+  return page.evaluate(() => {
+    // Every element is recorded, including zero offsets: framing can
+    // scroll an ancestor that started at zero, and restoring only the
+    // initially-nonzero entries would leave that scroll behind.
+    const elements = [...document.querySelectorAll("*")];
+    const entries = elements.map((element, index) => ({
+      index,
+      top: element.scrollTop,
+      left: element.scrollLeft,
+    }));
+    return {
+      x: window.scrollX,
+      y: window.scrollY,
+      scrollingTop: document.scrollingElement?.scrollTop ?? 0,
+      scrollingLeft: document.scrollingElement?.scrollLeft ?? 0,
+      entries,
+    };
+  });
+}
+
+async function restoreScrollState(page, saved) {
+  const apply = () =>
+    page
+      .evaluate((state) => {
+        const elements = [...document.querySelectorAll("*")];
+        for (const entry of state.entries) {
+          const element = elements[entry.index];
+          if (element) {
+            element.scrollTop = entry.top;
+            element.scrollLeft = entry.left;
+          }
+        }
+        if (document.scrollingElement) {
+          document.scrollingElement.scrollTop = state.scrollingTop;
+          document.scrollingElement.scrollLeft = state.scrollingLeft;
+        }
+        window.scrollTo(state.x, state.y);
+      }, saved)
+      .catch(() => {});
+  await apply();
+  // A smooth scroll started by framing can still be in flight and
+  // overwrite the first restore. The page clock is frozen, so wait on
+  // the runner's real clock and apply again once it has settled.
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await apply();
+}
+
+// Scroll the measured element so its start sits below the top of its
+// scroll container, leaving the rows and headings above it in frame, then
+// capture the viewport. A viewport capture of a very tall element shows
+// its beginning and its neighbours; an element capture of it is an
+// unreadable strip divorced from the card that contains it.
+async function frameFailureInViewport(page, locator) {
+  await locator.evaluate((element) => {
+    const contextTopPx = 160;
+    element.scrollIntoView({ block: "start", inline: "nearest", behavior: "instant" });
+    let rect = element.getBoundingClientRect();
+    if (Math.abs(rect.top - contextTopPx) > 1) {
+      let scroller = null;
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (node.scrollHeight > node.clientHeight + 1 && /(auto|scroll|overlay)/.test(style.overflowY)) {
+          scroller = node;
+          break;
+        }
+      }
+      const target = scroller ?? document.scrollingElement;
+      if (target) target.scrollTop += rect.top - contextTopPx;
+      rect = element.getBoundingClientRect();
+      if (Math.abs(rect.top - contextTopPx) > 1 && document.scrollingElement && target !== document.scrollingElement) {
+        document.scrollingElement.scrollTop += rect.top - contextTopPx;
+      }
+    }
+  });
+  await Promise.race([
+    page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        }),
+    ),
+    new Promise((resolve) => setTimeout(resolve, 500)),
+  ]);
+}
+
+async function removeEvidenceHandles(page) {
+  await page
+    .evaluate(() => {
+      for (const element of document.querySelectorAll("[data-ux-evidence-target]")) {
+        element.removeAttribute("data-ux-evidence-target");
+      }
+    })
+    .catch(() => {});
+}
+
+async function screenshotFor(ctx, rule, target, result) {
   if (!ctx.page) return "";
   const directory = path.join(ctx.outDir, "evidence", rule.id);
   await mkdir(directory, { recursive: true });
   const name = `${safeName(target.view)}-${target.theme}-${target.width}-${target.state}.png`;
   const destination = path.join(directory, name);
   const view = target.viewDef;
-  if (view?.clip) {
-    await ctx.page.locator(view.clip).first().screenshot({ path: destination }).catch(async () => {
+  // When the result identifies the measured element, frame that element
+  // with its surrounding context instead of the manifest clip, which is
+  // chosen for whole-view captures and can omit or stretch the defect.
+  // Any scroll changed for framing is restored before returning, so later
+  // rules measuring the same page see the state the load left.
+  const candidates = failureEvidenceCandidates(result);
+  let resolvedAny = false;
+  let lastCaptureError = null;
+  for (const candidate of candidates) {
+    const locator = await resolveFailureLocator(ctx, candidate).catch(() => null);
+    if (!locator) continue;
+    resolvedAny = true;
+    const saved = await captureScrollState(ctx.page).catch(() => null);
+    try {
+      await frameFailureInViewport(ctx.page, locator);
       await ctx.page.screenshot({ path: destination });
-    });
-  } else {
-    await ctx.page.screenshot({ path: destination });
+      return path.posix.join("evidence", rule.id, name);
+    } catch (error) {
+      lastCaptureError = error;
+    } finally {
+      if (saved) await restoreScrollState(ctx.page, saved);
+      await removeEvidenceHandles(ctx.page);
+    }
+  }
+  if (candidates.length > 0) {
+    // An explicit measured target was named but could not be framed.
+    // Returning the manifest clip here would present an unrelated image
+    // as proof of this finding, so fail explicitly instead: remove any
+    // partial or stale file at the destination, clean up, and throw a
+    // diagnostic the runner retains. The finding itself is untouched.
+    await removeEvidenceHandles(ctx.page);
+    await rm(destination, { force: true }).catch(() => {});
+    const reason = resolvedAny
+      ? `targeted viewport capture failed: ${lastCaptureError instanceof Error ? lastCaptureError.message : String(lastCaptureError ?? "unknown error")}`
+      : "measured evidence target did not resolve to exactly one element";
+    throw new EvidenceCaptureError(
+      `evidence capture failed for ${rule.id} on ${target.view}-${target.theme}-${target.width}-${target.state}: ${reason}; no screenshot attached`,
+      evidenceCaptureDiagnostic(result, reason, candidates),
+    );
+  }
+  // Genuinely untargeted result: no measured element was named, so the
+  // whole-view manifest clip (or viewport) remains the right capture.
+  // Temporary handles from the measurement must not outlive the capture.
+  await removeEvidenceHandles(ctx.page);
+  // An element capture scrolls its clip into view; restore afterwards so
+  // the fallback path leaves scroll state as it found it too.
+  const fallbackSaved = await captureScrollState(ctx.page).catch(() => null);
+  try {
+    if (view?.clip) {
+      await ctx.page.locator(view.clip).first().screenshot({ path: destination }).catch(async () => {
+        await ctx.page.screenshot({ path: destination });
+      });
+    } else {
+      await ctx.page.screenshot({ path: destination });
+    }
+  } finally {
+    if (fallbackSaved) await restoreScrollState(ctx.page, fallbackSaved);
   }
   return path.posix.join("evidence", rule.id, name);
+}
+
+// Attach a failure screenshot, or retain an explicit capture diagnostic.
+// On success the PNG path joins `result.evidence`. On failure no PNG is
+// attached: the diagnostic is recorded in `result.measurements` and as a
+// text evidence file, so the exported evidence never claims a screenshot
+// that does not frame the measured element. Status, fingerprint and
+// severity of the underlying finding are never changed here.
+export async function attachFailureScreenshot(ctx, rule, target, result) {
+  try {
+    const shot = await screenshotFor(ctx, rule, target, result);
+    if (shot && !result.evidence.includes(shot)) result.evidence.push(shot);
+    return shot;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const diagnostic =
+      error?.diagnostic ?? evidenceCaptureDiagnostic(result, message, failureEvidenceCandidates(result));
+    result.measurements = { ...result.measurements, evidence_capture: diagnostic };
+    try {
+      const write = ctx.writeEvidence
+        ? (label, text) => ctx.writeEvidence(rule.id, target.id, label, text)
+        : (label, text) => writeEvidence(ctx, rule.id, target.id, label, text);
+      const text = [
+        `evidence capture failed for ${rule.id} on ${target.id}`,
+        `fingerprint: ${result.fingerprint}`,
+        `reason: ${diagnostic.reason}`,
+        `action: ${diagnostic.action}`,
+        "",
+      ].join("\n");
+      const diagPath = await write("evidence-capture-failed", text);
+      if (diagPath && !result.evidence.includes(diagPath)) result.evidence.push(diagPath);
+    } catch {
+      result.measurements = {
+        ...result.measurements,
+        evidence_capture: { ...diagnostic, diagnostic_write_failed: true },
+      };
+    }
+    return "";
+  }
 }
 
 // Shared in-page measurement helpers, injected as a preamble so every
