@@ -157,6 +157,16 @@ function connection(name) {
   return { status: 200, body: { ...base, reachable: true } };
 }
 
+// One /api/jobs row, in the shape list_jobs returns: a JSON array of catalog
+// objects, not {items,total}. manual_runnable is the catalogue admission bit.
+function jobCatalogRow(jobId, manualRunnable, lastRunState, lastRunAt) {
+  return {
+    job_id: jobId, schema_version: 2, kind: 'workflow', state: 'enabled', default_input: null,
+    max_active_runs: 1, manual_runnable: manualRunnable, supports_no_input_submission: manualRunnable,
+    steps: [], path: `jobs/${jobId}.json`, last_run_state: lastRunState, last_run_at: lastRunAt,
+  };
+}
+
 // One host's own dashboard API, as the forward would relay it.
 function hostApi(host, req, rest, url, res) {
   const json = (body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -235,8 +245,19 @@ function hostApi(host, req, rest, url, res) {
     return json(readinessPayload(host));
   }
   if (rest === 'routines') return json({ machine_name: host, capabilities: {}, clock: {}, routines: [] });
-  if (rest === 'job-runs') return json({ items: [{ run_id: `jrun-${host}-confirmed`, job_id: 'fixture_sweep', state: 'running', run_role: 'top-level',
-    created_at: '2026-10-08T00:00:00Z', started_at: '2026-10-08T00:00:01Z', finished_at: null, duration_ms: null }], total: 1, limit: 100, truncated: false });
+  // Catalogue admission is this list. A run alone does not make a job runnable.
+  if (rest === 'jobs') return json([
+    jobCatalogRow('fixture_sweep', true, 'running', '2026-10-08T00:00:01Z'),
+    jobCatalogRow('task_pr_pipeline', false, 'failed', '2026-10-08T00:05:00Z'),
+  ]);
+  if (rest === 'job-runs') return json({ items: [
+    { run_id: `jrun-${host}-confirmed`, job_id: 'fixture_sweep', state: 'running', run_role: 'top-level',
+      created_at: '2026-10-08T00:00:00Z', started_at: '2026-10-08T00:00:01Z', finished_at: null, duration_ms: null },
+    { run_id: `jrun-${host}-delivery`, job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child',
+      created_at: '2026-10-08T00:04:00Z', started_at: '2026-10-08T00:04:01Z', finished_at: '2026-10-08T00:05:00Z', duration_ms: 59000 },
+    { run_id: `jrun-${host}-unlisted`, job_id: 'unlisted_side_job', state: 'succeeded', run_role: 'top-level',
+      created_at: '2026-10-08T00:06:00Z', started_at: '2026-10-08T00:06:01Z', finished_at: '2026-10-08T00:06:02Z', duration_ms: 1000 },
+  ], total: 3, limit: 100, truncated: false });
   if (rest === 'auto-tasks') {
     const allowed = { authorized: true, reason: null };
     const definitions = [{ name: `${host}-confirmed-definition`, enabled: true, template: { title: 'Confirmed chore' }, template_summary: 'Confirmed chore',
@@ -678,7 +699,12 @@ try {
   await page.evaluate(() => { window.location.hash = 'jobs/catalogue'; });
   const catalogueJob = page.locator('#jobs-body [data-job="fixture_sweep"]');
   await catalogueJob.waitFor({ state: 'visible' });
-  assert(await catalogueJob.getByRole('button', { name: 'Run ▸' }).isDisabled(), 'Run stays refused on a read-only host');
+  const catalogueJobs = await page.locator('#jobs-body [data-job]').evaluateAll((nodes) => nodes.map((node) => node.dataset.job));
+  assert(catalogueJobs.length === 1 && catalogueJobs[0] === 'fixture_sweep', `the catalogue lists only the server-declared runnable job: ${catalogueJobs.join(', ')}`);
+  const runControl = catalogueJob.getByRole('button', { name: 'Run ▸' });
+  assert(await runControl.isDisabled(), 'Run stays refused on a read-only host');
+  const runReason = await catalogueJob.locator('.operation-action-unavailable').getAttribute('aria-label');
+  assert(runReason.includes(READ_ONLY_REASON), `Run says why it is off: ${runReason}`);
   assert((await page.locator('#jobs-body .operations-readonly-note').textContent()).includes(READ_ONLY_REASON), 'the Catalogue says why Run is off');
   await capture('host-read-only-jobs-catalogue-dark-1440');
   await page.evaluate(() => { window.location.hash = 'operations/auto-tasks'; });
@@ -687,7 +713,7 @@ try {
   assert(await page.locator('#auto-tasks-body').getByRole('button', { name: 'Delete auto-task hostb-confirmed-definition' }).isDisabled(), 'Delete stays refused on a read-only host');
   assert(await page.locator('#auto-tasks-body [role="switch"]').first().isDisabled(), 'the auto-task switch stays refused on a read-only host');
   await capture('host-read-only-auto-tasks-dark-1440');
-  assert(logged(/^GET \/api\/on\/hostb\/job-runs\?/) && logged(/^GET \/api\/on\/hostb\/auto-tasks\?/), 'the reads went to hostb');
+  assert(logged(/^GET \/api\/on\/hostb\/jobs\?/) && logged(/^GET \/api\/on\/hostb\/job-runs\?/) && logged(/^GET \/api\/on\/hostb\/auto-tasks\?/), 'the reads went to hostb');
   assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   forwardWrites = { authorized: true, reason: null };
   await page.close();
