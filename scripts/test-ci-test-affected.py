@@ -13,9 +13,54 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 
 SCRIPTS = Path(__file__).resolve().parent
+
+
+def signal_reserved_group(pid, *, reserved):
+    """SIGKILL a process group only while its id is still reserved.
+
+    ProcessLookupError means the id is already gone. Do not signal that
+    number again: it may belong to another group.
+    """
+    if not reserved:
+        return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def stop_owned_helper(proc, child_pid_paths=()):
+    """Stop a helper and any child groups it has not yet reaped.
+
+    A recorded child pid is signaled only while this helper is unreaped.
+    The helper removes that record after it reaps the child. Once this
+    fixture has reaped the helper, those numbers are not signaled again.
+    """
+    if proc.returncode is not None:
+        return
+    for path in child_pid_paths:
+        if not path.exists():
+            continue
+        try:
+            pid = int(path.read_text())
+        except (OSError, ValueError):
+            continue
+        signal_reserved_group(pid, reserved=proc.returncode is None)
+    if proc.returncode is None:
+        signal_reserved_group(proc.pid, reserved=True)
+    try:
+        proc.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            proc.communicate()
 
 
 def assert_phase_sums(testcase, summary):
@@ -875,6 +920,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                         "import os, signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
                         "os.write(1, b'ready\\n'); signal.pause()"], os.environ)
                 except SystemExit as caught:
+                    (root / "child.pid").unlink(missing_ok=True)
                     (root / "result.json").write_text(json.dumps({
                         "code": caught.code, "returncode": children[0].poll(),
                         "signal_restored": signal.getsignal(signal.SIGTERM) == previous}))
@@ -893,18 +939,10 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 self.assertEqual(result, {"code": 128 + signal.SIGTERM,
                                           "returncode": -signal.SIGKILL, "signal_restored": True})
             finally:
-                # A helper that exited early may still have a live child in
-                # its separate session. Clean that session regardless of the
-                # helper's status before discarding its PID record.
-                pid_path = root / "child.pid"
-                if pid_path.exists():
-                    try:
-                        os.killpg(int(pid_path.read_text()), signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                if proc.poll() is None:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                    proc.communicate()
+                # The helper reaps its child before it exits and then drops
+                # the pid record. Signal that group only while the helper
+                # itself is still unreaped.
+                stop_owned_helper(proc, [root / "child.pid"])
 
     def test_relay_failures_stop_backpressured_child_and_pipe_holding_grandchild(self):
         scratch = SCRIPTS.parent / ".orbit" / "tmp"
@@ -973,7 +1011,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 children = []
                 real_popen = subprocess.Popen
                 def recording_popen(*args, **kwargs):
-                    kwargs["pass_fds"] = (ack_read, ready_write)
+                    kwargs["pass_fds"] = tuple(kwargs.get("pass_fds") or ()) + (ack_read, ready_write)
                     child = real_popen(*args, **kwargs)
                     children.append(child)
                     (root / "child.pid").write_text(str(child.pid))
@@ -1019,6 +1057,8 @@ class ObservedPipeDrainTests(unittest.TestCase):
                     grandchild_pid = int((root / "grandchild.pid").read_text())
                     reaped, status = os.waitpid(grandchild_pid, 0)
                     result["grandchild_killed"] = reaped == grandchild_pid and os.waitstatus_to_exitcode(status) == -signal.SIGKILL
+                for name in ("child.pid", "grandchild.pid"):
+                    (root / name).unlink(missing_ok=True)
                 (root / "result.json").write_text(json.dumps(result))
                 # Restore real streams before Python's final flush.
                 sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
@@ -1035,27 +1075,9 @@ class ObservedPipeDrainTests(unittest.TestCase):
                         stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
                     except subprocess.TimeoutExpired:
                         # The child's session is separate from the helper's.
-                        # Clean both before reporting a regression; this timer
-                        # is independent of the measured propagation latency.
-                        for pid_path in (root / "child.pid", root / "grandchild.pid"):
-                            if pid_path.exists():
-                                try:
-                                    os.killpg(int(pid_path.read_text()), signal.SIGKILL)
-                                except ProcessLookupError:
-                                    # The pre-repair implementation left the
-                                    # child in the helper's group. Kill it by
-                                    # PID so the helper can still reap it.
-                                    try:
-                                        os.kill(int(pid_path.read_text()), signal.SIGKILL)
-                                    except ProcessLookupError:
-                                        pass
-                        # Killing the child lets even the broken implementation
-                        # finish joining and the helper reap its grandchild.
-                        try:
-                            proc.communicate(timeout=self.DEADLINE_SECONDS)
-                        except subprocess.TimeoutExpired:
-                            os.killpg(proc.pid, signal.SIGKILL)
-                            proc.communicate()
+                        # Signal it only while the helper has not reaped it.
+                        # This timer is independent of the measured latency.
+                        stop_owned_helper(proc, [root / "child.pid", root / "grandchild.pid"])
                         self.fail("run_observed hung after a relay failure with a full pipe")
                     self.assertEqual(proc.returncode, 0, (stdout + stderr).decode(errors="replace"))
                     result = json.loads((root / "result.json").read_text())
@@ -1142,6 +1164,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 return child
             module.subprocess.Popen = recording_popen
             code, output = module.run_observed([sys.executable, "-u", sys.argv[2]], os.environ)
+            Path(sys.argv[3]).with_suffix(".pid").unlink(missing_ok=True)
             Path(sys.argv[3]).write_text(json.dumps({"exit_code": code, "output": output}))
         ''').lstrip("\n"))
         proc = subprocess.Popen(
@@ -1150,22 +1173,9 @@ class ObservedPipeDrainTests(unittest.TestCase):
         try:
             stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
         except subprocess.TimeoutExpired:
-            pid_path = result_path.with_suffix(".pid")
-            if pid_path.exists():
-                pid = int(pid_path.read_text())
-                try:
-                    os.killpg(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-            # Allow the helper to reap the separate child session first.
-            try:
-                proc.communicate(timeout=self.DEADLINE_SECONDS)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.communicate()
+            # The pid file survives only while the helper has not reaped the
+            # child. Do not signal that number after the helper is reaped.
+            stop_owned_helper(proc, [result_path.with_suffix(".pid")])
             self.fail("run_observed blocked past its deadline on a partial stdout line "
                       "while stderr held more than a pipe of data")
         self.assertEqual(proc.returncode, 0, stderr.decode("utf-8", errors="replace"))
@@ -1193,6 +1203,175 @@ class ObservedPipeDrainTests(unittest.TestCase):
         self.assertIn("STDERR_MARK|", relayed_err)
         self.assertIn("STDERR_END", relayed_err)
         self.assertNotIn("PARTIAL_STDOUT|", relayed_err)
+
+    def test_reaped_leader_is_not_signaled_after_its_group_id_is_released(self):
+        """A group signal after wait must still name the original reservation.
+
+        The model reaps the leader on wait. Without an anchor that wait hands
+        the numeric id to a replacement group, and a later killpg is foreign.
+        An anchor keeps the id reserved across that wait, so SIGKILL still
+        names the original group. No process is started and no id is reused.
+        """
+        import importlib.util
+        from types import SimpleNamespace
+
+        spec = importlib.util.spec_from_file_location(
+            "ci_test_affected_ownership", SCRIPTS / "ci-test-affected.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        state = {
+            "reserved": True, "owner": "original", "anchor_alive": False,
+            "leader_unreaped": True, "pid": 4242,
+        }
+        signals = []
+        foreign = []
+
+        class Pipe:
+            def __init__(self, line):
+                self.line = line
+
+            def readline(self):
+                line, self.line = self.line, b""
+                return line
+
+            def close(self):
+                return None
+
+        class Process:
+            def __init__(self):
+                self.pid = state["pid"]
+                self.args = ["observed"]
+                self.returncode = None
+                self.stdout = Pipe(b"line\n")
+                self.stderr = Pipe(b"")
+
+            def wait(self, timeout=None):
+                self.returncode = 0
+                state["leader_unreaped"] = False
+                if not state["anchor_alive"]:
+                    state["reserved"] = False
+                    state["owner"] = "replacement"
+                return 0
+
+            def kill(self):
+                if not state["leader_unreaped"]:
+                    foreign.append(("kill", self.pid, state["owner"]))
+                self.returncode = -signal.SIGKILL
+                state["leader_unreaped"] = False
+
+        def fake_fork():
+            state["anchor_alive"] = True
+            return 1
+
+        def fake_killpg(pid, sig):
+            owned = state["reserved"] and pid == state["pid"] and state["owner"] == "original"
+            record = (pid, sig, state["owner"], state["anchor_alive"], state["leader_unreaped"])
+            if owned:
+                signals.append(record)
+            else:
+                foreign.append(record)
+            if sig == signal.SIGKILL:
+                state["anchor_alive"] = False
+                state["reserved"] = False
+                state["owner"] = "released"
+
+        def fake_popen(*args, **kwargs):
+            preexec = kwargs.get("preexec_fn")
+            if preexec is not None:
+                preexec()
+            return Process()
+
+        next_fd = 100
+        opened = set()
+
+        def fake_pipe():
+            nonlocal next_fd
+            read_fd, write_fd = next_fd, next_fd + 1
+            next_fd += 2
+            opened.update((read_fd, write_fd))
+            return read_fd, write_fd
+
+        def fake_close(fd):
+            opened.discard(fd)
+
+        class Relay:
+            def write(self, raw):
+                raise OSError("injected relay failure")
+
+            def flush(self):
+                return None
+
+        class Sink:
+            def write(self, raw):
+                return len(raw)
+
+            def flush(self):
+                return None
+
+        originals = {
+            "fork": module.os.fork,
+            "killpg": module.os.killpg,
+            "pipe": module.os.pipe,
+            "close": module.os.close,
+            "set_inheritable": module.os.set_inheritable,
+            "Popen": module.subprocess.Popen,
+            "stdout": module.sys.stdout,
+            "stderr": module.sys.stderr,
+        }
+        module.os.fork = fake_fork
+        module.os.killpg = fake_killpg
+        module.os.pipe = fake_pipe
+        module.os.close = fake_close
+        module.os.set_inheritable = lambda fd, inheritable: None
+        module.subprocess.Popen = fake_popen
+        module.sys.stdout = SimpleNamespace(buffer=Relay(), write=lambda text: None, flush=lambda: None)
+        module.sys.stderr = SimpleNamespace(buffer=Sink(), write=lambda text: None, flush=lambda: None)
+        try:
+            with self.assertRaises(OSError) as caught:
+                module.run_observed(["observed"], {})
+        finally:
+            module.os.fork = originals["fork"]
+            module.os.killpg = originals["killpg"]
+            module.os.pipe = originals["pipe"]
+            module.os.close = originals["close"]
+            module.os.set_inheritable = originals["set_inheritable"]
+            module.subprocess.Popen = originals["Popen"]
+            module.sys.stdout = originals["stdout"]
+            module.sys.stderr = originals["stderr"]
+        self.assertEqual(str(caught.exception), "injected relay failure")
+        self.assertEqual(signals, [
+            (4242, signal.SIGTERM, "original", True, True),
+            (4242, signal.SIGKILL, "original", True, False),
+        ])
+        self.assertEqual(foreign, [])
+
+    def test_fixture_cleanup_does_not_signal_a_reaped_group(self):
+        """Fixture cleanup signals a recorded group only while its owner is unreaped."""
+        reaped = mock.Mock()
+        reaped.returncode = 0
+        reaped.pid = 4242
+        with mock.patch("os.killpg") as killpg:
+            stop_owned_helper(reaped, [])
+        killpg.assert_not_called()
+        live = mock.Mock()
+        live.returncode = None
+        live.pid = 4242
+        live.communicate.return_value = (b"", b"")
+        with tempfile.TemporaryDirectory() as temporary:
+            pid_path = Path(temporary) / "child.pid"
+            pid_path.write_text("5252")
+            with mock.patch("os.killpg") as killpg:
+                stop_owned_helper(live, [pid_path])
+        self.assertEqual(killpg.call_args_list, [
+            mock.call(5252, signal.SIGKILL),
+            mock.call(4242, signal.SIGKILL),
+        ])
+        with mock.patch("os.killpg", side_effect=ProcessLookupError), mock.patch("os.kill") as direct:
+            signal_reserved_group(99, reserved=True)
+        direct.assert_not_called()
+        with mock.patch("os.killpg") as killpg:
+            signal_reserved_group(99, reserved=False)
+        killpg.assert_not_called()
 
 
 if __name__ == "__main__":
