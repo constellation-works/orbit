@@ -3,6 +3,7 @@
 use super::Fixture;
 use super::application_authority::{app_command, consent};
 use chrono::{Duration, SecondsFormat, Utc};
+use rusqlite::Connection;
 use serde_json::{Value, json};
 
 fn expires_in(days: i64) -> String {
@@ -242,4 +243,110 @@ fn application_consent_validates_an_optional_rate_limit() {
     scope["rate_limit"] = json!({"admissions": 5, "window_seconds": 999_999});
     let stderr = refused(&fixture, &request(json!([scope]), 7), "rate-window");
     assert!(stderr.contains("rate limit"), "{stderr}");
+}
+
+/// A private plugin whose one tool declares a task `id` and an artifact
+/// `sha256`, so a constrained entry can bind the artifact its callbacks read.
+fn install_proposal_plugin(fixture: &Fixture) -> Value {
+    let source = fixture.source("proposal");
+    let root = super::write_shell_backend(
+        &source,
+        "#!/bin/sh\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    );
+    std::fs::write(
+        root.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: proposal
+  version: 0.1.0
+  description: Accepts one reviewed proposal.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+  tools:
+    - name: accept
+      description: Accept a reviewed proposal.
+      execution_kind: mutating
+      mcp_scope: workspace
+      input_schema:
+        type: object
+        properties:
+          id: { type: string, description: Proposal task id. }
+          sha256: { type: string, description: Digest of the proposal bytes. }
+"#,
+    )
+    .expect("write manifest");
+    fixture.add(&source, &[]);
+    fixture.success(["plugin", "enable", "proposal"]);
+    let show = fixture.json(["plugin", "show", "proposal"]);
+    json!({"name": "proposal", "manifest_digest": show["manifest_digest"]})
+}
+
+/// A constrained scope whose entry binds `proposal.json`'s digest and whose
+/// callback records the JSON at `pointer` of that same artifact.
+fn artifact_json_scope(plugin: &Value, pointer: &str) -> Value {
+    json!({
+        "name": "accept-proposal",
+        "operation": {
+            "tool": "proposal.accept",
+            "plugin": plugin,
+            "fields": {
+                "id": {"task": {"tags_all": ["proposal"], "status": ["proposed"],
+                                "artifact_sha256": {"path": "proposal.json", "field": "sha256"}}},
+                "sha256": {"sha256": {}}
+            }
+        },
+        "callbacks": [{
+            "tool": "orbit.task.update",
+            "plugin": null,
+            "fields": {
+                "id": {"bound": "id"},
+                "execution_summary": {"artifact_json": {"path": "proposal.json", "pointer": pointer}}
+            }
+        }]
+    })
+}
+
+/// Recorded consent rows, to show a refused consent provisions none.
+fn consent_row_count(fixture: &Fixture) -> i64 {
+    Connection::open(fixture.home.join(".orbit/orbit.db"))
+        .expect("open the consent database")
+        .query_row("SELECT COUNT(*) FROM application_consents", [], |row| {
+            row.get(0)
+        })
+        .expect("count consent rows")
+}
+
+#[test]
+fn application_consent_validates_artifact_json_pointer_syntax() {
+    let fixture = Fixture::new();
+    let plugin = install_proposal_plugin(&fixture);
+    // RFC 6901: `~` begins only `~0` or `~1`; the root pointer is empty.
+    for (suffix, pointer) in [("tilde-two", "/~2"), ("tilde-end", "/name~")] {
+        let before = consent_row_count(&fixture);
+        let request = request(json!([artifact_json_scope(&plugin, pointer)]), 7);
+        let stderr = refused(&fixture, &request, suffix);
+        assert!(stderr.contains("RFC 6901"), "{pointer}: {stderr}");
+        assert_eq!(
+            consent_row_count(&fixture),
+            before,
+            "a refused pointer {pointer} must record no consent"
+        );
+    }
+    for (suffix, pointer) in [
+        ("root", ""),
+        ("slash", "/"),
+        ("tilde-zero", "/~0"),
+        ("tilde-one", "/~1"),
+    ] {
+        let request = request(json!([artifact_json_scope(&plugin, pointer)]), 7);
+        let (grant, _) = consent(&fixture, &request, suffix, None);
+        assert_eq!(grant["schema_version"], 2, "pointer {pointer:?}");
+        assert_eq!(
+            grant["scopes"][0]["callbacks"][0]["fields"]["execution_summary"]["artifact_json"]["pointer"],
+            pointer
+        );
+    }
 }
