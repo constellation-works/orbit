@@ -1,7 +1,7 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-10-25
+last_updated: 2026-11-01
 last_validated: 2026-10-25
 status: Accepted
 ---
@@ -255,6 +255,7 @@ Retired features are removed from this table along with their folder.
 | Feature | Folder | Lead |
 |---------|--------|------|
 | Activity / Job | [docs/design/activity-job/](./activity-job/) | codex |
+| Application Approvals | [docs/design/application-approvals/](./application-approvals/) | claude |
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
 | Agent Scorecards | [docs/design/agent-scorecards/](./agent-scorecards/) | claude |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |

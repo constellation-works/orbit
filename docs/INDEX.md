@@ -128,10 +128,11 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 (files, macOS profile) is not yet filed | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (7)
+### Designing (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
+| [Application Approvals](./design/application-approvals/1_scope.md) | Daniel reviews the design; then file the slices in 2_design.md §9 (none filed yet) | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions (ORB-20620) | claude |
@@ -201,6 +202,7 @@ a conservative title/status fallback.
 | [Activity / Job](./design/activity-job/1_overview.md) | Activity / Job is Orbit's execution substrate. | Draft | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | Orbit models AI coding systems as first-class agent families and groups concrete provider-model assignments into named crews. | Draft | grok |
 | [Agent Scorecards](./design/agent-scorecards/1_overview.md) | One scorecard per agent role (orchestrators, implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role. | Draft | claude |
+| [Application Approvals](./design/application-approvals/1_scope.md) | Scope: parameterised application consent scopes (typed per-field constraints bound to live task state, bound read callbacks, named transitions) so an app can carry a user's approvals without operator authority | Draft | claude |
 | [Auditability](./design/auditability/1_overview.md) | Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? | Draft | codex |
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Partly implemented predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Accepted | claude |
