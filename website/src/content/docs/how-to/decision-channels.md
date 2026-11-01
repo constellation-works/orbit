@@ -125,6 +125,74 @@ The dashboard offers the same human answers. Direct answering needs no channel
 token and has no active answering tool for agents. A stale or expired request
 is refused without applying the answer.
 
+## Decisions an agent raises on a human task
+
+An agent that needs a person to choose can raise a multiple-choice decision on
+a task assigned to a [human crew](../../reference/config/#human-crews), instead
+of filing a free-text task. Raising needs no transport plugin and no channel.
+The request shows in `orbit decision list` and on the task's dashboard detail,
+and the operator answers it there.
+
+```bash
+orbit decision raise --task '<task-id>' \
+  --question 'Cut over billing before or after the schema migration?' \
+  --options '[
+    {"label": "Before", "consequence": "Billing reads the new column from day one.", "recommended": true},
+    {"label": "After", "consequence": "Billing stays on the old column until the migration lands.", "recommended": false}
+  ]'
+```
+
+The raise checks these rules before it writes anything:
+
+- `--options` is a JSON array of two to four objects. Each has a one-line
+  `label`, a one-line `consequence` and a `recommended` boolean. Exactly one
+  option is recommended.
+- `--question` is one or two sentences, at most 600 characters.
+- `--topic` is optional. It names a structured topic or a corpus rule id. When
+  it names a current rule the operator has set to auto, the request is answered
+  from that rule at once. That answer is recorded as a precedent, not as a
+  human answer.
+- The task must be assigned to a human crew and still open. A task that is
+  done, rejected or archived refuses the raise, and so does a task that already
+  holds a different open request. Raising an identical open question on the
+  same task returns the request that already holds it.
+- A workspace holds at most 20 open agent-raised requests, and one filer at most
+  5. Past either cap the raise is refused and nothing is written.
+
+The same call is `orbit.decision.raise` over MCP. An agent can raise a decision,
+but it cannot answer one: there is no answering tool for agents.
+
+### Answer a raised decision
+
+`orbit decision show '<request-id>'` lists each option with its answer id. The
+recommended option is always `1`:
+
+```bash
+orbit decision answer '<request-id>' 1 --note 'Confirmed with billing.'
+```
+
+You can also press the matching button on the task's dashboard detail. Answering
+completes the task, which unblocks any task waiting on it. If the task has left
+its human crew since the raise, the answer is refused and the request stays open.
+
+### Precedent for repeated decisions
+
+A corpus rule lets the operator answer a kind of decision once and have later
+raises with that topic answered from the rule.
+
+- `orbit decision rule-auto <rule> <on|off>` turns auto on or off for one
+  current rule in the workspace's decision corpus. `<rule>` is `topic/rule` or a
+  unique rule id. The command rewrites that rule's file; commit the one-line
+  change like any other edit.
+- `orbit decision reverse <id>` re-opens a request that a precedent answered and
+  restores the task status that the precedent recorded. Only the operator can
+  run it.
+- `orbit decision consolidate [--since YYYY-MM-DD]` reads the human answers on or
+  after the date and proposes corpus rule edits. It writes nothing. Put the
+  proposals in a pull request rather than editing rules directly.
+
+These three commands are CLI only. They have no MCP tool.
+
 ## Request an approval digest
 
 As the operator, inspect the digest with:

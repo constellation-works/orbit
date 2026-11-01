@@ -453,6 +453,42 @@ orbit task update "$TASK_ID" \
 Read [Continuous delivery](../continuous-delivery/) for what each hold means
 and the other admission checks that still apply after a decision.
 
+### Human tasks and decisions
+
+A task assigned to a [human crew](../../reference/config/#human-crews) opens with
+a compact panel above its tabs, badged `For you · <crew>`. The panel shows the
+task's first paragraph as its summary, its numbered steps, and a **Copy** button
+beside each fenced command. **Copy all commands** appears when the body has any
+command. Copy only puts text on your clipboard; nothing runs from the panel. When
+the body has neither steps nor commands, the panel says so. The body format is in
+[Human crews](../../reference/config/#human-crews).
+
+The **My work** chip on the Tasks page shows only your human crew's open tasks.
+
+### Decision cards
+
+An open decision on a task is a card with a short summary, a note field, and one
+button per option. The recommended option sorts first, is the primary button and
+carries a **Recommended** label. Each option's consequence sits beside its button.
+When a person outside Orbit must act first, the card opens with a **Do this:**
+line.
+
+Clicking an option asks you to confirm and shows that option's consequence. The
+answer is recorded with whatever the note field holds, and it is applied the same
+way as `orbit decision answer`. Then the card goes away. The answered decision
+stays on the task with the option picked, who answered and when. Where this view
+cannot change the task, the buttons are disabled.
+
+Cards appear in three places:
+
+- A blocked task's final-recovery decision sits in its block callout. See
+  [Blocked tasks: final recovery decides](../../reference/scheduling-yaml/#blocked-tasks-final-recovery-decides).
+- A proposed task that a pilot warning holds shows that decision in its
+  pilot-hold callout.
+- Every other open decision, including one an agent raised on a human-crew task,
+  lists under **Decision needed**. See
+  [Decision channels](../../how-to/decision-channels/#decisions-an-agent-raises-on-a-human-task).
+
 ### Scope and refusals
 
 - The **Why stuck** card and the **Pilot admission hold** callout are visible
