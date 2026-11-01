@@ -216,3 +216,75 @@ compatibility. The existing store schema-prefix and compatibility fixtures
 remain the regression guards for migration and long-lived clients. No live
 evaluation, deployment, configuration mutation or consumer activation is part
 of this delivery.
+
+## Precedent provider application boundary
+
+`orbit_core::application::task::precedent_provider` defines
+`orbit.precedent-provider/1` request/response records and the shared
+`validate_precedent_response` boundary. `OrbitRuntime::retrieve_decision_precedents`
+reads only the host's `assistance.precedent_providers` grant for the current
+workspace. With no entry it returns disabled evidence, scans no histories and
+calls no plugins. Existing decision-request reads are unchanged.
+
+The request contains `contract`, `workspace_id`, `request` (id, gate, category,
+question, options, optional topic, raised_at), `as_of` and `k`. `as_of` must equal
+`raised_at`. The response contains `contract`, `precedents`, `omissions` and
+`truncated`. Each precedent has id, question, options, chosen_option, context,
+scope (workspace_id, category, optional topic), decided_at, decided_by,
+decided_by_kind, reversed and citation (source, ref, digest).
+
+Fixed version-1 bounds apply to UTF-8 bytes, including JSON encoding for whole
+messages:
+
+| Field | Bound |
+|---|---|
+| Request / response | 65,536 / 262,144 bytes |
+| Any string | 8,192 bytes |
+| `k` | 1–32 (the consumer's normal packet size is 8) |
+| Identifiers, category, source | 256 bytes, nonempty, no control characters |
+| Options | 1–8, distinct nonempty ids of at most 64 bytes |
+| Omissions | At most 32 per source |
+| Citation digest | `sha256:` plus 64 lowercase hex digits |
+
+Unknown fields, invalid shapes or kinds, byte/count violations, duplicate ids,
+decisions at or after `as_of`, an unknown chosen option, automation answerers or
+foreign-workspace records refuse the entire source response. The returned
+`provider_gaps` and a durable `decision/precedent_provider_gap` audit event name
+the source and fixed refusal reason; raw response/error text is never audited.
+Other validated sources remain available. Consumers must persist the entire
+retrieval result with their packet, including gaps, omissions and truncation;
+partial evidence cannot justify self-answering. Citations are stored as inert
+references, never fetched.
+
+The built-in source scans workspace task histories, using immutable request
+and resolution events rather than current task text or folded request state.
+Both history writer and answerer must be human labels; `model`, `precedent`
+and `is_automation_actor` writers are excluded. It ranks by matching category,
+matching topic, question-word overlap and recency, then id. A stored category
+is preferred; old requests derive workspace/gate or workspace/agent_request/
+topic-file (or `untopiced`). Answer, confirmation and reversal events recorded
+at or after the cutoff are excluded. Earlier reversals remain contradiction
+evidence, never support.
+
+The human-review owner can append `decision_model_confirmed`, whose JSON note
+is `PrecedentHumanConfirmation { request_id, answered_at, confirmed_by }`.
+The human writer must equal `confirmed_by`, and the record binds the original
+model resolution timestamp. Only then can a model answer appear as
+`human_confirmed`, attributed to the confirming human. Availability and
+`decided_at` use confirmation time, preventing future confirmations leaking
+into replay. This retrieval slice adds no confirmation/answering surface.
+
+Validated sources are ordered by descending recency weight (a positive
+half-life, normally 90 days, gives the same ordering as decision time), then
+configuration source order, then id. Citations deduplicate by digest and the
+result is cut to `k`. Any duplicate marked reversed preserves that contradiction.
+Neither retrieval nor merging grants decision authority.
+
+Manual verification uses synthetic histories and a locally installed fixture
+plugin through the real public API, dispatch, callback and sandbox. It makes
+no external network calls and isolates its home/workspace in a child process:
+
+```sh
+mkdir -p .orbit/tmp
+scripts/build-budget.py -- cargo run -p orbit-core --example precedent_provider_fixture -- .orbit/tmp
+```
