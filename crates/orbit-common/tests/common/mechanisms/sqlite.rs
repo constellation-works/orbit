@@ -177,7 +177,6 @@ fn sqlite_permission_repair_is_safe_or_explicitly_refused() {
     {
         match result {
             Ok(opened) => {
-                eprintln!("SQLite permission repair outcome: Linux path-only repair exercised");
                 assert!(!opened.read_only);
                 assert_eq!(
                     std::fs::metadata(&path)
@@ -194,7 +193,6 @@ fn sqlite_permission_repair_is_safe_or_explicitly_refused() {
                 assert_eq!(value, 7);
             }
             Err(error) => {
-                eprintln!("SQLite permission repair outcome: explicit unsupported-kernel refusal");
                 assert!(
                     error
                         .to_string()
