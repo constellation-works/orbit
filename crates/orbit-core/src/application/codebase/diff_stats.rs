@@ -190,7 +190,13 @@ impl OrbitRuntime {
                 // One task owns the whole range, including a measured zero.
                 BTreeMap::from([(only.clone(), Attributed::from_range(counts))])
             }
-            many => split_by_commit_message(&repo, request, many, &classes)?,
+            many => split_by_commit_message(
+                &repo,
+                request,
+                many,
+                &classes,
+                self.context.settings().machine_task_prefix(),
+            )?,
         };
         for (task_id, attributed) in per_task {
             let task = self.get_task(&task_id)?;
@@ -353,6 +359,7 @@ impl OrbitRuntime {
             landing.task_id,
             &classes,
             counts.reviewable_lines(),
+            self.context.settings().machine_task_prefix(),
         );
         self.write_row(task, landing, &base, counts, reviewable)?;
         Ok(true)
@@ -442,6 +449,7 @@ fn split_by_commit_message(
     request: &DirectLandingRequest,
     task_ids: &[String],
     classes: &DiffClasses<'_>,
+    task_prefix: &str,
 ) -> Result<BTreeMap<String, Attributed>, OrbitError> {
     let git = |error: git2::Error| OrbitError::Execution(format!("walk landed range: {error}"));
     let mut walk = repo.revwalk().map_err(git)?;
@@ -462,9 +470,9 @@ fn split_by_commit_message(
         };
         if let Some((_, counts)) = diff_counts(repo, None, &oid.to_string(), classes) {
             // Class counts follow the batch split. Reviewable lines also drop
-            // a commit that names any other task id, so a shared range is
-            // never re-diffed into the denominator.
-            let reviewable = !names_other_task(message, task_id);
+            // a commit that names any other task of this workspace's prefix,
+            // so a shared range is never re-diffed into the denominator.
+            let reviewable = !names_other_task(message, task_id, task_prefix);
             per_task
                 .entry(task_id.clone())
                 .or_insert_with(|| Attributed {
@@ -483,27 +491,27 @@ fn names_task(message: &str, id: &str) -> bool {
     message_tokens(message).any(|token| token == id)
 }
 
-/// Whether `message` names a task id other than `id`. A task id is a 2–5
-/// letter prefix, a hyphen and digits, the shape a workspace allocates.
-fn names_other_task(message: &str, id: &str) -> bool {
-    message_tokens(message).any(|token| token != id && looks_like_task_id(token))
+/// Whether `message` names a task of `prefix` other than `id`. Only ids this
+/// workspace mints count: a token shaped like one, such as `UTF-8`, `SHA-256`
+/// or `GPT-5`, names no task.
+fn names_other_task(message: &str, id: &str, prefix: &str) -> bool {
+    message_tokens(message).any(|token| token != id && is_task_id_of(token, prefix))
 }
 
 fn message_tokens(message: &str) -> impl Iterator<Item = &str> {
     message.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
 }
 
-fn looks_like_task_id(token: &str) -> bool {
-    let Some((prefix, number)) = token.split_once('-') else {
-        return false;
-    };
-    (2..=5).contains(&prefix.len())
-        && prefix.chars().all(|ch| ch.is_ascii_uppercase())
-        && !number.is_empty()
-        && number.chars().all(|ch| ch.is_ascii_digit())
+/// Whether `token` is an id `prefix` mints: the prefix, a hyphen and digits.
+fn is_task_id_of(token: &str, prefix: &str) -> bool {
+    token
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|number| !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit()))
 }
 
-/// Reviewable lines of `base..landed` that belong to `task_id`.
+/// Reviewable lines of `base..landed` that belong to `task_id`. Another task
+/// is one `task_prefix` mints.
 ///
 /// One commit that names no other task keeps that commit's lines, including
 /// a message that names nobody. Several commits keep only those that name
@@ -517,6 +525,7 @@ fn attributed_reviewable(
     task_id: &str,
     classes: &DiffClasses<'_>,
     range_reviewable: ReviewableLines,
+    task_prefix: &str,
 ) -> Option<ReviewableLines> {
     let mut walk = repo.revwalk().ok()?;
     walk.simplify_first_parent().ok()?;
@@ -534,7 +543,7 @@ fn attributed_reviewable(
     match commits.as_slice() {
         [] => None,
         [only] => {
-            if names_other_task(&only.1, task_id) {
+            if names_other_task(&only.1, task_id, task_prefix) {
                 None
             } else if only.0 == landed {
                 Some(range_reviewable)
@@ -551,7 +560,7 @@ fn attributed_reviewable(
             let mut any = false;
             for (oid, message) in many {
                 if names_task(message, task_id)
-                    && !names_other_task(message, task_id)
+                    && !names_other_task(message, task_id, task_prefix)
                     && let Some((_, counts)) = diff_counts(repo, None, oid, classes)
                 {
                     let lines = counts.reviewable_lines();
