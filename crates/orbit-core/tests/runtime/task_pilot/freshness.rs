@@ -53,31 +53,6 @@ fn assert_fresh(workspace: &Workspace, routine: &RoutineDefinition, reason: &str
     );
 }
 
-fn assert_preparation_due(workspace: &Workspace, routine: &RoutineDefinition, task: &Task) {
-    let now = Utc::now();
-    let observed = evaluate_routine(&workspace.runtime, routine, false, now).unwrap();
-    assert_eq!(observed.reason, "debouncing", "{observed:?}");
-    assert!(
-        observed
-            .state
-            .unwrap()
-            .members
-            .unwrap()
-            .pending
-            .contains_key(&task.id)
-    );
-    let due = evaluate_routine(
-        &workspace.runtime,
-        routine,
-        true,
-        now + Duration::minutes(3),
-    )
-    .unwrap();
-    assert_eq!(due.reason, "would_fire", "{due:?}");
-    assert_eq!(due.batch.len(), 1);
-    assert_eq!(due.batch[0].task_ids, std::slice::from_ref(&task.id));
-}
-
 fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edits() {
     let workspace = Workspace::new();
     let task = workspace.task("fresh explicit assessment");
@@ -141,7 +116,7 @@ fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edit
             }),
         )
         .unwrap();
-    assert_preparation_due(&workspace, &routine, &task);
+    assert_fresh(&workspace, &routine, "fresh");
 }
 
 fn routine_reuse_obeys_configured_material_source_and_consumer_policy() {
@@ -194,7 +169,7 @@ fn routine_reuse_obeys_configured_material_source_and_consumer_policy() {
             }
             _ => unreachable!(),
         }
-        assert_preparation_due(&workspace, &routine, &task);
+        assert_fresh(&workspace, &routine, "fresh");
     }
 }
 
@@ -274,10 +249,35 @@ fn admission_reuses_an_explicit_assessment_off_the_scan_page() {
     );
 }
 
+fn automatic_discovery_skips_previously_piloted_tasks_after_edits() {
+    let workspace = Workspace::new();
+    let task = workspace.task("automatic discovery");
+    let discover = || {
+        workspace.action(
+            "prepare_task_pilot",
+            json!({"workspace_path": workspace.repo, "base_branch": "main"}),
+        )
+    };
+    assert_eq!(discover()["task_ids"], json!([task.id]));
+    assess(&workspace, &task, true);
+    workspace
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({
+                "id": task.id, "model": "codex", "description": "Changed requirements."
+            }),
+        )
+        .unwrap();
+    assert_eq!(discover()["task_ids"], json!([]));
+    assert_eq!(workspace.prepare(&[&task.id])["task_ids"], json!([task.id]));
+}
+
 crate::scenario_table!(
     explicit_assessment_freshness_scenarios,
     explicit_assessment_survives_selector_apply_promotion_and_administrative_edits,
     routine_reuse_obeys_configured_material_source_and_consumer_policy,
     newer_unready_explicit_evidence_is_fresh_without_releasing_active_pilot_holds,
-    admission_reuses_an_explicit_assessment_off_the_scan_page
+    admission_reuses_an_explicit_assessment_off_the_scan_page,
+    automatic_discovery_skips_previously_piloted_tasks_after_edits
 );
