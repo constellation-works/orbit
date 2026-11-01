@@ -39,7 +39,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
         max_wait_seconds,
         max_base_ci_cycles,
         poll_interval_seconds,
-        started,
+        started_ms,
         deadline_ms,
     } = *budget;
     let mut recovery = CheckRecovery::before(deadline_ms, max_base_ci_cycles);
@@ -101,7 +101,8 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             json!(diagnostic["status_observations"].as_u64().unwrap_or(0) > 1);
         let mut state = classify_pr_state(&status);
         diagnostic["classification"] = diagnostics::text(&describe(&state));
-        waited_seconds = waited_seconds.max(started.elapsed().as_secs());
+        waited_seconds = waited_seconds
+            .max(super::super::completion_deadline::now_ms()?.saturating_sub(started_ms) / 1000);
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
         let updated_head = adopt_base_update(&mut pin, context, &status);
@@ -300,7 +301,8 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 _ => {}
             }
         }
-        waited_seconds = waited_seconds.max(started.elapsed().as_secs());
+        waited_seconds = waited_seconds
+            .max(super::super::completion_deadline::now_ms()?.saturating_sub(started_ms) / 1000);
         // [ORB-15677] [ORB-15812] The review owed these checks to the pull
         // request's hosted CI instead of running them: nothing merges until
         // each reports an explicit success on the pinned head. A skipped or
