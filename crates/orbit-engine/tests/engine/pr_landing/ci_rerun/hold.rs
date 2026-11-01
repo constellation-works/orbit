@@ -98,3 +98,113 @@ fn dependency_only_hold_is_recorded_and_expires_into_repair() {
         },
     );
 }
+
+/// A throttled failed-job log read defers the next observation without
+/// restarting the dependency-only planner hold's original clock.
+#[test]
+fn dependency_only_hold_expires_from_its_original_start_after_throttled_log_read() {
+    isolated(
+        "ci_rerun::hold::dependency_only_hold_expires_from_its_original_start_after_throttled_log_read",
+        |sandbox| {
+            const START_MS: u64 = 1_000_000;
+            let (fx, host, _) = fixture(sandbox);
+            patch_config(&fx, |config| {
+                config["conclusions"] = json!({"test": "success"});
+            });
+            let mut input = fx.complete_ungated_input();
+            input["auto_fix"] = json!(true);
+            input["completion"] = json!("review");
+            input["max_wait_seconds"] = json!(6 * 60 * 60);
+            input["poll_interval_seconds"] = json!(10 * 60);
+
+            let host = std::rc::Rc::new(host);
+            let clock = std::rc::Rc::new(std::cell::Cell::new(START_MS));
+            let read_clock = std::rc::Rc::clone(&clock);
+            let wait_clock = std::rc::Rc::clone(&clock);
+            let wait_count = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+            let wait_calls = std::rc::Rc::clone(&wait_count);
+            let wait_host = std::rc::Rc::clone(&host);
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || {
+                    let current = read_clock.get();
+                    read_clock.set(current + 1);
+                    current
+                },
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            let millis = u64::try_from(duration.as_millis()).unwrap();
+                            wait_clock.set(wait_clock.get().saturating_add(millis));
+                            match wait_calls.get() {
+                                0 => {
+                                    // The first poll has already recorded its
+                                    // dependency-only hold. Throttle the next
+                                    // planner log read and resume at 1,000s,
+                                    // beyond the hold's original 900s limit.
+                                    wait_host.script(
+                                        "ci.job_log",
+                                        json!({
+                                            "fallback_error": "HTTP 403: API rate limit exceeded for user ID 270255973.",
+                                            "read_throttle": {
+                                                "retry_after_seconds": 400,
+                                                "principal": "user ID 270255973"
+                                            }
+                                        }),
+                                    );
+                                }
+                                1 => {
+                                    // The deferred log read continues in a new
+                                    // poll, so let it observe the real fixture.
+                                    locked(&wait_host.scripted).remove("ci.job_log");
+                                }
+                                _ => {}
+                            }
+                            wait_calls.set(wait_calls.get() + 1);
+                        },
+                        || action(&host, "pr_complete", &input),
+                    )
+                },
+            );
+
+            let error = result
+                .expect_err("an expired dependency-only hold reaches ordinary repair")
+                .to_string();
+            assert!(
+                orbit_types::workflow::is_pr_auto_fix_check_repair(&error),
+                "the expired hold takes the ordinary repair path: {error}"
+            );
+            assert!(
+                !error.contains("timed out after"),
+                "the original hold deadline expires before completion: {error}"
+            );
+            assert_eq!(
+                wait_count.get(),
+                2,
+                "one poll wait and one throttle wait; error={error}; history={:?}",
+                host.history(TASK_ID)
+            );
+            assert!(
+                locked(&host.scripted_inputs).contains_key("ci-planner-log-seen"),
+                "the planner observed the throttled failed-job log"
+            );
+            assert!(
+                clock.get() < START_MS + 1_500_000,
+                "the later Waiting observation uses the original 900s clock, got {}ms",
+                clock.get() - START_MS
+            );
+            let deferred = notes(&host, "pr_auto_fix_read_deferred");
+            assert_eq!(deferred.len(), 1, "{deferred:?}");
+            assert_eq!(deferred[0]["retry_after_seconds"], json!(400));
+            let held = notes(&host, "pr_auto_fix_ci_rerun_hold");
+            assert_eq!(held.len(), 1, "{:?}", host.history(TASK_ID));
+            assert!(
+                held[0]["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("dependency-only evidence")),
+                "{held:?}"
+            );
+            assert_eq!(notes(&host, "pr_auto_fix_ci_rerun_hold_expired"), held);
+        },
+    );
+}
