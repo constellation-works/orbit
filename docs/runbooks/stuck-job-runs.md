@@ -311,8 +311,8 @@ failing; the next process that can write records reconciles them.
 
 Reconciliation runs best-effort at workspace open and lazily on
 `orbit run history` / `show` / `logs` / `events`. Pass `--no-reconcile` to any of those four
-to read stored run records without finalizing anything; the run-failure and backlog-hygiene
-scans do this because they promise not to mutate run state. `orbit doctor` reports orphans
+to read stored run records without finalizing anything; the run-failure-patterns
+scan does this because it promises not to mutate run state. `orbit doctor` reports orphans
 read-only. A run whose PID is alive but unverifiable is deliberately left alone.
 
 Nested sandboxed activity commands are not a liveness authority for their host worker. When an

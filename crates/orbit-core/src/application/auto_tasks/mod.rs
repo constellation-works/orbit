@@ -20,6 +20,8 @@
 //!   triage's candidate rule (`application::task::triage_candidacy`).
 //! - `retired` — shipped defaults a routine replaced, kept as provenance so
 //!   `orbit workspace sync` retires their seeded copies.
+//! - `demoted` — shipped defaults dropped for unproven yield, whose existing
+//!   copies `orbit workspace sync` keeps as workspace-local definitions.
 //! - [`crud`] — the shared add/list/show/update/mint domain surface.
 //! - `job_step` — `auto-task:` job steps: freeze, observe, keyed admission,
 //!   checkpoints, parking and the step-bound start guard (ORB-20158).
@@ -37,6 +39,7 @@ mod body_history;
 mod change_probe;
 pub mod crud;
 pub mod delete;
+pub(crate) mod demoted;
 pub(crate) mod job_step;
 pub mod listing;
 mod read;
@@ -68,7 +71,10 @@ pub use toggle::{AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfi
 /// workspace on initialization. Defaults are deliberately inert: users must
 /// explicitly mint one or enable it through the existing auto-task surface.
 /// A default a later release dropped moves to
-/// [`retired::RETIRED_AUTO_TASK_FILES`].
+/// [`retired::RETIRED_AUTO_TASK_FILES`] when something replaced it, or to
+/// `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS` when it had not proven its
+/// yield. A definition joins this list only after it has proven its yield as
+/// a workspace-local definition (`docs/design/auto-tasks/1_overview.md`).
 pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "agent-guidance-audit",
@@ -83,20 +89,8 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/architecture-audit.yaml"),
     ),
     (
-        "backlog-hygiene",
-        include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
-    ),
-    (
-        "ci-budget-watch",
-        include_str!("../../../assets/auto_tasks/ci-budget-watch.yaml"),
-    ),
-    (
         "code-health-sweep",
         include_str!("../../../assets/auto_tasks/code-health-sweep.yaml"),
-    ),
-    (
-        "crew-ladder-review",
-        include_str!("../../../assets/auto_tasks/crew-ladder-review.yaml"),
     ),
     (
         "delivery-code-review",
@@ -115,20 +109,12 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/comment-hygiene.yaml"),
     ),
     (
-        "design-sync",
-        include_str!("../../../assets/auto_tasks/design-sync.yaml"),
-    ),
-    (
         "doc-duties",
         include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
     ),
     (
         "escape-to-guard",
         include_str!("../../../assets/auto_tasks/escape-to-guard.yaml"),
-    ),
-    (
-        "flaky-test-hunt",
-        include_str!("../../../assets/auto_tasks/flaky-test-hunt.yaml"),
     ),
     (
         "friction-curation",
@@ -165,18 +151,6 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "security-review",
         include_str!("../../../assets/auto_tasks/security-review.yaml"),
-    ),
-    (
-        "structure-sweep",
-        include_str!("../../../assets/auto_tasks/structure-sweep.yaml"),
-    ),
-    (
-        "suppression-ratchet",
-        include_str!("../../../assets/auto_tasks/suppression-ratchet.yaml"),
-    ),
-    (
-        "workflow-health-audit",
-        include_str!("../../../assets/auto_tasks/workflow-health-audit.yaml"),
     ),
 ];
 

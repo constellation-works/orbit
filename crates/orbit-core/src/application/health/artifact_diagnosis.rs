@@ -86,7 +86,7 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
 
     // Deprecated: tracked by the manifest, still on disk, no longer shipped.
     for (name, digest) in &tracked {
-        if catalog.shipped.contains(name) {
+        if catalog.shipped.contains(name) || catalog.kept.contains(name) {
             continue;
         }
         let path = catalog.path_of(name);

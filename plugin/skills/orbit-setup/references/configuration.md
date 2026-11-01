@@ -57,7 +57,8 @@ counterpart; a name list replaces the inherited list rather than adding to it.
 
 A name Orbit has never shipped is refused by config loading, `orbit config
 set` and seeding commands; the error names the key, bad name and shipped
-choices. A name a later release retired still loads but seeds nothing. This
+choices. A name a later release retired or demoted still loads but seeds
+nothing. This
 policy selects Orbit's shipped defaults, not user-authored or plugin definitions.
 
 The policy applies to `orbit workspace init`, `orbit workspace init --force`,

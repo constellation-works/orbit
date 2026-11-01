@@ -20,10 +20,10 @@ template:
 
     Do not file these here:
     - **Lint suppressions.** Counting, inventorying and ratcheting suppression
-      comments and attributes belongs to the `suppression-ratchet` default
-      auto-task. This sweep does not count them. If that definition is not
-      enabled in this workspace, say so in the execution summary instead of
-      counting here.
+      comments and attributes belongs to a workspace's own
+      `suppression-ratchet` auto-task when it has one. This sweep does not
+      count them. If no such definition is enabled in this workspace, say so
+      in the execution summary instead of counting here.
     - File size and module layout inside one package, and test placement or
       test retirement: layout-only work is not a code-health finding.
     - Latency and performance, documentation drift (the `doc-duties` default

@@ -13,7 +13,9 @@
 //!   default that the running binary no longer ships. A routine is also
 //!   deprecated when its content matches a retired template and the manifest
 //!   never recorded it: reconciliation retires that file by content, so
-//!   reporting the catalog healthy would contradict it [DANI-10502].
+//!   reporting the catalog healthy would contradict it [DANI-10502]. A
+//!   demoted auto-task default is not deprecated: its copy is kept as a
+//!   workspace-local definition.
 //! - **Stale** — the file is a managed copy of an *older* release of a default
 //!   this binary still ships, or an untracked file colliding with a bundled
 //!   default name. An auto-task file that differs from its bundled body only
@@ -54,6 +56,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_config::DEMOTED_DEFAULT_AUTO_TASKS;
 
 use super::activity_catalog::repair_retired_activity_backends as repair_activity_backends;
 
@@ -258,6 +261,9 @@ pub(super) struct ManagedCatalog {
     /// Shipped defaults the workspace seeding policy leaves out. They are
     /// never missing, and a tracked copy is retired as a dropped default is.
     pub(super) left_out: BTreeSet<String>,
+    /// Defaults a release demoted to workspace-local: a tracked copy is kept,
+    /// never deprecated, and `orbit workspace sync` drops its provenance.
+    pub(super) kept: BTreeSet<String>,
 }
 
 impl ManagedCatalog {
@@ -274,6 +280,7 @@ impl ManagedCatalog {
             embedded: Some(embedded),
             shipped,
             left_out: BTreeSet::new(),
+            kept: BTreeSet::new(),
         }
     }
 
@@ -288,6 +295,7 @@ impl ManagedCatalog {
             embedded: None,
             shipped: names.into_iter().collect(),
             left_out: BTreeSet::new(),
+            kept: BTreeSet::new(),
         }
     }
 
@@ -299,6 +307,12 @@ impl ManagedCatalog {
             embedded.retain(|name, _| !left_out.contains(name));
         }
         self.left_out = left_out;
+        self
+    }
+
+    /// Keep tracked copies of the demoted defaults `kept` out of retirement.
+    fn keeping<'a>(mut self, kept: impl IntoIterator<Item = &'a str>) -> Self {
+        self.kept = kept.into_iter().map(str::to_string).collect();
         self
     }
 
@@ -355,7 +369,8 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
                 )
             }),
         )
-        .leaving_out(left_out.auto_task_set()),
+        .leaving_out(left_out.auto_task_set())
+        .keeping(DEMOTED_DEFAULT_AUTO_TASKS.iter().copied()),
         // Routines are loaded and reconciled from the shared catalog. A linked
         // worktree's `local_dir` is its own `.orbit` and must not hide a fault
         // in the catalog the loader and sweep read. Auto-task writes stay
@@ -506,7 +521,7 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
     let mut retired = 0usize;
     let mut settled = Vec::new();
     for (name, digest) in &manifest.assets {
-        if catalog.shipped.contains(name) {
+        if catalog.shipped.contains(name) || catalog.kept.contains(name) {
             continue;
         }
         let relative = kind.layout().relative_path(name);

@@ -523,6 +523,36 @@
         "## Rules and command surfaces",
         "## What other work owns"
       ],
+      "digest": "32f5927fa4542c7659b8c679e9432377351fc895968c7b5096106e28c77e4908",
+      "revision": "72e32655f5febcb6b31ba3f398e1355d4babee45",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "code-health-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Pass A — dead code, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pass C — compatibility retirement, whole repository, every run",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What other work owns"
+      ],
       "digest": "644d52ce4a6c23a8ad169bbd68207b661d621ceefca0c347952e8659b328b480",
       "revision": "5e8901eefa96265b9f1ecd7a5662713cf3455bd6",
       "settings": {
@@ -3074,7 +3104,7 @@
         "## Windows, signatures and recurrence"
       ],
       "digest": "235bab9796dc58085fb123cfc54e574333fa1e5b0e1a6f2f4bc3e1dc77710d32",
-      "revision": "8265466506be352e9b942c70095702ddc31b98b5",
+      "revision": "15aff04ab5fb7e62ebb7e9e72f2f46994482a897",
       "settings": {
         "complexity": "hard",
         "dedupe": "skip_if_open",
@@ -3233,7 +3263,7 @@
         "## Rules and command surfaces"
       ],
       "digest": "eba98d7549890535ee4f2e4d64042e51fd8df426636a072f272c39031023a932",
-      "revision": "a722742b68edfa9789508a6a90b838604a130511",
+      "revision": "5df2d4f60072866fff8d9cb90e335b766fe4d20f",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

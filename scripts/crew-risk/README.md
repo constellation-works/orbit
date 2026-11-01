@@ -1,8 +1,9 @@
 # Crew risk observational report
 
 These scripts are for manual contributor analysis from an Orbit source checkout.
-They are separate from the generic `crew-ladder-review` auto-task, which uses
-workspace ladder and experiment readouts without invoking these scripts.
+They are separate from a workspace's `crew-ladder-review` auto-task, where one
+is defined, which uses workspace ladder and experiment readouts without invoking
+these scripts.
 
 `report.py` is the supported entrypoint. It exports facts read-only from an
 explicit registered **owning** workspace, or consumes a frozen JSON/gzip snapshot,

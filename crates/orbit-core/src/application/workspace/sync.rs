@@ -9,6 +9,7 @@ use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use serde::Serialize;
 
+use crate::application::auto_tasks::demoted::release_demoted_auto_tasks;
 use crate::application::auto_tasks::retired::retire_replaced_auto_tasks;
 use crate::application::auto_tasks::settings::migrate_settings_only_forks;
 use crate::application::auto_tasks::{
@@ -244,6 +245,9 @@ fn reconcile_managed_artifacts(
             base_branch,
             mode,
         )?;
+        // A demoted default's copy is kept: forgetting its provenance first
+        // stops reconciliation below from retiring it as a dropped default.
+        let released = release_demoted_auto_tasks(&auto_tasks_root, mode)?;
         let migrated = if mode.creates_only() {
             Vec::new()
         } else {
@@ -274,7 +278,7 @@ fn reconcile_managed_artifacts(
                 Ok(rendered)
             },
         )?;
-        // One row per migrated or replaced definition: in `Check` mode
+        // One row per migrated, replaced or released definition: in `Check` mode
         // reconciliation still sees the file and would also report it.
         let (superseded, mut kept): (Vec<_>, Vec<_>) = std::mem::take(&mut auto_tasks.actions)
             .into_iter()
@@ -282,6 +286,7 @@ fn reconcile_managed_artifacts(
                 migrated
                     .iter()
                     .chain(&replaced.actions)
+                    .chain(&released.actions)
                     .any(|handled| handled.name == action.name)
             });
         auto_tasks.warnings.retain(|warning| {
@@ -291,8 +296,10 @@ fn reconcile_managed_artifacts(
         });
         kept.extend(migrated);
         kept.extend(replaced.actions);
+        kept.extend(released.actions);
         auto_tasks.actions = kept;
         auto_tasks.warnings.extend(replaced.warnings);
+        auto_tasks.warnings.extend(released.warnings);
         Ok::<_, OrbitError>(auto_tasks)
     };
     let auto_tasks = if mode.writes() {
