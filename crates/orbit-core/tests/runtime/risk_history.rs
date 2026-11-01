@@ -1,6 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-#![allow(missing_docs)]
-
 //! Landed history that gives the owner's task-riskiness model a diff-lines
 //! fit, so a captured selective policy freezes a risk-model identity that
 //! carries its fit window and observations.

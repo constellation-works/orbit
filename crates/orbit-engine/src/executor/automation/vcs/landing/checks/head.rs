@@ -120,7 +120,10 @@ impl DeferredLogRead {
 /// admission; its caller separately preserves the known-red-base hold. A log read the
 /// provider throttled is [`HeadCheckEvidence::ReadDeferred`]; `deadline_ms`,
 /// when set, bounds the log read by the completion's absolute deadline.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "head evidence reads jobs, failed checks and the suspect-repair flag as separate landing inputs"
+)]
 pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -393,7 +396,10 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
 /// this one. `Err` is evidence this read could not establish: a head job
 /// whose identity or log could not be read, or a classification left
 /// inconclusive, such as an unreadable base job or log.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the red-base decision compares head, base and tip commits against the failed jobs in one read"
+)]
 pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,

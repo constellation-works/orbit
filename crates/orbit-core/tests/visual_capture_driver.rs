@@ -1,6 +1,9 @@
 //! Regression check: the visual capture driver runs a UI rule only at the
 //! widths the rule declares, as the canonical ux-rules runner does.
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "the driver fixture panics when the node process or its JSON report cannot be read"
+)]
 
 use std::process::Command;
 

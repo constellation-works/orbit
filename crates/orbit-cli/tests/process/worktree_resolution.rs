@@ -1,5 +1,4 @@
 #![allow(missing_docs)]
-#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::fs;
 #[cfg(unix)]
@@ -1503,7 +1502,6 @@ fn root_resolution_precedence() {
 
 /// Verify config reports the shared store and checkout-local roots without
 /// the retired root aliases.
-#[allow(clippy::too_many_arguments)]
 fn assert_root_case(
     fixture: &Fixture,
     name: &str,

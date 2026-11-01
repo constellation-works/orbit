@@ -1,4 +1,7 @@
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "job-wait fixtures panic when a spec does not parse, which means the fixture itself is wrong"
+)]
 
 //! Load-time checks of a job's auto-task steps [ORB-20157], through the
 //! public `check_job_waits` boundary: the allowed shapes of

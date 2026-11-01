@@ -220,7 +220,10 @@ impl OrbitRuntime {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "this public start entry keeps note, actor, crew, plan and field edits as separate caller arguments"
+    )]
     pub fn start_task_with_identity_and_crew(
         &self,
         id: &str,

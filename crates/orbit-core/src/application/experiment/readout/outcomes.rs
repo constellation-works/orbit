@@ -853,7 +853,10 @@ impl OrbitRuntime {
     /// Recoveries and conflicts per task from its runs' audit trails, the
     /// overlay digests each arm's dispatches received, and the roles in
     /// which each task's arm overlay reached a step that then succeeded.
-    #[allow(clippy::type_complexity)]
+    #[allow(
+        clippy::type_complexity,
+        reason = "the single caller splits run events, overlay digests and instruction roles, which are three independent maps"
+    )]
     fn run_audit(
         &self,
         experiment_id: &str,

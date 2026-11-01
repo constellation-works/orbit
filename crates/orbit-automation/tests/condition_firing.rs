@@ -1,4 +1,8 @@
-#![allow(missing_docs, clippy::expect_used, clippy::unwrap_used)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "firing fixtures panic when the store, clock or subject setup fails instead of hiding a broken fixture"
+)]
 
 //! Condition firing through the public `evaluate_condition` boundary over a
 //! real store: one admission per subject edge across lost replies, restarts

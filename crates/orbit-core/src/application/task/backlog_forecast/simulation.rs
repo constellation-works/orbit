@@ -152,7 +152,10 @@ impl Outcome {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "serialization needs scenario membership, rework and bases that the accumulator does not store itself"
+    )]
     fn into_json(
         mut self,
         items: &[Item],
@@ -380,7 +383,10 @@ pub(super) struct Forecast {
 /// the drain would admit it under `admission`, whose task `i` is
 /// `items[i]`. Proposed items count only toward `if_approved`; tasks
 /// `plan` cannot schedule are left out of each scenario's simulation.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "items, history, episodes, admission, plan, slots, rework, arrivals and correction are independent forecast inputs"
+)]
 pub(super) fn simulate_backlog_forecast(
     items: &[Item],
     resolved: &[Resolved],

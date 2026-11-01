@@ -1,5 +1,3 @@
-#![allow(missing_docs)]
-
 //! [ORB-20866] A `parallel:` branch whose script step kept output files is
 //! checkpointed with that exact output set when it succeeds before a
 //! sibling auto-task branch parks. The resumed run restores the set (the

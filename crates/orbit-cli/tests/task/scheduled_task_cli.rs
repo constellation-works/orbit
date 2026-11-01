@@ -1,6 +1,3 @@
-#![allow(missing_docs)]
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-
 //! `orbit task add|update --not-before` through the real binary: a local
 //! time is converted with the host zone (`TZ` here) and echoed in UTC and
 //! local, a malformed time is refused naming it, `--clear-not-before`

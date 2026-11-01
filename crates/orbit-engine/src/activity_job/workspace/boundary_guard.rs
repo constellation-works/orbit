@@ -21,7 +21,10 @@ use super::{DeclaredWorktreePair, DispatchError, V2AuditWriter, WorktreeBoundary
 impl WorktreeBoundaryGuard {
     /// `primary_base_branch` is the workspace's `workflow.base_branch`: the
     /// primary's baseline, whatever branch the primary has checked out.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "capture distinguishes the subprocess cwd, the registered primary and the declared pair before choosing a boundary"
+    )]
     pub(crate) fn capture(
         input: &Value,
         task_ctx: Option<&Value>,

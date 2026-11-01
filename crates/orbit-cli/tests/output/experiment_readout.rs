@@ -5,8 +5,6 @@
 //! intention-to-treat. Intention-to-treat metric tables follow under their
 //! own headings.
 
-#![allow(missing_docs)]
-
 use std::path::PathBuf;
 use std::process::Output;
 

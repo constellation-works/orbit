@@ -1,5 +1,8 @@
 //! Embed source identity while building, never by consulting a run's workspace.
-#![allow(clippy::print_stdout)]
+#![allow(
+    clippy::print_stdout,
+    reason = "Cargo reads rustc-env and rerun-if-changed instructions only from build script stdout"
+)]
 
 use std::io::Read;
 use std::process::{Command, Stdio};

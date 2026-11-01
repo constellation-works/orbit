@@ -343,7 +343,10 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         let intake_task = match intake_socket {
             Some(socket) => {
                 let accept = socket.serve(intake_state, lease_intake::IntakeLimits::default())?;
-                #[allow(clippy::print_stdout)]
+                #[allow(
+                    clippy::print_stdout,
+                    reason = "the operator reads the lease intake socket path from stdout when the server binds it"
+                )]
                 {
                     println!(
                         "Lease intake socket listening on {}",

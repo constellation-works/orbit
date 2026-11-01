@@ -35,7 +35,10 @@ pub(super) fn cites_changed_candidate(
 }
 
 /// Independently guard the repair evidence path, including job-level recovery.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "suspicion checks the job log, signature and pull number against the candidate diff in one pass"
+)]
 pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -165,7 +168,10 @@ fn repository_citations(
 /// Whether a matching base check passes. A pass alone only authorizes one
 /// unchanged-head pull-request rerun; only a repeated signature on that
 /// rerun can attribute the failure to the candidate.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "an untouched failure compares head, base and tip with the job log before any rerun"
+)]
 pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -211,7 +217,10 @@ pub(super) fn started_after_completion(job: &Value, other: &Value) -> bool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "base evidence takes the cited paths plus head, base, tip and the job that failed"
+)]
 fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,

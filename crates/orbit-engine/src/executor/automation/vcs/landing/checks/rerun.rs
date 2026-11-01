@@ -25,7 +25,10 @@ pub(in crate::executor::automation::vcs) enum CiRerunStep {
     BudgetSpent(String),
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the rerun planner takes pull status, failed jobs, base tip and the caller diagnostic together"
+)]
 pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -71,7 +74,10 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
     result
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the observed planner shares those landing inputs and writes into the caller-owned diagnostic"
+)]
 fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
