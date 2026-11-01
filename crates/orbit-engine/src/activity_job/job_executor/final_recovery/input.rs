@@ -1,4 +1,4 @@
-use orbit_types::workflow::FINAL_RECOVERY_CREWS_KEY;
+use orbit_types::workflow::{FINAL_RECOVERY_CREWS_KEY, FinalRecoveryDecision};
 
 use super::super::*;
 use super::types;
@@ -77,6 +77,12 @@ pub(super) fn final_recovery_input(
         "allowed_resume_step_ids": job.steps[1..=step_index]
             .iter().map(|step| step.id.clone()).collect::<Vec<_>>(),
         "crew_config_key": FINAL_RECOVERY_CREWS_KEY,
+        // The run is live here: it resumes through `resume`, never through a
+        // second resume of itself.
+        "decisions": FinalRecoveryDecision::KINDS
+            .iter()
+            .filter(|kind| **kind != "resume_run")
+            .collect::<Vec<_>>(),
     });
     recovery::evidence::inject_final_recovery_evidence(ctx, &mut input)?;
     if let JobV2StepBody::Target(target) = &step.body {

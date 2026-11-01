@@ -102,6 +102,7 @@ fn a_requeued_claimed_review_continues_its_kept_candidate_through_the_bound_work
         decision: Some(FinalRecoveryDecision::Escalate {
             diagnosis: "review budget exhausted".into(),
             human_action: "Authorize a review reset".into(),
+            summary: None,
         }),
         outcome: Some("settled: recorded for the claim settlement".into()),
     });

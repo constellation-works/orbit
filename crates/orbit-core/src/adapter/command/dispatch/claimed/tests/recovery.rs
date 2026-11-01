@@ -666,6 +666,7 @@ fn final_recovery_reads_only_while_its_leaf_and_recovery_are_live() {
     fixture.set_recovery(Some(FinalRecoveryDecision::Escalate {
         diagnosis: "decided".into(),
         human_action: "look".into(),
+        summary: None,
     }));
     refused_with(
         read(&fixture, &broker),

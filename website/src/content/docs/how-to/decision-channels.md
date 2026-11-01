@@ -20,7 +20,7 @@ Run from the registered workspace:
 orbit config set decision_channel.enabled true
 ```
 
-The setting defaults to `false`. Enabling it allows blocked-task triage and
+The setting defaults to `false`. Enabling it allows blocked-task final recovery and
 task-pilot admission holds to raise decision requests. The digest below also
 raises approval requests for proposed and review tasks. Each request names its
 allowed answers, consequences, binding and expiry. `orbit task show` exposes a

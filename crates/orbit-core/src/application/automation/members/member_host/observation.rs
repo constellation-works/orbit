@@ -14,7 +14,7 @@ use super::super::Host;
 use super::host::{already_preparing, already_triaging, already_verifying, incident_crew};
 use crate::application::automation::SourceCache;
 use crate::application::task::escalation_triage_steps::PilotWarningCandidacy;
-use crate::application::task::{TriageCandidacy, finding_fingerprint, needs_verification};
+use crate::application::task::{finding_fingerprint, needs_verification};
 
 /// Statuses the shared per-request snapshot carries: every status any state
 /// trigger observes (`Host::observed_statuses`), including `review` for
@@ -244,35 +244,8 @@ impl Host<'_> {
                         crew: bundle_crew(task.crew.as_deref()),
                     });
                 }
-                StateTriggerKind::BlockEscalated => {
-                    // Only an episode the shared triage rule qualifies is a
-                    // member, keyed by the task and fingerprinted by the
-                    // episode, so each episode is read once and a fresh
-                    // block is a new member.
-                    let TriageCandidacy::Qualifies(episode) =
-                        self.runtime.block_triage_candidacy_of(&task, now)?
-                    else {
-                        continue;
-                    };
-                    if let Some(run_ids) = active_preparations.get(&task.id) {
-                        withheld.insert(task.id, already_triaging(run_ids));
-                        continue;
-                    }
-                    candidates.push(StateMember {
-                        key: task.id.clone(),
-                        task_ids: vec![task.id.clone()],
-                        evidence: json!({
-                            "task_id": task.id,
-                            "episode": episode.key(),
-                            "basis": episode.basis,
-                        }),
-                        fingerprint: episode.key(),
-                        source: source.clone(),
-                        first_seen: now,
-                        changed_at: now,
-                        crew: bundle_crew(task.crew.as_deref()),
-                    });
-                }
+                // Retired trigger: observes nothing.
+                StateTriggerKind::BlockEscalated => continue,
                 StateTriggerKind::DecisionRequested => {
                     // One member per open request, keyed by the task and
                     // fingerprinted by the request id: the id is raised

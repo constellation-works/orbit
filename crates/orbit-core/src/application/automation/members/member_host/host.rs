@@ -16,9 +16,8 @@ use serde_json::json;
 use super::super::super::pins;
 use super::super::Host;
 use crate::OrbitRuntime;
-use crate::application::task::blocked_recovery::block_triaged_at;
+use crate::application::task::VERIFIABLE_STATUSES;
 use crate::application::task::escalation_triage_steps::{PilotWarningCandidacy, triaged_at};
-use crate::application::task::{TriageCandidacy, VERIFIABLE_STATUSES};
 
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
@@ -343,7 +342,8 @@ impl Host<'_> {
             StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
             StateTriggerKind::FindingUnverified => VERIFIABLE_STATUSES.to_vec(),
             StateTriggerKind::PilotWarningsHeld => vec![TaskStatus::Proposed],
-            StateTriggerKind::BlockEscalated => vec![TaskStatus::Blocked],
+            // Retired: no member is ever observed.
+            StateTriggerKind::BlockEscalated => Vec::new(),
             // An open request can hold a task at any gate: blocked
             // (block triage), backlog (pilot admission), proposed or
             // review (approvals).
@@ -366,33 +366,20 @@ impl Host<'_> {
     pub(super) fn escalation_subject(&self) -> Option<&'static str> {
         match self.trigger.kind {
             StateTriggerKind::PilotWarningsHeld => Some("pilot_warning"),
-            StateTriggerKind::BlockEscalated => Some("block"),
             StateTriggerKind::PreparationEligible
+            | StateTriggerKind::BlockEscalated
             | StateTriggerKind::ExecutionFailed
             | StateTriggerKind::FindingUnverified
             | StateTriggerKind::DecisionRequested => None,
         }
     }
 
-    /// Whether `task` is still an escalation triage member at `now`, with
-    /// the fingerprint it would carry: the held assessment's receipt, or the
-    /// block episode.
-    pub(super) fn escalation_of(
-        &self,
-        task: &Task,
-        now: DateTime<Utc>,
-    ) -> Result<Escalation, OrbitError> {
-        Ok(match self.trigger.kind {
-            StateTriggerKind::BlockEscalated => {
-                match self.runtime.block_triage_candidacy_of(task, now)? {
-                    TriageCandidacy::Qualifies(episode) => Escalation::Qualifies(episode.key()),
-                    other => Escalation::Gone(format!("block_{}", other.as_str())),
-                }
-            }
-            _ => match self.runtime.pilot_warning_candidacy_of(task)? {
-                PilotWarningCandidacy::Qualifies(held) => Escalation::Qualifies(held.operation_id),
-                other => Escalation::Gone(format!("pilot_warning_{}", other.as_str())),
-            },
+    /// Whether `task` is still an escalation triage member, with the
+    /// fingerprint it would carry: the held assessment's receipt.
+    pub(super) fn escalation_of(&self, task: &Task) -> Result<Escalation, OrbitError> {
+        Ok(match self.runtime.pilot_warning_candidacy_of(task)? {
+            PilotWarningCandidacy::Qualifies(held) => Escalation::Qualifies(held.operation_id),
+            other => Escalation::Gone(format!("pilot_warning_{}", other.as_str())),
         })
     }
 
@@ -402,15 +389,12 @@ impl Host<'_> {
         history: &[TaskHistoryEntry],
         fingerprint: &str,
     ) -> Option<DateTime<Utc>> {
-        match self.trigger.kind {
-            StateTriggerKind::BlockEscalated => block_triaged_at(history, fingerprint),
-            _ => triaged_at(history, fingerprint),
-        }
+        triaged_at(history, fingerprint)
     }
 
     /// Settle an escalation triage attempt from the markers its triagers
-    /// recorded. A member whose assessment or block episode carries its
-    /// `pilot_warning_triaged` or `blocked_task_triaged` marker is applied;
+    /// recorded. A member whose assessment carries its `pilot_warning_triaged`
+    /// marker is applied;
     /// once the run stopped, one that no longer qualifies (an operator
     /// decided or touched it, the task moved on, was re-piloted or blocked
     /// again, or was deleted) is released, and one still qualifying without
@@ -462,7 +446,7 @@ impl Host<'_> {
             if !stopped {
                 return Ok(MemberOutcome::Pending);
             }
-            match self.escalation_of(&task, Utc::now())? {
+            match self.escalation_of(&task)? {
                 Escalation::Qualifies(fingerprint) if fingerprint == member.fingerprint => {
                     failed.insert(member.key.clone(), "no_triage_marker".into());
                 }

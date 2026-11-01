@@ -290,19 +290,19 @@ chore of a later sweep can shadow the last decided sweep.
 `skip_unless_blocked_candidates: true` is the second mint-time precondition,
 evaluated after `skip_if_unchanged` on `Fire` only. The host's
 `probe_blocked_candidates` reads every blocked task and applies the
-blocked-task triage's candidate rule (`triage_candidacy` in
+the block-episode candidate rule (`triage_candidacy` in
 `crates/orbit-core/src/application/task/blocked_recovery/triage.rs`): the
 latest transition into `blocked` is one episode, and it qualifies when its
 final-recovery decision escalated, or when it has none and is older than the
 backstop's 72 hours, unless a human set or touched it or it was already
-triaged. `None` skips like `Unchanged` — the slot is not consumed, the skip is
+triaged (final recovery decides blocked tasks now, but the rule still names the episodes nothing has settled). `None` skips like `Unchanged` — the slot is not consumed, the skip is
 recorded as `last_skip` with reason `no_blocked_candidates` and a `detail`
 naming how many blocked tasks were read, and the tick report says the same.
 `Qualifying` mints. A probe error or `Unknown` **fails open**: the definition
 mints and the tick report's reason says the precondition was inconclusive. No
 shipped default carries it any more: the retired `blocked-task-triage` default
-did, and the seeded `blocked_task_triage` routine's `block_escalated` trigger
-now applies the same rule ([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated)).
+did, and final recovery now decides blocked tasks
+([automation triggers §6.2](../automation-triggers/2_design.md#62-retired-escalated-blocks-block_escalated)).
 
 The host tick calls `run_auto_task_scheduler_at` directly for every registered
 owner checkout after routine evaluation and under the host sweep lock. The pass

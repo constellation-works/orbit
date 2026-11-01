@@ -140,7 +140,7 @@ That sweep attaches a `sweep-cursor.json` artifact:
 
 If the ref or the cursor cannot be read, no completed sweep matches, or the probe fails, the tick files the task and records why. An unanswerable precondition does not stop the sweep. The shipped `code-review`, `qa-sweep`, and `qa-full-sweep` definitions carry this block against the workspace base branch. A delivery definition does not need it.
 
-`skip_unless_blocked_candidates: true` files a task only when at least one blocked task has a block episode awaiting triage. Otherwise the tick skips with reason `no_blocked_candidates` and records how many blocked tasks it read. A probe that cannot read them files the task and records why. No shipped auto-task sets this. The blocked-task triage routine below applies the same gate itself. The retired `blocked-task-triage` auto-task is the one that used to carry the flag.
+`skip_unless_blocked_candidates: true` files a task only when at least one blocked task has a block episode that nothing has settled. Otherwise the tick skips with reason `no_blocked_candidates` and records how many blocked tasks it read. A probe that cannot read them files the task and records why. No shipped auto-task sets this. The retired `blocked-task-triage` auto-task is the one that used to carry the flag; final recovery decides blocked tasks now.
 
 ## Delivery triggers
 
@@ -288,7 +288,7 @@ A state trigger watches tasks, waits out a short debounce, and starts its job. I
 | `preparation_eligible` | `job:task_pilot_pipeline` | Proposed or backlog tasks that need a task-pilot assessment. The seeded task-pilot routine. |
 | `finding_unverified` | `job:finding_verification_pipeline` | Review-filed bugs with no verification verdict. |
 | `pilot_warnings_held` | `job:escalation_triage_pipeline` | Proposed tasks whose latest task-pilot assessment holds promotion on warnings. |
-| `block_escalated` | `job:escalation_triage_pipeline` | Blocked tasks whose current block episode awaits triage. |
+| `block_escalated` | Retired | Kept so an old file still loads. Final recovery decides blocked tasks now, so a routine on this kind is skipped as retired. |
 | `decision_requested` | `job:decision_request_pipeline` | Tasks with an open decision request that has not been notified, one member per open request. The job is the decision channel's notification job; a routine on this kind needs it installed. |
 | `execution_failed` | Retired | Kept so an old file still loads. Its job, `task_triage_pipeline`, is no longer shipped, so the routine is skipped as retired. A failed run leaves its task blocked; returning it to the backlog is a human transition. |
 
@@ -358,35 +358,13 @@ policy:
 
 Enabled, it finds each `proposed` task whose latest applied task-pilot assessment holds promotion on warnings, once that hold has settled or waited out. The run only proposes: it does not approve, promote, clear a hold, or edit the task. An operator's approval, or a later task-pilot admission decision, ends membership. A material edit that produces a new holding assessment is a new member. An explicit `orbit run job escalation_triage_pipeline` does not use this gate.
 
-### Opt in to blocked-task triage
+### Blocked tasks: final recovery decides
 
-The seeded file is `.orbit/routines/blocked_task_triage.yaml`, named `blocked-task-triage-<workspace>`, disabled. The safe opt-in is `enabled: true` on that file.
+There is no blocked-task triage routine any more. Final recovery is the single decider for a blocked task. It first runs bounded mechanical steps, each at most once per head or run and recorded in the task history: resume the failed run, rerun the pull request's failed CI jobs, requeue, complete a no-diff task, or link a friction record. The shared requeue bound still applies (2 per 24 hours). A deterministic recheck with no agent also settles a block whose pull request merged outside Orbit, whose base is green on the failing required check, or whose infrastructure block cleared, and records why.
 
-```yaml
-enabled: false
-trigger:
-  state:
-    kind: block_escalated
-    owner_machine: hm_example
-    branch: main
-    debounce_minutes: 2
-    max_wait_minutes: 10
-    max_items: 50
-    batch_size: 5
-    retries: 1
-    deadline_minutes: 90
-target: job:escalation_triage_pipeline
-policy:
-  timeout_minutes: 90
-  overlap: forbid
-  retries:
-    max: 1
-    backoff_minutes: 5
-```
+What remains gets a decision card: a short summary, two or three options with their consequences, and a recommendation. A human answers it from the dashboard or `orbit decision answer`; the answer applies the option's rewrite and action and moves the task out of `blocked` in one operation.
 
-Enabled, it finds each block episode (the task's latest move to `blocked`) that final recovery escalated, or that stayed undecided past the backstop's 72-hour limit, and that nobody outside Orbit's automation has touched since. The run records one disposition: a requeue, a resumed failed run, or a CI rerun on the pull request's failed checks, each counted against the shared final-recovery bound (2 per 24 hours); a friction record for an Orbit defect; a decision proposal; or a named human action. A requeue, resume or rerun is refused for a run another machine executed, for a `security` or `security-review` task, or once the bound is spent, and a rerun is also refused when the pull request's head has moved or no required check failed. Only operator-only or exhausted-bound requeue refusals are recorded with their human action; the task stays blocked and the marker settles the episode. A requeue preflight failure (including an unsettled run) or an unreadable recent-count error stops before a triage comment or marker is written, leaving the episode awaiting triage. If the count cannot be read, record a report that the block remains unresolved. A refused resume or rerun also records nothing, so the episode stays awaiting triage. A recorded marker drops that episode from observation. A later block on the same task is a new episode.
-
-This routine replaces the retired `blocked-task-triage` auto-task. `orbit workspace sync` removes an unedited seeded copy of that auto-task and does not enable this routine. If that auto-task was turned on, sync says so and names this routine. An explicit `orbit run job escalation_triage_pipeline` does not use this gate.
+The seeded `blocked_task_triage.yaml` routine and its `block_escalated` trigger are retired. An existing `blocked-task-triage-<workspace>` file still loads, but it is inert: the loader skips it as retired. `orbit workspace sync` removes an unedited copy and keeps one you edited. The `blocked-task-triage` auto-task stays retired too.
 
 ### Delivery routine
 

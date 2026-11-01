@@ -102,14 +102,13 @@ legacy migration are in [remote-access.md](remote-access.md).
 ## Scheduling and claims
 
 Cron routine definitions have no machine pin: every host with a registered owner
-checkout and an enabled clock evaluates them against its own store. These four
+checkout and an enabled clock evaluates them against its own store. These three
 seeded state routines declare `trigger.state.owner_machine` and
 `trigger.state.branch`:
 
 - `task-pilot`
 - `finding-verification`
 - `pilot-warning-triage`
-- `blocked-task-triage`
 
 The pins are rendered from the seeding host's stable machine id and the
 registered base branch. Only that

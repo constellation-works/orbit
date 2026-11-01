@@ -1043,7 +1043,7 @@
   },
   {
     "name": "orbit_task_block_triage",
-    "description": "Triage blocked tasks whose final recovery escalated, or that the backstop never decides. `candidates` lists those awaiting triage; `propose` records options and a recommendation, `report` records a human action, and `requeue` returns the task to the backlog within the requeue bound shared with final recovery. Block episodes also take three mechanical recoveries: `resume_run` resumes the episode's own failed run from its checkpoints and `rerun_ci` re-requests the failed checks on the task's pull request at an unchanged head and requeues it, both within that bound; `friction_reported` links or files the friction record for an Orbit defect, and the task stays blocked. A refused recovery changes and records nothing. Never completes, rejects or archives a task. With `subject` `pilot_warning`, the same actions triage proposed tasks held by a task-pilot warning instead, and `requeue` is refused. A refused requeue leaves the task blocked. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the requeue bound, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Blocked-task triage`.",
+    "description": "Triage proposed tasks a task-pilot warning holds. `candidates` lists those awaiting triage; `propose` opens a decision request with a short summary, two or three options (each a one-sentence summary, a one-line consequence, an optional field rewrite and an optional action: requeue, re_pilot, change_crew, split, reject or archive) and a recommendation, which the operator answers with one click; `report` records the exact human action when only something outside Orbit resolves the hold. Prefer `propose` whenever the operator resolves the hold by choosing. Never approves, rejects or archives a task itself. Blocked tasks are no longer triaged here: final recovery decides them. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Pilot-warning triage`.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1053,47 +1053,27 @@
         },
         "action": {
           "type": "string",
-          "description": "candidates, requeue, resume_run, rerun_ci, friction_reported, propose, or report"
+          "description": "candidates, propose, or report"
         },
         "subject": {
           "type": "string",
-          "description": "what is triaged: block (default), a blocked task's block episode; pilot_warning, a proposed task's pilot warning hold"
+          "description": "what is triaged: pilot_warning (the default and only subject), a proposed task's pilot warning hold"
         },
         "id": {
           "type": "string",
-          "description": "every action but candidates: the blocked or pilot-held task"
+          "description": "propose and report: the pilot-held task"
         },
-        "blocker": {
+        "summary": {
           "type": "string",
-          "description": "block decisions: the escalation reason, quoted in the comment; pilot_warning quotes the holding findings itself and refuses it"
+          "description": "propose and report: one or two plain-language sentences naming the decision needed, readable without opening the code"
         },
         "reason": {
           "type": "string",
-          "description": "requeue: the repair applied and why the task can run again; resume_run, rerun_ci: why the run or checks can now pass; report, friction_reported: the specific action only a human can take"
-        },
-        "run_id": {
-          "type": "string",
-          "description": "resume_run: the episode's own failed run, as the candidate lists it"
-        },
-        "head_sha": {
-          "type": "string",
-          "description": "rerun_ci: the pull request head the failed checks ran on; refused if the head moved"
-        },
-        "friction_id": {
-          "type": "string",
-          "description": "friction_reported: an existing friction record to link"
-        },
-        "friction_title": {
-          "type": "string",
-          "description": "friction_reported: title of a friction record to file instead, with friction_body"
-        },
-        "friction_body": {
-          "type": "string",
-          "description": "friction_reported: what happened and why it is an Orbit defect"
+          "description": "report: the exact action only a human outside Orbit can take"
         },
         "options": {
           "type": "array",
-          "description": "propose: two or three {summary, consequences, target, replacement} objects; target is `acceptance_criteria` or `description`, and replacement is that field's complete new value (one criterion per line), which an operator's answer applies; without a target the option cannot be applied"
+          "description": "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both"
         },
         "recommended": {
           "type": "integer",

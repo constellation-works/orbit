@@ -39,7 +39,7 @@ Bearing: Orbit already has these pieces, all read from source at `d0cfa7a04`.
 - **Typed state kinds.** `StateTriggerKind`
   (`crates/orbit-types/src/workflow/automation/members.rs`) has these kinds:
   `preparation_eligible`, `finding_unverified`, `pilot_warnings_held`,
-  `block_escalated`, `decision_requested`, and the retired `execution_failed`. Each
+  `decision_requested`, and the retired `block_escalated` and `execution_failed`. Each
   kind has one Core observation rule
   (`crates/orbit-core/src/application/automation/members/member_host/observation.rs`).
   The only configurable predicate is `PreparationEligibility`, a fixed struct of
@@ -179,12 +179,11 @@ express:
 - **`cron` and `every_minutes` stay typed.** They carry a slot identity and the
   `missed_run` policy. A `now`-based condition fires on an edge, not a slot, so it
   can't say "the 09:00 slot was missed".
-- **`pilot_warnings_held` and `block_escalated` are preset candidates.** Each has a
-  one-rule membership: the shared promotion predicate, or `triage_candidacy`. Each
-  settles from a marker
-  ([automation-triggers §6.1–6.2](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held)).
-  They could become shipped condition presets such as
-  `task.status == 'blocked' && task.block.awaiting_triage`. Three things are needed
+- **`pilot_warnings_held` is a preset candidate** (`block_escalated`, its
+  `triage_candidacy` sibling, is retired). It has a one-rule membership, the
+  shared promotion predicate, and settles from a marker
+  ([automation-triggers §6.1](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held)).
+  It could become a shipped condition preset. Three things are needed
   first:
   1. those predicates exposed as computed, read-only task facts;
   2. a condition fire that can batch members into one job by crew (today
@@ -1328,7 +1327,7 @@ target: job:media_ingest_pipeline    # workspace-defined
 6. **Later.** Each of these is filed only when needed:
    - task dirty-ID hints and OS file notifications;
    - notices from a follower-evaluated condition, relayed to the owner;
-   - presets for `pilot_warnings_held` and `block_escalated` (§1);
+   - a preset for `pilot_warnings_held` (§1);
 
 ## Open questions
 

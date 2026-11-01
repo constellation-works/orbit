@@ -23,12 +23,11 @@ use super::template::is_seeded_routine_file;
 use crate::OrbitRuntime;
 
 /// Every state-trigger kind; [`trigger_options`] filters it per definition.
-const STATE_TRIGGER_KINDS: [StateTriggerKind; 6] = [
+const STATE_TRIGGER_KINDS: [StateTriggerKind; 5] = [
     StateTriggerKind::PreparationEligible,
     StateTriggerKind::ExecutionFailed,
     StateTriggerKind::FindingUnverified,
     StateTriggerKind::PilotWarningsHeld,
-    StateTriggerKind::BlockEscalated,
     StateTriggerKind::DecisionRequested,
 ];
 

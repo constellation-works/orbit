@@ -1,12 +1,12 @@
-//! The blocked-task triage's requeue fails closed on an unreadable count.
+//! The shared requeue count fails closed: an unreadable count refuses a final-recovery requeue.
 
 use orbit_types::task::TaskStatus;
 use serde_json::json;
 
 use crate::application::task::tests::{enter_isolated_child, test_runtime};
 use crate::application::task::{
-    BLOCKED_TASK_TRIAGED_EVENT, BlockTriageDecision, BlockTriageRequest, FinalRecoveryCompletion,
-    FinalRecoveryRequest, FinalRecoveryRequeueBound, TaskAddParams, TaskUpdateParams,
+    FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryRequest,
+    FinalRecoveryRequeueBound, TaskAddParams, TaskUpdateParams,
 };
 
 /// Fault injection is necessary: no public input makes the shared requeue
@@ -22,9 +22,9 @@ fn an_unreadable_requeue_count_refuses_the_requeue_and_records_nothing() {
     let (root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
-            title: "Triage an escalated block".to_string(),
-            description: "Exercise the triage requeue bound.".to_string(),
-            acceptance_criteria: vec!["The block is triaged once.".to_string()],
+            title: "Requeue under an unreadable count".to_string(),
+            description: "Exercise the requeue bound.".to_string(),
+            acceptance_criteria: vec!["The requeue fails closed.".to_string()],
             plan: "1) implement".to_string(),
             ..Default::default()
         })
@@ -38,39 +38,31 @@ fn an_unreadable_requeue_count_refuses_the_requeue_and_records_nothing() {
             },
         )
         .expect("start task");
-    runtime
-        .apply_final_recovery(
-            &FinalRecoveryRequest {
-                task_id: task.id.clone(),
-                run_id: "jrun-20261021-0100-t1".to_string(),
-                observed: runtime.final_recovery_revision(&task).expect("observe"),
-                repo_root: root.path().join("repo"),
-                base_ref: "main".to_string(),
-                completion: FinalRecoveryCompletion::Review,
-                requeue_bound: FinalRecoveryRequeueBound::default(),
-            },
-            Some(&json!({"decision": "escalate", "diagnosis": "worker crashed", "human_action": "requeue"})),
-        )
-        .expect("escalate");
-    let before = runtime.get_task(&task.id).expect("read task");
-    assert_eq!(before.status, TaskStatus::Blocked);
+    let request = FinalRecoveryRequest {
+        task_id: task.id.clone(),
+        run_id: "jrun-20261021-0100-t1".to_string(),
+        observed: runtime.final_recovery_revision(&task).expect("observe"),
+        repo_root: root.path().join("repo"),
+        base_ref: "main".to_string(),
+        completion: FinalRecoveryCompletion::Review,
+        requeue_bound: FinalRecoveryRequeueBound::default(),
+    };
     let comments_before = runtime.get_task_comments(&task.id).expect("comments").len();
 
     super::super::apply::FAIL_REQUEUE_COUNT_READ.with(|fail| fail.set(true));
     let error = runtime
-        .record_block_triage(&BlockTriageRequest {
-            task_id: task.id.clone(),
-            blocker: "worker crashed".to_string(),
-            decision: BlockTriageDecision::Requeue {
-                repair: "the host is back".to_string(),
-            },
-            requested_by: "claude".to_string(),
-        })
+        .apply_final_recovery(
+            &request,
+            Some(&json!({"decision": "requeue", "reason": "the host is back"})),
+        )
         .expect_err("an unreadable count must refuse the requeue")
         .to_string();
-    assert!(error.contains("cannot be read"), "{error}");
+    assert!(
+        error.contains("injected requeue count read failure"),
+        "{error}"
+    );
     let after = runtime.get_task(&task.id).expect("read task");
-    assert_eq!(after.status, TaskStatus::Blocked, "nothing was requeued");
+    assert_eq!(after.status, TaskStatus::InProgress, "nothing was requeued");
     assert_eq!(
         runtime.get_task_comments(&task.id).expect("comments").len(),
         comments_before,
@@ -81,7 +73,7 @@ fn an_unreadable_requeue_count_refuses_the_requeue_and_records_nothing() {
             .get_task_history(&task.id)
             .expect("history")
             .iter()
-            .any(|entry| entry.event == BLOCKED_TASK_TRIAGED_EVENT),
-        "the episode stays untriaged, so the next triage reads it again"
+            .any(|entry| entry.event == FINAL_RECOVERY_REQUEUED_EVENT),
+        "no requeue was recorded"
     );
 }

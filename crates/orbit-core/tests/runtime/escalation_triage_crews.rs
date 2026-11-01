@@ -2,8 +2,7 @@
 //! warning reads `workflow.purpose_crews.pilot_warning_triage` while it is set
 //! and holds a crew whose executor declares `inspection_args`, else
 //! `workflow.hard_complexity_crews`, and passes over the crew that wrote the
-//! held assessment while the pool offers another. A block always reads the
-//! hard tier. Crew names are fixture policy; providers matter only in that
+//! held assessment while the pool offers another. Crew names are fixture policy; providers matter only in that
 //! `gemini` declares no `inspection_args`.
 
 use chrono::Utc;
@@ -12,7 +11,7 @@ use orbit_engine::RuntimeHost;
 use orbit_types::workflow::{ActivityCrewDraw, PipelineState};
 use serde_json::{Value, json};
 
-use super::blocked_task_triage::{Fixture, fixture_with_config};
+use super::recovery_fixture::{Fixture, fixture_with_config};
 
 const TASK_PILOT_POOL: &str = "workflow.purpose_crews.task_pilot";
 
@@ -92,15 +91,9 @@ fn drawn(prepared: &Value, task: &str) -> (String, String, Vec<String>) {
     )
 }
 
-fn escalated_block(fx: &Fixture) -> String {
-    let task = fx.task(&[]);
-    fx.escalate(&task);
-    task
-}
-
 /// A `proposed` task whose latest task-pilot assessment holds promotion on a
 /// warning, written by the pilot run `author` drew for (`None`: no run).
-fn held_pilot_warning(fx: &Fixture, author: Option<&str>) -> String {
+pub(super) fn held_pilot_warning(fx: &Fixture, author: Option<&str>) -> String {
     let created = fx
         .runtime
         .run_tool(
@@ -189,11 +182,28 @@ fn a_pool_without_an_inspection_capable_member_falls_back_to_the_hard_tier() {
 }
 
 #[test]
-fn a_block_draws_from_the_hard_tier_whatever_the_pilot_warning_pool_holds() {
-    let fx = triage_fixture("pilot_warning_triage = [\"pilot_codex\"]");
-    let task = escalated_block(&fx);
-    let (crew, source, _) = drawn(&prepare(&fx, "block", &task), &task);
-    assert_eq!((crew.as_str(), source.as_str()), ("hard_lane", "pool:hard"));
+fn the_retired_block_subject_is_refused_and_points_at_final_recovery() {
+    let fx = triage_fixture("");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    let error = fx
+        .runtime
+        .run_deterministic(
+            "prepare_escalation_triage",
+            &json!({}),
+            &json!({
+                "subject": "block", "task_ids": [task],
+                "workspace_path": fx.repo, "base_branch": "main",
+            }),
+            orbit_tools::ToolContext::default(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("retired") && error.contains("final recovery"),
+        "{error}"
+    );
+    assert_eq!(fx.status(&task), "blocked", "nothing changed");
 }
 
 #[test]

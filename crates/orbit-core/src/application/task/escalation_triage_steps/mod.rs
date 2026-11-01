@@ -11,25 +11,25 @@
 //! hard tier), and the `triage_escalation` agent records one
 //! disposition through [`OrbitRuntime::record_pilot_warning_triage`]:
 //!
-//! - **propose** (decision): one comment quoting the holding findings, with
-//!   two or three options, their consequences, ready-to-apply replacement
-//!   text and a recommendation.
-//! - **report** (human-only): one comment naming the human action.
+//! - **propose** (decision, the default whenever the operator resolves the
+//!   hold by choosing): one comment quoting the holding findings and a
+//!   decision request with a short summary, two or three options (each with
+//!   a consequence, an optional field rewrite and an optional action) and a
+//!   recommendation. One click answers it.
+//! - **report** (human-only, limited to actions outside Orbit): one comment
+//!   naming the human action, and a request with the short summary, that
+//!   action and one "Done" option.
 //!
 //! Each appends one [`PILOT_WARNING_TRIAGED_EVENT`] marker naming the
 //! assessment's operation id, which excludes that assessment from the lane
-//! and is what member settlement reads. The lane is propose-only: it never
-//! approves, promotes, clears a hold or edits any other task field. A
-//! material edit re-pilots the task; a new assessment that still holds is a
-//! new member.
+//! and is what member settlement reads. The lane never approves, promotes,
+//! clears a hold or edits any other task field itself: an operator's answer
+//! does, through the decision request. A material edit re-pilots the task; a
+//! new assessment that still holds is a new member.
 //!
-//! The same job reads escalated blocks (`subject: block`). The seeded
-//! `blocked_task_triage` routine (`kind: block_escalated`) admits each block
-//! episode the shared [`triage_candidacy`](super::triage_candidacy) rule
-//! qualifies, once, and the triager records its resume, CI rerun, requeue,
-//! linked friction, proposal or report through
-//! [`OrbitRuntime::record_block_triage`], whose `blocked_task_triaged` marker
-//! settles the member.
+//! Blocked tasks are no longer read here: final recovery is their one
+//! decider, and the retired `block` subject is refused with a migration
+//! message.
 
 mod prepare;
 mod proof;
@@ -40,15 +40,18 @@ pub(crate) use proof::TriageInspectionProof;
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    DecisionAction, DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption,
+    DecisionOptionInput, DecisionRequest, Task, TaskComment, TaskDecision, TaskHistoryEntry,
+    TaskStatus, decision_option_answers,
+};
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
+use super::TaskListFilter;
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
-use super::blocked_recovery::{proposal_text, quote, triage_text, validated_proposal};
 use super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
 use super::pilot::{HeldPilotWarnings, held_pilot_warnings};
-use super::{TaskListFilter, TriageOption};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
 
@@ -169,15 +172,20 @@ pub(crate) fn triaged_at(
 pub enum PilotWarningDecision {
     /// Decision: the operator chooses between options.
     Propose {
+        /// One or two plain sentences naming the decision needed.
+        summary: String,
         /// The options, two or three.
-        options: Vec<TriageOption>,
+        options: Vec<DecisionOptionInput>,
         /// 1-based index of the recommended option.
         recommended: usize,
     },
-    /// Human-only: name the action only a human can take.
+    /// Human-only: name the action only a human outside Orbit can take.
     Report {
         /// The specific human action.
         human_action: String,
+        /// One or two plain sentences for the card; the action stands in
+        /// when absent.
+        summary: Option<String>,
     },
 }
 
@@ -258,7 +266,7 @@ impl OrbitRuntime {
     }
 
     /// Record the lane's decision on `request.task_id`'s held assessment,
-    /// under the task write lock: one comment and one
+    /// under the task write lock: one comment, one decision request and one
     /// [`PILOT_WARNING_TRIAGED_EVENT`] marker, nothing else. Refused unless
     /// the held assessment awaits triage: no marker names it and no operator
     /// has decided it.
@@ -266,32 +274,73 @@ impl OrbitRuntime {
         &self,
         request: &PilotWarningTriageRequest,
     ) -> Result<Value, OrbitError> {
-        let (disposition, outcome, body) = match &request.decision {
-            PilotWarningDecision::Propose {
-                options,
-                recommended,
-            } => {
-                let options = validated_proposal(options, *recommended)?;
-                (
-                    "decision",
-                    "proposed",
-                    format!(
-                        "{}\nNothing else on this task was changed: apply the chosen replacement \
-                         text with `orbit task update`. The edit re-pilots the task, and an \
-                         assessment that still holds is triaged afresh.",
-                        proposal_text(&options, *recommended)
-                    ),
-                )
-            }
-            PilotWarningDecision::Report { human_action } => (
-                "human_only",
-                "reported",
-                format!(
-                    "\nhuman_action: {}\nNothing else on this task was changed.",
-                    triage_text(human_action, "reason")?
-                ),
-            ),
-        };
+        let (disposition, outcome, body, summary, answers, recommended, human_action) =
+            match &request.decision {
+                PilotWarningDecision::Propose {
+                    summary,
+                    options,
+                    recommended,
+                } => {
+                    let summary = triage_text(summary, "summary")?;
+                    let answers = decision_option_answers(options, *recommended)
+                        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+                    let listing = answers
+                        .iter()
+                        .map(|answer| {
+                            format!(
+                                "\n\nOption {}: {}\nConsequence: {}",
+                                answer.id, answer.label, answer.consequence
+                            )
+                        })
+                        .collect::<String>();
+                    (
+                        "decision",
+                        "proposed",
+                        format!(
+                            "\nsummary: {summary}{listing}\n\nRecommended: option {recommended}\n\
+                             Nothing else on this task was changed: answer the decision request to \
+                             apply an option in one step."
+                        ),
+                        summary,
+                        answers,
+                        Some(recommended.to_string()),
+                        None,
+                    )
+                }
+                PilotWarningDecision::Report {
+                    human_action,
+                    summary,
+                } => {
+                    let human_action = triage_text(human_action, "reason")?;
+                    let summary = match summary {
+                        Some(summary) => triage_text(summary, "summary")?,
+                        None => human_action.clone(),
+                    };
+                    (
+                        "human_only",
+                        "reported",
+                        format!(
+                            "\nsummary: {summary}\nhuman_action: {human_action}\nNothing else on \
+                             this task was changed."
+                        ),
+                        summary,
+                        vec![DecisionAnswer {
+                            id: "done".to_string(),
+                            label: "Done — approve into backlog".to_string(),
+                            consequence: "Confirms the action was taken; the task is approved \
+                                          into the backlog."
+                                .to_string(),
+                            option: Some(DecisionOption {
+                                summary: "Done — approve into backlog".to_string(),
+                                rewrite: None,
+                                action: Some(DecisionAction::Requeue),
+                            }),
+                        }],
+                        Some("done".to_string()),
+                        Some(human_action),
+                    )
+                }
+            };
         self.ensure_coordination_task_write_permitted()?;
         let id = request.task_id.as_str();
         let mut answer = None;
@@ -313,7 +362,26 @@ impl OrbitRuntime {
                 request.requested_by,
                 quoted_findings(&held.findings)
             );
-            self.write_pilot_warning_triage(&task, &held, disposition, outcome, &comment)?;
+            let mut decision = DecisionRequest::new(
+                task.id.clone(),
+                DecisionGate::ProposedApproval,
+                answers.clone(),
+                DecisionBinding::for_task(&task, None),
+                "pilot_warning_triage".to_string(),
+                Utc::now(),
+            )
+            .with_summary(summary.clone(), recommended.clone());
+            if let Some(action) = &human_action {
+                decision = decision.with_human_action(action.clone());
+            }
+            self.write_pilot_warning_triage(
+                &task,
+                &held,
+                disposition,
+                outcome,
+                &comment,
+                decision,
+            )?;
             answer = Some(json!({
                 "task_id": id,
                 "subject": "pilot_warning",
@@ -335,6 +403,7 @@ impl OrbitRuntime {
         disposition: &str,
         outcome: &str,
         comment: &str,
+        decision: DecisionRequest,
     ) -> Result<(), OrbitError> {
         let now = Utc::now();
         let marker = TaskHistoryEntry {
@@ -367,7 +436,10 @@ impl OrbitRuntime {
                         message: comment.to_string(),
                         operation_id: None,
                     }],
-                    append_history: vec![marker.clone()],
+                    append_history: vec![
+                        marker.clone(),
+                        decision.history_entry(SYSTEM_ACTOR_LABEL),
+                    ],
                     expected_status: Some(vec![TaskStatus::Proposed]),
                     ..Default::default()
                 },
@@ -381,6 +453,26 @@ impl OrbitRuntime {
         })?;
         Ok(())
     }
+}
+
+/// `value` trimmed and redacted, refused when that leaves nothing.
+fn triage_text(value: &str, field: &str) -> Result<String, OrbitError> {
+    let value = orbit_common::security::redaction::redact_all(value.trim());
+    if value.is_empty() {
+        Err(OrbitError::InvalidInput(format!(
+            "pilot warning triage needs a non-empty `{field}`"
+        )))
+    } else {
+        Ok(value)
+    }
+}
+
+/// `text` as a Markdown quote, line by line.
+fn quote(text: &str) -> String {
+    text.lines()
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Each holding finding as a quote naming its kind.

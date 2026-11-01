@@ -525,7 +525,7 @@ Only an assessment written while the task was `proposed` is graded. The **window
 |---|---|
 | Confirmed | Within the window, a scope edit, or the task is rejected or archived. Or the task is approved with no scope edit and no bare-note edit in the window, and its delivery then blocks or the task is rejected. |
 | Dismissed | Approved with no scope edit and no bare-note edit, then `done` with no block. |
-| Missed scope block (clean assessments only) | Promoted, then a `blocked_task_triaged` marker records disposition `decision` (a `propose` from `orbit.task.block_triage` or the blocked-task triage routine). |
+| Missed scope block (clean assessments only) | Promoted, then a `blocked_task_triaged` marker records disposition `decision` (written only by the retired blocked-task triage, so it appears in old history). |
 | Settled clean (clean assessments only) | Promoted, then `done`, rejected or archived with no such marker. Counts in the denominator only. |
 | Excluded | Approved after a bare-note edit with no scope edit: neither credit nor charge, since it may be a dependency fix that answered the warning or only a tag change. Superseded by a later assessment with no scope edit in between (the later one is graded). Written outside `proposed`. Held and archived after approval. A clean assessment rejected or archived while still `proposed`. |
 | Pending | Still `proposed`, or the delivery has not finished. Reported with the excluded ones. |
@@ -534,7 +534,7 @@ An outcome falls in the window in which the entry that settled it was written. T
 
 Why these weights: at 3 : 1 a crew's warnings are net positive above 25% precision, and the evidence that motivated the terms measured about 55%. A hold costs one operator read, while a confirmed warning saves a failed delivery run. A missed scope block mirrors the confirmed credit, so staying silent is never free.
 
-Missed scope blocks have one source: block-triage markers. The blocked-task triage routine is disabled by default. When no `blocked_task_triaged` marker of any disposition falls in the window, the term reads 0 and the scorecard's `sources.missed_scope_blocks` reports `available: false`, with the reason. The view shows that as a banner, so the zero is not read as no misses.
+Missed scope blocks have one source: block-triage markers, which only the retired blocked-task triage wrote ([ORB-20629]), so they survive in old history alone. When no `blocked_task_triaged` marker of any disposition falls in the window, the term reads 0 and the scorecard's `sources.missed_scope_blocks` reports `available: false`, with the reason. The view shows that as a banner, so the zero is not read as no misses.
 
 Each assessment counts against the crew and model of the pilot run its receipt names, through the same attribution as graded tasks (above), never the task's own crew. A row can therefore have settled assessments but no graded done task (`units` 0).
 

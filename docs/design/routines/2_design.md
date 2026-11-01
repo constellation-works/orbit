@@ -258,9 +258,11 @@ require `overlap: forbid` and the job fixed by their kind:
 [finding-verification eligibility contract](../finding-verification/2_design.md#7-state-trigger);
 `pilot_warnings_held` targets `job:escalation_triage_pipeline` and uses the
 [pilot warning hold contract](../automation-triggers/2_design.md#61-pilot-warning-holds-pilot_warnings_held).
-`block_escalated` targets the same job for escalated blocked-task episodes;
-[ORB-17744] moved blocked-task triage from an auto-task to this state routine.
-The two triage kinds own separate consumers and member sets, so enabling both
+`block_escalated` is retired: [ORB-17744] moved blocked-task triage from an
+auto-task to a state routine, and [ORB-20629] retired that routine because final
+recovery now decides blocked tasks. The loader skips a routine on that trigger
+as inert and the seeding catalog lists `blocked_task_triage` as retired.
+State-trigger kinds own separate consumers and member sets, so enabling several
 is supported. [ORB-17918] narrowed the duplicate-ownership guard: enabled
 state routines with the same source and target conflict only when their kinds
 match, while a state routine still conflicts with a non-state routine on that
@@ -345,7 +347,7 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
 `task_pilot.yaml`, `finding_verification.yaml`, `pilot_warning_triage.yaml`,
-`blocked_task_triage.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
+`worktree_gc.yaml`, `store_gc.yaml`
 and `task_publication.yaml` with workspace-unique names and `enabled: false`.
 [ORB-17816] added `crew_performance_refresh.yaml`, seeded
 enabled: hourly at :23 it skips scanning and writes no snapshot while
@@ -1062,6 +1064,7 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-15662] added review-finding verification and its finding_unverified state trigger.
 - [ORB-16354] enabled replica-local store GC.
 - [ORB-17744] moved blocked-task triage onto the block_escalated state routine.
+- [ORB-20629] retired that routine and the `block_escalated` trigger; final recovery decides blocked tasks.
 - [ORB-17816] added the enabled hourly crew-performance snapshot refresh routine.
 - [ORB-17918] allowed distinct state-trigger kinds to share a job while retaining duplicate-ownership guards.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.

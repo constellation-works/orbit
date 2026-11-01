@@ -42,7 +42,7 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 
 `orbit workspace init` seeds the default routine templates (`ci_failure_sweep`,
 `dependabot_alert_sweep`, `task_pilot`, `finding_verification`, `pilot_warning_triage`,
-`blocked_task_triage`, `worktree_gc`, `store_gc`, `crew_performance_refresh`,
+`worktree_gc`, `store_gc`, `crew_performance_refresh`,
 `task_publication` and `ux-rules`) under
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). All other defaults are `enabled: false`;
@@ -66,8 +66,9 @@ bounded batches and stays quiet for fresh assessments, including unready ones.
 See [State routines and task-pilot configuration](./2_design.md#11-state-routines-and-task-pilot-configuration)
 for the loadable YAML, eligibility/freshness controls and preview commands.
 `finding_verification` uses `finding_unverified`, `pilot_warning_triage` uses
-`pilot_warnings_held` and `blocked_task_triage` uses `block_escalated`; failed-run triage's
-`execution_failed` kind is retained for compatibility and fires nothing.
+`pilot_warnings_held`; the retired `block_escalated` and failed-run triage's
+`execution_failed` kinds are retained for compatibility, and a routine that uses
+`block_escalated` loads inert (final recovery decides blocked tasks).
 Delivery routine configuration and evidence requirements are in
 [Delivery routines](./2_design.md#12-delivery-routines).
 

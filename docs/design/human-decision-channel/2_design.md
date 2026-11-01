@@ -80,18 +80,17 @@ the plugin stays a pure transport.
 Answer ids come from the source that already owns the vocabulary, never invented
 per request:
 
-- **Block triage `propose`:** the option ids `record_block_triage` records
-  (`BlockTriageDecision::Propose { options, recommended }`,
-  `crates/orbit-core/src/application/task/blocked_recovery/triage.rs`), plus
-  `dismiss` (leave blocked, stop asking for this episode). Answering an option
-  applies that option's ready-to-apply replacement text and returns the task to
-  `backlog` — exactly the manual steps the triage comment instructs today — as one
-  human-attributed update. Each option carries a `target` (`acceptance_criteria`
-  or `description`) recorded in the proposal comment beside its replacement; the
-  replacement is that field's complete new value. An option with no resolvable
-  target, an empty or redacted replacement, or a replacement equal to the current
-  field is refused (`answer_not_applicable`) before anything is written, so the
-  task stays blocked and the request open.
+- **Final-recovery `decide`** ([ORB-20629]): the request is self-contained. It carries the
+  option ids final recovery's `decide` decision proposes (each with a summary, a
+  consequence, an optional field rewrite and an optional action from `requeue`, `re_pilot`,
+  `change_crew`, `split`, `reject`, `archive`), the recommended one marked, and `dismiss`
+  (leave blocked, stop asking for this episode). Answering an option is one human-attributed
+  operation: a comment naming the option and note, the rewrite applied as the field's complete
+  new value, the action run, the task moved out of `blocked`, and the request closed. An
+  option with neither a rewrite nor an action, an unknown action, or a rewrite equal to the
+  current field is refused (`answer_not_applicable`) before anything is written, so the task
+  stays blocked and the request open. The same card shape serves `proposed_approval` for
+  pilot-warning triage, where an option approves or re-pilots the held proposed task.
 - **Block triage `report` / final-recovery escalation:** answers are `done` (the
   `human_action:` the readout carries,
   `crates/orbit-core/src/application/task/blocked_recovery/readout.rs`, has been
@@ -317,7 +316,7 @@ The binding (§2.1) is what makes a slow reply safe. Per gate, the request binds
 
 | Gate | Binding | Superseded when |
 |---|---|---|
-| `block_triage` | Block episode key (the `episode=` the triage marker records, `blocked_task_triaged`) | Task left `blocked`, a new episode began, or a human touched the task after the block (the same exclusion triage candidacy uses) |
+| `block_triage` | Block episode key (the latest transition into `blocked`; older requests also carry the `episode=` a retired `blocked_task_triaged` marker recorded) | Task left `blocked`, a new episode began, or a human touched the task after the block (the same exclusion triage candidacy uses) |
 | `pilot_admission` | Pilot `operation_id` of the holding assessment | A newer assessment landed, or an operator verdict already resolved that `operation_id` |
 | `proposed_approval` | Task revision + `proposed` status | Status moved, or description/criteria changed since the digest rendered |
 | `review_approval` | Task revision + `review` status + candidate identity | Status moved, or a new candidate replaced the reviewed one |
@@ -408,8 +407,8 @@ word      := approve | reject | approve-anyway | clear | evaluated | done | dism
 notified. A plugin-seeded state routine on this kind runs the mail job; the member
 settles when the request leaves `open` or the notification marker is written.
 
-Why not poll the existing markers (`blocked_task_triaged`,
-`pilot_warning_triaged`)?
+Why not poll the existing markers (`pilot_warning_triaged`, and the retired
+`blocked_task_triaged`)?
 
 - The markers record that *triage* happened, not that a *decision is owed*:
   `propose` and `report` owe one, a `mechanical` requeue does not, and the marker
@@ -429,7 +428,7 @@ list), and its settlement rule become core maintenance. That is the right trade 
 the alternative smears the same logic across every transport plugin.
 
 **Raising.** Requests are raised by the mechanisms that create the hold, in the
-same write: `record_block_triage` on `Propose`/`Report` dispositions; pilot
+same write: final recovery's `decide`/`escalate` decisions (formerly `record_block_triage`); pilot
 admission when a hold is first derived for an `operation_id`; the digest routine
 for `proposed` tasks (raising is idempotent per binding — one open request per
 (task, gate, binding), enforced at raise time). Raising happens only while
@@ -567,9 +566,9 @@ Ordered; each slice is independently deliverable and leaves the tree shippable.
 operator's step after review.
 
 1. **Decision-request record and raising.** Owner: `orbit-types`
-   (`DecisionRequest`), `orbit-core` (raise from `record_block_triage` and pilot
+   (`DecisionRequest`), `orbit-core` (raise from final recovery and pilot
    admission, derived state, `[decision_channel] enabled`). Depends on: nothing.
-   Acceptance sketch: with the channel enabled, a `propose` triage and a pilot
+   Acceptance sketch: with the channel enabled, a final-recovery `decide` and a pilot
    hold each raise exactly one open request with the right answers and binding;
    disabled, nothing is written.
 2. **Listing and local answering surfaces.** Owner: `orbit-tools`

@@ -54,12 +54,6 @@ export const taskState = {
   // is keyed `<task id>:<field>` because one detail can hold several editors.
   complexityFeedback: new Map(),
   fieldFeedback: new Map(),
-  // `open_decisions` on a task is compact: each request lists only its answer
-  // ids. The label and one-line consequence that tell an operator what an id
-  // does live on the decisions API, so the detail reads them from
-  // `GET /api/decisions?task_id=` once per set of open requests and renders no
-  // answer control until they are in hand.
-  taskDecisionLoads: new Map(),
   // Operator records (pilot-admission / post-deploy): a refused record's typed
   // code and message, kept with the action like a refused recovery.
   operatorRecordRefusals: new Map(),

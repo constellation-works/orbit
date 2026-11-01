@@ -765,6 +765,7 @@ fn an_exhausted_claimed_review_requeues_onto_a_new_claim() {
         decision: Some(FinalRecoveryDecision::Escalate {
             diagnosis: "review budget exhausted".into(),
             human_action: "Authorize a review reset".into(),
+            summary: None,
         }),
         outcome: Some("settled: recorded for the claim settlement".into()),
     });

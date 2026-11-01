@@ -364,7 +364,7 @@ stamps its checkpoint `inspection_proof_required: true`; a run prepared
 before the proof existed, still in flight across an upgrade, carries no
 stamp, and its results are checked only when they report a proof. Finding
 verification applies the same proof per partition. Escalation triage passes
-it on each `orbit.task.block_triage` decision: while a live triage run holds
+it on each pilot-warning `orbit.task.block_triage` decision: while a live triage run holds
 the task, the tool requires that run's proof (or, for a non-Git run,
 `source_revision` null and no observed values) and refuses before recording,
 proposing or requeueing anything. It validates the action, subject and task

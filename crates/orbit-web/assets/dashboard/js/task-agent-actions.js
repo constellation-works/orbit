@@ -151,7 +151,8 @@ async function watchPilotRun(task, key, runId, visit, context) {
 }
 
 // The detail's escalation triage readout, or null when no Triage action is
-// shown: the task is neither held by pilot warnings nor blocked. The server
+// shown: the task is not held by pilot warnings (a blocked task is decided
+// by final recovery and shows its decision card instead). The server
 // derives it from the pipeline's own candidacy, so the panel enables the
 // action exactly when the endpoint would submit.
 export function escalationTriage(task) {
@@ -172,18 +173,15 @@ function triageDisabledReason(task, mutable, running) {
   return `Triage unavailable — ${detail}`;
 }
 
-// Triage on a held proposed task or a blocked task: one explicit
-// escalation triage run for this task. It only proposes a decision or names
-// the human action (a blocked task may be requeued by the pipeline's own
-// bounded rule); it never approves, promotes or edits the task itself.
+// Triage on a task held by pilot warnings: one explicit escalation triage
+// run for this task. It only opens a decision card or names the human
+// action; it never approves, promotes or edits the task itself.
 export function appendTriageControls(actions, task, detail, context, mutable) {
   const triage = escalationTriage(task);
   const running = triageRunsByTask.get(taskShared.taskDispatchIdentity(task))
     || (triage && triage.run_id ? { runId: String(triage.run_id) } : null);
   const reason = triageDisabledReason(task, mutable, running);
-  const subjectWords = triage && triage.subject === "block"
-    ? "Triage this blocked task: a hard-tier triager requeues it within the final-recovery bound, proposes a decision, or names the human action. Nothing else on the task changes"
-    : "Triage this held pilot assessment: a hard-tier triager proposes a decision or names the human action that settles the hold. It never approves, promotes or edits the task";
+  const subjectWords = "Triage this held pilot assessment: a hard-tier triager opens a decision card or names the human action that settles the hold. It never approves, promotes or edits the task";
   const btn = el("button", {
     class: "action triage",
     text: running ? "triaging…" : "triage",

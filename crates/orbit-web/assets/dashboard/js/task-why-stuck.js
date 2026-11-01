@@ -4,6 +4,7 @@ import { el } from './common.js';
 import { taskState, absTimeNode, taskRunHref } from './task-shared.js';
 import * as taskComments from './task-comments.js';
 import * as taskFields from './task-fields.js';
+import * as taskDecision from './task-decision.js';
 
 // Descriptions longer than this open clamped behind "Show full description".
 // Estimated from the source, like a long comment, because the detail is built
@@ -164,31 +165,59 @@ function whyStuckChecks(pull) {
 
 // Core selects the latest block or escalation and supplies readable evidence.
 // Render it as text: diagnoses and operator actions are untrusted task content.
+// The blocked task's attention card. A final-recovery decision shows its short
+// summary and one button per option; a block with no decision shows the summary
+// and the exact human action. The raw diagnosis, the block time and the links to
+// the escalation and the run sit under a collapsed "Details".
 export function buildTaskBlockCallout(task, context, detail) {
   if (task.status !== "blocked") return null;
   const block = task.block || {};
+  const decision = taskDecision.blockDecision(task);
   const headingId = `block-heading-${task.id}`;
+  const reason = block.reason || "No block reason was recorded.";
+  const summary = (decision && decision.summary) || reason;
   const content = el("div", { class: "task-attention-content" }, [
     el("h3", { class: "task-attention-title", id: headingId, text: "Blocked · needs your attention" }),
-    el("p", {
-      class: "task-attention-body task-block-reason",
-      text: block.reason || "No block reason was recorded.",
-    }),
   ]);
+  if (decision) {
+    content.appendChild(taskDecision.buildDecisionCard(task, decision, detail, context));
+    if (!decision.summary) {
+      content.insertBefore(el("p", { class: "task-attention-body task-block-reason", text: summary }), content.children[1]);
+    }
+  } else {
+    content.appendChild(el("p", { class: "task-attention-body task-block-reason", text: summary }));
+    const next = block.next_action || (task.next_step && task.next_step.resume_command
+      ? "Review the failed run, resolve the cause, then resume the run or move this task back to backlog."
+      : "Review the task and its evidence, resolve the cause, then move this task back to backlog when it is ready to retry.");
+    content.appendChild(el("p", { class: "decision-human-action task-block-next" }, [
+      el("strong", { text: "Do this: " }),
+      el("span", { text: next }),
+    ]));
+  }
+  content.appendChild(buildBlockDetails(task, block, context, detail, summary));
+  return el("section", { class: "task-attention warning task-block-callout", "aria-labelledby": headingId }, [
+    el("span", { class: "task-attention-icon", "aria-hidden": "true" }), content,
+  ]);
+}
+
+function buildBlockDetails(task, block, context, detail, summary) {
+  const details = el("details", { class: "task-block-details" }, [
+    el("summary", { text: "Details" }),
+  ]);
+  const raw = block.reason || "";
+  if (raw && raw !== summary) {
+    details.appendChild(el("p", { class: "task-block-diagnosis", text: raw }));
+  }
   const time = el("p", { class: "task-block-time" });
   if (block.at) {
     time.append("Blocked at ", absTimeNode(context, block.at));
   } else {
     time.textContent = "Block time not recorded.";
   }
-  content.appendChild(time);
-  const next = block.next_action || (task.next_step && task.next_step.resume_command
-    ? "Review the failed run, resolve the cause, then resume the run or move this task back to backlog."
-    : "Review the task and its evidence, resolve the cause, then move this task back to backlog when it is ready to retry.");
-  content.appendChild(el("p", { class: "task-attention-body task-block-next", text: `Next: ${next}` }));
+  details.appendChild(time);
   const actions = el("div", { class: "task-attention-actions" });
   if (Number.isInteger(block.comment_index) && Array.isArray(task.comments) && task.comments[block.comment_index]) {
-    const read = el("button", { class: "attention-action primary", type: "button", text: "Read escalation" });
+    const read = el("button", { class: "attention-action", type: "button", text: "Read escalation" });
     read.addEventListener("click", () => {
       detail.activateTab("comments");
       const id = taskComments.commentAnchorId(task.id, block.comment_index);
@@ -209,8 +238,6 @@ export function buildTaskBlockCallout(task, context, detail) {
     history.addEventListener("click", () => detail.activateTab("history"));
     actions.appendChild(history);
   }
-  content.appendChild(actions);
-  return el("section", { class: "task-attention warning task-block-callout", "aria-labelledby": headingId }, [
-    el("span", { class: "task-attention-icon", "aria-hidden": "true" }), content,
-  ]);
+  details.appendChild(actions);
+  return details;
 }

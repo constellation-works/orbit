@@ -10,6 +10,7 @@ use std::{fmt, fs};
 
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_types::workflow::RoutineDefinition;
+use orbit_types::workflow::automation::members::StateTriggerKind;
 
 use super::due::parse_cron;
 use crate::condition::{ConditionCarrier, check_condition, check_guard};
@@ -79,6 +80,25 @@ pub fn manual_retirement_advice(path: &Path) -> String {
         "delete '{}' or retarget it at a job this Orbit ships",
         path.display()
     )
+}
+
+/// Why a state routine on the retired `block_escalated` trigger is skipped.
+/// The job it targets still ships (pilot-warning triage), so the trigger, not
+/// the job, is what retired.
+const RETIRED_BLOCK_TRIGGER_REASON: &str = "blocked-task triage is retired: final recovery is the \
+     single decider for a blocked task and opens its decision request itself";
+
+/// Compose the reason for a routine on the retired `block_escalated` trigger,
+/// then the single step that clears the file.
+pub fn retired_block_trigger_reason(advice: &str) -> String {
+    format!(
+        "trigger 'state:block_escalated' is retired in this Orbit ({RETIRED_BLOCK_TRIGGER_REASON}); {advice}"
+    )
+}
+
+/// Whether `reason` was composed by [`retired_block_trigger_reason`].
+pub fn is_retired_block_trigger_reason(reason: &str) -> bool {
+    reason.starts_with("trigger 'state:block_escalated' is retired")
 }
 
 /// Where a routine definition was found on disk. The directory decides; git
@@ -585,6 +605,29 @@ fn load_routine_file(
                 job: definition.target.job_name().to_string(),
                 reason,
                 skipped: true,
+            }),
+            catalog_error: None,
+        });
+    }
+
+    // A routine on the retired `block_escalated` trigger loads inert: the job
+    // it targets still ships for pilot warnings, so it would otherwise run
+    // with a trigger that observes nothing.
+    if definition
+        .trigger
+        .state
+        .as_ref()
+        .is_some_and(|state| state.kind == StateTriggerKind::BlockEscalated)
+    {
+        return Ok(RoutineLoadOutcome {
+            routine: RoutineLoad::Retired(RetiredRoutine {
+                name: definition.name,
+                origin,
+                source_workspace: source.workspace.clone(),
+                path: path.to_path_buf(),
+                job: definition.target.job_name().to_string(),
+                reason: retired_block_trigger_reason(&sync_retirement_advice(&source.workspace)),
+                skipped: false,
             }),
             catalog_error: None,
         });

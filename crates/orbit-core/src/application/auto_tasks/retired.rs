@@ -30,8 +30,10 @@ pub(crate) struct RetiredAutoTask {
     /// The last template a release shipped for it.
     pub template: &'static str,
     /// The seeded routine (its file stem under `.orbit/routines/`) that
-    /// replaces it.
-    pub replaced_by: &'static str,
+    /// replaces it, or `None` when nothing opt-in does.
+    pub replaced_by: Option<&'static str>,
+    /// What replaced it when no routine did.
+    pub superseded_by: &'static str,
 }
 
 /// Retiring a default: drop it from `DEFAULT_AUTO_TASK_FILES`, keep its
@@ -39,7 +41,8 @@ pub(crate) struct RetiredAutoTask {
 pub(crate) const RETIRED_AUTO_TASK_FILES: &[RetiredAutoTask] = &[RetiredAutoTask {
     name: "blocked-task-triage",
     template: include_str!("../../../assets/auto_tasks/blocked-task-triage.yaml"),
-    replaced_by: "blocked_task_triage",
+    replaced_by: None,
+    superseded_by: "final recovery, which decides every blocked task itself",
 }];
 
 /// What retiring the replaced defaults found in one auto-task directory.
@@ -102,20 +105,32 @@ pub(crate) fn retire_replaced_auto_tasks(
         if let Some(settings) = &settings {
             settings.apply(&mut effective);
         }
-        let routine = ManagedAssetLayout::YamlStem.relative_path(retired.replaced_by);
-        let routine = routines_dir.join(routine);
-        let routine = routine.display();
+        let routine = retired.replaced_by.map(|stem| {
+            routines_dir
+                .join(ManagedAssetLayout::YamlStem.relative_path(stem))
+                .display()
+                .to_string()
+        });
         let seeded = classified
             .as_ref()
             .is_none_or(|classified| classified.overrides.body_fields.is_empty());
         if !seeded {
             if effective.enabled {
-                replaced.warnings.push(format!(
-                    "auto-task `{}` is a locally edited copy of a retired default and was \
-                     preserved; the `{}` routine replaces it. Orbit did not enable the \
-                     routine: to opt in, set `enabled: true` in {routine}",
-                    retired.name, retired.replaced_by
-                ));
+                replaced
+                    .warnings
+                    .push(match (retired.replaced_by, &routine) {
+                        (Some(name), Some(routine)) => format!(
+                            "auto-task `{}` is a locally edited copy of a retired default and was \
+                         preserved; the `{name}` routine replaces it. Orbit did not enable the \
+                         routine: to opt in, set `enabled: true` in {routine}",
+                            retired.name
+                        ),
+                        _ => format!(
+                            "auto-task `{}` is a locally edited copy of a retired default and was \
+                         preserved; it is superseded by {}",
+                            retired.name, retired.superseded_by
+                        ),
+                    });
             }
             continue;
         }
@@ -134,17 +149,15 @@ pub(crate) fn retire_replaced_auto_tasks(
             name: retired.name.to_string(),
             path,
             outcome: ManagedAssetOutcome::Retired,
-            detail: Some(if effective.enabled {
-                format!(
-                    "the enabled auto-task is replaced by the `{}` routine, which Orbit left \
-                     disabled: to opt in, set `enabled: true` in {routine}",
-                    retired.replaced_by
-                )
-            } else {
-                format!(
-                    "replaced by the `{}` routine, disabled until you opt in ({routine})",
-                    retired.replaced_by
-                )
+            detail: Some(match (retired.replaced_by, &routine) {
+                (Some(name), Some(routine)) if effective.enabled => format!(
+                    "the enabled auto-task is replaced by the `{name}` routine, which Orbit left \
+                     disabled: to opt in, set `enabled: true` in {routine}"
+                ),
+                (Some(name), Some(routine)) => format!(
+                    "replaced by the `{name}` routine, disabled until you opt in ({routine})"
+                ),
+                _ => format!("superseded by {}", retired.superseded_by),
             }),
         });
     }

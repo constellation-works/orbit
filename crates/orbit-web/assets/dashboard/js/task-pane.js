@@ -13,7 +13,6 @@ import { fixPrSignature, fixPrState, pilotSignature, recoverySignature, refreshF
 import { crewOptionsSignature, feedbackSignature } from './task-crew.js';
 import { buildRelationRow, drainDependencyIds, relationTargets } from './task-relations.js';
 import * as taskReadiness from './task-readiness.js';
-import * as taskEvidence from './task-evidence.js';
 import * as taskComments from './task-comments.js';
 import * as taskFields from './task-fields.js';
 
@@ -124,7 +123,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => taskComments.disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${ptask.id}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${taskEvidence.decisionSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}`;
   return wrap;
 }
 /* ORB-11655: a comment or reject form, or an open field editor (ORB-12235),
@@ -217,7 +216,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${fixPrSignature(t)}-${taskEvidence.decisionSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${fixPrSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;

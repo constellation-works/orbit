@@ -1476,7 +1476,7 @@ baseline_red_repair = ["opus"]
 | Red-base repair | `workflow.purpose_crews.baseline_red_repair` | tasks the red-base re-check files (`baseline-red-repair` tag) | the task's matching [type pool](#type-pools-by-task-type-and-complexity), when it has one, then its complexity pool, then `default_crew` |
 | Sweep tasks | `workflow.purpose_crews.sweep_tasks` | tasks the CI failure sweep files (`ci-failure-sweep` tag), the Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files (its follow-up tag) | the same |
 | Explorer | `workflow.purpose_crews.explorer` | the read-only [explorers](#workflowexplore--read-only-exploration-for-implementing-agents) an implement or review-repair agent delegates | none: exploration is not offered |
-| Pilot-warning triage | `workflow.purpose_crews.pilot_warning_triage` | the triager of each held task-pilot assessment (`escalation_triage_pipeline`, subject `pilot_warning`; the `block` subject keeps the hard tier) | `workflow.hard_complexity_crews` |
+| Pilot-warning triage | `workflow.purpose_crews.pilot_warning_triage` | the triager of each held task-pilot assessment (`escalation_triage_pipeline`, subject `pilot_warning`) | `workflow.hard_complexity_crews` |
 
 A triager inspects pinned source natively, so only members whose executor declares [`inspection_args`](#executor-inspection-tools-inspection_args) are drawn, by weight and seeded by task, and for a pilot warning the crew that wrote the held assessment is passed over while the pool offers another. A pool with no such member keeps the hard-tier route (the next tier up, then `workflow.default_crew`, as above). The recorded draw names its source as `purpose:pilot_warning_triage` (`pool:<tier>` or `default` on the hard-tier route) in each prepared task row (`crew_source`) and partition (`draws`).
 
@@ -1995,17 +1995,17 @@ inherits no completion, merge or automatic-fix authority. See
 
 **Escalated blocks.** A final-recovery `requeue` is bounded to two per task
 in 24 hours; past that the decision is refused and the task stays blocked.
-The bound has no configuration key. What final recovery escalates waits in
-`blocked` for a reader: the seeded `blocked_task_triage` routine (shipped
-disabled; set `enabled: true` in `.orbit/routines/blocked_task_triage.yaml`)
-admits each escalated block episode once, shortly after it appears, into the
-`escalation_triage_pipeline` job. A triager drawn from
-`workflow.hard_complexity_crews` requeues a mechanical block within the same
-two-per-24-hours count, proposes options for a decision, or reports a
-human-only block. It replaced the `blocked-task-triage` auto-task, which is no
-longer seeded: `orbit workspace sync` retires a seeded copy and never enables
-the routine for you. See
-[blocked-task triage](../plugin/skills/orbit-setup/references/automation.md#blocked-task-triage).
+The bound has no configuration key. Before it escalates, final recovery runs
+bounded mechanical steps (resume the run, rerun CI, requeue), and a
+deterministic recheck settles a block whose pull request merged outside Orbit,
+whose base check went green or whose infrastructure cleared. What remains waits
+in `blocked` behind a decision card (a summary, two or three options with
+consequences, a recommendation) that an operator answers; the answer applies the
+option and moves the task out of `blocked` in one operation. The seeded
+`blocked_task_triage` routine and its `block_escalated` trigger are retired: a
+`blocked-task-triage-*` routine file loads inert and `orbit workspace sync`
+retires a seeded copy. See
+[final recovery](../plugin/skills/orbit-setup/references/automation.md#built-in-final-recovery-of-blocked-tasks).
 
 ### PR auto-fix repairs
 

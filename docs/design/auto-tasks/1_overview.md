@@ -304,8 +304,9 @@ definition of the same name.
   tasks, and a pass reads at most 60 tasks. A capped pass still completes, with
   `pilot-block-report.json` marked `partial` and `pilot-block-cursor.json`
   carrying `resume_after`. It reads the dispositions `escalation_triage_pipeline`
-  recorded (`pilot_warning_triaged` and `blocked_task_triaged` markers and
-  comments, grouped first by their recurring human actions), then untriaged
+  recorded (`pilot_warning_triaged` and, on older history, `blocked_task_triaged` markers
+  and comments, plus final-recovery decision cards, grouped first by their
+  recurring human actions), then untriaged
   pilot holds and final-recovery escalations from task history, `pilot_warnings`
   and run records. Each cause that recurs (at least 3 occurrences across 2
   tasks) is routed to its source: the filer, the task-pilot activity, the
@@ -534,10 +535,9 @@ definition of the same name.
   `code-health-sweep`; the minted chore is `no-diff-expected` and never builds.
 
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
-is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
-it: its `block_escalated` state trigger admits each escalated block episode once
-into the hard-tier `escalation_triage_pipeline`
-([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated),
+is retired and is not seeded. Final recovery decides blocked tasks now: it runs
+bounded mechanical steps, then escalates or opens a decision card
+([automation triggers §6.2](../automation-triggers/2_design.md#62-retired-escalated-blocks-block_escalated),
 [distributed drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
 Its last template stays as retired provenance (`RETIRED_AUTO_TASK_FILES`), so
 `orbit workspace sync` retires a seeded copy, settings-only forks included,
@@ -658,6 +658,8 @@ encode this repository's branches and gates. Re-init preserves them:
   `skip_unless_blocked_candidates` precondition.
 - ORB-17744 — Retired the `blocked-task-triage` default in favour of the
   `blocked_task_triage` routine on the escalation triage pipeline.
+- ORB-20629 — Retired that routine: final recovery is the single decider for
+  blocked tasks and opens the decision card.
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.

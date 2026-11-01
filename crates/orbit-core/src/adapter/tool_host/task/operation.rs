@@ -233,236 +233,125 @@ fn reviewed(value: Result<Value, OrbitError>) -> Result<(Value, Option<String>),
     Ok((value, id))
 }
 
-/// `orbit.task.block_triage`: the candidate list, or one triage decision,
-/// for a block episode or, with `subject` `pilot_warning`, a pilot warning
-/// hold.
+/// `orbit.task.block_triage`: the pilot-warning candidate list, or one
+/// triage decision on a held proposed task. Blocked tasks are decided by
+/// final recovery, so the retired `block` subject is refused.
 fn block_triage(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     input: &OperationInput,
 ) -> Result<(Value, Option<String>), OrbitError> {
     use crate::application::task::escalation_triage_steps::TriageInspectionProof;
-    use crate::application::task::{
-        BlockTriageDecision, BlockTriageRequest, PilotWarningDecision, PilotWarningTriageRequest,
-    };
+    use crate::application::task::{PilotWarningDecision, PilotWarningTriageRequest};
 
     let action = input.required_string("action")?;
-    let pilot_warning = match input.optional_string("subject")?.as_deref() {
-        None | Some("block") => false,
-        Some("pilot_warning") => true,
+    match input.optional_string("subject")?.as_deref() {
+        None | Some("pilot_warning") => {}
+        Some("block") => {
+            return Err(OrbitError::InvalidInput(
+                "blocked-task triage is retired: final recovery decides blocked tasks and opens \
+                 the decision request an operator answers; only `subject: pilot_warning` remains"
+                    .into(),
+            ));
+        }
         Some(other) => {
             return Err(OrbitError::InvalidInput(format!(
-                "block triage subject `{other}` is not one of block or pilot_warning"
+                "triage subject `{other}` is not pilot_warning"
             )));
         }
-    };
+    }
     if action == "candidates" {
-        let candidates = if pilot_warning {
-            runtime.pilot_warning_candidates_json()?
-        } else {
-            runtime.blocked_triage_candidates_json(chrono::Utc::now())?
-        };
-        return Ok((candidates, None));
+        return Ok((runtime.pilot_warning_candidates_json()?, None));
     }
     let id = input.required_string("id")?;
     let reason = || {
         input.optional_string("reason").and_then(|reason| {
             reason.ok_or_else(|| {
-                OrbitError::InvalidInput(format!("block triage `{action}` needs `reason`"))
+                OrbitError::InvalidInput(format!("triage `{action}` needs `reason`"))
             })
         })
     };
-    let requested_by = || {
-        runtime
-            .actor()
-            .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())
-    };
-    // The decision is validated in full before the inspection proof, so a
-    // malformed call reports its own error and spends no `git` process.
-    let proof = || -> Result<(), OrbitError> {
-        runtime.check_triage_inspection_proof(
-            &id,
-            &TriageInspectionProof {
-                source_revision: input.optional_string("source_revision")?,
-                observed_revision: input.optional_string("observed_revision")?,
-                observed_tree: input.optional_string("observed_tree")?,
-            },
-        )
-    };
-    if pilot_warning {
-        if input.optional_string("blocker")?.is_some() {
-            return Err(OrbitError::InvalidInput(
-                "pilot warning triage quotes the holding findings itself; omit `blocker`".into(),
-            ));
-        }
-        let decision = match action.as_str() {
-            "report" => PilotWarningDecision::Report {
-                human_action: reason()?,
-            },
-            "propose" => {
-                let (options, recommended) = proposal(input)?;
-                PilotWarningDecision::Propose {
-                    options,
-                    recommended,
-                }
-            }
-            "requeue" => {
-                return Err(OrbitError::InvalidInput(
-                    "pilot warning triage cannot requeue: it only proposes or reports, and \
-                     never moves a task"
-                        .into(),
-                ));
-            }
-            other => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "pilot warning triage action `{other}` is not one of candidates, propose or report"
-                )));
-            }
-        };
-        let requested_by = requested_by()?;
-        proof()?;
-        let response = runtime.record_pilot_warning_triage(&PilotWarningTriageRequest {
-            task_id: id.clone(),
-            decision,
-            requested_by,
-        })?;
-        return Ok((response, Some(id)));
-    }
     let decision = match action.as_str() {
-        "requeue" => BlockTriageDecision::Requeue { repair: reason()? },
-        "report" => BlockTriageDecision::Report {
+        "report" => PilotWarningDecision::Report {
             human_action: reason()?,
+            summary: input.optional_string("summary")?,
         },
         "propose" => {
-            let (options, recommended) = proposal(input)?;
-            BlockTriageDecision::Propose {
+            let (summary, options, recommended) = proposal(input)?;
+            PilotWarningDecision::Propose {
+                summary,
                 options,
                 recommended,
             }
         }
-        "resume_run" => BlockTriageDecision::ResumeRun {
-            run_id: input.required_string("run_id")?,
-            reason: reason()?,
-        },
-        "rerun_ci" => BlockTriageDecision::RerunCi {
-            head_sha: input.required_string("head_sha")?,
-            reason: reason()?,
-        },
-        "friction_reported" => BlockTriageDecision::FrictionReported {
-            friction: triage_friction(input, caller.model.as_deref())?,
-            human_action: reason()?,
-        },
         other => {
             return Err(OrbitError::InvalidInput(format!(
-                "block triage action `{other}` is not one of candidates, requeue, resume_run, \
-                 rerun_ci, friction_reported, propose or report"
+                "pilot warning triage action `{other}` is not one of candidates, propose or report"
             )));
         }
     };
-    let request = BlockTriageRequest {
+    let requested_by = runtime
+        .actor()
+        .resolve_write_label(caller.agent.as_deref(), caller.model.as_deref())?;
+    // The decision is validated in full before the inspection proof, so a
+    // malformed call reports its own error and spends no `git` process.
+    runtime.check_triage_inspection_proof(
+        &id,
+        &TriageInspectionProof {
+            source_revision: input.optional_string("source_revision")?,
+            observed_revision: input.optional_string("observed_revision")?,
+            observed_tree: input.optional_string("observed_tree")?,
+        },
+    )?;
+    let response = runtime.record_pilot_warning_triage(&PilotWarningTriageRequest {
         task_id: id.clone(),
-        blocker: input.optional_string("blocker")?.unwrap_or_default(),
         decision,
-        requested_by: requested_by()?,
-    };
-    proof()?;
-    let response = runtime.record_block_triage(&request)?;
+        requested_by,
+    })?;
     Ok((response, Some(id)))
 }
 
-/// A `friction_reported` call's friction: `friction_id` links an existing
-/// record; `friction_title` with `friction_body` files one, attributed to the
-/// caller's `model`.
-fn triage_friction(
-    input: &OperationInput,
-    model: Option<&str>,
-) -> Result<crate::application::task::TriageFriction, OrbitError> {
-    use crate::application::task::TriageFriction;
-    let id = input.optional_string("friction_id")?;
-    let title = input.optional_string("friction_title")?;
-    let body = input.optional_string("friction_body")?;
-    match (id, title, body) {
-        (Some(id), None, None) => Ok(TriageFriction::Existing(id)),
-        (None, Some(title), Some(body)) => Ok(TriageFriction::File {
-            title,
-            body,
-            model: model
-                .map(str::trim)
-                .filter(|model| !model.is_empty())
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(
-                        "filing a friction through block triage requires `model`".into(),
-                    )
-                })?
-                .to_string(),
-        }),
-        _ => Err(OrbitError::InvalidInput(
-            "block triage `friction_reported` needs either `friction_id`, or both \
-             `friction_title` and `friction_body`"
-                .into(),
-        )),
-    }
-}
-
-/// A triage `propose` call's `options` and 1-based `recommended` index.
+/// A triage `propose` call's `summary`, `options` and 1-based `recommended`
+/// index. Options parse strictly: an unknown action or field is refused here.
 fn proposal(
     input: &OperationInput,
-) -> Result<(Vec<crate::application::task::TriageOption>, usize), OrbitError> {
+) -> Result<(String, Vec<orbit_types::task::DecisionOptionInput>, usize), OrbitError> {
+    let summary = input.optional_string("summary")?.ok_or_else(|| {
+        OrbitError::InvalidInput(
+            "triage `propose` needs `summary`: one or two plain sentences naming the decision"
+                .into(),
+        )
+    })?;
     let options = input
         .as_value()
         .get("options")
-        .and_then(Value::as_array)
+        .cloned()
         .ok_or_else(|| {
             OrbitError::InvalidInput(
-                "block triage `propose` needs `options`: two or three {summary, consequences, target, replacement} objects"
+                "triage `propose` needs `options`: two or three {summary, consequence, rewrite, \
+                 action} objects"
                     .into(),
             )
-        })?
-        .iter()
-        .map(|option| {
-            let text = |key: &str| {
-                option
-                    .get(key)
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .ok_or_else(|| {
-                        OrbitError::InvalidInput(format!(
-                            "every proposal option needs a string `{key}`"
-                        ))
-                    })
-            };
-            let target = match option.get("target") {
-                None | Some(Value::Null) => None,
-                Some(value) => Some(
-                    value
-                        .as_str()
-                        .and_then(crate::application::task::TriageTarget::parse)
-                        .ok_or_else(|| {
-                            OrbitError::InvalidInput(
-                                "a proposal option `target` must be `acceptance_criteria` or `description`"
-                                    .into(),
-                            )
-                        })?,
-                ),
-            };
-            Ok(crate::application::task::TriageOption {
-                summary: text("summary")?,
-                consequences: text("consequences")?,
-                target,
-                replacement: text("replacement")?,
-            })
         })
-        .collect::<Result<Vec<_>, OrbitError>>()?;
+        .and_then(|options| {
+            serde_json::from_value::<Vec<orbit_types::task::DecisionOptionInput>>(options).map_err(
+                |error| OrbitError::InvalidInput(format!("triage `propose` options: {error}")),
+            )
+        })?;
     let recommended = input
         .as_value()
         .get("recommended")
         .and_then(Value::as_u64)
         .ok_or_else(|| {
             OrbitError::InvalidInput(
-                "block triage `propose` needs `recommended`: the 1-based option index".into(),
+                "triage `propose` needs `recommended`: the 1-based option index".into(),
             )
         })?;
-    Ok((options, usize::try_from(recommended).unwrap_or(usize::MAX)))
+    Ok((
+        summary,
+        options,
+        usize::try_from(recommended).unwrap_or(usize::MAX),
+    ))
 }
 
 /// `orbit.task.reject`.

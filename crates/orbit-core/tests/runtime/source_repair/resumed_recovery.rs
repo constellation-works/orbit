@@ -348,6 +348,7 @@ fn stopped_resumed_repair_refuses_unauthenticated_lineage() {
             s.final_recovery.as_mut().unwrap().decision = Some(FinalRecoveryDecision::Escalate {
                 diagnosis: "no".into(),
                 human_action: "no".into(),
+                summary: None,
             })
         }),
         ("no_repair", |s, _| {

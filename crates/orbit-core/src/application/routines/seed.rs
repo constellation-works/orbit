@@ -15,9 +15,8 @@
 //! - `__ORBIT_OWNER_MACHINE__` and `__ORBIT_BASE_BRANCH__` — a state trigger
 //!   names the one machine that evaluates it and the branch it observes, so
 //!   the seeded `task_pilot`, `finding_verification`,
-//!   `pilot_warning_triage` and `blocked_task_triage` definitions render
-//!   this host's registered machine id and the workspace's registered base
-//!   branch [ORB-12745].
+//!   and `pilot_warning_triage` definitions render this host's registered
+//!   machine id and the workspace's registered base branch [ORB-12745].
 //!
 //! Cron definitions carry no host pin [ORB-12236]: two hosts initializing the
 //! same workspace name write byte-identical cron definitions, and differ only
@@ -73,10 +72,6 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/pilot_warning_triage.yaml"),
     ),
     (
-        "blocked_task_triage",
-        include_str!("../../../assets/routines/blocked_task_triage.yaml"),
-    ),
-    (
         "worktree_gc",
         include_str!("../../../assets/routines/worktree_gc.yaml"),
     ),
@@ -104,8 +99,12 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
 /// loader skips a routine targeting its job as retired instead of failing it
 /// on every clock tick (`RETIRED_ROUTINE_JOBS`).
 ///
-/// Retiring a default: move its template here and add its target job to
-/// `RETIRED_ROUTINE_JOBS` in the same change.
+/// Retiring a default: move its template here and, when its target job went
+/// with it, add that job to `RETIRED_ROUTINE_JOBS` in the same change. A
+/// default whose job still ships (`blocked_task_triage` targeted
+/// `escalation_triage_pipeline`, which now serves pilot warnings only) is
+/// retired by its trigger kind instead: the loader skips a state routine on
+/// the retired `block_escalated` trigger.
 pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "auto_task_scheduler",
@@ -118,6 +117,10 @@ pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "ship_sweep",
         include_str!("../../../assets/routines/retired/ship_sweep.yaml"),
+    ),
+    (
+        "blocked_task_triage",
+        include_str!("../../../assets/routines/retired/blocked_task_triage.yaml"),
     ),
 ];
 

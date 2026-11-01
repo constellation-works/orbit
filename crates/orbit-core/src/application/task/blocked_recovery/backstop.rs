@@ -111,6 +111,18 @@ impl OrbitRuntime {
         submit: &mut dyn FnMut(Value) -> Result<String, OrbitError>,
     ) -> Result<BlockedRecoveryTick, OrbitError> {
         let mut tick = BlockedRecoveryTick::default();
+        // The recheck needs no agent and no crew, so it runs even where the
+        // backstop itself stands down for an empty pool. It stands down
+        // itself off the coordination owner and in a claimed worker.
+        if self.worker_invocation().is_none() && self.coordination_write_owner().is_none() {
+            match self.recheck_blocked_tasks() {
+                Ok(settled) => tick.rechecked = settled,
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.blocked_recovery",
+                    "the blocked-task recheck failed: {error}"
+                ),
+            }
+        }
         if let Some(reason) = self.blocked_task_recovery_disabled_reason() {
             tick.skipped = Some(reason);
             return Ok(tick);
@@ -342,9 +354,11 @@ impl OrbitRuntime {
             FinalRecoveryDecision::Escalate {
                 diagnosis,
                 human_action,
+                summary,
             } => FinalRecoveryDecision::Escalate {
                 diagnosis,
                 human_action: with_line(&human_action, &self.episode_candidate(input).summary()),
+                summary,
             },
             decision => decision,
         };
@@ -520,6 +534,7 @@ fn without_resume(
             rationale.trim()
         ),
         human_action,
+        summary: None,
     }
 }
 

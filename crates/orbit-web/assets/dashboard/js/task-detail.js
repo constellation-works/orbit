@@ -11,6 +11,7 @@ import { buildExternalRefs } from './task-relations.js';
 import * as taskHistory from './task-history.js';
 import * as taskReadiness from './task-readiness.js';
 import * as taskEvidence from './task-evidence.js';
+import * as taskDecision from './task-decision.js';
 import * as taskFields from './task-fields.js';
 import * as taskComments from './task-comments.js';
 import * as taskWhyStuck from './task-why-stuck.js';
@@ -207,9 +208,10 @@ export function buildTaskDetail(task, context, drain = null) {
     });
   }
 
-  if (Array.isArray(task.open_decisions) && task.open_decisions.length) {
-    addField(disclosures, "Decision needed", taskEvidence.buildOpenDecisions(task, detail, context), true, false, {
-      count: task.open_decisions.length,
+  const disclosedDecisions = taskDecision.disclosedDecisions(task);
+  if (disclosedDecisions.length) {
+    addField(disclosures, "Decision needed", taskDecision.buildOpenDecisions(task, detail, context), true, false, {
+      count: disclosedDecisions.length,
     });
   }
 
@@ -305,7 +307,7 @@ export function buildTaskDetail(task, context, drain = null) {
   if (blockCallout) band.appendChild(blockCallout);
   const whyStuck = taskWhyStuck.buildWhyStuckCard(task);
   if (whyStuck) band.appendChild(whyStuck);
-  const pilotCallout = taskReadiness.buildPilotWarnings(task);
+  const pilotCallout = taskReadiness.buildPilotWarnings(task, detail, context);
   if (pilotCallout) band.appendChild(pilotCallout);
   const admissionCallout = taskReadiness.buildPilotAdmissionHold(task, detail, context);
   if (admissionCallout) band.appendChild(admissionCallout);

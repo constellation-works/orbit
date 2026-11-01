@@ -1,45 +1,39 @@
-# Turn escalated holds into ready-to-choose decisions or precise human
-# actions, one read per hold. Propose-only: it never edits task
-# material, approves, promotes, clears a hold, rejects or archives.
+# Turn pilot-warning holds into ready-to-choose decision cards or precise
+# human actions, one read per hold. It never edits task material, approves,
+# promotes, clears a hold, rejects or archives: an operator's answer to the
+# card it opens does.
 #
-# One run reads one `subject`:
-# - `pilot_warning` (the default): a `proposed` task whose latest applied
-#   task-pilot assessment holds promotion on warning findings (the findings
-#   `orbit task list --pilot-warnings` shows). Propose-only.
-# - `block`: a `blocked` task whose block episode final recovery escalated,
-#   or that stayed undecided past the backstop's 72-hour limit, with no human
-#   touch since the block. The triager may requeue it within the
-#   final-recovery requeue bound it shares, propose options, or report.
-# Design: docs/design/automation-triggers/2_design.md (`pilot_warnings_held`,
-# `block_escalated`).
+# One run reads one `subject`: `pilot_warning` (the default and only subject),
+# a `proposed` task whose latest applied task-pilot assessment holds promotion
+# on warning findings (the findings `orbit task list --pilot-warnings`
+# shows). The retired `block` subject is refused with a migration message:
+# final recovery is the single decider for a blocked task.
+# Design: docs/design/automation-triggers/2_design.md (`pilot_warnings_held`).
 #
 # Selection
 # - Explicit: `orbit run job escalation_triage_pipeline --input
-#   'task_ids=["<id>"]'` (add `--input 'subject="block"'` for blocked tasks)
-#   triages those tasks. A named task that no longer qualifies (its
-#   assessment holds nothing on warnings, an operator decided or touched it,
-#   it was already triaged, or another live run is triaging it) settles
-#   superseded with its reason.
-# - Automatic (no task_ids): every qualifying task of the subject, oldest
-#   task first, up to max_tasks.
+#   'task_ids=["<id>"]'` triages those tasks. A named task that no longer
+#   qualifies (its assessment holds nothing on warnings, an operator decided
+#   or touched it, it was already triaged, or another live run is triaging
+#   it) settles superseded with its reason.
+# - Automatic (no task_ids): every qualifying task, oldest task first, up to
+#   max_tasks.
 # - State-triggered: the seeded `pilot_warning_triage` routine
-#   (`kind: pilot_warnings_held`) and `blocked_task_triage` routine
-#   (`kind: block_escalated`) each submit one crew-homogeneous batch of their
-#   subject per run.
+#   (`kind: pilot_warnings_held`) submits one crew-homogeneous batch per run.
 #
 # Prepare pins one landing-branch revision without touching the primary
 # checkout. Outside a Git work tree it pins none (`source_revision` null),
 # as task pilot does, and triagers read the supplied filesystem.
 #
 # Crew resolution
-# - `pilot_warning`: while `workflow.purpose_crews.pilot_warning_triage` is
-#   set, each triager is drawn from it, keeping only crews whose provider
-#   executor declares `inspection_args`; the draw's source is recorded as
+# - While `workflow.purpose_crews.pilot_warning_triage` is set, each triager
+#   is drawn from it, keeping only crews whose provider executor declares
+#   `inspection_args`; the draw's source is recorded as
 #   `purpose:pilot_warning_triage`. The crew that wrote the held assessment
 #   (the pilot run's frozen draw) is passed over while the pool offers
 #   another.
-# - Otherwise (an unset pool, a pool with no such crew, and every `block`
-#   task) the triager is drawn from `workflow.hard_complexity_crews` under the
+# - Otherwise (an unset pool or a pool with no such crew) the triager is
+#   drawn from `workflow.hard_complexity_crews` under the
 #   same filter (a tier without one passes to xhard), or is
 #   `workflow.default_crew` when its executor declares them and no pool has
 #   one.
@@ -47,10 +41,9 @@
 #   partition, so tasks are partitioned by crew, at most five per partition.
 #
 # There is no apply step. Each triager records its decision through
-# `orbit.task.block_triage` with the run's subject, which writes one comment
-# and one `pilot_warning_triaged` or `blocked_task_triaged` history marker;
-# the routine settles each member from that marker, never from the agent's
-# final message.
+# `orbit.task.block_triage`, which writes one comment, one decision request
+# and one `pilot_warning_triaged` history marker; the routine settles each
+# member from that marker, never from the agent's final message.
 
 schemaVersion: 2
 kind: Job
