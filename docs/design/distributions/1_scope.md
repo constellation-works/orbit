@@ -2,7 +2,7 @@
 title: "Scope: Distributions and workspace presets"
 owner: claude
 last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_validated: 2026-11-01
 status: Implemented
 stage: shipped
 next: "—"
@@ -22,8 +22,8 @@ unbuilt are called out separately below.
 Bearing: The [plugin standard](../plugins/1_scope.md) lets a package add tools, CLI groups,
 panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
 definitions land disabled and become active only through an operator act. Orbit also ships
-11 default routines and 26 default auto-tasks: 37 defaults in total. By default it seeds all
-37 into each workspace; `crew_performance_refresh` is seeded enabled ([ORB-17816] added it as
+10 default routines and 19 default auto-tasks: 29 defaults in total. By default it seeds all
+29 into each workspace; `crew_performance_refresh` is seeded enabled ([ORB-17816] added it as
 the one default seeded enabled) and the others are disabled. Seeded definitions carry managed
 provenance and digest-based retirement ([ORB-10800]). A distribution can narrow the Orbit defaults its workspace carries and choose
 which of its already-seeded plugin definitions to enable with a preset.
