@@ -186,7 +186,8 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             }
             Ok::<_, OrbitError>(())
         })();
-        if authority.is_err() {
+        let authority_refusal = authority.as_ref().err().map(authority_refusal_reason);
+        if authority_refusal.is_some() {
             differences.push(json!({"field":"authority", "expected":"current owner task/scope/admission", "observed":{"presence":"unconfirmed"}}));
         }
         if budget
@@ -277,7 +278,7 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             "read":{"operation":operations::PR_STATUS, "selector":safe_text(&binding.pull_request), "started_at":started_at, "finished_at":finished_at,
                 "outcome":if read.is_ok() { "readable" } else { "unreadable" },
                 "failure_kind":read.as_ref().err().map(|error| if error.is_timeout() { "timeout" } else { "provider_read_failed" })},
-            "mismatches":differences,
+            "mismatches":differences, "authority_refusal":authority_refusal,
             "settling":{"max_rereads":MAX_REREADS, "max_wait_seconds":MAX_REREADS * POLL_SECONDS,
                 "refusal_reason":if settled || can_wait { None } else if stale && head_only && differences.len() == 1 {
                     Some(if budget.settled_heads.iter().any(|head| head == published_head) { "head_regressed" } else { "budget_exhausted" })
@@ -303,9 +304,62 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             .filter_map(|m| m["field"].as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        let cause = authority_refusal
+            .map(|reason| format!("; authority refusal: {reason}"))
+            .unwrap_or_default();
         return Err(OrbitError::Execution(format!(
-            "source repair PR identity changed ({fields}); creating or replacing a pull request is not authorized; expected/observed evidence retained in source_repair_publication_refused history"
+            "source repair PR identity changed ({fields}){cause}; creating or replacing a pull request is not authorized; expected/observed evidence retained in source_repair_publication_refused history"
         )));
+    }
+}
+
+// Only known static validation reasons may cross this boundary. Other errors
+// can contain task input, credentials or arbitrarily large provider data.
+fn authority_refusal_reason(error: &OrbitError) -> &'static str {
+    match error {
+        OrbitError::Execution(message) if message == "publication admission changed" => {
+            "publication admission changed"
+        }
+        OrbitError::JobValidation(message) => match message.as_str() {
+            "source repair refused: host-widened selector was removed" => {
+                "host-widened selector was removed"
+            }
+            "source repair refused: unreadable host selector widening" => {
+                "unreadable host selector widening"
+            }
+            "source repair refused: source, task, scope or reservation changed before source application: task meaning changed" => {
+                "source, task, scope or reservation changed before source application: task meaning changed"
+            }
+            "source repair refused: source, task, scope or reservation changed before source application: newer execution changed" => {
+                "source, task, scope or reservation changed before source application: newer execution changed"
+            }
+            "source repair refused: source, task, scope or reservation changed before source application: original checkpoint owner changed" => {
+                "source, task, scope or reservation changed before source application: original checkpoint owner changed"
+            }
+            "source repair refused: source, task, scope or reservation changed before source application: source evidence changed" => {
+                "source, task, scope or reservation changed before source application: source evidence changed"
+            }
+            "source repair refused: source, task, scope or reservation changed before source application" => {
+                "source, task, scope or reservation changed before source application"
+            }
+            "source repair refused: publication requires unchanged explicit rework authority and current policy" => {
+                "publication requires unchanged explicit rework authority and current policy"
+            }
+            "source repair refused: kept inline publication requires its complete stopped lineage" => {
+                "kept inline publication requires its complete stopped lineage"
+            }
+            "source repair refused: task PR association has a conflicting repository or URL" => {
+                "task PR association has a conflicting repository or URL"
+            }
+            "source repair refused: task PR association has a conflicting number" => {
+                "task PR association has a conflicting number"
+            }
+            "source repair refused: task PR association is missing for the authenticated publication" => {
+                "task PR association is missing for the authenticated publication"
+            }
+            _ => "authority validation failed (details withheld)",
+        },
+        _ => "authority validation failed (details withheld)",
     }
 }
 

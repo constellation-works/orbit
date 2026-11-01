@@ -134,6 +134,13 @@ Context selectors are preparation hints, not what the task means: a task
 pilot or operator editing them keeps the candidate, and the resumed review
 reads the current selectors.
 
+A bound source-repair admission is different: tags, plan, selectors and other
+task-digest inputs are frozen. Only the exact system-recorded host selector
+widening and source-preserving system crew redraw exceptions count. Stop and
+review changed metadata; when scope materially changes, obtain a supported
+fresh operator decision before proceeding. Generic candidate resume does not
+reauthorize a bound source repair.
+
 A candidate held for a red base resumes like any candidate from `commit` or
 later. That includes one the before-PR review held because its only failed
 check also fails on the pinned base. It is `resumed_carried` once the hold
