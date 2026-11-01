@@ -21,7 +21,7 @@ Hand the action to the operator by name and keep the rest of the delivery. Do no
 
 ## Fix task
 
-No open fix task found. Reported deferred by the ORB-20623 pass (3 occurrences).
+ORB-21014 was filed from ORB-20998 to address this mechanism.
 
 ## Occurrences
 

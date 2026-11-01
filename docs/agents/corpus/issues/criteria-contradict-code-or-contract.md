@@ -21,7 +21,7 @@ The triage `decision` disposition proposes a replacement; the human chooses amen
 
 ## Fix task
 
-No open fix task found. Reported deferred by the ORB-20623 pass (4 occurrences).
+ORB-21012 was filed from ORB-20998 to address this mechanism.
 
 ## Occurrences
 
