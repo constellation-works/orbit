@@ -955,6 +955,35 @@ activity, task, tag, role, source, SHA-256 and byte size, without the text.
 The source is `default` or `workspace`; `workspace` records the repository
 path and revision, including for a mapping inherited from global config.
 
+## Agent corpus
+
+Use `[workflow.agent_corpus]` when an activity should receive workspace
+knowledge with its prompt. The table maps exact activity names to one
+repository-relative corpus index:
+
+```toml
+[workflow.agent_corpus]
+agent_implement = "agent-guidance/corpus/INDEX.md"
+final_recovery = "agent-guidance/corpus/INDEX.md"
+```
+
+Unset by default: with no mapping, no activity receives a corpus. Map at
+most 32 activities, every entry naming the same index. Absolute paths and
+`..` are refused.
+
+The host reads the index's generated rows at the run's base revision,
+keeps only rows whose `applies_to` matches the activity, and omits
+resolved issues. It injects at most 8 KiB into the prompt, with a note
+when rows are omitted. An activity with no mapping receives nothing.
+
+A claimed run uses the rows the owner captured. Each
+`activity.agent_corpus_applied` audit event records the paths, revision,
+digest and truncation.
+
+Human decision answers and typed engine recovery matches append proposals
+to task history. Turning a proposal into a corpus edit is an ordinary
+reviewed change: Orbit never commits or merges one by itself.
+
 ## Review-skip tags
 
 Use `workflow.review_skip_tags` to let a workspace tag skip agent review for
