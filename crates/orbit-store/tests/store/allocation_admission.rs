@@ -8,6 +8,8 @@ mod claim_retention;
 mod dependencies;
 #[path = "allocation_admission/handoff_compatibility.rs"]
 mod handoff_compatibility;
+#[path = "allocation_admission/import_relations.rs"]
+mod import_relations;
 #[path = "allocation_admission/known_red.rs"]
 mod known_red;
 #[path = "allocation_admission/mutation_receipts.rs"]
