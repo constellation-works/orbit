@@ -4,6 +4,7 @@
 import json
 import os
 from pathlib import Path
+import select
 import shutil
 import signal
 import subprocess
@@ -360,6 +361,126 @@ def pid_alive(pid):
     return state != "Z"
 
 
+def read_arm_proc_identity(pid):
+    """Return (process group, start time) for one live or zombie pid."""
+    text = Path("/proc", str(pid), "stat").read_text(encoding="utf-8")
+    fields = text.rsplit(")", 1)[1].split()
+    return int(fields[2]), int(fields[19])
+
+
+def arm_group_members(pgid):
+    members = []
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return members
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            pgrp, _start = read_arm_proc_identity(int(entry.name))
+        except (OSError, ValueError, IndexError):
+            continue
+        if pgrp == pgid:
+            members.append(int(entry.name))
+    return members
+
+
+def pidfd_is_alive(fd):
+    """A pidfd becomes readable when that incarnation has exited."""
+    readable, _, _ = select.select([fd], [], [], 0)
+    return not readable
+
+
+def pin_arm_pid(pid, pgid):
+    """Open a pidfd only when `pid` is stably the arm group member it was."""
+    try:
+        pgrp, start = read_arm_proc_identity(pid)
+    except (OSError, ValueError, IndexError):
+        return None
+    if pgrp != pgid:
+        return None
+    try:
+        fd = os.pidfd_open(pid)
+    except OSError:
+        return None
+    try:
+        try:
+            again = read_arm_proc_identity(pid)
+        except (OSError, ValueError, IndexError):
+            os.close(fd)
+            return None
+        if again != (pgrp, start) or not pidfd_is_alive(fd):
+            os.close(fd)
+            return None
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+class OwnedArmIdentity:
+    """Reservations for an arm group this fixture cannot join.
+
+    `setsid` puts the arm in another session, so an unreaped anchor cannot
+    enter that group. Each pidfd pins one incarnation observed while the arm
+    was blocked. Later signals go through those fds and only while the
+    incarnation is still alive; the fds are then closed. A saved numeric
+    PID or PGID is never signaled.
+    """
+
+    def __init__(self):
+        self.fds = []
+        self.retired = False
+
+    def pin(self, pgid, extra_pids):
+        seen = []
+        for pid in (pgid, *extra_pids, *arm_group_members(pgid)):
+            if pid in seen or not isinstance(pid, int) or pid <= 0:
+                continue
+            seen.append(pid)
+            fd = pin_arm_pid(pid, pgid)
+            if fd is not None:
+                self.fds.append(fd)
+
+    def signal_and_retire(self):
+        if self.retired:
+            return
+        self.retired = True
+        try:
+            for fd in self.fds:
+                try:
+                    alive = pidfd_is_alive(fd)
+                except OSError:
+                    continue
+                if not alive:
+                    continue
+                try:
+                    signal.pidfd_send_signal(fd, signal.SIGKILL)
+                except OSError:
+                    pass
+        finally:
+            for fd in self.fds:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            self.fds = []
+
+
+def retire_cancellation_processes(reservation, process):
+    """Signal only identities still reserved, then the unreaped benchmark."""
+    try:
+        reservation.signal_and_retire()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+
 def scenario_cancellation(root, script):
     case, work, events, env = make_fixture(root, script, "cancellation", allow_rm=True)
     block = case / "block"
@@ -440,7 +561,7 @@ def scenario_cancellation_spawn_window(root, script):
     )
     errors = []
     pids = []
-    pgid = None
+    reservation = OwnedArmIdentity()
     try:
         deadline = time.monotonic() + 20
         while not ((block / "ready.json").exists() and (block / "arm-pgid").exists()):
@@ -450,10 +571,15 @@ def scenario_cancellation_spawn_window(root, script):
             time.sleep(0.02)
         try:
             pgid = int((block / "arm-pgid").read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
+            pids = json.loads((block / "ready.json").read_text(encoding="utf-8"))["pids"]
+        except (OSError, ValueError, KeyError):
             errors.append("spawn-window arm identity was not recorded")
             return errors
-        pids = json.loads((block / "ready.json").read_text(encoding="utf-8"))["pids"]
+        # The DEBUG hook is still blocked, so stop_arm has not reaped this group.
+        if process.poll() is None:
+            reservation.pin(pgid, pids)
+            if process.poll() is None and not reservation.fds:
+                errors.append("spawn-window arm identity was not reserved")
         process.send_signal(signal.SIGTERM)
         try:
             process.communicate(timeout=20)
@@ -473,28 +599,7 @@ def scenario_cancellation_spawn_window(root, script):
         if any((work / name).exists() for name in ("trees", "targets", "locks")):
             errors.append("owned directories survived spawn-window cancellation cleanup")
     finally:
-        if pgid is None and (block / "arm-pgid").exists():
-            try:
-                pgid = int((block / "arm-pgid").read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                pgid = None
-        if pgid is not None:
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except OSError:
-                pass
-        for pid in pids:
-            if pid_alive(pid):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
-        if process.poll() is None:
-            process.kill()
-            try:
-                process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+        retire_cancellation_processes(reservation, process)
     return errors
 
 
@@ -522,6 +627,19 @@ def scenario_cancellation_flag_clear(root, script):
         "  if [[ \"$BASH_COMMAND\" == 'ARM_PGID=\"$group_pid\"' && \"$BASHPID\" == \"$$\" ]]; then\n"
         "    trap - DEBUG\n"
         "    printf '%s\\n' \"$group_pid\" > \"$RACE_ROOT/arm-pgid\"\n"
+        "    local waited\n"
+        "    for waited in $(seq 1 250); do\n"
+        "      if [[ -s \"$RACE_ROOT/ready.json\" ]]; then\n"
+        "        break\n"
+        "      fi\n"
+        "      sleep 0.02\n"
+        "    done\n"
+        "    for waited in $(seq 1 250); do\n"
+        "      if [[ -f \"$RACE_ROOT/identity-pinned\" ]]; then\n"
+        "        break\n"
+        "      fi\n"
+        "      sleep 0.02\n"
+        "    done\n"
         "  fi\n"
         "}\n"
         "trap flag_hold DEBUG\n",
@@ -534,7 +652,7 @@ def scenario_cancellation_flag_clear(root, script):
     )
     errors = []
     pids = []
-    pgid = None
+    reservation = OwnedArmIdentity()
     try:
         deadline = time.monotonic() + 20
         while not (block / "flag-held").exists():
@@ -543,8 +661,26 @@ def scenario_cancellation_flag_clear(root, script):
                 return errors
             time.sleep(0.02)
         process.send_signal(signal.SIGTERM)
+        # stop_arm runs as soon as record_arm returns. Hold that hook until
+        # the live group has been pinned, then let the benchmark cancel.
+        while process.poll() is None and time.monotonic() < deadline:
+            if (block / "arm-pgid").exists() and (block / "ready.json").exists():
+                try:
+                    pgid = int((block / "arm-pgid").read_text(encoding="utf-8").strip())
+                    pids = json.loads((block / "ready.json").read_text(encoding="utf-8"))["pids"]
+                except (OSError, ValueError, KeyError):
+                    errors.append("flag-clear arm identity was not recorded")
+                else:
+                    if process.poll() is None:
+                        reservation.pin(pgid, pids)
+                        if process.poll() is None and not reservation.fds:
+                            errors.append("flag-clear arm identity was not reserved")
+                (block / "identity-pinned").write_text("pinned\n", encoding="utf-8")
+                break
+            time.sleep(0.02)
+        remaining = max(0.1, deadline - time.monotonic())
         try:
-            process.communicate(timeout=20)
+            process.communicate(timeout=remaining)
         except subprocess.TimeoutExpired:
             errors.append("benchmark did not exit after SIGTERM at the flag-clear boundary")
             return errors
@@ -567,29 +703,235 @@ def scenario_cancellation_flag_clear(root, script):
         if any((work / name).exists() for name in ("trees", "targets", "locks")):
             errors.append("owned directories survived flag-clear cancellation cleanup")
     finally:
-        if pgid is None and (block / "arm-pgid").exists():
-            try:
-                pgid = int((block / "arm-pgid").read_text(encoding="utf-8").strip())
-            except (OSError, ValueError):
-                pgid = None
-        if pgid is not None:
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except OSError:
-                pass
-        for pid in pids:
-            if pid_alive(pid):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
-        if process.poll() is None:
-            process.kill()
-            try:
-                process.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+        retire_cancellation_processes(reservation, process)
     return errors
+
+
+def scenario_cancellation_identity(root, script):
+    """Run both real cancellation teardowns against intercepted identities.
+
+    Reaping retires the arm group and permits a replacement in this model.
+    A signal is unsafe when it targets a numeric PID/PGID or a pidfd whose
+    incarnation is already gone or was opened after that reuse.
+    """
+    import errno
+    from unittest import mock
+
+    leader = 424242
+    shim = 424243
+    child = 424244
+    members = (leader, shim, child)
+    cases = (
+        (scenario_cancellation_spawn_window, "spawn-window"),
+        (scenario_cancellation_flag_clear, "flag-clear"),
+    )
+    modes = ("success", "timeout", "assertion", "early-exit")
+    failures = []
+    for scenario, label in cases:
+        for mode in modes:
+            case_root = root / f"identity-{label}-{mode}"
+            case_root.mkdir()
+            model = {
+                "next_fd": 10_000_000,
+                "fds": {},
+                "events": [],
+                "unsafe": [],
+                "retired": mode == "early-exit",
+                "procs": {},
+            }
+            for pid in members:
+                model["procs"][pid] = {
+                    "pgrp": leader,
+                    "start": 1000 + pid,
+                    "generation": 2 if mode == "early-exit" else 1,
+                    "alive": True,
+                    "replacement": mode == "early-exit",
+                }
+
+            class FakeBenchmark:
+                def __init__(self, argv, env=None, **kwargs):
+                    self.returncode = None
+                    self.env = env or {}
+                    block = Path(self.env["BENCH_BLOCK"])
+                    if mode == "early-exit":
+                        self.returncode = 1
+                        (block / "arm-pgid").write_text(f"{leader}\n", encoding="utf-8")
+                        return
+                    (block / "flag-held").write_text("held\n", encoding="utf-8")
+                    (block / "arm-pgid").write_text(f"{leader}\n", encoding="utf-8")
+                    (block / "ready.json").write_text(
+                        json.dumps({"pids": [shim, child]}), encoding="utf-8")
+
+                def poll(self):
+                    return self.returncode
+
+                def send_signal(self, sig):
+                    if self.returncode is not None:
+                        return
+                    model["events"].append(("benchmark_signal", int(sig)))
+
+                def kill(self):
+                    if self.returncode is not None:
+                        return
+                    model["events"].append(("owned_benchmark_kill",))
+                    self.returncode = -9
+
+                def communicate(self, timeout=None):
+                    if mode == "timeout" and self.returncode is None:
+                        raise subprocess.TimeoutExpired("benchmark", timeout)
+                    if self.returncode is None:
+                        self.returncode = 143
+                        self._finish(retire=(mode == "success"))
+                    return "", ""
+
+                def _finish(self, retire):
+                    events_path = Path(self.env["BENCH_EVENTS"])
+                    with events_path.open("a", encoding="utf-8") as output:
+                        output.write(json.dumps({
+                            "tool": "rm", "owned_paths": [], "live_pids": [],
+                        }) + "\n")
+                    if not retire:
+                        model["events"].append(("communicate",))
+                        return
+                    model["events"].append(("retire",))
+                    model["retired"] = True
+                    for info in model["fds"].values():
+                        info["original_alive"] = False
+                    for pid in members:
+                        proc = model["procs"][pid]
+                        proc["generation"] += 1
+                        proc["start"] += 1
+                        proc["replacement"] = True
+                        proc["alive"] = True
+
+            real_close = os.close
+
+            def fake_read(pid):
+                proc = model["procs"].get(pid)
+                if proc is None:
+                    raise OSError(errno.ENOENT, "no such process")
+                return proc["pgrp"], proc["start"]
+
+            def fake_pidfd_open(pid, flags=0):
+                proc = model["procs"].get(pid)
+                if proc is None or not proc["alive"]:
+                    raise OSError(errno.ESRCH, "gone")
+                if model["retired"] or proc["replacement"]:
+                    model["unsafe"].append(("pidfd_open", pid))
+                fd = model["next_fd"]
+                model["next_fd"] += 1
+                model["fds"][fd] = {
+                    "pid": pid,
+                    "generation": proc["generation"],
+                    "original_alive": proc["alive"] and not proc["replacement"],
+                }
+                model["events"].append(("pidfd_open", pid, proc["generation"]))
+                return fd
+
+            def fake_select(rlist, wlist, xlist, timeout=None):
+                info = model["fds"][rlist[0]]
+                if info["original_alive"]:
+                    return [], [], []
+                return [rlist[0]], [], []
+
+            def fake_send(fd, sig, siginfo=None, flags=0):
+                info = model["fds"][fd]
+                proc = model["procs"][info["pid"]]
+                replacement = (
+                    proc["generation"] != info["generation"] or proc["replacement"]
+                )
+                stale = not info["original_alive"] or replacement
+                model["events"].append(("pidfd_send_signal", info["pid"], int(sig)))
+                if stale:
+                    model["unsafe"].append(("pidfd_send_signal", info["pid"]))
+                    raise OSError(errno.ESRCH, "reservation gone")
+                info["original_alive"] = False
+                proc["alive"] = False
+                return None
+
+            def fake_kill(pid, sig):
+                model["events"].append(("kill", pid, int(sig)))
+                model["unsafe"].append(("kill", pid))
+
+            def fake_killpg(pgid, sig):
+                model["events"].append(("killpg", pgid, int(sig)))
+                model["unsafe"].append(("killpg", pgid))
+
+            def fake_close(fd):
+                if fd in model["fds"]:
+                    model["events"].append(("close", fd))
+                    return None
+                return real_close(fd)
+
+            def fake_pid_alive(pid):
+                return mode == "assertion" and pid in (shim, child)
+
+            with mock.patch("os.pidfd_open", fake_pidfd_open), \
+                    mock.patch("os.kill", fake_kill), \
+                    mock.patch("os.killpg", fake_killpg), \
+                    mock.patch("os.close", fake_close), \
+                    mock.patch("signal.pidfd_send_signal", fake_send), \
+                    mock.patch("select.select", fake_select), \
+                    mock.patch("subprocess.Popen", FakeBenchmark), \
+                    mock.patch(f"{__name__}.read_arm_proc_identity", fake_read), \
+                    mock.patch(f"{__name__}.pid_alive", fake_pid_alive):
+                try:
+                    scenario_errors = scenario(case_root, script)
+                except Exception as exc:
+                    scenario_errors = [f"raised {exc!r}"]
+            opened = [event[1] for event in model["events"] if event[0] == "pidfd_open"]
+            signaled = [event[1] for event in model["events"] if event[0] == "pidfd_send_signal"]
+            numeric = [event for event in model["events"] if event[0] in ("kill", "killpg")]
+            owned_kills = [event for event in model["events"] if event[0] == "owned_benchmark_kill"]
+            problems = list(model["unsafe"])
+            if numeric:
+                problems.append(("numeric", numeric))
+            if mode == "early-exit":
+                if not any("did not reach" in item for item in scenario_errors):
+                    problems.append(("scenario", scenario_errors))
+                if opened or signaled or owned_kills:
+                    problems.append(("signaled_without_reservation", opened, signaled, owned_kills))
+            elif mode == "success":
+                if scenario_errors:
+                    problems.append(("scenario", scenario_errors))
+                if opened != [leader, shim, child]:
+                    problems.append(("pinned", opened))
+                if signaled or owned_kills:
+                    problems.append(("signaled_after_retire", signaled, owned_kills))
+                retire_at = [
+                    index for index, event in enumerate(model["events"]) if event[0] == "retire"
+                ]
+                if not retire_at:
+                    problems.append(("missing_retire", model["events"]))
+                elif any(
+                    event[0] == "pidfd_open" and index > retire_at[0]
+                    for index, event in enumerate(model["events"])
+                ):
+                    problems.append(("opened_after_retire", model["events"]))
+            elif mode == "timeout":
+                if scenario_errors != [
+                    "benchmark did not exit after SIGTERM in the spawn window"
+                    if label == "spawn-window"
+                    else "benchmark did not exit after SIGTERM at the flag-clear boundary"
+                ]:
+                    problems.append(("scenario", scenario_errors))
+                if opened != [leader, shim, child] or signaled != [leader, shim, child]:
+                    problems.append(("signals", opened, signaled))
+                if len(owned_kills) != 1:
+                    problems.append(("benchmark_kill", owned_kills))
+            else:
+                if not any("survived" in item for item in scenario_errors):
+                    problems.append(("scenario", scenario_errors))
+                if any("not cleaned" in item or "while the arm" in item or "did not report" in item
+                       for item in scenario_errors):
+                    problems.append(("lost_checks", scenario_errors))
+                if opened != [leader, shim, child] or signaled != [leader, shim, child]:
+                    problems.append(("signals", opened, signaled))
+                if owned_kills:
+                    problems.append(("benchmark_kill", owned_kills))
+            if problems:
+                failures.append(f"{label} {mode}: {problems}")
+    return failures
 
 
 def main():
@@ -607,6 +949,7 @@ def main():
         ("cancellation", scenario_cancellation),
         ("cancellation-spawn-window", scenario_cancellation_spawn_window),
         ("cancellation-flag-clear", scenario_cancellation_flag_clear),
+        ("cancellation-identity", scenario_cancellation_identity),
     )
     failures = 0
     with tempfile.TemporaryDirectory(prefix="bench-build-budget-", dir=scratch) as directory:
