@@ -69,6 +69,16 @@ workspace spelling sent to dispatch when an input includes `workspace` (CLI
 routing may canonicalize a selector to its checkout path). Do not include
 provider credentials or other secrets in consent inputs: scopes are audit data.
 
+A scope may instead list `fields`, a map from field name to a typed constraint,
+in place of `input` (never both). Such a scope needs a `name` and may carry a
+`rate_limit`. Orbit records it as a version 2 consent, validates every
+constraint against the built-in ceiling at consent time, refuses any operation
+or input that needs host operator authority, caps each operation at 8 KiB, and
+refuses an `expires_at` beyond `machine.application_consent_max_days` (global
+config, default 30 days). Calls under constrained or rate-limited scopes are
+not admitted yet: they are refused with `not yet admitted`. Exact scopes keep
+working as described above.
+
 Consent is reusable for those exact calls until expiry or revocation; it does
 not supply idempotency or prove a fresh human interaction per invocation. Use
 short expiries and consumer idempotency keys for operations such as sending a

@@ -506,6 +506,9 @@ pub struct OrbitRuntimeSettings {
     /// Admitted `machine.labels`: the capability labels this host carries,
     /// beside its OS as an implicit label.
     machine_labels: Vec<String>,
+    /// Admitted `machine.application_consent_max_days`: the longest lifetime
+    /// of a constrained (schema v2) application consent.
+    application_consent_max_days: u32,
 }
 
 impl OrbitRuntimeSettings {
@@ -567,6 +570,7 @@ impl OrbitRuntimeSettings {
         experiments: orbit_config::ExperimentSettings,
         crew_ladder: orbit_config::CrewLadderSettings,
         machine_labels: Vec<String>,
+        application_consent_max_days: u32,
     ) -> Self {
         Self {
             persistence,
@@ -623,11 +627,16 @@ impl OrbitRuntimeSettings {
             experiments,
             crew_ladder,
             machine_labels,
+            application_consent_max_days,
         }
     }
 
     pub(crate) fn machine_labels(&self) -> &[String] {
         &self.machine_labels
+    }
+
+    pub(crate) fn application_consent_max_days(&self) -> u32 {
+        self.application_consent_max_days
     }
 
     pub(crate) fn set_machine_labels(&mut self, labels: Vec<String>) {

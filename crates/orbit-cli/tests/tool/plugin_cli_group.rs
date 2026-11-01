@@ -2293,3 +2293,7 @@ fn write_greet_conformance_files(root: &Path, namespace: &str) {
 #[cfg(unix)]
 #[path = "application_authority.rs"]
 mod application_authority;
+
+#[cfg(unix)]
+#[path = "application_consent.rs"]
+mod application_consent;

@@ -80,7 +80,8 @@ every new consentable tool.
 - `crates/orbit-runtime/src/application_authority.rs::validate_application_operation`
   (as extended) refuses `text` on identity fields at consent time.
 - Gateway draft ids are `token`-constrained, so Orbit relies on the gateway plugin for
-  the draft digest (open question 3 in [1_scope.md](./1_scope.md#open-questions)).
+  the draft digest (resolved question 3 in [1_scope.md](./1_scope.md#open-questions):
+  "No, plugin checks it").
 - Cost: every consumer's ids must be resolvable by Orbit or be a plugin-internal token.
   An app that addresses Orbit work by a value Orbit cannot check needs a new predicate
   kind and another design review before it can be consented.

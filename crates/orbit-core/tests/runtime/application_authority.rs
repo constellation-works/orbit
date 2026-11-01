@@ -26,12 +26,15 @@ fn application_task_consent_is_exact_and_wire_metadata_cannot_grant_it() {
         application_id: "api-service".into(),
         expires_at: Utc::now() + Duration::hours(1),
         scopes: vec![ApplicationScope {
+            name: None,
             operation: ApplicationOperation {
                 tool: "orbit.task.update".into(),
-                input: input.clone(),
+                input: Some(input.clone()),
+                fields: None,
                 plugin: None,
             },
             callbacks: vec![],
+            rate_limit: None,
         }],
     };
     let agent = ToolSessionContext {
@@ -116,7 +119,8 @@ fn application_task_consent_is_exact_and_wire_metadata_cannot_grant_it() {
     };
     unsupported.scopes[0].operation = ApplicationOperation {
         tool: "orbit.routine.control".into(),
-        input: json!({}),
+        input: Some(json!({})),
+        fields: None,
         plugin: None,
     };
     assert!(

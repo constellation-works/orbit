@@ -248,6 +248,7 @@ task_prefix = "ORB"
 | `machine.worker_memory_max` | `50%` | Yes | **Advanced.** Scope `MemoryMax=` (OOM point). Same grammar. |
 | `machine.worker_tasks_max` | `4096` | Yes | **Advanced.** Scope `TasksMax=` (processes plus threads), at least 1. The macOS watchdog counts processes only. |
 | `machine.worker_cpu_quota` | `0` (unset) | Yes | **Advanced.** Scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` sets no CPU limit. Linux only. |
+| `machine.application_consent_max_days` | `30` | Yes (`--global`) | **Advanced.** Longest lifetime, in days (`1..=365`), of an application consent with constrained, named or rate-limited scopes (schema v2); `orbit application consent` refuses a later `expires_at`. Consents whose every scope is exact are not capped. |
 | `machine.web_terminal.enabled` | `false` | Yes (`--global`) | Enable private dashboard browser credentials at startup. |
 | `machine.web_session.ttl` | `43200` (12h) | Yes (`--global`) | Session lifetime in seconds (`1..=604800`); restart the dashboard to apply. See [browser sessions](#browser-sessions). |
 

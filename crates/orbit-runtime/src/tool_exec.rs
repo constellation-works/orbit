@@ -192,6 +192,9 @@ impl RuntimeKernel {
                 capability_enforcement,
             )?;
         }
+        // Input-dependent floors. Keep them in step with
+        // `INPUT_DEPENDENT_OPERATION_FLOORS`, which application consent reads
+        // to refuse such inputs outright.
         if (name == "orbit.pipeline.invoke"
             && input.get("default_input") == Some(&Value::Bool(true)))
             || (name == "orbit.auto_task.update" && input.get("expected_enabled").is_some())

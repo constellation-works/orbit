@@ -3,7 +3,7 @@ use super::Fixture;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-fn app_command(
+pub(super) fn app_command(
     fixture: &Fixture,
     credential: &Path,
     tool: &str,
@@ -36,7 +36,7 @@ fn app_command(
     command
 }
 
-fn consent(
+pub(super) fn consent(
     fixture: &Fixture,
     request: &Value,
     suffix: &str,

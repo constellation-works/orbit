@@ -129,9 +129,12 @@ pending gateway drafts at their current digest.
 - reach another workspace or host;
 - act after revocation: every admission rereads the record and the witness.
 
-*Bounds:* constrained consents expire within 30 days. Revocation is immediate for the
-next admission. Every admission is audited with its bound values, so misuse is visible
-after the fact. An optional per-scope rate limit is open question 2 in
+*Bounds:* constrained consents expire within the host's cap,
+`machine.application_consent_max_days` (default 30 days; Daniel: "30 can be default but
+configurable"). Revocation is immediate for the next admission. Every admission is
+audited with its bound values, so misuse is visible after the fact. A scope may carry an
+optional rate limit (Daniel: "configurable, default off"): none is set unless the
+operator writes one ([§4.2](#42-scope-and-operation)). Both answers are recorded in
 [1_scope.md](./1_scope.md#open-questions).
 
 ### 3.2 Malicious plugin
@@ -182,9 +185,15 @@ was swapped after consent.
 }
 ```
 
-The rules are unchanged except two. A request whose scopes include any constrained
-operation is limited to 8 KiB instead of 4 KiB. Its `expires_at` must be at most 30 days
-after consent.
+The rules are unchanged for a request whose every scope is exact, unnamed and
+unlimited: it is written as v1 and keeps its 4 KiB request budget. A request with any
+constrained, named or rate-limited scope is written as v2 and differs in two ways:
+
+- Each operation (entry or callback), serialized, is at most 8 KiB. The 4 KiB request
+  budget does not apply.
+- Its `expires_at` must be at most `machine.application_consent_max_days` days after
+  consent. The key defaults to 30, accepts 1-365, and is global-only, so a workspace
+  `config.toml` cannot raise it. Consent validation reads the configured value.
 
 ### 4.2 Scope and operation
 
@@ -192,9 +201,15 @@ after consent.
 {
   "name": "proposal-accept",
   "operation": ApplicationOperation,
-  "callbacks": [ApplicationOperation, ...]
+  "callbacks": [ApplicationOperation, ...],
+  "rate_limit": {"admissions": 60, "window_seconds": 3600}
 }
 ```
+
+- `rate_limit` is optional, and absent by default: a scope without one has no limit.
+  When set, `admissions` is 1-10000 and `window_seconds` 1-86400; consent validation
+  refuses anything else. Admission enforces it from slice 2. Until then a rate-limited
+  scope is refused at admission (`not yet admitted`), never run unlimited.
 
 - `name` is new. It is optional on an exact scope and required on a constrained one. It
   matches `[a-z0-9-]{1,48}` and is unique within the consent. Audit rows and refusals
@@ -257,9 +272,12 @@ Field rules:
 
 ### 4.4 Ceilings
 
-A closed table in `crates/orbit-common/src/governance/authorization/catalog.rs` replaces
-`APPLICATION_BUILTIN_OPERATIONS`. A consent may narrow a ceiling, never exceed it.
-Consent-time validation checks every scope against it, and admission checks again.
+A closed table in `crates/orbit-common/src/governance/authorization/catalog.rs`
+(`APPLICATION_OPERATION_CEILINGS`) replaces `APPLICATION_BUILTIN_OPERATIONS`. A consent
+may narrow a ceiling, never exceed it. Consent-time validation checks every scope
+against it, and admission checks again. Each row also keeps the v1 exact-form key list
+(`exact_fields`): `orbit.task.update` and `orbit.decision.answer` only, unchanged. The
+`orbit.auto_task.*` rows join the table in slice 5; until then they are refused.
 
 | Tool | Entry | Callback | Fields at most | Status targets at most |
 |---|---|---|---|---|
@@ -279,7 +297,9 @@ application write never forces a transition.
 **Always refused**, whatever the consent says: every operation or input that carries an
 Operator floor in the governed-operation catalogue, including the input-dependent floors
 in `authorize_registered_tool` (`crates/orbit-runtime/src/tool_exec.rs:163-227`).
-Consent-time validation derives this from the catalogue, not from a list. Today that
+Consent-time validation derives this from the catalogue, not from a list
+(`application_operator_floored`): a built-in whose governed row admits `Operator`, or an
+input field listed in `INPUT_DEPENDENT_OPERATION_FLOORS` whose operation does. Today that
 covers `orbit.routine.control`, `orbit.auto_task.mint` with `acknowledge_unconditional`,
 `orbit.auto_task.update` with `expected_enabled`, `orbit.auto_task.delete` and `reset`,
 `orbit.workflow.*` and pipeline dispatch, `granted_tools`, and every `application`
@@ -348,9 +368,11 @@ Abridged to accept and send-back. Slice 6 owns the full profile.
 
 The changes in `crates/orbit-types/src/tool/application.rs`, all additive:
 
-- `ApplicationConsent.schema_version` is `2` when any scope is constrained or named. Any
-  other consent is still written as `1` (see [§8](#8-migration-and-compatibility)).
-- `ApplicationScope` gains `name: Option<String>`.
+- `ApplicationConsent.schema_version` is `2` when any scope is constrained, named or
+  rate-limited. Any other consent is still written as `1` (see
+  [§8](#8-migration-and-compatibility)).
+- `ApplicationScope` gains `name: Option<String>` and
+  `rate_limit: Option<ApplicationRateLimit>`.
 - `ApplicationOperation` gains `fields: Option<BTreeMap<String, ApplicationConstraint>>`
   next to `input`. Exactly one is set. `input` becomes `Option<Value>` with serde default
   absent, so v1 records still read.
@@ -454,7 +476,7 @@ the app uses it once slice 6 has also landed.
 | **Dismiss** (`dismiss`) | `orbit.task.update {id, status: rejected, comment}` | Exact input (`application_authority.rs:399`). The status is already in the v1 list (:291) | **Allowed**: `id` is a `task` predicate whose `tags_any` names the tags of the three dismissable kinds (proposal, script output, gateway draft; slice 6 fixes the exact tag names) and the open statuses, `status` is `const` `rejected`, `comment` is `text`. `office.proposal-reconcile`, which ORB-20363 names, is not in the orbit-office checkout read. If it lands, it gets an entry scope with accept's read callbacks and the `rejected` transition | Constraint evaluator (step 5) |
 | **Approve** (`approve`) | `office.artifact-promote {task}`. Callbacks (`orbit-office/crates/office-tools/src/tools/artifacts/promote.rs`): `orbit.task.show` with fields `id`, `status`, `tags`, `artifacts`, `crew`, `updated_at`, and `orbit.task.artifact.get`. Then direct `orbit.task.update` steps toward `done` with `comment` and `execution_summary` | Entry exact; read callbacks not consentable; `in-progress` and `review` statuses; `execution_summary` key | **Allowed** from `review`, `in-progress` and `backlog`. A step from `proposed` to `backlog` is **refused** (approval-for-dispatch). Slice 6 changes the app's `closeSteps` to go from `proposed` straight to `in-progress` (the start transition), as accept does | Ceiling table (no `backlog` from `proposed`), `transition` constraint |
 | **Send back** (`sendBack`) | `orbit.task.update {id, status: backlog, comment}` | Exact input (`application_authority.rs:399`) | **Allowed**: `transition` from `review` to `backlog`, a `task` predicate on the approval tag (exact name fixed by slice 6), `comment` as `text` | `transition` constraint and the `backlog` ceiling rule |
-| **Gateway send** (`send`; `orbit-office/gateway/src/orbit_gateway/drafts.py`) | `gateway.http-send {draft, sha256}`. Callbacks: `orbit.task.show {id, fields}` and `orbit.task.update` with `comment`, `note`, a close walk and `execution_summary` | Entry exact; `orbit.task.show` not consentable; walk statuses; `note` and `execution_summary` keys | **Allowed**: `draft` is a `token`, `sha256` is a `sha256`, and the callback `id` is a `task` predicate with tag `gateway-draft` and `pin: true`. The walk from `proposed` must avoid `backlog`: slice 6 changes the gateway's `_CLOSE_FROM["proposed"]` to start at `in-progress`. Orbit cannot bind the draft digest. The gateway plugin checks it, as today (open question 3) | `token` and `pin`, host-route callback list |
+| **Gateway send** (`send`; `orbit-office/gateway/src/orbit_gateway/drafts.py`) | `gateway.http-send {draft, sha256}`. Callbacks: `orbit.task.show {id, fields}` and `orbit.task.update` with `comment`, `note`, a close walk and `execution_summary` | Entry exact; `orbit.task.show` not consentable; walk statuses; `note` and `execution_summary` keys | **Allowed**: `draft` is a `token`, `sha256` is a `sha256`, and the callback `id` is a `task` predicate with tag `gateway-draft` and `pin: true`. The walk from `proposed` must avoid `backlog`: slice 6 changes the gateway's `_CLOSE_FROM["proposed"]` to start at `in-progress`. Orbit does not bind the draft digest. The gateway plugin checks it, as today (resolved question 3: "No, plugin checks it") | `token` and `pin`, host-route callback list |
 | **Routine control** (`orbit-office/app/packages/server/src/features/routines/index.ts`) | `orbit.routine.control {action: toggle, ...}` | Consent time: not an application built-in (`application_authority.rs:298-302`). Operator-only catalogue row (`catalog.rs:602-607`) | **Refused (out).** Stays on the operator surfaces: dashboard `routine.toggle` (`DASHBOARD_ROUTINE_TOGGLE`, `catalog.rs:72`) and the CLI. The app keeps its not-permitted message | Named in the always-refused list (§4.4); no admission change |
 | **Auto-task mint** (`mintAutoTask`, `orbit-office/app/packages/server/src/orbit/client.ts`) | `orbit.auto_task.mint {..., acknowledge_unconditional}` | Consent time (`application_authority.rs:298-302`). The `acknowledge_unconditional` input takes the `orbit.routine.control` floor (`tool_exec.rs:195-205`) | **Refused (out).** Stays on the dashboard `auto_task.mint` row (`DASHBOARD_AUTO_TASK_MINT`, `catalog.rs:136`) | Named in the always-refused list (§4.4) |
 
@@ -551,12 +573,14 @@ design. Each is one deliverable PR. Slices 1-5 and 7 belong to `ws_orbit`, slice
 
 1. **Application consent v2 schema and consent-time validation.** Add the constraint
    types, scope names, the `fields` / `input` exclusivity, the ceiling table replacing
-   `APPLICATION_BUILTIN_OPERATIONS`, the always-refused list, the 8 KiB budget and the
-   30-day cap. Version selection by content (v1 when exact-only). Admission refuses
-   constrained scopes (`not yet admitted`) until slice 2. Tests: consent refusals for each
+   `APPLICATION_BUILTIN_OPERATIONS`, the always-refused list, the 8 KiB per-operation
+   budget, the expiry cap (`machine.application_consent_max_days`, default 30) and the
+   optional scope rate limit. Version selection by content (v1 when exact-only).
+   Admission refuses constrained and rate-limited scopes (`not yet admitted`) until
+   slice 2. Tests: consent refusals for each
    invalid constraint, ceiling breach and always-refused tool, at the `orbit application
    consent` CLI boundary.
-2. **Constrained entry admission.** Add the evaluator (§5.1), `ApplicationPort` reads for
+2. **Constrained entry admission.** Add the evaluator (§5.1), scope rate-limit enforcement, `ApplicationPort` reads for
    the task and artifact digest, invocation `bindings` and `text_digests`, the field-level
    refusal, executor support for `plan`, `execution_summary` and `note`, and the
    `transition` and `backlog` rules. Tests: dismiss and send-back admitted on matching
@@ -603,8 +627,9 @@ design. Each is one deliverable PR. Slices 1-5 and 7 belong to `ws_orbit`, slice
   than an exact call. `orbit application consent` should print a plain summary of each
   scope (slice 4), for example: "accept any task tagged proposal in status proposed whose
   proposal.json digest equals the call's sha256".
-- **The 30-day cap adds operator work.** Monthly rotation is a real cost on a one-user
-  host (open question 1).
+- **The expiry cap adds operator work.** Monthly rotation at the 30-day default is a real
+  cost on a one-user host. The host may raise the cap with
+  `machine.application_consent_max_days` (resolved question 1).
 - **Office close walks change.** The approve and gateway paths must stop passing through
   `backlog` from `proposed`. Until slice 6 lands, those closes fail with the specific
   refusal. The send has happened or the promote stands, and the app already reports

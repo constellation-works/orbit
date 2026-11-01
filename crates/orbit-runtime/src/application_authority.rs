@@ -1,4 +1,4 @@
-//! Host-local application authority: exact calls, never a capability grant.
+//! Host-local application authority: consented calls, never a capability grant.
 
 use std::cell::RefCell;
 use std::path::Path;
@@ -6,7 +6,8 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
-    CallerCapabilities, CallerEnvelope, agent_context_declared,
+    APPLICATION_EXACT_TASK_STATUSES, CallerCapabilities, CallerEnvelope, agent_context_declared,
+    application_operation_ceiling, application_operator_floored,
 };
 use orbit_common::security::application_credential::ApplicationCredential;
 use orbit_store::contracts::{ApplicationConsentRecord, ApplicationConsentStoreBackend};
@@ -16,6 +17,9 @@ use orbit_types::tool::{
 };
 use serde_json::Value;
 
+use crate::application_consent::{
+    OperationRole, validate_consent_request_v2, validate_constrained_fields,
+};
 use crate::{RuntimeKernel, tool_exec::CapabilityEnforcement};
 
 thread_local! {
@@ -27,10 +31,11 @@ pub fn take_application_audit() -> Option<ApplicationInvocation> {
     APPLICATION_AUDIT.with(|state| state.borrow_mut().take())
 }
 
-/// Calls supported by the built-in application integration. All other built-in
-/// operations retain their ordinary authority requirements, even in a consent.
-fn application_builtin_supported(tool: &str) -> bool {
-    orbit_common::governance::authorization::APPLICATION_BUILTIN_OPERATIONS.contains(&tool)
+/// Refusal for a constrained scope until constrained admission lands.
+fn constrained_scope_not_admitted() -> OrbitError {
+    OrbitError::CapabilityDenied(
+        "constrained and rate-limited application scopes are not yet admitted".into(),
+    )
 }
 
 impl RuntimeKernel {
@@ -97,39 +102,52 @@ impl RuntimeKernel {
             || request.scopes.len() > 64
         {
             return Err(OrbitError::InvalidInput(
-                "application consent needs an application id, future expiry and 1..64 exact scopes"
+                "application consent needs an application id, future expiry and 1..64 scopes"
                     .into(),
             ));
         }
-        if serde_json::to_vec(&request)
-            .map_err(|_| OrbitError::InvalidInput("invalid application consent".into()))?
-            .len()
-            > 4096
+        let schema_version = request.schema_version();
+        if schema_version == orbit_types::tool::APPLICATION_CONSENT_SCHEMA_V1
+            && serde_json::to_vec(&request)
+                .map_err(|_| OrbitError::InvalidInput("invalid application consent".into()))?
+                .len()
+                > 4096
         {
             return Err(OrbitError::InvalidInput(
                 "application consent exceeds the 4 KiB session scope budget".into(),
             ));
         }
+        validate_consent_request_v2(&request, self.application_consent_max_days(), Utc::now())?;
         for scope in &request.scopes {
-            self.validate_application_operation(&scope.operation)?;
+            self.validate_application_operation(&scope.operation, OperationRole::Entry)?;
             if !scope.callbacks.is_empty() && scope.operation.plugin.is_none() {
                 return Err(OrbitError::InvalidInput(
                     "only plugin calls may have completion callbacks".into(),
                 ));
             }
             for callback in &scope.callbacks {
-                if callback.plugin.is_some() || !application_builtin_supported(&callback.tool) {
+                if callback.plugin.is_some()
+                    || self
+                        .tool_registry()
+                        .plugin_binding(&callback.tool)
+                        .is_some()
+                {
                     return Err(OrbitError::InvalidInput(
                         "completion callbacks must be supported built-in application operations"
                             .into(),
                     ));
                 }
-                self.validate_application_operation(callback)?;
+                self.validate_application_operation(
+                    callback,
+                    OperationRole::Callback {
+                        entry: &scope.operation,
+                    },
+                )?;
             }
         }
         let credential = ApplicationCredential::mint()?;
         let consent = ApplicationConsent {
-            schema_version: 1,
+            schema_version,
             consent_id: credential.consent_id().into(),
             application_id: request.application_id,
             workspace_id: self.workspace_id()?,
@@ -219,15 +237,32 @@ impl RuntimeKernel {
         self.audit_application_lifecycle(&record.consent, "revoke")
     }
 
+    /// Check one consented operation against the live plugin install or the
+    /// built-in ceiling. Consent and every admission run it, so a stale
+    /// plugin digest refuses later calls.
     fn validate_application_operation(
         &self,
         operation: &ApplicationOperation,
+        role: OperationRole<'_>,
     ) -> Result<(), OrbitError> {
-        if !operation.input.is_object() {
-            return Err(OrbitError::InvalidInput(
-                "application operation input must be an exact JSON object".into(),
-            ));
-        }
+        let keys: Vec<&str> = match (&operation.input, &operation.fields) {
+            (Some(input), None) => input
+                .as_object()
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(
+                        "application operation input must be an exact JSON object".into(),
+                    )
+                })?
+                .keys()
+                .map(String::as_str)
+                .collect(),
+            (None, Some(fields)) => fields.keys().map(String::as_str).collect(),
+            _ => {
+                return Err(OrbitError::InvalidInput(
+                    "application operation needs exactly one of `input` or `fields`".into(),
+                ));
+            }
+        };
         match self.tool_registry().plugin_binding(&operation.tool) {
             Some(binding) => {
                 let expected = operation.plugin.as_ref().ok_or_else(|| {
@@ -263,36 +298,82 @@ impl RuntimeKernel {
                         "plugin digest consent is stale or plugin disabled".into(),
                     ));
                 }
-            }
-            None if operation.plugin.is_none()
-                && application_builtin_supported(&operation.tool) =>
-            {
-                let keys: &[&str] = if operation.tool == "orbit.task.update" {
-                    &["id", "status", "comment", "workspace"]
-                } else {
-                    &["id", "answer", "note", "workspace"]
-                };
-                if operation
-                    .input
-                    .as_object()
-                    .is_none_or(|input| input.keys().any(|key| !keys.contains(&key.as_str())))
-                    || operation
-                        .input
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .is_none_or(str::is_empty)
-                {
-                    return Err(OrbitError::InvalidInput("application task decisions admit only id, status/answer, note, comment and workspace".into()));
+                if let Some(fields) = &operation.fields {
+                    let declared: Vec<String> = self
+                        .tool_registry()
+                        .get_schema(&operation.tool)
+                        .map(|schema| schema.parameters.into_iter().map(|p| p.name).collect())
+                        .unwrap_or_default();
+                    validate_constrained_fields(operation, fields, role, None, &declared)?;
                 }
-                if operation.tool == "orbit.task.update"
-                    && operation.input.get("status").is_some_and(|status| {
-                        !matches!(
-                            status.as_str(),
-                            Some("backlog" | "done" | "rejected" | "archived")
-                        )
-                    })
-                {
-                    return Err(OrbitError::InvalidInput("application task updates support approval, completion or dismissal statuses only".into()));
+            }
+            None if operation.plugin.is_none() => {
+                // The catalogue's Operator floors outrank any consent.
+                if application_operator_floored(&operation.tool, keys.iter().copied()) {
+                    return Err(OrbitError::CapabilityDenied(format!(
+                        "`{}` with these inputs requires a host operator and is never application authority",
+                        operation.tool
+                    )));
+                }
+                let ceiling = application_operation_ceiling(&operation.tool).ok_or_else(|| {
+                    OrbitError::CapabilityDenied(
+                        "this built-in operation does not support application consent".into(),
+                    )
+                })?;
+                match (&operation.input, &operation.fields) {
+                    (Some(input), _) => {
+                        if ceiling.exact_fields.is_empty() {
+                            return Err(OrbitError::InvalidInput(format!(
+                                "`{}` admits only constrained application operations",
+                                operation.tool
+                            )));
+                        }
+                        if keys.iter().any(|key| !ceiling.exact_fields.contains(key))
+                            || input
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .is_none_or(str::is_empty)
+                        {
+                            return Err(OrbitError::InvalidInput("application task decisions admit only id, status/answer, note, comment and workspace".into()));
+                        }
+                        if operation.tool == "orbit.task.update"
+                            && input.get("status").is_some_and(|status| {
+                                !status
+                                    .as_str()
+                                    .is_some_and(|s| APPLICATION_EXACT_TASK_STATUSES.contains(&s))
+                            })
+                        {
+                            return Err(OrbitError::InvalidInput("application task updates support approval, completion or dismissal statuses only".into()));
+                        }
+                    }
+                    (None, Some(fields)) => {
+                        let admitted = match role {
+                            OperationRole::Entry => ceiling.constrained_entry,
+                            OperationRole::Callback { .. } => ceiling.constrained_callback,
+                        };
+                        if !admitted {
+                            return Err(OrbitError::InvalidInput(format!(
+                                "`{}` exceeds the application ceiling as a constrained {}",
+                                operation.tool,
+                                match role {
+                                    OperationRole::Entry => "entry",
+                                    OperationRole::Callback { .. } => "callback",
+                                }
+                            )));
+                        }
+                        validate_constrained_fields(
+                            operation,
+                            fields,
+                            role,
+                            Some(ceiling.constrained_fields),
+                            &[],
+                        )?;
+                    }
+                    (None, None) => {
+                        return Err(OrbitError::InvalidInput(
+                            "application operation needs exactly one of `input` or `fields`".into(),
+                        ));
+                    }
                 }
             }
             _ => {
@@ -357,8 +438,11 @@ impl RuntimeKernel {
             .get_application_consent(&invocation.consent.consent_id)?
             .ok_or_else(|| OrbitError::CapabilityDenied("unknown application consent".into()))?;
         self.verify_application_witness(&record)?;
-        if record.consent.schema_version != 1
-            || record.revoked
+        if !matches!(
+            record.consent.schema_version,
+            orbit_types::tool::APPLICATION_CONSENT_SCHEMA_V1
+                | orbit_types::tool::APPLICATION_CONSENT_SCHEMA_V2
+        ) || record.revoked
             || record.consent != invocation.consent
             || record.consent.expires_at <= Utc::now()
         {
@@ -381,30 +465,45 @@ impl RuntimeKernel {
                 .ok_or_else(|| {
                     OrbitError::CapabilityDenied("invalid application callback scope".into())
                 })?;
-            self.validate_application_operation(&scope.operation)?;
+            self.validate_application_operation(&scope.operation, OperationRole::Entry)?;
             if !scope
                 .callbacks
                 .iter()
-                .any(|op| op.tool == tool && op.input == *input)
+                .any(|op| op.tool == tool && op.input.as_ref() == Some(input))
             {
+                if scope
+                    .callbacks
+                    .iter()
+                    .any(|op| op.tool == tool && op.is_constrained())
+                {
+                    return Err(constrained_scope_not_admitted());
+                }
                 return Err(OrbitError::CapabilityDenied(
                     "completion callback is outside application consent".into(),
                 ));
             }
         } else {
-            invocation.scope_index = record
-                .consent
-                .scopes
-                .iter()
-                .position(|scope| scope.operation.tool == tool && scope.operation.input == *input)
-                .ok_or_else(|| {
-                    OrbitError::CapabilityDenied(
-                        "operation or input is outside application consent".into(),
-                    )
-                })?;
-            self.validate_application_operation(
-                &record.consent.scopes[invocation.scope_index].operation,
-            )?;
+            let scopes = &record.consent.scopes;
+            let Some(index) = scopes.iter().position(|scope| {
+                scope.operation.tool == tool && scope.operation.input.as_ref() == Some(input)
+            }) else {
+                if scopes
+                    .iter()
+                    .any(|scope| scope.operation.tool == tool && scope.operation.is_constrained())
+                {
+                    return Err(constrained_scope_not_admitted());
+                }
+                return Err(OrbitError::CapabilityDenied(
+                    "operation or input is outside application consent".into(),
+                ));
+            };
+            // A rate limit is enforced with constrained admission; until then
+            // a limited scope is refused rather than run unlimited.
+            if scopes[index].rate_limit.is_some() {
+                return Err(constrained_scope_not_admitted());
+            }
+            invocation.scope_index = index;
+            self.validate_application_operation(&scopes[index].operation, OperationRole::Entry)?;
         }
         APPLICATION_AUDIT.with(|state| *state.borrow_mut() = Some(invocation.clone()));
         session.application = Some(Box::new(invocation));
