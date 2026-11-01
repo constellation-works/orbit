@@ -46,10 +46,11 @@
 //! binds is refused, as its next admission would refuse it.
 //!
 //! A specification edited since the publication is refused: that candidate
-//! implements the old task. The refusal offers `discard_candidate`, which
-//! records the discard, returns the task to the backlog so the next run
-//! implements fresh, and closes the task's undelivered Orbit pull requests
-//! exactly as `orbit task update --status backlog --discard-candidate` does.
+//! implements the old task. The refusal names the operator CLI route,
+//! `orbit task update <id> --status backlog --discard-candidate`, which is
+//! CLI-only: `orbit.task.update` does not accept `discard_candidate`. That
+//! command records the discard, returns the task to the backlog so the next
+//! run implements fresh, and closes the task's undelivered Orbit pull requests.
 //!
 //! The decision and preservation records are written by `system`, since the
 //! published-owner resume trusts only Orbit's own records; the operator's
