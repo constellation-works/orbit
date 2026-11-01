@@ -580,7 +580,7 @@ These counts answer different questions:
 | **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
 | Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
 | **Health → Incidents → Events**, **denied** status | Audited calls recorded as denied. This is a filtered list, not a rail count. |
-| **Health → Incidents → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
+| **Health → Incidents → Errors** | Step and event failures in the selected window. When paging, errors appear one page at a time (8 per page on desktop, 4 at widths up to 600px), with **Previous** and **Next** controls. The panel header shows the current range as `Showing a–b of N`, names the window, and reports when retention or the stderr read cap leaves part of it unread. |
 
 From a terminal, the same facts come from `orbit task show <task-id>`,
 `orbit run show <run-id>`, and `orbit audit list`.
