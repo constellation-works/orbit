@@ -153,6 +153,8 @@ mod provider_limit_budget;
 mod provider_limit_hold;
 mod purpose_crews;
 mod readiness_population;
+#[cfg(unix)]
+mod recovery_provider_auth;
 mod regression_risk;
 mod resource_profiles;
 mod risk_history;

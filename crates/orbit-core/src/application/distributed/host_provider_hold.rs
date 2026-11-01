@@ -80,6 +80,11 @@ impl OrbitRuntime {
         let since = now - LOOKBACK;
         let fallback = self.fallback_host();
         let aliases = self.host_aliases(&fallback);
+        let observations = self
+            .provider_invocation_observations(since)?
+            .into_iter()
+            .filter(|item| aliases.contains(&item.host))
+            .collect::<Vec<_>>();
         let mut stopped_runs = self.stores().jobs().list_job_runs_filtered(&hold_query(
             JobRunState::Failed,
             since,
@@ -103,7 +108,16 @@ impl OrbitRuntime {
             .collect::<Vec<_>>();
         // Most draws and routine ticks meet no open failure; they read nothing
         // more.
-        if failures.is_empty() {
+        if failures.is_empty()
+            && !observations.iter().any(|item| {
+                item.class.is_some_and(|class| {
+                    matches!(
+                        class,
+                        ProviderFailureClass::Unavailable | ProviderFailureClass::Capacity
+                    ) && now < item.at + base_backoff(class)
+                })
+            })
+        {
             return Ok(Vec::new());
         }
         let successes = self
@@ -118,6 +132,20 @@ impl OrbitRuntime {
 
         let mut provider_success: BTreeMap<AccountKey, DateTime<Utc>> = BTreeMap::new();
         let mut crew_success: BTreeMap<(String, String), DateTime<Utc>> = BTreeMap::new();
+        for item in observations.iter().filter(|item| item.success) {
+            note_later(
+                &mut provider_success,
+                (item.provider.clone(), item.account.clone()),
+                item.started_at,
+            );
+            if let Some(crew) = &item.crew {
+                note_later(
+                    &mut crew_success,
+                    (item.provider.clone(), crew.clone()),
+                    item.started_at,
+                );
+            }
+        }
         for run in &successes {
             for crew_name in crews.crews(run, None) {
                 let Some(provider) = self.provider_of_crew(&crew_name) else {
@@ -135,9 +163,12 @@ impl OrbitRuntime {
         // started before the lookback. Probes clear unavailability only;
         // they stay out of the success maps capacity reads.
         let mut provider_probe: BTreeMap<AccountKey, DateTime<Utc>> = BTreeMap::new();
-        if failures
+        if observations
             .iter()
-            .any(|(_, class, ..)| *class == ProviderFailureClass::Unavailable)
+            .any(|item| item.class == Some(ProviderFailureClass::Unavailable))
+            || failures
+                .iter()
+                .any(|(_, class, ..)| *class == ProviderFailureClass::Unavailable)
         {
             self.note_probe_recoveries(&aliases, &fallback, &mut provider_probe)?;
         }
@@ -157,6 +188,16 @@ impl OrbitRuntime {
                 else {
                     continue;
                 };
+                if observations.iter().any(|item| {
+                    item.run_id == failure.run_id
+                        && item.provider == failure.provider
+                        && item.account == failure.account
+                        && item.class == Some(failure.class)
+                        && (failure.class == ProviderFailureClass::Unavailable
+                            || item.crew == failure.crew)
+                }) {
+                    continue;
+                }
                 if hold_cleared(&failure, &provider_success, &crew_success, &provider_probe) {
                     continue;
                 }
@@ -179,6 +220,44 @@ impl OrbitRuntime {
                         open.insert(key, failure);
                     }
                 }
+            }
+        }
+
+        for item in &observations {
+            let Some(class) = item.class.filter(|class| {
+                matches!(
+                    class,
+                    ProviderFailureClass::Unavailable | ProviderFailureClass::Capacity
+                )
+            }) else {
+                continue;
+            };
+            if now >= item.at + base_backoff(class) {
+                continue;
+            }
+            let failure = OpenFailure {
+                at: item.at,
+                run_id: item.run_id.clone(),
+                class,
+                provider: item.provider.clone(),
+                account: item.account.clone(),
+                crew: (class == ProviderFailureClass::Capacity)
+                    .then(|| item.crew.clone())
+                    .flatten(),
+            };
+            if hold_cleared(&failure, &provider_success, &crew_success, &provider_probe) {
+                continue;
+            }
+            let key = (
+                class.as_str().to_string(),
+                (failure.provider.clone(), failure.account.clone()),
+                failure.crew.clone(),
+            );
+            if open
+                .get(&key)
+                .is_none_or(|previous| previous.at <= failure.at)
+            {
+                open.insert(key, failure);
             }
         }
 

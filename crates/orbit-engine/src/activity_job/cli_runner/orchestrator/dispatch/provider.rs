@@ -692,6 +692,7 @@ pub(super) fn dispatch_prepared_provider(
         .map_err(|error| {
             DispatchError::CliInvocationPermanent(format!("record agent execution: {error}"))
         })?;
+    let started_at = chrono::Utc::now();
     let process_exit = subprocess::invoke_cli_provider(subprocess::CliProviderInvocation {
         context,
         provider: &provider,
@@ -714,6 +715,7 @@ pub(super) fn dispatch_prepared_provider(
     })?;
     post_run::finish_cli_dispatch(post_run::CliProviderCompletion {
         context,
+        started_at,
         provider,
         model,
         agent_execution_id,
