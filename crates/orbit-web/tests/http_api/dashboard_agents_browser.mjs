@@ -494,7 +494,8 @@ try {
   assert.equal(await body.locator('.agents-cost-plot, .agents-cost-point, .agents-cost-frontier, .agents-cost-axis, .agents-cost-legend, .agents-tier-table').count(), 0);
   const implementersText = await body.textContent();
   assert.ok(!implementersText.includes('Score against cost') && !implementersText.includes('First reviews by tier'), 'no chart, frontier or tier copy');
-  assert.equal(await body.evaluate(node => node.lastElementChild.classList.contains('agents-role-panel')), true, 'the panel follows the disclosure');
+  assert.equal(await body.evaluate(node => node.querySelector('.agents-how')?.nextElementSibling?.classList.contains('agents-role-panel') ?? false), true, 'the panel directly follows the disclosure, whatever sections come after it');
+  assert.equal(await body.locator('.agents-execution').count(), 1, 'the interactive-work section stays rendered for implementers');
   assert.match(await body.locator('.agents-stats').textContent(), /Cost per landed task/, 'cost stays in Shown, not scored');
   for (const label of ['Escaped regressions', 'Regression residual', 'Diff economy']) assert.ok((await body.locator('.agents-stats').textContent()).includes(label));
   assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
