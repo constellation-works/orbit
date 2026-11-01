@@ -95,6 +95,7 @@ let lastPayload = null;
 let requestScope = null;
 let liveRefresh = null;
 let calibrationHistoryPage = 0;
+let residualMetric = "hours";
 
 function clearForecast() {
   lastPayload = null;
@@ -177,10 +178,10 @@ export function renderForecast() {
   const forecast = lastPayload.forecast || {};
   const count = $(COUNT);
   if (count) count.textContent = `${forecast.tasks ?? 0} task${forecast.tasks === 1 ? "" : "s"} · ${lastPayload.inputs?.concurrency ?? "?"} slots`;
-  const nodes = [headerBar(), answerCard(), tasksCard(), gapsCard(), calibrationCard(), detailSections()];
+  const nodes = [headerBar(), answerCard(), tasksCard(), gapsCard(), calibrationCard(), residualsCard(), detailSections()];
   const root = el("div", { class: "fc-view" }, nodes);
   root.dataset.key = "forecast-view";
-  root.dataset.hash = JSON.stringify([view, lastPayload, calibrationHistoryPage]);
+  root.dataset.hash = JSON.stringify([view, lastPayload, calibrationHistoryPage, residualMetric]);
   syncNodes(body, [root]);
 }
 
@@ -1153,6 +1154,104 @@ function calibrationCard() {
     ]),
     settlementLine(calibration),
   ], "fc-calibration");
+}
+
+// ---- residuals -------------------------------------------------------------
+
+const RESIDUAL_METRICS = [["hours", "Work hours"], ["usd", "Cost"], ["tokens", "Tokens"]];
+// The chart spans at least ±ln 2 (half to double the p50), and the largest
+// residual when that is further, so a calm run is not stretched to the edges.
+const RESIDUAL_MIN_SPAN = Math.LN2;
+
+// "1.8× p50" for a log residual: the actual as a multiple of the forecast's p50.
+function residualRatio(value, suffix = " p50") {
+  const ratio = Math.exp(value);
+  return `${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(ratio >= 1 ? 1 : 2)}×${suffix}`;
+}
+
+// One bar per scored forecast, oldest first, from `rows` carrying
+// `{ at, version, value, detail }`. Bars above the zero line are work that
+// ran over the forecast's p50 (under-predicted); bars below came in under it
+// (over-predicted). Earlier model versions are muted, and a version change
+// starts a labelled segment, since their quantiles are not comparable.
+function residualChart(label, rows, current) {
+  const span = Math.max(RESIDUAL_MIN_SPAN, ...rows.map((row) => Math.abs(row.value)));
+  const bars = [];
+  const labels = [];
+  let version = null;
+  rows.forEach((row, index) => {
+    const share = Math.min(1, Math.abs(row.value) / span) * 50;
+    const over = row.value >= 0;
+    const bar = el("span", {
+      class: `fc-res-bar ${over ? "fc-res-under" : "fc-res-over"}${row.version === current ? "" : " fc-res-old"}${row.version !== version && index ? " fc-res-split" : ""}`,
+      title: `${formatDateTime(row.at)} · model v${row.version} · ${residualRatio(row.value)} (${over ? "ran over" : "came in under"} the forecast)${row.detail ? ` · ${row.detail}` : ""}`,
+    }, [el("span", { class: "fc-res-fill", style: { height: `${share}%`, [over ? "bottom" : "top"]: "50%" } })]);
+    bars.push(bar);
+    if (row.version !== version) {
+      version = row.version;
+      labels.push(el("span", { class: "fc-res-version", style: { gridColumn: `${index + 1} / -1` }, text: `v${version}` }));
+    }
+  });
+  const higher = residualRatio(span, "");
+  const lower = residualRatio(-span, "");
+  const newest = rows[rows.length - 1];
+  const summary = `${label}: ${rows.length} scored forecast${rows.length === 1 ? "" : "s"}, newest ${residualRatio(newest.value)}. Range ${lower} to ${higher} of p50.`;
+  const plot = el("div", { class: "fc-res-plot", role: "img", "aria-label": summary }, [
+    el("div", { class: "fc-res-zero", "aria-hidden": "true" }),
+    el("div", { class: "fc-res-bars", style: { gridTemplateColumns: `repeat(${rows.length}, minmax(3px, 14px))` } }, [...bars, ...labels]),
+  ]);
+  // A long series scrolls inside the plot; start at the newest forecast.
+  requestAnimationFrame(() => { plot.scrollLeft = plot.scrollWidth; });
+  return el("div", { class: "fc-res" }, [
+    el("div", { class: "fc-res-head" }, [el("span", { text: label }), el("span", { class: "fc-res-n", text: `${rows.length} scored` })]),
+    el("div", { class: "fc-res-body" }, [
+      el("div", { class: "fc-res-axis", "aria-hidden": "true" }, [
+        el("span", { text: `${higher} · over` }),
+        el("span", { text: "p50" }),
+        el("span", { text: `${lower} · under` }),
+      ]),
+      plot,
+    ]),
+  ]);
+}
+
+function residualsCard() {
+  const calibration = lastPayload.calibration || {};
+  const current = calibration.model_version;
+  const metric = RESIDUAL_METRICS.find(([key]) => key === residualMetric) || RESIDUAL_METRICS[0];
+  const meta = "ln(actual ÷ p50) · over the line = ran over the forecast";
+  const scored = [...(calibration.forecasts || [])].reverse();
+  const taskRows = scored
+    .filter((row) => num(row.residual?.[metric[0]]?.median) != null)
+    .map((row) => ({ at: row.forecast_at, version: row.model_version, value: row.residual[metric[0]].median, detail: `median of ${row.residual[metric[0]].n} task${row.residual[metric[0]].n === 1 ? "" : "s"}` }));
+  const drainRows = scored
+    .filter((row) => num(row.residual?.time_to_drain_hours) != null)
+    .map((row) => ({ at: row.forecast_at, version: row.model_version, value: row.residual.time_to_drain_hours, detail: `drain ${formatForecastHours(row.actual?.time_to_drain_hours)} vs p50 ${formatForecastHours(row.forecast?.time_to_drain_hours?.p50)}` }));
+  if (!taskRows.length && !drainRows.length && residualMetric === "hours") {
+    return card("Residuals", meta, [el("div", { class: "mx-empty" }, [
+      el("div", { class: "mx-empty-title", text: "No scored residuals yet" }),
+      el("div", { class: "mx-empty-detail", text: "A bar appears for each stored forecast once one of its tasks finishes: the median over its finished tasks of how far the actual ran from the forecast's p50. Whole-backlog drain time follows when a forecast settles, up to 90 days later." }),
+    ])], "fc-residuals");
+  }
+  const picker = el("div", { class: "mx-seg", role: "group", "aria-label": "Residual measure" }, RESIDUAL_METRICS.map(([key, text]) => {
+    const on = key === metric[0];
+    const button = el("button", { class: on ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, "aria-pressed": on ? "true" : "false" });
+    button.addEventListener("click", () => {
+      if (on) return;
+      residualMetric = key;
+      renderForecast();
+    });
+    return button;
+  }));
+  const blurb = el("p", { class: "mx-blurb", text: `One bar per stored forecast, oldest first: the median across its finished tasks of ln(actual ÷ forecast p50) for task ${metric[1].toLowerCase()}, so tasks of different size compare. Zero is a hit on the p50; +0.69 means twice the forecast, −0.69 half. Earlier model versions are muted and split off, since their quantiles differ.` });
+  const charts = [
+    taskRows.length ? residualChart(`Task ${metric[1].toLowerCase()}`, taskRows, current) : el("div", { class: "mx-empty-note", text: `No task ${metric[1].toLowerCase()} residuals scored yet.` }),
+    drainRows.length ? residualChart("Whole-backlog time to drain", drainRows, current) : el("div", { class: "mx-empty-note", text: "No whole-backlog drain time scored yet; it settles up to 90 days after a forecast." }),
+  ];
+  return card("Residuals", meta, [picker, blurb, el("div", { class: "fc-ress" }, charts), el("div", { class: "fc-res-legend", "aria-hidden": "true" }, [
+    el("span", { class: "fc-res-key fc-res-under", text: "ran over forecast" }),
+    el("span", { class: "fc-res-key fc-res-over", text: "came in under" }),
+  ])], "fc-residuals");
 }
 
 function hitRow(label, hits, target) {
