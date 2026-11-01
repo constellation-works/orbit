@@ -600,15 +600,27 @@ in to live review, set `mode` to `"live"` and list the repository-relative view
 manifests the checks should use:
 
 ```toml
+[review]
+timing = "before_landing"
+
 [visual_review]
 manifests = ["views.json"]
 mode = "live"
 ```
 
+`review.timing = "before_landing"` supplies the review layer that can resolve
+blocking findings for PR-route deliveries. Live mode alone does not make
+landing conditional: with `review.timing = "off"` and selective enforcement
+off (the defaults), or when the review is skipped or not required, confirmed
+findings at or above `block_at` are filed as high-priority follow-ups after
+landing instead of holding it. With timing off, enforced selective review
+(`review.selective_before_landing.mode = "enforce"`) can provide that layer
+for PR-route deliveries.
+
 - **`visual_review.manifests`** — Default: `[]`. Repository-relative view manifests. An empty list refuses a `verify-mock-ui` task with `no_view_manifest`. `orbit visual capture` reads these same manifests from the working tree in every mode.
 - **`visual_review.default_width`** — Default: `1440`. Width used when a mock name has no width. Non-responsive views allow only this width.
-- **`visual_review.mode`** — Default: `"off"`. `off` does not run delivery capture. `shadow` runs capture and checks without blocking landing or filing follow-ups. `live` blocks landing on findings at or above `visual_review.block_at` until they are fixed or an operator accepts the dispute with `orbit visual accept-dispute --task <ID> --finding <FINDING> --reason <REASON>`. Resume the held run after accepting a dispute.
-- **`visual_review.block_at`** — Default: `"high"`. In `live` mode, the lowest finding severity that blocks landing. Values: `critical`, `high`, `medium`, `low` or `never`.
+- **`visual_review.mode`** — Default: `"off"`. `off` does not run delivery capture. `shadow` runs capture and checks without blocking on findings or filing follow-ups; `visual_review.require_established = true` can still hold a delivery whose capture is not established. In `live`, confirmed findings at or above `visual_review.block_at` block landing when a review layer can resolve them; otherwise they become high-priority follow-ups. Blocking findings must be fixed or an operator must accept the dispute with `orbit visual accept-dispute --task <ID> --finding <FINDING> --reason <REASON>`. Resume the held run after accepting a dispute.
+- **`visual_review.block_at`** — Default: `"high"`. In `live` mode with a review layer, the lowest confirmed-finding severity that blocks landing. Values: `critical`, `high`, `medium`, `low` or `never`.
 - **`visual_review.file_at`** — Default: `"low"`. In `live` mode, the lowest unfixed finding severity filed as a follow-up after landing. Values: `critical`, `high`, `medium`, `low`, `nit` or `never`. Configuration fails to load if this severity is above `visual_review.block_at`.
 - **`visual_review.reviewer`** — Default: `true`. Runs the mock comparison reviewer after capture and checks. Set to `false` to keep capture and checks only. The reviewer comes from [`workflow.purpose_crews.visual_review`](#workflow-purpose-crews-visual-review).
 - **`visual_review.max_mocks`** — Default: `12`. Maximum mocks captured in one delivery (`1`–`100`).
