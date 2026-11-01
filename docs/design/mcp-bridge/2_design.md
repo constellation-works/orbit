@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 feature: mcp-bridge
 doc_role: design
@@ -169,10 +169,13 @@ when it binds loopback. A browser page can send HTTP requests to loopback, so
 the listener closes a connection unless its first byte is `{`. This check runs
 before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body
 ([ORB-12929] closed that browser-originated request path).
-rmcp buffers a message until its newline with no ceiling of its own, so the
-listener also closes a session whose single message exceeds 8 MiB
-(`DEFAULT_MAX_MCP_MESSAGE_BYTES`) rather than let an unauthenticated peer grow
-the process without bound.
+rmcp's stream transport caps one incoming line at 16 MiB (`DEFAULT_MAX_LINE_LENGTH`
+in rmcp 3.8). A longer line is discarded and logged while the connection stays
+open. The listener adds a stricter guard beneath rmcp: it fails the read and
+closes the session once a single message exceeds 8 MiB
+(`DEFAULT_MAX_MCP_MESSAGE_BYTES`), so an unauthenticated peer cannot grow a message
+past that bound, and rmcp's discard path is never reached on this listener. The
+stdio session has no Orbit cap of its own and takes rmcp's default.
 
 Each accepted connection is served on its own task with its own server instance.
 That isolation is load-bearing rather than defensive. The adapter's session state
