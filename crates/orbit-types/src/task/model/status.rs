@@ -11,6 +11,13 @@ pub const NO_DIFF_EXPECTED_TAG: &str = "no-diff-expected";
 /// human approves them.
 pub const NO_AUTO_APPROVE_TAG: &str = "no-auto-approve";
 
+/// Tasks carrying this tag are never admitted by an automatic drain
+/// (`orbit run auto`, pull-drain followers or any automatic admission pass)
+/// and are never approved by drain-window auto-approval (it implies
+/// [`NO_AUTO_APPROVE_TAG`]). An explicit `orbit run ship <id>` and an
+/// interactive claim still run it; removing the tag makes it eligible again.
+pub const NO_DRAIN_TAG: &str = "no-drain";
+
 /// Task history event an operator records to discard the candidate the task's
 /// last failed run preserved; the next run implements fresh [ORB-13985].
 pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";

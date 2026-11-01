@@ -191,6 +191,17 @@ orbit tool run orbit.task.update --input '{"id": "<task-id>",
 
 The next admission honours it. A task already running or claimed is not moved.
 
+## `no-drain` tag for orchestrator-owned work
+
+Tag a task `no-drain` when you file it for your own session to implement, so a
+live drain does not race you for it. No `orbit run auto` drain, pull-drain
+follower or automatic admission pass admits it (readiness reports
+`no_drain_tag`), and drain-window auto-approval never approves it — it implies
+`no-auto-approve`, though task-pilot may still assess it. An explicit
+`orbit run ship <id>` and an interactive claim still work. Remove the tag with
+`orbit.task.update` (full tag list without `no-drain`) to make it drain-eligible
+again.
+
 ## UI tag
 
 Tag every task whose change a user will see (a dashboard, web pages, a docs

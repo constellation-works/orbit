@@ -37,6 +37,11 @@ pub(crate) struct BacklogTaskExclusion {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BacklogTaskExclusionReason {
     ContextLockConflict,
+    /// The task carries the reserved `no-drain` tag: no automatic drain,
+    /// pull-drain follower or automatic admission pass admits it. An
+    /// explicit `orbit run ship <id>` still runs it, and removing the tag
+    /// makes it eligible on the next pass. Serializes as `no_drain_tag`.
+    NoDrainTag,
     /// The task's crew is a human crew (`[crews.<name>] kind = "human"`): the
     /// work waits for that operator. No drain admits it, whatever its
     /// `--allow-crew` list names, and it is never re-crewed onto an agent.

@@ -6,7 +6,8 @@ spec:
   type: deterministic
   description: >
     Select the `proposed` tasks one `orbit run auto --approve-proposed` pass
-    pilots for approval. A task qualifies when it carries `no-diff-expected`,
+    pilots for approval. Tasks tagged `no-auto-approve` or `no-drain` are held
+    (as that tag) and never approved. A task qualifies when it carries `no-diff-expected`,
     or when it has non-empty `context_files` and an assessed complexity
     (`unassessed` and unset do not count). A qualifying task is skipped while
     its newest history entry is a drain-approval hold the pilot recorded, or

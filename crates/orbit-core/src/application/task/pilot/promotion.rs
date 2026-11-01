@@ -10,7 +10,9 @@
 use std::collections::BTreeSet;
 
 use orbit_engine::DispatchError;
-use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskComment, TaskStatus, is_valid_orb_task_id};
+use orbit_types::task::{
+    NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, TaskComment, TaskStatus, is_valid_orb_task_id,
+};
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
@@ -113,9 +115,21 @@ fn holds_promotion(
 }
 
 /// Whether the task's filer opted it out of automatic approval. The tag is
-/// also the hold reason, so the report names what to remove.
+/// also the hold reason, so the report names what to remove. `no-drain`
+/// implies this opt-out.
 pub(crate) fn auto_approval_opted_out(tags: &[String]) -> bool {
-    tags.iter().any(|tag| tag == NO_AUTO_APPROVE_TAG)
+    tags.iter()
+        .any(|tag| tag == NO_AUTO_APPROVE_TAG || tag == NO_DRAIN_TAG)
+}
+
+/// The hold classification for an auto-approval opt-out: `no-drain` when
+/// that tag is present, otherwise `no-auto-approve`.
+pub(crate) fn auto_approval_hold_classification(tags: &[String]) -> &'static str {
+    if tags.iter().any(|tag| tag == NO_DRAIN_TAG) {
+        NO_DRAIN_TAG
+    } else {
+        NO_AUTO_APPROVE_TAG
+    }
 }
 
 pub(crate) struct PromotionFindings<'a> {
