@@ -383,3 +383,48 @@ fn sync_all_converges_a_workspace_whose_running_run_owner_is_gone() {
         "workspace held by a dead-owner run was not converged"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn sync_all_preserves_workspace_held_by_parked_dead_owner() {
+    let host = Host::new();
+    let parked = host.register_stale_workspace("parked");
+    host.orbit(&parked)
+        .args(["workspace", "list"])
+        .assert()
+        .success();
+    let run_id = "jrun-sync-all-parked";
+    host.insert_run_with_owner(&parked, run_id, "running", i32::MAX as u32);
+    let state = orbit_types::workflow::PipelineState::new(
+        run_id.to_owned(),
+        "fixture".to_owned(),
+        serde_json::json!({}),
+    );
+    let mut state = serde_json::to_value(state).unwrap();
+    state["auto_task"] = serde_json::json!({
+        "version": 1, "frozen_job": "fixture", "started_at": "2020-01-01T00:00:00Z",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "parked": {"parked_at": "2020-01-01T00:00:00Z", "wake_at": "2099-01-01T00:00:00Z", "reason": "waiting"}
+    });
+    Connection::open(host.home.join(".orbit/orbit.db")).unwrap().execute(
+        "INSERT INTO job_run_states (workspace_id, run_id, pipeline_state_json) VALUES (?1, ?2, ?3)",
+        params![host.workspace_id(&parked), run_id, state.to_string()],
+    ).unwrap();
+    let mut before = BTreeMap::new();
+    collect(&parked.join(".orbit"), &mut before);
+    let output = host.sync_all(&[]);
+    let by_name = records(&output);
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(by_name["parked"]["status"], "skipped", "{by_name:?}");
+    assert!(
+        by_name["parked"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains(run_id),
+        "{by_name:?}"
+    );
+    let mut after = BTreeMap::new();
+    collect(&parked.join(".orbit"), &mut after);
+    assert_eq!(Host::changed_paths(&before, &after), Vec::<PathBuf>::new());
+    assert!(!parked.join(".orbit").join(SHIPPED_AUTO_TASK).exists());
+}
