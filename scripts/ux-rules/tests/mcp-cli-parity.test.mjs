@@ -198,6 +198,63 @@ Global options:
   assert.equal(result.measurements.composed_equivalences, undefined);
 });
 
+test("decision raise maps --task to task_id and keeps the required --options flag", async () => {
+  const help = `Raise a decision for a task
+
+Usage: orbit decision raise [OPTIONS] --task <TASK_ID> --question <QUESTION> --options <OPTIONS>
+
+Options:
+      --task <TASK_ID>
+          Task to receive the decision
+
+      --question <QUESTION>
+          Decision question
+
+      --options <OPTIONS>
+          Decision options
+
+Global options:
+  --workspace <SELECTOR>
+`;
+  const required = ["options", "question", "task_id", "workspace"];
+  const tool = {
+    name: "orbit_decision_raise",
+    inputSchema: {
+      type: "object",
+      properties: {
+        options: { type: "array" },
+        question: { type: "string" },
+        task_id: { type: "string" },
+        workspace: { type: "string" },
+      },
+      required,
+    },
+  };
+  const result = resultFor(
+    await check(contextFor([tool], { "decision raise": help })),
+    "orbit_decision_raise",
+  );
+  assert.equal(result.status, "pass");
+  assert.deepEqual(result.measurements.cli_required, ["options", "question", "task_id"]);
+  assert.deepEqual(result.measurements.missing_on_cli, []);
+  assert.deepEqual(result.measurements.missing_on_mcp, []);
+
+  const withMissingField = {
+    ...tool,
+    inputSchema: {
+      ...tool.inputSchema,
+      properties: { ...tool.inputSchema.properties, owner: { type: "string" } },
+      required: [...required, "owner"],
+    },
+  };
+  const mismatch = resultFor(
+    await check(contextFor([withMissingField], { "decision raise": help })),
+    "orbit_decision_raise",
+  );
+  assert.equal(mismatch.status, "fail");
+  assert.deepEqual(mismatch.measurements.missing_on_cli, ["owner"]);
+});
+
 test("auto-task update does not treat its optional schedule flags as required", async () => {
   const help = `Usage: orbit auto-task update [OPTIONS] --name <NAME>
 

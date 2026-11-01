@@ -130,7 +130,6 @@ function requiredFromUsage(usage, commandArgv, helpText = "") {
     names.delete(normalize(part));
   }
   names.delete("orbit");
-  names.delete("options");
   for (const name of PROVENANCE) {
     names.delete(name);
   }
@@ -216,12 +215,16 @@ export async function check(ctx) {
       continue;
     }
     const usage = help.stdout.split("\n").find((line) => line.startsWith("Usage:")) ?? "";
-    const cliRequired = requiredFromUsage(usage, argv, help.stdout);
-    const globals = globalOptionNames(help.stdout);
     const schema = tool.inputSchema ?? {};
     const mcpRequired = new Set(
       (schema.required ?? []).map(normalize).filter((name) => !PROVENANCE.has(name)),
     );
+    const cliRequired = new Set(
+      [...requiredFromUsage(usage, argv, help.stdout)].map((name) =>
+        name === "task" && mcpRequired.has("task_id") ? "task_id" : name,
+      ),
+    );
+    const globals = globalOptionNames(help.stdout);
     // `template` is the MCP object `auto-task add` builds from required
     // `--title`. The names differ; the required input does not. Only a
     // template description that lists `title` without `?` qualifies.
