@@ -1887,7 +1887,6 @@ input.field-editor-input {
 .decision-note::placeholder { color: var(--fg-mute); opacity: 1; }
 .decision-card .decision-note { max-width: 640px; }
 .decision-answers { display: grid; gap: 8px; }
-.decision-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
 .decision-pending { color: var(--fg-mute); font-size: 12px; }
 .decision-card { display: grid; gap: 10px; margin-top: 6px; min-width: 0; }
@@ -1897,7 +1896,9 @@ input.field-editor-input {
 .decision-card .decision-human-action { margin: 0; }
 .decision-option {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  /* The answer column sizes to its label up to a cap, so a sentence-length
+     label wraps instead of taking the pane's width from its consequence. */
+  grid-template-columns: fit-content(min(45%, 22rem)) minmax(0, 1fr);
   align-items: baseline;
   gap: 2px 12px;
   padding: 8px 10px;
@@ -1906,7 +1907,13 @@ input.field-editor-input {
   background: var(--bg);
 }
 .decision-option.recommended { border-color: var(--warn-line); }
-.decision-option .decision-answer { grid-row: 1 / span 2; align-self: start; }
+/* `.action` pins a one-line, fixed-height button; a wrapped label needs the
+   height to follow its text. */
+.decision-option .decision-answer {
+  grid-row: 1 / span 2; align-self: start; justify-self: start;
+  height: auto; min-height: 30px; padding-block: 5px;
+  white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.35;
+}
 .decision-recommended { color: var(--attention-fg, var(--warn-fg)); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
 .decision-option .decision-consequence { flex: none; grid-column: 2; }
 .task-block-details { margin-top: 12px; font-size: 12px; color: var(--fg-mute); }
