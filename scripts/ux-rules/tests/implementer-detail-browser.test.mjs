@@ -45,12 +45,14 @@ test("implementer detail collapsed labels are detected and readable labels pass"
       assert.ok(failures.some((f) => f.selector === "dt" && f.text === label), JSON.stringify(before));
     }
     assert.ok(!failures.some((f) => /Invisible zero width|Clipped zero width/.test(f.text)), JSON.stringify(before));
+    await stats.scrollIntoViewIfNeeded();
     await ctx.screenshotFor(rule, target);
     // Give the same dashboard data a readable, bounded two-column layout.
     await ctx.page.addStyleTag({ content: "#agents-detail .agents-stats { grid-template-columns: minmax(160px, 1fr) minmax(0, 1fr) !important; } #agents-detail .agents-stats dd { overflow-wrap: anywhere; }" });
     const after = await check(ctx);
     assert.ok(!(after.measurements.failures || []).some((f) => /Cost/.test(f.text)), JSON.stringify(after));
-    await ctx.page.locator("#agents-detail").screenshot({ path: path.join(ctx.outDir, "implementer-readable.png") });
+    await stats.scrollIntoViewIfNeeded();
+    await stats.screenshot({ path: path.join(ctx.outDir, "implementer-readable.png") });
     // A regular two-line label is not treated as cramped.
     await ctx.page.evaluate(() => {
       const dt = document.querySelector("#agents-detail .agents-stats dt");
