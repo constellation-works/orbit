@@ -1,11 +1,11 @@
 ---
 title: "Scope: bounded decision assistance"
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 stage: parked
-next: "Improve rubrics/packets, independently adjudicate permitted data and register an unopened holdout before any activation; advisory rollout remains parked."
+next: "Improve rubrics, adjudicate permitted data and register a fresh holdout; rollout stays parked."
 feature: decision-assistance
 doc_role: scope
 type: design
@@ -48,7 +48,7 @@ current rubrics and packets, not an accuracy or rollout pass:
 | Failure categorization | 30 bounded historical diagnostic packets compared with prior investigator/agent categories; no independent human ground truth. | 26.7% agreement with the agent baseline and 60% substantive coverage; both predeclared quality screens failed. |
 | Task quality | 24 wholly invented tasks and Sonnet-authored synthetic labels, followed by Codex packet review with disagreements frozen before answers; no independent human labels or representative holdout. | 20 fully answered packets and four mixed predicate/refusal packets. Strict whole-result validation and predeclared confidence bands gave 119/212 consensus-cell matches (56.13%), excluding four predeclared uncertain label cells. Outcome agreement was 75%, scope 78.26%, criterion observability 20% and conflict 75.56%; every question group failed its predeclared screen. |
 
-The operator's development-study task retains the protocols and readouts as
+The operator's development-study task [ORB-19771] retains the protocols and readouts as
 `decision-assistance-development/{protocol,readout}.json` and
 `decision-assistance-quality-development/{protocol,readout}.json` (see Task
 References). Their protocol SHA256 values are
@@ -345,17 +345,20 @@ fields are implementation contracts still to be designed.
 ## Phasing
 
 This records delivered foundations and conditional re-entry requirements, not
-an instruction to resume the archived/deferred work.
+an instruction to resume the archived/deferred work. [ORB-19718] authored this
+design and authorized no implementation by itself.
 
-1. **Evaluation foundation — implemented.** Versioned question sets, evidence
+1. **Evaluation foundation — implemented** ([ORB-19720]). Versioned question sets, evidence
    contracts and offline scoring exist. The development screens above failed;
    independently adjudicated permitted data and a fresh holdout remain owed.
-2. **Service and private collector — implemented, default off.** The durable
-   bounded service, credentials/data controls and private task-quality collector
-   have synthetic public-boundary verification. This repository-only delivery
-   supplies no live effectiveness or adoption evidence. The failure consumer is
-   archived/deferred rather than awaiting immediate implementation.
-3. **Evidence and advisory integration — parked.** Improve rubrics/packets and
+2. **Service and private collector — implemented, default off** ([ORB-19721],
+   [ORB-19723]). The durable bounded service, credentials/data controls and private
+   task-quality collector have synthetic public-boundary verification. This
+   repository-only delivery supplies no live effectiveness or adoption evidence.
+   The failure consumer [ORB-19722] is archived/deferred rather than awaiting
+   immediate implementation.
+3. **Evidence and advisory integration — parked** ([ORB-19771] records the hold;
+   advisory surfaces [ORB-19724] are archived). Improve rubrics/packets and
    independently adjudicate permitted data, including disagreement and ambiguous
    cases. Split by family and time to prevent near-duplicate leakage and register
    a protocol before opening a fresh holdout. Review per-class precision/recall, abstention coverage,
@@ -365,10 +368,11 @@ an instruction to resume the archived/deferred work.
    holdout. Enable advisory mode only for consumers that meet those declared targets;
    keep measured regressions reversible by switching the consumer off.
 4. **Later candidates.** Evaluate the six original remaining candidates independently.
-   The [delivery-quality grader](specs/delivery-quality.md) is an additional proposed
-   evaluation, not a restart of the archived consumers. It needs an explicit
-   evidence/labeling protocol, ordinal-scoring support and its own adoption
-   decision. Any automatic application of annotations or descriptive tags needs its own evidence
+   The [delivery-quality grader](specs/delivery-quality.md) [ORB-20000] is an additional proposed
+   evaluation, not a restart of the archived consumers. Its offline ordinal contract
+   [ORB-20004] and default-off shadow runtime [ORB-20006] are in the repository;
+   neither is an adoption. It still needs an explicit evidence/labeling protocol
+   and its own adoption decision. Any automatic application of annotations or descriptive tags needs its own evidence
    and action contract. Keep execution-bearing tags (`ui`, `os:`, `crew-purpose:`,
    approval/review skips and instruction mappings) outside that automatic scope.
 
@@ -409,13 +413,15 @@ an instruction to resume the archived/deferred work.
 
 ## Task References
 
-- ORB-20000 — propose an independently evaluated advisory delivery-quality grader.
-- ORB-19718 — author this design and open its review PR; no implementation authorized.
-- ORB-19720 — offline evaluation contract and protocol.
-- ORB-19721 — optional generic service and synthetic public-boundary fixtures.
-- ORB-19723 — private task-quality shadow consumer and reasoned feedback.
-- ORB-19722 — failure consumer, archived/deferred after its development screen.
-- ORB-19724 — advisory surfaces, archived/deferred after the development screens.
-- ORB-19771 — operator development-study protocols, receipts, readouts and parked disposition.
+- [ORB-20006] — implements the default-off delivery-quality shadow runtime.
+- [ORB-20004] — adds the offline ordinal evaluation contract for delivery-quality grades.
+- [ORB-20000] — proposes an independently evaluated advisory delivery-quality grader.
+- [ORB-19771] — records the development-study protocols, receipts, readouts and parked disposition.
+- [ORB-19724] — advisory surfaces, archived/deferred after the development screens.
+- [ORB-19723] — implements the private task-quality shadow consumer and reasoned feedback.
+- [ORB-19722] — failure consumer, archived/deferred after its development screen.
+- [ORB-19721] — implements the optional generic service and synthetic public-boundary fixtures.
+- [ORB-19720] — implements the offline evaluation contract and protocol.
+- [ORB-19718] — authors this design and opens its review PR; no implementation authorized.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (10)
+### Building (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -123,7 +123,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a due experiment through the human decision channel (decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
-| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1-2 landed ([ORB-19983], [ORB-19985]) and declared output files ([ORB-20866]); the rest of phase 3 (files.inputs, the attach action, macOS profile) is not yet filed | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
@@ -140,7 +139,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
 
-### Shipped (37)
+### Shipped (38)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -159,6 +158,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
 | [Granted Tools](./design/granted-tools/1_scope.md) | Operate the shipped grants and reviewed mutation proposal path | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
+| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | — | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | — | codex |
@@ -186,7 +186,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Improve rubrics/packets, independently adjudicate permitted data and register an unopened holdout before any activation; advisory rollout remains parked. | codex |
+| [Decision Assistance](./design/decision-assistance/1_scope.md) | Improve rubrics, adjudicate permitted data and register a fresh holdout; rollout stays parked. | codex |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 
 ## Designs

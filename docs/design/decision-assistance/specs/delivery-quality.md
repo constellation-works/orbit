@@ -1,8 +1,8 @@
 ---
 title: "Proposal: delivery-quality grader"
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 feature: decision-assistance
 doc_role: spec
@@ -13,7 +13,8 @@ tags: [decision-assistance, agent-scorecards]
 
 # Proposal: delivery-quality grader
 
-Status: **proposed for adoption; no live consumer, grading run or activation is authorized**.
+Status: **proposed for adoption; no live consumer, grading run or activation is authorized** ([ORB-20000]).
+The default-off shadow runtime is in the repository ([ORB-20006]); it is not an authorization to run it.
 The [scope](../1_scope.md) remains parked and every existing consumer remains
 off by default. This is a new evaluation candidate, distinct from the private
 task-authoring quality collector. Its versioned offline questions, contracts and scoring are implemented by the
@@ -233,7 +234,7 @@ new validation; preserve prior records and an effective off switch.
 
 ## Private runtime capability
 
-The application consumer is `application::delivery_quality`; composition uses
+The application consumer ([ORB-20006]) is `application::delivery_quality`; composition uses
 only host-global private shadow assistance settings; an advisory policy does
 not adopt this consumer. First enablement freezes an eligibility start time per
 policy epoch: only runs created since that boundary enter the owner scan. No
@@ -325,6 +326,7 @@ accounting only, never grading accuracy or adoption.
 
 ## Task References
 
-- ORB-20000 — author this proposal and its parent-design links; open a review PR.
+- [ORB-20006] — implements the default-off delivery-quality shadow runtime.
+- [ORB-20000] — authors this proposal and its parent-design links; opens a review PR.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
