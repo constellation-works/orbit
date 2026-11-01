@@ -297,26 +297,42 @@ if [[ "$static" == false && "$guards" == false ]]; then
   run_phase fmt cargo fmt --all -- --check
 fi
 
-# Repository guards and self-tests share one sliding-window pool. Its width is
-# the build budget's cargo job count, the same number Cargo receives, so guard
-# fan-out stays inside the host-wide budget. The pool runs in a background
-# subshell, so in full mode the workflow test build below overlaps it;
-# nothing in the pool depends on that build, and no pool member
-# takes the Cargo build lock. Each guard writes its own output files, and the
-# pool prints them in launch order as it reaps each guard.
+# Repository guards and self-tests share one pool. Its width is the build
+# budget's cargo job count, the same number Cargo receives, so guard fan-out
+# stays inside the host-wide budget. A free slot admits the next guard as soon
+# as any running member finishes: a slow early guard must not keep the slots of
+# members that have already exited. The pool runs in a background subshell, so
+# in full mode the workflow test build below overlaps it; nothing in the pool
+# depends on that build, and no pool member takes the Cargo build lock. Each
+# guard writes its own output files. The pool still prints those files in
+# launch order, and the first failure in that order stays the pool's status.
+# bash 3.2 has no `wait -n`, so each member writes its launch index to a fifo
+# the lane holds open, and the parent waits only on that exited pid.
 pool_width="$("$repo_root/scripts/build-budget.py" --cargo-jobs)"
 pids=()
 names=()
 slots=()
+statuses=()
+finished=()
 # The exclusive lane is a second subshell with copies of these counters, so it
 # names its output slots apart from the pool's.
 slot_prefix=""
 launched=0
-reaped=0
+collected=0
+printed=0
 next_slot=0
 
+# One completion fifo per lane. Read-write so the open does not block and a
+# writer is not required to be the last closer. macOS bash 3.2 included.
+open_done_fifo() {
+  local fifo="$guard_logs/${slot_prefix}done.fifo"
+  mkfifo "$fifo"
+  exec 3<>"$fifo"
+}
+
 # Waits for one guard, prints its output and folds its status into the first
-# failure. Arguments: pid, output slot, name.
+# failure. Arguments: pid, output slot, name. Used for the waiting guard,
+# which is not a pool member.
 reap_guard() {
   local status=0
   wait "$1" || status=$?
@@ -329,35 +345,72 @@ reap_guard() {
   fi
 }
 
-# Reaps the oldest launched guard.
-reap_oldest() {
-  reap_guard "${pids[$reaped]}" "${slots[$reaped]}" "${names[$reaped]}"
-  reaped=$((reaped + 1))
+# Blocks until one pool member reports that it has finished, then reaps that
+# pid. The signal is the member's launch index, written just before it exits.
+collect_finished_guard() {
+  local index="" status=0
+  if ! IFS= read -r index <&3; then
+    echo "ci-guardrails: guard pool lost a completion signal" >&2
+    exit 1
+  fi
+  if [[ ! "$index" =~ ^[0-9]+$ ]] || ((index >= launched)) || [[ -n "${finished[$index]}" ]]; then
+    echo "ci-guardrails: guard pool completion signal is invalid: $index" >&2
+    exit 1
+  fi
+  wait "${pids[$index]}" || status=$?
+  statuses[$index]=$status
+  finished[$index]=1
+  collected=$((collected + 1))
 }
 
-drain_pool() {
-  while ((reaped < launched)); do
-    reap_oldest
+# Prints finished guards in launch order and records the first failure in
+# that order. Later guards that finished sooner stay buffered.
+flush_finished_prefix() {
+  local status
+  while ((printed < launched)) && [[ -n "${finished[$printed]}" ]]; do
+    cat "$guard_logs/${slots[$printed]}.out"
+    cat "$guard_logs/${slots[$printed]}.err" >&2
+    status="${statuses[$printed]}"
+    if [[ "$status" -ne 0 ]]; then
+      echo "ci-guardrails: FAILED ${names[$printed]} (exit $status)" >&2
+      if [[ "$failed" -eq 0 ]]; then failed="$status"; fi
+    fi
+    printed=$((printed + 1))
   done
 }
 
+drain_pool() {
+  while ((collected < launched)); do
+    collect_finished_guard
+  done
+  flush_finished_prefix
+}
+
 # Forks one guard into output slot $1 and leaves its pid in started_pid.
+# $2 is the launch index, $3 is "true" when the guard must signal the fifo.
 # bash's time keyword supplies fractional wall time on Linux and bash 3.2.
 start_guard() {
-  local slot="$1" name="${2##*/}"
-  shift
+  local slot="$1" index="$2" notify="$3" name="${4##*/}"
+  shift 3
   (
     # bash 3.2 drops TIMEFORMAT when errexit aborts a failing timed command,
     # so a guard that exits non-zero would publish no duration line. Suspend
     # errexit only around `time` and return the command status unchanged.
-    TIMEFORMAT="ci-guardrails: $name %3R s"
+    # The command does not inherit the completion fifo.
     set +e
-    if [[ "$slot_prefix" == exclusive- ]]; then
-      time { "$@"; }
-    else
-      time { run_lowered "$@"; }
-    fi
+    (
+      exec 3>&-
+      TIMEFORMAT="ci-guardrails: $name %3R s"
+      if [[ "$slot_prefix" == exclusive- ]]; then
+        time { "$@"; }
+      else
+        time { run_lowered "$@"; }
+      fi
+    )
     status=$?
+    if [[ "$notify" == true ]]; then
+      printf '%s\n' "$index" >&3
+    fi
     exit "$status"
   ) >"$guard_logs/$slot.out" 2>"$guard_logs/$slot.err" &
   started_pid=$!
@@ -365,25 +418,28 @@ start_guard() {
 
 # Starts one pool member in the next output slot.
 launch_guard() {
+  local index=$launched
   local slot="$slot_prefix$next_slot"
   next_slot=$((next_slot + 1))
-  start_guard "$slot" "$@"
+  start_guard "$slot" "$index" true "$@"
   pids+=("$started_pid")
   names+=("${1##*/}")
   slots+=("$slot")
+  statuses+=("")
+  finished+=("")
   launched=$((launched + 1))
 }
 
 # A self-test that spends nearly all of its wall time in fixed waits starts
 # beside the pool, outside its window, and is reaped after the pool drains.
-# Inside the window it would hold a slot for its whole duration, and because
-# the window reaps in launch order, the guards behind it would wait on it.
+# Inside the window it would occupy one of the width slots for that whole wait.
 waiting_pid=""
 waiting_name=""
 start_waiting_guard() {
   if skipped "$1"; then return 0; fi
   waiting_name="${1##*/}"
-  start_guard waiting "$@"
+  # Not a pool member: it does not take a slot or write a completion signal.
+  start_guard waiting 0 false "$@"
   waiting_pid="$started_pid"
 }
 
@@ -416,13 +472,14 @@ skipped() {
   return 1
 }
 
-# Pool member: waits for the oldest running guard whenever the pool is full.
+# Pool member: when every slot is busy, waits until any running member finishes.
 run_guard() {
   if skipped "$1"; then return 0; fi
-  while ((launched - reaped >= pool_width)); do
-    reap_oldest
+  while ((launched - collected >= pool_width)); do
+    collect_finished_guard
   done
   launch_guard "$@"
+  flush_finished_prefix
 }
 
 # Exclusive self-test: runs in the exclusive lane at normal priority, and is
@@ -516,6 +573,7 @@ if [[ "$static" == false && "$checks" == false ]]; then
     # The report trap belongs to the parent shell, not to the lane.
     trap - EXIT
     slot_prefix=exclusive-
+    open_done_fifo
     run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
@@ -531,6 +589,7 @@ if [[ "$checks" == false ]]; then
 (
   # The report trap belongs to the parent shell, not to the pool.
   trap - EXIT
+  open_done_fifo
   # Beside the exclusive lane, each pool command starts at lowered priority.
   # About 6 s of CPU time across about 63 s of wall time, nearly all of it
   # fixed slow-child and hang delays. The helper's deadlines run on an

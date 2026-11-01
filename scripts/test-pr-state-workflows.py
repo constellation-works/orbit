@@ -801,6 +801,28 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         # A path no crate reads runs the always-run crates alone.
         self.assertEqual(self.pull_request("scripts/qa-full-sweep-inventory.json"),
                          "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store")
+        # UX rules select the crate that reads them. The CLI rules, their
+        # lib helpers and the Node tests have no Cargo reader; the guardrail
+        # runs the QA sweep, so that script selects no crate either. The
+        # visual-capture driver loads ui/ and ui-context.mjs, and the
+        # rule-findings sweep reads README.md and step.mjs, so those select
+        # orbit-core. run.mjs is undeclared and stays a full run.
+        always_run = "affected:orbit-auth,orbit-exec,orbit-policy,orbit-store"
+        orbit_core = ("affected:orbit-auth,orbit-cli,orbit-cmd,orbit-core,orbit-exec,"
+                      "orbit-policy,orbit-store,orbit-web")
+        self.assertEqual(self.pull_request("scripts/test-qa-full-sweep.py"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/cli/mcp-cli-parity.mjs"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/tests/implementer-detail-browser.test.mjs"),
+                         always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/lib/cli-context.mjs"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/lib/manifest.mjs"), always_run)
+        self.assertEqual(self.pull_request("scripts/ux-rules/lib/ui-context.mjs"), orbit_core)
+        self.assertEqual(self.pull_request("scripts/ux-rules/ui/cramped-wrap.mjs"), orbit_core)
+        self.assertEqual(self.pull_request("scripts/ux-rules/README.md"), orbit_core)
+        self.assertEqual(self.pull_request("scripts/ux-rules/step.mjs"), orbit_core)
+        self.assertEqual(self.pull_request("scripts/ux-rules/run.mjs"), "full")
+        self.assertEqual(self.pull_request("scripts/ux-rules/cli/mcp-cli-parity.mjs",
+                                           "scripts/ux-rules/README.md"), orbit_core)
         # Markdown that a scripts/test-* self-test reads is code too: test-release-promotion.py
         # executes RELEASING.md's procedures, and test-qa-full-sweep.py digests npm/README.md.
         self.assertEqual(self.pull_request("RELEASING.md"), "full")
@@ -859,6 +881,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.push("RELEASING.md"), "full")
         self.assertEqual(self.push("README.md", "RELEASING.md"), "full")
         self.assertEqual(self.push("npm/README.md"), "full")
+        # orbit-core's rule-findings sweep reads this page, so a push of it is
+        # not a docs-only skip.
+        self.assertEqual(self.push("scripts/ux-rules/README.md"), "full")
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
 
     def test_docs_push_after_untested_before_runs_full_gate(self):

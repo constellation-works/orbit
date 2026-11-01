@@ -595,8 +595,9 @@ log("end {name}")
         os.mkfifo(right)
         installer, mcp = "test-installer-security.sh", "test-mcp-registry-publish-workflow.sh"
         third = "test-check-unused-dependencies.py"
-        # Two cargo jobs admit two members at once: the first pair rendezvous and hold,
-        # so the third starts only after the oldest of them has ended.
+        # Two cargo jobs admit two members at once. The pair rendezvous and
+        # hold, so the third starts only after one of them has ended, and
+        # never while both still hold the two slots.
         self.write_overlapping_member(installer, events, outgoing=left, incoming=right, hold=0.5)
         self.write_overlapping_member(mcp, events, outgoing=right, incoming=left, hold=0.5)
         self.write_event_stub(third, events)
@@ -605,7 +606,46 @@ log("end {name}")
                                                "ORBIT_CARGO_JOBS": "2"})
         self.assertEqual(result.returncode, 0, result.stderr)
         log = events.read_text().splitlines()
-        self.assertLess(log.index(f"end {installer}"), log.index(f"start {third}"), log)
+        self.assertLess(log.index(f"start {installer}"), log.index(f"start {third}"), log)
+        self.assertLess(log.index(f"start {mcp}"), log.index(f"start {third}"), log)
+        self.assertTrue(
+            log.index(f"end {installer}") < log.index(f"start {third}")
+            or log.index(f"end {mcp}") < log.index(f"start {third}"),
+            log)
+        running = 0
+        widest = 0
+        for line in log:
+            if line.startswith("start "):
+                running += 1
+                widest = max(widest, running)
+            elif line.startswith("end "):
+                running -= 1
+        self.assertLessEqual(widest, 2, log)
+
+    def test_slow_oldest_guard_does_not_hold_a_finished_slot(self):
+        self.prepare_ci()
+        events = self.root / "events"
+        slow, fast, nxt = (
+            "check-orphan-modules.sh",
+            "check-workflow-action-pins.sh",
+            "test-qa-full-sweep.py",
+        )
+        # The oldest member outlives the second. Launch-order reaping would
+        # keep the second member's slot until the oldest ends; a free slot
+        # starts the third while the oldest is still running.
+        self.write_event_stub(slow, events, hold=1.0)
+        self.write_event_stub(fast, events, hold=0)
+        self.write_event_stub(nxt, events, hold=0)
+        result = self.run_guard("ci-guardrails.sh", "--fast",
+                                env_overrides={"CI_TEST_BASE": "missing-delivery-base",
+                                               "ORBIT_CARGO_JOBS": "2"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = events.read_text().splitlines()
+        # The two first members are both in flight; their start lines can
+        # pass each other. The third must start after the fast one ends and
+        # while the slow oldest is still running.
+        self.assertLess(log.index(f"end {fast}"), log.index(f"start {nxt}"), log)
+        self.assertLess(log.index(f"start {nxt}"), log.index(f"end {slow}"), log)
 
     def test_make_ci_fast_reports_failing_guard_name(self):
         self.prepare_ci()
