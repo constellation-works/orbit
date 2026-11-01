@@ -972,6 +972,21 @@ every kept forecast against what happened. A new workspace needs a few days
 of finished work before there are per-task scores, and a forecast from model
 version 9 on gets its whole-drain score 90 days after it was made.
 
+**Residuals** sits under calibration: one bar per stored forecast of how
+far actuals ran from the forecast p50. Forecast bias and quantiles are
+corrected from these scored residuals. The **Work hours** | **Cost** |
+**Tokens** switch chooses the measure, opening on **Work hours**. Each bar
+is the median across that forecast's finished tasks of ln(actual ÷ forecast
+p50), captioned `ln(actual ÷ p50) · over the line = ran over the forecast`:
+zero is a hit on the p50, about +0.69 is twice the forecast and −0.69 is
+half, so bars over the line ran over the forecast. **Whole-backlog time to
+drain** is a second series that appears once a forecast settles, up to 90
+days later. Bars from earlier model versions are muted, since their
+quantiles differ. With nothing scored yet the card says **No scored
+residuals yet**; per measure it says **No task work hours residuals scored
+yet** (and the matching cost and tokens wordings), and the drain series says
+**No whole-backlog drain time scored yet**.
+
 ### Cost
 
 Open **Cost** for managed-execution spend and token use in the selected
