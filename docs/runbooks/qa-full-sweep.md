@@ -462,13 +462,20 @@ candidate earn those assertions.
 
 The command harness requires a POSIX host. It drains stdout and stderr while
 retaining at most one MiB per stream and marks truncated output. A disposable
-supervisor owns each command's process group and is a child subreaper, so a
-worker that starts its own session stays in the supervisor's tree. After the
-command leaves, the supervisor records that worker's process id, process
-group, working directory and command line, and waits until the process has
-exited before publishing the command result. Timeout, normal completion,
-owner loss and unwind all wait for that exit. The report records whether
-cleanup was verified. A refused group signal or expired reap deadline fails
+supervisor owns each command's process group. On Linux it is a child
+subreaper, so a worker that starts its own session stays in the supervisor's
+tree. macOS has no subreaper: such a worker is reparented to PID 1, so the
+supervisor and the harness find it by a working directory under the command's
+private temp root, read through `/proc` or libproc. After the command leaves,
+the supervisor records that worker's process id, process group, working
+directory and command line, and waits until the process has exited before
+publishing the command result. Timeout, normal completion, owner loss and
+unwind all wait for that exit. A host with neither a subreaper nor a
+working-directory source cannot find a detached worker, so the run reports
+`cleanup_verified` false with `detached worker cleanup NOT_RUN` in its output,
+and the report's `scratch_cleanup.warning` says the same. On macOS a worker
+whose working directory is outside that root is not found. The report records
+whether cleanup was verified. A refused group signal or expired reap deadline fails
 with an explicit unverified cleanup outcome; timeout and lost-supervisor
 outcomes also fail. The harness scratch directory is removed only after owned
 workers whose working directory is still under that root have exited.
