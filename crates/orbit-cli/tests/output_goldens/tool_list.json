@@ -3684,6 +3684,23 @@
     "mcp_toolset": "default"
   },
   {
+    "name": "orbit.workflow.run.observe",
+    "description": "Read a stored workflow run without reconciliation or mutation. Requires operator capability; agent sessions are refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "Job run ID.",
+        "param_type": "string",
+        "required": true
+      }
+    ],
+    "mcp_toolset": "default"
+  },
+  {
     "name": "orbit.workflow.run.resume",
     "description": "Resume a terminal resumable workflow run as a new linked run, or explicitly authorize review-only same-PR source repair of an eligible owner-local publication, including successful or stopped inline publication with unmet acceptance. Requires operator capability; agent sessions are refused.",
     "enabled": true,

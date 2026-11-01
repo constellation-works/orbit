@@ -26,7 +26,7 @@ impl GuardedModes for WorkflowVerb {
                 .err()
                 .map(Err),
             WorkflowVerb::Ship | WorkflowVerb::RunResume => ensure_not_managed(ctx).err().map(Err),
-            WorkflowVerb::RunList | WorkflowVerb::RunShow => None,
+            WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => None,
         }
     }
 
@@ -57,7 +57,7 @@ impl GuardedModes for WorkflowVerb {
                 Ok(false) => None,
                 Err(error) => Some(Err(error)),
             },
-            WorkflowVerb::RunResume | WorkflowVerb::Ship => None,
+            WorkflowVerb::RunObserve | WorkflowVerb::RunResume | WorkflowVerb::Ship => None,
         }
     }
 
@@ -76,6 +76,7 @@ impl GuardedModes for WorkflowVerb {
             }
             WorkflowVerb::RunList
             | WorkflowVerb::RunResume
+            | WorkflowVerb::RunObserve
             | WorkflowVerb::RunShow
             | WorkflowVerb::Ship => Ok(()),
         }
@@ -86,6 +87,7 @@ impl GuardedModes for WorkflowVerb {
             WorkflowVerb::Auto
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
+            | WorkflowVerb::RunObserve
             | WorkflowVerb::RunShow
             | WorkflowVerb::Ship => None,
         }

@@ -611,6 +611,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "dispatching a ship workflow creates managed runs and worktrees",
     },
     GovernedOperation {
+        id: "orbit.workflow.run.observe",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "workflow run observation is an operator surface",
+    },
+    GovernedOperation {
         id: "orbit.workflow.run.show",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

@@ -22,6 +22,8 @@ operation_registry! {
         Auto => AUTO,
         /// `orbit.workflow.run.list`.
         RunList => RUN_LIST,
+        /// `orbit.workflow.run.observe`.
+        RunObserve => RUN_OBSERVE,
         /// `orbit.workflow.run.resume`.
         RunResume => RUN_RESUME,
         /// `orbit.workflow.run.show`.
@@ -247,6 +249,21 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
             "Explicit operator recovery of an eligible stopped owner-local publication. Inspect: {action: inspect, task_id} returns binding, review, policy_digest, immutable reservations and reservation_digests. Submit: {action: submit, task_id, request_key, binding, diagnosis}; successful or kept inline publication rework also requires unmet_acceptance evidence and the inspected current policy_digest. Select the original publishing run explicitly, including after empty failed successors; inspection authenticates its stopped lineage, unchanged specification and exact PR head. Supply the exact binding object and author a valid execution plan before submission; lifecycle refusal creates no reservation. To recover an existing reservation with no admitted run after correcting only an empty or placeholder plan, use {action: reconcile, task_id, request_key, reservation_digest, binding, diagnosis} with the original key, its inspected reservation_digest, fresh binding and otherwise unchanged evidence/policy. This appends fresh operator authorization while preserving the original reservation and charge; identical replay returns the one admitted run. Other meaning, identity, actor, policy or lease changes refuse reconciliation. Diagnosis and unmet_acceptance accept 1-32768 bytes each. Captures current review and workflow.required_validation_commands: configured commands require fresh candidate evidence; an empty list records skipped_no_required_commands, not a passing check, and does not waive configured review or hosted required checks. Reuses the original PR and preserves historical completion deadlines; grants no completion, merge or auto-fix authority.",
         ),
     ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const RUN_OBSERVE: OperationSpec<WorkflowVerb> = OperationSpec {
+    verb: WorkflowVerb::RunObserve,
+    cli_path: &[],
+    tool_name: "orbit.workflow.run.observe",
+    tool_description: "Read a stored workflow run without reconciliation or mutation. Requires operator capability; agent sessions are refused.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[&[RUN_ID_PARAM]],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

@@ -457,6 +457,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             WorkflowVerb::Auto
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
+            | WorkflowVerb::RunObserve
             | WorkflowVerb::RunShow
             | WorkflowVerb::Ship => ActionPolicy {
                 declared: verb.spec().params,
@@ -534,6 +535,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             WorkflowVerb::Auto
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
+            | WorkflowVerb::RunObserve
             | WorkflowVerb::RunShow
             | WorkflowVerb::Ship => false,
         },

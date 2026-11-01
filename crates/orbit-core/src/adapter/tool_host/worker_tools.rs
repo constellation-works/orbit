@@ -73,6 +73,7 @@ pub(crate) fn execute(
             WorkflowVerb::Auto
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
+            | WorkflowVerb::RunObserve
             | WorkflowVerb::RunShow
             | WorkflowVerb::Ship => false,
         },
@@ -407,6 +408,7 @@ pub(crate) fn execute(
             WorkflowVerb::Auto
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
+            | WorkflowVerb::RunObserve
             | WorkflowVerb::RunShow
             | WorkflowVerb::Ship => return Ok(None),
         },
