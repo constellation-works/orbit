@@ -109,6 +109,24 @@ impl Fixture {
         std::fs::write(dir.join("pricing.md"), markdown).unwrap();
     }
 
+    fn commit_all(&self, message: &str) {
+        for args in [&["add", "-A"][..], &["commit", "-q", "-m", message][..]] {
+            let status = git_test_support::command()
+                .args(args)
+                .current_dir(&self.repo)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+    }
+
+    /// Write rules and commit them, so the pinned base revision auto-answer
+    /// reads contains them (as a merged rule would be).
+    fn write_rules_committed(&self, markdown: &str) {
+        self.write_rules(markdown);
+        self.commit_all("rules");
+    }
+
     fn rule_bytes(&self) -> Vec<u8> {
         std::fs::read(self.repo.join("docs/agents/corpus/decisions/pricing.md")).unwrap()
     }
@@ -326,7 +344,7 @@ fn consolidation_supersedes_contradictions_and_marks_stale_rules() {
 fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
     let fx = Fixture::new();
     let digest = corpus_content_digest(b"pub fn price() {}\n");
-    fx.write_rules(&rule_doc("1", "current", FUTURE, false, &digest));
+    fx.write_rules_committed(&rule_doc("1", "current", FUTURE, false, &digest));
 
     let waiting = fx.task("Waiting on a price");
     let open = fx
@@ -396,6 +414,10 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
         .unwrap();
     assert_eq!(still_open["deduplicated"], true, "{still_open}");
     assert_eq!(still_open["state"], "open", "{still_open}");
+
+    // The operator's auto edit answers only once it is committed, as a
+    // merged rule would be; the working-tree edit alone must not answer.
+    fx.commit_all("arm auto rule");
 
     let decision = fx.task("Sign off a different wording");
     let dependent = fx
@@ -606,7 +628,7 @@ fn non_auto_stale_and_ambiguous_rules_do_not_answer() {
     // is not what these cases exercise.
     const FILERS: [&str; 5] = ["claude", "codex", "gemini", "grok", "muse"];
     for (index, (markdown, topic, label)) in cases.into_iter().enumerate() {
-        fx.write_rules(&markdown);
+        fx.write_rules_committed(&markdown);
         let task = fx.task(&format!("case {index}"));
         let raised = fx
             .raise_as(
@@ -626,7 +648,7 @@ fn non_auto_stale_and_ambiguous_rules_do_not_answer() {
         "{}\n```yaml\nid: \"drop-model\"\nquestion: \"Drop it?\"\nanswer: \"3\"\nwhy: \"Also approved.\"\ncitations: []\ndepends_on: []\nstatus: \"current\"\nreview_by: \"{FUTURE}\"\nauto: true\nauto_set_by: \"operator\"\n```\n",
         rule_doc("1", "current", FUTURE, true, &digest)
     );
-    fx.write_rules(&ambiguous);
+    fx.write_rules_committed(&ambiguous);
     let task = fx.task("ambiguous topic");
     let raised = fx
         .raise_as(
@@ -643,4 +665,58 @@ fn non_auto_stale_and_ambiguous_rules_do_not_answer() {
         fx.runtime.get_task(&task).unwrap().status,
         TaskStatus::Backlog
     );
+}
+
+#[test]
+fn uncommitted_auto_rule_and_dependency_do_not_answer() {
+    let fx = Fixture::new();
+    let digest = corpus_content_digest(b"pub fn price() {}\n");
+    // An auto rule that exists only in the working tree (never committed,
+    // as on an unmerged branch checkout) must not answer.
+    fx.write_rules(&rule_doc("1", "current", FUTURE, true, &digest));
+    let uncommitted = fx.task("Uncommitted rule");
+    let raised = fx
+        .raise(raise_input(
+            &uncommitted,
+            "Which price do we ship?",
+            Some("pricing/sign-off"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "open", "{raised}");
+    assert!(raised.get("resolution").is_none(), "{raised}");
+    assert_eq!(
+        fx.runtime.get_task(&uncommitted).unwrap().status,
+        TaskStatus::Backlog
+    );
+
+    // Once committed (as a merged rule would be), the same rule answers.
+    fx.commit_all("add pricing rule");
+    let committed = fx.task("Committed rule");
+    let raised = fx
+        .raise(raise_input(
+            &committed,
+            "Which price do we ship?",
+            Some("pricing/sign-off"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "answered", "{raised}");
+    assert_eq!(raised["resolution"]["answered_by"], "precedent");
+
+    // An uncommitted edit to the rule's path dependency must not stale it:
+    // the digest is read at the same pinned revision as the rule.
+    std::fs::write(
+        fx.repo.join("src/lib.rs"),
+        "pub fn price() { /* edit */ }\n",
+    )
+    .unwrap();
+    let drifted = fx.task("Uncommitted dependency edit");
+    let raised = fx
+        .raise(raise_input(
+            &drifted,
+            "Which price do we ship?",
+            Some("pricing/sign-off"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "answered", "{raised}");
+    assert_eq!(raised["resolution"]["answered_by"], "precedent");
 }

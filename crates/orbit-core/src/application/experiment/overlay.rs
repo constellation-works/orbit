@@ -23,9 +23,7 @@ use super::capture::validate_experiment_capture;
 use super::definition::{ExperimentOverlay, InstructionOverlay, OverlayRole};
 use crate::OrbitRuntime;
 use crate::application::job::granted_tool_refusal;
-use crate::application::tag_instructions::{
-    LazyRevision, TagInstructionFailure, commit_at, read_blob_at,
-};
+use crate::application::tag_instructions::{LazyRevision, TagInstructionFailure, read_blob_at};
 use crate::runtime::run_input::singular_task_id_from_input;
 
 /// The experiment mode whose overlays apply.
@@ -358,12 +356,7 @@ impl OrbitRuntime {
     /// The workspace's current base: its base branch as last fetched from
     /// `origin`, else the local branch, else this checkout's `HEAD`.
     fn current_base_revision(&self) -> Result<String, String> {
-        let root = &self.paths().repo_root;
-        let branch = self.workspace_base_branch();
-        let branch = branch.strip_prefix("origin/").unwrap_or(branch);
-        commit_at(root, &format!("refs/remotes/origin/{branch}"))
-            .or_else(|_| commit_at(root, &format!("refs/heads/{branch}")))
-            .or_else(|_| commit_at(root, "HEAD"))
+        self.workspace_base_revision()
     }
 }
 
