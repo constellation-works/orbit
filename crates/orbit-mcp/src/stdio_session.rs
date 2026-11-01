@@ -41,7 +41,8 @@ use orbit_common::OrbitError;
 use orbit_common::fs::generation;
 use rmcp::ServiceExt;
 use rmcp::model::{
-    ClientJsonRpcMessage, ClientNotification, ClientRequest, InitializeRequestParams, Meta,
+    ClientJsonRpcMessage, ClientNotification, ClientRequest, InitializeRequestParams,
+    RequestMetaObject,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -269,7 +270,7 @@ async fn serve_plain(
     let running = match initialize {
         Some(request) => {
             server
-                .apply_initialize(&request, &Meta::default())
+                .apply_initialize(&request, &RequestMetaObject::default())
                 .map_err(|error| start_error(&error))?;
             rmcp::service::serve_directly(server, transport, Some(request))
         }
@@ -330,7 +331,7 @@ async fn serve_handing_over(
     let running = match initialize {
         Some(request) => {
             server
-                .apply_initialize(&request, &Meta::default())
+                .apply_initialize(&request, &RequestMetaObject::default())
                 .map_err(|error| start_error(&error))?;
             tracing::info!(target: "orbit.mcp", "resumed the stdio session after an executable handover");
             rmcp::service::serve_directly(server, (reader, writer), Some(request))

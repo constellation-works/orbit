@@ -8,7 +8,7 @@ use orbit_common::OrbitError;
 use orbit_mcp::{ListenerExposure, McpHost, McpListener};
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use rmcp::ServiceExt;
-use rmcp::model::ClientInfo;
+use rmcp::model::ClientConfig;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -105,7 +105,7 @@ async fn a_full_listener_recovers_without_partial_peers_closing_themselves() {
     let stream = TcpStream::connect(addr)
         .await
         .expect("connect legitimate peer");
-    let initialize = ClientInfo::default().serve(stream);
+    let initialize = ClientConfig::default().serve(stream);
     tokio::pin!(initialize);
     assert!(
         tokio::time::timeout(Duration::from_millis(100), &mut initialize)
@@ -134,7 +134,7 @@ async fn initialized_sessions_remain_usable_after_the_initialization_budget() {
     let budget = Duration::from_millis(200);
     let (addr, accepting) = listen(budget).await;
     let stream = TcpStream::connect(addr).await.expect("connect");
-    let client = tokio::time::timeout(budget, ClientInfo::default().serve(stream))
+    let client = tokio::time::timeout(budget, ClientConfig::default().serve(stream))
         .await
         .expect("initialize promptly")
         .expect("initialize succeeds");
@@ -195,7 +195,7 @@ async fn a_peer_that_sends_nothing_is_disconnected_and_releases_its_slot() {
     let stream = TcpStream::connect(addr)
         .await
         .expect("connect legitimate peer");
-    let initialize = ClientInfo::default().serve(stream);
+    let initialize = ClientConfig::default().serve(stream);
     tokio::pin!(initialize);
     assert!(
         tokio::time::timeout(Duration::from_millis(100), &mut initialize)

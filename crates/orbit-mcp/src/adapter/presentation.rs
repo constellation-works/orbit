@@ -8,7 +8,7 @@ use crate::presentation_definition::{
 };
 use orbit_common::OrbitError;
 use orbit_types::tool::{McpPresentationRead, McpToolDefinition};
-use rmcp::model::{Meta, Resource, ResourceContents, Tool, ToolAnnotations};
+use rmcp::model::{MetaObject, Resource, ResourceContents, Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
 pub(super) const RESOURCE_URI: &str = "ui://orbit/control-center/v1/index.html";
@@ -70,7 +70,7 @@ pub(super) fn tools(federated: bool) -> Vec<Tool> {
                 Arc::new(schema.as_object().cloned().unwrap_or_default()))
                 .with_title(definition.title)
                 .with_annotations(ToolAnnotations::new().read_only(true).destructive(false).idempotent(true).open_world(false))
-                .with_meta(Meta(json!({
+                .with_meta(MetaObject(json!({
                     "ui": { "resourceUri": RESOURCE_URI },
                     "openai/ui": { "entrypoints": [{ "type": definition.entrypoint }] }
                 }).as_object().cloned().unwrap_or_default()))
@@ -105,7 +105,7 @@ pub(super) fn resource_content(uri: &str) -> ResourceContents {
         );
     ResourceContents::text(html, uri)
         .with_mime_type(MIME)
-        .with_meta(Meta(
+        .with_meta(MetaObject(
             json!({
                 "ui": { "prefersBorder": true,
                     "csp": { "connectDomains": [], "resourceDomains": [], "frameDomains": [] } },
