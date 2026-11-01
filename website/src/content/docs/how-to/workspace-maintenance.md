@@ -92,7 +92,7 @@ orbit workspace sync --check --all   # preview; writes nothing
 
 One workspace failing does not stop the rest. The command exits `1` if any workspace failed; skipped workspaces are reported but do not fail it. With `--check`, `--all` exits `3` when any workspace has pending changes and none failed. `--json` prints the same records under `workspaces`, plus a `summary` of counts.
 
-A workspace with a live drain or a pending, running or retrying run is skipped rather than rewritten mid-run. There is no override flag: once the drain or run ends, rerun `orbit workspace sync --all`, or sync that workspace from its own checkout. `--check` never skips for a live run, because it reads only. `--all` cannot be combined with `--workspace`.
+Live drains, pending and retrying runs, and running runs whose owners are live or inconclusive hold the workspace, so sync skips them instead of rewriting them mid-run. Parked running runs hold the workspace even when their owners are conclusively missing or mismatched. A running row whose owner is conclusively missing or mismatched after the startup grace and has no parked wait is converged. There is no override flag: after a held drain or run ends, rerun `orbit workspace sync --all`, or sync that workspace from its own checkout. `--check` never skips for a live run, because it reads only. `--all` cannot be combined with `--workspace`.
 
 Host-global assets (skills, jobs, activities) are shared by every workspace, so each synced workspace's report includes them; only the first changes anything.
 
