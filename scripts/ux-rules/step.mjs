@@ -1,6 +1,6 @@
 // Script-step adapter: run each surface independently and return one document.
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -77,7 +77,27 @@ async function browserKit(locations) {
     ]);
     playwrightBrowsersPath ||= await firstExisting([path.join(root, "browsers")]);
   }
-  return { playwrightModule, playwrightBrowsersPath };
+  return { playwrightModule, playwrightBrowsersPath, ...(await unpackedKitRuntime(locations.browserKit)) };
+}
+
+// The kit installer's Linux-without-root layout: libraries unpacked under
+// `<kit>/root/{usr/lib,lib}/*-linux-gnu` and a `<kit>/fonts.conf`. These are
+// the paths its `env.sh` exports; the adapter derives them from the granted
+// kit root instead of evaluating that shell file. Hosts using system
+// libraries or macOS have neither, so nothing is set for them.
+async function unpackedKitRuntime(root) {
+  if (!root) return { libraryDirs: [], fontsConf: "" };
+  const libraryDirs = [];
+  for (const parent of ["usr/lib", "lib"]) {
+    const base = path.join(root, "root", parent);
+    let names;
+    try { names = await readdir(base); } catch { continue; }
+    for (const name of names.filter((n) => n.endsWith("-linux-gnu")).sort()) {
+      try { if ((await stat(path.join(base, name))).isDirectory()) libraryDirs.push(path.join(base, name)); } catch { /* skip */ }
+    }
+  }
+  const fontsConf = await firstExisting([path.join(root, "fonts.conf")]);
+  return { libraryDirs, fontsConf };
 }
 
 async function main() {
@@ -104,6 +124,12 @@ async function main() {
         const env = { ...process.env, ORBIT_SCRATCH_DIR: out, ORBIT_VISUAL_ORBIT: orbit };
         if (kit.playwrightModule) env.PLAYWRIGHT_MODULE = kit.playwrightModule;
         if (kit.playwrightBrowsersPath) env.PLAYWRIGHT_BROWSERS_PATH = kit.playwrightBrowsersPath;
+        // Kit libraries go in front of any inherited loader path; an explicit
+        // FONTCONFIG_FILE already in the environment is kept.
+        if (kit.libraryDirs.length) {
+          env.LD_LIBRARY_PATH = [...kit.libraryDirs, ...(process.env.LD_LIBRARY_PATH ? [process.env.LD_LIBRARY_PATH] : [])].join(path.delimiter);
+        }
+        if (kit.fontsConf && !process.env.FONTCONFIG_FILE) env.FONTCONFIG_FILE = kit.fontsConf;
         await exec(process.execPath, args, { env, maxBuffer: 4 * 1024 * 1024 });
         const report = JSON.parse(await readFile(path.join(out, "ux-rules.json"), "utf8"));
         if (!Array.isArray(report.results)) throw new Error("runner report has no results array");
