@@ -538,7 +538,7 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   established, never both. It runs on the owner: preparation records a
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
-- **`host-health`** (`medium`) — disabled-by-default daily review of host-local
+- **`host-health`** (`hard`) — disabled-by-default daily review of host-local
   `orbit doctor --json` findings and Orbit service logs. It groups normalized
   signatures, files standing doctor findings and recurring log errors, and
   routes operator fixes with runnable `## Resolve` steps.
