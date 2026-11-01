@@ -13,7 +13,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 
 ## Entries
 
-### ORB-18103: Landing review rejected on F3: criterion 6 requires QA of one successful real pi
+### ORB-18103: Landing review rejected on F3: criterion 6 requires QA of one successful real pilot, but the attached QA used an 8 s stub pipeline. Accept the stub QA or require a real pilot?
 
 - Date: 2026-10-25T05:51Z
 - Task: ORB-18103
@@ -24,7 +24,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `let's go with option 2` (comment by `human`, 05:51Z). No further reason recorded.
 - Source: blocked_task_triaged marker 2026-10-25T05:40Z; comment 05:51Z; forced event 05:51Z
 
-### ORB-19593: Owner sign-off to delete the stable-tier public wrapper `workspace_relative_path
+### ORB-19593: Owner sign-off to delete the stable-tier public wrapper `workspace_relative_paths_overlap` (criterion 2 requires it before implementation)?
 
 - Date: 2026-10-28T21:38Z
 - Task: ORB-19593
@@ -35,7 +35,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `I approve it` (comment by `human`, 21:38Z). No reason recorded.
 - Source: final-recovery escalation 21:35Z; blocked_task_triaged marker; forced event
 
-### ORB-19594: Owner sign-off to delete `TaskCommitBoundary::admit_task_with_experiments` and `
+### ORB-19594: Owner sign-off to delete `TaskCommitBoundary::admit_task_with_experiments` and `ExperimentCapture` (stable-tier orbit-store API)?
 
 - Date: 2026-10-28T21:39Z
 - Task: ORB-19594
@@ -46,7 +46,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `I approve the change` (21:39Z) and `I approve` (21:41Z), comments by `human`. No reason recorded.
 - Source: final-recovery escalation 21:35Z; forced event
 
-### ORB-18751: Add the public `TaskDecision::CiFailureIdentity` variant and type to the stable 
+### ORB-18751: Add the public `TaskDecision::CiFailureIdentity` variant and type to the stable tier (owner sign-off)?
 
 - Date: 2026-10-27T01:07Z
 - Task: ORB-18751
@@ -57,7 +57,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: Stable-tier owner sign-off (operator-delegated): additive persisted shape mirroring `TaskDecision::CodeScanningAlert`, with fields failure_key, compiler_cause_digest, open_compiler_set, signature, tested_commit, sources.
 - Source: admission comment 2026-10-27T01:07Z
 
-### ORB-18197: Pilot hold: criterion 3 needs `orbit.workflow.run.show`, an operator-only tool t
+### ORB-18197: Pilot hold: criterion 3 needs `orbit.workflow.run.show`, an operator-only tool the lane cannot call.
 
 - Date: 2026-10-25T09:47Z
 - Task: ORB-18197
@@ -68,7 +68,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: Criterion 3 is proved from the diff: the candidate must not touch the governance catalog or any capability allowlist, so nobody needs to call the tool. Cleared by opus on-call ORB-18172.
 - Source: comment and operator_validation_resolved event, 09:47Z
 
-### ORB-18911: Pilot hold: criterion 2 needs `orbit.experiment.assign`, reserved for the operat
+### ORB-18911: Pilot hold: criterion 2 needs `orbit.experiment.assign`, reserved for the operator capability.
 
 - Date: 2026-10-28T00:36Z
 - Task: ORB-18911
@@ -79,7 +79,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: No note recorded.
 - Source: operator_validation_resolved event, 2026-10-28T00:36Z
 
-### ORB-19240: Pilot hold: criterion 1 names `orbit.workflow.run.resume`, which the implementin
+### ORB-19240: Pilot hold: criterion 1 names `orbit.workflow.run.resume`, which the implementing lane does not grant.
 
 - Date: 2026-10-28T00:35Z
 - Task: ORB-19240
@@ -90,7 +90,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: No note recorded.
 - Source: operator_validation_resolved event, 2026-10-28T00:35Z
 
-### ORB-16193: Pilot inferred native Windows and Linux CodeQL from a consumer narrative; hold o
+### ORB-16193: Pilot inferred native Windows and Linux CodeQL from a consumer narrative; hold or clear?
 
 - Date: 2026-10-15T02:57Z
 - Task: ORB-16193
@@ -101,7 +101,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: Criterion 6 names four gates, public regressions and current review; Windows and complete CodeQL evidence stay with the consumer task (named `55` in the comment) after delivery. No `os:windows` tag, broad skip or falsely passed consumer check.
 - Source: comment 2026-10-15T02:57Z
 
-### ORB-19066: Re-scope one design-sync task covering 3 feature folders, 19 docs and 152 cited 
+### ORB-19066: Re-scope one design-sync task covering 3 feature folders, 19 docs and 152 cited ids against a 10-file pilot assessment?
 
 - Date: 2026-10-27T07:52Z
 - Task: ORB-19066
@@ -112,7 +112,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: Minted scope (3 folders, 19 docs, 152 cited ids including 31 legacy T-ids that `orbit.task.show` rejects) far exceeds the pilot's 10-file assessment; the design-sync auto-task mints a fresh run next cycle.
 - Source: comment by human:daniel 2026-10-27T07:52Z; status_changed to archived
 
-### ORB-20598: Implementer stopped for scope reassessment: the per-line metrics need a per-task
+### ORB-20598: Implementer stopped for scope reassessment: the per-line metrics need a per-task denominator the store does not keep. How to proceed?
 
 - Date: 2026-10-31 (answer relayed 2026-11-01T00:30Z)
 - Task: ORB-20598
@@ -123,7 +123,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `ok C` (Daniel, 2026-10-31), recorded by claude-opus-5-5 on the task. ORB-20598 moved back to backlog at 00:30Z.
 - Source: comment 2026-11-01T00:30Z; ORB-20646 created 00:29Z
 
-### ORB-20625: Candidate PR #7375 carried the right fix but non-compliant regression evidence, 
+### ORB-20625: Candidate PR #7375 carried the right fix but non-compliant regression evidence, and resume was refused. Resume, hint, or restart?
 
 - Date: 2026-11-01T00:33Z and 00:36Z
 - Task: ORB-20625
@@ -134,7 +134,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: The hint: keep the `blocked_run_stopped` fix, delete the private-helper test, replace the mocked delivery test with one public-boundary regression through the real runtime. Daniel: `Discard and requeue`; resume was refused because the failure handoff disagrees with the task's run record. The fresh run landed PR #7390.
 - Source: comments 00:33Z and 00:36Z; operator_requeued event
 
-### ORB-18135: PR #6045 was reviewed clean but is red on a guard test the landing reviewer miss
+### ORB-18135: PR #6045 was reviewed clean but is red on a guard test the landing reviewer missed. Resume the candidate or implement fresh?
 
 - Date: 2026-10-25T08:33Z
 - Task: ORB-18135
@@ -156,7 +156,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `Only red check was a flaky ci-guardrails compiler-cache stage (F2026-10-587); rerun of CI 40176214663 is green. Resume PR #6042.`
 - Source: operator_requeued event 08:46Z
 
-### ORB-18547: Before-landing review was incomplete only on three Linux sandbox tests a Mac rev
+### ORB-18547: Before-landing review was incomplete only on three Linux sandbox tests a Mac reviewer could not run. Resume the kept candidate?
 
 - Date: 2026-10-26T15:10Z and 15:40Z
 - Task: ORB-18547
@@ -167,7 +167,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `operator ran them on the box at bedde87 (all passed) and attached the results`; then `Linux evidence re-run at post-review candidate 0ae6e4f, all passed and attached`.
 - Source: operator_requeued events 15:10Z and 15:40Z
 
-### ORB-19818: Landing review attributed inherited F1 repairs to this attempt and returned `acc
+### ORB-19818: Landing review attributed inherited F1 repairs to this attempt and returned `accept_with_fixes` with no change. Resume the candidate?
 
 - Date: 2026-10-29T16:57Z
 - Task: ORB-19818
@@ -178,7 +178,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: Independent review confirms the single F1 fix predated review; the reviewer erred. Resume through fresh validation and required review, preserving all claims, heads and failed review evidence. No spec change or discard; backlog waits for the next authorized post-upgrade window (ORB-19771).
 - Source: operator_requeued event 16:57Z
 
-### ORB-17664: The owner rejected `review.timing=after_landing`. Is it repaired, so the blocked
+### ORB-17664: The owner rejected `review.timing=after_landing`. Is it repaired, so the blocked leaf can resume?
 
 - Date: 2026-10-23T05:00Z
 - Task: ORB-17664
@@ -189,7 +189,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: Owner review.timing incompatibility repaired by on-call ORB-17606 (timing restored to off at 04:51Z; task reads verified); the leaf failed only at the steering-gate owner read; candidate retained on mac-mini-1.
 - Source: operator_requeued event 05:00Z
 
-### ORB-20359: The box's `workflow.purpose_crews` referenced undefined crews. Retry the frozen 
+### ORB-20359: The box's `workflow.purpose_crews` referenced undefined crews. Retry the frozen review?
 
 - Date: 2026-10-31T02:51Z
 - Task: ORB-20359
@@ -200,7 +200,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `.orbit/config.toml` now uses defined crew names and `orbit.task.show` succeeds on dk-server-2.
 - Source: operator_requeued event 02:51Z
 
-### ORB-20736: Final recovery escalated because dk-server-2 rejected `[plugin_enablement]` in i
+### ORB-20736: Final recovery escalated because dk-server-2 rejected `[plugin_enablement]` in its host config. Requeue?
 
 - Date: 2026-11-01T04:50Z
 - Task: ORB-20736
@@ -244,7 +244,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `Drew grok while the Grok Build balance is exhausted (HTTP 402); cancelled before work and moved to opus by the on-call operator`.
 - Source: operator_requeued events
 
-### ORB-18269: Muse subprocess exited 1 with no failure text; the retained candidate had no cha
+### ORB-18269: Muse subprocess exited 1 with no failure text; the retained candidate had no changes. Requeue?
 
 - Date: 2026-10-25T20:33Z
 - Task: ORB-18269
@@ -255,7 +255,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: `requeued to implement fresh: no work completed`.
 - Source: candidate_discarded and operator_requeued events 20:33Z
 
-### ORB-19150: Implementer declared `incomplete_scenario_counts` for a no-diff sweep. Requeue o
+### ORB-19150: Implementer declared `incomplete_scenario_counts` for a no-diff sweep. Requeue or close?
 
 - Date: 2026-10-27T20:06Z
 - Task: ORB-19150
@@ -266,7 +266,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: No note recorded; the action matches the triage proposal.
 - Source: blocked_task_triaged marker 19:44Z; forced event 20:06Z
 
-### ORB-19588: Implementer declared `incomplete_code_health_sweep`. Requeue so a fresh implemen
+### ORB-19588: Implementer declared `incomplete_code_health_sweep`. Requeue so a fresh implementer finishes?
 
 - Date: 2026-10-28T21:41Z
 - Task: ORB-19588
@@ -277,7 +277,7 @@ Human answers and actions that cleared a blocked or pilot-held task in ws_orbit 
 - Human note: No note recorded.
 - Source: blocked_task_triaged marker 21:37Z; forced event 21:41Z
 
-### ORB-20310 and ORB-20473: ORB-20310: filing cap used, rerun to finish passes (Option 1) or accept the part
+### ORB-20310 and ORB-20473: ORB-20310: filing cap used, rerun to finish passes (Option 1) or accept the partial audit (Option 2)? ORB-20473: criterion 1 unstable; evaluate the 0.67 target by the median of three paired ratios (Option 1)?
 
 - Date: 2026-10-30T23:25Z and 2026-10-31T16:09Z
 - Task: ORB-20310 and ORB-20473
@@ -297,14 +297,14 @@ Each row is a human lifecycle override of a blocked task (`forced` history event
 | 2026-10-04 20:15 | ORB-13964 | not recorded | blocked; no diagnosis text in history | forced blocked -> done | none recorded |
 | 2026-10-04 21:09 | ORB-13984 | not recorded | blocked; no diagnosis text in history | forced blocked -> proposed | none recorded |
 | 2026-10-25 06:05 | ORB-18096 | jrun-20261025-0448-c8 | final recovery activity `final_recovery` did not return a decision: completion recovery required checks have not all concluded; no complete failure diagnosis is available | forced blocked -> done | none recorded |
-| 2026-10-25 19:02 | ORB-18270 | jrun-20261025-1832-c3 | final recovery activity `final_recovery` did not return a decision: worktree integrity violation `worktree_mismatch`: {"code":"worktree_mismatch","reason":"workspace_path '/home/d | forced blocked -> proposed | none recorded |
+| 2026-10-25 19:02 | ORB-18270 | jrun-20261025-1832-c3 | final recovery activity `final_recovery` did not return a decision: worktree integrity violation `worktree_mismatch`: {"code":"worktree_mismatch","reason":"workspace_path '/home/daniel/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261025-1832-c3' is not a directory","task_id":"ORB-18270","run_id":"jrun-20261025-1832-c3","provider":"codex","requested_workspace_path":"/home/daniel/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261025-1832-c3","requested_repo_root":"/home/daniel/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261025-1832-c3","resolved_assigned_root":null,"registered_primary_root":"/home/daniel/workspace/constellation/codebases/orbit","automatic_reconciliation":false} | forced blocked -> proposed | none recorded |
 | 2026-10-28 00:34 | ORB-19242 | jrun-20261027-2353-t1 | blocked; no diagnosis text in history | forced blocked -> rejected | none recorded |
 | 2026-10-28 02:16 | ORB-19265 | jrun-20261028-0149-c1 | blocked; no diagnosis text in history | forced blocked -> review | none recorded |
-| 2026-10-29 21:37 | ORB-19689 | jrun-20261029-0753-c30 | Run jrun-20261029-0753-c30 (the fresh ordinary repair shipment authorized by ORB-19771, comment 2026-10-29T07:51:15Z) failed at resume_candidate/candidate_resume before any implem | forced blocked -> rejected | none recorded |
+| 2026-10-29 21:37 | ORB-19689 | jrun-20261029-0753-c30 | Run jrun-20261029-0753-c30 (the fresh ordinary repair shipment authorized by ORB-19771, comment 2026-10-29T07:51:15Z) failed at resume_candidate/candidate_resume before any implementation: 'published candidate lacks a unique requeue binding; inspect explicit source repair for publishing run jrun-20261029-0437-c18, or discard the candidate'. Verified in this session: the current worktree is clean at base 56b345176086ad454c2a06db59630fb7478217d3 with no diff vs origin/agent-main, while the retained candidate worktree /home/daniel/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261029-0437-c18 still holds published head 6ceb43ee0a296ebc4f4ca51e86239664a0dffe99 (origin/orbit/ORB-19689-fdcea510, PR #6851, help-text-only diff to crates/orbit-cli/src/command/run/command.rs and crates/orbit-cli/tests/help_goldens/run/root.txt). This is exactly the candidate-authentication refusal the steering anticipated: it forbids discard, manual rebase, and any forced state/binding bypass, and instructs to preserve the candidate and diagnose. Resuming from review_preflight or resume_candidate would re-run the same refused binding with no evidence anything changed, so no resume/requeue is safe. The underlying repair work is still owed and unchanged: CI run 40819701041 fails help_examples::run_job_help_examples_are_accepted_by_the_documented_command (help_examples.rs:41) and run_cancel_help_synopsis_reaches_run_lookup (:83), which consume run-root examples this PR intentionally removed; they must be aligned with the documented per-command entrypoints without weakening behavior coverage or pinning wording, on the retained PR #6851. Friction recorded via orbit.friction.add for ORB-19689. | forced blocked -> rejected | none recorded |
 | 2026-10-29 22:54 | ORB-19960 | jrun-20261029-2251-t1 | blocked; no diagnosis text in history | forced blocked -> done | none recorded |
-| 2026-10-29 23:45 | ORB-19962 | jrun-20261029-2309-c3 | ORB-19962 repeatedly stops with incomplete_examination. This executor returned after 49 seconds without timeout or stall. Its run-bound automation-coverage.json remains explicitly | forced blocked -> done | none recorded |
-| 2026-10-30 07:33 | ORB-20007 | jrun-20261030-0533-c3 | Exploratory grading blocked at host runtime boundary, unchanged since failure: `orbit config get assistance --json` still shows policies=[], budget epoch=unfunded, token_ceiling=0 | forced blocked -> someday | none recorded |
+| 2026-10-29 23:45 | ORB-19962 | jrun-20261029-2309-c3 | ORB-19962 repeatedly stops with incomplete_examination. This executor returned after 49 seconds without timeout or stall. Its run-bound automation-coverage.json remains explicitly incomplete: no examined deliveries, unfinished doctor/plugin refactors, documentation verification, terminal edge cases and old-claim searches. The worktree is clean at 2df8acd2139637483f3eba9f452f07f8948abd23, equal to origin/agent-main, with no candidate commits. No environmental change supports another requeue. Completing the review requires task evidence writes prohibited in this recovery activity. Recorded friction F2026-10-694; task and Git state were unchanged. Workspace gates were not run, as required by no-diff-expected. | forced blocked -> done | none recorded |
+| 2026-10-30 07:33 | ORB-20007 | jrun-20261030-0533-c3 | Exploratory grading blocked at host runtime boundary, unchanged since failure: `orbit config get assistance --json` still shows policies=[], budget epoch=unfunded, token_ceiling=0, spend_ceiling_microusd=0, pricing_version=null. Zero actual model grades obtained; worktree clean at base 5da8dddb38e986b3b26de3d79ddc65ba775d7d70 on orbit/ORB-20007-ae2c5d9f with no candidate commit. Landed adapter (openai-decisions/1, gpt-6-luna, strict DecisionAnswer schema) also lacks rationale/evidence fields required by criteria. Human labels/holdout are explicitly not blockers for this exploratory scope. Friction F2026-10-701 already records this. Retrying without host change would repeat the same grading_runtime_unavailable failure. | forced blocked -> someday | none recorded |
 | 2026-10-31 01:26 | ORB-20250 | jrun-20261031-0023-c1 | blocked; no diagnosis text in history | forced blocked -> done | none recorded |
-| 2026-10-31 02:20 | ORB-20339 | jrun-20261031-0153-c19 | final recovery activity `final_recovery` did not return a decision: cli invocation failed (permanent): invalid input: denyModify match `/home/daniel/workspace/constellation/codeba | forced blocked -> done | none recorded |
-| 2026-10-31 08:52 | ORB-20455 | jrun-20261031-0836-c16 | ORB-20455 (no-diff tool-failure-patterns auto-task) failed at implement_bundle/implement_one: codex self-declared status=failed scan_incomplete (exit 0, timed_out=false, 57s of 3h | forced blocked -> rejected | none recorded |
-| 2026-10-31 16:09 | ORB-20470 | jrun-20261031-0903-c8 | ORB-20470 has no delivery candidate. Worktree /home/daniel/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261031-0903-c8 is clean at b75de3d09b27d0774 | forced blocked -> rejected | none recorded |
+| 2026-10-31 02:20 | ORB-20339 | jrun-20261031-0153-c19 | final recovery activity `final_recovery` did not return a decision: cli invocation failed (permanent): invalid input: denyModify match `/home/daniel/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261031-0153-c19/.orbit/tmp/repro-work/scratch-case-60433/scratch/forbidden.env` must exist and resolve canonically: No such file or directory (os error 2) | forced blocked -> done | none recorded |
+| 2026-10-31 08:52 | ORB-20455 | jrun-20261031-0836-c16 | ORB-20455 (no-diff tool-failure-patterns auto-task) failed at implement_bundle/implement_one: codex self-declared status=failed scan_incomplete (exit 0, timed_out=false, 57s of 3h deadline) after only preliminary counts. Verified: task is in-progress with no comments/steering and no artifacts (no tool-failure-cursor.json); execution_summary says INCOMPLETE, no cursor advanced, no records filed, 4890 failure + 498 denied rows, classification/signature/coverage unfinished; worktree orbit-jrun-20261031-0836-c16 is clean (git diff --check clean) at base bd4ce3d9315ca1f338006aaa345ab39467243cbf with no commit; delivery is pending. This is not environmental (no sandbox/permission/rate-limit evidence, so requeue criteria unmet), not complete_no_diff (scan undone, no evidence commit), and not obsolete: newest done instance is still prior ORB-20129 (cursor 2026-10-30T10:01:59Z) and no newer instance exists. Final recovery cannot finish the scan here: completing it requires filing tasks/frictions, updating the execution summary and attaching the cursor, which this lane is forbidden/ungranted to do (no task edits; applier refuses on changed task), and there is no diff to repair to justify resume; a blind resume would likely repeat the self-abort. Step recovery already returned not_recovered/retry_admitted=false. | forced blocked -> rejected | none recorded |
+| 2026-10-31 16:09 | ORB-20470 | jrun-20261031-0903-c8 | ORB-20470 has no delivery candidate. Worktree /home/daniel/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261031-0903-c8 is clean at b75de3d09b27d07744c0a97a2e96d43e3b4d3e44; its relevant source files also match current origin/agent-main. Delivery evidence shows no commit or landing. AC1 remains unmet. perf-evidence.json reports freshness-violating probe-skipping p95 ratios of 0.921, 0.404, 0.903 and 0.834, median 0.869 versus the required <=0.67. These variable measurements do not establish the claimed impossibility of a freshness-preserving repair. Causal profiling and a validated candidate are missing; a watcher design is not demonstrated to solve the target. The experiment is absent from source, but target/ reportedly retains its binary and must be rebuilt before reuse. git diff --check passed; tests and workspace gates were not run because no files changed. Existing evidence and friction F2026-10-715 preserve the investigation. | forced blocked -> rejected | none recorded |
