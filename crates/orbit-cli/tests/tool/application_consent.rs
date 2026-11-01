@@ -91,29 +91,18 @@ fn application_consent_writes_v2_for_constrained_scopes_and_v1_for_exact_ones() 
     // A scope without a rate limit records none: no limit applies.
     assert!(grant["scopes"][0].get("rate_limit").is_none());
 
-    // Constrained admission is a later slice: refused, never widened to a match.
+    // A constrained scope is evaluated on current state: no such task here.
     let dismiss = json!({"id": "TST-1", "status": "rejected", "comment": "not needed"});
     let output = app_command(&fixture, &credential, "orbit.task.update", &dismiss)
         .assert()
         .failure()
         .get_output()
         .clone();
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("not yet admitted"),
-        "constrained scope admission must refuse as not yet admitted: {}",
-        String::from_utf8_lossy(&output.stderr)
+        stderr.contains("scope `approval-dismiss` field `id` failed `task`"),
+        "a constrained scope must refuse a call its predicate does not admit: {stderr}"
     );
-    let output = app_command(
-        &fixture,
-        &credential,
-        "shapes.maintain",
-        &json!({"force": true}),
-    )
-    .assert()
-    .failure()
-    .get_output()
-    .clone();
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not yet admitted"));
 
     // Every scope exact, unnamed and unlimited: still the v1 record a
     // rolled-back binary honors, and outside the constrained expiry cap.

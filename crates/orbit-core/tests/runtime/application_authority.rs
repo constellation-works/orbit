@@ -55,11 +55,11 @@ fn application_task_consent_is_exact_and_wire_metadata_cannot_grant_it() {
         .unwrap();
     assert!(!format!("{credential:?}").contains(consent.consent_id.as_str()));
     let session = ToolSessionContext {
-        application: Some(Box::new(ApplicationInvocation {
-            consent: consent.clone(),
-            scope_index: 0,
-            callback: false,
-        })),
+        application: Some(Box::new(ApplicationInvocation::new(
+            consent.clone(),
+            0,
+            false,
+        ))),
         ..Default::default()
     };
     runtime

@@ -208,8 +208,9 @@ constrained, named or rate-limited scope is written as v2 and differs in two way
 
 - `rate_limit` is optional, and absent by default: a scope without one has no limit.
   When set, `admissions` is 1-10000 and `window_seconds` 1-86400; consent validation
-  refuses anything else. Admission enforces it from slice 2. Until then a rate-limited
-  scope is refused at admission (`not yet admitted`), never run unlimited.
+  refuses anything else. Admission enforces it from slice 2: each admitted entry
+  call is charged once, however many chokepoints admit it, to a private admission
+  log beside the consent witness, and a call over the limit is refused and audited.
 
 - `name` is new. It is optional on an exact scope and required on a constrained one. It
   matches `[a-z0-9-]{1,48}` and is unique within the consent. Audit rows and refusals
@@ -419,8 +420,10 @@ and the new ones marked **new**:
 Execution (**new**, `crates/orbit-core/src/application/application_authority.rs`):
 
 - `orbit.task.update` passes `plan`, `execution_summary` and `note` through to
-  `update_task_as_human` (`crates/orbit-core/src/application/task/update/entry.rs:169`).
-  The ordinary lifecycle checks run, including the atomic start transition.
+  `update_task_as_application` (`crates/orbit-core/src/application/task/update/entry.rs`).
+  The ordinary lifecycle checks run, including the atomic start transition, and the
+  write rechecks under the task lock the status admission saw (the invocation's
+  `predicate.status_seen`).
 - `orbit.task.show` runs the ordinary read, limited to the admitted `fields`.
 - `orbit.task.artifact.get` runs the ordinary read. When the invocation bound that
   artifact, Orbit rechecks the returned bytes' digest before returning them, which
@@ -455,8 +458,8 @@ check(artifact_json A, v): v == json_pointer(artifact(ctx.bound_task, A.path), A
                      and that artifact's digest == the entry binding
 ```
 
-The evaluator reads state through `ApplicationPort`: `get_task` exists, and slice 2 adds
-an artifact digest and read method. The kernel never reaches into `orbit-core`
+The evaluator reads state through `ApplicationPort`: `get_task` and, from slice 2,
+`task_artifact_sha256`. The kernel never reaches into `orbit-core`
 directly (`crates/orbit-runtime/CLAUDE.md`). Predicate reads and the write are not one
 transaction. Lifecycle preconditions on the write (the atomic start, `transition.from`
 rechecked by the update itself) close the race for status. The digest recheck closes

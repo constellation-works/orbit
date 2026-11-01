@@ -1,7 +1,8 @@
-//! Built-in completion operations reached only after exact application consent.
+//! Built-in operations reached only after application consent admitted the call.
 
 use crate::{OrbitRuntime, application::task::TaskUpdateParams};
 use orbit_common::OrbitError;
+use orbit_types::task::TaskStatus;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
@@ -42,22 +43,46 @@ impl OrbitRuntime {
         );
         match tool {
             "orbit.task.update" => {
-                let task = self.update_task_as_human(
-                    &required("id")?,
+                let status = string("status")?
+                    .map(|status| {
+                        status.parse::<TaskStatus>().map_err(|_| {
+                            OrbitError::InvalidInput("invalid application task status".into())
+                        })
+                    })
+                    .transpose()?;
+                let note = string("note")?;
+                if note.is_some() && status.is_none() {
+                    return Err(OrbitError::InvalidInput(
+                        "`note` requires a status change; use `comment` for free-form discussion"
+                            .into(),
+                    ));
+                }
+                let id = required("id")?;
+                // A constrained entry read the task's status; its write
+                // rechecks it under the task lock. Callbacks inherit the
+                // entry's evidence but walk the status on, so they do not.
+                let expected_status = invocation
+                    .predicate
+                    .as_ref()
+                    .filter(|seen| !invocation.callback && seen.task == id)
+                    .map(|seen| {
+                        seen.status_seen.parse::<TaskStatus>().map_err(|_| {
+                            OrbitError::InvalidInput("invalid application task status".into())
+                        })
+                    })
+                    .transpose()?;
+                let task = self.update_task_as_application(
+                    &id,
                     TaskUpdateParams {
-                        status: string("status")?
-                            .map(|status| {
-                                status.parse().map_err(|_| {
-                                    OrbitError::InvalidInput(
-                                        "invalid application task status".into(),
-                                    )
-                                })
-                            })
-                            .transpose()?,
+                        status,
                         comment: string("comment")?,
+                        plan: string("plan")?,
+                        execution_summary: string("execution_summary")?,
                         ..Default::default()
                     },
                     actor,
+                    note,
+                    expected_status,
                 )?;
                 Ok(Some(
                     serde_json::json!({"id": task.id, "status": task.status}),

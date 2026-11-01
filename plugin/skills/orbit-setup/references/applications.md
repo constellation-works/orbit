@@ -75,9 +75,26 @@ in place of `input` (never both). Such a scope needs a `name` and may carry a
 constraint against the built-in ceiling at consent time, refuses any operation
 or input that needs host operator authority, caps each operation at 8 KiB, and
 refuses an `expires_at` beyond `machine.application_consent_max_days` (global
-config, default 30 days). Calls under constrained or rate-limited scopes are
-not admitted yet: they are refused with `not yet admitted`. Exact scopes keep
-working as described above.
+config, default 30 days). Exact scopes keep working as described above.
+
+A direct call (or a plugin entry) under a constrained scope is admitted when
+every field it sends is listed and every listed field that is not `optional`
+passes its constraint on the task's current state: a `task` predicate reads
+the task's tags, status and bound artifact digest, and a `transition` reads
+the status of the task the call's `id` names. The first matching scope wins.
+A refusal names each constrained scope of that tool with its first failing
+field and constraint kind, never a value the call sent. The write then
+rechecks the status admission saw, so a task that moved in between is not
+changed. A move to `backlog` is admitted only from `review` or `in-progress`.
+`orbit.task.update` applies `status`, `comment`, `note`, `plan` and
+`execution_summary`; `note` needs a status change. The audit row's
+`application` object records the bound identity and digest values, a digest
+and length for each free-text field, and the task state admission read.
+Callbacks under a constrained scope are not admitted yet (`not yet admitted`).
+
+A scope's optional `rate_limit` (`{"admissions": N, "window_seconds": S}`)
+caps the calls admitted under it in any trailing window of `S` seconds; one
+over the limit is refused and audited. A scope without one has no limit.
 
 Consent is reusable for those exact calls until expiry or revocation; it does
 not supply idempotency or prove a fresh human interaction per invocation. Use

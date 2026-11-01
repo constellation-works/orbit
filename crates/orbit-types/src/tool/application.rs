@@ -238,11 +238,65 @@ pub struct ApplicationConsent {
     pub scopes: Vec<ApplicationScope>,
 }
 
+/// Digest and length of one admitted free-text field. Audit rows keep this,
+/// never the text: the task's own history already holds it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApplicationTextDigest {
+    pub sha256: String,
+    /// Unicode scalar values.
+    pub chars: u32,
+}
+
+/// Task state a constrained admission read: what the predicate or the
+/// transition saw, so the write can recheck it and the audit row shows it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApplicationPredicateEvidence {
+    pub task: String,
+    pub status_seen: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags_matched: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ApplicationArtifactEvidence>,
+}
+
+/// The artifact digest a `task` predicate bound.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApplicationArtifactEvidence {
+    pub path: String,
+    pub sha256: String,
+}
+
 /// Host-minted reference passed to a plugin instead of the app credential.
 /// It is authoritative only inside a verified host callback session.
+///
+/// The constrained-admission fields are empty for an exact match, and they
+/// are omitted when empty so an exact invocation serializes as it always has.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApplicationInvocation {
     pub consent: ApplicationConsent,
     pub scope_index: usize,
     pub callback: bool,
+    /// The entry's admitted values for identity and digest fields.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, Value>,
+    /// `{sha256, chars}` for each admitted free-text field.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub text_digests: BTreeMap<String, ApplicationTextDigest>,
+    /// Task state the constrained entry was admitted on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<ApplicationPredicateEvidence>,
+}
+
+impl ApplicationInvocation {
+    /// An invocation of `consent` with no constrained-admission evidence.
+    pub fn new(consent: ApplicationConsent, scope_index: usize, callback: bool) -> Self {
+        Self {
+            consent,
+            scope_index,
+            callback,
+            bindings: BTreeMap::new(),
+            text_digests: BTreeMap::new(),
+            predicate: None,
+        }
+    }
 }

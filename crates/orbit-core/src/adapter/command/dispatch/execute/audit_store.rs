@@ -106,6 +106,7 @@ where
     let _ = crate::runtime::application_authority::take_application_audit();
     let result = dispatch(input);
     let application = crate::runtime::application_authority::take_application_audit();
+    crate::runtime::application_authority::finish_application_dispatch();
     let plugin_secrets = take_delivered_plugin_secret_names();
     let plugin_secret_updates = take_plugin_secret_updates();
     let plugin = take_callback_plugin_provenance().or(plugin);

@@ -2297,3 +2297,7 @@ mod application_authority;
 #[cfg(unix)]
 #[path = "application_consent.rs"]
 mod application_consent;
+
+#[cfg(unix)]
+#[path = "application_admission.rs"]
+mod application_admission;

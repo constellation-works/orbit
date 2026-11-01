@@ -488,11 +488,11 @@ fn application_host_route_refuses_changed_inputs_and_revoked_consent() {
     let mut callback =
         PluginCallbackSession::mint(&global, &provenance, &["orbit.task.update".into()]).unwrap();
     callback
-        .bind_application(Some(&ApplicationInvocation {
-            consent: serde_json::from_value(grant.clone()).unwrap(),
-            scope_index: 0,
-            callback: false,
-        }))
+        .bind_application(Some(&ApplicationInvocation::new(
+            serde_json::from_value(grant.clone()).unwrap(),
+            0,
+            false,
+        )))
         .unwrap();
     let host: Arc<dyn OrbitToolHost> = Arc::new(Host(runtime));
     callback.open_host_route(Some(&host)).unwrap();

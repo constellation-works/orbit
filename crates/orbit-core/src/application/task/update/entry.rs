@@ -185,6 +185,33 @@ impl OrbitRuntime {
         )
     }
 
+    /// Apply an admitted application call as `application:<id>`. `note` is
+    /// the status-change note; `expected_status` is the status admission saw,
+    /// rechecked under the task lock so a move between admission and write
+    /// refuses instead of applying on changed state.
+    pub(crate) fn update_task_as_application(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        actor_label: String,
+        note: Option<String>,
+        expected_status: Option<TaskStatus>,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                status_note: note,
+                actor_override: Some(actor_label),
+                expected_status,
+                operator_decision_authority: true,
+                status_authority: StatusAuthority::Lifecycle,
+                ..Default::default()
+            },
+        )
+    }
+
     /// Bookkeeping status move for a precedent answer or its reversal.
     ///
     /// Internal authority, actor `precedent`, and the precedent bookkeeping

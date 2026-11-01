@@ -1,6 +1,7 @@
 //! Host-local application authority: consented calls, never a capability grant.
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use chrono::Utc;
@@ -17,6 +18,9 @@ use orbit_types::tool::{
 };
 use serde_json::Value;
 
+use crate::application_admission::{
+    ConstrainedAdmission, admit_within_rate_limit, evaluate_constrained_entry,
+};
 use crate::application_consent::{
     OperationRole, validate_consent_request_v2, validate_constrained_fields,
 };
@@ -24,6 +28,10 @@ use crate::{RuntimeKernel, tool_exec::CapabilityEnforcement};
 
 thread_local! {
     static APPLICATION_AUDIT: RefCell<Option<ApplicationInvocation>> = const { RefCell::new(None) };
+    /// Calls this thread already charged to a scope rate limit. One call is
+    /// admitted at several chokepoints (authorization, execution, the audited
+    /// dispatch); it is charged once, at the first.
+    static RATE_LIMIT_CHARGED: RefCell<BTreeSet<String>> = const { RefCell::new(BTreeSet::new()) };
 }
 
 /// Drain the host-authenticated facts for the enclosing dispatch's audit row.
@@ -31,11 +39,15 @@ pub fn take_application_audit() -> Option<ApplicationInvocation> {
     APPLICATION_AUDIT.with(|state| state.borrow_mut().take())
 }
 
-/// Refusal for a constrained scope until constrained admission lands.
-fn constrained_scope_not_admitted() -> OrbitError {
-    OrbitError::CapabilityDenied(
-        "constrained and rate-limited application scopes are not yet admitted".into(),
-    )
+/// End of one audited dispatch: the next call is charged to its scope's rate
+/// limit afresh.
+pub fn finish_application_dispatch() {
+    RATE_LIMIT_CHARGED.with(|charged| charged.borrow_mut().clear());
+}
+
+/// Refusal for a constrained callback until bound callbacks land.
+fn constrained_callback_not_admitted() -> OrbitError {
+    OrbitError::CapabilityDenied("constrained application callbacks are not yet admitted".into())
 }
 
 impl RuntimeKernel {
@@ -415,11 +427,7 @@ impl RuntimeKernel {
                 .ok_or_else(|| {
                     OrbitError::CapabilityDenied("unrecognized application credential".into())
                 })?;
-            invocation = Some(ApplicationInvocation {
-                consent: record.consent,
-                scope_index: 0,
-                callback: false,
-            });
+            invocation = Some(ApplicationInvocation::new(record.consent, 0, false));
         }
         let Some(mut invocation) = invocation else {
             return Ok(false);
@@ -476,7 +484,7 @@ impl RuntimeKernel {
                     .iter()
                     .any(|op| op.tool == tool && op.is_constrained())
                 {
-                    return Err(constrained_scope_not_admitted());
+                    return Err(constrained_callback_not_admitted());
                 }
                 return Err(OrbitError::CapabilityDenied(
                     "completion callback is outside application consent".into(),
@@ -484,30 +492,109 @@ impl RuntimeKernel {
             }
         } else {
             let scopes = &record.consent.scopes;
-            let Some(index) = scopes.iter().position(|scope| {
-                scope.operation.tool == tool && scope.operation.input.as_ref() == Some(input)
-            }) else {
-                if scopes
-                    .iter()
-                    .any(|scope| scope.operation.tool == tool && scope.operation.is_constrained())
-                {
-                    return Err(constrained_scope_not_admitted());
+            let mut refusals = Vec::new();
+            let mut matched = None;
+            for (index, scope) in scopes.iter().enumerate() {
+                if scope.operation.tool != tool {
+                    continue;
                 }
-                return Err(OrbitError::CapabilityDenied(
-                    "operation or input is outside application consent".into(),
-                ));
+                match (&scope.operation.input, &scope.operation.fields) {
+                    (Some(exact), None) if exact == input => {
+                        matched = Some((index, ConstrainedAdmission::default()));
+                        break;
+                    }
+                    (None, Some(fields)) => {
+                        match evaluate_constrained_entry(self, &record.consent, fields, input)? {
+                            Ok(admission) => {
+                                matched = Some((index, admission));
+                                break;
+                            }
+                            Err(refusal) => refusals.push(format!(
+                                "scope `{}` {}",
+                                scope.name.as_deref().unwrap_or("unnamed"),
+                                refusal.describe()
+                            )),
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some((index, admission)) = matched else {
+                // Name each constrained scope's failing field and constraint
+                // kind; never a value the call sent.
+                return Err(OrbitError::CapabilityDenied(if refusals.is_empty() {
+                    "operation or input is outside application consent".into()
+                } else {
+                    format!(
+                        "operation or input is outside application consent: {}",
+                        refusals.join("; ")
+                    )
+                }));
             };
-            // A rate limit is enforced with constrained admission; until then
-            // a limited scope is refused rather than run unlimited.
-            if scopes[index].rate_limit.is_some() {
-                return Err(constrained_scope_not_admitted());
+            self.validate_application_operation(&scopes[index].operation, OperationRole::Entry)?;
+            if let Some(limit) = &scopes[index].rate_limit
+                && !self.charge_application_rate_limit(
+                    &record.consent.consent_id,
+                    index,
+                    limit,
+                    tool,
+                    input,
+                )?
+            {
+                return Err(OrbitError::CapabilityDenied(format!(
+                    "application scope `{}` reached its rate limit of {} admissions per {} seconds",
+                    scopes[index].name.as_deref().unwrap_or("unnamed"),
+                    limit.admissions,
+                    limit.window_seconds
+                )));
             }
             invocation.scope_index = index;
-            self.validate_application_operation(&scopes[index].operation, OperationRole::Entry)?;
+            invocation.bindings = admission.bindings;
+            invocation.text_digests = admission.text_digests;
+            invocation.predicate = admission.predicate;
         }
         APPLICATION_AUDIT.with(|state| *state.borrow_mut() = Some(invocation.clone()));
         session.application = Some(Box::new(invocation));
         Ok(true)
+    }
+
+    /// Charge one call to a scope's rate limit; `false` when the window is
+    /// full. A call this thread already charged within the current dispatch
+    /// passes without a second charge.
+    fn charge_application_rate_limit(
+        &self,
+        consent_id: &str,
+        scope_index: usize,
+        limit: &orbit_types::tool::ApplicationRateLimit,
+        tool: &str,
+        input: &Value,
+    ) -> Result<bool, OrbitError> {
+        let key = format!(
+            "{consent_id}:{scope_index}:{}",
+            orbit_common::security::release::sha256_hex(format!("{tool}\0{input}").as_bytes())
+        );
+        if RATE_LIMIT_CHARGED.with(|charged| charged.borrow().contains(&key)) {
+            return Ok(true);
+        }
+        let admitted = admit_within_rate_limit(
+            &self.application_admission_log_path(consent_id)?,
+            scope_index,
+            limit,
+            Utc::now(),
+        )?;
+        if admitted {
+            RATE_LIMIT_CHARGED.with(|charged| charged.borrow_mut().insert(key));
+        }
+        Ok(admitted)
+    }
+
+    /// The scope rate-limit log, beside the consent's witness.
+    fn application_admission_log_path(&self, id: &str) -> Result<std::path::PathBuf, OrbitError> {
+        let path = self.application_witness_path(id)?;
+        if let Some(parent) = path.parent() {
+            orbit_common::fs::io::create_private_dir_all(parent)?;
+        }
+        Ok(path.with_file_name(format!("{id}.admissions.json")))
     }
 
     fn application_witness_path(&self, id: &str) -> Result<std::path::PathBuf, OrbitError> {
@@ -551,11 +638,7 @@ impl RuntimeKernel {
         action: &str,
     ) -> Result<(), OrbitError> {
         use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
-        let invocation = ApplicationInvocation {
-            consent: consent.clone(),
-            scope_index: 0,
-            callback: false,
-        };
+        let invocation = ApplicationInvocation::new(consent.clone(), 0, false);
         self.record_audit_event_with_invocation(
             &AuditEventInsertParams {
                 execution_id: orbit_common::observability::audit_id::audit_execution_id(
