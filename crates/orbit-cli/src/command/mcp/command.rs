@@ -97,14 +97,58 @@ pub enum ServeMode {
     Federated,
 }
 
+/// Contract detail behind the `orbit mcp serve` flags. Each flag's own help is one
+/// line; this block follows the options in `--help` and is not in `-h`.
+const SERVE_CONTRACT_HELP: &str = "\
+`--mode remote` proxies one chosen SSH destination and requires it as an argument. \
+`--mode federated` includes this machine automatically and muxes every host registered \
+with `orbit host add`; it takes no argument.\n\n\
+Omit `--operator` for any server an agent launches: without it a session holds the agent \
+capability only, and governed operations are refused. The flag is the deliberate act — \
+`ORBIT_OPERATOR` in this process's environment is ignored on the MCP surface, so an operator \
+shell cannot grant operator authority to an agent's server by accident.\n\n\
+With `--mode remote` or `--mode federated`, `--operator` is also the operator statement for \
+every SSH destination this client opens: Orbit is a single-user tool and an SSH login to a \
+machine is ownership of it, so the destination serves the authority this argv asks for. A \
+client that is itself running as an agent never propagates it.\n\n\
+Most MCP clients cannot announce `_meta.orbit.workspace` on their initialize, so without \
+`--workspace` a workspace-scoped tool must repeat the selector on every call. Local \
+`orbit mcp init` and `orbit workspace init --mcp` write this into the integrations they \
+generate; a managed child that launches `orbit mcp serve` without the flag still inherits \
+`ORBIT_WORKSPACE` from the trusted execution envelope. The federated init path is \
+session-unbound. A client that does announce a workspace, and any explicit per-call \
+`workspace`, still take precedence. The selector is resolved against the accepting server's \
+registry per call, never from the server process cwd.\n\n\
+`--orchestrator` is attribution only. Unlike `--operator` it grants nothing: a session still \
+holds exactly the capabilities it was served with, and the crew named here neither selects \
+the crew a task executes under nor the model recorded for that execution. The name is \
+resolved against the crews of whichever workspace the call lands in, so an unconfigured crew \
+fails that call rather than quietly selecting another one. It applies only when a task is \
+created, and only to that task: an existing task's orchestrator is never rewritten from this \
+default. Treat it as configuration, not as evidence of who is calling. A long-lived MCP \
+connection outlives a model switch in the client, so pass `orchestrator` on the individual \
+call, or restart the connection with a new value, when the orchestrating crew actually \
+changes.\n\n\
+The default toolset (tasks, workflows and runs, automation, decision list and show, codebase, \
+friction, search, the UI and visual tools, command execution and workspace discovery) is \
+always advertised. `leases` adds the lease tools; `experiments` the experiment tools; \
+`analytics` the agent and orchestrator scorecards and the crew ladder; `decision-channel` a \
+decision channel's submit and digest, which only the bound channel plugin or the operator may \
+call; `agent-invoke` agent invocation, which a managed run offered explorer delegation enables \
+on its own server.\n\n\
+`--toolset` replaces the `machine.mcp.toolsets` host config for this server. A toolset changes \
+only what this server lists and dispatches: a call to a tool outside it is refused with the \
+toolset to enable, and `orbit tool run`, activities and plugin callbacks reach every tool \
+regardless. `--mode remote` asks the destination for the same toolsets, and `--mode federated` \
+applies them to every destination.";
+
 #[derive(Args)]
-#[command(about = "Serve the Orbit tool registry over Model Context Protocol")]
+#[command(
+    about = "Serve the Orbit tool registry over Model Context Protocol",
+    after_long_help = SERVE_CONTRACT_HELP
+)]
 pub struct ServeArgs {
     /// Run as a client to other Orbit servers instead of serving this machine.
-    ///
-    /// `remote` proxies one chosen SSH destination and requires it as an
-    /// argument. `federated` includes this machine automatically and muxes
-    /// every host registered with `orbit host add`; it takes no argument.
     #[arg(long, value_name = "MODE")]
     pub mode: Option<ServeMode>,
     /// SSH destination for `--mode remote`, such as a host, `user@host`, or a
@@ -132,77 +176,16 @@ pub struct ServeArgs {
         requires = "remote_caller_machine_id"
     )]
     pub worker_host: bool,
-    /// Serve sessions with operator authority, so they may perform governed
-    /// operations such as dispatching a workflow or deleting a task.
-    ///
-    /// Omit this for any server an agent launches: without it a session holds
-    /// the agent capability only, and governed operations are refused. The flag
-    /// is the deliberate act — `ORBIT_OPERATOR` in this process's environment is
-    /// ignored on the MCP surface, so an operator shell cannot grant operator
-    /// authority to an agent's server by accident.
-    ///
-    /// With `--mode remote` or `--mode federated` it is also the operator
-    /// statement for every SSH destination this client opens: Orbit is a
-    /// single-user tool and an SSH login to a machine is ownership of it, so
-    /// the destination serves the authority this argv asks for. A client that
-    /// is itself running as an agent never propagates it.
+    /// Serve sessions with operator authority, so they may perform governed operations such as dispatching a workflow or deleting a task.
     #[arg(long)]
     pub operator: bool,
-    /// Bind this server's sessions to a registered workspace: a workspace
-    /// name, a logical workspace ID (`ws_*`), or an absolute registered
-    /// checkout path.
-    ///
-    /// Most MCP clients cannot announce `_meta.orbit.workspace` on their
-    /// initialize, so without this a workspace-scoped tool must repeat the
-    /// selector on every call. Local `orbit mcp init` and `orbit workspace
-    /// init --mcp` write this into the integrations they generate; a managed
-    /// child that launches `orbit mcp serve` without the flag still inherits
-    /// `ORBIT_WORKSPACE` from the trusted execution envelope. The federated
-    /// init path is session-unbound. A client that does announce a workspace,
-    /// and any explicit per-call `workspace`, still take precedence. The
-    /// selector is resolved against the accepting server's registry per call,
-    /// never from the server process cwd.
+    /// Bind this server's sessions to a registered workspace: a workspace name, a logical workspace ID (`ws_*`), or an absolute registered checkout path.
     #[arg(long, value_name = "SELECTOR", conflicts_with = "mode")]
     pub workspace: Option<String>,
-    /// Attribute tasks this session creates to a named orchestrator crew,
-    /// unless the call names one itself.
-    ///
-    /// Attribution only. Unlike `--operator` it grants nothing: a session
-    /// still holds exactly the capabilities it was served with, and the crew
-    /// named here neither selects the crew a task executes under nor the
-    /// model recorded for that execution. The name is resolved against the
-    /// crews of whichever workspace the call lands in, so an unconfigured
-    /// crew fails that call rather than quietly selecting another one.
-    ///
-    /// It applies only when a task is created, and only to that task: an
-    /// existing task's orchestrator is never rewritten from this default.
-    ///
-    /// Treat it as configuration, not as evidence of who is calling. A
-    /// long-lived MCP connection outlives a model switch in the client, so
-    /// pass `orchestrator` on the individual call, or restart the connection
-    /// with a new value, when the orchestrating crew actually changes.
+    /// Attribute tasks this session creates to a named orchestrator crew, unless the call names one itself.
     #[arg(long, value_name = "CREW")]
     pub orchestrator: Option<String>,
-    /// Advertise these opt-in toolsets beside the default one, as a
-    /// comma-separated list: `leases`, `experiments`, `analytics`,
-    /// `decision-channel`, `agent-invoke`, or `all`.
-    ///
-    /// The default toolset (tasks, workflows and runs, automation, decision
-    /// list and show, codebase, friction, search, the UI and visual tools,
-    /// command execution and workspace discovery) is always advertised.
-    /// `leases` adds the lease tools; `experiments` the experiment tools;
-    /// `analytics` the agent and orchestrator scorecards and the crew
-    /// ladder; `decision-channel` a decision channel's submit and digest,
-    /// which only the bound channel plugin or the operator may call;
-    /// `agent-invoke` agent invocation, which a managed run offered explorer
-    /// delegation enables on its own server.
-    ///
-    /// Replaces the `machine.mcp.toolsets` host config for this server. A
-    /// toolset changes only what this server lists and dispatches: a call to a
-    /// tool outside it is refused with the toolset to enable, and `orbit tool
-    /// run`, activities and plugin callbacks reach every tool regardless.
-    /// `--mode remote` asks the destination for the same toolsets, and
-    /// `--mode federated` applies them to every destination.
+    /// Advertise these opt-in toolsets beside the default one, as a comma-separated list: `leases`, `experiments`, `analytics`, `decision-channel`, `agent-invoke`, or `all`.
     #[arg(long, value_name = "TOOLSETS")]
     pub toolset: Option<String>,
 }
