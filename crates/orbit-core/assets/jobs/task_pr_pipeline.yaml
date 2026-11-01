@@ -333,7 +333,7 @@ spec:
     # Mock comparison review and in-line verification, in shadow: prepare
     # assembles each shown mock with its capture under the image budgets
     # and draws an image-capable reviewer, verifier and escalation crew;
-    # the reviewer answers the eight comparison questions; verify-prepare
+    # the reviewer answers the comparison and quality questions; verify-prepare
     # drops invalid evidence and partitions the findings (check findings
     # included) five per verifier invocation; one escalation round
     # re-verifies low-confidence verdicts. `visual_settle` records the
@@ -427,6 +427,7 @@ spec:
             image_input: "{{ item.image_input }}"
             staged_images: "{{ item.staged_images }}"
             findings: "{{ item.findings }}"
+            design_rules: "{{ item.design_rules }}"
             catalog: "{{ item.catalog }}"
       fan_in:
         join: { mode: any }
@@ -471,6 +472,7 @@ spec:
             image_input: "{{ item.image_input }}"
             staged_images: "{{ item.staged_images }}"
             findings: "{{ item.findings }}"
+            design_rules: "{{ item.design_rules }}"
             catalog: "{{ item.catalog }}"
       fan_in:
         join: { mode: any }
@@ -1172,6 +1174,7 @@ spec:
             image_input: "{{ item.image_input }}"
             staged_images: "{{ item.staged_images }}"
             findings: "{{ item.findings }}"
+            design_rules: "{{ item.design_rules }}"
             catalog: "{{ item.catalog }}"
       fan_in:
         join: { mode: any }

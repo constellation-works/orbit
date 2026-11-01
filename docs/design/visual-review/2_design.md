@@ -597,6 +597,15 @@ both:
    and does it show what the mock shows?
 8. **Rules conflict.** Where the capture follows the design rules and the mock does not, say
    so as `none` with a note, not as a finding.
+9. **Rules and floor.** For every capture regardless of mock fidelity, check the app's
+   design rules and quality floor: overlapping or clipped text, one-word-per-line labels or
+   squeezed label/value columns, text against container edges, illegible size or leading,
+   misaligned data-column numbers, missing visible focus rings, and missing or broken empty,
+   loading or error states requested by the mock or task. Cite a capture region and the
+   rule heading (`basis: design_rules`) or floor item. High severity covers unreadable or
+   overlapping content; medium covers a noticeable rule break; low or nit covers minor ones.
+   Acceptance criteria and operator comments win, declared deviations are not findings,
+   and known check findings are not repeated.
 
 The reviewer answers in a structured envelope (§11.1). Free text outside the answers is not
 read.
@@ -715,9 +724,9 @@ The reviewer returns, per finding:
 
 | Field | Rule |
 |---|---|
-| `question` | 1–8 (§8), or `rule:<id>` / `check:<name>` for a check finding. |
+| `question` | 1–9 (§8), or `rule:<id>` / `check:<name>` for a check finding. |
 | `mock` | The mock artifact the finding is about. |
-| `title`, `detail` | Non-empty. `detail` says what the capture shows and what the mock shows. |
+| `title`, `detail` | Non-empty. `detail` compares the capture and mock, or cites the rule heading or floor item for question 9. |
 | `evidence` | At least one `{image, region}`: `image` is the mock or its capture as named in `capture.json`, `region` an `[x, y, w, h]` box inside it. Optionally `{location}` as `path:line` for the cause, checked at the candidate. |
 | `severity` | `critical`, `high`, `medium`, `low` or `nit`, using the shared rubric ([ORB-19304]). |
 
@@ -745,9 +754,9 @@ with one extension: an evidence location may be an image region (`visual/<…>.p
 REJECTED, a confidence, and for CONFIRMED a severity, which may differ from the reviewer's.
 The verified severity is the one recorded, filed and scored, with `severity_source: verified`.
 
-The verifier receives the cited images and regions, the precedence rule, the relevant rules
-section, any deviation that touches the finding, and the task text. It does not receive the
-reviewer's other findings. A low-confidence verdict escalates once to a crew of the next
+The verifier receives the cited images and regions, the precedence rule, the bounded
+base-revision design-rule excerpts and any deviation that touches the finding. It checks a
+design-rules citation against the cited text. It does not receive the reviewer's other findings. A low-confidence verdict escalates once to a crew of the next
 tier's filtered pool, as finding verification does. A finding left without a valid verdict is
 `unverified`.
 

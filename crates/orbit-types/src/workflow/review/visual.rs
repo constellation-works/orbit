@@ -12,7 +12,7 @@ pub struct ReviewVisualFinding {
     pub finding_id: String,
     /// The `mocks/…` artifact the capture was compared with.
     pub mock: String,
-    /// The review question (`1`–`8`) or check (`rule:<id>`, `check:<name>`).
+    /// The review question (`1`–`9`) or check (`rule:<id>`, `check:<name>`).
     pub question: String,
     pub title: String,
     pub detail: String,

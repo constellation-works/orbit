@@ -20,7 +20,7 @@ spec:
   require_response_envelope: true
   description: >
     Mock comparison review of one `verify-mock-ui` delivery, in shadow.
-    For each shown mock, answers the eight comparison questions against
+    For each shown mock, answers the comparison and quality questions against
     its capture under the precedence rule, one finding per difference,
     each anchored to an image region in this delivery's capture. Findings
     are verified in-line by `visual_verify` and recorded in
@@ -171,9 +171,20 @@ spec:
     8. Rules conflict. Where the capture follows the design rules and
        the mock does not, that is `none`, not a finding.
 
-    Each finding is {"question": <1-8>, "mock": "<mock artifact>",
-    "title": "...", "detail": "<what the capture shows and what the mock
-    shows>", "evidence": [{"image": "<artifact as named in
+    9. Rules and floor. Regardless of the mock, does each capture break
+       the app's design rules or the quality floor: overlapping or clipped
+       text; labels wrapping one word per line or squeezed label/value
+       columns; text against a container edge; illegibly small or tightly
+       leaded text; misaligned numbers in data columns; missing visible
+       focus rings; or a missing or broken empty, loading or error state
+       requested by the mock or task? Cite a capture region and, in
+       detail, `basis: design_rules` with the rule heading, or the floor
+       item. High: unreadable or overlapping content; medium: a visible
+       rule break a user would notice; low/nit: minor.
+
+    Each finding is {"question": <1-9>, "mock": "<mock artifact>",
+    "title": "...", "detail": "<capture and mock difference, or rule
+    heading or floor item for question 9>", "evidence": [{"image": "<artifact as named in
     staged_images>", "region": [x, y, w, h]}], "severity": "..."}.
     Anchor every finding to a region in the mock, a region in the
     capture, or both; `catalog` gives each image's pixel size, and a
