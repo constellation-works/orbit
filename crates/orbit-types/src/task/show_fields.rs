@@ -153,6 +153,9 @@ pub fn unknown_task_show_field_message(name: &str) -> String {
         "blocked_by" => format!(
             "{message}. Use `dependencies`, `resolved_dependencies` or `relations` instead."
         ),
+        "warnings" => format!(
+            "{message}. `warnings` is optional write-response metadata, not a task field, and is absent when empty. To receive it, omit `fields` on the original valid `orbit.task.add` or `orbit.task.update` request: an unprojected object response carries any warnings. Do not replay a write that succeeded or whose outcome is unknown; check with `orbit.task.show` first."
+        ),
         _ => message,
     }
 }

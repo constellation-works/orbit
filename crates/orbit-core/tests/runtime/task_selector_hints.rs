@@ -62,7 +62,7 @@ fn task_tool_unknown_selectors_give_specific_recovery_hints() {
             "title": "Invalid projection",
             "description": "The invalid selector is rejected before a write.",
             "complexity": "low",
-            "workspace": workspace,
+            "workspace": workspace.clone(),
             "fields": ["final_validation_commands"],
             "model": "codex"
         }),
@@ -82,6 +82,43 @@ fn task_tool_unknown_selectors_give_specific_recovery_hints() {
             "unknown field selector `blocked_by`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}. Use `dependencies`, `resolved_dependencies` or `relations` instead."
         )
     );
+
+    let tasks_before = runtime
+        .run_tool(
+            "orbit.task.list",
+            json!({"fields": ["id"], "model": "codex"}),
+        )
+        .expect("list tasks before the refused add");
+    let added_with_warnings = invalid_input_message(runtime.run_tool(
+        "orbit.task.add",
+        json!({
+            "title": "Warnings projection",
+            "description": "Warnings is response metadata, not a selectable field.",
+            "complexity": "low",
+            "workspace": workspace,
+            "fields": ["warnings"],
+            "model": "codex"
+        }),
+    ));
+    assert!(
+        added_with_warnings.starts_with(&format!(
+            "unknown field selector `warnings`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}. "
+        )) && added_with_warnings.contains("omit `fields` on the original valid `orbit.task.add`"),
+        "warnings refusal names the unprojected recovery: {added_with_warnings}"
+    );
+    assert!(
+        !TASK_SHOW_PROJECTION_FIELDS_CSV
+            .split(", ")
+            .any(|field| field == "warnings"),
+        "warnings stays out of the projection vocabulary"
+    );
+    let tasks_after = runtime
+        .run_tool(
+            "orbit.task.list",
+            json!({"fields": ["id"], "model": "codex"}),
+        )
+        .expect("list tasks after the refused add");
+    assert_eq!(tasks_before, tasks_after, "the refused add creates no task");
 
     let unknown = invalid_input_message(runtime.run_tool(
         "orbit.task.show",
