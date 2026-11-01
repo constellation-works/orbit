@@ -1,8 +1,8 @@
 ---
 title: Owner Failover — Design
 owner: claude
-last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Proposed
 feature: owner-failover
 doc_role: design
@@ -144,7 +144,10 @@ tasks:
 - Appends start after the JSONL lengths recorded in that task's newest change-log row at or
   before the caller's cursor. The owner therefore needs no per-follower state. A follower that
   finds a length mismatch discards that task's mirror copy and asks for it again from cursor
-  zero for that task (`refetch: [task_id]`).
+  zero for that task (`refetch: [task_id]`). The same refetch closes an open publication hole
+  (§3.3) when the owner is reachable. It does not run during an outage, and it does not rewrite
+  git. A hole still open at takeover is copied onto the fence; rejoin, not a later refetch of
+  the old publication, recovers it.
 - A page holds at most 200 tasks or 1 MiB, the inline limit the protocol already uses. A task
   larger than a page arrives alone, with its prose split across continuation pages.
 
@@ -204,8 +207,16 @@ holds a replica of:
    cursor, or sits behind the envelope's `change_seq`, import the publication tree into the
    mirror. It uses the validation of the restore path
    ([task-publication §6](../task-publication/2_design.md#disaster-recovery)), not its
-   destination rules. Then set the cursor to `(owner_epoch, change_seq)`.
-3. Poke the owner for the delta from that cursor.
+   destination rules. Then set the scalar cursor to `(owner_epoch, change_seq)` and record
+   one open hole for each `withheld` entry (§3.3). A cursor with open holes is not caught up.
+   `change_seq` does not mean every task is current through that seq. Import does not replace
+   a mirror copy that this follower already refetched from the owner at or after that task's
+   `withheld_seq`; that copy stays and its hole stays closed.
+3. Poke the owner for the delta from that scalar cursor, and refetch every holed task (§2.3).
+   A successful refetch stores the task in the mirror and closes that hole. Those bytes come
+   from the owner, not from the publication tree, so denied prose stays unpublished. An
+   unreachable owner leaves the holes open. A later refetch cannot repair a takeover that
+   already promoted the incomplete tree; the fence carries the holes instead (§5.2, §7.2).
 4. Run the epoch gate (§4.3) before starting any drain.
 
 ## 3. Cold start and git bootstrap
@@ -221,7 +232,9 @@ The owner publishes when unpublished change-log rows exist and either of these h
 - the oldest unpublished row is `authority.publication.max_lag` old (default 15 minutes).
 
 A periodic owner-local job compares the change-log head with the last published `change_seq`.
-It is not a post-write hook, so a task write is still acknowledged by the local store alone.
+A hole whose `withheld_seq` is already below that `change_seq` does not make the head look
+unpublished: the commit that advanced past the hole carries it in `withheld` (§3.3). The job
+is not a post-write hook, so a task write is still acknowledged by the local store alone.
 The decision
 [Publication does not participate in task-write acknowledgement](../task-publication/4_decisions.md#publication-does-not-participate-in-task-write-acknowledgement)
 stands. When nothing has changed, nothing is published. Byte-identical reruns already create
@@ -269,10 +282,23 @@ The proposal adds:
   `publication.routine_attachments = omit`. Mirror attachment transfer (§2.4) does not depend on
   publication.
 - **Deny patterns over core prose** (description, plan, summary, comments and history
-  messages), not only attachment paths. A match withholds that task's *new* version: the
-  publication keeps the task's previously published version and lists it under
-  `withheld: [{task_id, reason}]` in the envelope. The owner raises an operator notice. The
-  rest of the publication proceeds, so one comment does not stop every backup.
+  messages), not only attachment paths. A match does not publish that task's new prose.
+  The publication tree keeps the task's previously published bytes, or omits the task when
+  it has never been published. The rest of the publication proceeds, so one comment does not
+  stop every backup. The owner raises an operator notice. Denied prose is never written to a
+  publication commit, a fence commit or an archive ref.
+- **A withheld task is a hole under `change_seq`.** Each withheld entry is
+  `{task_id, reason, epoch, withheld_seq}`. `withheld_seq` is the newest change-log row for
+  that task, in `epoch`, that this snapshot does not include. It can be lower than
+  `change_seq` in the same epoch. `change_seq` stays the newest row whose resulting state
+  the tree includes for some task (§4.1), and it still advances when a later row for a
+  different task is included. It is not a completeness watermark. An empty `withheld` list
+  means the snapshot is complete through `change_seq`. A non-empty list is an **incomplete
+  snapshot**. Importing one sets the scalar cursor to `(owner_epoch, change_seq)` and records
+  one open hole per entry. Adopting that scalar does not recover the hole. Startup, takeover
+  and rejoin carry the hole until the owner serves the task or rejoin applies it (§2, §5.2,
+  §7.2). A later epoch that copies the hole forward keeps the epoch the row was withheld in.
+  The new epoch's own `change_seq` does not close it.
 - **No retraction promise.** Debouncing is not a retraction window. Once a commit is pushed,
   the existing rule applies: history rewrite and credential rotation are operator incidents.
 
@@ -287,7 +313,7 @@ The publication envelope
 ```yaml
 owner_epoch: 3
 authority_machine_id: hm_4bdeb191f194f07e     # the epoch's owner, as today
-change_seq: 1297                              # newest change-log row this snapshot includes
+change_seq: 1297                              # newest included change-log row; not a completeness watermark (§3.3)
 fence: none | handoff | takeover              # set only on the commit that starts the epoch
 epochs:
   - {epoch: 1, owner: hm_9ca6004473492f06, id_base: 1}
@@ -296,15 +322,20 @@ epochs:
     owner: hm_4bdeb191f194f07e
     id_base: 23000
     started_by: takeover
-    base_cursor: {epoch: 2, seq: 40198}       # what the new owner knew
+    base_cursor: {epoch: 2, seq: 40198}       # scalar cursor the new owner adopted
+    base_holes: []                            # withheld tasks at or below that cursor (§3.3, §7.2)
     prior_id_ceiling: 22999                   # highest ID the prior epoch may hold without renumbering
 segment: 1
-withheld: []
+withheld: []                                  # [{task_id, reason, epoch, withheld_seq}] when incomplete
 ```
 
 The `epochs` list is append-only. A fence commit adds exactly one entry and closes the
-previous one. A handoff records the closing `final_seq`. A takeover records only what the
-taker knew, `base_cursor`, because the old owner's real final seq is unknown until rejoin.
+previous one. A handoff records the closing `final_seq` and leaves `base_holes` empty,
+because the target has already refetched every withheld task (§5.1). A takeover records
+only what the taker knew: `base_cursor`, plus one `base_holes` entry for every open hole
+in that base. The old owner's real final seq is unknown until rejoin. A scalar
+`base_cursor` does not cover a task named in `base_holes`. `withheld_seq` on a hole can
+be lower than `change_seq`.
 
 ### 4.2 The fence
 
@@ -367,13 +398,19 @@ tools may mirror them later. Managed agents cannot call them.
    Claims are never transferred (§7.3).
 3. **Freeze.** All task writes are refused with `owner_frozen`. The change-log head `H` is now
    fixed.
-4. **Final publish** at the current epoch with `change_seq = H`.
+4. **Final publish** at the current epoch with `change_seq = H`. A task whose prose is still
+   denied is withheld (§3.3). That commit does not contain the denied prose.
 5. **Target catch-up.** The owner calls the target's `orbit.mirror.ack` over the target's
-   destination. The target fetches pages to `H` and returns the digest of its mirror's core
-   bundles. The owner compares it with its own digest and stops on any mismatch.
+   destination. The target fetches pages from its own cursor through `H`. It does not replace
+   that cursor with the final publication's `change_seq` while a hole is open. It refetches
+   every task the final envelope withholds. The refetch travels on the mirror channel, so the
+   denied prose reaches the target's mirror and not the Git commit. The target returns the
+   digest of its mirror's core bundles after those refetches. The owner compares it with its
+   own digest and stops on any mismatch or any hole that is still open. No fence is pushed
+   in that case.
 6. **Fence.** The owner pushes the fence commit: `owner_epoch + 1`, `fence: handoff`,
-   `authority_machine_id = <target>`, `final_seq = H`, and `id_base` equal to its allocator's
-   next number. No buffer is needed because writes are frozen.
+   `authority_machine_id = <target>`, `final_seq = H`, `base_holes` empty, and `id_base`
+   equal to its allocator's next number. No buffer is needed because writes are frozen.
 7. **Role flip.** The old owner records the new epoch, flips its checkout to a replica of the
    target and keeps its canonical partition as its mirror at cursor `(E, H)`. The target sees
    the fence on its next poke or branch fetch, or because the old owner notified it. It
@@ -381,11 +418,13 @@ tools may mirror them later. Managed agents cannot call them.
    flips its checkout to owner.
 
 **Data-loss window: none.** Writes stop at step 3, and the target proves at step 5 that it holds
-every write up to `H`. Step 6 records `H` in the fence. A crash before step 6 leaves the old
-owner as owner. Its startup unfreezes it, and the operator reruns the handoff. A crash after step
-6 is finished from the branch tip: §4.2 promotes the target and deposes the old owner with an
-empty divergent set. Host-local runs, logs and audit stay on the old host. They are not lost,
-and they are not moved.
+every write up to `H`, including tasks the final publication withheld. A hole the target cannot
+refetch stops the handoff, so a withheld update is not dropped on the way past the fence. Step 6
+records `H` in the fence with `base_holes` empty. A crash before step 6 leaves the old owner as
+owner. Its startup unfreezes it, and the operator reruns the handoff. A crash after step 6 is
+finished from the branch tip: §4.2 promotes the target and deposes the old owner with an empty
+divergent set. Host-local runs, logs and audit stay on the old host. They are not lost, and
+they are not moved.
 
 ### 5.2 Unplanned takeover
 
@@ -396,44 +435,71 @@ and they are not moved.
    publication is `format_version: 2`, so the old owner understands fences (§8). The local
    canonical partition for the workspace is empty, which is the restore rule
    ([task-publication §6](../task-publication/2_design.md#disaster-recovery)).
-2. **Choose the base.** Fetch the branch tip `T` at epoch `E`. If the mirror is at epoch `E` and
-   its cursor is at or past `T.change_seq`, the base is the mirror. Otherwise import `T` into the
-   mirror first. The base cursor is `(E, S)`.
+2. **Choose the base.** Fetch the branch tip `T` at epoch `E`. If the mirror is at epoch `E`
+   and its scalar cursor is at or past `T.change_seq`, the base is the mirror, including any
+   open holes it still has (§3.3). Otherwise import `T` into the mirror first. Import does not
+   replace a copy the mirror already refetched at or after that task's `withheld_seq`. Every
+   remaining withheld entry stays an open hole. The base cursor is `(E, S)`, where `S` is
+   that scalar cursor. Open holes are not covered by `S`. A newer mirror is not replaced by
+   an older git tip just because a hole is open.
+   Takeover is not refused because a snapshot is incomplete. The fence records the holes, and
+   rejoin recovers them (§7.2). The promoted tree still holds the previously published bytes,
+   so the denied prose is not published by the takeover commit.
 3. **Size the ID range** (§6.2). The command prints the computed `id_base` and
    `prior_id_ceiling` and accepts `--id-buffer` to override them.
 4. **Fence.** Build a snapshot from the mirror with `owner_epoch: E + 1`, `fence: takeover`,
-   the taker as `authority_machine_id`, and the new `epochs` entry. Compare-and-swap it
-   against `T`. On failure, stop. Nothing local has changed. A moved tip means the owner or
-   another taker is alive.
+   the taker as `authority_machine_id`, and the new `epochs` entry. That entry carries
+   `base_cursor: {epoch: E, seq: S}` and `base_holes` copied from the open holes. The fence
+   envelope keeps those tasks in `withheld`, so a follower that imports the fence does not
+   treat the published bytes as current. Later publications of the new epoch keep listing
+   an unresolved hole until rejoin applies it or the operator resolves the hold. Compare-and-swap
+   the fence against `T`. On failure, stop. Nothing local has changed. A moved tip means the
+   owner or another taker is alive.
 5. **Promote.** Move the mirror into the canonical partition through the restore path's staged,
    rolled-back import ([ORB-11076]). Advance the allocator to `id_base` with the existing
    `bump_allocator_to_at_least`. Bind the workspace's task prefix to this host for the
    partition. Flip the checkout to owner. Record epoch `E + 1`.
 6. **Hold inherited execution.** Every task the base shows as `in-progress` or `review` has no
    claim on the new owner, because claims are never mirrored. Such a task gets the reconcile
-   hold `orphaned_by_takeover`. Pull does not admit it and landing does not land it until the
-   operator recovers it (§7.3).
+   hold `orphaned_by_takeover`. Every task named in `base_holes` gets `withheld_at_takeover`,
+   whether or not it was in progress. Pull does not admit a held task and landing does not
+   land it. For a hole, the bytes in the tree are the last published version, not the withheld
+   update. `withheld_at_takeover` stays until rejoin applies that update or records a conflict,
+   or until the operator resolves the hold knowing the old store is gone (§7.4). An
+   `orphaned_by_takeover` hold stays until the operator recovers the task (§7.3).
 7. **Repoint followers.** Other followers learn the new epoch from the branch at their next
    startup, branch fetch or poke failure. They then use §4.3.
 
 **Data-loss window.** The new owner lacks every write the old owner committed after the base
-cursor `(E, S)`. Two things bound that window:
+cursor `(E, S)`, and every write named in `base_holes` even when its seq is at or below `S`.
 
-- **Visibility loss (until rejoin).** The writes in `(S, old head]`. In time, this is the mirror
-  staleness at takeover (§2.5): at most one refill interval with a drain running, at most the
-  5-minute poke interval when idle, and no more than the old owner's last publication lag
-  (15 minutes at most) when the base comes from git. A takeover therefore misses at most about
-  15 minutes of the old owner's writes when it could reach git, and usually under 5.
+- **Included visibility loss (until rejoin).** The writes in `(S, old head]` for tasks the base
+  includes. In time, this is the mirror staleness at takeover (§2.5): at most one refill
+  interval with a drain running, at most the 5-minute poke interval when idle, and no more
+  than the old owner's last publication lag (15 minutes at most) when the base comes from a
+  complete git snapshot. A takeover from a complete snapshot therefore misses at most about
+  15 minutes of included writes when it could reach git, and usually under 5. This bound does
+  not cover a withheld task.
+- **Withheld updates (until rejoin).** A deny match keeps the new prose out of every snapshot
+  for as long as the match lasts. That can be indefinite, so `withheld_seq` can sit below
+  `change_seq` with no time limit. The base records the gap as a hole. The published bytes
+  are not the acknowledged update. Rejoin recovers the hole from the old owner's store
+  (§7.2, §7.4). There is no shorter bound.
 - **Split-brain writes.** An old owner that is alive but cut off from the taker keeps accepting
   writes until it learns of the new epoch. That happens at its next publication attempt, within
   `max_lag` of its next write when it can reach git, or at a probe from a follower that knows
   the epoch. If it is cut off from git and from every follower, the period has no bound, and
   those writes wait for rejoin.
-- **Permanent loss.** Only if the old owner's store never comes back. Then the visibility window
-  above is lost for good, along with attachment blobs the mirror had not fetched and every
-  host-local record on that host.
+- **Permanent loss.** Only if the old owner's store never comes back. Then the included
+  visibility window and every still-open withheld hole are lost for good, along with
+  attachment blobs the mirror had not fetched and every host-local record on that host.
+  Resolving `withheld_at_takeover` without the old store is that acknowledgement for the
+  holed task. It does not invent the withheld prose.
 
-Writes from both windows are recovered at rejoin (§7). Some arrive as conflicts.
+Writes from the included window, the withheld holes and the split-brain window are recovered
+at rejoin (§7). Some arrive as conflicts. Denied prose is recovered into the canonical store
+over `orbit.authority.reconcile` and is not published (§3.3). A later snapshot withholds it
+again when the deny pattern still matches.
 
 ### 5.3 Automatic takeover
 
@@ -543,15 +609,27 @@ It never drains as owner again without a new fence that names it.
 
 `orbit workspace authority rejoin --confirm` runs on the deposed host:
 
-1. **Divergent set.** The change-log rows of epoch `E` after the fence's `base_cursor.seq`.
-   These are exactly the writes the new owner never saw. If the set is empty, skip to step 4.
+1. **Divergent set.** The change-log rows of epoch `E` after the fence's `base_cursor.seq`,
+   plus every task named in the fence's `base_holes`. A hole is a withheld update at or below
+   that cursor. The scalar range does not select it. The hole is what puts the task in the
+   set. The deposed host sends that task even when the range is empty. If the range and the
+   holes are both empty, skip to step 4. A task that appears in both is sent once.
 2. **Rejoin bundle.** For each divergent task, the deposed host sends its current state in the
-   delta format (§2.3). It adds its live claims, runs, handoffs and preserved branches as
-   `orphaned_claim` records (§7.3), and its CI rerun facts.
+   delta format (§2.3). A base hole is sent from the task's current store record, not from a
+   retained change-log row: log retention (§2.1) can drop the row without dropping the task.
+   If that task record itself is gone, the bundle names the hole as
+   `withheld_update_unavailable` and does not send the published bytes as if they were
+   current. The bundle also adds live claims, runs, handoffs and preserved branches as
+   `orphaned_claim` records (§7.3), and the CI rerun facts.
 3. **Apply on the new owner.** The new owner applies the bundle through the operator-only
    `orbit.authority.reconcile`. It is idempotent by
-   `(old machine, old epoch, highest divergent seq)`. The base version is the task in the fence
-   commit's tree, the new owner's state at takeover. The rules:
+   `(old machine, old epoch, highest seq among the divergent rows and the hole withheld_seqs)`.
+   The base version is the task in the fence commit's tree. When a hole still has published
+   bytes, that base is the previous version, not the withheld update. Prose fields (description,
+   acceptance, plan and execution summary) follow the field rule below. They are not
+   append-only. A hole whose task is absent from the fence tree is imported with the same ID
+   when its number is within
+   `prior_id_ceiling`. That task was withheld, not minted after the base. The rules:
 
    | Old-side change since base | New-side state since base | Result |
    |---|---|---|
@@ -564,7 +642,12 @@ It never drains as owner again without a new fence that names it.
    | Deletion | Anything | Conflict entry: Orbit never deletes automatically |
 
    Every applied change gets a history event with `origin: rejoin`, the old epoch and the old
-   machine.
+   machine. Applying a hole does not write the payload to the publication branch. When the
+   applied prose still matches a deny pattern, the next publication withholds it again (§3.3).
+   Followers of the new owner refetch it from that owner when the owner is reachable. An
+   applied hole clears `withheld_at_takeover`. A conflict result replaces that hold with
+   `authority_conflict`. `withheld_update_unavailable` is an unresolved conflict: the
+   published bytes stay labelled incomplete, and the hold is not cleared by guessing.
 4. **Retire and follow.** The deposed host renames its canonical partition to
    `retired:<workspace_id>:e<E>`, read-only and kept for audit. It flips its checkout to a
    replica of the new owner and rebuilds its mirror from git and the delta.
@@ -594,6 +677,43 @@ Execution state belongs to the epoch that admitted it. It never crosses an epoch
 
 Re-queueing an orphaned task later might adopt its preserved branch instead of starting over.
 That is a separate design. This proposal only preserves the evidence.
+
+### 7.4 Worked example: a withheld update below the snapshot cursor
+
+Epoch `E`. The owner has acknowledged both writes locally.
+
+1. Task A changes at seq 41. Its new prose matches a deny pattern. No publication includes
+   that prose. The change log still holds the row.
+2. Task B changes at seq 42. B's prose is clean. The debounced publication runs. The tree
+   contains A's previously published bytes and B's seq-42 state. The envelope has
+   `change_seq: 42` and
+   `withheld: [{task_id: A, reason: prose_deny, epoch: E, withheld_seq: 41}]`.
+   A's seq-41 prose is not in the commit.
+3. **Git bootstrap.** The owner is unreachable. A fresh follower imports that tip. Its scalar
+   cursor becomes `(E, 42)` and it records an open hole `(A, 41)`. It does not treat A as
+   current. The refetch cannot run, so the hole stays open.
+4. **Takeover.** The follower takes over. Its mirror was just imported and sits at
+   `(E, 42)` with the hole still open, so the base is that tip. The fence records
+   `base_cursor: {epoch: E, seq: 42}` and
+   `base_holes: [{task_id: A, reason: prose_deny, epoch: E, withheld_seq: 41}]`.
+   Promotion copies the tree, including stale A, and does not publish the denied prose. A receives
+   `withheld_at_takeover`. Pull will not admit A and landing will not land it. B is current.
+5. **Rejoin.** The old owner returns with head 42 and stands down. The divergent set is the
+   rows of epoch `E` with seq greater than 42, which is empty, plus the fence's base holes,
+   which is A. The deposed host sends A's current store record. The new owner has not changed
+   A, so the field rule applies A's seq-41 prose and clears `withheld_at_takeover`. The apply
+   writes a history event with `origin: rejoin`. The payload is not published. If the new
+   owner had edited A, both versions and the stale published base would be kept as an
+   `authority_conflict`, and that hold would replace `withheld_at_takeover`. Either way the
+   seq-41 update is not dropped.
+6. **After rejoin.** If A's prose still matches the deny pattern, the next snapshot withholds
+   it again. Followers refetch A from the new owner when that owner is reachable. Git still
+   does not store the denied prose.
+7. **Bound.** B's seq-42 state is in the tree, so the base includes B and rejoin does not
+   have to recover it. The 15-minute figure in §5.2 is only for included writes, and only
+   when the snapshot is complete. It does not cover A. A's withheld update can sit below
+   `change_seq` for as long as the deny match lasts. Rejoin recovers it. It is permanent
+   only if the old store never returns.
 
 ## 8. Compatibility and rollout
 
@@ -668,9 +788,10 @@ cannot fail over, and its behaviour is unchanged.
 | Failure | Behaviour |
 |---|---|
 | Owner unreachable during a poke | Mirror frozen and labelled. Failure counted. No takeover, no claim change |
-| Cursor older than retention | `cursor_expired`. Rebootstrap from git, then the delta |
+| Cursor older than retention | `cursor_expired`. Rebootstrap from git, including its holes (§3.3), then the delta |
 | JSONL length mismatch in a delta | Refetch that task whole. Never splice |
-| Publication blocked by a prose deny match | That task's new version is withheld, the previous version stays, and the operator gets a notice |
+| Publication hits a prose deny match | That task's new prose is withheld and recorded as a hole (§3.3). The previous bytes stay in the tree. The operator gets a notice. Denied prose is not in the commit. Takeover copies the hole into `base_holes`; rejoin recovers it |
+| Handoff catch-up leaves a hole | Stop before the fence. The owner stays owner. A withheld update is not dropped |
 | Compaction refused by branch protection | Compaction disabled and reported. Normal publication continues |
 | Handoff preflight or catch-up digest mismatch | Stop before freezing, or unfreeze. The owner stays owner |
 | Crash during handoff before the fence | The old owner unfreezes on restart. Rerun the handoff |
@@ -679,7 +800,7 @@ cannot fail over, and its behaviour is unchanged.
 | Takeover compare-and-swap loses | Nothing changes locally. The owner or another taker is alive |
 | Old owner restarts with Git unreachable | Acts on its local epoch record and warns (§10) |
 | Settlement for a claim from an older epoch | `claim_from_prior_epoch`. The candidate becomes an `orphaned_claim` conflict entry |
-| Rejoin replayed | Idempotent by `(machine, epoch, highest seq)` |
+| Rejoin replayed | Idempotent by `(machine, epoch, highest seq)`, including hole `withheld_seq` values |
 
 ## 10. Concerns & Honest Limitations
 
@@ -691,8 +812,11 @@ cannot fail over, and its behaviour is unchanged.
   restarts while still cut off, it trusts its local record. Its writes come back at rejoin, some
   as conflicts. Its IDs can overflow the range after about 5–10 days at today's rates and are
   then renumbered.
-- **A takeover loses visibility of the old owner's last few minutes** (§5.2) until the old
-  owner rejoins, and loses them for good if its disk never returns.
+- **A takeover loses visibility of the old owner's last few minutes of included writes**
+  (§5.2) until the old owner rejoins, and loses them for good if its disk never returns.
+  A task withheld by a prose deny pattern is outside that bound. It can be missing from
+  git for as long as the pattern matches. Rejoin recovers it from the old store (§7.4).
+  A store that never returns loses it.
 - **Execution history does not move.** Runs, logs, audit and claims stay on the host that
   produced them. After a takeover, the new owner's dashboard and run inspection start empty
   for the old epoch.
@@ -721,7 +845,9 @@ cannot fail over, and its behaviour is unchanged.
    (for example 10 minutes) trade write availability for unattended failover?
 2. **Sync frequency.** Are the defaults right: a 5-minute idle poke, publication after a
    2-minute quiet period or 15 minutes at most, and a delta on every drain call? Tighter
-   values shrink the takeover window (§5.2) and cost more owner reads and more Git commits.
+   values shrink the included-write window (§5.2) and cost more owner reads and more Git
+   commits. They do not bound a withheld hole. That lasts until the deny match clears or
+   rejoin recovers it.
 3. **Conflict-review surface.** CLI plus dashboard panel plus operator MCP tool (§7.2). Is the
    dashboard panel enough, or should conflicts also reach you as decision items through the
    human-decision channel?
@@ -740,6 +866,7 @@ cannot fail over, and its behaviour is unchanged.
 ## Task References
 
 - [ORB-20620] — wrote this proposal.
+- [ORB-20639] — made a withheld update below `change_seq` recoverable at rejoin.
 - [ORB-12528] — landed the task commit boundary the change log would join.
 - [ORB-11076] — implemented the staged, rolled-back restore that takeover promotion reuses.
 - [ORB-11110] — made publication an exact compare-and-swap, the fence this design relies on.

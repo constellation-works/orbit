@@ -1,8 +1,8 @@
 ---
 title: Owner Failover — Decisions
 owner: claude
-last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Proposed
 feature: owner-failover
 doc_role: decisions
@@ -145,8 +145,11 @@ new range. A planned handoff, with writes frozen, starts at the allocator's next
 
 ### Context
 
-A rejoining old owner may hold writes from after the takeover base, and the new owner may
-have changed the same tasks. Timestamps come from two clocks and say nothing about intent.
+A rejoining old owner may hold writes from after the takeover base, and it may hold a
+withheld update from at or below that base when the snapshot did not include it
+([2_design.md §3.3](./2_design.md#33-redaction-at-higher-frequency) and
+[§7.2](./2_design.md#72-reconciling-divergent-writes)). The new owner may have changed the
+same tasks. Timestamps come from two clocks and say nothing about intent.
 The retired Task Sync proposal needed operation replay and structured conflict resolution to
 merge writers. That is the machinery this design avoids.
 
@@ -157,7 +160,10 @@ history, review-thread entries, consumed budgets) union. A field or status chang
 one side only applies, except changes that reflect execution state. A change made on both
 sides, any deletion, and any change that reflects a claim go to an operator conflict list.
 The affected task is held from admission and landing until each entry is resolved. Neither
-side's timestamp ever decides a winner.
+side's timestamp ever decides a winner. A publication withhold is not a discard. The update
+stays in the old owner's store and joins the divergent set even when its seq is at or below
+the takeover base cursor. The reconcile payload is not published, so denied prose stays out
+of git.
 
 ### Consequences
 
