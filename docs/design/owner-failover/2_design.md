@@ -634,26 +634,57 @@ It never drains as owner again without a new fence that names it.
 `orbit workspace authority rejoin --confirm` runs on the deposed host:
 
 1. **Divergent set.** The change-log rows of epoch `E` after the fence's `base_cursor.seq`,
-   plus every task named in the fence's `base_holes`. A hole is a withheld update at or below
-   that cursor. The scalar range does not select it. The hole is what puts the task in the
-   set. The deposed host sends that task even when the range is empty. If the range and the
-   holes are both empty, skip to step 4. A task that appears in both is sent once.
-2. **Rejoin bundle.** For each divergent task, the deposed host sends its current state in the
-   delta format (§2.3). A base hole is sent from the task's current store record, not from a
-   retained change-log row: log retention (§2.1) can drop the row without dropping the task.
-   If that task record itself is gone, the bundle names the hole as
+   plus every task named in the fence's `base_holes`. These are exactly the task writes the new
+   owner never saw. A hole is a withheld update at or below that cursor. The scalar range does
+   not select it. The hole is what puts the task in the set, so the deposed host sends that task
+   even when the range is empty. A task that appears in both is sent once. The set may be empty.
+   An empty set means only that there is no task state to reconcile in step 3; it proves nothing
+   about host-local execution (§2.4), so it never skips the inventory in step 2 or the apply in
+   step 3. There is no empty-set fast path to step 4.
+2. **Rejoin bundle (always sent).** For each divergent task, the deposed host sends its
+   current state in the delta format (§2.3). A base hole is sent from the task's current store
+   record, not from a retained change-log row: log retention (§2.1) can drop the row without
+   dropping the task. If that task record itself is gone, the bundle names the hole as
    `withheld_update_unavailable` and does not send the published bytes as if they were
-   current. The bundle also adds live claims, runs, handoffs and preserved branches as
-   `orphaned_claim` records (§7.3), and the CI rerun facts.
+   current. Independently of whether that task list is empty, the bundle also inventories and
+   adds, from its own host-local records (§2.4):
+   - every live or interrupted claim, job run, handoff or landing row and preserved branch
+     or open PR it holds for this workspace and epoch, as `orphaned_claim` records (§7.3);
+   - every consumed once-per-head CI rerun fact (`ci_check_rerun_reserved`,
+     `ci_check_rerun`) the new owner does not already hold — in particular any fact recorded
+     after the fence's `base_cursor`, whether or not a task change-log row followed it.
+
+   The bundle is transmitted even when it carries no divergent tasks, and even when the
+   inventory is also empty. Before its first transmission the deposed host persists the
+   bundle and its `rejoin_id` (step 3); a retry retransmits that persisted bundle unchanged
+   rather than re-inventorying. Records discovered after an acknowledged bundle form a
+   further bundle under a new `rejoin_id`. The deposed host does not retire (step 4) until
+   the new owner has acknowledged applying a bundle.
 3. **Apply on the new owner.** The new owner applies the bundle through the operator-only
-   `orbit.authority.reconcile`. It is idempotent by
-   `(old machine, old epoch, highest seq among the divergent rows and the hole withheld_seqs)`.
-   The base version is the task in the fence commit's tree. When a hole still has published
-   bytes, that base is the previous version, not the withheld update. Prose fields (description,
-   acceptance, plan and execution summary) follow the field rule below. They are not
-   append-only. A hole whose task is absent from the fence tree is imported with the same ID
-   when its number is within
-   `prior_id_ceiling`. That task was withheld, not minted after the base. The rules:
+   `orbit.authority.reconcile`. It is idempotent by `rejoin_id`, defined without any divergent
+   sequence:
+
+   `rejoin_id = (old machine, old epoch, base_cursor, inventory_digest)`, where
+   `inventory_digest` is the digest of the bundle's canonical, sorted inventory: its divergent
+   tasks (`task_id`, with the `seq` of each change-log row and each hole `withheld_seq` that
+   selected it), its `orphaned_claim` identities (`task`, `claim`, `run`, `branch`, `pr`,
+   `head`) and its CI rerun fact identities. Each of those lists may be empty; the digest of
+   the empty canonical inventory is well defined, so `rejoin_id` is defined for the fully
+   mirrored, empty-delta rejoin as well. The new owner records every applied `rejoin_id`:
+   replaying a bundle with a recorded `rejoin_id` returns the recorded result and creates no
+   second task change, conflict entry or CI fact. Records the owner already holds are dropped
+   by their own identities (claim/run identity for orphaned execution, fact identity for CI
+   reruns, entry identity for appends), so a later bundle that overlaps an earlier one cannot
+   duplicate them either.
+
+   The base version is the task in the fence commit's tree, the new owner's state at
+   takeover. When a hole still has published bytes, that base is the previous version, not the
+   withheld update. Prose fields (description, acceptance, plan and execution summary) follow
+   the field rule below. They are not append-only. A hole whose task is absent from the fence
+   tree is imported with the same ID when its number is within `prior_id_ceiling`. That task
+   was withheld, not minted after the base. The rules below govern the divergent tasks;
+   `orphaned_claim` records and CI rerun facts are applied as in §7.3 and the `CI rerun fact`
+   row even when there are no divergent tasks to apply them alongside:
 
    | Old-side change since base | New-side state since base | Result |
    |---|---|---|
@@ -672,9 +703,26 @@ It never drains as owner again without a new fence that names it.
    applied hole clears `withheld_at_takeover`. A conflict result replaces that hold with
    `authority_conflict`. `withheld_update_unavailable` is an unresolved conflict: the
    published bytes stay labelled incomplete, and the hold is not cleared by guessing.
-4. **Retire and follow.** The deposed host renames its canonical partition to
-   `retired:<workspace_id>:e<E>`, read-only and kept for audit. It flips its checkout to a
-   replica of the new owner and rebuilds its mirror from git and the delta.
+4. **Retire and follow.** Only after the acknowledgement in step 2, the deposed host
+   renames its canonical partition to `retired:<workspace_id>:e<E>`, read-only and kept for
+   audit. It flips its checkout to a replica of the new owner and rebuilds its mirror from
+   git and the delta.
+
+**Counterexample: fully mirrored in-progress task, empty divergent set.** The follower has
+mirrored every task change through seq 42 with no open hole, including a task in
+`in-progress`, before the old owner goes down. The old owner's claim, run, worktree and
+preserved branch for that task remain only on the old host (§2.4), and no later task write
+occurs. At takeover the follower records `base_cursor = (E, 42)`. On rejoin the old owner's
+head is also 42, so the divergent set is empty. Under the unconditional procedure above: step 2
+still inventories the old host's claim, run, handoff and branch and any consumed CI rerun facts
+and sends them as `orphaned_claim` and CI records with no divergent tasks attached; step 3
+unions the CI facts and records the orphan evidence as conflict entries (§7.3) against the
+task, which already carries the `orphaned_by_takeover` hold from §5.2 step 6, so the operator
+can re-queue it from that evidence instead of from the task status alone. Retransmitting the
+bundle is a no-op: its `rejoin_id` is `(old machine, E, (E, 42), digest of the sorted
+orphan/CI inventory)` — no "highest divergent seq" is needed, and none exists here. Only
+after that apply is acknowledged does step 4 retire the partition. No race is involved:
+the old claim was never mirrored, so an empty task delta cannot stand in for its absence.
 
 **The conflict list.** These are durable owner-side `authority_conflict` rows: task,
 kind, base, old and new versions, origin epoch and machine, and resolution. A task with an
@@ -824,7 +872,7 @@ cannot fail over, and its behaviour is unchanged.
 | Takeover compare-and-swap loses | Nothing changes locally. The owner or another taker is alive |
 | Old owner restarts with Git unreachable | Acts on its local epoch record and warns (§10) |
 | Settlement for a claim from an older epoch | `claim_from_prior_epoch`. The candidate becomes an `orphaned_claim` conflict entry |
-| Rejoin replayed | Idempotent by `(machine, epoch, highest seq)`, including hole `withheld_seq` values |
+| Rejoin replayed | Idempotent by `rejoin_id` (`old machine, old epoch, base_cursor, inventory_digest`, §7.2 step 3), which is defined even with no divergent tasks and covers hole `withheld_seq` values. A replay returns the recorded result and creates no duplicate task change, conflict entry or CI rerun fact; retirement waits for the apply acknowledgement |
 
 ## 10. Concerns & Honest Limitations
 
