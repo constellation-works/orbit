@@ -24,8 +24,8 @@ use super::operations::{
 };
 use crate::governance::operation::{
     CliArgKind, CliHelp, Effect, EnumValue, ParamSpec, ParamType, RETIRED_AGENT_FIELD, Redaction,
-    RetiredField, UnknownFields, both, cli_only, cli_required, defaulted, free_text, mcp_only,
-    preserve_empty, required,
+    RetiredField, UnknownFields, both, cli_only, defaulted, free_text, mcp_only, preserve_empty,
+    required,
 };
 
 /// The hidden wire field that carries `orbit task add` and `orbit task update`
@@ -204,7 +204,10 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 CliArgKind::flag("title"),
                 "Task title",
             ))),
-            free_text(required(defaulted(
+            // Not wire-required: the operator command defaults it to empty, so
+            // the MCP tool's `description` requirement lives in the schema
+            // extension and `shape_input`, as `complexity`'s does.
+            free_text(defaulted(
                 both(
                     "description",
                     ParamType::String,
@@ -213,7 +216,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                     "Task description",
                 ),
                 "",
-            ))),
+            )),
             // The binding key for the task store; an MCP session's own
             // workspace may supply it, and process cwd never does.
             mcp_only(
@@ -287,13 +290,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 ),
                 "medium",
             ),
-            cli_required(both(
+            both(
                 "complexity",
                 ParamType::Enum(TASK_COMPLEXITY_VALUES),
                 "Required for ordinary creation; omit for guarded request_id creation. Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
                 CliArgKind::flag("complexity"),
-                "Task complexity (low, medium, hard, or xhard)",
-            )),
+                "Task complexity (low, medium, hard, or xhard). Required",
+            ),
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),

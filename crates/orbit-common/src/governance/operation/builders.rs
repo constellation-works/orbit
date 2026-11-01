@@ -80,14 +80,6 @@ pub(crate) const fn required(mut param: ParamSpec) -> ParamSpec {
     param
 }
 
-/// Require a parameter's CLI flag although the wire leaves it optional.
-pub(crate) const fn cli_required(mut param: ParamSpec) -> ParamSpec {
-    if let Some(binding) = &mut param.cli {
-        binding.required = true;
-    }
-    param
-}
-
 /// Give a parameter the value the CLI sends when its flag is omitted.
 pub(crate) const fn defaulted(mut param: ParamSpec, default: &'static str) -> ParamSpec {
     param.default = Some(default);

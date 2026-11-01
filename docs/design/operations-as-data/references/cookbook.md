@@ -28,7 +28,7 @@ kinds, `default`, and flag aliases and value names. Phase 3a (task reads,
 [ORB-15937]) built `EnumList`, multi-value flags, optional positionals and
 `CliHelp` (long description, after-help examples, flag order), and showed how
 to migrate part of a noun. Phase 3b (task writes, [ORB-15938]) built `Array`,
-CLI-required flags (`cli_required`), `UnknownFields::Refuse` for a verb that
+`UnknownFields::Refuse` for a verb that
 already refused extras, retired-field wordings, the `GuardedModes::preempt`
 and `schema_extension` tables, and a hidden option object for operator-only
 CLI flags. Phase 3c (task artifacts and locks, [ORB-15939]) built two-segment `cli_path`

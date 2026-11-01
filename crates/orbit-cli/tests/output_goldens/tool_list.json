@@ -2297,7 +2297,7 @@
         "name": "description",
         "description": "Task description markdown",
         "param_type": "string",
-        "required": true
+        "required": false
       },
       {
         "name": "workspace",
