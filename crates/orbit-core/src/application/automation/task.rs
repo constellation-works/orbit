@@ -169,6 +169,14 @@ fn task_outcome(
 /// no executor that could still submit evidence for that run. Cancellation,
 /// timeout, interruption and holds keep their existing explicit-recovery
 /// paths and are not proven stopped here.
+///
+/// Terminalization writes the same `workflow_run_failed` block for a
+/// `timeout` and a `cancelled` run, so the history match alone cannot tell
+/// them from `failed`; a local run's own state decides. A timed-out run is
+/// resumed, which re-admits this task, and a retry minted meanwhile would
+/// review the same batch twice. Run ids are machine-local and that block is
+/// written only for the local run, so a foreign run has no state to read and
+/// the history match stands alone.
 fn blocked_run_stopped(runtime: &OrbitRuntime, task: &Task) -> Result<bool, AutomationError> {
     if task.status != TaskStatus::Blocked {
         return Ok(false);
@@ -176,18 +184,20 @@ fn blocked_run_stopped(runtime: &OrbitRuntime, task: &Task) -> Result<bool, Auto
     let Some(run_id) = task.job_run_id.as_deref() else {
         return Ok(false);
     };
-    // The history coupling is owner-side evidence, so it proves a claimed
-    // (foreign) run stopped as well as a local one.
-    if blocked_by_failed_run(&runtime.get_task_history(&task.id)?, run_id) {
-        return Ok(true);
-    }
-    if !runtime.task_run_is_local(task) {
+    if !blocked_by_failed_run(&runtime.get_task_history(&task.id)?, run_id) {
         return Ok(false);
     }
-    let run = runtime.show_job_run(run_id)?;
-    Ok(run.state == JobRunState::Failed
-        && crate::application::job::run_owner_liveness(&run)
-            == crate::application::job::RunOwnerLiveness::Stopped)
+    if !runtime.task_run_is_local(task) {
+        return Ok(true);
+    }
+    match runtime.show_job_run_observed(run_id) {
+        Ok(run) => Ok(run.state == JobRunState::Failed),
+        Err(OrbitError::NotFound {
+            kind: NotFoundKind::JobRun,
+            ..
+        }) => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Whether the task's latest status transition is the block its coupled
