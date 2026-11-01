@@ -10,7 +10,10 @@
 // restored after a success or a failure), the Health rail count, that a
 // cached read delayed in transit past a newer refresh or a host switch never
 // replaces what the panel shows, and that no request carries anything but
-// the read-only parameters. No Orbit
+// the read-only parameters. Each remediation's copy control is legible at 1440
+// and 375 (no content text under 11px by ui.undersized-text, with an
+// undersized negative control still flagged), does not cover its command, and
+// copies from the keyboard. No Orbit
 // store, dashboard, SSH session or host is contacted.
 import { pathToFileURL } from 'node:url';
 import http from 'node:http';
@@ -243,7 +246,7 @@ const pageErrors = [];
 const evidenceLog = {};
 
 const capture = async (name) => {
-  for (const width of [1440, 768]) {
+  for (const width of [1440, 768, 375]) {
     await page.setViewportSize({ width, height: 900 });
     await page.waitForTimeout(100);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -276,6 +279,79 @@ const railCount = () => page.locator('#rail-count-diagnostics').evaluate((node) 
   lines: node.getClientRects().length && Math.round(node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight)),
   clipped: node.getBoundingClientRect().right > node.closest('.tab').getBoundingClientRect().right,
 }));
+
+// ui.undersized-text (scripts/ux-rules/ui/undersized-text.mjs), measured over
+// the whole document as the rule does: content tags under the 11px floor,
+// except uppercase text tracked at 5% of its size (an overline).
+const UNDERSIZED_FLOOR_PX = 11;
+const NEGATIVE_CONTROL_TEXT = 'Undersized control';
+const undersizedText = () => page.evaluate((floor) => {
+  const tags = new Set(['P', 'LI', 'TD', 'TH', 'DD', 'DT', 'BUTTON', 'A', 'LABEL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SELECT', 'INPUT', 'TEXTAREA', 'OPTION', 'SUMMARY']);
+  let matched = 0;
+  const found = [];
+  for (const el of document.querySelectorAll('*')) {
+    if (!tags.has(el.tagName) || el.closest('svg')) continue;
+    const text = (el.textContent ?? '').trim();
+    if (text.replace(/[^A-Za-z0-9]/g, '').length < 4) continue;
+    const nested = [...el.querySelectorAll('*')].some((child) => [...child.childNodes].some((node) => node.nodeType === 3 && node.textContent.trim() !== ''));
+    if (nested) continue;
+    const style = getComputedStyle(el);
+    const size = parseFloat(style.fontSize);
+    if (!(size > 0)) continue;
+    const overline = style.textTransform === 'uppercase' && parseFloat(style.letterSpacing) >= size * 0.05;
+    if (overline) continue;
+    matched += 1;
+    if (size < floor) found.push({ tag: el.tagName, text: text.slice(0, 40), fontSize: size });
+  }
+  return { matched, found };
+}, UNDERSIZED_FLOOR_PX);
+// A genuinely undersized button (10.5px, the original copy-control size) that
+// the same measurement must flag, so a clean view cannot be a vacuous pass.
+const undersizedNegativeControl = async () => {
+  await page.evaluate((text) => {
+    const control = document.createElement('button');
+    control.dataset.negativeControl = 'undersized-text';
+    control.type = 'button';
+    control.textContent = text;
+    control.style.fontSize = '10.5px';
+    document.body.append(control);
+  }, NEGATIVE_CONTROL_TEXT);
+  try {
+    return await undersizedText();
+  } finally {
+    await page.evaluate(() => document.querySelector('[data-negative-control="undersized-text"]')?.remove());
+  }
+};
+// Each remediation copy control: its size, whether it covers or clips its
+// command, and whether it stays inside its remediation row.
+const copyControls = () => page.evaluate(() => {
+  const rect = (node) => node.getBoundingClientRect();
+  return [...document.querySelectorAll('#doctor-body .doctor-command')].map((command) => {
+    const code = command.querySelector('code');
+    const copy = command.querySelector('.doctor-copy');
+    const codeBox = rect(code);
+    const copyBox = rect(copy);
+    const rowBox = rect(command.closest('.doctor-remediation'));
+    // Distinct line tops of the label, so a wrapped "copied!" feedback counts.
+    const label = document.createRange();
+    label.selectNodeContents(copy);
+    const lines = new Set([...label.getClientRects()].map((box) => Math.round(box.top))).size;
+    return {
+      command: code.textContent,
+      title: copy.title,
+      label: copy.textContent,
+      lines,
+      fontSize: parseFloat(getComputedStyle(copy).fontSize),
+      width: copyBox.width,
+      height: copyBox.height,
+      overlapsCommand: codeBox.right > copyBox.left && copyBox.right > codeBox.left
+        && codeBox.bottom > copyBox.top && copyBox.bottom > codeBox.top,
+      commandClipped: code.scrollWidth > code.clientWidth + 1 || code.scrollHeight > code.clientHeight + 1,
+      insideRemediation: copyBox.left >= rowBox.left - 1 && copyBox.right <= rowBox.right + 1
+        && copyBox.top >= rowBox.top - 1 && copyBox.bottom <= rowBox.bottom + 1,
+    };
+  });
+});
 
 try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
@@ -376,7 +452,47 @@ try {
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   assert(copied === 'orbit doctor --fix-stale-locks', `copy puts the command on the clipboard: ${copied}`);
   assert(await page.locator('#doctor-body details.doctor-passing summary').textContent() === '4 passing checks · 1 skipped', 'passing and skipped checks are folded away');
+
+  // The copy controls are legible and usable at desktop and phone widths. They
+  // are measured before the capture so the negative control is gone from the
+  // screenshots, and asserted after it so a failing run still leaves evidence.
+  const legibility = {};
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(100);
+    legibility[width] = { view: await undersizedText(), control: await undersizedNegativeControl(), copy: await copyControls() };
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  evidenceLog.legibility = legibility;
   await capture('cached');
+  for (const width of [1440, 375]) {
+    const { view, control, copy } = legibility[width];
+    assert(view.matched > 0, `the undersized-text check matched content text at ${width}px: ${JSON.stringify(view)}`);
+    assert(view.found.length === 0, `no content text in the Doctor view is under 11px at ${width}px: ${JSON.stringify(view.found)}`);
+    assert(control.found.some((item) => item.text === NEGATIVE_CONTROL_TEXT), `the undersized negative control is flagged at ${width}px: ${JSON.stringify(control)}`);
+    assert(copy.length === 3, `each remediation command has its copy control at ${width}px: ${JSON.stringify(copy)}`);
+    for (const item of copy) {
+      assert(!item.overlapsCommand && !item.commandClipped, `the copy control neither covers nor clips ${item.command} at ${width}px: ${JSON.stringify(item)}`);
+      assert(item.insideRemediation, `the copy control stays inside its remediation row at ${width}px: ${JSON.stringify(item)}`);
+      assert(item.lines === 1, `the copy label "${item.label}" stays on one line at ${width}px: ${JSON.stringify(item)}`);
+      assert(item.width >= 24 && item.height >= 24, `the copy control is a 24px target at ${width}px: ${JSON.stringify(item)}`);
+    }
+  }
+
+  // Keyboard: Tab from the report region reaches the third copy control, which
+  // shows its focus ring and copies its command on Enter.
+  await page.locator('#doctor-body').focus();
+  for (let i = 0; i < 3; i += 1) await page.keyboard.press('Tab');
+  const focused = await page.evaluate(() => {
+    const node = document.activeElement;
+    const style = getComputedStyle(node);
+    return { title: node.title, focusVisible: node.matches(':focus-visible'), outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+  });
+  evidenceLog.keyboardFocus = focused;
+  assert(focused.title === 'Copy: orbit doctor' && focused.focusVisible && focused.outlineStyle === 'solid' && focused.outlineWidth === '2px',
+    `keyboard focus reaches the copy control with its focus ring: ${JSON.stringify(focused)}`);
+  await page.keyboard.press('Enter');
+  await until('the keyboard copy', async () => (await page.evaluate(() => navigator.clipboard.readText())) === 'orbit doctor');
 
   // 2. The dashboard's own refresh only peeks; it never runs doctor.
   const before = doctorRequests().length;
@@ -511,6 +627,9 @@ try {
     assertions: [
       'browser-doctor-rows-show-full-message-and-remediation',
       'browser-doctor-remediation-commands-copy',
+      'browser-doctor-copy-controls-legible-and-usable',
+      'browser-doctor-undersized-text-clear-with-negative-control',
+      'browser-doctor-copy-control-keyboard-focus-and-copy',
       'browser-doctor-cached-report-shows-age',
       'browser-doctor-refresh-runs-again',
       'browser-doctor-first-run-shows-busy-state',
@@ -528,7 +647,7 @@ try {
     viewports: ['1440', '768', '375'],
     ...evidenceLog,
   }, null, 2)}\n`);
-  console.log('Dashboard doctor browser checks passed at 1440px and 768px: rows, remediation copy, cached age, Refresh, peek-only polling, host forward and unavailable host.');
+  console.log('Dashboard doctor browser checks passed at 1440px, 768px and 375px: rows, remediation copy legibility and keyboard use, cached age, Refresh, peek-only polling, host forward and unavailable host.');
 } catch (error) {
   fs.writeFileSync(path.join(evidence, 'doctor-assertions.json'), JSON.stringify({ passed: false, error: error.message, pageErrors, ...evidenceLog }, null, 2));
   throw error;
