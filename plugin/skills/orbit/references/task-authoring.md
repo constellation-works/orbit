@@ -131,6 +131,49 @@ On `orbit.task.add`, `model` may be your full model id (`claude-opus-5-5`):
 `model` never sets `orchestrator_model`: that comes from the `orchestrator`
 crew's configuration unless you override it.
 
+### Work only a human can do
+
+Credentials, approvals, physical access and operator-only decisions go to the
+human, not an agent. Set `crew` to the human-kind crew. Find it with
+`orbit config show`, which lists a human crew with provider `human`, or
+`orbit config get crews.<name>.kind` (answers `human`). Choose the sole human
+crew, or the one matching the affected operator; if several are ambiguous, use
+the fallback. A human crew never bypasses an agent gate: the task is never
+dispatched, and an agent still cannot close it.
+
+With no matching human crew, do not assign an agent. File a setup chore tagged
+`setup`, `needs-operator` and `no-auto-approve` that asks the operator to add
+a human crew (`orbit init --human-name <name>`), and leave it `proposed`.
+
+Keep the body short; nobody reads a wall of text. In plain words, it has:
+
+1. a 1-2 line what and why;
+2. numbered steps;
+3. every command in its own fenced `sh` block, ready to copy and run;
+4. a closing `Verify:` line with one fenced command.
+
+Put long evidence in a task artifact, not the body. Filing a human-crew task
+returns a warning for missing numbered steps, no fenced block, no `Verify`
+block, or a body over 2000 characters; fix the body with `orbit.task.update`.
+Example:
+
+````text
+Rotate the expired GitHub token on the CI host; CI sweeps fail without it.
+
+1. Create a token: https://github.com/settings/tokens (repo, workflow)
+2. Install it:
+
+```sh
+gh auth login --with-token < token.txt
+```
+
+Verify:
+
+```sh
+gh auth status
+```
+````
+
 Implicit complexity, tag and context-file edits preserve the crew and crew source
 of admitted work, including work awaiting setup, in progress or under review.
 Stopped deliveries and preserved candidates keep that attribution until a fresh

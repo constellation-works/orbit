@@ -3073,6 +3073,32 @@
         "## Safe evidence",
         "## Windows, signatures and recurrence"
       ],
+      "digest": "235bab9796dc58085fb123cfc54e574333fa1e5b0e1a6f2f4bc3e1dc77710d32",
+      "revision": "8265466506be352e9b942c70095702ddc31b98b5",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * *"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
       "digest": "b0854dd74649335ced56c259ab8cf9e0c325cc883378e90384712534f6fd24ed",
       "revision": "a9fb991e3c53da61b874a87133c1f69756d72ec4",
       "settings": {
@@ -3193,6 +3219,31 @@
         "tags": [
           "pilot-block-patterns",
           "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "eba98d7549890535ee4f2e4d64042e51fd8df426636a072f272c39031023a932",
+      "revision": "a722742b68edfa9789508a6a90b838604a130511",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
         ]
       }
     }

@@ -30,6 +30,7 @@ mod finding_verification;
 pub(crate) mod finding_verification_steps;
 mod grants;
 mod helpers;
+mod human_format;
 mod job_port;
 pub(crate) mod legacy_decisions;
 mod lifecycle;
