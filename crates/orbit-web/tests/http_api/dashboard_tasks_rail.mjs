@@ -1470,3 +1470,77 @@ assertCommentPreferences(unavailableThread, false, false);
 unavailableThread.querySelector('.comment-pref').dispatch('click');
 unavailableThread.querySelector('.section-title').dispatch('click', { target: unavailableThread.querySelector('.field-toggle') });
 assertCommentPreferences(unavailableThread, true, true);
+
+// "Waiting on you" reads the open decision ids from /api/decisions: an answered
+// decision leaves the chip count and filter without a reload, and a workspace
+// switch drops the ids read for the previous workspace.
+const waitingBox = Object.assign(new Node('div'), { id: 'task-filter' });
+byId['task-filter'] = waitingBox;
+document.body.appendChild(waitingBox);
+let decisionsServed = [{ task_id: 'ORB-401' }];
+const waitingReads = [];
+context.fetch = async (url, init = {}) => {
+  const path = String(url);
+  if ((init.method || 'GET') === 'POST') {
+    decisionsServed = [];
+    return { ok: true, status: 200, text: async () => '{}', headers: { get: () => null } };
+  }
+  if (path.startsWith('/api/decisions')) {
+    waitingReads.push(path);
+    return { ok: true, status: 200, json: async () => ({ items: decisionsServed }), headers: { get: () => null } };
+  }
+  return new Promise(() => {});
+};
+const waitingTask = { ...task(401), open_decisions: [{ id: 'dec-1', gate: 'block', options: [{ id: 'yes', label: 'Yes' }] }] };
+const quietTask = task(402);
+let waitingTasks = [waitingTask, quietTask];
+const waitingContext = {
+  ...taskContext,
+  getTasks: () => waitingTasks,
+  getTasksMeta: () => ({ total: waitingTasks.length, limit: 50, offset: 0, next_cursor: null }),
+  refreshDashboard: async () => {
+    waitingTasks = waitingTasks.map(entry => (entry.id === 'ORB-401' ? { ...entry, open_decisions: [] } : entry));
+    renderTasks(waitingTasks, waitingContext);
+  },
+};
+const waitingCount = () => waitingBox.querySelector('.waiting-filter .chip-count').textContent;
+const waitingRows = () => taskRows().map(row => row.dataset.key);
+common.setWorkspace('ws_waiting_a');
+tasksModule.namespace.buildChips(waitingContext);
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+assert.equal(waitingReads.length, 1, 'the first chip refresh reads the open decisions');
+assert.equal(waitingCount(), '1', 'the open decision counts');
+waitingBox.querySelector('.waiting-filter').dispatch('click');
+renderTasks(waitingTasks, waitingContext);
+assert.deepEqual(waitingRows(), ['task-ORB-401'], 'the filter keeps the task with an open decision');
+
+// Answering through the decision card: the answered task leaves count and filter.
+const answerDetail = new Node('div');
+const answerCard = modules.get('task-decision.js').namespace.buildDecisionCard(waitingTask, waitingTask.open_decisions[0], answerDetail, waitingContext);
+answerCard.querySelector('.decision-note').value = '';
+answerCard.querySelector('.decision-answer').dispatch('click');
+await settleReads();
+await settleReads();
+assert.equal(waitingReads.length, 2, 'an answered decision reads the open decisions again inside the throttle window');
+assert.equal(waitingCount(), '0', 'the answered decision leaves the chip count without a reload');
+assert.deepEqual(waitingRows(), [], 'the answered decision leaves the filter without a reload');
+
+// A decision raised later, with no open_decisions on the task row, still shows.
+decisionsServed = [{ task_id: 'ORB-402' }];
+modules.get('task-shared.js').namespace.notifyDecisionAnswered();
+renderTasks(waitingTasks, waitingContext);
+await settleReads();
+assert.equal(waitingCount(), '1', 'a decision read after load counts');
+assert.deepEqual(waitingRows(), ['task-ORB-402'], 'a decision read after load filters in its task');
+
+// Switching workspace forgets the ids read for the previous one.
+decisionsServed = [];
+common.setWorkspace('ws_waiting_b');
+waitingTasks = [quietTask];
+renderTasks(waitingTasks, waitingContext);
+assert.equal(waitingCount(), '0', 'the previous workspace\'s waiting task never shows in the next one');
+assert.deepEqual(waitingRows(), [], 'the filter drops the previous workspace\'s decision ids at once');
+await settleReads();
+assert.ok(waitingReads.at(-1).includes('workspace=ws_waiting_b'), 'the next workspace reads its own decisions');
+waitingBox.querySelector('.waiting-filter').dispatch('click');

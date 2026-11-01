@@ -151,5 +151,6 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
   if (!visit.isCurrent()) return;
   taskShared.taskState.taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
   forgetTaskDetailLoad(task.id);
+  taskShared.notifyDecisionAnswered();
   await taskShared.refreshTasks(context);
 }

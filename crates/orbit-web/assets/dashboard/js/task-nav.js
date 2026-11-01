@@ -1,7 +1,7 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
 
-import { captureWorkspaceVisit, panelCanRender, raiseMessageSlot, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
-import { $, taskState, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, STATUS_LABELS } from './task-shared.js';
+import { captureWorkspaceVisit, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
+import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, STATUS_LABELS } from './task-shared.js';
 import { forgetTaskDetailLoad } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, myWorkCrewNames } from './task-crew.js';
@@ -35,6 +35,9 @@ let waitingDecisionTaskIds = null;
 let waitingCountValue = null;
 let waitingFetchAt = 0;
 let waitingFetchPending = false;
+// Advances whenever the cached ids stop being trustworthy (a workspace switch or
+// an answered decision), so a read that began before it is dropped and redone.
+let waitingGeneration = 0;
 export function waitingOnYouFilter() { return waitingOnly; }
 function isOpenTask(t) { return t.status !== "done" && t.status !== "cancelled" && t.status !== "canceled"; }
 export function taskWaitsOnYou(t) {
@@ -46,22 +49,51 @@ export function taskWaitsOnYou(t) {
 function waitingCountFromTasks(context) {
   return taskList(context).filter(taskWaitsOnYou).length;
 }
+// The cache holds the ids of the workspace and moment it was read; forget it so
+// the next chip refresh reads /api/decisions again.
+function invalidateWaitingDecisions() {
+  waitingGeneration += 1;
+  waitingFetchAt = 0;
+}
+function resetWaitingDecisions() {
+  invalidateWaitingDecisions();
+  waitingDecisionTaskIds = null;
+  waitingCountValue = null;
+}
+onWorkspaceChange(resetWaitingDecisions);
+onDecisionAnswered(invalidateWaitingDecisions);
+function sameIds(a, b) {
+  return Boolean(a) && Boolean(b) && a.size === b.size && [...a].every((id) => b.has(id));
+}
+// Throttled: callers on every chip refresh may call it freely.
 async function refreshWaitingCount(context) {
   if (waitingFetchPending || Date.now() - waitingFetchAt < 15000) return;
   // Federated/aggregate: loaded tasks already carry open_decisions and crew,
   // so count locally — a workspace-spanning /api/decisions read has no scope.
-  if (isAggregateView()) { waitingCountValue = waitingCountFromTasks(context); waitingFetchAt = Date.now(); refreshChips(context); return; }
+  if (isAggregateView()) { waitingDecisionTaskIds = null; waitingCountValue = waitingCountFromTasks(context); waitingFetchAt = Date.now(); renderChips(context); return; }
   waitingFetchPending = true;
+  const generation = waitingGeneration;
+  let redo = false;
+  let changed = false;
   try {
     const visit = captureWorkspaceVisit();
     const payload = await fetchJson(visit.path("/api/decisions"));
-    if (!visit.isCurrent()) return;
+    if (!visit.isCurrent() || generation !== waitingGeneration) { redo = true; return; }
     const items = Array.isArray(payload?.items) ? payload.items : [];
-    waitingDecisionTaskIds = new Set(items.map((r) => r && r.task_id).filter(Boolean));
-    waitingCountValue = new Set([...waitingDecisionTaskIds, ...taskList(context).filter(taskWaitsOnYou).map((t) => t.id)]).size;
+    const ids = new Set(items.map((r) => r && r.task_id).filter(Boolean));
+    changed = !sameIds(ids, waitingDecisionTaskIds);
+    waitingDecisionTaskIds = ids;
+    waitingCountValue = new Set([...ids, ...taskList(context).filter(taskWaitsOnYou).map((t) => t.id)]).size;
     waitingFetchAt = Date.now();
-  } catch { waitingCountValue = waitingCountFromTasks(context); waitingFetchAt = Date.now(); }
-  finally { waitingFetchPending = false; refreshChips(context); }
+  } catch {
+    if (generation !== waitingGeneration) redo = true;
+    else { waitingCountValue = waitingCountFromTasks(context); waitingFetchAt = Date.now(); }
+  } finally {
+    waitingFetchPending = false;
+    // Rows filtered by the old ids repaint; otherwise only the chip changes.
+    if (changed && waitingOnly) rerender(context); else renderChips(context);
+    if (redo) refreshWaitingCount(context);
+  }
 }
 
 export function filterTasks(tasks, context) {
@@ -373,7 +405,13 @@ function statusCounts(context) {
   return counts;
 }
 
+// Repaints the chips and keeps the "Waiting on you" decision ids fresh.
 export function refreshChips(context) {
+  renderChips(context);
+  if ($("task-filter")) refreshWaitingCount(context);
+}
+
+function renderChips(context) {
   const container = $("task-filter");
   if (!container) return;
   const activeStatuses = activeStatusSet(context);
@@ -389,16 +427,18 @@ export function refreshChips(context) {
       : chip.dataset.role === "my-work" ? myWorkOnly
       : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
-    if (chip.dataset.role === "waiting") {
-      const c = chip.querySelector(".chip-count");
-      if (c) c.textContent = waitingCountValue != null ? String(waitingCountValue) : String(waitingCountFromTasks(context));
-    }
     if (chip.dataset.role === "my-work") chip.hidden = myWorkCrewNames().length === 0 && !myWorkOnly;
     // ORB-10874: chip state must not rely on the active/inactive color
     // difference alone — aria-pressed exposes it to assistive tech too.
     chip.setAttribute("aria-pressed", on ? "true" : "false");
     const count = chip.querySelector(".chip-count");
-    if (count) count.textContent = status && on && counts ? String(counts.get(status) || 0) : "";
+    if (!count) continue;
+    if (chip.dataset.role === "waiting") {
+      // Always shown, unlike a status count that shows only while its chip is on.
+      count.textContent = String(waitingCountValue != null && !isAggregateView() ? waitingCountValue : waitingCountFromTasks(context));
+    } else {
+      count.textContent = status && on && counts ? String(counts.get(status) || 0) : "";
+    }
   }
 }
 
@@ -648,7 +688,6 @@ export function buildChips(context) {
   waiting.classList.add("waiting-filter");
   waiting.addEventListener("click", () => { waitingOnly = !waitingOnly; navigateTasksHash(context); });
   primary.appendChild(waiting);
-  refreshWaitingCount(context);
   const allChip = chip("All", { role: "all" }, true);
   allChip.addEventListener("click", () => {
     setActiveStatuses(context, new Set(statusOrder(context)));
