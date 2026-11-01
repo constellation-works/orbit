@@ -493,6 +493,29 @@ fn linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority() 
         .unwrap_or_else(|_| runtime.paths().global_dir.clone());
     let authority = global.join("state/recovery-authority");
 
+    // Runtime SQLite object pins must not be ordinary file descriptions:
+    // closing one can release this process's SQLite POSIX locks [ORB-20976].
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::MetadataExt;
+    for suffix in ["", "-wal", "-shm"] {
+        let path = global.join(format!("orbit.db{suffix}"));
+        let pin = resolved
+            .runtime_write_authority
+            .iter()
+            .find(|pin| pin.path == path)
+            .unwrap_or_else(|| panic!("missing runtime pin {}", path.display()));
+        let flags = unsafe { libc::fcntl(pin.handle.as_raw_fd(), libc::F_GETFL) };
+        assert!(
+            flags >= 0 && flags & libc::O_PATH != 0,
+            "{} must use a path-only pin",
+            path.display()
+        );
+        let pinned = pin.handle.metadata().expect("pinned metadata");
+        let actual = std::fs::metadata(&path).expect("runtime file metadata");
+        assert_eq!((pinned.dev(), pinned.ino()), (actual.dev(), actual.ino()));
+        assert!(pinned.is_file());
+    }
+
     // The database and both SQLite sidecars: a writer holding any one of them
     // could inject rows, so the deny has to cover the whole root.
     for name in ["authority.db", "authority.db-wal", "authority.db-shm"] {

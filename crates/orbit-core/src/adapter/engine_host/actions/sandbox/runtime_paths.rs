@@ -56,7 +56,9 @@ pub(super) fn open_runtime_file(root: &Path, file: &Path) -> Result<OwnedFd, Dis
         .ok_or_else(|| runtime_open_error(file, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
     let name = CString::new(name.as_bytes())
         .map_err(|_| runtime_open_error(file, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
-    let flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK;
+    // A path-only pin keeps the mount source stable without an ordinary
+    // SQLite file descriptor whose close could release process-owned locks.
+    let flags = libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW;
     let raw = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
     if raw < 0 {
         return Err(runtime_open_error(file, std::io::Error::last_os_error()));
