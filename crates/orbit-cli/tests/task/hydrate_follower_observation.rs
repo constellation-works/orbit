@@ -146,7 +146,6 @@ fn hydration_through_operator_route_leaves_an_orphaned_leaf_unchanged() {
             log: log.clone(),
             db: follower.global.join("orbit.db"),
             partition: follower.partition_id.clone(),
-            logical: follower.logical_id.clone(),
             orbit_dir: follower.repo.join(".orbit"),
             leaf: LEAF_RUN.to_string(),
             drain: DRAIN_RUN.to_string(),
@@ -206,15 +205,25 @@ fn hydration_through_operator_route_leaves_an_orphaned_leaf_unchanged() {
         wire.contains("--operator") && wire.contains("orbit_workflow_run_observe"),
         "hydration did not call the operator observation route\nwire:\n{wire}"
     );
-    let seeded = wire.find("SEEDED").unwrap_or_else(|| {
-        panic!("the follower run was not seeded after the session opened\nwire:\n{wire}")
+    let seeded = wire.find("SEEDED_BEFORE_START").unwrap_or_else(|| {
+        panic!("the follower run was not seeded before the session started\nwire:\n{wire}")
     });
+    let spawned = wire
+        .find("CHILD_SPAWNED")
+        .unwrap_or_else(|| panic!("the follower server start was not recorded\nwire:\n{wire}"));
+    let first_in = wire
+        .find("IN ")
+        .unwrap_or_else(|| panic!("the follower session received no request\nwire:\n{wire}"));
     let forwarded = wire
         .find("FORWARD_OBSERVE")
         .unwrap_or_else(|| panic!("the observation call was not forwarded\nwire:\n{wire}"));
     assert!(
-        seeded < forwarded,
-        "the orphan must exist only after this session's runtime is open and before observation\nwire:\n{wire}"
+        seeded < spawned && spawned < first_in && spawned < forwarded,
+        "the orphan, drain and reservation must exist before the follower server starts and before observation\nwire:\n{wire}"
+    );
+    assert!(
+        !wire.contains("fixture-prime") && !wire.contains("PRIME "),
+        "cold observation must not prime the runtime before seeding\nwire:\n{wire}"
     );
 
     let db = Connection::open(follower.global.join("orbit.db")).unwrap();
@@ -259,7 +268,6 @@ struct ObservingSsh {
     log: PathBuf,
     db: PathBuf,
     partition: String,
-    logical: String,
     orbit_dir: PathBuf,
     leaf: String,
     drain: String,
@@ -461,10 +469,11 @@ os.execve({binary}, [{binary}] + argv, env)
     write_ssh(bin, &script);
 }
 
-/// SSH during hydration. The follower process is already open before the
-/// orphan exists: a fresh `orbit mcp serve` reconciles stale runs while
-/// opening its workspace, so the orphan is inserted only after a priming
-/// read has opened that runtime and immediately before the real observation.
+/// SSH during hydration. The orphaned leaf, admitting drain and reservation
+/// are written before each `orbit mcp serve` starts. Discovery and the
+/// observation call are separate processes; a second start leaves the stored
+/// rows in place. A cold session that reconciles on open would rewrite them
+/// before observation.
 fn install_observing_ssh(bin: &Path, target: &ObservingSsh) {
     let script = r#"#!/usr/bin/env python3
 import json, os, shlex, sqlite3, subprocess, sys, threading
@@ -474,28 +483,10 @@ argv = shlex.split(sys.argv[-1])
 with open(__LOG__, "a", encoding="utf-8") as evidence:
     evidence.write("ARGV " + sys.argv[-1] + "\n")
 assert argv.pop(0) == "orbit", argv
-env = os.environ.copy()
-env["HOME"] = __HOME__
-env["USERPROFILE"] = __HOME__
-env.pop("ORBIT_MANAGED_RUN_CONTEXT", None)
-env.pop("ORBIT_RUN_ID", None)
-child = subprocess.Popen(
-    [__BINARY__] + argv,
-    cwd=__WORK__,
-    env=env,
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-)
-primed = threading.Event()
 
 def note(text):
     with open(__LOG__, "a", encoding="utf-8") as evidence:
         evidence.write(text)
-
-def pump_err():
-    for line in child.stderr:
-        note("ERR " + line.decode("utf-8", "replace"))
 
 def seed():
     started = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -515,7 +506,7 @@ def seed():
         conn.execute("PRAGMA busy_timeout=5000")
         def insert(run_id, job_id, payload):
             conn.execute(
-                "INSERT INTO job_runs("
+                "INSERT OR IGNORE INTO job_runs("
                 "run_id, workspace_id, job_id, attempt, state, scheduled_at, "
                 "started_at, finished_at, duration_ms, created_at, pid, pid_start_time, "
                 "input_json, executed_on_json) "
@@ -529,7 +520,7 @@ def seed():
         insert(__LEAF__, "task_claimed_pr_pipeline", leaf_input)
         insert(__DRAIN__, "workspace_pull_pipeline", drain_input)
         conn.execute(
-            "INSERT INTO task_reservations ("
+            "INSERT OR IGNORE INTO task_reservations ("
             "reservation_id, workspace_orbit_dir, workspace_id, task_ids_json, files_json, "
             "actor, created_at, expires_at, owner_run_id) "
             "VALUES (?,?,?,?, '[]', 'fixture', ?, '2999-01-01T00:00:00Z', ?)",
@@ -538,22 +529,35 @@ def seed():
         conn.commit()
     finally:
         conn.close()
-    note("SEEDED\n")
+    note("SEEDED_BEFORE_START\n")
+
+try:
+    seed()
+except Exception as error:
+    note(f"SEED_ERROR {error}\n")
+    os._exit(1)
+
+env = os.environ.copy()
+env["HOME"] = __HOME__
+env["USERPROFILE"] = __HOME__
+env.pop("ORBIT_MANAGED_RUN_CONTEXT", None)
+env.pop("ORBIT_RUN_ID", None)
+child = subprocess.Popen(
+    [__BINARY__] + argv,
+    cwd=__WORK__,
+    env=env,
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+note("CHILD_SPAWNED\n")
+
+def pump_err():
+    for line in child.stderr:
+        note("ERR " + line.decode("utf-8", "replace"))
 
 def read_out():
     for line in child.stdout:
-        try:
-            message = json.loads(line.decode("utf-8"))
-        except json.JSONDecodeError:
-            message = None
-        if isinstance(message, dict) and message.get("id") == "fixture-prime" and not primed.is_set():
-            note("PRIME_RESULT " + line.decode("utf-8", "replace"))
-            try:
-                seed()
-            except Exception as error:
-                note(f"SEED_ERROR {error}\n")
-            primed.set()
-            continue
         sys.stdout.buffer.write(line)
         sys.stdout.buffer.flush()
     child.wait()
@@ -572,24 +576,6 @@ for raw in sys.stdin.buffer:
     name = None
     if isinstance(message, dict) and message.get("method") == "tools/call":
         name = (message.get("params") or {}).get("name")
-    if name in observe_names and not primed.is_set():
-        prime = {
-            "jsonrpc": "2.0",
-            "id": "fixture-prime",
-            "method": "tools/call",
-            "params": {
-                "name": "orbit_workflow_run_observe",
-                "arguments": {"id": "jrun-fixture-prime", "workspace": __LOGICAL__},
-            },
-        }
-        blob = (json.dumps(prime) + "\n").encode()
-        note("PRIME " + blob.decode("utf-8"))
-        child.stdin.write(blob)
-        child.stdin.flush()
-        if not primed.wait(60):
-            note("PRIME_TIMEOUT\n")
-            child.kill()
-            os._exit(1)
     if name in observe_names:
         note("FORWARD_OBSERVE\n")
     child.stdin.write(raw)
@@ -609,10 +595,6 @@ os._exit(0)
         .replace(
             "__PARTITION__",
             &serde_json::to_string(&target.partition).unwrap(),
-        )
-        .replace(
-            "__LOGICAL__",
-            &serde_json::to_string(&target.logical).unwrap(),
         )
         .replace(
             "__ORBIT_DIR__",

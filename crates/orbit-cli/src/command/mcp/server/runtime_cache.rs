@@ -29,8 +29,13 @@ pub(super) const OPENED_WORKSPACE_RUNTIME_LOG: &str = "opened a workspace runtim
 /// the files behind them and over both `config.toml` layers, so an edit to the
 /// runtime configuration takes effect on the next call rather than at the next
 /// server restart.
+///
+/// Writable opens and observation opens stay in separate maps. An observation
+/// runtime does not reconcile stale runs or repair tasks; publishing it into
+/// the writable map would make a later ordinary tool skip that reconciliation.
 pub(super) struct WorkspaceRuntimeCache {
-    entries: Mutex<HashMap<String, CachedRuntime>>,
+    writable: Mutex<HashMap<String, CachedRuntime>>,
+    observation: Mutex<HashMap<String, CachedRuntime>>,
 }
 
 /// One built runtime together with the facts it was composed from.
@@ -43,9 +48,9 @@ struct CachedRuntime {
 
 impl CachedRuntime {
     /// `ResolvedWorkspaceSelection::local_root` is deliberately not compared:
-    /// [`orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout_for`] composes
-    /// against the registered checkout's own `.orbit` for both roots, so a
-    /// selection that differs only there yields the same runtime.
+    /// the writable open and the observation open both compose against the
+    /// registered checkout's own `.orbit` for both roots, so a selection that
+    /// differs only there yields the same runtime.
     fn matches(
         &self,
         selected: &ResolvedWorkspaceSelection,
@@ -60,13 +65,15 @@ impl CachedRuntime {
 impl Default for WorkspaceRuntimeCache {
     fn default() -> Self {
         Self {
-            entries: Mutex::new(HashMap::new()),
+            writable: Mutex::new(HashMap::new()),
+            observation: Mutex::new(HashMap::new()),
         }
     }
 }
 
 impl WorkspaceRuntimeCache {
-    /// Reuse the runtime already built for `selected`, or build one and keep it.
+    /// Reuse the writable runtime already built for `selected`, or build one
+    /// and keep it.
     ///
     /// `build` runs outside the cache lock: opening stores blocks on I/O, and
     /// two concurrent builds for the same facts are interchangeable.
@@ -76,50 +83,72 @@ impl WorkspaceRuntimeCache {
         selected: &ResolvedWorkspaceSelection,
         build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
     ) -> Result<Arc<OrbitRuntime>, OrbitError> {
-        let stamp = RegisteredRuntimeStamp::read(global_root, &selected.checkout);
-        if let Some(value) = self.reusable(selected, &stamp) {
-            return Ok(value);
-        }
-        let value = Arc::new(build()?);
-        let mut entries = self.lock();
-        // A racing call may have published an equivalent entry while this one
-        // built; prefer the published runtime so the session converges on one.
-        if let Some(published) = entries
-            .get(&selected.workspace.id)
-            .filter(|cached| cached.matches(selected, &stamp))
-        {
-            return Ok(Arc::clone(&published.value));
-        }
-        // Otherwise this build becomes the entry, replacing whatever stale one
-        // a rebind or an edited registry left behind for this workspace.
-        entries.insert(
-            selected.workspace.id.clone(),
-            CachedRuntime {
-                workspace: selected.workspace.clone(),
-                checkout: selected.checkout.clone(),
-                stamp,
-                value: Arc::clone(&value),
-            },
-        );
-        Ok(value)
+        resolve_kind(&self.writable, global_root, selected, build)
     }
 
-    /// The cached runtime for this selection iff every fact it was built from
-    /// is unchanged. A mismatch reports absent, so the caller rebuilds.
-    fn reusable(
+    /// Reuse the observation runtime already built for `selected`, or build
+    /// one and keep it. Never consults or publishes the writable map.
+    pub(super) fn resolve_observation(
         &self,
+        global_root: &Path,
         selected: &ResolvedWorkspaceSelection,
-        stamp: &RegisteredRuntimeStamp,
-    ) -> Option<Arc<OrbitRuntime>> {
-        self.lock()
-            .get(&selected.workspace.id)
-            .filter(|cached| cached.matches(selected, stamp))
-            .map(|cached| Arc::clone(&cached.value))
+        build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
+    ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+        resolve_kind(&self.observation, global_root, selected, build)
     }
+}
 
-    /// Poisoning is recoverable here: the map is an idempotent build cache, so
-    /// a panic in another call cannot leave it logically inconsistent.
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, CachedRuntime>> {
-        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+fn resolve_kind(
+    entries: &Mutex<HashMap<String, CachedRuntime>>,
+    global_root: &Path,
+    selected: &ResolvedWorkspaceSelection,
+    build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
+) -> Result<Arc<OrbitRuntime>, OrbitError> {
+    let stamp = RegisteredRuntimeStamp::read(global_root, &selected.checkout);
+    if let Some(value) = reusable(entries, selected, &stamp) {
+        return Ok(value);
     }
+    let value = Arc::new(build()?);
+    let mut guard = lock(entries);
+    // A racing call may have published an equivalent entry while this one
+    // built; prefer the published runtime so the session converges on one.
+    if let Some(published) = guard
+        .get(&selected.workspace.id)
+        .filter(|cached| cached.matches(selected, &stamp))
+    {
+        return Ok(Arc::clone(&published.value));
+    }
+    // Otherwise this build becomes the entry, replacing whatever stale one
+    // a rebind or an edited registry left behind for this workspace.
+    guard.insert(
+        selected.workspace.id.clone(),
+        CachedRuntime {
+            workspace: selected.workspace.clone(),
+            checkout: selected.checkout.clone(),
+            stamp,
+            value: Arc::clone(&value),
+        },
+    );
+    Ok(value)
+}
+
+/// The cached runtime for this selection iff every fact it was built from
+/// is unchanged. A mismatch reports absent, so the caller rebuilds.
+fn reusable(
+    entries: &Mutex<HashMap<String, CachedRuntime>>,
+    selected: &ResolvedWorkspaceSelection,
+    stamp: &RegisteredRuntimeStamp,
+) -> Option<Arc<OrbitRuntime>> {
+    lock(entries)
+        .get(&selected.workspace.id)
+        .filter(|cached| cached.matches(selected, stamp))
+        .map(|cached| Arc::clone(&cached.value))
+}
+
+/// Poisoning is recoverable here: the map is an idempotent build cache, so
+/// a panic in another call cannot leave it logically inconsistent.
+fn lock(
+    entries: &Mutex<HashMap<String, CachedRuntime>>,
+) -> MutexGuard<'_, HashMap<String, CachedRuntime>> {
+    entries.lock().unwrap_or_else(PoisonError::into_inner)
 }

@@ -1468,7 +1468,7 @@ This is operator-only (an agent, a managed scan or a worker bound to a claim is
 refused), bounded (default 25 claims, at most 100; `remaining` counts the rest)
 and runs from the owner. It reads each claim's leaf run, and once per drain the
 admitting drain, from the claim's follower through this machine's registered,
-authenticated route to that host (`orbit.workflow.run.show`), and keeps the answer
+authenticated route to that host (`orbit.workflow.run.observe`), and keeps the answer
 as `hydrated` evidence only if the whole tuple matches: the run is the claim's
 bound run, executed on the claim's machine, is a terminal claimed-leaf job
 delivering exactly the claim's task, and its admitting drain ran on that machine
@@ -1486,9 +1486,13 @@ skipped without `--recheck`. When the selection is larger than the limit,
 its last claim; repeat with `--after <that claim-id>` and the same filters to
 visit every selected claim, unsuccessful outcomes included, and likewise
 under `--recheck`. A continuation claim outside the selection is refused.
-The follower's `orbit.workflow.run.show` may
-reconcile a run that has not ended, so hydration accepts only a terminal run and
-reports a live one as `mismatch`; run it after the leaf has ended.
+The follower opens `orbit.workflow.run.observe` and reads the stored records.
+That open, including the workspace discovery that precedes the read, does not
+reconcile stale runs and does not change run, task, or reservation state. A
+nonterminal leaf is `mismatch`; run hydration after the leaf has ended so the
+stored record is terminal. Ordinary `orbit run show` and
+`orbit.workflow.run.show` still reconcile when they open. Hydration still
+accepts only a terminal matching tuple as hydrated evidence.
 
 The owner's dashboard shows the same state, plus the accepted handoff, inside
 the task detail it belongs to — there is no distributed tab, and the panel
