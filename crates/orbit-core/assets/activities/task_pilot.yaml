@@ -487,6 +487,15 @@ spec:
       a site only when source evidence shows it must change, and record why in
       `assessment_rationale`. Do not sweep every registry or caller; a
       same-name action-body-only change adds no registry selector.
+    - Parent module declaration: when the plan creates a new Rust source or
+      test file in a directory whose existing declaration file (`main.rs`,
+      `mod.rs`, `lib.rs` or `<dir>.rs`) must declare it with a `mod`
+      statement, declare that existing file with `file:` and record the
+      reason in `assessment_rationale`. The new file itself stays under the
+      creation-authorization rule (the Existence rule below); never predict
+      a new filename. Do not declare a declaration file for a file the build
+      discovers automatically, such as a crate-root `tests/*.rs` binary. A
+      body-only edit to an existing module adds no declaration selector.
     - Existence, for every selector including companions and wiring sites:
       the anchor must exist at `source_revision`; omit working-tree-only and
       later-commit paths. The one exception is a creation target named by the
