@@ -205,10 +205,8 @@ fn sigterm_is_caught() -> bool {
     let mut action = std::mem::MaybeUninit::<libc::sigaction>::uninit();
     // SAFETY: a null new action only reads the process disposition into the
     // valid out pointer. The struct is initialized on success.
-    assert_eq!(
-        unsafe { libc::sigaction(libc::SIGTERM, std::ptr::null(), action.as_mut_ptr()) },
-        0
-    );
+    let rc = unsafe { libc::sigaction(libc::SIGTERM, std::ptr::null(), action.as_mut_ptr()) };
+    assert_eq!(rc, 0);
     // SAFETY: sigaction succeeded and initialized action above.
     let handler = unsafe { action.assume_init() }.sa_sigaction;
     handler != libc::SIG_DFL && handler != libc::SIG_IGN

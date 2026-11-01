@@ -209,6 +209,8 @@ fn interactive_init_offers_the_os_user_and_re_asks_on_an_agent_crew_name() {
             )
         };
         assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+        // SAFETY: openpty returned 0 (asserted above), so both descriptors are fresh and
+        // owned here; each is wrapped exactly once.
         unsafe {
             (
                 fs::File::from_raw_fd(controller),

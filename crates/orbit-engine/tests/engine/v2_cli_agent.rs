@@ -488,6 +488,8 @@ fn oversized_provider_stream_marks_its_surviving_tool_calls_incomplete() {
             )
             .unwrap();
             let dispatch = |capture_limit: usize, run_id: &str| {
+                // SAFETY: this test runs alone in its own nextest process (.config/nextest.toml);
+                // the variable is set here and removed below, once dispatch has returned.
                 unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, capture_limit.to_string()) };
                 let tmp_audit = tempfile::tempdir().unwrap();
                 let (writer, _store) = build_writer(tmp_audit.path(), run_id).unwrap();
@@ -502,6 +504,7 @@ fn oversized_provider_stream_marks_its_surviving_tool_calls_incomplete() {
                     host: Some(&host),
                 })
                 .unwrap();
+                // SAFETY: same single-test process as the set_var above; dispatch has returned.
                 unsafe { std::env::remove_var(CAPTURE_LIMIT_ENV) };
                 outcome
             };

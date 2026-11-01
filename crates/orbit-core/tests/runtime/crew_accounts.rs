@@ -396,6 +396,8 @@ fn a_crew_budget_gates_the_crew_from_its_own_ledger_spend() {
 /// usage-bar row. A crew with a different credential stays its own account,
 /// and a provider that still has a default-login crew marks nobody.
 fn shared_credential_model_crews_merge_on_the_usage_bar() {
+    // SAFETY: scenario_table! runs this row alone in its own `--exact` child (see
+    // scenarios::run), so no other test thread reads these variables.
     unsafe {
         std::env::set_var("SHARED_CLAUDE_KEY", "shared-claude-fixture");
         std::env::set_var("CREDITS_CLAUDE_KEY", "credits-claude-fixture");

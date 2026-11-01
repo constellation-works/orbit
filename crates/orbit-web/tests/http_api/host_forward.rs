@@ -1187,7 +1187,7 @@ fn forwarded_audit_cursor_walks_the_remote_window_page_by_page() {
 
 // Run the public ticket issuer in the server's HOME without changing the test process environment.
 #[test]
-#[ignore]
+#[ignore = "prints a one-use URL from ~/.orbit/run under HOME; only local_session_ticket runs it"]
 fn local_session_ticket_child() {
     orbit_web::open_dashboard(orbit_web::OpenArgs { no_open: true }).unwrap();
 }

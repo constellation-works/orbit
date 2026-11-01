@@ -500,6 +500,7 @@ fn read_help_on_pty(args: &[&str], flag: &str, width: usize) -> String {
     assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
     // SAFETY: successful openpty returned owned, distinct file descriptors.
     let mut master = unsafe { fs::File::from_raw_fd(master) };
+    // SAFETY: slave is the other owned end of the same openpty pair, wrapped only here.
     let slave = unsafe { fs::File::from_raw_fd(slave) };
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
     test_env::clear_inherited_authority(|name| {

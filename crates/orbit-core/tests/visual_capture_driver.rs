@@ -517,6 +517,13 @@ process.on("exit", () => writeSync(1, String(Date.now() - stoppedAt)));
     );
 }
 
+/// Send `signal` to `pid` through libc `kill`; signal 0 only probes that the process exists.
+#[cfg(unix)]
+fn signal_pid(pid: i32, signal: i32) -> i32 {
+    // SAFETY: kill takes no pointers and has no memory-safety preconditions.
+    unsafe { libc::kill(pid, signal) }
+}
+
 #[cfg(unix)]
 fn pid_file_alive(pid_file: &std::path::Path) -> bool {
     let Ok(text) = std::fs::read_to_string(pid_file) else {
@@ -525,7 +532,7 @@ fn pid_file_alive(pid_file: &std::path::Path) -> bool {
     let Ok(pid) = text.trim().parse::<i32>() else {
         return false;
     };
-    (unsafe { libc::kill(pid, 0) }) == 0
+    signal_pid(pid, 0) == 0
 }
 
 #[cfg(unix)]
@@ -533,9 +540,7 @@ fn kill_pid_file(pid_file: &std::path::Path) {
     if let Ok(text) = std::fs::read_to_string(pid_file)
         && let Ok(pid) = text.trim().parse::<i32>()
     {
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
+        signal_pid(pid, libc::SIGKILL);
     }
 }
 
@@ -689,13 +694,13 @@ fn run_signal_case(signal: i32, signal_name: &str, expected_code: i32) {
     // The fixture must be alive when the signal lands; otherwise the test
     // would not prove cleanup ran after the signal.
     assert_eq!(
-        unsafe { libc::kill(fixture_pid, 0) },
+        signal_pid(fixture_pid, 0),
         0,
         "fixture server {fixture_pid} must be alive before {signal_name} (ORB-20090)"
     );
 
     let before_signal = Instant::now();
-    let sent = unsafe { libc::kill(child.id() as libc::pid_t, signal) };
+    let sent = signal_pid(child.id() as libc::pid_t, signal);
     assert_eq!(
         sent, 0,
         "failed to send {signal_name} to the capture driver"
@@ -707,12 +712,10 @@ fn run_signal_case(signal: i32, signal_name: &str, expected_code: i32) {
             break status;
         }
         if before_signal.elapsed() >= deadline {
-            let fixture_status = unsafe { libc::kill(fixture_pid, 0) };
+            let fixture_status = signal_pid(fixture_pid, 0);
             cleanup_child(&mut child);
-            unsafe {
-                libc::kill(-fixture_pid, libc::SIGKILL);
-                libc::kill(fixture_pid, libc::SIGKILL);
-            }
+            signal_pid(-fixture_pid, libc::SIGKILL);
+            signal_pid(fixture_pid, libc::SIGKILL);
             panic!(
                 "capture driver did not exit within {deadline:?} of {signal_name} \
                  (fixture alive: {fixture_status}); it continued the capture loop \
@@ -738,7 +741,7 @@ fn run_signal_case(signal: i32, signal_name: &str, expected_code: i32) {
     // started must be gone once the driver is gone.
     let start = Instant::now();
     let gone = loop {
-        if unsafe { libc::kill(fixture_pid, 0) } != 0 {
+        if signal_pid(fixture_pid, 0) != 0 {
             break true;
         }
         if start.elapsed() >= Duration::from_secs(5) {
@@ -747,10 +750,8 @@ fn run_signal_case(signal: i32, signal_name: &str, expected_code: i32) {
         std::thread::sleep(Duration::from_millis(20));
     };
     if !gone {
-        unsafe {
-            libc::kill(-fixture_pid, libc::SIGKILL);
-            libc::kill(fixture_pid, libc::SIGKILL);
-        }
+        signal_pid(-fixture_pid, libc::SIGKILL);
+        signal_pid(fixture_pid, libc::SIGKILL);
         let _ = child.wait();
         panic!(
             "fixture server {fixture_pid} remained alive after signalled driver exit (ORB-20090)"
