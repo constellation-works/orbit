@@ -37,8 +37,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, Task, TaskHistoryEntry, TaskStatus,
-    TaskType,
+    CONTEXT_CREATION_AUTHORIZED_EVENT, NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskHistoryEntry,
+    TaskStatus, TaskType,
 };
 use orbit_types::workflow::{
     ChildDispatchPhase, DrainApprovalReport, DrainHoldFinding, DrainWaitingTask, JobRunState,
@@ -150,6 +150,7 @@ fn approval_snapshot(
         let disqualified =
             approval_disqualification(&task.tags, &task.context_files, task.complexity);
         if disqualified != Some(NO_AUTO_APPROVE_TAG)
+            && disqualified != Some(NO_DRAIN_TAG)
             && let Some((_, finding)) =
                 runtime.verified_no_diff(&task.id, task.status, &task.tags)?
         {

@@ -1002,6 +1002,25 @@ fn excluded(pass: &Value, crew: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// A `no-drain` backlog task is claimed by no pull follower.
+fn no_drain_task_is_never_claimed_by_a_pull_follower() {
+    let mut pair = Pair::new(0);
+    let task = backlog_task_with_input(
+        &pair.wire.owner,
+        &pair.owner_repo,
+        "src/no_drain.rs",
+        None,
+        json!({"tags": ["no-drain"]}),
+    );
+    pair.tasks.push(task.clone());
+    let drain = pair.start_drain();
+    let pass = pair.pass(&drain);
+    assert!(error_of(&pass).is_empty(), "{pass}");
+    assert_eq!(pass["admitted"], 0, "{pass}");
+    assert_no_admission(&pair);
+    assert_eq!(pair.owner_status(&task), "backlog");
+}
+
 /// Read-only audit requirements are admitted through the closed owner bridge.
 fn claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created() {
     for tool in ["orbit.search", "orbit.task.list"] {
@@ -2616,6 +2635,7 @@ crate::scenario_table!(
     contract_refusals_do_not_trip_the_breaker_but_genuine_failures_still_do,
     a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run,
     unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf,
+    no_drain_task_is_never_claimed_by_a_pull_follower,
     claimed_workspace_reads_are_satisfiable_before_a_leaf_is_created,
     a_follower_is_handed_only_tasks_its_os_satisfies,
     a_provider_auth_failure_releases_the_claim_and_excludes_the_crew_for_the_window

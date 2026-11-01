@@ -401,7 +401,10 @@ pub fn explain_workspace_auto_readiness(
                     // [ORB-14697] Lifts by itself at the reading's reset;
                     // the detail names the provider, window, used
                     // percent, threshold, reset and skipped crews.
-                    | BacklogTaskExclusionReason::ProviderLimit => {
+                    | BacklogTaskExclusionReason::ProviderLimit
+                    // Tagged `no-drain`: no automatic drain admits it; the
+                    // detail names explicit ship / tag removal.
+                    | BacklogTaskExclusionReason::NoDrainTag => {
                         object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }

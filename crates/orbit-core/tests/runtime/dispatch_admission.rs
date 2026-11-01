@@ -2429,7 +2429,64 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
     }
 }
 
+/// A `no-drain` backlog task is never admitted automatically, reports
+/// `no_drain_tag` in readiness, still ships explicitly, and re-admits after
+/// the tag is removed.
+fn no_drain_task_is_excluded_automatically_but_ships_explicitly() {
+    let (_root, runtime, _repo) = runtime();
+    let held = seed(
+        &runtime,
+        Seed::named("interactive-owned").tags(&["no-drain"]),
+    );
+    let free = seed(&runtime, Seed::named("drain-owned"));
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(admitted(&output), vec![free.id.clone()], "{output}");
+    assert_eq!(
+        excluded_entry(&output, &held.id)["reason"],
+        "no_drain_tag",
+        "{output}"
+    );
+
+    let readiness = default_readiness(&runtime);
+    let entry = readiness_task(&readiness, &held.id);
+    assert_eq!(entry["eligible"], false, "{entry}");
+    assert_eq!(entry["reason"], "no_drain_tag", "{entry}");
+    assert!(
+        entry["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("no-drain")),
+        "{entry}"
+    );
+
+    // Explicit single-task dispatch still runs it.
+    let explicit = list_backlog_tasks(&runtime, json!({"task_ids": [held.id]}));
+    assert_eq!(admitted(&explicit), vec![held.id.clone()], "{explicit}");
+
+    // Removing the tag makes it admissible on the next pass.
+    runtime
+        .update_task_as_human(
+            &held.id,
+            orbit_core::application::task::TaskUpdateParams {
+                tags: Some(Vec::new()),
+                ..Default::default()
+            },
+            "fixture operator".into(),
+        )
+        .unwrap();
+    let after = list_backlog_tasks(&runtime, json!({}));
+    assert!(
+        admitted(&after).contains(&held.id),
+        "tag removal re-admits: {after}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    no_drain_task_is_excluded_automatically_but_ships_explicitly_scenarios,
+    no_drain_task_is_excluded_automatically_but_ships_explicitly
+);
+
 crate::scenario_table!(
     empty_context_is_admitted_on_auto_ship_and_readiness_without_locks_scenarios,
     empty_context_is_admitted_on_auto_ship_and_readiness_without_locks,

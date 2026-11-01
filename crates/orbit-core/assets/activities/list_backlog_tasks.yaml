@@ -192,6 +192,7 @@ spec:
                 - pr_forge_remote_missing
                 - awaiting_footprint
                 - awaiting_exclusive_slot
+                - no_drain_tag
             detail:
               type: string
             conflicts:

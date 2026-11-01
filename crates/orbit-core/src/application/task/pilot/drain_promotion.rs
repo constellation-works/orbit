@@ -23,8 +23,8 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity,
-    TaskDecision, TaskHistoryEntry, TaskStatus, readiness_gaps,
+    NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity, TaskDecision,
+    TaskHistoryEntry, TaskStatus, readiness_gaps,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde::Serialize;
@@ -40,7 +40,8 @@ use crate::application::task::{
 use super::apply::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
 use super::promotion::{
-    PromotionFindings, auto_approval_opted_out, promotion_findings, promotion_task_ids,
+    PromotionFindings, auto_approval_hold_classification, auto_approval_opted_out,
+    promotion_findings, promotion_task_ids,
 };
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
@@ -55,7 +56,7 @@ pub(crate) fn approval_disqualification(
     complexity: Option<TaskComplexity>,
 ) -> Option<&'static str> {
     if auto_approval_opted_out(tags) {
-        return Some(NO_AUTO_APPROVE_TAG);
+        return Some(auto_approval_hold_classification(tags));
     }
     readiness_gaps(ReadinessStage::Proposed, tags, context_files, complexity)
         .into_iter()
@@ -225,7 +226,7 @@ pub(super) fn assess_drain_admission(
     } else if auto_approval_opted_out(&current.tags) {
         (
             PromotionDecision::Withhold,
-            NO_AUTO_APPROVE_TAG,
+            auto_approval_hold_classification(&current.tags),
             Value::Null,
         )
     } else if let Some(finding) = &verified_no_diff {
@@ -379,7 +380,7 @@ pub(super) fn approve(
                 Approval::NotProposed
             } else if auto_approval_opted_out(&task.tags) {
                 Approval::Held {
-                    classification: NO_AUTO_APPROVE_TAG,
+                    classification: auto_approval_hold_classification(&task.tags),
                     evidence: Value::Null,
                 }
             } else if let Some(hold) = runtime.unverified_finding_hold(&task)? {

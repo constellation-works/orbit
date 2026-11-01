@@ -6,7 +6,7 @@ use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionRequest, AdmissionTaskGuidance,
     ExecutorCapability, JobRunQuery,
 };
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{NO_DRAIN_TAG, Task, TaskStatus};
 use orbit_types::tool::{CLAIMED_MODE_DENIED_TOOLS, is_claimed_owner_tool};
 use orbit_types::workflow::JobRunState;
 
@@ -18,6 +18,13 @@ use crate::runtime::run_input::recorded_task_ids;
 
 /// The pull hold for a task assigned to a human crew: operator work no
 /// follower or owner pull claims, matching the local `human_crew` exclusion.
+/// The pull hold for a task tagged `no-drain`: no follower claims it.
+fn no_drain_pull_hold(task: &Task) -> Option<String> {
+    task.tags.iter().any(|tag| tag == NO_DRAIN_TAG).then(|| {
+        format!("{NO_DRAIN_TAG}: tagged `{NO_DRAIN_TAG}`; no automatic drain or follower admits it")
+    })
+}
+
 fn human_crew_pull_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
     let human = runtime.human_crew(task.crew.as_deref())?;
     Some(format!(
@@ -104,6 +111,10 @@ impl OrbitRuntime {
         let machine_id = Some(identity.location().machine_id.as_str());
         let now = chrono::Utc::now();
         for task in &backlog {
+            if let Some(hold) = no_drain_pull_hold(task) {
+                admission_holds.insert(task.id.clone(), hold);
+                continue;
+            }
             // Operator work: no follower claims a human crew's task.
             if let Some(hold) = human_crew_pull_hold(self, task) {
                 admission_holds.insert(task.id.clone(), hold);
@@ -228,6 +239,9 @@ impl OrbitRuntime {
                     && orbit_types::task::has_verify_mock_ui_tag(&task.tags)
                 {
                     return Ok(Some("visual_live_claim_unsupported: owner-verified final-candidate visual resolution is unavailable for claimed delivery".into()));
+                }
+                if let Some(hold) = no_drain_pull_hold(task) {
+                    return Ok(Some(hold));
                 }
                 // Re-read under the section: the crew may have been changed
                 // to a human crew since the backlog read.

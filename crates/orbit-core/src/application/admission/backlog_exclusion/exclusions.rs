@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use orbit_types::task::{
-    ExecutorOsLimit, ReadinessGap, ReadinessStage, Task, browser_kit_wait, readiness_gaps,
-    requires_browser_kit,
+    ExecutorOsLimit, NO_DRAIN_TAG, ReadinessGap, ReadinessStage, Task, browser_kit_wait,
+    readiness_gaps, requires_browser_kit,
 };
 
 use super::super::auto_admission::{DeferralReason, DeferredAdmission};
@@ -115,6 +115,26 @@ pub(super) fn mock_validation_exclusion(
         conflicts: Vec::new(),
         crew: None,
         detail: Some(detail),
+    })
+}
+
+/// The exclusion for a task carrying the reserved `no-drain` tag. Automatic
+/// selection only: the explicit ship override in `listing.rs` deliberately
+/// does not apply it, so `orbit run ship <id>` still runs the task.
+pub(super) fn no_drain_exclusion(task: &Task) -> Option<BacklogTaskExclusion> {
+    if !task.tags.iter().any(|tag| tag == NO_DRAIN_TAG) {
+        return None;
+    }
+    Some(BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::NoDrainTag,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(format!(
+            "tagged `{NO_DRAIN_TAG}`: no automatic drain or follower admits it; \
+             run it explicitly with `orbit run ship <id>`, claim it interactively, \
+             or remove the tag to make it eligible again"
+        )),
     })
 }
 

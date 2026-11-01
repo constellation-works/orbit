@@ -1446,6 +1446,15 @@ description = "Daniel's own work"
 - **Listed.** `orbit config show` lists a human crew with provider `human`, and `orbit config get crews.<name>.kind` answers `human`. For an agent crew, `kind` is absent. The dashboard tags each human-crew task `for <name>`. Its **My work** chip (`#tasks?crew=mine`) keeps the open tasks of the viewer's human crew: the only human crew, or else the one matching the OS user that runs `orbit web serve`.
 - **Seeded by `orbit init`.** When the global config has no human crew, `orbit init` adds one named after the OS user, normalized to lowercase letters, digits, `_` and `-`. At a terminal it prompts with the OS user as the default; without a terminal, or with `--non-interactive`, it takes the OS user as-is. `--human-name <NAME>` sets the name. A name an agent crew already holds is asked again at a terminal and refused otherwise, before init writes anything. A re-run leaves an existing human crew unchanged.
 
+### The `no-drain` task tag
+
+Tag a task `no-drain` when an interactive session owns it and no drain should pick it up. It is a reserved task tag, not a config key; there is no `workflow.drain_exclude_tags` setting.
+
+- **Never admitted automatically.** `orbit run auto` drains, pull-drain followers and any automatic admission pass skip a backlog task carrying `no-drain`. `orbit run readiness` and the backlog-exclusion listing report it with reason `no_drain_tag`.
+- **Implies `no-auto-approve`.** Drain-window auto-approval (`select_proposed_approvals`) never approves a proposed `no-drain` task, even with a clean pilot assessment (held as `no-drain`). Task-pilot may still assess it.
+- **Explicit dispatch still works.** `orbit run ship <id>` runs it, and an agent or human can claim it to `in-progress` and deliver it by hand.
+- **Removable.** Removing the tag with `orbit.task.update` (send the full tag list without `no-drain`) makes it eligible on the next admission pass.
+
 ### Per-crew credentials (`env`)
 
 Every crew of a provider reads its credential from the same agent environment, so by default they share one account. A crew's `env` list points that crew alone at another one, such as an API key with prepaid credits next to a Claude subscription:

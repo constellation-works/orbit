@@ -15,7 +15,7 @@ use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
     browser_kit_exclusion, clears_complexity_gate, host_labels_exclusion, host_os_exclusion,
     human_crew_exclusion, inherited_only_epic_root_exclusion, mock_validation_exclusion,
-    pilot_finding_exclusion, pilot_preparation_exclusion, scheduled_exclusion,
+    no_drain_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion, scheduled_exclusion,
 };
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
@@ -167,6 +167,16 @@ pub(super) fn backlog_snapshot_in_mode(
     // crew is the first reason a task reports.
     backlog.retain(|task| {
         let Some(exclusion) = human_crew_exclusion(runtime, task) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
+    // A `no-drain` task is never admitted automatically. Read every pass, so
+    // removing the tag makes it eligible on the next pass. Explicit ship
+    // (`listing.rs` with named task_ids) does not use this snapshot filter.
+    backlog.retain(|task| {
+        let Some(exclusion) = no_drain_exclusion(task) else {
             return true;
         };
         excluded.push(exclusion);

@@ -715,6 +715,30 @@ fn no_auto_approve_is_held_by_every_promotion_authority() {
     assert_eq!(workspace.status(&filed), TaskStatus::Proposed);
 }
 
+fn no_drain_is_held_by_drain_auto_approval() {
+    let workspace = Workspace::new();
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let held = workspace.task(
+        "interactive-owned proposed",
+        &["no-drain", "no-diff-expected"],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["task_ids"], json!([]), "it costs no pilot work");
+    assert_eq!(held_reason(&selection, &held), Some("no-drain"));
+
+    // The apply boundary holds it even when a drain pilots it anyway, with a
+    // clean assessment.
+    let pilot = workspace.pilot_child(&drain, &json!([held.id]));
+    let applied = workspace
+        .pilot(&drain, &pilot, vec![assessment(&held)])
+        .unwrap();
+    assert_eq!(applied["drain_approval"][0]["classification"], "no-drain");
+    assert_eq!(workspace.status(&held), TaskStatus::Proposed);
+}
+
 fn drain_authority_is_verified_before_any_approval() {
     let workspace = Workspace::new();
     let task = workspace.task("scoped", &[], &["file:README.md"], TaskComplexity::Low);
@@ -1770,6 +1794,7 @@ crate::scenario_table!(
     tasks_filed_mid_window_are_approved_by_tag_or_fields_and_admitted_the_same_pass,
     unqualified_and_pilot_held_tasks_stay_proposed_with_their_reasons,
     no_auto_approve_is_held_by_every_promotion_authority,
+    no_drain_is_held_by_drain_auto_approval,
     drain_authority_is_verified_before_any_approval,
     a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes,
     an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change,
