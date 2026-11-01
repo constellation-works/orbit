@@ -255,8 +255,9 @@ What each addition is for:
   task enum value tables moved to the task registry, so both nouns share them.
 - **`Array`, `CliBinding::required` and hidden option objects** are what the
   task writes (phase 3b) needed. `relations` is an array of typed entries
-  (`Array`). `add --complexity` is required on the CLI while guarded creation
-  over MCP may omit it (`cli_required`). The operator command's options that
+  (`Array`). `add --complexity` is enforced at the handler for ordinary
+  creation, not by the usage line, because guarded creation over MCP may omit
+  it and the wire schema must agree with the CLI's required flags. The operator command's options that
   MCP must not see (`add --plan`, `--status`, `--parent`; `update --approve`,
   `--force`, `--artifact`) travel in one `cli_options` object that is a
   hidden wire field, consumed by the core handler (§9, phase 3b).

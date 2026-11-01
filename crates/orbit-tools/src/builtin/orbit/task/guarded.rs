@@ -89,8 +89,8 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
 pub(super) fn extend_create_schema(value: &mut Value) {
     value["allOf"] = json!([{
         "if":{"required":["request_id"]},
-        "then":{"required":["workspace","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","model","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
-        "else":{"required":["complexity"]}
+        "then":{"required":["workspace","description","acceptance_criteria"],"propertyNames":{"enum":["workspace","request_id","model","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}},"crew":{"type":["string","null"]}}},
+        "else":{"required":["description","complexity"]}
     }]);
     // Nullable crew is used only by guarded creation; ordinary creation still
     // parses and validates its existing field semantics at the host boundary.

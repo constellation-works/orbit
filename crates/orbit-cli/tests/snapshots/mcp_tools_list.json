@@ -950,8 +950,7 @@
         }
       },
       "required": [
-        "title",
-        "description"
+        "title"
       ],
       "additionalProperties": false,
       "allOf": [
@@ -964,6 +963,7 @@
           "then": {
             "required": [
               "workspace",
+              "description",
               "acceptance_criteria"
             ],
             "propertyNames": {
@@ -995,6 +995,7 @@
           },
           "else": {
             "required": [
+              "description",
               "complexity"
             ]
           }
