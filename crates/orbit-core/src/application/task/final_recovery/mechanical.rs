@@ -21,10 +21,12 @@ use chrono::Utc;
 use orbit_common::governance::friction::normalize_title;
 use orbit_store::contracts::FrictionAddParams;
 use orbit_types::record::FrictionStatus;
-use orbit_types::task::{Task, TaskHistoryEntry};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use serde_json::Value;
 
-use super::super::blocked_recovery::{BLOCKED_TASK_TRIAGE_RESUMED_EVENT, blocking_run_of};
+use super::super::blocked_recovery::{
+    BLOCKED_TASK_TRIAGE_RESUMED_EVENT, BlockSource, blocking_run_of,
+};
 use super::super::helpers::SYSTEM_ACTOR_LABEL;
 use super::apply::Plan;
 use super::request::{FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound};
@@ -406,18 +408,46 @@ fn system_entry(event: &str, note: String) -> TaskHistoryEntry {
     }
 }
 
-/// Whether `history` records any head's failure as inherited from the base.
-pub(in crate::application::task) fn records_base_red(history: &[TaskHistoryEntry]) -> bool {
-    history.iter().any(|entry| {
-        BASE_RED_EVENTS
-            .iter()
-            .any(|(event, _)| entry.event == *event)
-    })
+/// The part of `history` that is the task's current block episode, when an
+/// automation-recorded run failure blocked it and the run recorded a failure
+/// as inherited from the base (`pr_auto_fix_base_red`, `ci_base_suspect`).
+///
+/// The episode starts after the task's last move to a status other than
+/// `blocked`, so a base-red entry from an earlier run says nothing about this
+/// block, and an operator's block or a review rejection never qualifies. The
+/// caller compares the recorded head with the pull request's current head
+/// through [`base_red_owner`].
+pub(in crate::application::task) fn base_red_block_episode(
+    history: &[TaskHistoryEntry],
+) -> Option<&[TaskHistoryEntry]> {
+    let start = history
+        .iter()
+        .rposition(|entry| {
+            entry
+                .to_status
+                .is_some_and(|status| status != TaskStatus::Blocked)
+        })
+        .map_or(0, |index| index + 1);
+    let episode = &history[start..];
+    let blocked_by_run_failure = episode
+        .iter()
+        .find(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        .is_some_and(|entry| BlockSource::of(entry).is_some());
+    (blocked_by_run_failure
+        && episode.iter().any(|entry| {
+            BASE_RED_EVENTS
+                .iter()
+                .any(|(event, _)| entry.event == *event)
+        }))
+    .then_some(episode)
 }
 
 /// The base-red event in `history` that records `head`'s failure as
 /// inherited from the base, if any.
-fn base_red_owner(history: &[TaskHistoryEntry], head: &str) -> Option<&'static str> {
+pub(in crate::application::task) fn base_red_owner(
+    history: &[TaskHistoryEntry],
+    head: &str,
+) -> Option<&'static str> {
     BASE_RED_EVENTS.iter().find_map(|(event, field)| {
         history
             .iter()
