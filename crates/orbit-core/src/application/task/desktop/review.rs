@@ -29,6 +29,8 @@ enum PullRequestSource {
         selector: String,
         url: Option<String>,
     },
+    /// The exact native publication, already authenticated against its provider.
+    Native(DesktopPullRequest),
     /// The handoff this owner accepted from the linked foreign run.
     Handoff {
         number: u64,
@@ -112,6 +114,7 @@ impl OrbitRuntime {
             return Ok(None);
         };
         match source {
+            PullRequestSource::Native(pull_request) => Ok(Some(pull_request)),
             PullRequestSource::Reference { selector, url } => {
                 let status = self.read_pull_request_status(&selector)?;
                 let head = status.head_sha.ok_or_else(|| {
@@ -142,8 +145,8 @@ impl OrbitRuntime {
         }
     }
 
-    /// The task's PR reference and the accepted handoff's delivery must name
-    /// one pull request; either alone is enough.
+    /// Select from authenticated execution evidence when references include
+    /// history. An accepted foreign handoff needs no task PR reference.
     fn desktop_pull_request_source(
         &self,
         task: &Task,
@@ -153,40 +156,74 @@ impl OrbitRuntime {
             .iter()
             .filter(|r| r.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
             .collect();
-        if refs.len() > 1 {
-            return Err(invalid(
-                "desktop completion requires one unambiguous PR reference",
-            ));
-        }
         let foreign = self.desktop_foreign_execution(task)?;
-        let handoff = foreign
+        if let Some((number, accepted)) = foreign
             .as_ref()
             .and_then(|foreign| foreign.pull_request_handoff())
-            .map(|(number, accepted)| (number, Box::new(accepted.clone())));
-        match (refs.first(), handoff) {
-            (Some(reference), Some((number, _)))
-                if reference.id != number.to_string()
-                    || reference
-                        .url
-                        .as_deref()
-                        .is_some_and(|url| pull_number(url) != Some(number)) =>
-            {
-                Err(invalid(
-                    "the task's PR reference and its accepted handoff name different pull requests",
-                ))
-            }
-            (_, Some((number, accepted))) => {
-                Ok(Some(PullRequestSource::Handoff { number, accepted }))
-            }
-            (Some(reference), None) => Ok(Some(PullRequestSource::Reference {
-                selector: reference
-                    .url
-                    .clone()
-                    .unwrap_or_else(|| reference.id.clone()),
-                url: reference.url.clone(),
-            })),
-            (None, None) => Ok(None),
+        {
+            let url = format!(
+                "https://github.com/{}/pull/{number}",
+                accepted.handoff.candidate.repository
+            );
+            validate_publication_references(task, number, &url, true)?;
+            return Ok(Some(PullRequestSource::Handoff {
+                number,
+                accepted: Box::new(accepted.clone()),
+            }));
         }
+        if foreign.is_none() && refs.len() > 1 {
+            let proof = self.desktop_native_publication_proof(task)?;
+            let number = proof
+                .number
+                .parse::<u64>()
+                .map_err(|_| invalid("native publication has no exact pull request number"))?;
+            if number == 0 || proof.number != number.to_string() {
+                return Err(invalid(
+                    "native publication has an inexact pull request number",
+                ));
+            }
+            let remote = git2::Repository::open(&self.paths().repo_root)
+                .and_then(|repository| repository.config()?.get_string("remote.origin.url"))
+                .map_err(|_| invalid("native publication repository identity is unavailable"))?;
+            let repository = orbit_types::workspace::git_remote_identity(&remote)
+                .map_err(|_| invalid("native publication repository identity is invalid"))?;
+            let repository = repository.strip_prefix("github.com/").ok_or_else(|| {
+                invalid("native publication requires an exact GitHub repository identity")
+            })?;
+            let url = format!("https://github.com/{repository}/pull/{number}");
+            if proof.url.as_deref() != Some(url.as_str()) {
+                return Err(invalid("native publication URL and repository disagree"));
+            }
+            validate_publication_references(task, number, &url, false)?;
+            let status = self.read_pull_request_status(&number.to_string())?;
+            if status.number != Some(number)
+                || status.url.as_deref() != Some(url.as_str())
+                || status.head_branch.as_deref() != Some(proof.branch.as_str())
+                || status.base_branch.as_deref() != Some(proof.base_branch.as_str())
+                || status.head_sha.as_deref() != Some(proof.head.as_str())
+            {
+                return Err(invalid(
+                    "the provider no longer matches the authenticated native publication",
+                ));
+            }
+            return Ok(Some(PullRequestSource::Native(DesktopPullRequest {
+                head: proof.head,
+                url: Some(url),
+                completion_refusal: None,
+            })));
+        }
+        if refs.len() > 1 {
+            return Err(invalid(
+                "desktop completion requires authenticated current publication evidence for multiple PR references",
+            ));
+        }
+        Ok(refs.first().map(|reference| PullRequestSource::Reference {
+            selector: reference
+                .url
+                .clone()
+                .unwrap_or_else(|| reference.id.clone()),
+            url: reference.url.clone(),
+        }))
     }
 
     /// A handed-off delivery completes only once its own pull request merged
@@ -213,4 +250,47 @@ impl OrbitRuntime {
         }
         self.merged_head_reconciliation_refusal(task, accepted, pull_request)
     }
+}
+
+/// References corroborate authenticated delivery identity; their order has no
+/// authority. Keep historical references while refusing contradictory aliases.
+fn validate_publication_references(
+    task: &Task,
+    number: u64,
+    url: &str,
+    allow_absent: bool,
+) -> Result<(), OrbitError> {
+    let mut associated = false;
+    for reference in task
+        .external_refs
+        .iter()
+        .filter(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
+    {
+        if reference.id == number.to_string() {
+            if reference
+                .url
+                .as_deref()
+                .is_some_and(|reference_url| reference_url != url)
+            {
+                return Err(invalid(
+                    "the task's PR reference contradicts its authenticated publication URL",
+                ));
+            }
+            associated = true;
+        } else if reference
+            .url
+            .as_deref()
+            .is_some_and(|reference_url| pull_number(reference_url) == Some(number))
+        {
+            return Err(invalid(
+                "the task's PR reference contradicts its authenticated publication number",
+            ));
+        }
+    }
+    if !associated && !allow_absent {
+        return Err(invalid(
+            "the task's PR references do not identify its authenticated publication",
+        ));
+    }
+    Ok(())
 }

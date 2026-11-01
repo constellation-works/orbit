@@ -636,16 +636,10 @@ pub(in crate::executor::automation::vcs) fn task_url(
     task: &Task,
     pr_config: &PrConfig,
 ) -> Option<String> {
-    task.external_refs
-        .iter()
-        .find_map(|external_ref| external_ref.url.as_deref())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            pr_config
-                .task_url_template
-                .as_ref()
-                .map(|template| template.replace("{task_id}", &task.id))
-        })
+    pr_config
+        .task_url_template
+        .as_ref()
+        .map(|template| template.replace("{task_id}", &task.id))
 }
 
 /// The pull request title: `pr.title_template` rendered on one line for a

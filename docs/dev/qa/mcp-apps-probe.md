@@ -108,6 +108,13 @@ Existing gate certificates and open findings are projected from canonical review
 evidence when available. A manual desktop verdict is a separate recorded review;
 it does not rewrite a workflow certificate or bypass PR merge checks.
 
+Historical PR references are retained after discard/requeue. When several PRs
+are linked, desktop review selects the current delivery only from the exact
+host-qualified task-bound native run's authenticated successful publication
+chain, or the accepted foreign handoff. References corroborate its identity;
+reference order grants no authority. Missing or contradictory proof and a
+provider repository, number, URL, branch, base or head mismatch refuse review.
+
 The PR head is read from the provider by the PR's exact number or URL, never
 searched for in a recent-PR listing. When the task's linked run executed on
 another machine (`job_run_machine`), completion reads the owner-held claim and

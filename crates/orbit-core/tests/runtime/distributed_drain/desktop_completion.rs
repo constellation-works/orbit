@@ -75,7 +75,8 @@ fn pull_request_is(state: &str, head: &str, base: &str, merge_commit: Option<&st
             "number": 42,
             "state": state,
             "mergedAt": if state == "MERGED" { json!("2026-10-05T06:50:00Z") } else { Value::Null },
-            "headRefName": "orbit/fixture",
+            "headRefName": std::fs::read_to_string(home().join("pr-branch"))
+                .unwrap_or_else(|_| "orbit/fixture".into()),
             "headRefOid": head,
             "baseRefName": base,
             "mergeCommit": merge_commit.map(|oid| json!({"oid": oid})),
@@ -347,6 +348,14 @@ impl Delivery {
         assert!(settled["error"].is_null(), "{settled}");
         assert_eq!(pair.owner_status(&task), "review");
         let claim = pair.wire.owner.distributed_claim_console().unwrap()["claims"][0].clone();
+        std::fs::write(
+            home().join("pr-branch"),
+            claim["handoff"]["candidate"]["source_branch"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+
         let landing = claim["handoff"]["candidate"]["landing_branch"]
             .as_str()
             .unwrap()
@@ -823,6 +832,55 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
         "{shown:#}"
     );
     assert_eq!(shown["external_refs"], json!([]), "{shown:#}");
+
+    // Foreign handoff acceptance need not append a PR reference. Even with
+    // history alone, the exact accepted handoff selects #42.
+    let without_history = delivery.snapshot(McpCapability::Operator).reviewed_head;
+    owner
+        .apply_task_automation_update(
+            task,
+            orbit_engine::TaskAutomationUpdate {
+                external_refs: vec![orbit_types::task::ExternalRef {
+                    system: "github-pr".into(),
+                    id: "7".into(),
+                    url: Some("https://github.com/owner/repository/pull/7".into()),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        delivery.snapshot(McpCapability::Operator).reviewed_head,
+        without_history
+    );
+    owner
+        .apply_task_automation_update(
+            task,
+            orbit_engine::TaskAutomationUpdate {
+                external_refs: vec![orbit_types::task::ExternalRef {
+                    system: "github-pr".into(),
+                    id: "42".into(),
+                    url: Some(PR_URL.into()),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let provider = std::fs::read(home().join("pr.json")).unwrap();
+    for branch in [json!("other-branch"), Value::Null] {
+        let mut wrong: Value = serde_json::from_slice(&provider).unwrap();
+        wrong["headRefName"] = branch;
+        std::fs::write(home().join("pr.json"), wrong.to_string()).unwrap();
+        assert!(
+            delivery
+                .snapshot(McpCapability::Operator)
+                .reviewed_head
+                .is_none(),
+            "a provider branch mismatch cannot identify the accepted foreign delivery"
+        );
+    }
+    std::fs::write(home().join("pr.json"), provider).unwrap();
 
     // An open pull request neither completes nor reconciles, and the head is
     // read by number: the stand-in provider refuses any listing.
