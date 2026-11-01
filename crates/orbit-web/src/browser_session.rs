@@ -152,7 +152,10 @@ pub fn open_dashboard(args: OpenArgs) -> Result<(), OrbitError> {
         record.address,
         session::browser_ticket(&record.key)?
     );
-    #[allow(clippy::print_stdout)]
+    #[allow(
+        clippy::print_stdout,
+        reason = "the operator copies the one-use dashboard URL from stdout"
+    )]
     {
         println!("{url}");
     }
@@ -221,7 +224,10 @@ fn probe_session_identity(address: SocketAddr) -> Result<String, OrbitError> {
 /// private ticket; redirected stdout (services, SSH, audit capture) never does.
 pub(crate) fn print_interactive_session_url(url: &str) {
     if std::io::stdout().is_terminal() {
-        #[allow(clippy::print_stdout)]
+        #[allow(
+            clippy::print_stdout,
+            reason = "a terminal operator must see the one-use session URL and redirected stdout must stay quiet"
+        )]
         {
             println!("Browser session (one use): {url}");
         }

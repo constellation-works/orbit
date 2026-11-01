@@ -289,7 +289,10 @@ fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin(sandbox: &P
 }
 /// Both lag observers are fail-closed: only the known previous head may be
 /// retried, while the task branch is still at the candidate and within bounds.
-#[allow(clippy::print_stderr)]
+#[allow(
+    clippy::print_stderr,
+    reason = "the isolated row log reads the scenario name from stderr when this refusal case fails"
+)]
 fn assert_previous_head_refusal(sandbox: &Path, case: &str, pull: bool) {
     eprintln!(
         "scenario: {} {case}",
@@ -4467,7 +4470,10 @@ fn bare_tip(bare: &Path, branch: &str) -> Option<String> {
 }
 /// A lease and publication must follow the effective destination, including a
 /// composed rewrite whose decoy already holds the candidate [ORB-17686].
-#[allow(clippy::print_stderr)]
+#[allow(
+    clippy::print_stderr,
+    reason = "the isolated row log reads the scenario name from stderr when this destination case fails"
+)]
 fn assert_effective_push_destination(sandbox: &Path, case: &str) {
     eprintln!("scenario: effective push destination {case}");
     let (fx, host) = fx_host(sandbox);
@@ -6521,7 +6527,10 @@ fn run_rows(parent: &Path, rows: &[(&str, Scenario)]) {
         run_named_row(parent, name, scenario);
     }
 }
-#[allow(clippy::print_stderr)]
+#[allow(
+    clippy::print_stderr,
+    reason = "the isolated row log reads the scenario name from stderr before the row body runs"
+)]
 fn run_named_row(parent: &Path, name: &str, scenario: impl FnOnce(&Path)) {
     eprintln!("scenario: {name}");
     in_fresh_row(parent, scenario);

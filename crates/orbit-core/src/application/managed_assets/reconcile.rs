@@ -84,7 +84,10 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
 /// is removed by its recorded digest and a locally modified one is preserved
 /// outside the active catalog. Its operator opt-out is kept, so restoring the
 /// default policy later does not recreate a default the operator deleted.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "left-out reconcile takes the catalog, operator mode and render hook separately so each file can be retired or kept"
+)]
 pub(crate) fn reconcile_managed_assets_left_out<'a>(
     dir: &Path,
     asset_kind: &str,

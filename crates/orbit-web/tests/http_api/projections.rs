@@ -1616,7 +1616,10 @@ fn add_scope_workspace(fixture: &Fixture, id: &str, name: &str) -> orbit_core::O
         .unwrap()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one projection row sets run, activity, agent, model, tool and the three counters independently"
+)]
 fn seed_scope(
     runtime: &orbit_core::OrbitRuntime,
     run: &str,

@@ -326,7 +326,10 @@ struct CapturedMocks {
     check_findings: Vec<VisualCheckFinding>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "capture takes the contract, candidate, kit layout and pass from different earlier stages"
+)]
 fn capture_mocks(
     runtime: &OrbitRuntime,
     contract: &VisualReviewContract,

@@ -1,5 +1,9 @@
 //! Public-boundary regressions for key churn bypass and rejection amplification.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "limiter fixtures panic when the window or budget cannot be built instead of hiding a setup bug"
+)]
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};

@@ -2,7 +2,11 @@
 //! keeps only a hash, verification returns the scope or a typed refusal, a
 //! revocation holds on the next use, and a missing or shared store is refused.
 #![cfg(unix)]
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "token fixtures panic on a bad permission, clock or store path so the failure names that step"
+)]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

@@ -52,7 +52,10 @@ pub(crate) struct BatchSpec {
 /// `qualify` decides one candidate, `draw` returns its row and crew key,
 /// `skipped_detail` renders a superseded detail, and `partition_extra`
 /// optionally adds one partition key from the rows and its task IDs.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the shared skeleton takes one hook per selection step so callers do not duplicate the batch loop"
+)]
 pub(crate) fn prepare_batch<T>(
     runtime: &OrbitRuntime,
     action: &str,

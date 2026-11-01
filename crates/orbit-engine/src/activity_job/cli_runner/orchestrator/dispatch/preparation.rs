@@ -79,7 +79,10 @@ fn attach_regression_risk<'a>(
 /// `explore_brief_instruction`, record the outcome whatever it is, and put a
 /// delivered brief into the task context. Returns the instruction to append
 /// only when the prompt carries the brief.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "brief admission needs the step identity, the mutable task context and the audit writer together"
+)]
 fn attach_explore_brief<'a>(
     host: &dyn RuntimeHost,
     spec: &'a AgentLoopSpec,
@@ -116,7 +119,10 @@ fn attach_explore_brief<'a>(
 /// Run a catalog activity on behalf of a pipeline step whose id differs from
 /// the activity name. Policy and broker authorization use `activity_name`;
 /// audit labels and worktree-boundary reports use `step_id`.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "policy authorizes the activity name while audit and the worktree boundary report the step id"
+)]
 pub(crate) fn run_cli_backend_for_step(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,

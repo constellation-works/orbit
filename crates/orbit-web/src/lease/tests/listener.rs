@@ -3,7 +3,6 @@
 //! admits the test's own user, is crate-private, so this cannot run at the
 //! crate boundary; the listener's other guarantees are tested there
 //! (`tests/http_api/lease_listener.rs`).
-#![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::io::Write;
 use std::net::SocketAddr;

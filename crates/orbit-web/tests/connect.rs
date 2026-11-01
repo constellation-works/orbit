@@ -1,7 +1,11 @@
 //! Public connect regressions. Separate binary because connect installs process
 //! signal handlers; each scenario re-executes with a disposable home and PATH.
 #![cfg(unix)]
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "connect fixtures panic when a disposable home, stream or signal setup fails"
+)]
 
 use std::fs;
 use std::io::{IsTerminal, Read, Write};

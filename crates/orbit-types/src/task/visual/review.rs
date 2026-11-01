@@ -163,7 +163,10 @@ pub(super) fn is_default_block_at(threshold: &VisualThreshold) -> bool {
     *threshold == DEFAULT_VISUAL_BLOCK_AT
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)]
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if passes a reference even though VisualThreshold is Copy"
+)]
 pub(super) fn is_default_file_at(threshold: &VisualThreshold) -> bool {
     *threshold == DEFAULT_VISUAL_FILE_AT
 }

@@ -84,7 +84,10 @@ pub fn serve_lease_listener(
             .local_addr()
             .map_err(|error| OrbitError::Io(format!("lease listener: {error}")))?;
         tracing::info!(address = %local, intake = %config.intake_socket.display(), "serving the lease listener");
-        #[allow(clippy::print_stdout)]
+        #[allow(
+            clippy::print_stdout,
+            reason = "the operator reads the bound lease URL from stdout because the listener has no other status channel"
+        )]
         {
             let scheme = if config.tls.is_some() { "https" } else { "http" };
             println!("Lease listener on {scheme}://{local} (lease routes and /healthz only)");

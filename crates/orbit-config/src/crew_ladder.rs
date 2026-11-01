@@ -332,7 +332,11 @@ impl CrewLadderSettings {
         let scale = f64::from(CREW_LADDER_WEIGHT_SCALE);
         // explore_rate is admitted in [0.02, 0.25], so this is 20..=250.
         let candidate = (self.explore_rate * scale).round().clamp(1.0, scale - 1.0);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the rounded weight is clamped from 1 to one below the weight scale, and that integer converts to u32 exactly"
+        )]
         let candidate = candidate as u32;
         (CREW_LADDER_WEIGHT_SCALE - candidate, candidate)
     }

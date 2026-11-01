@@ -111,7 +111,10 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
 }
 
 /// Produce the first retry through the same planner as claimed landing.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "auto-fix recovery passes the pull status and deadline into the same planner landing uses"
+)]
 pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,

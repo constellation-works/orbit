@@ -1,4 +1,7 @@
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "predicate fixtures panic when a board or clause cannot be built, which is a broken test"
+)]
 
 //! Load-time condition checks and their evaluation, through the public
 //! `check_condition` and `ConditionEvaluator` boundaries.

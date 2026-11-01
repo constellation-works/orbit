@@ -419,7 +419,10 @@ fn a_verdict_without_rejection_reason_still_deserializes() {
 fn emitted_rejected_verdict_is_readable_by_the_preceding_reader() {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "these fields pin the preceding reader schema and this test never reads them in Rust"
+    )]
     struct PreviousVerdict {
         verdict: orbit_types::task::VisualVerdictKind,
         crew: Option<String>,

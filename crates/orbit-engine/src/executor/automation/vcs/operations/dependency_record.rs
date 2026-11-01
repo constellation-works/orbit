@@ -9,7 +9,10 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path};
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "authentication binds the deadline, snapshot, failed jobs and workflow source to one log"
+)]
 pub(super) fn authenticate_dependency_record(
     deadline: Deadline,
     workspace: &Path,

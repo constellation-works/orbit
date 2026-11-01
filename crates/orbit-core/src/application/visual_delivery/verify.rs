@@ -207,7 +207,10 @@ fn escalation_prepare(
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one verification batch keeps its workspace, crew, images and escalation flag as separate inputs"
+)]
 fn partition(
     runtime: &OrbitRuntime,
     workspace: &Path,

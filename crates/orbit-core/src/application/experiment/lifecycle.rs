@@ -403,7 +403,10 @@ impl OrbitRuntime {
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one revision write carries the row, optional arms, audit event and running cap in a single call"
+    )]
     fn write_change(
         &self,
         record: &ExperimentRecord,

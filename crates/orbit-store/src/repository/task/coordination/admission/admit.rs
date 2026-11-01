@@ -108,7 +108,10 @@ impl TaskCommitBoundary {
 
     /// Admission with the owner's task-guidance callback, before the
     /// receipt is written. The callback must not acquire task admission locks.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "admission borrows identity, ordering, holds and guidance together so the receipt records one snapshot"
+    )]
     pub fn admit_task_with_guidance(
         &self,
         identity: &AdmissionIdentity,
