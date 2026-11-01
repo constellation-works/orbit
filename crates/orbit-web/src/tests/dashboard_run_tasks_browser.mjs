@@ -392,36 +392,62 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
     });
     await boot(base);
     await list.waitFor({ state: 'visible' });
-    for (const width of [1440, 375]) {
-      await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+    // Lookup and Clear are supported at desktop width. Below about 1202px the
+    // Tasks toolbar intentionally hides the search, Settle merged PRs and New
+    // task [ORB-20453], so the narrow width asserts that absence without
+    // filling, focusing or clicking the hidden controls.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const key of ['Enter', 'Space']) {
       await lookup('ORB-16021');
       await pinned.waitFor({ state: 'visible' });
       check(await search.inputValue() === '', 'A successful lookup empties search');
-      await page.screenshot({ path: path.join(evidence, `task-lookup-open-${width}.png`) });
-      await backToList(width);
+      if (key === 'Enter') await page.screenshot({ path: path.join(evidence, 'task-lookup-open-1440.png') });
+      await backToList(1440);
       check(await clear.isVisible(), 'An empty search with a lookup result must expose Clear beside search');
       const layout = await clear.evaluate(node => {
         const rect = node.getBoundingClientRect();
         const search = document.getElementById('task-search').getBoundingClientRect();
         return { inside: rect.left >= search.left && rect.right <= search.right && rect.top === search.top, width: rect.width, height: rect.height, hit: node.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)) };
       });
-      check(layout.inside && layout.hit && layout.width >= 40 && layout.height >= 40, `Clear must be reachable beside search at ${width}px: ${JSON.stringify(layout)}`);
+      check(layout.inside && layout.hit && layout.width >= 40 && layout.height >= 40, `Clear must be reachable beside search at 1440px: ${JSON.stringify(layout)}`);
       await search.focus(); await page.keyboard.press('Tab');
       check(await clear.evaluate(node => document.activeElement === node && node.matches(':focus-visible')), 'Tab from search must reach the visibly focused Clear button');
-      await page.keyboard.press(width === 375 ? 'Space' : 'Enter');
+      await page.keyboard.press(key);
       await restored();
       check(await search.evaluate(node => document.activeElement === node), 'Clear returns focus to usable search');
-      await page.screenshot({ path: path.join(evidence, `task-lookup-cleared-${width}.png`) });
-      await lookup('ORB-16022');
-      await list.and(page.locator('.expanded')).waitFor({ state: 'visible' });
-      check(!(await routeState()).params.q, 'Successful listed lookup must remove stale q from route');
-      await backToList(width);
-      await clear.click(); await restored();
-      await boot(`${base}&open=ORB-16021`);
-      await pinned.waitFor({ state: 'visible' });
-      await page.screenshot({ path: path.join(evidence, `task-deep-link-${width}.png`) });
-      await backToList(width);
-      await clear.click(); await restored();
+      if (key === 'Enter') await page.screenshot({ path: path.join(evidence, 'task-lookup-cleared-1440.png') });
+    }
+    await lookup('ORB-16022');
+    await list.and(page.locator('.expanded')).waitFor({ state: 'visible' });
+    check(!(await routeState()).params.q, 'Successful listed lookup must remove stale q from route');
+    await backToList(1440);
+    await clear.click(); await restored();
+    await boot(`${base}&open=ORB-16021`);
+    await pinned.waitFor({ state: 'visible' });
+    await page.screenshot({ path: path.join(evidence, 'task-deep-link-1440.png') });
+    await backToList(1440);
+    await clear.click(); await restored();
+    // Narrow width: verify the intended hidden search and the remaining
+    // reachable controls. No fill, focus, keyboard or Clear action here.
+    await page.setViewportSize({ width: 375, height: 812 });
+    const narrowWrap = page.locator('.task-search-wrap');
+    check(await narrowWrap.isHidden(), 'Task search must stay hidden below about 1202px [ORB-20453]');
+    check(await search.isHidden(), 'Task search input must stay hidden at 375px');
+    check(await clear.isHidden(), 'Clear must stay hidden with the search at 375px');
+    check(await page.locator('.tasks-heading').isVisible(), 'Tasks heading must stay reachable at 375px with search hidden');
+    check(await list.isVisible(), 'Task list must stay reachable at 375px with search hidden');
+    await page.screenshot({ path: path.join(evidence, 'task-lookup-hidden-375.png') });
+    await boot(`${base}&open=ORB-16021`);
+    await pinned.waitFor({ state: 'visible' });
+    await page.screenshot({ path: path.join(evidence, 'task-deep-link-375.png') });
+    await backToList(375);
+    await page.waitForFunction(() => !window.location.hash.includes('open='));
+    check(await list.isVisible(), 'Sheet Back must return to the list at 375px');
+    {
+      const narrowState = await routeState();
+      check(!narrowState.params.open, `Sheet Back must retire open at 375px: ${JSON.stringify(narrowState)}`);
+      check(narrowState.params.status === filters, `Sheet Back must retain status at 375px: ${JSON.stringify(narrowState)}`);
+      check(narrowState.query === '', `Narrow-width deep link must leave search empty: ${JSON.stringify(narrowState)}`);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
     // Copied links retain filters, and their cleared route survives reload.
@@ -509,7 +535,7 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
     await page.waitForFunction(() => !document.querySelector('.pinned-task-wrap'));
     check((await routeState()).scope === '?workspace=ws_other&window=24h' && !(await routeState()).params.open, 'Clear must retain the adopted workspace');
     check(errors.length === 0, errors.join('\n'));
-    fs.writeFileSync(path.join(evidence, 'task-lookup-clear-result.json'), JSON.stringify({ passed: true, widths: [1440, 375], keyboard: ['Enter', 'Space'], deepLink: true, listedAndFilteredOut: true, reload: true, history: true, notFoundAndError: true, delayedLookup: true, delayedHashLookupSameId: true, delayedRefresh: true, retainedScopeAndFilters: true }, null, 2));
+    fs.writeFileSync(path.join(evidence, 'task-lookup-clear-result.json'), JSON.stringify({ passed: true, widths: [1440, 375], lookupWidths: [1440], keyboard: ['Enter', 'Space'], keyboardWidths: [1440], narrowSearchHiddenWidths: [375], deepLink: true, listedAndFilteredOut: true, reload: true, history: true, notFoundAndError: true, delayedLookup: true, delayedHashLookupSameId: true, delayedRefresh: true, retainedScopeAndFilters: true }, null, 2));
   } finally {
     for (const response of held) if (response.fulfill) await response.fulfill().catch(() => {});
     await page.close();

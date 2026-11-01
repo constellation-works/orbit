@@ -102,6 +102,47 @@ pub struct FsAccessArgs {
     pub path: String,
 }
 
+impl DoctorCommand {
+    /// The report `orbit doctor` can still give when the runtime would not
+    /// open, or `None` to let the bootstrap error stand.
+    ///
+    /// Only a plain health check qualifies: a focused subcommand or a repair
+    /// flag needs the runtime it asked for. The one finding reported without
+    /// a runtime is a misplaced global `[plugin_enablement]` table, read
+    /// straight from the host config because that table is what makes the
+    /// layered config refuse to load. Every other command still fails closed.
+    pub(crate) fn degraded_report(
+        &self,
+        root_override: Option<&std::path::Path>,
+        bootstrap: &OrbitError,
+    ) -> Option<CommandOut> {
+        let repairs = self.fix_stale_locks
+            || self.fix_stale_task_locks
+            || self.fix_state_directory_permissions
+            || self.remove_graph
+            || self.fix_stale_artifacts
+            || self.fix_retired_activity_backends
+            || self.fix_orphan_task_stores
+            || self.fix_automation_pins
+            || self.fix_retired_config_keys;
+        if self.command.is_some() || repairs {
+            return None;
+        }
+        let global_root = orbit_cmd::registry_runtime::global_root_for(root_override).ok()?;
+        let misplaced = orbit_cmd::misplaced_plugin_enablement_row(&global_root)?;
+        let runtime = WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "runtime".to_string(),
+            status: WorkspaceDoctorStatus::Error,
+            message: format!("The runtime did not open, so no other check ran: {bootstrap}"),
+            remediation: Some(
+                "Fix the check above, then rerun `orbit doctor` for the full report.".to_string(),
+            ),
+        };
+        Some(report_output(vec![misplaced, runtime], self.problems))
+    }
+}
+
 impl Execute for DoctorCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self.command {
@@ -266,81 +307,87 @@ impl Execute for DoctorCommand {
             });
         }
         results.extend(orbit_cmd::run_doctor_report(runtime, self.deep));
-        let failures = results
-            .iter()
-            .filter(|row| row.status == WorkspaceDoctorStatus::Error)
-            .count();
-        let warnings = results
-            .iter()
-            .filter(|row| row.status == WorkspaceDoctorStatus::Warning)
-            .count();
-
-        let values = results
-            .iter()
-            .map(orbit_cmd::doctor_row_json)
-            .collect::<Vec<_>>();
-
-        let summary = format!("{failures} failure(s), {warnings} warning(s).");
-        eprintln!("{summary}");
-        let mut blocks = Vec::new();
-
-        results.sort_by_key(|row| match row.status {
-            WorkspaceDoctorStatus::Error => 0,
-            WorkspaceDoctorStatus::Warning => 1,
-            WorkspaceDoctorStatus::Ok => 2,
-            WorkspaceDoctorStatus::Info => 3,
-            WorkspaceDoctorStatus::Skipped => 4,
-        });
-
-        if self.problems {
-            results.retain(|row| {
-                matches!(
-                    row.status,
-                    WorkspaceDoctorStatus::Error | WorkspaceDoctorStatus::Warning
-                )
-            });
-        }
-
-        {
-            use crate::output::table::{Column, Table};
-            let mut table = Table::new(vec![
-                Column::new("CHECK").fixed(),
-                Column::new("STATUS").fixed(),
-                Column::new("DETAILS"),
-            ])
-            .empty_message(if self.problems {
-                "no problems found"
-            } else {
-                "no workspace checks ran"
-            });
-            for row in &results {
-                use comfy_table::Cell;
-                table.add_row(vec![
-                    Cell::new(&row.check_name),
-                    crate::output::color::cell(status_label(row.status), Domain::DoctorStatus),
-                    Cell::new(human_detail(row).replace('\n', " | ")),
-                ]);
-            }
-            blocks.push(Block::table(table));
-            blocks.push(Block::DoctorFindings(results.clone()));
-
-            if failures == 0 && warnings == 0 {
-                blocks.push(Block::text(format!(
-                    "\n{}",
-                    crate::output::color::text("Workspace healthy.", Role::Ok)
-                )));
-            }
-        }
-
-        // Unlike `skill doctor` / `tool doctor`, a failed check exits nonzero
-        // so unattended callers (cron, CI, systemd) can alert on it.
-        let exit_code = i32::from(failures > 0);
-        let mut payload = Payload::blocks(Value::Array(values), blocks).with_exit_code(exit_code);
-        if failures > 0 {
-            payload = payload.with_audit_message(findings_audit_message(&results, warnings));
-        }
-        Ok(payload.into())
+        report_output(results, self.problems)
     }
+}
+
+/// Render the checks as `orbit doctor` reports them: a table sorted by
+/// severity, the JSON rows, and a nonzero exit when any check failed.
+fn report_output(mut results: Vec<WorkspaceDoctorResult>, problems: bool) -> CommandOut {
+    let failures = results
+        .iter()
+        .filter(|row| row.status == WorkspaceDoctorStatus::Error)
+        .count();
+    let warnings = results
+        .iter()
+        .filter(|row| row.status == WorkspaceDoctorStatus::Warning)
+        .count();
+
+    let values = results
+        .iter()
+        .map(orbit_cmd::doctor_row_json)
+        .collect::<Vec<_>>();
+
+    let summary = format!("{failures} failure(s), {warnings} warning(s).");
+    eprintln!("{summary}");
+    let mut blocks = Vec::new();
+
+    results.sort_by_key(|row| match row.status {
+        WorkspaceDoctorStatus::Error => 0,
+        WorkspaceDoctorStatus::Warning => 1,
+        WorkspaceDoctorStatus::Ok => 2,
+        WorkspaceDoctorStatus::Info => 3,
+        WorkspaceDoctorStatus::Skipped => 4,
+    });
+
+    if problems {
+        results.retain(|row| {
+            matches!(
+                row.status,
+                WorkspaceDoctorStatus::Error | WorkspaceDoctorStatus::Warning
+            )
+        });
+    }
+
+    {
+        use crate::output::table::{Column, Table};
+        let mut table = Table::new(vec![
+            Column::new("CHECK").fixed(),
+            Column::new("STATUS").fixed(),
+            Column::new("DETAILS"),
+        ])
+        .empty_message(if problems {
+            "no problems found"
+        } else {
+            "no workspace checks ran"
+        });
+        for row in &results {
+            use comfy_table::Cell;
+            table.add_row(vec![
+                Cell::new(&row.check_name),
+                crate::output::color::cell(status_label(row.status), Domain::DoctorStatus),
+                Cell::new(human_detail(row).replace('\n', " | ")),
+            ]);
+        }
+        blocks.push(Block::table(table));
+        blocks.push(Block::DoctorFindings(results.clone()));
+
+        if failures == 0 && warnings == 0 {
+            blocks.push(Block::text(format!(
+                "\n{}",
+                crate::output::color::text("Workspace healthy.", Role::Ok)
+            )));
+        }
+    }
+
+    // Unlike `skill doctor` / `tool doctor`, a failed check exits nonzero
+    // so unattended callers (cron, CI, systemd) can alert on it.
+    let exit_code = i32::from(failures > 0);
+    let mut payload = Payload::blocks(Value::Array(values), blocks).with_exit_code(exit_code);
+    if failures > 0 {
+        payload = payload.with_audit_message(findings_audit_message(&results, warnings));
+    }
+    Ok(payload.into())
 }
 
 fn admission_receipts(runtime: &OrbitRuntime, compact: bool) -> CommandOut {

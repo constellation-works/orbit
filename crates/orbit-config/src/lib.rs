@@ -156,7 +156,9 @@ pub use operation::{
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{
-    load_workspace_plugin_enablement, plugin_enablement_key, workspace_config_sets_policy,
+    MisplacedGlobalPluginEnablement, global_plugin_enablement_fix,
+    load_workspace_plugin_enablement, misplaced_global_plugin_enablement, plugin_enablement_key,
+    workspace_config_sets_policy,
 };
 pub use plugins::{
     PluginConfigSchema, plugin_config_schema_generation, register_plugin_config_schemas,

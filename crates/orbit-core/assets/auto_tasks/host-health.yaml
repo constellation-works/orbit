@@ -117,7 +117,12 @@ template:
     - Host, credential, service-unit, OS and operator-only conditions become type chore tasks
       assigned explicitly to a configured crew whose kind is human. Inspect crew kinds through
       orbit config; choose the sole human crew or the one matching the affected operator.
-      If several are ambiguous, use the fallback rather than guessing an agent crew.
+      If several are ambiguous, use the fallback rather than guessing an agent crew. A human
+      chore body follows the shared human-task format in the installed orbit skill's
+      task-authoring reference: a 1-2 line what and why, numbered steps, each command in its
+      own fenced shell block, and a closing Verify line with one fenced command, under 2000
+      characters. Keep the evidence table in the report artifact, not the body. orbit.task.add
+      warns on a human-crew body that misses this; fix it before moving on.
     - With no matching human crew, file a setup chore tagged host-health, setup,
       needs-operator and no-auto-approve. orbit.task.add leaves it proposed: verify that on
       read-back, never approve, promote, dispatch or present it as agent-ready. State that an
@@ -130,7 +135,9 @@ template:
 
     ## Resolve contract for every filing
 
-    Every filed task, including an agent bug, MUST contain a literal `## Resolve` section:
+    Every filed task, including an agent bug, MUST contain a literal `## Resolve` section. For a
+    human chore that section is the short format above: numbered steps, fenced commands, then
+    `Verify:` and one fenced command. Keep words plain and few. The rules below apply to all:
 
     - Exact runnable commands in fenced shell blocks, or a resolve.sh task artifact with
       invocation instructions. A state-changing script must support --dry-run and explain

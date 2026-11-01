@@ -74,6 +74,7 @@
 //! watches: it never requests a merge or completes a task, and ends once the
 //! pull request is mergeable, leaving the task in review.
 
+mod ci_rerun_hold;
 mod conflict;
 mod drive;
 mod mutation;

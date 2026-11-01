@@ -360,6 +360,7 @@ export async function runOperatorRecord(task, detail, btnNode, context, request)
   for (const b of held) if (!recordHost || b.closest("[data-operator-record]") !== recordHost) b.disabled = false;
   if (!visit.isCurrent()) return;
   taskShared.taskState.taskActionNotice = successText;
+  taskShared.notifyDecisionAnswered();
   await taskShared.refreshTasks(context);
 }
 

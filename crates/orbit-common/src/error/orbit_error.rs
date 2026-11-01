@@ -114,6 +114,14 @@ pub enum OrbitError {
         .0.friction_id, .0.workspace_id, .0.found_in.join(", ")
     )]
     FrictionNotLocal(Box<FrictionNotLocal>),
+    /// The host's own global configuration is invalid, so a call that only
+    /// needed the host to serve it was not judged. Names the host and file.
+    #[error("host configuration error on host '{host}' in '{path}': {message}")]
+    HostConfiguration {
+        host: String,
+        path: String,
+        message: String,
+    },
     #[error("invalid input: {0}")]
     InvalidInput(String),
     /// A distributed-execution claim or handoff mutation the owner refused.

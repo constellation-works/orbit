@@ -8,6 +8,12 @@
 //! Off a terminal (width 0, the piped/golden path) every row stays on one line.
 //! The column is computed from the real names, not hand-typed spaces, so a
 //! longer name widens the column instead of drifting [ORB-19912].
+//!
+//! Everything else Clap renders (flag descriptions, about text, its command
+//! lists) is wrapped by Clap itself once `wrap_help` is on and the command
+//! carries the sink width. Footer text is the exception: Clap re-flows a long
+//! footer line from column 0, which strands a continuation of an indented
+//! example away from its command, so [`hang_wrap_footers`] wraps footers first.
 
 use clap::{Command, Id};
 
@@ -45,6 +51,101 @@ pub(crate) fn compact_globals(mut command: Command, global_ids: &[Id]) -> Comman
         command = command.after_long_help(long);
     }
     command
+}
+
+/// Wrap every footer in `command`'s tree to `width` columns with a hanging
+/// indent: a continuation of an indented line sits two columns deeper than the
+/// line it continues, so it stays with its example. Width `0` (piped) leaves
+/// the footers untouched.
+pub(crate) fn hang_wrap_footers(mut command: Command, width: usize) -> Command {
+    if width == 0 {
+        return command;
+    }
+    if let Some(footer) = command.get_after_help().map(ToString::to_string) {
+        command = command.after_help(hang_wrap_text(&footer, width));
+    }
+    if let Some(footer) = command.get_after_long_help().map(ToString::to_string) {
+        command = command.after_long_help(hang_wrap_text(&footer, width));
+    }
+    let names: Vec<String> = command
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_string())
+        .collect();
+    for name in names {
+        command = command.mut_subcommand(name, |sub| hang_wrap_footers(sub, width));
+    }
+    command
+}
+
+/// Extra columns a continuation sits under the line it continues, when that
+/// line is itself indented.
+const HANG_INDENT: usize = 2;
+
+/// Wrap the lines of `text` that are wider than `width` at word boundaries.
+/// Lines that fit are left exactly as written, so aligned columns survive. A
+/// prose paragraph hard-wrapped in the source (unindented lines, each ending
+/// mid-sentence) is re-flowed as one when any of its lines is too wide, so the
+/// narrow wrap does not leave a ragged stub after every source line break.
+fn hang_wrap_text(text: &str, width: usize) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut paragraph: Vec<&str> = Vec::new();
+    let flush = |paragraph: &mut Vec<&str>, out: &mut Vec<String>| {
+        if paragraph.iter().any(|line| line.chars().count() > width) {
+            out.push(hang_wrap_line(&paragraph.join(" "), width));
+        } else {
+            out.extend(paragraph.iter().map(|line| line.to_string()));
+        }
+        paragraph.clear();
+    };
+    for line in text.split('\n') {
+        let prose = !line.is_empty() && !line.starts_with(' ');
+        if !prose {
+            flush(&mut paragraph, &mut out);
+            out.push(hang_wrap_line(line, width));
+            continue;
+        }
+        paragraph.push(line);
+        // A line that ends a sentence or introduces a list closes its paragraph.
+        if line.ends_with(['.', ':', ';']) {
+            flush(&mut paragraph, &mut out);
+        }
+    }
+    flush(&mut paragraph, &mut out);
+    out.join("\n")
+}
+
+fn hang_wrap_line(line: &str, width: usize) -> String {
+    if line.chars().count() <= width {
+        return line.to_string();
+    }
+    let lead = line.chars().take_while(|c| *c == ' ').count();
+    let continuation = if lead > 0 { lead + HANG_INDENT } else { 0 };
+    // A hang so deep it leaves no room would never make progress; fall back to
+    // the line's own indent.
+    let continuation = if continuation + 1 >= width {
+        lead.min(width.saturating_sub(1))
+    } else {
+        continuation
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = " ".repeat(lead.min(width.saturating_sub(1)));
+    let mut has_word = false;
+    for word in line.split_whitespace() {
+        let word_len = word.chars().count();
+        let current_len = current.chars().count();
+        if !has_word {
+            current.push_str(word);
+            has_word = true;
+        } else if current_len + 1 + word_len <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(std::mem::replace(&mut current, " ".repeat(continuation)));
+            current.push_str(word);
+        }
+    }
+    lines.push(current);
+    lines.join("\n")
 }
 
 /// Spaces before a grouped row.

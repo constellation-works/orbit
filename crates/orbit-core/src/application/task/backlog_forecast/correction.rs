@@ -281,19 +281,63 @@ pub(super) fn script_spend(script: &Script) -> Draw {
     total
 }
 
-/// Apply the cohort correction to every attempt the script will charge.
+/// Apply the cohort correction to the script as a whole.
+///
+/// The fit's residuals are per full task: `base_p50`, `center` and the
+/// actual are all full-script totals (see [`script_spend`]). Applying the
+/// log-affine map to each step instead would correct a different unit
+/// whenever `spread != 0`: the sum of corrected steps would not be the
+/// correction of the summed script the residuals were trained on. So the
+/// map is applied once per metric to the script's uncorrected total, and
+/// the steps are scaled by `corrected_total / total` so their corrected
+/// sum equals that corrected total (within floating-point rounding).
+/// A single-step script therefore keeps its previous behaviour, and a
+/// step with a missing metric stays missing: the total for a metric is
+/// the sum of the steps that carry it.
 pub(super) fn apply_script(correction: &Correction, complexity: &str, script: &mut Script) {
+    if script.steps.is_empty() {
+        return;
+    }
+    let present_total = |metric: usize| -> Option<f64> {
+        let mut total = 0.0;
+        let mut present = false;
+        for step in &script.steps {
+            let value = match metric {
+                0 => step.spend.hours,
+                1 => step.spend.tokens,
+                _ => step.spend.usd,
+            };
+            if let Some(value) = value {
+                present = true;
+                total += value;
+            }
+        }
+        present.then_some(total)
+    };
+    let factor = |metric: usize| -> f64 {
+        let Some(total) = present_total(metric) else {
+            return 1.0;
+        };
+        if !total.is_finite() || total <= 0.0 {
+            return 1.0;
+        }
+        let corrected = correction.apply_metric(metric, complexity, total);
+        if !corrected.is_finite() {
+            return 1.0;
+        }
+        corrected / total
+    };
+    let factors = [factor(0), factor(1), factor(2)];
     for step in &mut script.steps {
         if let Some(hours) = step.spend.hours {
-            let corrected = correction.apply_metric(0, complexity, hours);
-            step.spend.hours = Some(corrected);
-            step.hours = corrected;
+            step.spend.hours = Some(hours * factors[0]);
+            step.hours *= factors[0];
         }
         if let Some(tokens) = step.spend.tokens {
-            step.spend.tokens = Some(correction.apply_metric(1, complexity, tokens));
+            step.spend.tokens = Some(tokens * factors[1]);
         }
         if let Some(usd) = step.spend.usd {
-            step.spend.usd = Some(correction.apply_metric(2, complexity, usd));
+            step.spend.usd = Some(usd * factors[2]);
         }
     }
 }

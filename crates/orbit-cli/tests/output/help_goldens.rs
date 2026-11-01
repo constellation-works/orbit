@@ -477,57 +477,63 @@ fn update_creates_missing_family_directories_but_validation_stays_strict() {
     assert!(!temp.path().join("outside.txt").exists());
 }
 
+/// `orbit <args> <flag>` on a pseudo-terminal whose width is `COLUMNS`.
 #[cfg(unix)]
-#[test]
-fn grouped_help_fits_narrow_tty() {
+fn read_help_on_pty(args: &[&str], flag: &str, width: usize) -> String {
     use std::io::Read;
     use std::os::fd::FromRawFd;
     use std::process::Stdio;
 
     let temp = tempdir().expect("tempdir");
+    let mut master = -1;
+    let mut slave = -1;
+    // SAFETY: openpty initializes both descriptors on success; pointers are valid.
+    let rc = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+    // SAFETY: successful openpty returned owned, distinct file descriptors.
+    let mut master = unsafe { fs::File::from_raw_fd(master) };
+    let slave = unsafe { fs::File::from_raw_fd(slave) };
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let mut child = command
+        .current_dir(temp.path())
+        .env("HOME", temp.path())
+        .env("USERPROFILE", temp.path())
+        .env("COLUMNS", width.to_string())
+        .env("NO_COLOR", "1")
+        .env_remove("ORBIT_FORMAT")
+        .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+        .args(args)
+        .arg(flag)
+        .stdout(Stdio::from(slave))
+        .spawn()
+        .expect("run help on pty");
+    drop(command);
+    let mut bytes = Vec::new();
+    if let Err(error) = master.read_to_end(&mut bytes) {
+        // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
+        assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
+    }
+    assert!(child.wait().expect("wait for help").success());
+    String::from_utf8(bytes).expect("UTF-8 help")
+}
+
+#[cfg(unix)]
+#[test]
+fn grouped_help_fits_narrow_tty() {
     for args in [&[][..], &["run"][..], &["task"][..]] {
         for width in [8usize, 16, 20] {
-            let mut master = -1;
-            let mut slave = -1;
-            // SAFETY: openpty initializes both descriptors on success; pointers are valid.
-            let rc = unsafe {
-                libc::openpty(
-                    &mut master,
-                    &mut slave,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                )
-            };
-            assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
-            // SAFETY: successful openpty returned owned, distinct file descriptors.
-            let mut master = unsafe { fs::File::from_raw_fd(master) };
-            let slave = unsafe { fs::File::from_raw_fd(slave) };
-            let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
-            test_env::clear_inherited_authority(|name| {
-                command.env_remove(name);
-            });
-            let mut child = command
-                .current_dir(temp.path())
-                .env("HOME", temp.path())
-                .env("USERPROFILE", temp.path())
-                .env("COLUMNS", width.to_string())
-                .env("NO_COLOR", "1")
-                .env_remove("ORBIT_FORMAT")
-                .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
-                .args(args)
-                .arg("--help")
-                .stdout(Stdio::from(slave))
-                .spawn()
-                .expect("run help on pty");
-            drop(command);
-            let mut bytes = Vec::new();
-            if let Err(error) = master.read_to_end(&mut bytes) {
-                // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
-                assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
-            }
-            assert!(child.wait().expect("wait for help").success());
-            let output = String::from_utf8(bytes).expect("UTF-8 help");
+            let output = read_help_on_pty(args, "--help", width);
             let start_heading = match args.first().copied() {
                 Some("run") => "Workflows:",
                 Some("task") => "Tasks:",
@@ -549,6 +555,49 @@ fn grouped_help_fits_narrow_tty() {
                         "orbit {args:?}, width {width}: overlong grouped line {line:?}"
                     );
                 }
+            }
+        }
+    }
+}
+
+/// Clap's own help text (flags, about, command lists, footers) used to come
+/// out as one long line per paragraph because Clap's `wrap_help` was off, so a
+/// terminal soft-wrapped it from column 0. At a terminal width every line must
+/// now fit, at 120 as well as at 60, and a continuation must stay indented
+/// under the flag or command it belongs to.
+#[cfg(unix)]
+#[test]
+fn clap_help_wraps_to_the_terminal_width_with_a_hanging_indent() {
+    let surfaces: [(&[&str], &str); 7] = [
+        (&[], "-h"),
+        (&["search"], "--help"),
+        (&["browser-kit"], "--help"),
+        (&["workspace"], "--help"),
+        (&["run"], "--help"),
+        (&["task"], "--help"),
+        (&["task", "update"], "--help"),
+    ];
+    for width in [60usize, 80, 120] {
+        for (args, flag) in surfaces {
+            let output = read_help_on_pty(args, flag, width);
+            let mut previous_indent = 0usize;
+            for line in output.lines().map(|line| line.trim_end_matches('\r')) {
+                let indent = line.chars().take_while(|c| *c == ' ').count();
+                let words: Vec<_> = line.split_whitespace().collect();
+                assert!(
+                    line.chars().count() <= width
+                        || (words.len() == 1
+                            && words[0].chars().count() > width.saturating_sub(indent)),
+                    "orbit {args:?} {flag}, width {width}: overlong line {line:?}"
+                );
+                // A wrapped flag description sits deeper than its flag, never at column 0.
+                if previous_indent >= 6 && !line.is_empty() {
+                    assert!(
+                        indent > 0,
+                        "orbit {args:?} {flag}, width {width}: continuation at column 0 {line:?}"
+                    );
+                }
+                previous_indent = indent;
             }
         }
     }

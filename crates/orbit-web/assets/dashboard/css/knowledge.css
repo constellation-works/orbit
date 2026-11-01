@@ -24,10 +24,52 @@
   border-color: var(--accent);
 }
 
+.friction-pagination[hidden] { display: none; }
+.friction-pagination {
+  display: flex;
+  flex: 1 1 auto;
+  margin-left: auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.friction-pagination span {
+  color: var(--fg-dim);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.friction-pagination button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.friction-pagination button.is-disabled {
+  color: var(--fg-dim);
+  opacity: 0.55;
+  cursor: default;
+}
+.friction-pagination button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 @media (max-width: 520px) {
   #friction-search { flex: 1 1 100%; }
   .friction-filter-control { flex: 1 1 100%; }
   #friction-status-filter { flex: 1; }
+  .friction-pagination {
+    flex: 1 1 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
 }
 
 .friction-stats {

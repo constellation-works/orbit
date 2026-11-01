@@ -77,6 +77,9 @@ pub enum TransientInfrastructure {
     LockBusy,
     /// The SQLite store stayed busy or locked past its busy timeout.
     StoreLocked,
+    /// The owner's host configuration is invalid (for example a workspace-only
+    /// table in the global config), so the call was never judged.
+    HostConfiguration,
 }
 
 impl TransientInfrastructure {
@@ -85,6 +88,7 @@ impl TransientInfrastructure {
         match self {
             Self::LockBusy => "lock_busy",
             Self::StoreLocked => "store_locked",
+            Self::HostConfiguration => "host_configuration",
         }
     }
 
@@ -93,6 +97,9 @@ impl TransientInfrastructure {
         match self {
             Self::LockBusy => "a lock stayed held past its acquisition deadline",
             Self::StoreLocked => "the task store stayed locked past its busy timeout",
+            Self::HostConfiguration => {
+                "the owner's host configuration is invalid; fix the file it names, then the task requeues"
+            }
         }
     }
 
@@ -100,13 +107,28 @@ impl TransientInfrastructure {
     /// when that failure is transient infrastructure.
     #[must_use]
     pub fn of_action_failure(action: &str, message: &str) -> Option<Self> {
-        if !DELIVERY_ACTIONS.contains(&action) {
-            return None;
-        }
         let message = message.trim_start();
         let message = message
             .strip_prefix("execution failed: ")
             .unwrap_or(message);
+        // `OrbitError::RemoteTool` from an owner that answered
+        // `host_configuration`, or the typed display itself. A host-config
+        // failure judges nothing about the candidate whatever step surfaced
+        // it (a follower's tag-instructions load is not a delivery action),
+        // so it is classified before the delivery-action gate. It is
+        // recognised only at the start of the error, after the one wrapper
+        // Orbit adds for a tag-instructions load: a validation failure's
+        // message starts with its own text (the command, then output), so
+        // quoting the marker there never matches.
+        let typed = strip_tag_instructions_wrapper(message);
+        if typed.starts_with("remote tool failed (host_configuration)")
+            || typed.starts_with("host configuration error on host '")
+        {
+            return Some(Self::HostConfiguration);
+        }
+        if !DELIVERY_ACTIONS.contains(&action) {
+            return None;
+        }
         // `OrbitError::RemoteTool` from an owner that answered `lock_busy`.
         if message.starts_with("remote tool failed (lock_busy)") {
             return Some(Self::LockBusy);
@@ -130,6 +152,17 @@ impl TransientInfrastructure {
         }
         None
     }
+}
+
+/// The typed error after the `load tag instructions for `<activity>` (run
+/// <id>): ` wrapper the runtime host puts on a tag-instructions load failure,
+/// or `message` unchanged when it has no such wrapper. The activity name and
+/// run id are Orbit's own, so the first `): ` ends the wrapper.
+fn strip_tag_instructions_wrapper(message: &str) -> &str {
+    message
+        .strip_prefix("load tag instructions for `")
+        .and_then(|rest| rest.split_once("): "))
+        .map_or(message, |(_, typed)| typed)
 }
 
 /// The note of a [`TRANSIENT_INFRA_BLOCKED_EVENT`].

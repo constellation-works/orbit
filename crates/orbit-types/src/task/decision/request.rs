@@ -35,6 +35,9 @@ pub enum DecisionGate {
     ProposedApproval,
     /// Approval of a task in review.
     ReviewApproval,
+    /// A multiple-choice question an agent raised on a human-crew task. An
+    /// answer records the chosen option and completes the task.
+    AgentRequest,
 }
 
 impl DecisionGate {
@@ -45,6 +48,7 @@ impl DecisionGate {
             "pilot_admission" => Some(Self::PilotAdmission),
             "proposed_approval" => Some(Self::ProposedApproval),
             "review_approval" => Some(Self::ReviewApproval),
+            "agent_request" => Some(Self::AgentRequest),
             _ => None,
         }
     }
@@ -56,6 +60,7 @@ impl DecisionGate {
             Self::PilotAdmission => "pilot_admission",
             Self::ProposedApproval => "proposed_approval",
             Self::ReviewApproval => "review_approval",
+            Self::AgentRequest => "agent_request",
         }
     }
 
@@ -69,7 +74,7 @@ impl DecisionGate {
                 "Approve the proposed task; it goes through task-pilot screening like a CLI approval."
             }
             Self::ReviewApproval => "Approve the task in review.",
-            Self::BlockTriage | Self::PilotAdmission => return Vec::new(),
+            Self::BlockTriage | Self::PilotAdmission | Self::AgentRequest => return Vec::new(),
         };
         vec![
             DecisionAnswer::plain("approve", "Approve", approved),
@@ -598,9 +603,18 @@ pub struct DecisionRequest {
     /// can: the request then carries one "Done — requeue" answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub human_action: Option<String>,
+    /// Structured topic (or corpus rule id) an agent-raised request carries,
+    /// so a later reader matches it by exact value, never by wording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+    /// Writer label of the agent that raised an agent-raised request; the
+    /// per-filer cap counts open requests by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filer: Option<String>,
     /// Stale-guard binding the request was raised against.
     pub binding: DecisionBinding,
-    /// Mechanism that raised it (`block_triage`, `task_pilot`, `digest`).
+    /// Mechanism that raised it (`block_triage`, `task_pilot`, `digest`,
+    /// `agent_request`).
     pub raised_by: String,
     /// When it was raised.
     pub raised_at: chrono::DateTime<chrono::Utc>,
@@ -634,6 +648,8 @@ impl DecisionRequest {
             summary: None,
             recommended: None,
             human_action: None,
+            topic: None,
+            filer: None,
             binding,
             raised_by,
             raised_at,
@@ -647,6 +663,13 @@ impl DecisionRequest {
     pub fn with_summary(mut self, summary: String, recommended: Option<String>) -> Self {
         self.summary = Some(summary);
         self.recommended = recommended;
+        self
+    }
+
+    /// This request carrying the structured `topic` and the `filer` that raised it.
+    pub fn with_topic_and_filer(mut self, topic: Option<String>, filer: String) -> Self {
+        self.topic = topic;
+        self.filer = Some(filer);
         self
     }
 

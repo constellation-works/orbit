@@ -1144,7 +1144,11 @@ ancestry. Reruns share the eligible-set planner with owner-local `auto_fix=true`
 workflow-wide `--failed` action, it authenticates the **complete** latest-attempt job and step
 listing, not only required failed checks. Every failed job must be an independently eligible
 transient/flaky root or a dependency-only waiter whose versioned evidence reaches those roots.
-An independent candidate failure vetoes the shared action and keeps its ordinary repair route;
+An independent candidate failure vetoes the shared action and keeps its ordinary repair route.
+Dependency-only records hold only when no other job failed: any other failed sibling, including
+a candidate whose log cites no changed file, takes its own class's route. Owner-local completion
+records each planner hold on the task and bounds it (15 minutes per head, or the last poll),
+after which the failure takes the ordinary repair path;
 unreadable, pending, unknown or ambiguous evidence holds without granting retry or repair authority,
 except a `cancelled` or `timed_out` conclusion, which is transient without a log.
 Neither matching text nor sharing a run proves a dependency.

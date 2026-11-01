@@ -317,6 +317,16 @@ pub(crate) fn run() {
     let runtime = match bootstrapped {
         Ok(runtime) => runtime,
         Err(err) => {
+            // A misplaced host `[plugin_enablement]` table is what keeps the
+            // runtime from opening, so `orbit doctor` reports it from the
+            // file instead of failing with the bare refusal. Everything else
+            // fails closed.
+            if let command::Commands::Doctor(doctor) = &cli.command
+                && let Some(degraded) = doctor.degraded_report(root_override.as_deref(), &err)
+            {
+                finish_command(degraded, &sink, json_error_preference, None);
+                return;
+            }
             print_error(&err, &sink, json_error_preference);
             orbit_common::observability::logging::exit(1);
         }

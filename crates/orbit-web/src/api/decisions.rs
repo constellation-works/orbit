@@ -58,7 +58,7 @@ pub(super) async fn list_decisions(
             Some(gate) => Some(gate),
             None => {
                 return bad_request(format!(
-                    "unknown decision gate `{name}`; expected block_triage, pilot_admission, proposed_approval or review_approval"
+                    "unknown decision gate `{name}`; expected agent_request, block_triage, pilot_admission, proposed_approval or review_approval"
                 ));
             }
         },

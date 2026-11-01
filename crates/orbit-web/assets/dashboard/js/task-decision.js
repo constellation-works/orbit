@@ -1,7 +1,7 @@
 // Orbit dashboard decision cards: the open human decision request on a task as
 // a summary, one button per option beside its consequence, and a note field.
 
-import { captureWorkspaceVisit, el, postJson } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, postJson } from './common.js';
 import * as taskShared from './task-shared.js';
 import { forgetTaskDetailLoad } from './task-data.js';
 
@@ -45,7 +45,9 @@ export function buildDecisionCard(task, request, detail, context) {
       el("span", { text: request.human_action }),
     ]));
   }
-  const options = Array.isArray(request.options) ? request.options : [];
+  // Recommended first, stable for the rest (server order otherwise).
+  const options = (Array.isArray(request.options) ? [...request.options] : [])
+    .sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended)));
   if (!options.length) {
     if (!request.human_action) {
       card.appendChild(el("div", { class: "decision-pending", role: "status", text: "Answer options are unavailable for this request." }));
@@ -73,6 +75,9 @@ export function buildDecisionCard(task, request, detail, context) {
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+      const label = answer.label || answerId;
+      if (typeof window.confirm === "function"
+        && !window.confirm(`Answer this decision with “${label}”?${answer.consequence ? `\n\n${answer.consequence}` : ""}`)) return;
       answerDecision(task, detail, request.id, answerId, note.value.trim(), btn, context);
     });
     option.appendChild(btn);
@@ -82,6 +87,34 @@ export function buildDecisionCard(task, request, detail, context) {
   }
   card.appendChild(list);
   return card;
+}
+
+// Answered decisions for a task, read from the closed-inclusive list:
+// the picked option label, who answered and when. Empty until the read
+// lands (and stays empty when there is nothing answered), so callers can
+// always mount it. Works in the federated view via taskWorkspacePath.
+export function buildAnsweredDecisions(task, context) {
+  const wrap = el("div", { class: "decision-answered-list" });
+  const visit = captureWorkspaceVisit();
+  const path = taskShared.taskWorkspacePath(task, `/api/decisions?task_id=${encodeURIComponent(task.id)}&include_closed=true`);
+  fetchJson(path).then((payload) => {
+    if (!visit.isCurrent()) return;
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const answered = items.filter((r) => r && r.resolution && (r.state === "answered" || r.resolution.answer_id));
+    if (!answered.length) { const block = wrap.closest(".field-block"); if (block) block.remove(); return; }
+    for (const request of answered) {
+      const res = request.resolution;
+      const picked = (Array.isArray(request.answers) ? request.answers : []).find((a) => String(a.id) === String(res.answer_id));
+      const label = picked ? picked.label : res.answer_id;
+      const when = res.answered_at ? taskShared.fmtAbsTimeValue(context, res.answered_at) : "";
+      wrap.appendChild(el("div", { class: "decision-answered" }, [
+        el("span", { class: "decision-answered-option", text: `Answered: ${label}` }),
+        el("span", { class: "decision-answered-meta", text: `by ${res.answered_by || "unknown"}${when ? ` · ${when}` : ""}` }),
+        res.note ? el("span", { class: "decision-answered-note", text: res.note }) : null,
+      ]));
+    }
+  }).catch(() => { const block = wrap.closest(".field-block"); if (block) block.remove(); });
+  return wrap;
 }
 
 // Open human decision requests no callout shows, one row per request.
@@ -118,5 +151,6 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
   if (!visit.isCurrent()) return;
   taskShared.taskState.taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
   forgetTaskDetailLoad(task.id);
+  taskShared.notifyDecisionAnswered();
   await taskShared.refreshTasks(context);
 }

@@ -40,7 +40,7 @@ Both config files must be regular files. Runtime loads and workspace plugin-togg
 - **Tables** layer down to individual settings; **scalars and arrays** replace the global value.
 - **Named crews** layer by crew name and field: a workspace `[crews.sol]` holding only `model = "gpt-6-astra"` overrides that one field of the global `sol` crew.
 - **Security keys** (`execution.codex.sandbox`, `execution.codex.approval_policy`, `execution.env.pass`) never inherit from global once a workspace file exists; an omitted one takes its built-in default. A workspace file holding only `[plugin_enablement]` does not count, so those keys keep inheriting.
-- `[machine]` and each crew's [`env`](#per-crew-credentials-env) are global-only and `[plugin_enablement]` workspace-only; any of them in the wrong file is refused at load, naming the file.
+- `[machine]` and each crew's [`env`](#per-crew-credentials-env) are global-only and `[plugin_enablement]` workspace-only; any of them in the wrong file is refused at load, naming the file. A `[plugin_enablement]` table in the global file is a typed `host_configuration` error naming the host and file (not the caller's `invalid_input`), so a follower whose remote call the owner serves is classified by final recovery as transient infrastructure and requeues once the table is removed. `orbit doctor` (and the dashboard's Doctor panel, which runs the same probes) reports it as the `plugin-enablement` check with the exact fix: remove the table from the global file; host enablement is `orbit plugin enable|disable <plugin>` and a per-workspace toggle adds `--scope workspace`. Because the table stops the runtime from opening, a plain `orbit doctor` reads it straight from the host config and reports that check (plus a `runtime` row saying no other check ran) instead of the bare refusal; every other command, and doctor's repair flags and subcommands, keep failing closed.
 
 `.orbit/config.yaml` (it stores `workspace_id`) is the workspace identity file, not runtime config.
 
@@ -882,7 +882,9 @@ checkpoints, including inline final recovery and the blocked-task backstop.
 The dashboard task payload exposes `active_triage`, an array of `{run_id, crew}`
 entries, only while such a binding is active. Finishing the run clears it;
 an inline recovery decision also clears it while delivery continues. The owner
-view uses the same projection in local and federated lists.
+view uses the same projection in local and federated lists. If an active run's
+pipeline state cannot be read, the service logs a warning and shows no triage
+for any task until it can be read; the task list, detail and writes still succeed.
 
 The pilot checks concrete contracts required by a task's description and
 criteria against pinned source: tools and their output fields, schemas, port
@@ -1547,7 +1549,7 @@ description = "Daniel's own work"
 - **Never drawn.** `workflow.default_crew`, the complexity, type and purpose pools, `purpose_crews.review`, and experiment arm overlays may not name one. Config load refuses the first four, and `orbit experiment start` refuses an arm. A redraw never selects or moves a task onto a human crew.
 - **Never admitted.** A drain or pull follower skips a human-crew task even when `--allow-crew` names the crew. `--allow-crew` accepts a human crew's name, but it admits nothing. `orbit run readiness` reports the task with reason `human_crew` and the crew. An explicit ship of the task admits nothing, and the dashboard shows no Ship control for it.
 - **Never piloted.** The task pilot excludes the task (`human_crew`), refuses an explicit request (`task_pilot_human_crew`), and records no assessment, warning or hold on it.
-- **Closed by the operator.** An agent-attributed `orbit.task.update` (one that passes `model`) cannot move a human-crew task to `done`. The operator's own update or the dashboard can.
+- **Closed by the operator.** An agent-attributed `orbit.task.update` (one that passes `model`) cannot move a human-crew task to `done`. The operator's own update or the dashboard can, and without the lifecycle gates: `orbit task update <id> --status <status>` or the dashboard's status control (which offers every status for such a task) moves a human-crew task from any status to any other, for example `proposed` to `done`, with no plan, review, completion evidence or `--force`. A note stays optional. Each move is recorded as a `forced` status entry with the actor, the from and to statuses and a note naming the human crew (`human-crew bypass`). Only the operator's CLI and dashboard get this; `orbit.task.update` and MCP keep the normal lifecycle on the same task, so assigning a human crew never lets an agent skip review. A non-terminal local run that owns the task still refuses the move, and leaving `done` or `archived` still needs `--force`.
 - **Out of agent analytics.** Crew analytics, performance rankings, the crew ladder and provider usage leave human crews out.
 - **Listed.** `orbit config show` lists a human crew with provider `human`, and `orbit config get crews.<name>.kind` answers `human`. For an agent crew, `kind` is absent. The dashboard tags each human-crew task `for <name>`. Its **My work** chip (`#tasks?crew=mine`) keeps the open tasks of the viewer's human crew: the only human crew, or else the one matching the OS user that runs `orbit web serve`.
 - **Seeded by `orbit init`.** When the global config has no human crew, `orbit init` adds one named after the OS user, normalized to lowercase letters, digits, `_` and `-`. At a terminal it prompts with the OS user as the default; without a terminal, or with `--non-interactive`, it takes the OS user as-is. `--human-name <NAME>` sets the name. A name an agent crew already holds is asked again at a terminal and refused otherwise, before init writes anything. A re-run leaves an existing human crew unchanged.
@@ -2162,6 +2164,15 @@ existing recovery activities, final validation and push do the repair:
   this journal and includes a current refusal in the stop diagnostic, including
   when the original completion budget expires. A diagnostic write failure is
   reported in a warning and never grants recovery permission.
+- A rerun-planner hold in owner-local `auto_fix=true` completion is bounded.
+  The owning task records `pr_auto_fix_ci_rerun_hold` with the head and
+  reason when a hold begins on a head. After 15 minutes on that head, or on
+  the completion's last poll, the hold expires: `pr_auto_fix_ci_rerun_hold_expired`
+  is recorded and the failed checks take the ordinary repair path, whose
+  known-red-base and evidence gates still admit a repair or stop with a
+  reason. A dependency-only record holds only when no other job failed: a
+  failed sibling the logs cannot tie to a changed file (for example a
+  guardrail check) is still a candidate failure and goes to repair.
 - Final recovery after `complete_pr` re-reads required checks on the current
   head and receives each failed check's name and diagnostic evidence in
   `required_check_failures`, independently of the earlier step error. The

@@ -34,15 +34,21 @@ pub(super) fn load_registry_for_selector_resolution(
 
 /// The host data directory a registry lookup reads: the `--root` override when
 /// one was passed, the trusted managed registry locator for a managed child,
-/// and `~/.orbit` otherwise. Never derived from cwd, so a registry-first
-/// command works from any directory.
+/// and `~/.orbit` otherwise. A relative `--root` is joined to the process
+/// current directory, as workspace root resolution does, so the same relative
+/// path names a different registry from each directory. An absolute `--root`,
+/// the managed locator and the `~/.orbit` default are not derived from cwd, so
+/// a registry-first command resolves them from any directory.
 ///
 /// This is the single answer to "which registry does `--root` select?", shared
 /// by every root-aware surface — including the dashboard, which used to load
 /// the machine-global registry unconditionally (ORB-11388).
 pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
     match root_override {
-        Some(root) => Ok(root.to_path_buf()),
+        Some(root) if root.is_absolute() => Ok(root.to_path_buf()),
+        Some(root) => std::env::current_dir()
+            .map(|cwd| cwd.join(root))
+            .map_err(|error| OrbitError::Io(error.to_string())),
         None => orbit_core::runtime::resolve_global_root(),
     }
 }

@@ -149,6 +149,14 @@ impl ConfigStore {
         mode: WorkspaceInitMode,
     ) -> Result<Self, OrbitError> {
         let path = workspace_config_path.into();
+        if let (Some(workspace_root), Some(global_root)) =
+            (path.parent(), global_config_path.parent())
+        {
+            let roots = ConfigRoots::new(global_root, workspace_root);
+            if !roots.has_workspace_layer() {
+                validate_staged_workspace_document(&roots, &path, "")?;
+            }
+        }
         // A file holding only `[plugin_enablement]` is not a policy layer
         // yet, so the first real setting written into it gets the same
         // fail-closed choice as a missing file; the toggles are carried over.
@@ -313,7 +321,11 @@ impl ConfigStore {
     pub fn snapshot_with_global(&self, global_root: &Path) -> Result<ConfigSnapshot, OrbitError> {
         // Without a distinct workspace, both runtime roots name the global
         // file. Preserve its standalone semantics, including [machine].
-        if self.path.parent() == Some(global_root) {
+        if self
+            .path
+            .parent()
+            .is_some_and(|root| !ConfigRoots::new(global_root, root).has_workspace_layer())
+        {
             return self.snapshot();
         }
         match self.scope {

@@ -83,6 +83,19 @@ export function setRenderer(fn) {
   taskRenderer = fn;
 }
 
+// An answered decision changes what waits on the operator. The task list reads
+// that from a cache task-nav.js owns, so it subscribes here instead of being
+// imported by the modules that answer decisions.
+const decisionAnsweredListeners = new Set();
+
+export function onDecisionAnswered(listener) {
+  decisionAnsweredListeners.add(listener);
+}
+
+export function notifyDecisionAnswered() {
+  for (const listener of decisionAnsweredListeners) listener();
+}
+
 export function rerender(context) {
   taskRenderer(taskList(context), context);
 }
@@ -119,6 +132,15 @@ export function statusTransitions(task) {
   return Array.isArray(task && task.status_transitions)
     ? task.status_transitions.filter((transition) => transition && transition.status)
     : [];
+}
+
+// The operator moves a human crew's task to any status without the lifecycle
+// gates, and the server applies it as a plain PATCH. A task already `done` or
+// `archived` keeps the governed list and the forced override.
+export function usesHumanCrewBypass(task) {
+  if (!task || !task.crew || task.status === "done" || task.status === "archived") return false;
+  const humanCrews = taskState.lastCrewPayload.human_crews || [];
+  return humanCrews.some((crew) => crew.name === task.crew);
 }
 
 export function statusTransition(task, targetStatus) {

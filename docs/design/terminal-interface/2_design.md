@@ -76,6 +76,8 @@ A closed stdout is not an error. During rendering, `output/pipe.rs` suppresses t
 
 ## 8. Test Coverage of Output
 
+Clap-rendered help (flag descriptions, about text, command lists, footers) wraps to the sink width with a hanging indent: the workspace enables Clap's `wrap_help`, `cli_command` hands Clap the sink width, and `help::hang_wrap_footers` wraps footer lines first so a continuation stays under its example. The hand-built grouped rows are template text Clap never re-wraps. Piped help has width 0, which keeps source formatting and so stays unwrapped; the goldens pin that form. The PTY test `clap_help_wraps_to_the_terminal_width_with_a_hanging_indent` covers the terminal layout at 60, 80 and 120 columns.
+
 Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover the plain and JSON forms of tool, task, and skill lists; they also cover a plain task detail view and the layer provenance of `config show --json`. CLI long-help goldens live under `crates/orbit-cli/tests/help_goldens/` and are compared against the binary's `--help`. `tests/snapshots/` holds the MCP tool listing. The list-command integration goldens capture piped output; the table form needs a terminal, so no golden covers it.
 
 The first rendering assertions arrived with the borderless migration [ORB-10567]. `crates/orbit-cli/tests/output/table_rendering.rs` runs the binary and asserts that an *N*-record `orbit task list` is *N* body lines under one header with no box glyphs, and that a zero-result list leaves stdout empty.

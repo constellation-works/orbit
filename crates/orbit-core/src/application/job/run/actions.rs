@@ -663,6 +663,25 @@ impl OrbitRuntime {
         self.stores().jobs().read_run_states(run_ids)
     }
 
+    /// Pipeline state for a triage scan: one store call, and unreadable JSON
+    /// fails the scan the way [`Self::read_run_state`] does.
+    ///
+    /// [`Self::read_run_states`] turns a bad checkpoint into an absent state so
+    /// a list page still renders. Using that here would bind the run from its
+    /// submitted input instead of failing the scan.
+    pub fn read_run_states_exact(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<orbit_types::workflow::PipelineState>>, OrbitError> {
+        let _read = tracing::debug_span!(
+            target: "orbit.core.job_run_state",
+            "read_job_run_states_exact",
+            run_count = run_ids.len() as u64,
+        )
+        .entered();
+        self.stores().jobs().read_run_states_exact(run_ids)
+    }
+
     /// Persist a complete run-state snapshot. Changes that must survive another
     /// writer use the store's transactional `update_run_state` instead.
     pub fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError> {

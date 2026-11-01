@@ -1833,7 +1833,11 @@ one. From then on:
   its repair route and vetoes the workflow-wide retry. Unreadable/truncated
   jobs, steps or logs, pending/unknown outcomes, foreign events/identities,
   policy/source/lease changes or ambiguous dependencies hold explicitly.
-  No check name or error-message match proves a dependency.
+  No check name or error-message match proves a dependency. Dependency-only
+  records hold only when no other job failed. In owner completion, look for
+  `pr_auto_fix_ci_rerun_hold` on the task: the hold expires after 15 minutes
+  on one head (`pr_auto_fix_ci_rerun_hold_expired`) and the failure goes to
+  the ordinary repair path.
 
   For a dependency-only waiter, the trusted workflow declares
   `ORBIT_DEPENDENCY_PRODUCER`, `ORBIT_DEPENDENCY_PRODUCER_SHA`,

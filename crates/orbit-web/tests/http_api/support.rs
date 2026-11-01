@@ -282,6 +282,30 @@ impl Fixture {
         )
     }
 
+    /// A server that records each exact pipeline-state batch read.
+    pub(super) fn counted_run_state_server(&self) -> Server {
+        self.server_impl_with_env(
+            false,
+            false,
+            false,
+            &self.path("process.log"),
+            None,
+            &[(
+                "ORBIT_HTTP_RUN_STATE_TRACE",
+                self.path("run-state.jsonl").as_os_str(),
+            )],
+        )
+    }
+
+    pub(super) fn run_state_trace(&self) -> Vec<Value> {
+        fs::read_to_string(self.path("run-state.jsonl"))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
     pub(super) fn job_run_query_trace(&self) -> Vec<Value> {
         fs::read_to_string(self.path("run-query.jsonl"))
             .unwrap()
@@ -612,6 +636,10 @@ pub(super) fn serve_fixture() {
         .or_else(|| {
             std::env::var_os("ORBIT_HTTP_RUN_QUERY_TRACE")
                 .map(|path| (path, &["orbit.core.job_run.reconcile"][..]))
+        })
+        .or_else(|| {
+            std::env::var_os("ORBIT_HTTP_RUN_STATE_TRACE")
+                .map(|path| (path, &["orbit.core.job_run_state"][..]))
         });
     if let Some((path, targets)) = trace {
         // Count task-store operations (with the codebase scan's per-task

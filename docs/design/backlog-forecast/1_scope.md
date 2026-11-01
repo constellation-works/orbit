@@ -15,7 +15,7 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 # Scope: backlog forecast v2 from drain admission
 
-Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, and [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**, and [ORB-20729] applies that correction to the full-script total as `MODEL_VERSION` **17**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/task/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
@@ -73,7 +73,7 @@ with empty selectors made the whole workspace unavailable.
 - **Storage.** Stored model-13 rows stay readable and scored under their
   own version. While 14 was current, the default read served only a
   model-14 snapshot, so a fresh model-13 row was recomputed live, under
-  the unchanged hourly write rule. Model 16 keeps that rule for its own
+  the unchanged hourly write rule. Model 17 keeps that rule for its own
   snapshot.
 
 Stored read path [ORB-19615], with no model version change: the default
@@ -111,11 +111,17 @@ read serves the newest stored forecast instead of recomputing it.
   and notes when its scores are the stored ones.
 
 Residual correction [ORB-20673] counts one residual per distinct task as
-model version **16** [ORB-20728]. The simulation still resamples delivery
-history. Before each attempt is scheduled, a log-affine map learned from
-scored per-task residuals shifts that attempt's hours, tokens and USD.
-Drain time, cost and tokens inherit the shift, including generated rework
-and arrival draws, because the schedule charges the corrected attempts.
+model version **16** [ORB-20728] and applies to the full script as model
+version **17** [ORB-20729]. The simulation still resamples delivery
+history. Before a script is scheduled, a log-affine map learned from
+scored per-task residuals is applied once per metric to the script's
+uncorrected full-script total, and its steps are scaled so their
+corrected sum equals that corrected total. Model 16 applied the map to
+each attempt step instead, so with non-zero spread the corrected steps
+did not sum to the correction of the total the residuals were trained
+on. Drain time, cost and tokens inherit the shift, including generated
+rework and arrival draws, because the schedule charges the corrected
+attempts.
 
 - **Fit.** For each metric (work hours, tokens, USD) and complexity, training
   uses only stored forecasts of the current model version. A residual is
@@ -156,12 +162,14 @@ and arrival draws, because the schedule charges the corrected attempts.
   memory. The fit is one pass over the forecasts scoring already loaded
   (the newest 60 rows, plus up to 60 mature snapshots per version). It is
   recomputed for each forecast. There is no incremental table and no
-  migration. A version bump starts with no correction: version 16 does not
-  inherit version 15's residuals, and version 15 did not inherit version 14's.
+  migration. A version bump starts with no correction: version 17 does not
+  inherit version 16's residuals, version 16 did not inherit version 15's,
+  and version 15 did not inherit version 14's.
 - **Earlier versions.** Scoring branches are unchanged. Versions before 15
   keep their own hour measure and hit rates under
   `calibration.by_model_version`. Model 15's correction rows stay scored
-  under version 15 and do not train version 16.
+  under version 15 and do not train version 16; model 16's rows likewise
+  do not train version 17.
 - **Payload.** `inputs.correction` reports `half_life_days`, `window_days`,
   `min_n`, `max_abs_log_adjust` and one cohort per complexity and metric
   (`n`, `weight`, `applied`, and the terms when `n > 0`). `n` counts
@@ -430,7 +438,7 @@ Retain `backlog_forecasts` (introduced by store migration v62) and `BacklogForec
 
 Persist the additive response inputs and per-task predictions: snapshot status/dependencies/footprint hash, phase/review basis, start distributions, completion probabilities, riskiness estimator version and expected synthetic work. Store the factor manifest alongside numeric `model_version`; old rows lacking these fields remain readable under their original measure. Do not rewrite old predictions with today's risk, policy or task metadata.
 
-**Bump once per landed forecast factor**, in integration order: (1) dependencies/locks/footprint/reservations/dispatch, (2) review-mode cells, (3) outcome/return phases, (4) resource fit, (5) regression rework. The standalone task-riskiness feature versions its estimator independently; when consumed or recalibrated in forecasts it also bumps `model_version`. Record each factor's own revision in `inputs.admission_factors` so reordered implementations remain identifiable. Further changes to sampling, fallback, timing, risk priors or quantile/scoring meaning require another bump, including bug fixes that alter predictions. Model 15 is that bump for the residual correction. Model 16 [ORB-20728] recounts it by distinct task, one residual from the latest eligible forecast, so repeated snapshots cannot satisfy the minimum. Neither adds an admission factor. Display-only changes do not. Never reuse a version for different enabled factors. Sequential hourly snapshots allow factor effects to be compared with support/changed-workload caveats, not claimed as causal ablations.
+**Bump once per landed forecast factor**, in integration order: (1) dependencies/locks/footprint/reservations/dispatch, (2) review-mode cells, (3) outcome/return phases, (4) resource fit, (5) regression rework. The standalone task-riskiness feature versions its estimator independently; when consumed or recalibrated in forecasts it also bumps `model_version`. Record each factor's own revision in `inputs.admission_factors` so reordered implementations remain identifiable. Further changes to sampling, fallback, timing, risk priors or quantile/scoring meaning require another bump, including bug fixes that alter predictions. Model 15 is that bump for the residual correction. Model 16 [ORB-20728] recounts it by distinct task, one residual from the latest eligible forecast, so repeated snapshots cannot satisfy the minimum. Model 17 [ORB-20729] applies it to the full-script total and distributes it over the steps. None adds an admission factor. Display-only changes do not. Never reuse a version for different enabled factors. Sequential hourly snapshots allow factor effects to be compared with support/changed-workload caveats, not claimed as causal ablations.
 
 Keep the newest-60-snapshot read for v1 scoring and recent v2 provisional diagnostics. For v2 horizon metrics also read up to the newest 60 mature snapshots per model version, with `forecast_at` at least 90 days old; otherwise hourly snapshots would age out of a 60-row window before they were ever scoreable. Cache these bounded maturity reads and report their window/counts. Partition calibration by model version/factor manifest and execution-host/mode. Keep v1 scoring unchanged: invocation-union hours and its original exclusions. For v2:
 
@@ -507,6 +515,7 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 | [ORB-19961] | Shipped: legacy fix footprints recovered from durable history, classified fix-history gaps and exclusions, and support scoped to the sampled pool (model 14, regression rework factor 2). |
 | [ORB-20673] | Shipped: per-metric, per-complexity residual correction on simulated draws, with a 14-day half-life, a 90-day window, a minimum of 8 residuals, and uncorrected fallback below that (model 15). |
 | [ORB-20728] | Shipped: the residual correction keeps one residual per distinct task (the latest eligible forecast), so `n` and weight count independent tasks and a repeated snapshot cannot meet the minimum of 8 (model 16). |
+| [ORB-20729] | Shipped: the residual correction is applied to the full-script total and distributed over its steps, matching the full-task totals it is trained on (model 17). |
 
 ## Task References
 
@@ -530,5 +539,6 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 - [ORB-19963] — explains unavailable forecasts and labels the pre-regression baseline in the dashboard.
 - [ORB-20673] — corrects bias and quantiles from scored per-task residuals (model 15).
 - [ORB-20728] — counts residual-correction samples by distinct task (model 16).
+- [ORB-20729] — applies the residual correction to the full-script total (model 17).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

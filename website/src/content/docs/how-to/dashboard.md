@@ -580,7 +580,7 @@ These counts answer different questions:
 | **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
 | Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
 | **Health → Incidents → Events**, **denied** status | Audited calls recorded as denied. This is a filtered list, not a rail count. |
-| **Health → Incidents → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
+| **Health → Incidents → Errors** | Step and event failures in the selected window. When paging, errors appear one page at a time (8 per page on desktop, 4 at widths up to 600px), with **Previous** and **Next** controls. The panel header shows the current range as `Showing a–b of N`, names the window, and reports when retention or the stderr read cap leaves part of it unread. |
 
 From a terminal, the same facts come from `orbit task show <task-id>`,
 `orbit run show <run-id>`, and `orbit audit list`.
@@ -1381,7 +1381,11 @@ status, task, and body text, and **Show** filters by status:
 
 Each row shows the record's ID, when it was reported, a summary of its
 body, its status pill and tags, and `during <task-id>` when it was filed
-against a task. Select a row to open **Friction detail**: the full body,
+against a task. The list shows eight records at a time. **Previous** and
+**Next**, beside search and **Show**, move through the rest and leave the
+current search and status in place. The count next to **Knowledge** is the
+on-screen range against the total for the current status, such as
+`1–8/74`. Select a row to open **Friction detail**: the full body,
 its status, model, reported and resolved times, tags, and the task it
 names. On a narrow screen the detail opens inline under the row instead of
 in its own panel.

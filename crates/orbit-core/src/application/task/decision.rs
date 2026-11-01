@@ -97,6 +97,9 @@ pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
     if let Some(action) = &request.human_action {
         entry["human_action"] = json!(action);
     }
+    if let Some(topic) = &request.topic {
+        entry["topic"] = json!(topic);
+    }
     entry
 }
 
@@ -423,6 +426,32 @@ impl OrbitRuntime {
                     task_id,
                     TaskUpdateParams {
                         comment: Some(comment),
+                        ..Default::default()
+                    },
+                    actor_label.to_string(),
+                )?;
+                Ok(None)
+            }
+            DecisionGate::AgentRequest => {
+                let task = self.get_task(task_id)?;
+                if !self.is_human_crew(task.crew.as_deref()) {
+                    return Err(OrbitError::decision_refused(
+                        DecisionRefusalCode::AnswerNotApplicable,
+                        format!(
+                            "task {task_id} is no longer assigned to a human crew, so its decision cannot complete it; nothing was applied and the request stays open"
+                        ),
+                    ));
+                }
+                let consequence = request
+                    .answer(answer_id)
+                    .map(|answer| format!("Consequence: {}", answer.consequence))
+                    .unwrap_or_default();
+                let comment = decision_comment(request, answer_id, chosen, via, note, &consequence);
+                self.update_task_as_human(
+                    task_id,
+                    TaskUpdateParams {
+                        comment: Some(comment),
+                        status: Some(TaskStatus::Done),
                         ..Default::default()
                     },
                     actor_label.to_string(),

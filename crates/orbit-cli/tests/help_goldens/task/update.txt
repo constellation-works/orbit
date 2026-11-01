@@ -47,7 +47,7 @@ Options:
           Append a task comment
 
       --status <STATUS>
-          New status
+          New status. A task assigned to a human crew takes any status from you directly, with no plan, evidence or review and no `--force`; the change is recorded in task history as a human-crew bypass
           
           [possible values: proposed, backlog, someday, in-progress, review, done, blocked, archived, rejected]
 
@@ -122,7 +122,7 @@ Options:
           Discard the candidate the task's last failed run preserved, so its next run implements fresh instead of resuming it. Combine with `--status backlog` to requeue
 
       --force
-          Apply `--status` even when the task lifecycle refuses the transition (for example reopening a done task). Human-operator override: the change is recorded in task history as `forced`
+          Apply `--status` even when the task lifecycle refuses the transition (for example reopening a done task). Human-operator override: the change is recorded in task history as `forced`. A human-crew task needs no `--force` except to leave `done` or `archived`
 
       --allow-drop-system-tags
           Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`)

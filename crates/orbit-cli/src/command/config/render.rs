@@ -109,17 +109,25 @@ pub(super) fn effective_text(
     let mut out = String::new();
     let global_path = runtime.global_root().join("config.toml");
     let workspace_path = runtime.shared_root().join("config.toml");
-    let workspace_file_exists = workspace_path.exists();
+    let has_workspace_layer = super::support::runtime_config_roots(runtime).has_workspace_layer();
+    let workspace_file_exists = has_workspace_layer && workspace_path.exists();
 
     let _ = writeln!(out, "orbit config — effective{}", workspace_suffix(runtime));
     let _ = writeln!(out);
-    let _ = writeln!(
+    let _ = write!(
         out,
-        "{:<HEADING_WIDTH$} built-in defaults → global {} → workspace {}",
+        "{:<HEADING_WIDTH$} built-in defaults → global {}",
         "Layers (later wins)",
-        display_path(&global_path, global_path.exists()),
-        display_path(&workspace_path, workspace_file_exists),
+        display_path(&global_path, global_path.exists())
     );
+    if has_workspace_layer {
+        let _ = write!(
+            out,
+            " → workspace {}",
+            display_path(&workspace_path, workspace_file_exists)
+        );
+    }
+    let _ = writeln!(out);
     // A workspace file holding only `[plugin_enablement]` is not a policy
     // layer, so the exception is not in force for it.
     if workspace_file_exists && orbit_config::workspace_config_sets_policy(&workspace_path) {

@@ -87,7 +87,24 @@ new task with a `regression_from` relation. Only an operator's
 `orbit task archive <id>` is that table's move to `archived` (`done` and
 `rejected` are not sources). `rejected` returns to `backlog` or
 `in-progress`. Follow supported transitions and the assigned workflow; agents
-have no lifecycle force override.
+have no lifecycle force override. A task assigned to a human crew
+(`[crews.<name>] kind = "human"`) is operator work: the operator's own
+`orbit task update --status` or dashboard status control sets any status from
+`proposed` to `done` with no plan, review, evidence or `--force`, and task
+history records it as a `forced` entry naming the human-crew bypass. Agents and
+MCP stay on the normal lifecycle for that task, and leaving `done` or
+`archived` still needs `--force`.
+
+When you need a person to choose between known options, such as a sign-off, a
+price or a policy fork, raise `orbit.decision.raise` on a human-crew task you
+filed instead of writing a free-text human task: a question, two to four options
+(one-line label and consequence, exactly one `recommended`), and an optional
+`topic`. Only the operator answers; the answer is recorded in the task's history,
+completes the task and unblocks its `blocked_by` dependents. Free text stays for
+open-ended asks. A decision is scoped to its task, and past answers are never
+precedent. An answer that changes lasting behaviour or policy must be carried into
+the doc, config or code that owns it, in the PR of the task it unblocks.
+Details: [Tool surface](references/tool-surface.md#raising-a-decision).
 
 When you work a task directly in an interactive session instead of through a
 drain, set its `context_files` to the files the work will touch as you claim

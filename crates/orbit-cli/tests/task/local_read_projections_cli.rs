@@ -219,6 +219,7 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
     let workspace_root = Path::new(shown_workspace["orbit_root"].as_str().unwrap());
     let run_id = "jrun-show-summary";
     let now = Utc::now();
+    let pid = std::process::id();
     let id = {
         let _authority = orbit_common::test_env::unset(
             orbit_common::test_env::INHERITED_AUTHORITY_ENV
@@ -239,8 +240,8 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
             started_at: Some(now),
             finished_at: None,
             duration_ms: None,
-            pid: None,
-            pid_start_time: None,
+            pid: Some(pid),
+            pid_start_time: orbit_common::process::identity::process_start_identity_token(pid),
             input: None,
             retry_source_run_id: None,
             knowledge_metrics: None,

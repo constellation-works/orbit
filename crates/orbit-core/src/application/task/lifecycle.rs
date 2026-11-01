@@ -25,8 +25,13 @@ const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agen
 
 /// Status event recorded when a human overrides the lifecycle table from the
 /// bare CLI or the dashboard, so an audit can tell a governed transition from
-/// an override.
+/// an override. An operator's move of a human crew's task records it too, with
+/// [`HUMAN_CREW_BYPASS_NOTE`] naming why no `--force` was needed.
 pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
+
+/// Opens the note of the `forced` entry recorded when an operator moves a human
+/// crew's task without the lifecycle gates; the crew name follows.
+pub(crate) const HUMAN_CREW_BYPASS_NOTE: &str = "human-crew bypass: task is assigned to human crew";
 
 /// Status event recorded when Orbit settles a task to `done` from its delivery
 /// pull request merged outside Orbit (`external_merge`). Like the delivery

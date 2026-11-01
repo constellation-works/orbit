@@ -1,7 +1,7 @@
 ---
 title: "Human decision channel — Design"
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-11-01
 last_validated: 2026-10-27
 status: Draft
 feature: human-decision-channel
@@ -69,10 +69,11 @@ the plugin stays a pure transport.
 |---|---|
 | `id` | Opaque request id (`dr-<random>`); the token binds to it, mail subjects carry it |
 | `task_id` | The held task |
-| `gate` | `block_triage` \| `pilot_admission` \| `proposed_approval` \| `review_approval` |
+| `gate` | `block_triage` \| `pilot_admission` \| `proposed_approval` \| `review_approval` \| `agent_request` |
 | `answers[]` | Allowed answers: stable `id`, short `label`, one-line `consequence` (rendered in mail and dashboard) |
 | `binding` | Stale-guard binding (§5): per gate, the episode/operation/revision the request was raised against |
-| `raised_by`, `raised_at` | The mechanism that raised it (`block_triage`, `task_pilot`, `digest`) and when |
+| `raised_by`, `raised_at` | The mechanism that raised it (`block_triage`, `task_pilot`, `digest`, `agent_request`) and when |
+| `topic`, `filer` | Agent-raised requests only: an exact-match structured topic (or corpus rule id) and the raising agent's writer label (the per-filer cap counts by it) |
 | `expires_at` | `raised_at + request_ttl_hours` (default 72h); the token expires with it |
 | `state` | `open` → `answered` \| `superseded` \| `expired` (§2.2) |
 | `resolution` | On `answered`: chosen answer id, answering human, channel provenance, note text, applied-at |
@@ -105,6 +106,18 @@ per request:
   the hold's `operation_id`, so `operator_resolution`
   (`crates/orbit-core/src/application/task/pilot/admission.rs:377`) accepts it
   unchanged.
+- **Agent request** (`orbit.decision.raise`): an agent puts a multiple-choice question
+  on a task assigned to a human crew. It carries two to four plain answers `1`..`4` (one-line
+  label and consequence), the one the agent recommends first as `1`, and no rewrite or action.
+  It is task-scoped: no store, table or precedent lookup; the record is the task's history.
+  Raising is bounded: the same open question (case- and spacing-insensitive, same topic)
+  returns the existing request, a task holds one open request, and open agent-raised requests
+  are capped at 20 per workspace and 5 per filer, refused past either with nothing written.
+  Only the operator answers (an agent label is refused `caller_not_allowed`): the answer
+  records who, when and which option, comments the option's consequence, moves the human-crew
+  task to `done` as the operator (the human-crew bypass) and so satisfies its `blocked_by`
+  dependents. An answer that changes lasting behaviour is carried by the task it unblocks into
+  the owning doc, config or code. The corpus append of an answered request carries its `topic`.
 - **Proposed / review approval:** `approve` / `reject`, applied through the
   screened approval / the existing reject path. A proposed `approve` first
   passes the pilot preparation and admission screening above; a review
@@ -320,6 +333,7 @@ The binding (§2.1) is what makes a slow reply safe. Per gate, the request binds
 | `pilot_admission` | Pilot `operation_id` of the holding assessment | A newer assessment landed, or an operator verdict already resolved that `operation_id` |
 | `proposed_approval` | Task revision + `proposed` status | Status moved, or description/criteria changed since the digest rendered |
 | `review_approval` | Task revision + `review` status + candidate identity | Status moved, or a new candidate replaced the reviewed one |
+| `agent_request` | Task revision + the task's status at raise | Status moved, or description/criteria changed since the raise |
 
 Core judges the binding, state, expiry and allowed answer on a fresh read of
 the task under its write lock, and applies the gate's effect and records

@@ -104,11 +104,77 @@ pub(crate) fn plugin_enablement_from_document(
     Ok(toggles)
 }
 
+/// Host label a global document names for itself: `[machine] name`, else its
+/// `id`, else `this host`.
+fn host_label_from_document(document: &toml::Value) -> String {
+    document
+        .get("machine")
+        .and_then(toml::Value::as_table)
+        .and_then(|machine| {
+            machine
+                .get("name")
+                .or_else(|| machine.get("id"))
+                .and_then(toml::Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .unwrap_or("this host")
+        .to_string()
+}
+
+/// Exact fix for a misplaced global `[plugin_enablement]` table.
+pub fn global_plugin_enablement_fix(path: &Path) -> String {
+    format!(
+        "Remove [{PLUGIN_ENABLEMENT_TABLE}] from '{}'. Host enablement is \
+         `orbit plugin enable|disable <plugin>`; a per-workspace toggle is \
+         `orbit plugin enable|disable <plugin> --scope workspace`",
+        redact_home_dir(&path.display().to_string())
+    )
+}
+
+/// A `[plugin_enablement]` table found in a global `config.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MisplacedGlobalPluginEnablement {
+    /// Host label the global document names (`[machine] name` or `id`).
+    pub host: String,
+    /// Global config file holding the table.
+    pub path: std::path::PathBuf,
+}
+
+/// Read `path` (a global `config.toml`) and report a misplaced
+/// `[plugin_enablement]` table, without admitting the rest of the config.
+/// A missing file is not misplaced; a malformed file is an error naming it.
+pub fn misplaced_global_plugin_enablement(
+    path: &Path,
+) -> Result<Option<MisplacedGlobalPluginEnablement>, OrbitError> {
+    let Some(raw) = read_config_file(path)? else {
+        return Ok(None);
+    };
+    let document = toml::from_str::<toml::Value>(&raw).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "invalid runtime config '{}': {error}",
+            redact_home_dir(&path.display().to_string())
+        ))
+    })?;
+    let present = document
+        .as_table()
+        .is_some_and(|table| table.contains_key(PLUGIN_ENABLEMENT_TABLE));
+    if !present {
+        return Ok(None);
+    }
+    Ok(Some(MisplacedGlobalPluginEnablement {
+        host: host_label_from_document(&document),
+        path: path.to_path_buf(),
+    }))
+}
+
 /// Refuse `[plugin_enablement]` in the global `config.toml`.
 ///
 /// Host enablement is the plugin store row `orbit plugin enable|disable`
 /// writes; a global toggle table would be a second host switch that the
-/// grants witness does not cover.
+/// grants witness does not cover. The refusal is a typed host-configuration
+/// error naming the host and file, not the caller's `invalid_input`: a
+/// follower whose remote call the owner serves did nothing wrong.
 pub(crate) fn reject_global_plugin_enablement(
     document: &toml::Value,
     path: &Path,
@@ -119,12 +185,14 @@ pub(crate) fn reject_global_plugin_enablement(
     if !present {
         return Ok(());
     }
-    Err(OrbitError::InvalidInput(format!(
-        "[{PLUGIN_ENABLEMENT_TABLE}] is a workspace setting: remove it from '{}'. Host \
-         enablement is `orbit plugin enable|disable <plugin>`; a per-workspace toggle is \
-         `orbit plugin enable|disable <plugin> --scope workspace`",
-        redact_home_dir(&path.display().to_string())
-    )))
+    Err(OrbitError::host_configuration(
+        host_label_from_document(document),
+        redact_home_dir(&path.display().to_string()),
+        format!(
+            "[{PLUGIN_ENABLEMENT_TABLE}] is a workspace setting. {}",
+            global_plugin_enablement_fix(path)
+        ),
+    ))
 }
 
 /// Remove the toggle table from a workspace document, reporting whether the

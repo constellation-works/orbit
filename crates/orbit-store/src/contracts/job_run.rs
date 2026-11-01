@@ -409,6 +409,24 @@ pub trait JobRunStoreBackend: Send + Sync {
         &self,
         run_ids: &[String],
     ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError>;
+    /// Pipeline state for many runs in one store call, failing on unreadable JSON.
+    ///
+    /// [`Self::read_run_states`] turns unreadable JSON into `None` so a list
+    /// page still renders. A triage scan must not: the single-run read returns
+    /// `invalid pipeline_state_json`, and treating that row as absent would
+    /// bind the run from its submitted input instead. A run with no state row
+    /// is `None`. The default reads each run with [`Self::read_run_state`];
+    /// the SQLite backend issues one query per chunk.
+    fn read_run_states_exact(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        let mut states = HashMap::with_capacity(run_ids.len());
+        for run_id in run_ids {
+            states.insert(run_id.clone(), self.read_run_state(run_id)?);
+        }
+        Ok(states)
+    }
     fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError>;
     /// Initialize an existing run's pipeline state only while it is absent.
     /// Returns `false` if another writer already supplied state, preserving

@@ -39,6 +39,7 @@ impl Execute for DecisionCommand {
         match spec.verb {
             DecisionVerb::List
             | DecisionVerb::Show
+            | DecisionVerb::Raise
             | DecisionVerb::Submit
             | DecisionVerb::Digest => {
                 let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
@@ -280,6 +281,9 @@ fn show_blocks(value: &Value) -> Vec<Block> {
             text(&answer["id"]),
             text(&answer["consequence"]),
         );
+    }
+    if let Some(topic) = value.get("topic").filter(|value| !value.is_null()) {
+        let _ = write!(out, "\ntopic: {}", text(topic));
     }
     if let Some(binding) = value.get("binding") {
         let _ = write!(out, "\nbinding: {binding}");
