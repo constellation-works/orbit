@@ -3103,6 +3103,32 @@
         "## Safe evidence",
         "## Windows, signatures and recurrence"
       ],
+      "digest": "235bab9796dc58085fb123cfc54e574333fa1e5b0e1a6f2f4bc3e1dc77710d32",
+      "revision": "15aff04ab5fb7e62ebb7e9e72f2f46994482a897",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * *"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
       "digest": "b0854dd74649335ced56c259ab8cf9e0c325cc883378e90384712534f6fd24ed",
       "revision": "a9fb991e3c53da61b874a87133c1f69756d72ec4",
       "settings": {
