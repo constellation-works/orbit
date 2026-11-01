@@ -274,7 +274,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "status",
                 ParamType::EnumList(TASK_STATUS_VALUES),
-                "Optional task status filter. Pass a comma-separated string or an array of status names.",
+                "Optional task status filter. Pass a comma-separated string or an array of status names: proposed, backlog, in-progress, review, done, blocked, archived, rejected, someday.",
                 CliArgKind::Flag {
                     long: "status",
                     delimiter: Some(','),

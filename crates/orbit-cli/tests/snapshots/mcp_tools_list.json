@@ -1231,7 +1231,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional task status filter. Pass a comma-separated string or an array of status names."
+          "description": "Optional task status filter. Pass a comma-separated string or an array of status names: proposed, backlog, in-progress, review, done, blocked, archived, rejected, someday."
         },
         "parent_id": {
           "type": "string",
