@@ -1,0 +1,149 @@
+{
+  "fixture": "implementers-scorecard",
+  "frozen_instant": "2026-01-01T12:00:00Z",
+  "tasks": [],
+  "scorecard": {
+    "role": "implementers",
+    "unit": "implemented tasks",
+    "status": "ok",
+    "window": "30d",
+    "requested_window": "30d",
+    "since": "2026-09-19T08:00:00Z",
+    "computed_at": "2026-10-19T08:00:00.000Z",
+    "min_support": 10,
+    "cache_ttl_seconds": 300,
+    "tasks_scanned": 200,
+    "fleet_average": 99.99999999999999,
+    "terms": [
+      {
+        "key": "weighted_landed",
+        "label": "Landed",
+        "weight": 1,
+        "group": "credit",
+        "definition": "Landed"
+      },
+      {
+        "key": "first_pass_accepts",
+        "label": "First-pass accepts",
+        "weight": 1,
+        "group": "credit",
+        "definition": "First-pass accepts"
+      },
+      {
+        "key": "review_rejects",
+        "label": "Review rejects",
+        "weight": -1,
+        "group": "problem",
+        "definition": "Review rejects"
+      },
+      {
+        "key": "reviewer_repairs",
+        "label": "Reviewer repairs",
+        "weight": -0.5,
+        "group": "problem",
+        "definition": "Reviewer repairs"
+      },
+      {
+        "key": "crew_rework",
+        "label": "Crew-caused rework",
+        "weight": -1,
+        "group": "problem",
+        "definition": "Crew-caused rework"
+      }
+    ],
+    "rows": [
+      {
+        "crew": "unpriced",
+        "model": "model-e",
+        "rank": 1,
+        "units": 24,
+        "score_base": 100,
+        "score": 88.7295081967213,
+        "raw": 88.7295081967213,
+        "below_support": false,
+        "runs_without_model": 0,
+        "provisional": null,
+        "counts": {
+          "weighted_landed": 16,
+          "first_pass_accepts": 16,
+          "review_rejects": 3,
+          "reviewer_repairs": 2,
+          "crew_rework": 1,
+          "escaped_regressions": 1
+        },
+        "per_100": {
+          "weighted_landed": 66.66666666666667,
+          "first_pass_accepts": 66.66666666666667,
+          "review_rejects": 12.5,
+          "reviewer_repairs": 8.333333333333334,
+          "crew_rework": 4.166666666666667,
+          "escaped_regressions": 4.166666666666667
+        },
+        "stats": [
+          {
+            "key": "escaped_regressions",
+            "label": "Escaped regressions (severity-weighted)",
+            "value": 1
+          },
+          {
+            "key": "regression_residual",
+            "label": "Regression residual (actual − expected)",
+            "value": 0
+          },
+          {
+            "key": "diff_economy",
+            "label": "Diff economy (× fleet median)",
+            "value": null
+          },
+          {
+            "key": "cost_per_weighted_landed",
+            "label": "Cost per landed task (USD)",
+            "value": null
+          },
+          {
+            "key": "cost_coverage",
+            "label": "Cost coverage (counted attempts)",
+            "value": "18 measured · 4 unpriced · 2 missing run of 24 counted attempts"
+          },
+          {
+            "key": "cost_coverage_attempts",
+            "label": "Cost coverage denominator (counted attempts)",
+            "value": 24
+          },
+          {
+            "key": "cost_measured_attempts",
+            "label": "Cost measured attempts",
+            "value": 18
+          },
+          {
+            "key": "cost_unpriced_attempts",
+            "label": "Cost unpriced attempts",
+            "value": 4
+          },
+          {
+            "key": "cost_missing_run_attempts",
+            "label": "Cost missing-run attempts",
+            "value": 2
+          },
+          {
+            "key": "median_run_seconds",
+            "label": "Median completed run (seconds)",
+            "value": 540
+          },
+          {
+            "key": "tasks_by_tier",
+            "label": "Tasks by tier",
+            "value": "medium: 24"
+          }
+        ],
+        "expected": {
+          "weighted_landed": 19.081967213114755,
+          "first_pass_accepts": 15.934426229508198,
+          "review_rejects": 3.3442622950819674,
+          "reviewer_repairs": 1.9672131147540983,
+          "crew_rework": 0.9836065573770492
+        }
+      }
+    ]
+  }
+}

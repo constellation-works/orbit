@@ -156,7 +156,7 @@ if [ -z "$url" ]; then
 fi
 # Serve the experiment API data from the fixture; all other requests use the
 # real disposable dashboard server. No experiment is created in the store.
-if [ -n "$first_experiment" ]; then
+if [ -n "$first_experiment" ] || [ "$fixture" = "implementers-scorecard" ]; then
   FIXTURE_TASK="$first_task" node - "$url" "$seed" "$first_experiment" <<'NODE' &
 const http = require("http");
 const fs = require("fs");
@@ -165,6 +165,12 @@ const seed = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 const id = process.argv[4];
 http.createServer((req, res) => {
   const path = req.url.split("?")[0];
+  if (req.method === "GET" && path === "/api/agents/implementers/scorecard" && seed.scorecard) {
+    const window = new URL(req.url, upstream).searchParams.get("window") || "last500";
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ...seed.scorecard, window, requested_window: window }));
+    return;
+  }
   const base = `/api/diagnostics/experiments/${encodeURIComponent(id)}`;
   if (req.method === "GET" && (path === base || path === `${base}/readout`)) {
     res.writeHead(200, { "content-type": "application/json" });
