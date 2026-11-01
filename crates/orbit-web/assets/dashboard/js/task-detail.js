@@ -303,6 +303,8 @@ export function buildTaskDetail(task, context, drain = null) {
   const [tabStrip, ...tabPanels] = sections;
   const band = el("div", { class: "detail-band" });
   band.appendChild(metaBlock);
+  const triageBadges = taskReadiness.buildActiveTriageBadges(task);
+  if (triageBadges.length) band.appendChild(el("div", { class: "task-active-triage" }, triageBadges));
   const blockCallout = taskWhyStuck.buildTaskBlockCallout(task, context, detail);
   if (blockCallout) band.appendChild(blockCallout);
   const whyStuck = taskWhyStuck.buildWhyStuckCard(task);

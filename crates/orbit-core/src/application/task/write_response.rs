@@ -15,7 +15,7 @@
 //! - [`TaskWriteResponsePolicy::DashboardFullRecord`] — the full
 //!   record plus the dashboard extras (linked pull requests,
 //!   `status_transitions`, `job_run_navigable`,
-//!   `readiness.preparing`). Only HTTP serves it.
+//!   `readiness.preparing`, `active_triage`). Only HTTP serves it.
 //! - [`TaskWriteResponsePolicy::Compact`] — [`task_base_json`] plus
 //!   OS and crew enrichments, no sidecar hydration. The tool host
 //!   (MCP) and therefore a routed remote CLI answer serve it.
@@ -31,12 +31,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{Task, TaskStatus, is_valid_orb_task_id, task_base_json};
+use orbit_types::workflow::{
+    FINAL_RECOVERY_CREWS_CONFIG_KEY, FINAL_RECOVERY_CREWS_KEY, JobRunState,
+};
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskAutomationPort;
 
+use super::job_port::TaskJobPort;
 use super::lifecycle::{task_status_transition_allowed, task_status_transition_required_field};
 use super::pull_request_links::PullRequestLinks;
 use super::record_json::{task_record_json, task_show_field_json};
@@ -277,7 +282,7 @@ pub(crate) fn task_reference_status_index(
 }
 
 /// Linked pull requests, lifecycle transitions, run navigability and
-/// `readiness.preparing`. These are dashboard controls, not part of
+/// `readiness.preparing` and active triage/recovery bindings. These are dashboard controls, not part of
 /// the shared task record; the dashboard detail and its write
 /// responses add them, no other profile does.
 pub fn with_dashboard_extras(
@@ -302,6 +307,9 @@ pub fn with_dashboard_extras(
             task,
         )),
     );
+    if let Some(triage) = active_task_triage_map(runtime)?.remove(&task.id) {
+        object.insert("active_triage".to_string(), triage);
+    }
     let mut value = Value::Object(object);
     if value.get("readiness").is_some() {
         let preparing = tasks_in_pilot_preparation(runtime).contains(&task.id);
@@ -345,6 +353,122 @@ pub fn tasks_in_pilot_preparation(runtime: &OrbitRuntime) -> BTreeSet<String> {
             tracing::warn!(%error, "task readiness: active pilot preparations unreadable");
             BTreeSet::new()
         })
+}
+
+/// Active triage and recovery run bindings, read once for a dashboard page.
+///
+/// Preparation checkpoints bind escalation partitions; a final-recovery
+/// checkpoint binds an inline recovery, and the backstop's input and prepared
+/// output bind its separate run. Crew names come from those recorded choices,
+/// never from the task's implementer or current configuration. A pending run
+/// can name a task before drawing its crew, in which case `crew` is null.
+pub fn active_task_triage_map(
+    runtime: &OrbitRuntime,
+) -> Result<BTreeMap<String, Value>, OrbitError> {
+    let workspace = runtime.paths().repo_root.canonicalize()?;
+    let mut by_task = BTreeMap::<String, BTreeMap<String, Value>>::new();
+    for status in [
+        JobRunState::Pending,
+        JobRunState::Running,
+        JobRunState::Retrying,
+    ] {
+        let runs = runtime
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                state: Some(status),
+                include_steps: false,
+                ..Default::default()
+            })?;
+        for run in runs {
+            let mut bind = |task_id: &str, crew: Option<&str>| {
+                by_task.entry(task_id.to_string()).or_default().insert(
+                    run.run_id.clone(),
+                    json!({"run_id": run.run_id, "crew": crew}),
+                );
+            };
+            let Some(state) = runtime.stored_run_state(&run.run_id)? else {
+                // Pending runs can be visible before their worker creates
+                // pipeline state. Only explicit submitted bindings count.
+                if let Some(input) = run.input.as_ref() {
+                    if run.job_id == super::BLOCKED_TASK_RECOVERY_JOB {
+                        if let Some(id) = input.get("task_id").and_then(Value::as_str) {
+                            bind(id, None);
+                        }
+                    } else if run.job_id == crate::application::contracts::ESCALATION_TRIAGE_JOB
+                        && let Some(ids) = input.get("task_ids").and_then(Value::as_array)
+                    {
+                        for id in ids.iter().filter_map(Value::as_str) {
+                            bind(id, None);
+                        }
+                    }
+                }
+                continue;
+            };
+            let recovery_crew = state
+                .activity_crew_draws
+                .get(FINAL_RECOVERY_CREWS_CONFIG_KEY)
+                .or_else(|| state.activity_crew_draws.get(FINAL_RECOVERY_CREWS_KEY))
+                .map(|draw| draw.crew.as_str());
+            if let Some(recovery) = state.final_recovery.as_ref()
+                && recovery.key.run_id == run.run_id
+                && recovery.decision.is_none()
+            {
+                bind(&recovery.task_id, recovery_crew);
+            }
+            if run.job_id == super::BLOCKED_TASK_RECOVERY_JOB {
+                // The run is bound on submission, including while prepare is
+                // pending. Its output names the same task after preparation.
+                let prepared = state.step_outputs.iter().find_map(|(index, output)| {
+                    (state.step_states.get(index) == Some(&JobRunState::Success)
+                        && output.get("proceed").is_some())
+                    .then_some(output)
+                });
+                if prepared.and_then(|output| output.get("proceed")) == Some(&Value::Bool(false)) {
+                    continue;
+                }
+                if let Some(task_id) = prepared
+                    .and_then(|output| output.pointer("/recovery/task_id"))
+                    .or_else(|| state.initial_input.get("task_id"))
+                    .and_then(Value::as_str)
+                {
+                    bind(task_id, recovery_crew);
+                }
+            } else if run.job_id == crate::application::contracts::ESCALATION_TRIAGE_JOB {
+                let prepared = state.step_outputs.iter().find_map(|(index, output)| {
+                    (state.step_states.get(index) == Some(&JobRunState::Success)
+                        && output.get("partitions").is_some()
+                        && output.get("tasks").is_some())
+                    .then_some(output)
+                });
+                if let Some(prepared) = prepared {
+                    if prepared.get("workspace_path").and_then(Value::as_str) != workspace.to_str()
+                    {
+                        continue;
+                    }
+                    if let Some(tasks) = prepared.get("tasks").and_then(Value::as_array) {
+                        for task in tasks {
+                            if let Some(task_id) = task.get("task_id").and_then(Value::as_str) {
+                                bind(task_id, task.get("crew").and_then(Value::as_str));
+                            }
+                        }
+                    }
+                } else if let Some(ids) = state
+                    .initial_input
+                    .get("task_ids")
+                    .and_then(Value::as_array)
+                {
+                    for task_id in ids.iter().filter_map(Value::as_str) {
+                        bind(task_id, None);
+                    }
+                }
+            }
+        }
+    }
+    Ok(by_task
+        .into_iter()
+        .map(|(id, runs)| (id, Value::Array(runs.into_values().collect())))
+        .collect())
 }
 
 /// Add `readiness.preparing` to a projection that carries readiness.

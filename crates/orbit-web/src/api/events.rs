@@ -26,7 +26,7 @@
 //!
 //! The connection cap and cooperative shutdown mirror `/api/log/stream`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,6 +42,7 @@ use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use futures_core::Stream;
 use orbit_core::application::change_watch::RunStateStamp;
+use orbit_core::application::task;
 use orbit_core::{OrbitRuntime, TaskStatus};
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -261,6 +262,7 @@ type TaskStamp = (TaskStatus, DateTime<Utc>);
 /// yet (`None`) produces no notices; its next successful read is its baseline.
 struct WorkspaceWatch {
     tasks: Option<BTreeMap<String, TaskStamp>>,
+    active_triage: Option<BTreeMap<String, Value>>,
     runs: Option<BTreeMap<String, RunStateStamp>>,
     run_read_at: DateTime<Utc>,
     reservations: Option<Vec<String>>,
@@ -275,6 +277,7 @@ impl Default for WorkspaceWatch {
         let now = Utc::now();
         Self {
             tasks: None,
+            active_triage: None,
             runs: None,
             run_read_at: now,
             reservations: None,
@@ -320,6 +323,29 @@ impl WorkspaceWatch {
                 self.tasks = Some(next);
             }
             Err(error) => tracing::debug!(%error, "change stream could not read task stamps"),
+        }
+
+        // Recovery admission and its decision change a task's decoration
+        // without changing either the task record or the delivery run state.
+        // Emit task notices for those transitions as well as run transitions.
+        match task::active_task_triage_map(runtime) {
+            Ok(next) => {
+                if let Some(previous) = &self.active_triage {
+                    let ids: BTreeSet<_> = previous.keys().chain(next.keys()).collect();
+                    for id in ids {
+                        if previous.get(id) != next.get(id) {
+                            let stamp = self.tasks.as_ref().and_then(|tasks| tasks.get(id));
+                            notices.push(task_notice(
+                                id,
+                                stamp.map(|(status, _)| *status),
+                                stamp.map(|(_, updated_at)| *updated_at),
+                            ));
+                        }
+                    }
+                }
+                self.active_triage = Some(next);
+            }
+            Err(error) => tracing::debug!(%error, "change stream could not read active triage"),
         }
 
         let mut runs_changed = false;

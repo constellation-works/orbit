@@ -164,6 +164,60 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
                 await_notice(&mut stream, "idle", idle);
             }
 
+            // Inline recovery changes the task decoration while its delivery
+            // run stays running and the task record is untouched.
+            let mut recovery_run = fixture.seed_run(
+                "jrun-events-recovery",
+                "task_pr_pipeline",
+                JobRunState::Running,
+            );
+            let mut state = orbit_types::workflow::PipelineState::new(
+                recovery_run.run_id.clone(),
+                recovery_run.job_id.clone(),
+                json!({"task_id": task.id}),
+            );
+            fixture
+                .runtime
+                .write_run_state(&recovery_run.run_id, &state)
+                .unwrap();
+            await_notice(&mut stream, "delivery before recovery", |n| {
+                kind(n) == "run" && n["id"] == recovery_run.run_id.as_str()
+            });
+            state.final_recovery = Some(
+                serde_json::from_value(json!({
+                    "key": {"run_id": recovery_run.run_id, "attempt": 1},
+                    "failed_step_id": "implement_bundle", "task_id": task.id,
+                    "admitted_at": chrono::Utc::now()
+                }))
+                .unwrap(),
+            );
+            fixture
+                .runtime
+                .write_run_state(&recovery_run.run_id, &state)
+                .unwrap();
+            await_notice(&mut stream, "recovery started", |n| {
+                kind(n) == "task" && n["id"] == task.id.as_str()
+            });
+            state.final_recovery.as_mut().unwrap().decision =
+                Some(orbit_types::workflow::FinalRecoveryDecision::Resume {
+                    step_id: "implement_bundle".into(),
+                    rationale: "Continue repaired work".into(),
+                });
+            fixture
+                .runtime
+                .write_run_state(&recovery_run.run_id, &state)
+                .unwrap();
+            await_notice(&mut stream, "recovery ended", |n| {
+                kind(n) == "task" && n["id"] == task.id.as_str()
+            });
+            recovery_run.state = JobRunState::Success;
+            fixture.save_run(&recovery_run);
+            await_notice(&mut stream, "delivery after recovery", |n| {
+                kind(n) == "run"
+                    && n["id"] == recovery_run.run_id.as_str()
+                    && n["state"] == "success"
+            });
+
             // A remote pull's capability row is not a local run. Its arrival
             // and expiry must invalidate readiness even while phase stays idle.
             for age in [0, 601] {
