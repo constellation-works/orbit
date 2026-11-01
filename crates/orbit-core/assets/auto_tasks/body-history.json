@@ -2939,6 +2939,31 @@
     },
     {
       "comments": [
+        "## Cap and rank the filings",
+        "## File one area review per area",
+        "## Finish",
+        "## Partition the tree",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "c969c9274c23b0b1e4912625b5e450ce3cc5dc9a1135d58d1fa359ec422ae99e",
+      "revision": "06690e4a87a2a475946a106c2480ae6bd49ece54",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 6 1 * *"
+        },
+        "tags": [
+          "full-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
         "## File one area review per area",
         "## Finish",
         "## Partition the tree",
@@ -3037,7 +3062,60 @@
       }
     }
   ],
-  "host-health": [],
+  "host-health": [
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
+      "digest": "235bab9796dc58085fb123cfc54e574333fa1e5b0e1a6f2f4bc3e1dc77710d32",
+      "revision": "8265466506be352e9b942c70095702ddc31b98b5",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * *"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Authority and hosts",
+        "## Bounded completion, report and cursor",
+        "## Dedupe and routing",
+        "## Inputs and service configuration",
+        "## Resolve contract for every filing",
+        "## Safe evidence",
+        "## Windows, signatures and recurrence"
+      ],
+      "digest": "b0854dd74649335ced56c259ab8cf9e0c325cc883378e90384712534f6fd24ed",
+      "revision": "a9fb991e3c53da61b874a87133c1f69756d72ec4",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "10 7 * * *"
+        },
+        "tags": [
+          "host-health",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "path-risk-review": [
     {
       "comments": [
@@ -3102,8 +3180,34 @@
         "## 6. Report and cursor",
         "## Rules and command surfaces"
       ],
+      "digest": "74b217bcd1842bc3f83efa55e1a24c33ab3f5fa7623c9b35d343ba72909d6757",
+      "revision": "295f43a96ac92e24fe46deb45ee31efdea7ecbd7",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
       "digest": "baf35172a80a79107670d2ded11785a9af07f6cf5494a754471f195551a29c9c",
-      "revision": "8ddebfced5cb3a395fc8b7902f9db0d322f1cb8e",
+      "revision": "d2b3bf7154503e203d38ca2346cec05adba2a68f",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -4648,6 +4752,35 @@
       ],
       "digest": "369e200e7ecfd0522498f00c6c9d654d5538a7e703f4c5b33a01e5f8d3b291b4",
       "revision": "ff7de70fa52d78f9c40e834bdb111622efe8ff77",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 10080
+        },
+        "tags": [
+          "structure-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Candidate shapes",
+        "## Discovery",
+        "## Duplicate safety",
+        "## Filing",
+        "## Grouping and filing cap",
+        "## Handoff",
+        "## Pin",
+        "## Rules and command surfaces",
+        "## Thresholds (state them in every run summary)"
+      ],
+      "digest": "76394b82eac94ca5b59c2f8c2b50a9dd88686820decab7ef72613e820cce9ac2",
+      "revision": "085a0ff4ce03648aed697f010b5a54b403cc7566",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
