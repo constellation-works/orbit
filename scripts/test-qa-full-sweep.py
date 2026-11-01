@@ -912,7 +912,10 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
         captured_stderr = tails["stderr"].decode(errors="replace")
         evidence["stderr"] = captured_stderr + ("\n" if captured_stderr and evidence["stderr"] else "") + evidence["stderr"]
         evidence["output_truncated"] = any(truncated.values())
-    evidence["outcome"] = "PASS" if evidence["exit_code"] == 0 else "FAIL"
+    # A zero exit is not a completed cleanup. The record keeps that exit code;
+    # callers that certify the run share native_execution_refused.
+    refused = evidence["exit_code"] != 0 or native_execution_refused(evidence)
+    evidence["outcome"] = "FAIL" if refused else "PASS"
     return evidence
 
 
@@ -2369,6 +2372,28 @@ def native_required_commands(repo):
     return commands
 
 
+def native_execution_refused(evidence):
+    """A native certificate needs verified cleanup.
+
+    Exit 0 stays on the record and is not acceptance by itself. A missing
+    cleanup flag is the same refusal as an explicit false.
+    """
+    return not isinstance(evidence, dict) or evidence.get("cleanup_verified") is not True
+
+
+def native_shell_status(evidence):
+    """Status a native workflow step returns for one retained record.
+
+    Unknown status and unverified cleanup fail the step. A nonzero command
+    status is returned unchanged. The record keeps the original exit code
+    and output either way.
+    """
+    code = evidence.get("exit_code")
+    if type(code) is not int or (code == 0 and native_execution_refused(evidence)):
+        return 1
+    return code
+
+
 def validate_native_execution(records, repo, head):
     expected = native_required_commands(repo)
     if sorted(json.dumps(row.get("command")) for row in records) != sorted(json.dumps(cmd) for cmd in expected):
@@ -2376,6 +2401,8 @@ def validate_native_execution(records, repo, head):
     for row in records:
         if row.get("source_revision") != head or row.get("exit_code") != 0:
             raise ValueError("macOS execution failed or names a different revision")
+        if native_execution_refused(row):
+            raise ValueError("macOS execution cleanup was not verified")
         if row.get("source_status") != [] or row.get("source_stable") is not True:
             raise ValueError("macOS execution requires a clean source candidate stable through each command")
         if execution_notices(row):
@@ -2423,9 +2450,10 @@ def record_native_execution(command, repo, directory):
         json.dump(evidence, stream, indent=2)
     print(evidence.get("stdout", ""), end="")
     print(evidence.get("stderr", ""), end="", file=sys.stderr)
-    # SystemExit(None) means shell success; retain unknown status in the raw
-    # evidence while making supervision/cleanup failures fail the workflow step.
-    return evidence["exit_code"] if evidence["exit_code"] is not None else 1
+    # SystemExit(None) means shell success. Retain the command's own status in
+    # the record, and fail the workflow step when supervision cannot verify
+    # cleanup, including when that status is 0.
+    return native_shell_status(evidence)
 
 
 def process_self_test():
@@ -3438,6 +3466,7 @@ def self_test():
             "execution": [{"command": ["cargo", "test", "-p", "native", "--lib"],
                            "executed_command": ["cargo", "test", "-p", "native", "--lib", "--", "--show-output"],
                            "source_revision": "a" * 40, "source_status": [], "source_stable": True, "exit_code": 0,
+                           "cleanup_verified": True,
                            "stdout": "running 1 test\ntest native_boundary ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s", "stderr": "     Running unittests src/lib.rs (target/debug/deps/native)\n"}],
             "source_identity": {
                 path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
@@ -3457,6 +3486,8 @@ def self_test():
             {**hosted, "execution": []},
             {**hosted, "execution": [{**hosted["execution"][0], "stdout": "native_boundary: test\n1 test, 0 benchmarks"}]},
             {**hosted, "execution": [{**hosted["execution"][0], "stderr": "SKIP: sandbox-exec cannot apply a profile: Operation not permitted"}]},
+            {**hosted, "execution": [{**hosted["execution"][0], "cleanup_verified": False,
+                                      "stderr": hosted["execution"][0]["stderr"] + "detached worker settlement failed: fixture settlement refusal"}]},
         ]
         for mutation in mutations:
             try:

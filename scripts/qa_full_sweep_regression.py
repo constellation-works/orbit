@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -205,6 +206,7 @@ def self_test():
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     candidate_build_report_self_test(harness, scratch)
+    native_emitter_cleanup_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
     scratch_cleanup_race_self_test(harness, scratch)
@@ -258,6 +260,7 @@ def self_test():
                 workflow = repo / ".github/workflows/ci-macos.yml"
                 workflow.write_text("python3 scripts/test-qa-full-sweep.py --record-native-command " + " ".join(command) + "\n")
                 execution = {"command": command, "executed_command": [*command, "--", "--show-output"] if "--" not in command else command, "source_revision": "a" * 40, "source_status": [], "source_stable": True, "exit_code": 0,
+                             "cleanup_verified": True,
                              "stdout": "running 1 test\ntest boundary::contracts ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s", "stderr": "     Running tests/boundary.rs (target/debug/deps/boundary-fixture)\n"}
                 if mode.startswith("native-"):
                     execution.update(json.loads((repo / "transcript.json").read_text()))
@@ -358,7 +361,8 @@ def self_test():
         command = ["cargo", "test", "--no-fail-fast", "-p", "orbit-common", "--test", "test_env", "--locked"]
         for mode in ["success", "multiple-success", "nocapture", "directory-target", "outer-failure", "early-target-failure", "nonzero", "missing-target",
                      "wrong-target", "extra-target", "zero", "incomplete-rows", "child-only",
-                     "ambiguous", "truncated", "seatbelt", "ps", "unstable", "wrong-revision", "missing-status"]:
+                     "ambiguous", "truncated", "seatbelt", "ps", "unstable", "wrong-revision", "missing-status",
+                     "unverified-cleanup"]:
             execution = {"stdout": actual["stdout"], "stderr": actual["stderr"], "exit_code": 0,
                          "executed_command": [*command, "--", "--show-output"]}
             if mode == "outer-failure":
@@ -414,6 +418,9 @@ def self_test():
             elif mode == "missing-status":
                 execution["exit_code"] = None
                 execution["outcome"] = "FAIL"
+            elif mode == "unverified-cleanup":
+                execution["cleanup_verified"] = False
+                execution["stderr"] = execution["stderr"] + "detached worker settlement failed: fixture settlement refusal"
             (repo / "transcript.json").write_text(json.dumps(execution))
             # Run the public recorder first; feed its actual retained command
             # bytes to the public platform import, which shares emitter rules.
@@ -427,14 +434,19 @@ def self_test():
             assert recorded["stdout"] == execution["stdout"], recorded
             # Adapt only fields whose negative control concerns the emitter's
             # completeness/identity, rather than recorder subprocess behavior.
-            for key in ["output_truncated", "source_stable", "source_revision"]:
+            for key in ["output_truncated", "source_stable", "source_revision", "cleanup_verified"]:
                 if key in execution:
                     recorded[key] = execution[key]
             if mode == "missing-status":
                 recorded.update(exit_code=None, outcome="FAIL")
+            if mode == "unverified-cleanup":
+                recorded["stderr"] = execution["stderr"]
             (repo / "transcript.json").write_text(json.dumps(recorded))
             report = sweep([native], f"native-{mode}")
             assert (report["decision"] == "PASS") == (mode in ["success", "multiple-success", "nocapture", "directory-target"]), (mode, report)
+            if mode == "unverified-cleanup":
+                assert "cleanup was not verified" in row(report, "platform-evidence-import")["stderr"], (mode, report)
+                assert recorded["exit_code"] == 0 and recorded["stdout"], recorded
             if mode in ["outer-failure", "early-target-failure"]:
                 assert "failing outer tests" in row(report, "platform-evidence-import")["stderr"], (mode, report)
             if mode in ["success", "multiple-success", "nocapture", "directory-target"]:
@@ -998,6 +1010,75 @@ def retired_cases_orphan_proof_self_test(harness, scratch):
         assert report["decision"] == "INCOMPLETE", report
 
 
+def native_emitter_cleanup_self_test(harness, scratch):
+    """Hosted emission refuses unverified cleanup and keeps the raw record.
+
+    scripts/check-ci-macos.sh loads the harness with runpy and emits PASS only
+    after validate_native_execution returns. This is that call. Import uses
+    the same verifier. Exit 0 with missing or false cleanup is a refusal.
+    Failed, zero-test, self-skip and truncated records still fail on their
+    own guards, and the retained exit code and stdout are not rewritten.
+    """
+    with tempfile.TemporaryDirectory(prefix="qa-emitter-cleanup-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        (repo / ".github/workflows").mkdir(parents=True)
+        command = ["cargo", "test", "-p", "native", "--lib"]
+        workflow = "python3 scripts/test-qa-full-sweep.py --record-native-command " + " ".join(command) + "\n"
+        (repo / ".github/workflows/ci-macos.yml").write_text(workflow)
+        head = "a" * 40
+        passing = (
+            "running 1 test\n"
+            "test native_boundary ... ok\n"
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n")
+        announced = "     Running unittests src/lib.rs (target/debug/deps/native)\n"
+        base = {
+            "command": command,
+            "executed_command": [*command, "--", "--show-output"],
+            "source_revision": head, "source_status": [], "source_stable": True,
+            "exit_code": 0, "cleanup_verified": True, "stdout": passing, "stderr": announced,
+        }
+        loaded = runpy.run_path(str(harness))
+
+        def emit(record):
+            try:
+                loaded["validate_native_execution"]([dict(record)], repo, head)
+            except (ValueError, KeyError, TypeError) as error:
+                return 1, "check-ci-macos: incomplete native execution: " + str(error)
+            return 0, "PASS"
+
+        status, message = emit(base)
+        assert status == 0 and message == "PASS", (status, message)
+        evidence_path = repo / "execution.json"
+        unverified = dict(base, cleanup_verified=False, stderr=announced + (
+            "detached worker settlement failed: fixture settlement refusal\n"))
+        evidence_path.write_text(json.dumps(unverified))
+        retained = json.loads(evidence_path.read_text())
+        status, message = emit(retained)
+        assert status == 1 and "cleanup was not verified" in message, (status, message)
+        assert retained["exit_code"] == 0 and retained["stdout"] == passing, retained
+        on_disk = json.loads(evidence_path.read_text())
+        assert on_disk["exit_code"] == 0 and on_disk["stdout"] == passing, on_disk
+        missing = dict(base)
+        missing.pop("cleanup_verified")
+        status, message = emit(missing)
+        assert status == 1 and "cleanup was not verified" in message, (status, message)
+        failed = dict(base, exit_code=101)
+        status, message = emit(failed)
+        assert status == 1 and "failed or names a different revision" in message, (status, message)
+        assert "cleanup was not verified" not in message, message
+        zero = dict(base, stdout=(
+            "running 0 tests\n"
+            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"))
+        status, message = emit(zero)
+        assert status == 1 and "zero passing tests" in message, (status, message)
+        skipped = dict(base, stderr=announced + "SKIP: sandbox-exec cannot apply a profile: Operation not permitted\n")
+        status, message = emit(skipped)
+        assert status == 1 and "self-skipped" in message, (status, message)
+        truncated = dict(base, output_truncated=True)
+        status, message = emit(truncated)
+        assert status == 1 and "truncated" in message, (status, message)
+
+
 def native_recorder_prefix_self_test(harness, scratch):
     """Exercise recorder arguments, shell status and retained execution evidence."""
     with tempfile.TemporaryDirectory(prefix="qa-native-prefix-", dir=scratch) as tmp:
@@ -1048,7 +1129,7 @@ def native_recorder_prefix_self_test(harness, scratch):
 
         driver = repo / "status-driver.py"
         driver.write_text('''
-import importlib.util, sys
+import importlib.util, os, sys
 from unittest import mock
 spec = importlib.util.spec_from_file_location("qa", sys.argv[1])
 qa = importlib.util.module_from_spec(spec)
@@ -1068,6 +1149,19 @@ def injected_run(*args, **kwargs):
         # group. The caller cannot verify its own sweep and must retain FAIL.
         with mock.patch("os.killpg", side_effect=PermissionError("fixture cleanup refusal")):
             return real_run(*args, **kwargs)
+    if mode == "unverified-settlement":
+        # The child exits 0. Settlement then fails, so cleanup is unverified
+        # while the raw exit and output stay on the record.
+        from pathlib import Path
+        repo = Path(sys.argv[sys.argv.index("--repo-root") + 1])
+        settle_root = repo / "settle-tmp"
+        settle_root.mkdir(parents=True, exist_ok=True)
+        os.environ["TMPDIR"] = str(settle_root)
+        if kwargs.get("env") is not None:
+            kwargs["env"]["TMPDIR"] = str(settle_root)
+        with mock.patch.object(qa, "settle_detached_workers_under",
+                                side_effect=OSError("fixture settlement refusal")):
+            return real_run(*args, **kwargs)
     return real_run(*args, **kwargs)
 qa.run = injected_run
 sys.argv = [sys.argv[1], *sys.argv[3:]]
@@ -1076,6 +1170,7 @@ qa.main()
         for mode, code, expected_status in [
             ("numeric-zero", 0, 0), ("numeric-seven", 7, 7), ("numeric-127", 127, 127),
             ("timeout", 0, 1), ("lost-result", 0, 1), ("unverified-cleanup", 0, 1),
+            ("unverified-settlement", 0, 1),
         ]:
             print(f"native recorder status regression: {mode}", flush=True)
             command = [sys.executable, "-c",
@@ -1088,12 +1183,13 @@ qa.main()
                 cwd=repo, env=env, capture_output=True, text=True, timeout=60)
             recorded = json.loads(next(records.glob("*.json")).read_text())
             assert child.returncode == expected_status, (mode, child.returncode, recorded)
-            expected_code = code if mode.startswith("numeric-") else None
+            expected_code = 0 if mode == "unverified-settlement" else code if mode.startswith("numeric-") else None
             assert recorded["exit_code"] == expected_code, (mode, recorded)
-            assert recorded["outcome"] == ("PASS" if expected_code == 0 else "FAIL"), (mode, recorded)
+            expect_pass = expected_code == 0 and mode != "unverified-settlement"
+            assert recorded["outcome"] == ("PASS" if expect_pass else "FAIL"), (mode, recorded)
             assert child.stdout == recorded["stdout"] and child.stderr == recorded["stderr"], (mode, recorded)
             assert recorded["command"] == command, (mode, recorded)
-            if mode.startswith("numeric-") or mode == "unverified-cleanup":
+            if mode.startswith("numeric-") or mode in ("unverified-cleanup", "unverified-settlement"):
                 assert recorded["stdout"] == "retained stdout\n", (mode, recorded)
                 assert recorded["stderr"].startswith("retained stderr\n"), (mode, recorded)
             if mode == "timeout":
@@ -1102,3 +1198,7 @@ qa.main()
                 assert "supervisor exited without a command result" in recorded["stderr"], recorded
             elif mode == "unverified-cleanup":
                 assert not recorded["cleanup_verified"] and "fixture cleanup refusal" in recorded["stderr"], recorded
+            elif mode == "unverified-settlement":
+                assert recorded["cleanup_verified"] is False, recorded
+                assert "fixture settlement refusal" in recorded["stderr"], recorded
+                assert recorded["exit_code"] == 0 and recorded["stdout"] == "retained stdout\n", recorded
