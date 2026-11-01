@@ -37,3 +37,4 @@ Backfilled 2026-11-01 from task history, 2026-10-02 to 2026-11-01 (ORB-20650).
 | 2026-10-19 15:36 | ORB-17055 | jrun-20261019-1536-t1 | stale decision refused: task changed after the failure | system moved to done at 2026-10-19T15:37Z |
 | 2026-10-22 03:25 | ORB-17520 | jrun-20261022-0324-t1 | stale decision refused: task changed after the failure | codex moved to review at 2026-10-22T03:29Z |
 | 2026-10-25 03:10 | ORB-18052 | jrun-20261025-0310-t1 | stale decision refused: task changed after the failure | system moved to done at 2026-10-25T03:30Z |
+| 2026-10-30 07:23 | ORB-20115 | jrun-20261030-0720-t2 | task is already archived; final recovery never reopens settled work | recovery decision archive was refused; no triage marker in the ORB-20998 collection |

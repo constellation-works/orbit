@@ -21,7 +21,7 @@ The operator on the owning host inspects or requeues; recovery should name the h
 
 ## Fix task
 
-No open fix task found. Reported deferred by the ORB-20623 pass (5 occurrences, not filed over its cap).
+ORB-21013 was filed from ORB-20998 to address this mechanism.
 
 ## Occurrences
 

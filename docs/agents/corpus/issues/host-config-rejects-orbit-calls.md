@@ -21,7 +21,7 @@ Do not requeue until `orbit tool run orbit.task.show` succeeds on the host; the 
 
 ## Fix task
 
-ORB-20766 (proposed, filed 2026-11-01T04:52Z): a stray `[plugin_enablement]` in the owner's host config fails every follower run at dispatch. For the crew-name variant, ORB-20626 is archived, not landed and the cause was cleared by operator config edits.
+ORB-20766 (done when ORB-20998 read it on 2026-11-01; filed 2026-11-01T04:52Z): a stray `[plugin_enablement]` in the owner's host config fails every follower run at dispatch. The crew-name variant is archived ORB-20626, not a landed code change; the in-window failures matched an older binary and the operator had already replaced it.
 
 ## Occurrences
 
