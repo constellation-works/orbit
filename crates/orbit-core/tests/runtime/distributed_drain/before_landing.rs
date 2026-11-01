@@ -615,6 +615,55 @@ fn a_claimed_observation_gap_keeps_delivery_non_enforcing() {
         .expect("observed predicate gap supplies no review obligation");
 }
 
+/// The probe names the selective observation actually captured, never an
+/// unconditional before-PR review; actual timings keep their diagnostics.
+fn probe_diagnostics_name_selective_observation_not_before_pr_review() {
+    let pair = Pair::with_owner_config(
+        "[review]\ntiming = \"off\"\nselective_before_landing.mode = \"observe\"\nselective_before_landing.paths = [\"**\"]\n",
+        &[None],
+    );
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    assert_ne!(probe["ship"]["before_pr"], true, "{probe}");
+    assert_ne!(probe["ship"]["before_landing"], true, "{probe}");
+    assert!(probe["ship"]["review"].is_object(), "{probe}");
+    let diagnostics = probe["diagnostics"].to_string();
+    assert!(
+        diagnostics.contains("selective_before_landing.mode = observe"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("no reviewer runs"), "{diagnostics}");
+    assert!(!diagnostics.contains("before-PR review"), "{diagnostics}");
+
+    let pair = Pair::with_owner_config(
+        &format!("[review]\nbefore_pr = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"),
+        &[None],
+    );
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let diagnostics = probe["diagnostics"].to_string();
+    assert!(
+        diagnostics.contains("review.timing = before_pr"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("before-PR review"), "{diagnostics}");
+
+    let pair = Pair::with_owner_config(
+        &format!(
+            "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n"
+        ),
+        &[None],
+    );
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let diagnostics = probe["diagnostics"].to_string();
+    assert!(
+        diagnostics.contains("review.timing = before_landing"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("reviews its open pull request"),
+        "{diagnostics}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_claimed_before_landing_review_reads_the_current_implementers_summary_scenarios,
@@ -626,5 +675,6 @@ crate::scenario_table!(
     a_claimed_before_landing_review_confirms_baselines_against_the_owners_commands,
     selective_observation_and_nonmatch_follow_a_certified_claimed_repair,
     a_claimed_observed_light_skip_keeps_its_receipt_through_owner_acceptance,
-    a_claimed_observation_gap_keeps_delivery_non_enforcing
+    a_claimed_observation_gap_keeps_delivery_non_enforcing,
+    probe_diagnostics_name_selective_observation_not_before_pr_review
 );

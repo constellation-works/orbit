@@ -295,10 +295,27 @@ impl crate::OrbitRuntime {
                     "owner {switch}; each claimed leaf reviews its open pull request with crew \
                      {crew} before it hands off"
                 )
-            } else {
+            } else if ship.before_pr {
                 format!(
                     "owner has review.timing = before_pr; each claimed leaf runs the before-PR review \
                      with crew {crew} before it opens a pull request"
+                )
+            } else if let Some(policy) = ship.selective_policy() {
+                if policy.is_enforced() {
+                    format!(
+                        "owner has review.selective_before_landing.mode = enforce; each claimed leaf \
+                         evaluates the selective before-landing policy and a selected leaf reviews its \
+                         open pull request with crew {crew} before it hands off"
+                    )
+                } else {
+                    "owner has review.selective_before_landing.mode = observe; each claimed leaf \
+                     is observed against the selective before-landing policy and no reviewer runs"
+                        .to_string()
+                }
+            } else {
+                format!(
+                    "owner has a captured review contract with crew {crew}; no before-PR or \
+                     before-landing review applies to claimed leaves"
                 )
             });
         }
