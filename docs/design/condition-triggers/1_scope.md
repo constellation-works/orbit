@@ -1000,9 +1000,9 @@ target: job:release_pipeline     # workspace-defined; declares authority: operat
    revision `40`, the captured task fields, and `subject_freshness = 40`.
    Its fire ID is `F = sha256(consumer, epoch, task key, 40, arm sequence)`.
    Because the target declares `approval: per_fire`, the fire raises request `R`
-   on the task: "Release from this preparation? approve / dismiss". Mail delivers
-   it once the decision-mail transport ships. `R` binds
-   `(F, grant identity, grant digest, 40)`.
+   on the task: "Release from this preparation? approve / dismiss". With the decision
+   channel enabled, the implemented `orbit-decision-mail` transport delivers it.
+   `R` binds `(F, grant identity, grant digest, 40)`.
 4. The owner's `condition_fired(F)` is entry 41 and `decision_requested(R)` is
    entry 42. Raw history length is now 42 and `updated_at` may have advanced, but
    both entries are exempt under §7: current subject freshness is still 40, so
@@ -1067,10 +1067,12 @@ policy: {timeout_minutes: 30, overlap: forbid}
 What is missing:
 
 - **Notice delivery.** `notify` needs a no-answer *notice* record in the decision
-  channel, and a transport to deliver it. The `orbit-decision-mail` transport is a stub
-  today ([human decision channel](../human-decision-channel/1_scope.md)). Until it
-  ships, notices appear in the dashboard Automation view, in `orbit automation explain`
-  and in the clock log.
+  channel, and a transport to deliver it. The `orbit-decision-mail` transport is
+  implemented for decision requests and digests, behind the default-off decision channel
+  ([human decision channel](../human-decision-channel/1_scope.md), phases 4 and 5). It
+  does not by itself deliver `notify` notices: the no-answer notice record and its
+  integration are still missing. Until they ship, notices appear in the dashboard
+  Automation view, in `orbit automation explain` and in the clock log.
 - **Other mounts.** Reading a mount other than the three sampled paths needs a declared
   extra path.
 - **Follower hosts.** dk-server-1's worktrees are where the disk fills. Adding
