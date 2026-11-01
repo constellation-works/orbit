@@ -18,6 +18,7 @@ use orbit_types::task::{
 use crate::OrbitRuntime;
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
 
+use super::human_format::human_task_format_warnings;
 use super::params::{TaskAddParams, TaskUpdateParams};
 use super::paths::{ContextCreationAuthorization, compute_task_add_warnings};
 
@@ -148,6 +149,9 @@ impl OrbitRuntime {
         // [ORB-15191] Filed straight into the backlog with no footprint, a
         // live drain admits it before a pilot can prepare one.
         warnings.extend(backlog_footprint_warning(&task));
+        if self.is_human_crew(task.crew.as_deref()) {
+            warnings.extend(human_task_format_warnings(&task.description));
+        }
         Ok(ScreenedTaskWrite {
             task,
             warnings,

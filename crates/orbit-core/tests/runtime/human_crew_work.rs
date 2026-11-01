@@ -257,3 +257,62 @@ fn crew_analytics_leave_human_crew_tasks_out() {
         "a human crew's task scores no agent: {export:#}"
     );
 }
+
+#[test]
+fn filing_a_human_crew_task_warns_unless_the_body_is_short_with_steps_commands_and_verify() {
+    let fx = HumanCrewFixture::new();
+    let file = |crew: &str, description: &str| -> Vec<String> {
+        let added = fx
+            .runtime
+            .run_tool(
+                "orbit.task.add",
+                json!({
+                    "workspace": "test",
+                    "title": "Rotate the expired token",
+                    "description": description,
+                    "complexity": "low",
+                    "crew": crew,
+                }),
+            )
+            .expect("task add");
+        added["warnings"]
+            .as_array()
+            .map(|warnings| {
+                warnings
+                    .iter()
+                    .filter_map(|warning| warning.as_str())
+                    .filter(|warning| warning.starts_with("human-crew task"))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let compliant = "Rotate the expired GitHub token; CI sweeps fail without it.\n\n\
+        1. Create a token: https://github.com/settings/tokens\n\
+        2. Install it:\n\n```sh\ngh auth login --with-token < token.txt\n```\n\n\
+        Verify:\n\n```sh\ngh auth status\n```";
+    assert!(file("dk", compliant).is_empty(), "compliant body warns");
+
+    let wall = format!(
+        "{}\n",
+        "Investigate the failing credential rotation at length. ".repeat(60)
+    );
+    let warnings = file("dk", &wall);
+    for expected in [
+        "numbered steps",
+        "fenced shell block",
+        "verify command",
+        "limit",
+    ] {
+        assert!(
+            warnings.iter().any(|warning| warning.contains(expected)),
+            "missing `{expected}` warning: {warnings:?}"
+        );
+    }
+
+    assert!(
+        file("sol", &wall).is_empty(),
+        "an agent crew's task is not held to the human format"
+    );
+}

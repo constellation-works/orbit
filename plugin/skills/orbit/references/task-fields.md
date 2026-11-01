@@ -86,7 +86,14 @@ Write responses without a projection omit the append-heavy `comments` and
 `history`; request those fields explicitly when needed. Write projections
 use the same field catalogue above.
 
-`crew` selects execution; `orchestrator` records separate orchestration
+`crew` selects execution; work only a human can do (credentials, approvals,
+physical access, operator-only decisions) sets it to the human-kind crew
+(`orbit config get crews.<name>.kind` answers `human`), never an agent crew; with
+no human crew, file a `setup`, `needs-operator` chore instead. A human crew
+never bypasses an agent gate. Its body is short: a 1-2 line summary, numbered
+steps, fenced `sh` commands and a `Verify:` command, at most 2000 characters;
+filing warns otherwise (see [task-authoring.md](task-authoring.md#work-only-a-human-can-do)).
+`orchestrator` records separate orchestration
 attribution. `created_by` is the creator's agent family; `created_by_model` is
 the full model id (`claude-opus-5-5`) recorded once when `orbit.task.add` was
 given one as `model`. It is never rewritten, and it is `null` for family-only
