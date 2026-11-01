@@ -271,6 +271,24 @@ dependencies and other admission checks still apply. An operator's explicit
 the override in history. See [Scheduled tasks](../scheduling/#scheduled-tasks)
 for setting, clearing and listing schedules.
 
+#### The `no-drain` tag
+
+Tag a task `no-drain` when an interactive session owns it and no automatic
+drain should pick it up. It is a reserved task tag, not a config key; there
+is no `workflow.drain_exclude_tags` setting.
+
+- **Automatic drains skip it.** `orbit run auto` drains, pull-drain
+  followers, and any automatic admission pass skip a backlog task carrying
+  `no-drain`. `orbit run readiness` reports it with reason `no_drain_tag`.
+- **It implies `no-auto-approve`.** Drain-window auto-approval never approves
+  a proposed `no-drain` task, even with a clean pilot assessment. The task
+  pilot may still assess it.
+- **Explicit dispatch still works.** `orbit run ship <id>` still runs it, and
+  you can claim it to `in-progress` and deliver it by hand.
+- **Removing the tag restores eligibility.** Update the task with the full
+  tag list minus `no-drain`, and it becomes eligible on the next admission
+  pass.
+
 ### Friction resolution
 
 Friction records live under `orbit friction`, outside the task lifecycle. A task closes
