@@ -1,0 +1,222 @@
+schemaVersion: 1
+name: host-health
+description: Daily doctor and recurring service-log findings with owner dedupe, human routing and executable resolution steps
+enabled: false
+schedule:
+  cron: 10 7 * * *
+template:
+  title: Track doctor warnings and recurring host service errors
+  description: |-
+    Read host health without repairing the host. Turn standing doctor findings and recurring
+    service errors into actionable, deduplicated tasks. Attach host-health-report.json and
+    host-health-cursor.json on every completed pass, including empty and capped passes.
+
+    ## Authority and hosts
+
+    - The shipped pass is the owner aggregator. Preparation must record required_machine
+      naming the workspace owner before admission. Confirm machine identity and checkout role
+      with `orbit config get machine.id` and `orbit workspace show --json`. A collector's
+      instruction instead names its target machine ID and collector-only role; preparation
+      must record required_machine for that target. An OS tag is not a machine pin.
+      On the wrong machine, record wrong_host and stop without filing or advancing a cursor.
+    - For each follower the operator wants monitored, configure a daily collector variant in
+      the owner's auto-task directory, tagged host-health-collector and no-diff-expected,
+      with this collection/report contract, collector-only role, target machine ID and an
+      earlier schedule. The owner scheduler mints it and a pull follower executes the pinned
+      task. Collectors never file tasks/frictions or comment on other tasks. They attach the
+      two artifacts to their own task; claimed workers return them in task_artifacts for the
+      owner to store. Never try to run a local doctor against a remote workspace selector.
+    - The owner lists completed host-health-collector tasks, reads their artifact metadata
+      before artifact.get, and imports each (task ID, host, window) once. Check the artifact's
+      machine ID against job_run_machine and the configured target. Use the newest completed
+      report per host; merge older unconsumed windows in order when available. A report older
+      than 36 hours, an unreachable host or a missing report is missing coverage, never healthy
+      or zero findings. Report the gap and retain that host's cursor. Followers never file.
+    - Collection is read-only: no doctor repair flags, service restarts, config writes,
+      credential reads, installs, dispatch, or status changes. Do not read Orbit databases
+      or state files directly, except the log inputs named below. This pass may only
+      create finding tasks, comment counts on
+      covering open tasks, and update its own summary/artifacts. Read the installed orbit
+      skill's task-authoring reference and each tool's schema before filing.
+
+    ## Inputs and service configuration
+
+    - Run `orbit doctor --json` on the execution host, capture its exit status and parse all
+      warning/error checks (check, status, message, remediation) even when doctor exits
+      nonzero. An execution or parse failure is unavailable coverage, not a clean bill of health. Record the Orbit version and
+      `git rev-parse HEAD` where a source checkout exists.
+    - Unit names come from the host's installed service configuration, never a baked-in list.
+      On Linux enumerate `systemctl --user list-unit-files --type=service --no-legend --no-pager`
+      plus loaded services, then inspect only selected properties (Id, FragmentPath, DropInPaths,
+      ExecStart, WorkingDirectory, StandardOutput and StandardError) with systemctl show.
+      Select Orbit web, run/drain and sweep/clock launchers by executable/subcommand and
+      workspace association; include host-wide Orbit services. Do not dump Environment,
+      EnvironmentFiles, full units or process environments: launch arguments may also contain
+      secrets, so keep only names/paths needed to establish the association.
+    - On macOS inspect only Label, Program/ProgramArguments, WorkingDirectory, StandardOutPath
+      and StandardErrorPath from installed user LaunchAgents plists; never dump a whole plist
+      or its EnvironmentVariables. Labels and output paths are host configuration. Read the
+      selected output files since the cursor, or use the platform's bounded log query when
+      they log there. Other platforms use their configured service manager's equivalent;
+      unsupported or denied access is recorded as a coverage gap. Do not guess service names.
+    - Linux logs: `journalctl --user -u <discovered-unit> --since <window-start> --until
+      <window-end> --output=json --no-pager`, retaining warning/error priority or explicit
+      WARN/ERROR application records. Filter before displaying anything. Also inspect Orbit's
+      existing workspace .orbit/state/logs/, the global ~/.orbit/state/logs/orbit.jsonl
+      and its rotated archives, and service-configured log paths when present.
+      Use file identity plus byte offset and event timestamp for files, and journal cursor
+      for journal entries; record rotation/truncation gaps. Deduplicate the same event mirrored
+      into a service file and journal rather than counting both as recurrence.
+    - Never print the contents of ~/.zprofile, ~/.orbit/clock.env or credential files.
+      Never source those files, inspect secret environment values or attach raw doctor/log
+      output. Bound collection to 10000 records or 8 MiB per host per pass, whichever comes
+      first; stream rather than buffering unbounded logs. A limit produces a partial report
+      with the last consumed source position, not a failed pass or a claim of full coverage.
+
+    ## Windows, signatures and recurrence
+
+    - Find the newest completed pass of the same role and machine using orbit.task.list,
+      including artifact-complete review tasks if delivery has not closed them yet. Read its
+      report/cursor through orbit.task.artifact.get only after orbit.task.show lists them.
+      Record scan_start in UTC before collecting; first pass uses the preceding 24 hours.
+      Missing/corrupt prior artifacts mean a reported baseline reset, not invented history.
+    - A fresh window ends at scan_start. A partial resume keeps its original window_start and
+      window_end and drains pending groups/source positions before opening a later window.
+      Doctor is a current snapshot: retain an eligible doctor's pending finding on resume,
+      but check it still exists before filing. Do not count a resumed snapshot as a new pass.
+    - Normalize warnings/errors into a stable signature: source kind, doctor check ID or
+      service role, leading error code/kind and action/tool. Replace task/run/request IDs,
+      UUIDs, SHAs, timestamps, home-directory paths and ports with typed placeholders; strip
+      volatile counts. Keep distinct error codes/checks/actions separate. Store machine ID
+      separately, so the same code defect can group across hosts without losing attribution.
+    - A doctor warning/error is a standing condition: eligible on first sight. A log signature
+      is eligible only with at least 3 distinct events across at least 2 non-overlapping
+      completed collection windows within 7 days, on the same host. Carry the 7-day per-window
+      counts in the cursor; never use cross-host counts or repeated imports/resumes to meet
+      the threshold. Below-threshold groups are counted, not filed. Report the threshold.
+
+    ## Dedupe and routing
+
+    - Before every filing search open tasks, tasks closed in the last 30 days (including
+      done, archived and rejected), and open frictions. Use orbit.search with all:true and
+      corpus-qualified statuses (task:done, task:rejected, friction:open), one distinctive
+      signature token per query; inspect plausible hits with the record tools. Also retain
+      prior rejected mappings in the cursor so an older rejection is not refiled.
+    - A covering open task gets at most one comment per pass with signature, host counts,
+      new events and first/last seen. A covering open friction is recorded as covered without
+      a duplicate task. A rejected match is recorded and never refiled. A recently closed
+      match is inspected for the resolution: old evidence stays covered; a verified new
+      occurrence after that resolution may be a new regression task if no open task covers
+      it. Do not infer a deployed fix from a version or timestamp alone.
+    - Orbit code or config-default defects become type bug tasks for agent crews. Verify the
+      mechanism in the source checkout at git rev-parse HEAD: name file/function and quote
+      the few relevant lines. No mechanism means unconfirmed, retained for investigation,
+      never a guessed code bug. Use non-empty verified context_files for paths the fix changes.
+      Example shape (replace placeholders with verified evidence, including the full body):
+      `orbit tool run orbit.task.add --input '{"title":"Fix <signature>","description":"<evidence, verified mechanism and Resolve section>","type":"bug","complexity":"medium","tags":["host-health","no-auto-approve"],"context_files":["symbol:<verified-path>#<function>:function"],"relations":[{"type":"spawned_from","target":"<this-task-id>"}],"model":"<agent-family>"}'`
+    - Host, credential, service-unit, OS and operator-only conditions become type chore tasks
+      assigned explicitly to a configured crew whose kind is human. Inspect crew kinds through
+      orbit config; choose the sole human crew or the one matching the affected operator.
+      If several are ambiguous, use the fallback rather than guessing an agent crew.
+    - With no matching human crew, file a setup chore tagged host-health, setup,
+      needs-operator and no-auto-approve. orbit.task.add leaves it proposed: verify that on
+      read-back, never approve, promote, dispatch or present it as agent-ready. State that an
+      operator must assign a human crew before promotion; tags alone are not an admission
+      guard. Absence of a human crew never authorizes an agent repair task.
+    - Every new task has a spawned_from relation to this pass, assessed complexity, reachable
+      acceptance criteria and verified selectors for files to change. Host-only work has no
+      invented repository selectors; name its host configuration target in the body instead.
+      Read each filing back and confirm its route, relation and redacted description.
+
+    ## Resolve contract for every filing
+
+    Every filed task, including an agent bug, MUST contain a literal `## Resolve` section:
+
+    - Exact runnable commands in fenced shell blocks, or a resolve.sh task artifact with
+      invocation instructions. A state-changing script must support --dry-run and explain
+      its expected changes; commands are instructions for the assignee, never executed by
+      this collection pass. Where no command exists, provide numbered concrete UI/operator
+      steps with the exact target and expected result. No vague "fix the environment" steps.
+    - Name the host (stable machine ID and display name) and shell for EACH block, for example
+      bash -lc on Linux or zsh -lc on macOS. Resolve placeholders before filing; quote real
+      paths/unit names safely. Refer to secret variables/files by name, never their values.
+      Source file names may be given for editing, but never print their secret contents.
+    - Include a verification command on that host and in that shell showing the warning gone:
+      orbit doctor --json filtered to the actual check ID, or a bounded journal/file query
+      for the signature over a fresh window. Give the expected output and exit status, plus
+      a symptom-specific check when a clean doctor alone cannot prove the fix.
+    - For resolve.sh, attach the script to the NEW task with orbit.task.artifact.put and
+      confirm the attachment before marking it filed; otherwise provide full inline commands.
+      A code bug may give exact reproduction/build commands and numbered source repair steps
+      when the implementation is still to be written; never invent a patch or unsafe command.
+
+    ## Safe evidence
+
+    Build a signature-grouped evidence table: source/check or service role, signature, host,
+    current and 7-day counts, distinct windows, first/last seen, route and disposition.
+    Excerpts are optional and bounded to 3 lines / 600 characters per signature. Replace
+    tokens, passwords, authorization headers, cookies, email addresses and home paths first.
+    Send excerpts only through Orbit's existing redaction on orbit.task.add or orbit.task.update
+    text. Read the stored text back (including when redactions_applied is true) and copy only
+    that redacted excerpt into reports. Artifact upload itself is not a redaction API.
+    For report-only excerpts use a comment on this pass and read it back. If that round trip
+    is unavailable (including a claimed collector), omit excerpts with a reason; report only
+    allowlisted check/error identifiers, counts and dispositions, with sensitive free text
+    omitted. Never persist raw logs in artifacts, scratch evidence, summaries or commands.
+
+    ## Bounded completion, report and cursor
+
+    - File at most 5 new tasks per owner pass, prioritizing doctor errors, then doctor warnings,
+      then eligible recurring logs by count, with signature as tie-breaker. Cover every group
+      with filed, commented, covered, rejected, counted, unconfirmed or deferred disposition.
+      Collectors have a zero filing cap. A cap is successful partial completion, never a blocker.
+    - Freeze the pending eligible groups with their sanitized evidence and stable ordering.
+      Store them in the cursor with resume_after and the original window bounds. Carry all
+      unfiled groups forward, not only their keys. A resume rechecks dedupe before filing and
+      never increments occurrence counts for the frozen window. Source read limits also keep
+      the last read position; advance a source's high-water mark only through consumed records.
+      Once pending groups and unread sources are drained, clear resume_after/partial and the
+      next pass can start a fresh window. New arrivals wait for that next window.
+    - Write under .orbit/tmp/ ($ORBIT_SCRATCH_DIR), then attach both files with
+      orbit.task.artifact.put on this pass (claimed collectors return task_artifacts):
+
+      host-health-report.json:
+      {"schema_version":1,"role":"owner|collector","machine_id":"...","scan_start":"RFC3339",
+       "window_start":"RFC3339","window_end":"RFC3339","partial":false,"filing_cap":5,
+       "log_threshold":{"events":3,"windows":2,"days":7},"groups":[],
+       "hosts":[{"machine_id":"...","doctor":"ok|findings|unavailable","records_read":0,
+       "services":[],"gaps":[],"counts":{"doctor":0,"log":0,"eligible":0,"filed":0}}]}
+      Each group carries its signature, per-host/per-window counts, source positions,
+      first/last seen, route, disposition, covering record ID, sanitized evidence and any
+      omitted-excerpt reason. Imported evidence includes collector task/artifact and window.
+
+      host-health-cursor.json:
+      {"schema_version":1,"role":"owner|collector","machine_id":"...","window_start":"RFC3339",
+       "window_end":"RFC3339","partial":false,"resume_after":null,"pending_groups":[],
+       "hosts":[],"consumed_collector_windows":[],"rejected_mappings":[]}
+      Each host entry carries per-source journal/file positions and 7-day per-window signature
+      counts. Preserve unavailable hosts' prior positions, imported-window identities and
+      rejected mappings. Keep artifacts under the 1 MiB limit: omit excerpts first, paginate
+      pending evidence into named companion artifacts if needed and reference/attach them all.
+    - Summary: per-host coverage/counts, grouped dispositions, filed/commented records,
+      missing coverage, partial/resume point and both artifact paths. Empty passes still attach
+      both artifacts. No host repairs, repository edits, commits or validation gates are needed.
+  acceptance_criteria:
+    - host-health-report.json and host-health-cursor.json are attached, with per-host doctor/log coverage, grouped counts, routes, dispositions and any partial resume point, including when no finding is eligible.
+    - Every new finding task has a Resolve section with host/shell-specific commands or an attached resolve.sh (or concrete numbered operator steps), a verification command, the correct human/setup or agent route, and a spawned_from relation; covering tasks and rejected matches are recorded without duplicate filings.
+    - The report records first-sight doctor eligibility, the 3-event/2-window log threshold, open/recent-closed task and friction dedupe, bounded redacted evidence and at most 5 owner filings (zero collector filings); capped passes preserve pending evidence in the cursor.
+  task_type: chore
+  tags:
+    - host-health
+    - no-diff-expected
+  priority: medium
+  complexity: hard
+  required_tools:
+    - orbit.task.list
+    - orbit.task.show
+    - orbit.task.add
+    - orbit.task.update
+    - orbit.task.artifact.get
+    - orbit.task.artifact.put
+    - orbit.search
+dedupe: skip_if_open

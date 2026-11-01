@@ -44,6 +44,87 @@ Both config files must be regular files. Runtime loads and workspace plugin-togg
 
 `.orbit/config.yaml` (it stores `workspace_id`) is the workspace identity file, not runtime config.
 
+## Host-health auto-task
+
+`host-health` reads `orbit doctor --json` and warning/error service logs daily
+(at 07:10 in the scheduler's local timezone). Like other shipped definitions it
+starts disabled. Enable it on the workspace owner and tune its schedule with:
+
+```sh
+orbit auto-task toggle host-health on
+orbit auto-task update host-health --cron '10 7 * * *'
+# Or use an interval:
+orbit auto-task update host-health --every-minutes 1440
+```
+
+Preparation pins the owner pass with `required_machine`. Collection never
+repairs doctor checks, restarts services, edits config or reads credentials.
+Doctor warnings/errors qualify on first sight; log signatures require three
+distinct events across two completed collection windows on the same host within
+seven days. Signatures remove volatile IDs, SHAs, home paths, ports and times.
+The owner searches open tasks, tasks closed within 30 days and open frictions,
+comments new counts on a covering task, and retains rejected mappings without
+refiling them. It files at most five tasks per pass.
+
+**Service configuration.** There is no `host_health.units` config key. The
+source of service names is the host's installed service-manager configuration:
+
+| Host | Configuration read | Log inputs |
+|---|---|---|
+| Linux | Installed and loaded systemd **user** services: unit identity, fragment/drop-in paths, executable/subcommand, working directory and output destinations | `journalctl --user -u <discovered-unit> --since <window-start> --until <window-end> --output=json --no-pager`, selected configured log files |
+| macOS | User LaunchAgents plists: `Label`, `Program`/`ProgramArguments`, `WorkingDirectory`, `StandardOutPath`, `StandardErrorPath` | Configured stdout/stderr files, or a bounded platform log query |
+
+The pass discovers Orbit web, drain/run and clock/sweep launchers from those
+properties, including renamed units and host-wide services. Configure or rename
+services through the host's normal service manager; the next pass reads that
+configuration. It also reads the global `~/.orbit/state/logs/orbit.jsonl` and rotated
+archives, plus the existing workspace `.orbit/state/logs/` when present. It never dumps whole units/plists, environment properties or credential
+files. Missing managers, inaccessible logs, rotation gaps and failed doctor
+execution are reported as missing coverage. Other platforms need equivalent
+configured service metadata and log access; unsupported collection is not
+reported healthy.
+
+**Follower collection.** Doctor is host-local; passing a remote workspace does
+not run it on that host. To monitor a follower, the operator creates a collector
+variant in the **owner's** `.orbit/auto_tasks/`, using the shipped collection and
+report instructions. Give it a unique name such as `host-health-collector-build`,
+tags `host-health-collector` and `no-diff-expected`, the explicit role
+`collector-only`, the target's stable machine ID, and an earlier daily schedule.
+Preparation must pin its `required_machine` to that target, and that follower
+must already be pulling work from the owner. Do not enable an owner aggregator
+on a replica. A collector files nothing; it returns its two artifacts through
+`task_artifacts` in claimed mode. The owner reads completed collector-task
+artifacts, verifies their machine identity, and imports each host/window once.
+Reports over 36 hours old or absent are coverage gaps; the previous host cursor
+is retained. Without configured collectors the shipped pass covers its owner
+only. Collector variants are operator-managed definitions; copy future collection
+contract changes deliberately.
+
+**Routes and resolution.** A verified Orbit code/default defect becomes an agent
+bug with file/function evidence quoted at the inspected commit. Host, credential,
+service-unit, OS and operator-only work goes to a configured [human crew](#human-crews).
+If no human crew can be selected, the pass files a proposed setup chore tagged
+`needs-operator` and `no-auto-approve`, requiring human assignment before any
+promotion. Tags alone do not prevent dispatch; keep these fallback chores
+proposed until an operator assigns a human crew. Every filing includes a
+`## Resolve` section with exact host/shell-specific commands or an attached
+`resolve.sh` (with `--dry-run` for a state-changing script), or concrete numbered
+operator steps when no command exists, plus a verification command and expected
+result. The collection pass never executes those repairs.
+
+**Evidence and continuation.** Every completed pass attaches
+`host-health-report.json` (signature groups, routes, dispositions, per-host
+counts and coverage gaps) and `host-health-cursor.json` (source positions,
+seven-day counts, imported windows, rejected mappings and pending evidence).
+Collection stops at 10,000 records or 8 MiB per host; a read or filing cap is a
+successful partial pass with a fixed window and resume position. The next pass
+drains pending groups before advancing, without recounting events. Excerpts are
+limited to three lines/600 characters per signature and pass through Orbit's
+text redaction before entering an artifact; if that route is unavailable,
+excerpts are omitted. Never print `~/.zprofile`, `~/.orbit/clock.env` or credential
+file contents. Raw logs are never attached. Empty passes still store both
+artifacts.
+
 ## Inspecting and editing
 
 | Command | What it does |
@@ -612,7 +693,7 @@ Delivery automation dry runs defer mapped-tag decisions, including profiles with
 
 Mapped tags have the same protection as `skip-review`: only filing a task (including an auto-task definition) or an operator update may add one; an agent's update that adds one is refused, and removal is always allowed. A mapped tag skips review only, never validation: required validation, workspace gates and hosted CI still run. The built-in `skip-review` and `skip-validation` tags keep their behaviour above and cannot be remapped. Config validation refuses a mapping that reuses a built-in tag name, has an empty or malformed `paths`, or a `guard` that is absolute or contains `..`, naming the key. `orbit config show` lists the effective mappings under `Review skip tags:` (and as `review_skip_tags` in `--json`).
 
-The seeded template includes one mapping for each shipped default auto-task's `auto-task:<name>` provenance tag, all limited to the documentation/CI paths shown above. The template is not migrated into existing config files: `orbit init` leaves an existing config alone unless run with `--force`. To opt in on an existing install, add the same tables to its `config.toml`:
+The seeded template includes mappings for selected shipped auto-tasks' `auto-task:<name>` provenance tags, all limited to the documentation/CI paths shown above. Report-only `host-health` passes need no review-skip mapping. The template is not migrated into existing config files: `orbit init` leaves an existing config alone unless run with `--force`. To opt in on an existing install, add the same tables to its `config.toml`:
 
 ```toml
 [workflow.review_skip_tags."auto-task:agent-guidance-audit"]
