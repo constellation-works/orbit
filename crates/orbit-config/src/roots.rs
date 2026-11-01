@@ -48,7 +48,13 @@ impl ConfigRoots {
 
     /// Whether a distinct workspace layer exists. Replace-only keys resolve to
     /// built-in defaults rather than global values only when this is true.
-    pub(crate) fn has_workspace_layer(&self) -> bool {
-        self.workspace != self.global
+    pub fn has_workspace_layer(&self) -> bool {
+        if self.workspace == self.global {
+            return false;
+        }
+        match (self.workspace.canonicalize(), self.global.canonicalize()) {
+            (Ok(workspace), Ok(global)) => workspace != global,
+            _ => true,
+        }
     }
 }

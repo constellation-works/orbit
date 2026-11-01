@@ -42,7 +42,10 @@ pub(super) fn load_registry_for_selector_resolution(
 /// the machine-global registry unconditionally (ORB-11388).
 pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
     match root_override {
-        Some(root) => Ok(root.to_path_buf()),
+        Some(root) if root.is_absolute() => Ok(root.to_path_buf()),
+        Some(root) => std::env::current_dir()
+            .map(|cwd| cwd.join(root))
+            .map_err(|error| OrbitError::Io(error.to_string())),
         None => orbit_core::runtime::resolve_global_root(),
     }
 }
