@@ -162,8 +162,12 @@ Each run re-checks every rule. A later human answer that chooses a different
 option marks the old rule `superseded` (its id is renamed and `auto` is
 cleared) and writes a new `current` rule. A rule whose `depends_on` digest no
 longer matches, or whose `review_by` has passed, becomes `stale`. An already
-superseded rule stays superseded. Re-confirming a stale rule is an edit in
-that pull request. Only a `current` rule whose review date has not passed and
+superseded rule stays superseded. Replaying an answer a rule already cites
+(the default history run does) changes nothing: only a new human answer
+refreshes a rule's digests and review date, and a stale rule is otherwise
+re-confirmed by an edit in that pull request. A bare topic that names a rule
+id held by exactly one decision file updates that file's rule; otherwise it
+keeps the `topic/topic` default. Only a `current` rule whose review date has not passed and
 whose digests still match is injected or cited.
 
 `auto: true` is operator-only (`orbit decision rule-auto`). An agent cannot
