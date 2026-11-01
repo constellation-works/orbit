@@ -82,6 +82,9 @@ fn lifecycle_interval() -> Duration {
 /// serving and retries at a later idle point.
 const MAX_CARRYOVER: usize = 32 * 1024;
 const READ_CHUNK: usize = 64 * 1024;
+/// Match rmcp's stream limit, including the terminating newline.
+#[cfg(unix)]
+const MAX_STDIO_LINE: usize = rmcp::transport::async_rw::DEFAULT_MAX_LINE_LENGTH;
 
 /// How a stdio session ended.
 pub enum StdioExit {
@@ -543,7 +546,7 @@ mod unix {
     use tokio::io::unix::AsyncFd;
     use tokio::sync::{mpsc, oneshot};
 
-    use super::{MAX_CARRYOVER, READ_CHUNK, Tracker, lock};
+    use super::{MAX_CARRYOVER, MAX_STDIO_LINE, READ_CHUNK, Tracker, lock};
 
     pub(super) struct StdinFd(OwnedFd);
 
@@ -704,9 +707,24 @@ mod unix {
                 }
                 return Ok(PumpOutcome::Closed);
             }
-            buffer.extend_from_slice(&chunk[..read]);
-            if !forward_lines(&mut buffer, &lines, &tracker, &undelivered).await {
-                return Ok(PumpOutcome::Closed);
+            // Check each line before appending or parsing it. A read may
+            // contain multiple lines, so a chunk-wide length check would
+            // incorrectly reject several small requests.
+            let mut remaining = &chunk[..read];
+            while !remaining.is_empty() {
+                let end = remaining.iter().position(|byte| *byte == b'\n');
+                let take = end.map_or(remaining.len(), |index| index + 1);
+                if buffer.len() + take > MAX_STDIO_LINE {
+                    tracing::warn!(target: "orbit.mcp", "closing stdio session: input line exceeds the transport limit");
+                    return Ok(PumpOutcome::Closed);
+                }
+                buffer.extend_from_slice(&remaining[..take]);
+                remaining = &remaining[take..];
+                if end.is_some()
+                    && !forward_lines(&mut buffer, &lines, &tracker, &undelivered).await
+                {
+                    return Ok(PumpOutcome::Closed);
+                }
             }
         }
     }
