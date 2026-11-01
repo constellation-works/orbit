@@ -653,7 +653,23 @@ fn rule_fences(section: &str) -> Vec<(usize, usize, CorpusDecisionRule)> {
             opening = Some((start, offset));
         }
     }
+    // The reader (`parse_decision_rules`) accepts a final fence whose body
+    // runs to the end of the section, so the span editor must too.
+    if let Some((fence_start, body_start)) = opening
+        && let Some(rule) = parse_rule_yaml(&section[body_start..])
+    {
+        fences.push((fence_start, section.len(), rule));
+    }
     fences
+}
+
+fn fence_is_unclosed(section: &str, start: usize, end: usize) -> bool {
+    section[start..end]
+        .trim_end_matches(['\r', '\n'])
+        .lines()
+        .last()
+        .map(|line| line.trim() != "```")
+        .unwrap_or(true)
 }
 
 fn rewrite_rules_section(markdown: &str, rules: &[CorpusDecisionRule]) -> String {
@@ -677,6 +693,13 @@ fn rewrite_rules_section(markdown: &str, rules: &[CorpusDecisionRule]) -> String
         if let Some(rule) = rules.get(used) {
             if *rule == original {
                 out.push_str(&section[start..end]);
+                if fence_is_unclosed(section, start, end) {
+                    if !out.ends_with('\n') {
+                        out.push_str(newline);
+                    }
+                    out.push_str("```");
+                    out.push_str(newline);
+                }
             } else {
                 let rendered = render_rules(std::slice::from_ref(rule));
                 out.push_str(
@@ -808,6 +831,7 @@ pub fn set_rule_auto_in_markdown(
     let mut replacement = String::new();
     let mut found_auto = false;
     let mut found_actor = false;
+    let mut found_closing = false;
     for line in fence.split_inclusive('\n') {
         let content = line.trim_end_matches(['\r', '\n']);
         let ending = &line[content.len()..];
@@ -831,9 +855,25 @@ pub fn set_rule_auto_in_markdown(
                 replacement.push_str(newline);
             }
             replacement.push_str(line);
+            found_closing = true;
         } else {
             replacement.push_str(line);
         }
+    }
+    if !found_closing {
+        if !replacement.ends_with('\n') {
+            replacement.push_str(newline);
+        }
+        if !found_auto {
+            replacement.push_str(if auto { "auto: true" } else { "auto: false" });
+            replacement.push_str(newline);
+        }
+        if auto && !found_actor {
+            replacement.push_str("auto_set_by: \"operator\"");
+            replacement.push_str(newline);
+        }
+        replacement.push_str("```");
+        replacement.push_str(newline);
     }
     // Refuse forms we cannot safely edit as top-level lines (e.g. flow YAML).
     let replacement_rule = rule_fences(&replacement).into_iter().next()?.2;

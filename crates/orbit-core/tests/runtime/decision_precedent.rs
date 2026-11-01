@@ -855,3 +855,92 @@ fn rule_edits_preserve_unparsed_content_and_crlf() {
         CorpusRuleStatus::Stale
     );
 }
+
+#[test]
+fn unclosed_final_rule_fence_stays_parseable_after_edits() {
+    let digest = corpus_content_digest(b"pub fn price() {}\n");
+    let closed_current = rule_doc("1", "current", FUTURE, false, &digest);
+    let unclosed = closed_current
+        .strip_suffix("```\n")
+        .expect("rule_doc ends with a closing fence")
+        .to_string();
+    assert!(unclosed.ends_with("auto: false\n"));
+    assert_eq!(parse_decision_rules(&unclosed).len(), 1);
+
+    // Rule-auto agrees with the reader about the EOF-terminated rule.
+    let fx = Fixture::new();
+    fx.write_rules(&unclosed);
+    fx.operator()
+        .set_decision_rule_auto("pricing/sign-off", true, "human:operator")
+        .unwrap();
+    let rewritten = String::from_utf8(fx.rule_bytes()).unwrap();
+    let expected = unclosed.replace(
+        "auto: false\n",
+        "auto: true\nauto_set_by: \"operator\"\n```\n",
+    );
+    assert_eq!(rewritten, expected);
+    let armed = parse_decision_rules(&rewritten);
+    assert_eq!(armed.len(), 1);
+    assert!(armed[0].auto);
+    assert_eq!(armed[0].auto_set_by.as_deref(), Some("operator"));
+
+    // The CRLF variant inserts the new lines and closing fence with CRLF.
+    let unclosed_crlf = unclosed.replace('\n', "\r\n");
+    fx.write_rules(&unclosed_crlf);
+    fx.operator()
+        .set_decision_rule_auto("pricing/sign-off", true, "human:operator")
+        .unwrap();
+    let rewritten_crlf = String::from_utf8(fx.rule_bytes()).unwrap();
+    assert_eq!(
+        rewritten_crlf,
+        unclosed_crlf.replace(
+            "auto: false\r\n",
+            "auto: true\r\nauto_set_by: \"operator\"\r\n```\r\n",
+        )
+    );
+    assert_eq!(parse_decision_rules(&rewritten_crlf).len(), 1);
+    assert!(parse_decision_rules(&rewritten_crlf)[0].auto);
+
+    // Consolidation of the stale EOF-terminated rule proposes parseable
+    // markdown with no nested fence, preserving unrelated bytes.
+    let closed_stale = rule_doc("1", "current", "2020-01-01", false, &digest);
+    let unclosed_stale = closed_stale
+        .strip_suffix("```\n")
+        .expect("rule_doc ends with a closing fence")
+        .to_string();
+    for input in [
+        unclosed_stale.clone(),
+        unclosed_stale.trim_end_matches('\n').to_string(),
+        unclosed_stale.replace('\n', "\r\n"),
+    ] {
+        assert_eq!(parse_decision_rules(&input).len(), 1);
+        let proposals = consolidate_decision_corpus(
+            &[document(&input)],
+            &[],
+            &[digest_of("src/lib.rs", &digest)],
+            TODAY,
+        );
+        assert_eq!(proposals.len(), 1, "input: {input:?}");
+        let proposed = &proposals[0].markdown;
+        let rules = parse_decision_rules(proposed);
+        assert_eq!(rules.len(), 1, "proposed: {proposed}");
+        assert_eq!(rules[0].status, CorpusRuleStatus::Stale);
+        assert_eq!(proposed.matches("```yaml").count(), 1, "{proposed}");
+        assert!(proposed.contains("# Pricing"), "{proposed}");
+    }
+
+    // A fresh EOF-terminated rule is not nested either: any proposal
+    // remains parseable to the same single rule.
+    let fresh = consolidate_decision_corpus(
+        &[document(&unclosed)],
+        &[],
+        &[digest_of("src/lib.rs", &digest)],
+        TODAY,
+    );
+    let fresh_rules = resulting_rules(&unclosed, &fresh);
+    assert_eq!(fresh_rules.len(), 1);
+    assert_eq!(fresh_rules[0].status, CorpusRuleStatus::Current);
+    if let Some(proposal) = fresh.first() {
+        assert_eq!(proposal.markdown.matches("```yaml").count(), 1);
+    }
+}
