@@ -1,8 +1,10 @@
 // Every panel body keeps a non-zero inset, equal to its sibling panels'.
 // The inset that counts is where content actually starts: body padding,
 // or the first content element's offset plus its own padding (a summary
-// table's first cell, a note's padding). A body whose content touches
-// the panel border fails — the Lifecycle diagnostics card regression.
+// table's first cell, a note's padding). Content is what paints: an
+// assistive live region clipped to zero area is skipped, so it cannot stand
+// in for the visible content. A body whose content touches the panel border
+// fails — the Lifecycle diagnostics card regression.
 import { measureInPage, verdict } from "../lib/ui-context.mjs";
 export const rule = {
   id: "ui.panel-body-padding",
@@ -13,12 +15,25 @@ export const rule = {
 };
 export async function check(ctx) {
   const rows = await measureInPage(ctx, (H) => {
+    // A live region clipped to zero area (components.css
+    // `.panel-placeholder.quiet`) stays in the accessibility tree and paints
+    // nothing, so it is not the panel's content.
+    const paintsContent = (element) => {
+      if (!H.visible(element)) return false;
+      const style = getComputedStyle(element);
+      // `clip` applies only to absolutely positioned boxes. An `auto` edge
+      // parses to NaN, which fails both comparisons and stays unbounded.
+      const clip = /^rect\((.*)\)$/.exec(style.clip);
+      if (!clip || !/absolute|fixed/.test(style.position)) return true;
+      const [top, right, bottom, left] = clip[1].trim().split(/[\s,]+/).map(Number.parseFloat);
+      return !(right - left <= 0 || bottom - top <= 0);
+    };
     const contentInset = (body) => {
       const bodyRect = H.rect(body);
       let element = body;
       let inset = H.px(getComputedStyle(body).paddingLeft);
       for (let depth = 0; depth < 6; depth += 1) {
-        const child = [...element.children].find((candidate) => H.visible(candidate));
+        const child = [...element.children].find((candidate) => paintsContent(candidate));
         if (!child) break;
         element = child;
         inset = Math.max(
