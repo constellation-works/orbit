@@ -1193,6 +1193,48 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     );
 }
 
+/// A managed caller can leave `ORBIT_ACTIVITY_MCP_TOOLSETS` on the test
+/// process after the pre-`main` scrub. The default `tools/list` fixture must
+/// still match the committed snapshot, including the bytes the snapshot-update
+/// path writes from that response. The deliberate opt-in, which sets the stamp
+/// on the child after the fixture scrub, is
+/// `opt_in_toolsets_are_withheld_by_default_and_restored_by_flag_or_config`.
+#[test]
+fn ambient_activity_mcp_toolset_does_not_change_default_tools_list() {
+    let snapshot_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SNAPSHOT_RELATIVE_PATH);
+    let original = std::fs::read(&snapshot_path).expect("read tools/list snapshot");
+    // The startup scrub has already run. Reintroduce the stamp here, the way
+    // a managed parent still has it when this test spawns `orbit`.
+    let _stamp = test_env::scoped([(
+        orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV,
+        Some("agent-invoke"),
+    )]);
+
+    let (_workspace, mut client) = McpWorkspace::served();
+    let response = client.tools_list();
+    let names = tool_names(&response);
+    assert!(
+        !names.contains(&"orbit_agent_invoke"),
+        "ambient ORBIT_ACTIVITY_MCP_TOOLSETS must not advertise orbit_agent_invoke: {names:?}"
+    );
+    let tools = &response["result"]["tools"];
+    let expected: Value = serde_json::from_slice(&original).expect("parse tools/list snapshot");
+    assert_eq!(
+        tools, &expected,
+        "ambient toolset stamp changed the default tools/list schemas"
+    );
+
+    // Same serialization `mcp_serve_tools_list_matches_production_snapshot`
+    // writes when `ORBIT_MCP_UPDATE_SNAPSHOT=1`.
+    let mut serialized = serde_json::to_string_pretty(tools).expect("serialize tools/list");
+    serialized.push('\n');
+    assert_eq!(
+        serialized.as_bytes(),
+        original.as_slice(),
+        "snapshot update would rewrite the committed tools/list"
+    );
+}
+
 #[test]
 fn mcp_model_schema_admits_full_model_strings_and_call_succeeds() {
     let (_workspace, mut client) = McpWorkspace::served();
