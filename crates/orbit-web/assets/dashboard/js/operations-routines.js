@@ -314,7 +314,7 @@ function routineEditor(payload, routine) {
   return routineTriggerEditor({
     key,
     routine,
-    cronPreview: cronText,
+    cronPreview: (cron) => cronText(cron, routineNextAt(routine)),
     save: (trigger) => {
       const observed = editorObserved(key) || { source: routine.source, target: routine.target, trigger: routine.trigger };
       return postJson("/api/routines/trigger", {
@@ -349,10 +349,13 @@ function routineRow(payload, routine, workspaceId) {
       el("span", { class: "operation-cell-main", text: routineScheduleText(routine) }),
       condition ? el("span", { class: "operation-cell-sub", text: conditionStateLabel(condition) }) : null,
     ]
-    : [
-      el("span", { class: "operation-cell-main", text: cronText(routine.cron) }),
-      routine.cron && cronText(routine.cron) !== routine.cron ? el("span", { class: "operation-cell-sub mono", text: routine.cron }) : null,
-    ];
+    : (() => {
+      const cadenceLabel = cronText(routine.cron, nextAt);
+      return [
+        el("span", { class: "operation-cell-main", text: cadenceLabel }),
+        routine.cron && cadenceLabel !== routine.cron ? el("span", { class: "operation-cell-sub mono", text: routine.cron }) : null,
+      ];
+    })();
   const lastRun = fire
     ? [
       el("span", { class: "operation-cell-main operation-outcome" }, [

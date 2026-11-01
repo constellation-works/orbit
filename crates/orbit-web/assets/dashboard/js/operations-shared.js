@@ -370,14 +370,53 @@ export function noteCronZone(payload) {
   if (payload?.cron_zone) operationsState.hostCronZone = payload.cron_zone;
 }
 
-// "PDT" for an IANA host zone, else "UTC-07:00" from the offset.
-function cronZoneLabel(zone) {
+// Dates used only to ask whether a zone's short name changes with the season.
+// The label is never taken from the browser's current clock.
+const CRON_ZONE_WINTER = new Date(Date.UTC(2026, 0, 15, 12));
+const CRON_ZONE_SUMMER = new Date(Date.UTC(2026, 6, 15, 12));
+
+function parseCronInstant(value) {
+  if (value == null || value === "") return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function intlZoneName(timeZone, style, date) {
+  return new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: style })
+    .formatToParts(date)
+    .find((part) => part.type === "timeZoneName")?.value || "";
+}
+
+// "PT", or "UTC" when the short name does not change between winter and summer.
+// Offset-shaped generics ("GMT+0") are kept only when no stable short name exists.
+function stableCronZoneName(timeZone) {
+  let generic = "";
+  try {
+    generic = intlZoneName(timeZone, "shortGeneric", CRON_ZONE_WINTER);
+  } catch {
+    generic = "";
+  }
+  if (generic && !/\d/.test(generic)) return generic;
+  const january = intlZoneName(timeZone, "short", CRON_ZONE_WINTER);
+  const july = intlZoneName(timeZone, "short", CRON_ZONE_SUMMER);
+  if (january && january === july) return january;
+  return generic;
+}
+
+// Abbreviation for a cron cadence. `instant` is that row's next evaluation, so
+// the name is the one at the fire ("PDT" before a Pacific fallback, "PST"
+// after it) and agrees with the UTC next fire beside it. Rendered cadences,
+// job chips and editor previews pass that instant when the row has one. With
+// no instant the stable generic name ("PT") is used. Today's abbreviation is
+// not applied to a future or unspecified fire. An unknown zone name falls
+// back to the reported offset ("UTC-07:00").
+function cronZoneLabel(zone, instant) {
   if (!zone) return "";
   if (zone.name) {
+    const at = parseCronInstant(instant);
     try {
-      const part = new Intl.DateTimeFormat("en-US", { timeZone: zone.name, timeZoneName: "short" })
-        .formatToParts(new Date()).find((p) => p.type === "timeZoneName");
-      if (part?.value) return part.value;
+      const named = at ? intlZoneName(zone.name, "short", at) : stableCronZoneName(zone.name);
+      if (named) return named;
     } catch {
       // Unknown to this browser: fall back to the offset.
     }
@@ -393,12 +432,12 @@ function cronZoneLabel(zone) {
 // A readable cadence for the common cron shapes routines use; anything else
 // is shown verbatim so nothing is misdescribed. Clock times are in the host
 // zone the scheduler evaluates cron in, not UTC.
-export function cronText(cron) {
+export function cronText(cron, instant) {
   const parts = String(cron || "").trim().split(/\s+/);
   if (parts.length !== 5) return cron || "—";
   const [minute, hour, dom, month, dow] = parts;
   const pad = (v) => String(v).padStart(2, "0");
-  const label = cronZoneLabel(operationsState.hostCronZone);
+  const label = cronZoneLabel(operationsState.hostCronZone, instant);
   const zone = label ? ` ${label}` : "";
   if (dom !== "*" || month !== "*") return cron;
   if (minute === "*" && hour === "*" && dow === "*") return "every minute";

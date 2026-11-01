@@ -246,7 +246,10 @@ function jobRow(job, workspace, streak) {
   });
   const scheduledBy = job.routines.length
     ? job.routines.map((routine) => {
-      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${routine.trigger?.deliveries_landed ? "on delivery" : routine.trigger?.state ? "on task change" : cronText(routine.cron)}${routine.enabled ? "" : " · paused"}` });
+      const cadence = routine.trigger?.deliveries_landed ? "on delivery"
+        : routine.trigger?.state ? "on task change"
+        : cronText(routine.cron, routine.next_evaluation?.at || routine.next_due);
+      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${cadence}${routine.enabled ? "" : " · paused"}` });
       chip.href = "#operations/routines";
       return chip;
     })
@@ -272,7 +275,7 @@ function jobRow(job, workspace, streak) {
   const recent = job.runs.slice(0, 5);
   const card = el("article", { class: `operation-card operation-row job-card ${jobFamily(job.id)}` });
   card.dataset.job = job.id;
-  card.append(
+  card.append(...[
     el("div", { class: "operation-row-head" }, [
       operationCell("Job", [
         el("div", { class: "operation-identity" }, [el("strong", { class: "mono", text: job.id })]),
@@ -298,7 +301,7 @@ function jobRow(job, workspace, streak) {
         ])))
         : null,
     ]),
-  );
+  ].filter(Boolean));
   return card;
 }
 
