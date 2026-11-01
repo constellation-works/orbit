@@ -276,16 +276,40 @@ resuming its failed attempt:
 orbit tool run orbit.workflow.run.resume --input '{"id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
 ```
 
+Supported order is: author a valid execution plan on the task first,
+freshly inspect the exact immutable source binding/policy, then submit the
+unchanged binding with the required acceptance evidence and a fresh request
+key.
+
 Submit the returned `binding` unchanged with `action: "submit"`, the same
 `task_id`, a new bounded `request_key`, and a `diagnosis` naming the observed
-failure and remaining source work. This is an explicit source decision. It
-creates a new attempt with current required commands, configured review,
-`completion: "review"` and `auto_fix: false`. It grants no merge authority.
-Keep the identical key, binding and diagnosis when a submission reply is lost:
-the durable reservation/link returns the same successor, even after it stops.
-Each newly published head needs another explicit inspection and fresh key;
-automatic fixes and explicit generations share the PR repair budget. Generic
-resume still cannot replay an admitted source-repair attempt.
+failure and remaining source work. The task must already carry a valid
+non-empty execution plan before submission: submit refuses a missing or
+placeholder plan and creates no reservation. When the only correction is an
+empty or placeholder plan on an existing reservation with no admitted run,
+use `action: "reconcile"` with the original key, its inspected
+`reservation_digest`, a fresh binding and otherwise unchanged
+evidence/policy. This is an explicit source decision. It creates a new
+attempt with current required commands, configured review,
+`completion: "review"` and `auto_fix: false`. It grants no completion, merge
+or auto-fix authority, extends no historical deadline, and inherits none from
+the source run. Keep the identical key, binding, diagnosis, `unmet_acceptance`
+and `policy_digest` when a submission reply is lost: the durable
+reservation/link returns the same successor, even after it stops. Each newly
+published head needs another explicit inspection and fresh key; automatic
+fixes and explicit generations share the PR repair budget. Generic resume
+still cannot replay an admitted source-repair attempt.
+
+A successful owner publication whose published candidate leaves acceptance
+unmet takes the same explicit route, not ordinary continuation. Select the
+original publishing `Success` run explicitly and inspect it: inspection
+returns the binding plus `review`, the current `policy_digest`, reservations
+and `reservation_digests`. Submit the exact binding with the diagnosis,
+explicit `unmet_acceptance` evidence identifying the unmet criteria on this
+published candidate, the inspected current `policy_digest`, and a fresh key.
+Green requeue remains the route for carrying an unchanged candidate forward
+without authorizing implementation; successful-publication rework authorizes
+review-only source work on the same PR.
 
 In addition to cancelled publications and failed publications with an applied
 requeue, inspection supports these conclusively stopped failed owner shapes
