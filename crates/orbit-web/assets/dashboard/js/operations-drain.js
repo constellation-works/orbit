@@ -12,6 +12,9 @@ let announcedDrainState = null;
 // Set while Start or Stop is refreshing the card after reporting its result, so
 // the state change that result caused is not announced over the result.
 let holdDrainAnnouncement = false;
+// Bumped on every host or workspace reset. A readiness read captures the value
+// it started with and will not paint after a newer scope has taken the card.
+let drainScopeGeneration = 0;
 function renderAutoDrainHead(payload) {
   const { capacity, phase, running, label, pulling, pullLabel } = autoDrainPhase(payload);
   updateDrainIndicators(pulling ? "pulling" : phase, pulling ? pullLabel : label);
@@ -245,7 +248,8 @@ function autoDrainApprovals(approvals) {
 // A Start-card field's label with its help as an info hint beside it; `warn`
 // tints the hint amber. The hint sits outside the <label>, so pressing it never
 // focuses or toggles the control.
-function renderAutoDrain(payload) {
+function renderAutoDrain(payload, generation = drainScopeGeneration) {
+  if (generation !== drainScopeGeneration) return;
   operationsState.lastAutoDrain = payload;
   setDrainReadiness(payload);
   const body = $("auto-drain-body");
@@ -287,20 +291,44 @@ function clearStartCard(id) {
   if (card) card.hidden = true;
 }
 
+// The shared panel reset clears the body and shows Loading. The phase pill,
+// its dot and the window's time left sit outside that body, so clear them
+// here or the previous host's drain stays on the card until the next paint.
+function clearDrainChrome() {
+  const card = $("auto-drain-panel");
+  if (card) {
+    delete card.dataset.drainState;
+    const title = card.querySelector(".drain-title");
+    if (title) title.textContent = "Auto-drain";
+  }
+  const pill = $("auto-drain-phase");
+  if (pill) delete pill.dataset.drainState;
+  const dot = $("auto-drain-dot");
+  if (dot) dot.className = "drain-dot";
+  const text = $("auto-drain-phase-label");
+  if (text) text.textContent = "—";
+  const when = $("auto-drain-when");
+  if (when) when.textContent = "";
+}
+
 registerOperationsReset(() => {
+  drainScopeGeneration += 1;
   announcedDrainState = null;
+  clearDrainChrome();
   updateDrainIndicators("idle", "idle");
   clearStartCard("auto-drain-quick-start");
 });
 
 configureOperationsFleetCallbacks({ updateDrainIndicators, clearStartCard });
 function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) {
+  const generation = drainScopeGeneration;
   const workspace = selectedWorkspace();
   if (!workspace) {
     const token = ++operationsState.aggregateFleetToken;
     const revision = getWorkspaceRevision();
-    const guard = () => token === operationsState.aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
+    const guard = () => generation === drainScopeGeneration && token === operationsState.aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
     return requestPanel("auto-drain-body", "fleet", () => loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } }), payload => {
+      if (!guard()) return;
       paintAggregateFleet(payload);
     }, "auto-drain-phase-label");
   }
@@ -313,7 +341,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
   const path = `${scope}${query}`;
   const visit = captureWorkspaceVisit();
   const readiness = requestPanel("auto-drain-body", scope, () => fetchJson(path), payload => {
-    renderAutoDrain(payload);
+    renderAutoDrain(payload, generation);
   }, "auto-drain-phase-label").catch(error => {
     if (detailTaskId && visit.isCurrent()) {
       setDrainReadinessFailure(detailTaskId, error.message || String(error));

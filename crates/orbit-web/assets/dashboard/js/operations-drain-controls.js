@@ -1,6 +1,6 @@
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { revealDockStart } from './log-tail.js';
-import { captureWorkspaceVisit, describePullSettlements, el, infoHint, postJson, reviewLayerText, submissionNoticeLines } from './common.js';
+import { captureWorkspaceVisit, describePullSettlements, el, getHost, infoHint, postJson, reviewLayerText, submissionNoticeLines } from './common.js';
 import { $, autoDrainNumber, feedback, operationsState, pendingOperations, selectedWorkspace } from './operations-shared.js';
 import { autoDrainCounts, autoDrainLiveWindow, autoDrainReasons, throttleNames, throttledResources } from './operations-drain-capacity.js';
 
@@ -15,25 +15,34 @@ const AUTO_DRAIN_DURATION_SECONDS = { "1h": 3600, "2h": 7200, "4h": 14400, "8h":
 const AUTO_DRAIN_DURATIONS = Object.keys(AUTO_DRAIN_DURATION_SECONDS);
 const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed tasks, including ones filed while it runs.";
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
-let autoDrainDuration = "1h";
-let autoDrainConcurrency = "";
-let autoDrainComplete = false;
-let autoDrainApproveProposed = false;
-let autoDrainAutoFix = false;
-// "" keeps workspace review policy; "before-landing" adds that layer.
-let autoDrainReview = "";
+// Window length, parallel tasks and the four toggles belong to the selected
+// host. The first visit uses the defaults; a later visit keeps that host's
+// choices. Another host never sees them. A same-host workspace change keeps
+// the current host's choices, including a carried completion toggle.
+// `review` "" keeps workspace review policy; "before-landing" adds that layer.
+const autoDrainFormsByHost = new Map();
+
+function autoDrainHostForm() {
+  const key = getHost() || "";
+  let form = autoDrainFormsByHost.get(key);
+  if (!form) {
+    form = { duration: "1h", concurrency: "", complete: false, approveProposed: false, autoFix: false, review: "" };
+    autoDrainFormsByHost.set(key, form);
+  }
+  return form;
+}
 const AUTO_DRAIN_CONCURRENCY_MAX = 4_294_967_295;
 const AUTO_DRAIN_CONCURRENCY_PROBLEM = "Parallel tasks must be a whole number, 1 or more. Leave it blank for the runtime default.";
 
 export function autoDrainConcurrencyValid() {
-  if (autoDrainConcurrency === "") return true;
-  if (!/^\d+$/.test(autoDrainConcurrency)) return false;
-  const value = Number(autoDrainConcurrency);
+  if (autoDrainHostForm().concurrency === "") return true;
+  if (!/^\d+$/.test(autoDrainHostForm().concurrency)) return false;
+  const value = Number(autoDrainHostForm().concurrency);
   return value >= 1 && value <= AUTO_DRAIN_CONCURRENCY_MAX;
 }
 
 export function autoDrainConcurrencyValue() {
-  return autoDrainConcurrency;
+  return autoDrainHostForm().concurrency;
 }
 
 function drainFieldHead(label, help, { warn = false, id = null } = {}) {
@@ -79,13 +88,13 @@ function autoDrainDurationControl(payload) {
   segment.setAttribute("role", "group");
   segment.setAttribute("aria-label", "Window duration");
   for (const value of AUTO_DRAIN_DURATIONS) {
-    const selected = value === autoDrainDuration;
+    const selected = value === autoDrainHostForm().duration;
     const option = el("button", { class: `drain-duration mono${selected ? " selected" : ""}`, text: value });
     option.type = "button";
     option.dataset.drainFocus = `duration-${value}`;
     option.setAttribute("aria-pressed", selected ? "true" : "false");
     option.addEventListener("click", () => {
-      autoDrainDuration = value;
+      autoDrainHostForm().duration = value;
       drainControlCallbacks.render(payload);
     });
     segment.appendChild(option);
@@ -106,7 +115,7 @@ function autoDrainConcurrencyControl(payload, form) {
   input.type = "number";
   input.min = "1";
   input.placeholder = fallback || "auto";
-  input.value = autoDrainConcurrency;
+  input.value = autoDrainHostForm().concurrency;
   input.dataset.drainFocus = "concurrency";
   // The message sits under the whole settings row, not in this narrow column.
   const problem = el("div", { class: "operation-control-note drain-stop-note disabled-reason" });
@@ -125,7 +134,7 @@ function autoDrainConcurrencyControl(payload, form) {
     if (form.start) form.start.disabled = autoDrainStartBlocked(payload);
   };
   input.addEventListener("input", () => {
-    autoDrainConcurrency = input.value.trim();
+    autoDrainHostForm().concurrency = input.value.trim();
     form.syncConcurrency();
   });
   const step = (delta, name) => {
@@ -134,9 +143,9 @@ function autoDrainConcurrencyControl(payload, form) {
     button.dataset.drainFocus = `concurrency${delta}`;
     button.setAttribute("aria-label", `${name} concurrency`);
     button.addEventListener("click", () => {
-      const current = Math.trunc(Number(autoDrainConcurrency || fallback || 1));
-      autoDrainConcurrency = String(Math.max(1, (Number.isFinite(current) ? current : 1) + delta));
-      input.value = autoDrainConcurrency;
+      const current = Math.trunc(Number(autoDrainHostForm().concurrency || fallback || 1));
+      autoDrainHostForm().concurrency = String(Math.max(1, (Number.isFinite(current) ? current : 1) + delta));
+      input.value = autoDrainHostForm().concurrency;
       form.syncConcurrency();
     });
     return button;
@@ -156,21 +165,21 @@ const AUTO_DRAIN_REVIEW_STOP = "Off: shipped tasks stay in review; a separate ac
 // Completion: off stops each shipped task at review, on marks it done. On is
 // the riskier choice, so its hint turns amber with the warning.
 function autoDrainCompletionControl(payload, reasons) {
-  const unavailable = Boolean(reasons.complete) && !autoDrainComplete;
+  const unavailable = Boolean(reasons.complete) && !autoDrainHostForm().complete;
   return drainSwitchField({
     id: "auto-drain-complete",
     label: "Mark shipped tasks done",
-    help: unavailable ? reasons.complete : autoDrainComplete ? AUTO_DRAIN_COMPLETE_WARNING : AUTO_DRAIN_REVIEW_STOP,
-    warn: autoDrainComplete || unavailable,
-    checked: autoDrainComplete,
+    help: unavailable ? reasons.complete : autoDrainHostForm().complete ? AUTO_DRAIN_COMPLETE_WARNING : AUTO_DRAIN_REVIEW_STOP,
+    warn: autoDrainHostForm().complete || unavailable,
+    checked: autoDrainHostForm().complete,
     disabled: unavailable,
     title: unavailable ? reasons.complete : "",
     // A checked choice can still block Start (a carried-over choice on a
     // replica); its help describes the choice, so the refusal is named here.
-    refusal: autoDrainComplete ? reasons.complete : "",
+    refusal: autoDrainHostForm().complete ? reasons.complete : "",
     extraClass: "drain-field-complete",
     onChange: (on) => {
-      autoDrainComplete = on;
+      autoDrainHostForm().complete = on;
       drainControlCallbacks.render(payload);
     },
   });
@@ -183,15 +192,15 @@ function autoDrainApproveControl(payload, reasons) {
   return drainSwitchField({
     id: "auto-drain-approve",
     label: "Approve qualifying proposals",
-    help: autoDrainApproveProposed ? `${AUTO_DRAIN_APPROVE_WARNING}\n${AUTO_DRAIN_APPROVE_RULE}` : `Off: proposed tasks stay proposed until you approve them.\n${AUTO_DRAIN_APPROVE_RULE}`,
-    warn: autoDrainApproveProposed,
-    checked: autoDrainApproveProposed,
-    disabled: Boolean(reasons.approve) && !autoDrainApproveProposed,
+    help: autoDrainHostForm().approveProposed ? `${AUTO_DRAIN_APPROVE_WARNING}\n${AUTO_DRAIN_APPROVE_RULE}` : `Off: proposed tasks stay proposed until you approve them.\n${AUTO_DRAIN_APPROVE_RULE}`,
+    warn: autoDrainHostForm().approveProposed,
+    checked: autoDrainHostForm().approveProposed,
+    disabled: Boolean(reasons.approve) && !autoDrainHostForm().approveProposed,
     title: reasons.approve || "",
     refusal: reasons.approve && !reasons.submit ? reasons.approve : "",
     extraClass: "drain-field-approve",
     onChange: (on) => {
-      autoDrainApproveProposed = on;
+      autoDrainHostForm().approveProposed = on;
       drainControlCallbacks.render(payload);
     },
   });
@@ -204,12 +213,12 @@ function autoDrainAutoFixControl(payload, reasons) {
     id: "auto-drain-auto-fix",
     label: "Auto-fix PR blockers",
     help: AUTO_DRAIN_AUTO_FIX_HELP,
-    checked: autoDrainAutoFix,
+    checked: autoDrainHostForm().autoFix,
     // Keep an unavailable selected option clearable after authority changes.
-    disabled: Boolean(reasons.autoFix) && !autoDrainAutoFix,
+    disabled: Boolean(reasons.autoFix) && !autoDrainHostForm().autoFix,
     refusal: reasons.autoFix || "",
     onChange: (on) => {
-      autoDrainAutoFix = on;
+      autoDrainHostForm().autoFix = on;
       drainControlCallbacks.render(payload);
     },
   });
@@ -239,17 +248,17 @@ function autoDrainReviewControl(payload, reasons) {
     ? `Workspace policy applies before-PR review (review.timing = before_pr, ${source}; deprecated). Change it in configuration.`
     : policy
       ? `Workspace policy applies it (review.timing = before_landing, ${source}). Change it in configuration.`
-      : autoDrainReview ? AUTO_DRAIN_REVIEW_HELP : `Off: workspace policy applies no review before landing. ${AUTO_DRAIN_REVIEW_HELP}`;
+      : autoDrainHostForm().review ? AUTO_DRAIN_REVIEW_HELP : `Off: workspace policy applies no review before landing. ${AUTO_DRAIN_REVIEW_HELP}`;
   return drainSwitchField({
     id: "auto-drain-review",
     label: "Review before landing",
     help,
-    checked: Boolean(policy) || autoDrainReview === "before-landing",
+    checked: Boolean(policy) || autoDrainHostForm().review === "before-landing",
     // Keep an unavailable chosen layer clearable after the view changes.
-    disabled: Boolean(policy) || (Boolean(reasons.review) && !autoDrainReview),
+    disabled: Boolean(policy) || (Boolean(reasons.review) && !autoDrainHostForm().review),
     refusal: policy ? "" : reasons.review || "",
     onChange: checked => {
-      autoDrainReview = checked ? "before-landing" : "";
+      autoDrainHostForm().review = checked ? "before-landing" : "";
       drainControlCallbacks.render(payload);
     },
   });
@@ -270,10 +279,10 @@ function autoDrainStartBlocked(payload) {
   return Boolean(reasons.submit || autoDrainStartRefusal(payload))
     || pendingOperations.has("auto-drain:start")
     || !autoDrainConcurrencyValid()
-    || (autoDrainComplete && Boolean(reasons.complete))
-    || (autoDrainApproveProposed && Boolean(reasons.approve))
-    || (autoDrainAutoFix && Boolean(reasons.autoFix))
-    || (Boolean(autoDrainReview) && !workspaceReviewTiming(payload) && Boolean(reasons.review));
+    || (autoDrainHostForm().complete && Boolean(reasons.complete))
+    || (autoDrainHostForm().approveProposed && Boolean(reasons.approve))
+    || (autoDrainHostForm().autoFix && Boolean(reasons.autoFix))
+    || (Boolean(autoDrainHostForm().review) && !workspaceReviewTiming(payload) && Boolean(reasons.review));
 }
 
 function autoDrainStartButton(payload, form) {
@@ -282,7 +291,7 @@ function autoDrainStartButton(payload, form) {
   const pending = pendingOperations.has(key);
   const button = el("button", {
     class: "operation-button drain-start primary",
-    text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${autoDrainDuration} window`,
+    text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${autoDrainHostForm().duration} window`,
     title: reasons.submit || autoDrainStartRefusal(payload) || "Submit orbit.workflow.auto with this duration and concurrency",
   });
   button.type = "button";
@@ -296,20 +305,20 @@ function autoDrainStartButton(payload, form) {
     const workspace = selectedWorkspace();
     const checkout = drainCheckout(payload, workspace?.id);
     const counts = autoDrainCounts(payload);
-    const duration = autoDrainDuration;
+    const duration = autoDrainHostForm().duration;
     const completeLine = checkout.replica
       ? "The owner decides completion and review for work this replica claims."
-      : autoDrainComplete
+      : autoDrainHostForm().complete
         ? `WARNING: ${AUTO_DRAIN_COMPLETE_WARNING}`
       : "Shipped tasks stay in review; a separate action completes them.";
-    const approveProposed = autoDrainApproveProposed;
-    const autoFix = autoDrainAutoFix;
-    const review = workspaceReviewTiming(payload) ? "" : autoDrainReview;
+    const approveProposed = autoDrainHostForm().approveProposed;
+    const autoFix = autoDrainHostForm().autoFix;
+    const review = workspaceReviewTiming(payload) ? "" : autoDrainHostForm().review;
     const confirmText = [
       checkout.replica
         ? `Start pulling from ${checkout.ownerHost} in workspace "${workspace?.name || workspace?.id}"?`
         : `Start a bounded auto-delivery window in workspace "${workspace?.name || workspace?.id}"?`,
-      `Duration: ${duration} · Concurrency: ${autoDrainConcurrency || "runtime default"}`,
+      `Duration: ${duration} · Concurrency: ${autoDrainHostForm().concurrency || "runtime default"}`,
       `Review before landing: ${checkout.replica ? "owner policy" : review ? `add ${review} review` : "workspace policy"}`,
       `Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}`,
       "",
@@ -324,9 +333,9 @@ function autoDrainStartButton(payload, form) {
     try {
       const body = checkout.replica
         ? { for_duration: duration, pull: checkout.workspaceId || checkout.pullSelector, host: checkout.ownerHost }
-        : { for_duration: duration, complete: autoDrainComplete, approve_proposed: approveProposed, auto_fix: autoFix };
+        : { for_duration: duration, complete: autoDrainHostForm().complete, approve_proposed: approveProposed, auto_fix: autoFix };
       if (!checkout.replica && review) body.review = review;
-      if (autoDrainConcurrency) body.concurrency = Number(autoDrainConcurrency);
+      if (autoDrainHostForm().concurrency) body.concurrency = Number(autoDrainHostForm().concurrency);
       const result = await postJson(visit.path("/api/workflows/auto"), body);
       if (!visit.isCurrent()) return;
       const runId = result?.run_id ?? null;
@@ -537,18 +546,18 @@ export function renderAutoDrainStart(payload, reasons) {
 function autoDrainStartSummary(payload) {
   const capacity = payload.capacity || {};
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
-  const parallel = autoDrainConcurrencyValid() && autoDrainConcurrency
-    ? autoDrainConcurrency
+  const parallel = autoDrainConcurrencyValid() && autoDrainHostForm().concurrency
+    ? autoDrainHostForm().concurrency
     : Number.isFinite(limit) && limit >= 1 ? String(Math.trunc(limit)) : "";
   const mode = payload.auto_concurrency?.configured_mode || "";
   return [
-    `${autoDrainDuration} window`,
+    `${autoDrainHostForm().duration} window`,
     parallel ? `up to ${parallel} in parallel` : "runtime default parallelism",
     mode ? (mode === "off" ? "no forecast" : mode) : "",
-    autoDrainComplete ? "marks done" : "",
-    autoDrainApproveProposed ? "approves proposals" : "",
-    autoDrainAutoFix ? "auto-fix on" : "",
-    autoDrainReview && !workspaceReviewTiming(payload) ? `adds ${autoDrainReview} review` : "",
+    autoDrainHostForm().complete ? "marks done" : "",
+    autoDrainHostForm().approveProposed ? "approves proposals" : "",
+    autoDrainHostForm().autoFix ? "auto-fix on" : "",
+    autoDrainHostForm().review && !workspaceReviewTiming(payload) ? `adds ${autoDrainHostForm().review} review` : "",
   ].filter(Boolean).join(" · ");
 }
 
