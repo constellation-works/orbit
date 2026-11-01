@@ -112,8 +112,14 @@ Historical PR references are retained after discard/requeue. When several PRs
 are linked, desktop review selects the current delivery only from the exact
 host-qualified task-bound native run's authenticated successful publication
 chain, or the accepted foreign handoff. References corroborate its identity;
-reference order grants no authority. Missing or contradictory proof and a
-provider repository, number, URL, branch, base or head mismatch refuse review.
+reference order grants no authority. Missing or contradictory proof refuses
+review. For the native publication, a provider repository, number, URL, branch,
+base or head mismatch refuses review. For an accepted foreign handoff, a provider
+repository, number, URL, source branch or landing branch mismatch refuses review;
+a provider head that differs from the handed-off candidate does not refuse. It
+binds `reviewed_head` to that head, and completion stays refused until the pull
+request has merged and, when the merged head is not the candidate, until an
+accepted review reconciliation covers it (see the next paragraph).
 
 The PR head is read from the provider by the PR's exact number or URL, never
 searched for in a recent-PR listing. When the task's linked run executed on
