@@ -202,10 +202,7 @@ pub struct InitArgs {
     /// Scope for written config files (workspace: repo-local, home: user-level).
     #[arg(long, value_enum, default_value_t = ScopeArg::Workspace)]
     pub scope: ScopeArg,
-    /// Register the federated mux as a separate `orbit-federated` MCP server.
-    ///
-    /// The generated entry launches `orbit mcp serve --mode federated` and
-    /// does not replace the existing v1 `orbit` server entry.
+    /// Register the federated mux as a separate `orbit-federated` MCP server, launched by `orbit mcp serve --mode federated`.
     #[arg(long)]
     pub federated: bool,
 }

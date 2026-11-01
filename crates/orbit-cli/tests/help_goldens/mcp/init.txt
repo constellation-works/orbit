@@ -50,9 +50,7 @@ Options:
           [default: workspace]
 
       --federated
-          Register the federated mux as a separate `orbit-federated` MCP server.
-          
-          The generated entry launches `orbit mcp serve --mode federated` and does not replace the existing v1 `orbit` server entry.
+          Register the federated mux as a separate `orbit-federated` MCP server, launched by `orbit mcp serve --mode federated`
 
   -h, --help
           Print help (see a summary with '-h')
