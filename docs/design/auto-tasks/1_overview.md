@@ -145,8 +145,10 @@ definition of the same name.
   code totals 25,000 lines or fewer, make it one area. Do not file an area under
   5,000 lines unless no in-bound merge is possible, and record the reason in
   `full-review-areas.json`. That artifact records the inventories, counts and
-  exclusions. It files one area-review
-  chore per bounded area tagged
+  exclusions. It files at most 24 area-review chores per run, ranking
+  hard-to-review areas (concurrency, persistence, security, process control)
+  first and then the least recently reviewed, and records the rest as `deferred`.
+  Each filed chore is one bounded area tagged
   `full-code-review` + `no-diff-expected` — never `code-review` — at `hard`
   complexity or below with no pinned crew. Area reviewers read every partition
   of at most 10,000 lines in full, recording file/range coverage and findings
@@ -155,7 +157,9 @@ definition of the same name.
   it. Incomplete coverage reports `review_incomplete` with uncovered partitions
   in the artifact and task comment. Findings are `bug`s tagged `code-review` +
   `full-code-review`, with source-file and matching test context selectors
-  [ORB-18948].
+  [ORB-18948]. Reviewers skip `nit` findings, anything already fixed at the
+  integration tip or tracked by any task, and re-search before retrying a
+  failed filing [ORB-20705].
 - `qa-full-sweep` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). It is the hands-on counterpart of
   `full-code-review`: where `qa-sweep` validates only the changes since its
