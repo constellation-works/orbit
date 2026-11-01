@@ -47,6 +47,7 @@ globalThis.fetch = async (path) => {
       definition('winter-digest', '0 7 * * *', { state: 'scheduled', at: WINTER_AT }),
       definition('transition-digest', '0 7 * * *', { state: 'scheduled', at: TRANSITION_AT }),
       definition('unscheduled', '0 7 * * 4', { state: 'waiting', at: null }),
+      definition('sunday-digest', '0 7 * * 0', { state: 'scheduled', at: TRANSITION_AT }),
     ],
   });
   if (url.pathname === '/api/routines') return response({
@@ -56,6 +57,7 @@ globalThis.fetch = async (path) => {
       routine('winter-sweep', '0 7 * * *', WINTER_AT, 'job:winter'),
       routine('transition-sweep', '0 7 * * *', TRANSITION_AT, 'job:transition'),
       routine('unscheduled-sweep', '0 7 * * 4', null, 'job:unscheduled'),
+      routine('sunday-sweep', '0 7 * * 0', TRANSITION_AT, 'job:fixture'),
     ],
     clock: { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true },
     inactive_plugin_counts: {}, retired: [],
@@ -147,6 +149,30 @@ try {
   const routinePreview = openPreview('routines-body', 'transition-sweep');
   assert(routinePreview.includes('daily 07:00 PST'), `routine editor preview uses the post-fallback instant: ${routinePreview}`);
   closePreview('routines-body', 'transition-sweep');
+
+  // Editing a cron across the seasonal boundary: the saved Sunday fire is
+  // 2026-11-01T15:00Z (PST), but a daily draft fires at other instants (PDT
+  // before the fallback). The draft never borrows the saved fire's PST; it names
+  // the stable host zone. Putting the saved cron back restores the precise label.
+  const editCron = (bodyId, name, value) => {
+    const input = rowEl(bodyId, name)?.querySelector('.schedule-editor input.schedule-input');
+    assert(input, `cron input is open for ${name}`);
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return rowEl(bodyId, name)?.querySelector('.schedule-preview')?.textContent || '';
+  };
+  const noSeason = (text) => !text.includes('PST') && !text.includes('PDT');
+  for (const [bodyId, name, verb] of [['auto-tasks-body', 'sunday-digest', 'Mints'], ['routines-body', 'sunday-sweep', 'Fires']]) {
+    const saved = openPreview(bodyId, name);
+    assert(saved.includes(`${verb} weekly Sun 07:00 PST`), `${name} saved preview names the saved fire's PST: ${saved}`);
+    const edited = editCron(bodyId, name, '0 7 * * *');
+    assert(edited.includes(`${verb} daily 07:00 PT`) && noSeason(edited), `${name} edited draft uses the generic zone, not the saved PST (${today} now): ${edited}`);
+    const reflowed = editCron(bodyId, name, '  0   7 * * 0 ');
+    assert(reflowed.includes(`${verb} weekly Sun 07:00 PST`), `${name} unchanged cron with extra spaces keeps the saved instant: ${reflowed}`);
+    const other = editCron(bodyId, name, '0 7 * * 1');
+    assert(other.includes(`${verb} weekly Mon 07:00 PT`) && noSeason(other), `${name} a different weekday is generic too: ${other}`);
+    closePreview(bodyId, name);
+  }
 
   // A host whose IANA name is unknown is still labelled by its offset.
   zone = { name: null, offset_seconds: 5.5 * 3600 };

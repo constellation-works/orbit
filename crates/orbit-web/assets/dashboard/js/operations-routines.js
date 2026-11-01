@@ -13,6 +13,7 @@ import {
   clockUnavailable,
   clockUnavailableReason,
   controlReason,
+  cronDraftText,
   cronText,
   durationText,
   explainUnavailable,
@@ -314,7 +315,7 @@ function routineEditor(payload, routine) {
   return routineTriggerEditor({
     key,
     routine,
-    cronPreview: (cron) => cronText(cron, routineNextAt(routine)),
+    cronPreview: (cron) => cronDraftText(cron, routine.cron || routine.trigger?.cron, routineNextAt(routine)),
     save: (trigger) => {
       const observed = editorObserved(key) || { source: routine.source, target: routine.target, trigger: routine.trigger };
       return postJson("/api/routines/trigger", {

@@ -406,7 +406,8 @@ function stableCronZoneName(timeZone) {
 // Abbreviation for a cron cadence. `instant` is that row's next evaluation, so
 // the name is the one at the fire ("PDT" before a Pacific fallback, "PST"
 // after it) and agrees with the UTC next fire beside it. Rendered cadences,
-// job chips and editor previews pass that instant when the row has one. With
+// job chips and the editor preview of an unchanged cron pass that instant when
+// the row has one (an edited draft takes the generic name; see cronDraftText). With
 // no instant the stable generic name ("PT") is used. Today's abbreviation is
 // not applied to a future or unspecified fire. An unknown zone name falls
 // back to the reported offset ("UTC-07:00").
@@ -449,6 +450,15 @@ export function cronText(cron, instant) {
     return `weekly ${CRON_DAYS[Number(dow)] || dow} ${pad(hour)}:${pad(minute)}${zone}`;
   }
   return cron;
+}
+
+// Editor preview of a draft cron. The saved row's next evaluation belongs to
+// the saved cron only: an edited draft fires at other instants, possibly across
+// a seasonal change, so it takes the stable generic zone name instead of
+// borrowing the saved fire's abbreviation.
+export function cronDraftText(draftCron, savedCron, savedInstant) {
+  const same = (a, b) => String(a || "").trim().split(/\s+/).join(" ") === String(b || "").trim().split(/\s+/).join(" ");
+  return cronText(draftCron, same(draftCron, savedCron) ? savedInstant : null);
 }
 
 // One switch for enable/disable. The visible text stays "Enable"/"Disable"
