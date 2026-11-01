@@ -278,7 +278,7 @@ fn wrap_message(message: &str, width: u16) -> String {
         return message.to_string();
     }
     let mut prose = Table::new();
-    prose.load_preset(presets::NOTHING);
+    prose.load_style(presets::NOTHING);
     prose.force_no_tty();
     prose.set_content_arrangement(ContentArrangement::Disabled);
     prose.add_row(vec![Cell::new(message)]);

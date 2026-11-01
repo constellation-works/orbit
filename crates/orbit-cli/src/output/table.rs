@@ -272,7 +272,7 @@ impl Table {
         let (layout, dropped) = self.resolve_widths(&visible, &natural, sink_width);
 
         let mut grid = Grid::new();
-        grid.load_preset(presets::NOTHING);
+        grid.load_style(presets::NOTHING);
         grid.set_content_arrangement(ContentArrangement::Disabled);
         grid.set_truncation_indicator(ELLIPSIS);
         // Told, never asked. Left to itself `comfy_table` probes stdout and
@@ -398,7 +398,7 @@ impl Table {
     /// in grapheme clusters by the same code that lays the grid out.
     fn natural_widths(&self, visible: &[usize]) -> Vec<usize> {
         let mut probe = Grid::new();
-        probe.load_preset(presets::NOTHING);
+        probe.load_style(presets::NOTHING);
         probe.set_content_arrangement(ContentArrangement::Disabled);
         probe.set_header(
             visible

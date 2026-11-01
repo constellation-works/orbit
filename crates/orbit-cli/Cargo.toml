@@ -19,7 +19,7 @@ path = "src/main.rs"
 chrono.workspace = true
 clap.workspace = true
 colored = "2"
-comfy-table = "7"
+comfy-table = "8"
 csv = "1"
 orbit-auth = { path = "../orbit-auth" }
 orbit-cmd = { path = "../orbit-cmd" }

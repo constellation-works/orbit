@@ -2664,7 +2664,10 @@ def process_self_test():
                             unwind_observed["marker"] = values
                             return True
                         return False
-                    wait_until(ready_waiting, 8, "unwind worker did not become ready")
+                    # The predicate returns as soon as the worker reports ready; the
+                    # bound only covers a loaded guard pool, where start-up can take
+                    # longer than 8 seconds.
+                    wait_until(ready_waiting, 60, "unwind worker did not become ready")
                     unwind_observed["info"] = _proc_identity(int(unwind_observed["marker"]["pid"]))
                     raised["done"] = True
                     raise KeyboardInterrupt
