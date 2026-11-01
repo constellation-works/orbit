@@ -437,6 +437,114 @@ succeed with its evidence persisted. Missing evidence remains a stated
 gap. Review and approve proposed follow-ups before they enter delivery;
 enabling a sweep does not approve them for you.
 
+## Host-health auto-task
+
+`host-health` is a shipped auto-task that reads a machine's health and files
+tasks for what it finds. It ships **disabled**. Enable it on the
+workspace owner, from your registered owner checkout, and set its schedule
+(the default is daily at 07:10, host-local time):
+
+```bash
+orbit auto-task toggle host-health on
+orbit auto-task update host-health --cron '10 7 * * *'
+# Or run on an interval instead:
+orbit auto-task update host-health --every-minutes 1440
+```
+
+You can also toggle it from the dashboard's Automation view. Scheduled passes
+need the [host clock](#1-install-the-clock). As with the sweeps above, the clock
+files a pass task and an agent runs it like any other task.
+
+The pass never repairs anything. It does not restart services, change config,
+run doctor's repair flags or read credentials, and it does not dump whole
+service units, launch agent plists or environment values.
+
+### What it reads
+
+- **Doctor.** `orbit doctor --json` on the machine that runs the pass. Any
+  doctor warning or error qualifies on first sight.
+- **Services and their logs.** No config key lists services. Orbit takes the
+  names from the host's installed service configuration: on Linux, the
+  installed user systemd units and their `journalctl --user` output; on macOS,
+  the user LaunchAgents and the stdout and stderr files they write, or a bounded
+  platform log query. A renamed unit or a host-wide service is picked up from
+  that configuration, so rename services in your service manager, not in Orbit.
+- **Orbit's own log.** The global Orbit log, and the workspace's log directory
+  when it exists.
+
+A log signature qualifies only after three distinct events across two completed
+collection windows on the same host within seven days. A single error does not
+file a task.
+
+Missing service managers, unreadable logs, rotation gaps and a failed doctor
+run are reported as missing coverage. They are never counted as a healthy
+pass.
+
+### What it files
+
+Before it files anything, the pass searches open tasks, tasks closed within 30
+days and open frictions. If a covering task already exists, the pass comments
+the new counts on that task instead of filing a copy. A finding you have
+already rejected is not filed again. A pass files at most five tasks.
+
+- A verified Orbit defect becomes a bug for an agent crew, with the file and
+  function evidence.
+- Host, credential, service and operator-only findings go to a
+  [human crew](../../reference/config/#human-crews).
+- If no human crew can be chosen, the pass files a proposed setup chore tagged
+  `needs-operator` and `no-auto-approve`. It stays `proposed` until an operator
+  assigns a human crew. Do not promote it before then: the tags alone do not
+  stop dispatch.
+
+Every filing has a `## Resolve` section. It gives exact commands for that host
+and shell, or an attached `resolve.sh` with a `--dry-run` mode when the script
+changes state. When no command exists, it gives numbered steps. Each filing
+also gives a command that verifies the result, and the output to expect. The
+pass never runs these steps; you do.
+
+Each pass task attaches `host-health-report.json`, which lists findings by
+signature, their routes, and any coverage gaps, and `host-health-cursor.json`,
+which holds the log positions and seven-day counts the next pass continues from.
+Empty passes attach both too. Open them in the [dashboard](../dashboard/), or
+find the pass tasks and the filings that need you with:
+
+```bash
+orbit task list --tag auto-task:host-health
+orbit task list --tag needs-operator
+```
+
+### Collect from a follower
+
+By default a pass covers only its owner. To also watch a follower, a checkout
+that pulls work from the owner (see [Run Orbit across hosts](../multi-host/)),
+add a collector on the owner. Do not add it on the replica.
+
+1. On the follower, run `orbit config get machine.id` and note the ID.
+2. On the owner, write a definition file in `.orbit/auto_tasks/`.
+   `orbit auto-task add` cannot set a collector's role or machine, so start from
+   the template that `orbit auto-task show host-health --json` prints, and set:
+   - a unique name, such as `host-health-collector-build`;
+   - the tags `host-health-collector` and `no-diff-expected`, so the owner can
+     recognize it;
+   - in its instructions, the follower's machine ID and the `collector-only`
+     role, so the collector is pinned to that machine;
+   - a daily cron earlier than the owner's pass, such as `40 6 * * *`.
+   The [scheduling YAML reference](../../reference/scheduling-yaml/) describes
+   the file's fields. The follower must already pull work from the owner.
+
+A collector files nothing. It returns its two artifacts with its own task, and
+the owner imports each host and window once. A follower whose latest report is
+older than 36 hours, or that has no report, shows as a coverage gap, not as a
+healthy host. Collector definitions are yours to maintain: when a later release
+changes the collection contract, copy the change into your collector yourself.
+
+To check the setup:
+
+```bash
+orbit auto-task show host-health
+orbit clock tick --dry-run --verbose
+```
+
 ## 4. Watch it work
 
 A routine fire is an ordinary run, and a filed task is an ordinary task. The
