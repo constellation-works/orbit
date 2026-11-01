@@ -25,12 +25,7 @@ pub struct AuditListArgs {
     /// Filter by role
     #[arg(long)]
     pub role: Option<String>,
-    /// Filter by trusted stored workspace ID
-    ///
-    /// This is deliberately distinct from the global `--workspace` selector:
-    /// the latter accepts a registered name or checkout path and is resolved
-    /// during runtime bootstrap. The audit log is host-global, so listing is
-    /// unscoped unless this filter is passed.
+    /// Filter by trusted stored workspace ID (not a registered name or path)
     #[arg(long = "workspace-id")]
     pub workspace_id: Option<String>,
     /// Filter by trusted caller machine ID
