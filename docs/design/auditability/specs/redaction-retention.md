@@ -116,7 +116,7 @@ Global process tracing:
 
 - If a redactor misses an unknown secret shape, the audit layer may persist that value. Reviewers should treat new provider payload shapes as redaction-sensitive changes.
 - If redaction changes payload bytes, the stored hash identifies the redacted payload, not the raw provider payload.
-- If v2 audit-store writes fail, the run may continue with in-memory audit snapshots only; durable reconstruction is incomplete.
+- If v2 audit-store writes fail, the run continues with a degraded audit trail: the writer counts and logs each failed envelope and keeps no in-memory copy. A failed event is absent from sink-backed snapshots and cannot be reconstructed from memory, so its durable evidence is missing.
 - `orbit audit prune` deletes command audit rows only; run audit rows and blobs are pruned by `orbit gc audit`.
 - A blob whose write crashed before its row committed keeps its pending marker and survives until the marker is older than `retention.audit_days`.
 - A blob named by pipeline state survives its audit row until `orbit gc runs` drops that state. A blob named by a step response or error is kept for as long as the step row exists, since run retention keeps steps.
