@@ -111,6 +111,86 @@ fn raise_input(task: &str, question: &str) -> Value {
 }
 
 #[test]
+fn equivalent_questions_are_deduplicated_only_within_their_task() {
+    let fx = Fixture::new();
+    let first = fx.task("First decision", "dk");
+    let second = fx.task("Second decision", "dk");
+    let dependent = |title: &str, decision: &str| {
+        fx.task_with(
+            title,
+            "sol",
+            vec![TaskRelation {
+                relation_type: TaskRelationType::BlockedBy,
+                target: decision.into(),
+                regression: None,
+            }],
+        )
+    };
+    let first_dependent = dependent("First dependent", &first);
+    let second_dependent = dependent("Second dependent", &second);
+    let first_request = fx
+        .raise("claude", raise_input(&first, "Approve the price?"))
+        .unwrap();
+    let retry = fx
+        .raise("codex", raise_input(&first, "  APPROVE the price? "))
+        .unwrap();
+    assert_eq!(retry["deduplicated"], true);
+    assert_eq!(retry["id"], first_request["id"]);
+    let second_request = fx
+        .raise("claude", raise_input(&second, "  APPROVE the price? "))
+        .unwrap();
+    assert_eq!(second_request["deduplicated"], false, "{second_request}");
+    assert_ne!(second_request["id"], first_request["id"]);
+    assert_eq!(
+        fx.runtime.get_task_decision_requests(&first).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        fx.runtime
+            .get_task_decision_requests(&second)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    fx.operator()
+        .answer_decision_request_as_human(
+            first_request["id"].as_str().unwrap(),
+            "1",
+            None,
+            "human:operator".into(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        fx.runtime.get_task(&first).unwrap().status,
+        TaskStatus::Done
+    );
+    assert_eq!(
+        fx.runtime.get_task(&second).unwrap().status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(
+        fx.runtime.get_task_decision_requests(&second).unwrap()[0].state,
+        DecisionRequestState::Open
+    );
+    for (dependent, decision, expected) in [
+        (&first_dependent, &first, TaskStatus::Done),
+        (&second_dependent, &second, TaskStatus::Backlog),
+    ] {
+        let task = fx.runtime.get_task(dependent).unwrap();
+        assert_eq!(
+            fx.runtime
+                .dependency_status_index([&task])
+                .unwrap()
+                .get(decision)
+                .copied(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn an_agent_raises_a_decision_and_only_the_operator_answers_it() {
     let fx = Fixture::new();
     let decision = fx.task("Sign off the price", "dk");

@@ -8,8 +8,8 @@
 //! completes the task and so unblocks its `blocked_by` dependents.
 //!
 //! Raising is bounded: an open agent-raised request is counted per workspace
-//! and per filer, the same open question is deduplicated to the request that
-//! already holds it, and a task holds one open request.
+//! and per filer, the same open question on a task is deduplicated to the
+//! request that already holds it, and a task holds one open request.
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
@@ -134,7 +134,8 @@ impl OrbitRuntime {
                     .filter(|request| request.state == DecisionRequestState::Open)
                     .collect();
                 if let Some(existing) = open.iter().find(|request| {
-                    request.topic == topic
+                    request.task_id == task_id
+                        && request.topic == topic
                         && request.summary.as_deref().map(question_key).as_deref() == Some(&key)
                 }) {
                     outcome = Some(AgentDecisionRaised {
