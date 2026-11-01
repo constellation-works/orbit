@@ -32,9 +32,14 @@ holds different evidence, which stands), unreachable (the follower could not be 
 no_leaf_run. A build or step the follower's record never held stays unrecorded; nothing is \
 guessed from this owner's or any current build. Nothing is cancelled, retried or rewritten: no \
 task, claim or run changes.\n\
+When more claims are selected than one run observes, the report's remaining counts them and \
+next_after_claim_id names the last claim visited; pass it back as --after with the same filters \
+to visit the next page, including claims whose outcome was absent, unreachable, mismatch or \
+no_leaf_run, and with --recheck the whole selection alike.\n\
 JSON shape: {\"rows\":[{\"task_id\",\"claim_id\",\"machine_id\",\"leaf_run_id\",\"outcome\",\
-\"detail\"}],\"remaining\"}\n\
+\"detail\"}],\"remaining\",\"next_after_claim_id\"}\n\
 Examples:\n  orbit run settlements-hydrate --follower-workspace orbit --limit 10\n  \
+orbit run settlements-hydrate --follower-workspace orbit --limit 10 --after <claim-id>\n  \
 orbit run settlements-hydrate --follower-workspace orbit --task <task-id> --recheck --json"
 )]
 pub struct RunHydrateSettlementsArgs {
@@ -68,6 +73,11 @@ pub struct RunHydrateSettlementsArgs {
     /// Most claims to observe in one run (default 25, at most 100)
     #[arg(long)]
     pub limit: Option<usize>,
+
+    /// Continue after this claim, as the previous run's
+    /// `next_after_claim_id` reported it, with the same filters
+    #[arg(long, value_name = "CLAIM_ID")]
+    pub after: Option<String>,
 }
 
 impl Execute for RunHydrateSettlementsArgs {
@@ -96,6 +106,7 @@ impl Execute for RunHydrateSettlementsArgs {
             since: self.since.as_deref().map(parse_since).transpose()?,
             recheck: self.recheck,
             limit: self.limit,
+            after_claim_id: self.after,
         };
         let observer = OperatorRunObserver {
             global_root,
@@ -125,7 +136,11 @@ impl Execute for RunHydrateSettlementsArgs {
                 Cell::new(row.detail.as_deref().unwrap_or("-")),
             ]);
         }
-        let doc = json!({ "rows": report.rows, "remaining": report.remaining });
+        let doc = json!({
+            "rows": report.rows,
+            "remaining": report.remaining,
+            "next_after_claim_id": report.next_after_claim_id,
+        });
         Ok(Payload::blocks(doc, vec![Block::table(table)]).into())
     }
 }

@@ -365,7 +365,7 @@ settlement's text. For a claim settled before a follower sent it, an operator on
 the owner reads it from the follower:
 
 ```bash
-orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--limit 25] [--recheck] [--json]
+orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--limit 25] [--after <claim-id>] [--recheck] [--json]
 ```
 
 Operator-only and bounded (default 25, at most 100); an agent, managed scan or
@@ -376,8 +376,11 @@ pull from this owner. The result is immutable `hydrated` evidence; no claim, tas
 or run changes. Per claim the outcome is `hydrated`, `replayed` (same fact held),
 `conflict` (different evidence held, which stands), `mismatch`, `absent` (the
 follower holds no such run; legacy evidence stays `unrecorded`), `unreachable`
-(ask again later) or `no_leaf_run`. A live run is a `mismatch`: hydrate after the
-leaf has ended.
+(ask again later) or `no_leaf_run`. When more claims are selected than the
+limit, `remaining` counts the rest and `next_after_claim_id` names the page's
+last claim; repeat with `--after <that claim-id>` and the same filters to
+visit them all, unsuccessful outcomes and `--recheck` alike. A live run is a
+`mismatch`: hydrate after the leaf has ended.
 
 The owner's dashboard reads the same claim state, plus the accepted handoff,
 inside the task detail (`orbit web serve --operator`, then

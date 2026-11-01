@@ -1457,7 +1457,7 @@ A claim settled before a follower sent its run record stays `unrecorded` until
 an operator on the owner hydrates it from the follower:
 
 ```bash
-orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--machine <id|name>] [--since 7d] [--limit 25] [--recheck] [--json]
+orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--machine <id|name>] [--since 7d] [--limit 25] [--after <claim-id>] [--recheck] [--json]
 ```
 
 This is operator-only (an agent, a managed scan or a worker bound to a claim is
@@ -1477,7 +1477,12 @@ that it holds no such run, so the evidence is genuinely not available, which for
 claim that predates the evidence stays `unrecorded`); `unreachable` (the follower
 could not be asked, so the question stays open and a later run can answer it); or
 `no_leaf_run` (the claim never bound one). A claim that already holds evidence is
-skipped without `--recheck`. The follower's `orbit.workflow.run.show` may
+skipped without `--recheck`. When the selection is larger than the limit,
+`remaining` counts the claims after the page and `next_after_claim_id` names
+its last claim; repeat with `--after <that claim-id>` and the same filters to
+visit every selected claim, unsuccessful outcomes included, and likewise
+under `--recheck`. A continuation claim outside the selection is refused.
+The follower's `orbit.workflow.run.show` may
 reconcile a run that has not ended, so hydration accepts only a terminal run and
 reports a live one as `mismatch`; run it after the leaf has ended.
 

@@ -52,7 +52,7 @@ Run history:
   orbit run events [run_id] [-s step_id] [--type event_type] [--json]
   orbit run trace [run_id] [--json]
   orbit run settlements [--since 7d] [--json]
-  orbit run settlements-hydrate --follower-workspace <workspace> [--limit N] [--json]
+  orbit run settlements-hydrate --follower-workspace <workspace> [--limit N] [--after <claim-id>] [--json]
 
 Maintenance:
   orbit run cancel <run_id> --confirm
