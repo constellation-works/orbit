@@ -95,6 +95,26 @@ pub(super) fn print_error(
     }
 
     eprintln!("error: {error}");
+    if let Some(next_step) = task_not_found_next_step(error) {
+        eprintln!("{next_step}");
+    }
+}
+
+/// The next step to name under a task-not-found error.
+///
+/// The error only carries the ID that did not resolve, so the next step points
+/// at the listing that shows valid IDs. An error that already carries its own
+/// guidance keeps that wording.
+fn task_not_found_next_step(error: &orbit_core::OrbitError) -> Option<&'static str> {
+    matches!(
+        error,
+        orbit_core::OrbitError::NotFound {
+            kind: orbit_core::NotFoundKind::Task,
+            guidance: None,
+            ..
+        }
+    )
+    .then_some("see `orbit task list` for valid task IDs")
 }
 
 /// Whether to report an error as JSON, and whether to pretty-print it.
