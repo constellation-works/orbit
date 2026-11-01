@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web SSH Local Forward"
-last_validated: 2026-10-29
+last_validated: 2026-11-01
 tags: [remote-access]
 ---
 
@@ -28,9 +28,11 @@ It is not used by MCP. MCP remote mode uses direct ssh -T stdio with no -L forwa
        ssh -tt -o ExitOnForwardFailure=yes <bind marker options> -L 127.0.0.1:<local>:localhost:<remote> <host> "<remote command>"
 
 7. By default, the remote command is `orbit web serve --no-open --operator --port <remote>`. `--no-operator` omits `--operator`. It may include a POSIX-quoted `--workspace` and the compatibility `--global` flag.
-8. Poll /healthz for up to 30 seconds, consulting it only once this child has reported its bind. The same total deadline and 8 KiB status-line bound apply. Once ready, open the local URL unless local --no-open was requested.
+8. Poll /healthz for up to 30 seconds, consulting it only once this child has reported its bind. The same total deadline and 8 KiB status-line bound apply. Once ready, open the local URL unless local --no-open was requested (a browser-session ticket may replace the plain URL, below).
 
 After a healthy attach, connect may `GET /api/routines` to decide the operator-capability notice. That read uses the same 8 KiB status-line and header caps, a 1 MiB body cap, and its own five-second total deadline. An oversized or unfinished body is ignored and the notice is skipped.
+
+When the forwarded `GET /api/session` succeeds (the remote dashboard has [browser sessions](../../../CONFIG.md#browser-sessions) enabled) and a browser or an interactive terminal will consume the URL, connect obtains a one-time ticket by running `orbit web open --no-open` in a separate authenticated SSH command, never through the HTTP API or remote command arguments. It accepts the result only when it is an `http` URL on the remote port with an `orbit-session=` fragment, then opens or prints `http://localhost:<local>/#<fragment>`. Any failure warns and keeps the tunnel up, falling back to the plain local URL unless `--no-open` was requested.
 
 A forward can exist while no service listens behind it, so SSH startup alone never proves readiness.
 
@@ -44,7 +46,7 @@ The local port is free between selection and SSH's bind, so a listener on it doe
 
 - The local -L listener is explicitly bound to 127.0.0.1, and its target is remote localhost.
 - The remote Web process separately enforces its own loopback bind.
-- Orbit Web adds no token, ACL, or session. SSH supplies authentication, encryption, and host verification.
+- Orbit Web adds no token or ACL to the tunnel boundary. The optional browser-session ticket neither authenticates the tunnel nor changes authorization on existing routes. SSH supplies authentication, encryption, and host verification.
 - The dashboard API includes writes. Access to the forwarded local port carries the remote Web process's authority.
 - ExitOnForwardFailure=yes prevents the remote command from continuing when SSH cannot establish the forward.
 - The remote command always includes --no-open.
