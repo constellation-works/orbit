@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-30
+last_updated: 2026-10-31
 last_validated: 2026-10-29
 status: Accepted
 feature: auto-tasks
@@ -764,6 +764,27 @@ disclosure. All-workspace and inactive/unknown workspace selections stay
 read-only. Refresh and hash navigation only GET — they never replay a toggle
 or mint.
 
+**Delete** removes one definition with `POST /api/auto-tasks/delete`, a body of
+`name`, an optional `reason` and an optional `force` flag, scoped to the selected
+workspace. The governed operation is `auto_task.delete`, operator-only like the
+other auto-task writes; the row's Delete button is disabled with the
+`auto_task_delete` capability's reason when that decision is refused. Core removes
+the definition file, its scheduler cursor and, for a delivery trigger, the consumer
+state its audited reset owns. Deleting a shipped default's name also records a
+managed-asset opt-out, so `orbit workspace init --force` and `orbit workspace sync`
+do not reseed it; the success message then says the shipped default will not be
+reseeded. While a task minted from the definition is still open, the delete returns
+`409` with `code: "open_minted_tasks"` and an `open_tasks` list of those task ids,
+and it removes nothing. The confirmation names those tasks as links and offers
+**Delete anyway**, which posts the same request with `force: true`; the open tasks
+stay open. A refused delete changes nothing. A failure before the delivery consumer
+reset restores the definition, cursor and opt-out; the reset runs last and is not
+undone, so a failure after it leaves the reset applied under its own audit record.
+Every attempt writes a dashboard-operations audit row for `auto_task.delete` that
+records the reason and force flag the request sent. The row is `denied` when operator
+authority is missing, `failure` for a core refusal (including the 409, whose message
+it keeps), and `success` otherwise.
+
 The dashboard's `GET /api/auto-tasks` lists workspace task metadata once per
 request and groups it by definition provenance tag. It reads no task bodies on
 the indexed path and uses each group's newest instance for `last_minted_*`.
@@ -772,12 +793,15 @@ archived, rejected and someday instances do not count as open. Delivery-schedule
 automation diagnostics reuse the same open-instance result. The projection is
 recomputed on each request; it does not cache instance state.
 
-List responses expose separate `capabilities` decisions for auto-task toggle,
-manual mint, routine toggle, clock service, and clock cadence. Each decision
-uses the same governed operation as its POST endpoint; no client-side grant
-is inferred from another action. These five operations currently all require
-operator authority, while bounded-window submission has a separate policy.
-The legacy `controls_authorized` field remains for existing API consumers.
+`GET /api/auto-tasks` returns separate `capabilities` decisions for
+`auto_task_toggle`, `auto_task_mint`, `auto_task_schedule` and `auto_task_delete`.
+Each decision uses the same governed operation as its POST endpoint
+(`auto_task.toggle`, `auto_task.mint`, `auto_task.set_schedule` and
+`auto_task.delete`); no client-side grant is inferred from another action. All
+four currently require operator authority, while bounded-window submission has a
+separate policy. Routine toggle and the clock capabilities are on the routines
+list response instead. The legacy `controls_authorized` field remains for existing
+API consumers and still answers only for toggle and mint.
 
 One session-access explanation appears above Operations. Dashboard authority
 comes from the **server process**, not from opening a browser or terminal.
