@@ -123,11 +123,11 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
                     .map(|id| stored_task(id, "medium", 100.0, false))
                     .collect(),
             );
-            record(&fixture, now - Duration::days(12), 15, eligible);
+            record(&fixture, now - Duration::days(12), 16, eligible);
             record(
                 &fixture,
                 now - Duration::days(9),
-                15,
+                16,
                 medium
                     .iter()
                     .map(|id| stored_task(id, "medium", 100.0, true))
@@ -138,7 +138,7 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
             let response = initial_work_forecast_baseline(json_ok(
                 server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
             ));
-            assert_eq!(response["model_version"], 15);
+            assert_eq!(response["model_version"], 16);
             assert_eq!(response["inputs"]["history_deliveries"], 5, "{response}");
             assert_eq!(
                 response["assumptions"]["residual_correction"],
@@ -217,10 +217,118 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
                 older["task_level"]["hours"]["n"].as_u64().unwrap() >= 8,
                 "version 14 must still be scored on its own measure: {older}"
             );
-            let current = version(15);
+            let current = version(16);
             assert!(
                 current["task_level"]["hours"]["n"].as_u64().unwrap() > 8,
                 "scoring still counts a forecast made after done: {current}"
+            );
+        },
+    );
+}
+
+/// One medium task stored on ten eligible forecasts is one residual, so the
+/// cohort stays under the minimum and the open draw is not shifted. Eight
+/// distinct hard tasks on those same forecasts are eight residuals and are
+/// corrected once each.
+#[test]
+fn repeated_snapshots_count_one_residual_per_task() {
+    isolated(
+        "backlog_correction::repeated_snapshots_count_one_residual_per_task",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            for _ in 0..5 {
+                completed(&fixture, now - Duration::days(1));
+            }
+            let done_at = now - Duration::days(10);
+            let observed = now - Duration::days(8);
+            let medium_id = completed_work(&fixture, done_at, TaskComplexity::Medium, 4);
+            retimestamp_invocation(&fixture, &medium_id, observed);
+            let mut hard = Vec::new();
+            for _ in 0..8 {
+                let id = completed_work(&fixture, done_at, TaskComplexity::Hard, 4);
+                retimestamp_invocation(&fixture, &id, observed);
+                hard.push(id);
+            }
+            let pending_medium = super::backlog_forecast::backlog_task(
+                &fixture,
+                "Open medium",
+                &["file:medium.rs"],
+                &[],
+                &[],
+            );
+            let pending_hard = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Open hard".into(),
+                    complexity: TaskComplexity::Hard,
+                    status: Some(TaskStatus::Backlog),
+                    context_files: vec!["file:hard.rs".into()],
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+
+            let mut training = vec![stored_task(&medium_id, "medium", 1.0, true)];
+            training.extend(hard.iter().map(|id| stored_task(id, "hard", 1.0, true)));
+            // Oldest first, every row before done, so each task is eligible
+            // ten times. Ten copies of one task must not reach the minimum.
+            for days_ago in (12..=21).rev() {
+                record(
+                    &fixture,
+                    now - Duration::days(days_ago),
+                    16,
+                    training.clone(),
+                );
+            }
+
+            let server = fixture.server(false);
+            let response = initial_work_forecast_baseline(json_ok(
+                server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
+            ));
+            let correction = &response["inputs"]["correction"];
+            let age_days = (Utc::now() - done_at).num_seconds() as f64 / 86_400.0;
+            let one_weight = 0.5_f64.powf(age_days / 14.0);
+
+            let medium_hours = cohort(correction, "medium", "work_hours");
+            assert_eq!(medium_hours["n"], 1, "{medium_hours}");
+            assert_eq!(medium_hours["applied"], false, "{medium_hours}");
+            let medium_weight = medium_hours["weight"].as_f64().unwrap();
+            assert!(
+                (medium_weight - one_weight).abs() < 0.05,
+                "one task must be weighted once, got {medium_weight} vs {one_weight} from {medium_hours}"
+            );
+            let medium_usd = cohort(correction, "medium", "usd");
+            assert_eq!(medium_usd["n"], 1, "{medium_usd}");
+            assert_eq!(medium_usd["applied"], false, "{medium_usd}");
+
+            let hard_hours = cohort(correction, "hard", "work_hours");
+            assert_eq!(hard_hours["n"], 8, "{hard_hours}");
+            assert_eq!(hard_hours["applied"], true, "{hard_hours}");
+            let hard_weight = hard_hours["weight"].as_f64().unwrap();
+            assert!(
+                (hard_weight - 8.0 * one_weight).abs() < 0.05,
+                "eight tasks must be weighted once each, got {hard_weight} vs {} from {hard_hours}",
+                8.0 * one_weight
+            );
+            let hard_usd = cohort(correction, "hard", "usd");
+            assert_eq!(hard_usd["n"], 8, "{hard_usd}");
+            assert_eq!(hard_usd["applied"], true, "{hard_usd}");
+
+            let medium_p50 = prediction(&response, &pending_medium)["work_hours"]["p50"]
+                .as_f64()
+                .unwrap();
+            assert!(
+                (0.5..1.5).contains(&medium_p50),
+                "one repeated task must leave the medium draw uncorrected, got {medium_p50}"
+            );
+            let hard_p50 = prediction(&response, &pending_hard)["work_hours"]["p50"]
+                .as_f64()
+                .unwrap();
+            assert!(
+                (3.5..4.5).contains(&hard_p50),
+                "eight distinct tasks must correct the hard draw, got {hard_p50}"
             );
         },
     );
