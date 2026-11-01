@@ -47,10 +47,11 @@ const INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Longest single JSON-RPC message, in bytes, a listener session accepts.
 ///
-/// The peer is unauthenticated and rmcp reads a message into memory until its
-/// newline with no ceiling of its own, so one connection that never sends a
-/// newline would otherwise grow the process without bound. A session that
-/// exceeds this is closed. Far larger than any tool call an agent sends.
+/// The peer is unauthenticated. rmcp's transport discards a line longer than its
+/// own 16 MiB default and keeps the connection open, so this stricter limit is
+/// what protects the listener. A session whose single message exceeds it is
+/// closed before rmcp buffers the message whole. Far larger than any tool call
+/// an agent sends.
 pub(crate) const DEFAULT_MAX_MCP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
 /// How far a listener is allowed to be reachable.
