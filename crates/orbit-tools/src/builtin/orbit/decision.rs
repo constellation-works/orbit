@@ -17,7 +17,7 @@ use serde_json::Value;
 impl GuardedModes for DecisionVerb {
     fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::List | Self::Show | Self::Submit | Self::Digest => None,
+            Self::List | Self::Show | Self::Raise | Self::Submit | Self::Digest => None,
             Self::Answer => Some(Err(OrbitError::PolicyDenied(
                 "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
             ))),
@@ -38,6 +38,7 @@ impl GuardedModes for DecisionVerb {
         match self {
             Self::List
             | Self::Show
+            | Self::Raise
             | Self::Answer
             | Self::Submit
             | Self::Digest
@@ -52,6 +53,7 @@ impl GuardedModes for DecisionVerb {
         match self {
             Self::List
             | Self::Show
+            | Self::Raise
             | Self::Answer
             | Self::Submit
             | Self::Digest
@@ -66,6 +68,7 @@ impl GuardedModes for DecisionVerb {
         match self {
             Self::List
             | Self::Show
+            | Self::Raise
             | Self::Answer
             | Self::Submit
             | Self::Digest

@@ -12,6 +12,7 @@
 //!
 //! [`TaskHistoryEntry::decision`]: super::TaskHistoryEntry::decision
 
+mod agent_request;
 mod ci_evidence;
 mod code_scanning;
 mod desktop;
@@ -20,6 +21,10 @@ mod record;
 mod recovery;
 mod request;
 
+pub use agent_request::{
+    AGENT_DECISION_MAX_OPTIONS, AGENT_DECISION_MIN_OPTIONS, AgentDecisionOptionInput,
+    AgentDecisionRequestError, agent_decision_answers, normalize_agent_decision_topic,
+};
 pub use ci_evidence::{CiFailureIdentity, CiFailureIdentityError, CiFailureSource};
 pub use code_scanning::{CodeScanningAlertEvidence, CodeScanningAlertEvidenceError};
 pub use desktop::{DesktopMutationReceipt, DesktopMutationReceiptError};

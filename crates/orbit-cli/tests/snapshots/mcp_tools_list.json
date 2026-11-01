@@ -400,17 +400,21 @@
   },
   {
     "name": "orbit_decision_list",
-    "description": "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate or task_id. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
+    "description": "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate, task_id or an exact topic. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "gate": {
           "type": "string",
-          "description": "Only requests waiting on this gate: block_triage, pilot_admission, proposed_approval or review_approval."
+          "description": "Only requests waiting on this gate: agent_request, block_triage, pilot_admission, proposed_approval or review_approval."
         },
         "task_id": {
           "type": "string",
           "description": "Only requests on this task."
+        },
+        "topic": {
+          "type": "string",
+          "description": "Only requests carrying exactly this structured topic."
         },
         "include_closed": {
           "type": "boolean",
@@ -430,6 +434,49 @@
     },
     "annotations": {
       "readOnlyHint": true
+    }
+  },
+  {
+    "name": "orbit_decision_raise",
+    "description": "Raise a multiple-choice decision request on a human-crew task you filed or were handed, instead of a free-text human task. Give a question and two to four options, each with a one-line label and a one-line consequence, exactly one marked recommended (it is listed first); an optional topic or corpus rule id lets a later reader match the request exactly. Only the operator can answer: the answer is recorded in the task's history, completes the task and unblocks its blocked_by dependents. The same open question is deduplicated to the existing request, a task holds one open request, and open agent-raised requests are capped per workspace and per filer; past a cap the call is refused and nothing is written. An answer that changes lasting behaviour must be carried into the owning doc, config or code by the task it unblocks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "description": "The human-crew task the decision is for. The task must be assigned to a human crew and not be done, archived or rejected."
+        },
+        "question": {
+          "type": "string",
+          "description": "One or two plain-language sentences naming the decision needed, readable without opening the code."
+        },
+        "options": {
+          "type": "array",
+          "description": "Two to four options as an array of {label, consequence, recommended} objects. label and consequence are one line each; exactly one option has recommended: true, and it is listed first."
+        },
+        "topic": {
+          "type": "string",
+          "description": "Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value."
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^(?:[Cc][Oo][Dd][Ee][Xx]|[Cc][Ll][Aa][Uu][Dd][Ee]|[Gg][Ee][Mm][Ii][Nn][Ii]|[Gg][Rr][Oo][Kk]|[Mm][Uu][Ss][Ee]|[Gg][Pp][Tt]-.*|[Oo]1.*|[Oo]3.*|[Cc][Ll][Aa][Uu][Dd][Ee]-.*|[Oo][Pp][Uu][Ss].*|[Ss][Oo][Nn][Nn][Ee][Tt].*|[Ff][Aa][Bb][Ll][Ee].*|[Gg][Ee][Mm][Ii][Nn][Ii]-.*|[Gg][Rr][Oo][Kk]-.*|[Gg][Rr][Oo][Kk]3.*|[Mm][Uu][Ss][Ee]-.*)$",
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "task_id",
+        "question",
+        "options"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
     }
   },
   {

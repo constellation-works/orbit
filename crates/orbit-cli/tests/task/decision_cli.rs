@@ -286,6 +286,86 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
         .failure();
 }
 
+/// An agent raises a multiple-choice request on a human-crew task through
+/// the tool, the CLI lists it by topic, an agent identity cannot answer it,
+/// and the operator's answer completes the task.
+#[test]
+fn decision_raise_cli_raises_lists_and_completes_on_answer() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::decision_raise_cli_raises_lists_and_completes_on_answer",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let config_path = workspace_root.join("config.toml");
+    let mut config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    config.push_str("\n[crews.dk]\nkind = \"human\"\n");
+    std::fs::write(&config_path, config).unwrap();
+
+    let task_id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("decision-fixture"));
+        runtime
+            .add_task(TaskAddParams {
+                title: "Sign off the price".into(),
+                crew: Some("dk".into()),
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+            .to_string()
+    };
+
+    let input = serde_json::json!({
+        "model": "codex",
+        "task_id": task_id,
+        "question": "Which price do we ship?",
+        "topic": "pricing/sign-off",
+        "options": [
+            {"label": "Keep it", "consequence": "No change."},
+            {"label": "Raise 10%", "consequence": "Edit the price table.", "recommended": true},
+        ],
+    })
+    .to_string();
+    let raised = fixture.json(&["tool", "run", "orbit.decision.raise", "--input", &input]);
+    assert_eq!(raised["gate"], "agent_request", "{raised}");
+    assert_eq!(raised["answers"][0]["label"], "Raise 10%", "{raised}");
+    assert_eq!(raised["recommended"], "1", "{raised}");
+    let request_id = raised["id"].as_str().unwrap().to_string();
+
+    let listed = fixture.json(&["decision", "list", "--topic", "pricing/sign-off", "--json"]);
+    assert_eq!(listed["count"], 1, "{listed}");
+    let other = fixture.json(&["decision", "list", "--topic", "pricing", "--json"]);
+    assert_eq!(other["count"], 0, "{other}");
+
+    fixture
+        .command(&["decision", "answer", &request_id, "1", "--json"])
+        .env("ORBIT_AGENT_NAME", "codex")
+        .env("ORBIT_AGENT_MODEL", "gpt-6.1-sol")
+        .assert()
+        .failure();
+    let still_open = fixture.json(&["decision", "show", &request_id, "--json"]);
+    assert_eq!(still_open["state"], "open", "{still_open}");
+
+    fixture
+        .command(&["decision", "answer", &request_id, "1", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success();
+    let task = fixture.json(&["task", "show", &task_id, "--json"]);
+    assert_eq!(task["status"], "done", "{task}");
+}
+
 /// The delegated-human channel over the real CLI: the operator registers
 /// a channel, submits an answer with its per-request token through the
 /// governed tool (the path a channel plugin uses), and revocation then

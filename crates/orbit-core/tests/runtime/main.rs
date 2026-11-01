@@ -62,6 +62,7 @@ mod config_settings;
 mod crew_accounts;
 mod crew_ladder_trials;
 mod decision_channel;
+mod decision_raise;
 mod decision_requested;
 mod default_catalog;
 #[cfg(unix)]

@@ -72,6 +72,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.crew.ladder",
             "orbit.decision.digest",
             "orbit.decision.list",
+            "orbit.decision.raise",
             "orbit.decision.show",
             "orbit.decision.submit",
             "orbit.experiment.abandon",

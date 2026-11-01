@@ -2,7 +2,9 @@
 //! waiting on, the operator CLI's answer verb, and the delegated-human
 //! channel that submits a human's answer through `orbit.decision.submit`.
 //!
-//! Listing and showing are read-only tools any caller may use. Answering is
+//! Listing and showing are read-only tools any caller may use. Raising is the
+//! agent's: `orbit.decision.raise` puts a bounded multiple-choice question on a
+//! human-crew task. Answering is
 //! the operator's: its operation carries no MCP scope and the noun registers
 //! tool-only operations inactive, so no agent session can answer a request
 //! through the tool surface. The bare CLI applies the answer in core as the
@@ -33,6 +35,8 @@ operation_registry! {
         List => LIST,
         /// One decision request with its answers and binding.
         Show => SHOW,
+        /// Raise a multiple-choice decision request on a human-crew task.
+        Raise => RAISE,
         /// Answer one open decision request (operator CLI only).
         Answer => ANSWER,
         /// Submit a human's answer through a registered decision channel.
@@ -67,6 +71,7 @@ pub const DECISION: NounSpec<DecisionVerb> = NounSpec {
 };
 
 const GATES: &[EnumValue] = &[
+    EnumValue::plain("agent_request"),
     EnumValue::plain("block_triage"),
     EnumValue::plain("pilot_admission"),
     EnumValue::plain("proposed_approval"),
@@ -83,7 +88,7 @@ const LIST_FILTER: &[ParamSpec] = &[
     both(
         "gate",
         ParamType::Enum(GATES),
-        "Only requests waiting on this gate: block_triage, pilot_admission, proposed_approval or review_approval.",
+        "Only requests waiting on this gate: agent_request, block_triage, pilot_admission, proposed_approval or review_approval.",
         CliArgKind::flag("gate"),
         "Only requests waiting on this gate",
     ),
@@ -93,6 +98,13 @@ const LIST_FILTER: &[ParamSpec] = &[
         "Only requests on this task.",
         CliArgKind::flag("task"),
         "Only requests on this task",
+    ),
+    both(
+        "topic",
+        ParamType::String,
+        "Only requests carrying exactly this structured topic.",
+        CliArgKind::flag("topic"),
+        "Only requests carrying exactly this topic",
     ),
     both(
         "include_closed",
@@ -107,7 +119,7 @@ const LIST: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.decision.list",
-    tool_description: "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate or task_id. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
+    tool_description: "List the workspace's human decision requests on held work, open ones unless include_closed is set. Each request names its task, gate, allowed answers, expiry and effective state (open, answered, superseded or expired, with supersession and expiry derived when read). Filter by gate, task_id or an exact topic. Read-only: seeing a request never answers it; an operator answers from the CLI or the dashboard.",
     cli_about: "List decision requests held work is waiting on",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -135,6 +147,52 @@ const SHOW: OperationSpec<DecisionVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[REQUEST_ID, MODEL],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const RAISE_PARAMS: &[ParamSpec] = &[
+    required(both(
+        "task_id",
+        ParamType::String,
+        "The human-crew task the decision is for. The task must be assigned to a human crew and not be done, archived or rejected.",
+        CliArgKind::flag("task"),
+        "The human-crew task the decision is for",
+    )),
+    required(free_text(both(
+        "question",
+        ParamType::String,
+        "One or two plain-language sentences naming the decision needed, readable without opening the code.",
+        CliArgKind::flag("question"),
+        "The decision needed, in one or two sentences",
+    ))),
+    required(both(
+        "options",
+        ParamType::Array,
+        "Two to four options as an array of {label, consequence, recommended} objects. label and consequence are one line each; exactly one option has recommended: true, and it is listed first.",
+        CliArgKind::flag("options"),
+        "The options as a JSON array of {label, consequence, recommended}",
+    )),
+    both(
+        "topic",
+        ParamType::String,
+        "Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value.",
+        CliArgKind::flag("topic"),
+        "Structured topic or corpus rule id",
+    ),
+];
+
+const RAISE: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::Raise,
+    cli_path: &["raise"],
+    tool_name: "orbit.decision.raise",
+    tool_description: "Raise a multiple-choice decision request on a human-crew task you filed or were handed, instead of a free-text human task. Give a question and two to four options, each with a one-line label and a one-line consequence, exactly one marked recommended (it is listed first); an optional topic or corpus rule id lets a later reader match the request exactly. Only the operator can answer: the answer is recorded in the task's history, completes the task and unblocks its blocked_by dependents. The same open question is deduplicated to the existing request, a task holds one open request, and open agent-raised requests are capped per workspace and per filer; past a cap the call is refused and nothing is written. An answer that changes lasting behaviour must be carried into the owning doc, config or code by the task it unblocks.",
+    cli_about: "Raise a multiple-choice decision request on a human-crew task",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[RAISE_PARAMS, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
