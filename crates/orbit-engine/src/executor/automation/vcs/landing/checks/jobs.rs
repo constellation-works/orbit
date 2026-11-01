@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::super::super::super::ci::log_signature::{
-    LineKind, classify_log_lines, diagnostic_excerpt,
+    LineKind, classify_log_lines, diagnostic_excerpt, log_payload,
 };
 use super::super::super::baseline::network_inconclusive;
 use super::super::super::operations;
@@ -74,6 +74,77 @@ pub(super) fn job_label(job: &Value) -> String {
         Some(workflow) => format!("{workflow} / {name}"),
         None => name.to_string(),
     }
+}
+
+/// A failed waiter whose log names only an awaited cancellation, timeout, or
+/// the waiter's own deadline. Any other emitted line, including a dependency
+/// record, is a different failure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AwaitedStop {
+    /// `ci-await: … concluded cancelled`.
+    Cancelled,
+    /// `ci-await: … concluded timed_out`.
+    TimedOut,
+    /// `ci-await: timed out after …`.
+    Timeout,
+}
+
+/// The awaited stop a log reports when every emitted line is that signal or
+/// waiter bookkeeping. `None` when the log names anything else.
+pub(super) fn exclusive_awaited_stop(log: &str) -> Option<AwaitedStop> {
+    let mut found = None;
+    for (kind, line) in classify_log_lines(log) {
+        if matches!(
+            kind,
+            LineKind::RunCommand
+                | LineKind::CommandBody
+                | LineKind::ParamDump
+                | LineKind::EndGroup
+                | LineKind::GenericTrailer
+                | LineKind::Bookkeeping
+        ) {
+            continue;
+        }
+        let payload = log_payload(line).trim();
+        if payload.is_empty() || payload.starts_with("ci-await-api:") {
+            continue;
+        }
+        if payload.starts_with("orbit-dependency-evidence:") {
+            return None;
+        }
+        let body = payload.strip_prefix("ci-await:")?.trim();
+        let signal = if body.starts_with("timed out") {
+            AwaitedStop::Timeout
+        } else {
+            let token = body
+                .rsplit_once("concluded ")
+                .and_then(|(_, rest)| rest.split([':', ' ', '\t']).next())
+                .unwrap_or("");
+            match token {
+                "cancelled" => AwaitedStop::Cancelled,
+                "timed_out" => AwaitedStop::TimedOut,
+                _ => return None,
+            }
+        };
+        if found.is_some_and(|prior| prior != signal) {
+            return None;
+        }
+        found = Some(signal);
+    }
+    found
+}
+
+/// A job the provider stopped, as opposed to one whose step failed.
+pub(super) fn concluded_stopped(job: &Value) -> Option<&str> {
+    match job["conclusion"].as_str() {
+        Some(conclusion @ ("cancelled" | "timed_out")) => Some(conclusion),
+        _ => None,
+    }
+}
+
+/// Signature of a stop classified from the job conclusion, with no log.
+pub(super) fn conclusion_signature(conclusion: &str) -> String {
+    format!("concluded {conclusion}")
 }
 
 /// The network or runner failure a log shows, if any.

@@ -16,10 +16,11 @@ use super::super::super::landing::checks::CheckReadGap;
 use super::super::super::push::push_batch_changes;
 use super::super::answers::{ReviewedMergeOutcome, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
-    AutoFix, BlockedStopReason, BlockedVerdict, CheckRepair, LocalRepair, adopt_published_repairs,
-    base_tip_checks, blocked_verdict, defer_throttled_read, hold_auto_fix_stop, owed_read_wait,
-    publish_local_repair, record_base_path, record_landed_repair, record_published_repair,
-    red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
+    AutoFix, BlockedStopReason, BlockedVerdict, CheckRepair, CiRerunRecovery, LocalRepair,
+    adopt_published_repairs, base_tip_checks, blocked_verdict, defer_throttled_read,
+    hold_auto_fix_stop, owed_read_wait, publish_local_repair, record_base_path,
+    record_landed_repair, record_published_repair, red_base_wait, repair_failed_checks,
+    reserve_base_refresh, stopped,
 };
 use super::super::delivery::{
     BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, UnreportedChecks,
@@ -449,7 +450,11 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                     diagnostic,
                 );
                 infrastructure_wait |= match retry {
-                    Ok(waiting) => waiting,
+                    Ok(CiRerunRecovery::Waiting) => true,
+                    Ok(CiRerunRecovery::NotEligible) => false,
+                    Ok(CiRerunRecovery::Stopped(reason)) => {
+                        return Err(stopped(pr_number, &reason));
+                    }
                     Err(error) => {
                         // [ORB-20178] The first throttled answer ends this
                         // poll's reads of that log until its not-before.

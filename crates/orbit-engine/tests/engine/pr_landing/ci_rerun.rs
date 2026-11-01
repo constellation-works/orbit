@@ -178,6 +178,7 @@ fn first_dependency_failure_repairs_without_owner_rerun() {
 }
 
 mod bounded;
+mod cancelled;
 mod diagnostic;
 
 #[test]

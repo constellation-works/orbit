@@ -165,7 +165,17 @@ pub fn diagnostic_anchor(lines: &[(LineKind, &str)]) -> Option<usize> {
             return Some(previous);
         }
     }
-    None
+    // A waiter that only reports `ci-await:` has no compiler or trailer
+    // anchor. That line is still the failure, so it must not fall through to
+    // the step name. Stronger diagnostics above keep their own identity.
+    lines
+        .iter()
+        .rposition(|(kind, line)| *kind == LineKind::Content && is_await_waiter_signal(line))
+}
+
+/// `ci-await:` from the job waiter. `ci-await-api:` bookkeeping does not match.
+fn is_await_waiter_signal(line: &str) -> bool {
+    signature_payload(line).trim().starts_with("ci-await:")
 }
 
 /// Bounded raw evidence around the same emitted diagnostic used for identity.

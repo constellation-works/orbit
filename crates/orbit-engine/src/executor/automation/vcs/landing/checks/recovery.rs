@@ -228,6 +228,21 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             ));
         };
         let label = job_label(job);
+        if let Some(conclusion) = super::jobs::concluded_stopped(job) {
+            // The conclusion is the classification. Reading the log would
+            // turn a 404 or a truncated stop into an unclassified hold.
+            jobs.push(FailedJob {
+                run_id: Some(run_id),
+                job_id,
+                label,
+                class: CheckFailureClass::Transient,
+                signature: super::jobs::conclusion_signature(conclusion),
+                why: format!("the job concluded {conclusion}"),
+                excerpt: String::new(),
+                tip_passes: false,
+            });
+            continue;
+        }
         let log = match job_log(
             host,
             workspace,
@@ -311,11 +326,20 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     }
     let has_aggregates = !aggregates.is_empty();
     jobs.extend(aggregates);
+    // A conclusion stop still has to reach the planner after its one rerun,
+    // so an exhausted budget records the jobs instead of a generic hold.
+    let conclusion_stop = jobs
+        .iter()
+        .any(|job| job.signature.starts_with("concluded "))
+        && jobs
+            .iter()
+            .all(|job| job.class == CheckFailureClass::Transient);
     let planned = if has_aggregates
         || (recovery.rerun
             && jobs
                 .iter()
-                .all(|job| job.class == CheckFailureClass::Transient))
+                .all(|job| job.class == CheckFailureClass::Transient)
+            && !conclusion_stop)
     {
         Ok(super::rerun::CiRerunStep::NotEligible)
     } else {
@@ -351,6 +375,9 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 plan.run_id, plan.run_attempt
             ));
             return Ok(CheckRecoveryStep::Acted);
+        }
+        super::rerun::CiRerunStep::BudgetSpent(reason) => {
+            return Ok(CheckRecoveryStep::Stop(reason));
         }
         super::rerun::CiRerunStep::NotEligible => {}
     }

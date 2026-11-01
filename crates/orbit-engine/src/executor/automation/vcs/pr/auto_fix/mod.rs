@@ -16,6 +16,9 @@
 //!   required failures' jobs and logs are read on the exact head the rollup
 //!   reports ([`head_check_evidence`]); a check no job answers, an unreadable
 //!   job or log, or a runner or network failure stops without an agent. A
+//!   required check whose unsuccessful jobs only concluded `cancelled` or
+//!   `timed_out` is rerun once before any repair, even when that log cannot
+//!   be read; an exhausted rerun names those jobs and admits no agent. A
 //!   failed job's log read the provider throttled (an authenticated rate
 //!   limit) instead waits, read-only and recorded, for the provider's reset
 //!   or a bounded backoff, never past the completion deadline
@@ -68,7 +71,8 @@ mod verdict;
 
 pub(super) use admission::{AutoFix, admit};
 pub(super) use checks::{
-    CheckRepair, base_tip_checks, recover_ci_rerun, red_base_wait, repair_failed_checks,
+    CheckRepair, CiRerunRecovery, base_tip_checks, recover_ci_rerun, red_base_wait,
+    repair_failed_checks,
 };
 pub(super) use ledger::{
     attach_evidence, record_base_path, record_landed_repair, record_published_repair,

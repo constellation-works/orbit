@@ -123,25 +123,25 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     observation: &mut Option<
         super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
     >,
-) -> Result<bool, OrbitError> {
+) -> Result<CiRerunRecovery, OrbitError> {
     let Some(head) = status.head_sha.as_deref() else {
-        return Ok(false);
+        return Ok(CiRerunRecovery::NotEligible);
     };
     // Missing source bindings leave prerequisite recovery's existing read
     // order and typed deadline holds intact; they cannot authorize this plan.
     let Some(base_name) = input_string_field(input, "base") else {
-        return Ok(false);
+        return Ok(CiRerunRecovery::NotEligible);
     };
     if status.head_branch.is_none() {
-        return Ok(false);
+        return Ok(CiRerunRecovery::NotEligible);
     }
     let failed = super::super::super::landing::checks::failed_checks(status);
     if failed.is_empty() {
-        return Ok(false);
+        return Ok(CiRerunRecovery::NotEligible);
     }
     let (failed, _) = match required_failures(host, workspace_path, pr_number, head, &failed) {
         Ok(value) => value,
-        Err(_) => return Ok(false),
+        Err(_) => return Ok(CiRerunRecovery::NotEligible),
     };
     let workspace = Path::new(workspace_path);
     let base_ref =
@@ -163,13 +163,29 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         &auto_fix.run_id,
         observation,
     )? {
-        super::super::super::landing::checks::CiRerunStep::NotEligible => Ok(false),
+        super::super::super::landing::checks::CiRerunStep::NotEligible => {
+            Ok(CiRerunRecovery::NotEligible)
+        }
         super::super::super::landing::checks::CiRerunStep::Wait(_) => {
             // The shared bounded journal retains this observation.
-            Ok(true)
+            Ok(CiRerunRecovery::Waiting)
         }
-        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(true),
+        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(CiRerunRecovery::Waiting),
+        super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
+            Ok(CiRerunRecovery::Stopped(reason))
+        }
     }
+}
+
+/// What the shared CI retry decided for this poll.
+pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
+    /// A rerun was sent or is being observed. Do not admit a repair.
+    Waiting,
+    /// The failure is not a CI retry. The caller may repair it.
+    NotEligible,
+    /// The retry budget is spent on jobs that are still cancelled or timed
+    /// out. The reason names them. Do not admit a repair.
+    Stopped(String),
 }
 
 /// Whether an earlier poll recorded `head`'s failure as inherited from the
