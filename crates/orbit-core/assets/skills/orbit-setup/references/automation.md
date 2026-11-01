@@ -115,7 +115,7 @@ on this host.
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
 | `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
-| `ux-rules` | daily at 06:40 | `ux_rules_pipeline` | Disabled by default. Runs the UX rules on each surface in `ux_rules.surfaces` through an operator-granted `ux_rules_runner` script step, then files proposed bug tasks for failing rules, capped by `ux_rules.max_new_tasks`. Grant the script with `orbit script grant ux_rules_runner` ([Workspace scripts](#workspace-scripts)). With no grant or no surfaces it does no work. |
+| `ux-rules` | daily at 06:40 | `ux_rules_pipeline` | Disabled by default. Runs the UX rules on each surface in `ux_rules.surfaces` through an operator-granted `ux_rules_runner` script step, then files proposed bug tasks for failing rules, capped by `ux_rules.max_new_tasks`. Grant the script with `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` ([Workspace scripts](#workspace-scripts)). With no grant or no surfaces it does no work. |
 
 ### UX rules checks
 
@@ -123,7 +123,7 @@ The seeded `ux-rules` routine runs `ux_rules_pipeline` daily and is disabled by
 default. It runs `ux_rules.runner` once for each surface in `ux_rules.surfaces`.
 The `file_rule_findings` activity keeps one open task per `rule_fingerprint`; new
 failures become proposed bug tasks. The runner script manifest must be granted
-with `orbit script grant ux_rules_runner` before the routine can do work. With
+with `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` before the routine can do work. With
 no grant or an empty `surfaces` list, the run does no work. Enable the routine
 deliberately after configuration; see [Turning the scheduler on](#turning-the-scheduler-on).
 
@@ -528,7 +528,7 @@ orbit script history <name>        # recent attempts, newest first, refusals inc
 3. After a run, `orbit script history <name>` lists each attempt, including the
    refused ones.
 
-For the ux-rules routine, copy and adapt the `ux_rules_runner` Script template in the UX rules README to `.orbit/resources/scripts/ux_rules_runner.yaml`, including the host's Node, Orbit and browser-kit paths in its `interpreter`/`args` and `read_roots` (no `env_pass`: the script profile refuses it). Set `ux_rules.surfaces` with `orbit config set ux_rules.surfaces '["cli", "ui"]'`, then an operator runs `orbit script grant ux_rules_runner` and `orbit run job ux_rules_pipeline`. Verify `ux_rules_runner` in step 2 before enabling the routine. UI uses a fixture server inside the isolated network namespace; it requires working loopback, the browser kit and the Orbit binary. See the README for sandbox limitations.
+For the ux-rules routine, copy and adapt the `ux_rules_runner` Script template in the UX rules README to `.orbit/resources/scripts/ux_rules_runner.yaml`, including the host's Node, Orbit and browser-kit paths in its `interpreter`/`args` and `read_roots` (no `env_pass`: the script profile refuses it). Set `ux_rules.surfaces` with `orbit config set ux_rules.surfaces '["cli", "ui"]'`, then an operator runs `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` and `orbit run job ux_rules_pipeline`. Verify `ux_rules_runner` in step 2 before enabling the routine. UI uses a fixture server inside the isolated network namespace; it requires working loopback, the browser kit and the Orbit binary. See the README for sandbox limitations.
 
 ## Tuning which tasks task-pilot prepares
 
