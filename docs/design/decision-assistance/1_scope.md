@@ -4,12 +4,12 @@ owner: codex
 last_updated: 2026-11-01
 last_validated: 2026-11-01
 status: Draft
-stage: parked
-next: "Improve rubrics, adjudicate permitted data and register a fresh holdout; rollout stays parked."
+stage: building
+next: "Review precedent-decision consumer; slices ORB-21091..21097 proposed; old rollout parked"
 feature: decision-assistance
 doc_role: scope
 type: design
-summary: "Scope: optional typed model judgments, parked rollout and a proposed advisory delivery-quality grader."
+summary: "Scope: optional typed model judgments, parked rollout, a proposed delivery-quality grader and a proposed precedent-decision consumer."
 tags: [decision-assistance]
 ---
 
@@ -30,6 +30,12 @@ durable ledger and public application boundary. A new
 [delivery-quality grader proposal](specs/delivery-quality.md) defines a separate
 offline evaluation candidate. Its offline contract and a default-off owner-clock shadow
 runtime are in the repository; this design does not activate it or authorize adoption.
+A [precedent-decision consumer](specs/precedent-decisions.md) ([ORB-21089]) is
+proposed as a separate design. Its labels are real human answers to decision
+requests, measured in shadow per category against a prospective holdout. It
+may answer on its own only in categories the operator enables after a measured
+pass, and never for irreversible, authority, spending or unknown-tier requests.
+Nothing in it is implemented or activated.
 
 Bearing: builds on [activities and jobs](../activity-job/2_design.md),
 [auto-tasks](../auto-tasks/2_design.md), the shipped
@@ -125,6 +131,7 @@ every action; current implementation and parked status are recorded above.
 | First | Failure-pattern categorization | Bounded failure evidence; choose one category from the existing taxonomy plus `insufficient_evidence`. | Failure-pattern report suggests categories; investigator verifies causes and dispositions. |
 | First | Task-creation quality checks | Title, description and individually numbered criteria; independent predicates for unclear outcomes, non-observable criteria, contradictory requirements and mixed outcomes. | Author and pilot see advisory flags; no task rejection or approval. |
 | Proposed; offline contract and default-off shadow runtime | Delivery-quality grader | Frozen task/diff/contracts and validation evidence; independent anchored 1–5 choices for scope fit, robustness, structure, standards, verification and maintainability, with abstention. | Separate advisory quality profile; no scorecard term, routing change or review authority. See [proposal](specs/delivery-quality.md). |
+| Proposed; design only | Precedent-answered human decisions | An open decision request, its own options and the k most relevant recorded human decisions from a pluggable precedent provider; choose one option or `insufficient_precedent`, cite supporting precedents, flag conflicts. | Shadow measurement per category first; self-answer only for operator-enabled low-risk categories, recorded as `answered_by: model` with a veto digest. See [proposal](specs/precedent-decisions.md). |
 | Later | Task tag suggestions | Task text and an approved workspace vocabulary; one predicate per tag because several may apply. | Suggest descriptive tags; separately evaluate automatic application and every tag with execution effects. |
 | Later | Backlog duplicate/landed candidates | Search-selected task pairs, scopes and available delivery evidence; choose same issue, partial overlap, distinct, or insufficient evidence. | Rank candidates in backlog hygiene; commit inspection establishes landed coverage. |
 | Later | Friction grouping and rejection classification | Retrieved report pairs and current rejection rationale; classify same mechanism and administrative versus terminal rejection. | Curator inspects current behavior and records canonical mappings; similarity cannot close a friction. |
@@ -292,7 +299,10 @@ pass the credential into an agent process to make these calls. Resolve credentia
 only within the adapter and never persist their values. Operator enablement must
 identify the destination and what evidence is sent. Workspace content cannot choose
 a credential, endpoint or broader data scope. The human decision channel cannot
-be answered by model assistance.
+be answered by model assistance, with one proposed exception: the
+[precedent-decision consumer](specs/precedent-decisions.md), only in categories
+the operator enables after a measured pass, only for `routine` or `reversible`
+requests, as the `model` actor (never a human label) and subject to veto.
 
 Send only permitted, bounded evidence after value-based redaction at the external
 boundary. Run logs and task text are untrusted evidence, never instructions that
@@ -318,6 +328,10 @@ fields are implementation contracts still to be designed.
 
 - **Automated authority.** No task approval, defect verification, lifecycle change,
   hold clearance, review verdict, human answer, recovery command or dispatch.
+  The proposed [precedent-decision consumer](specs/precedent-decisions.md) is
+  the one bounded exception: in an operator-enabled category it may answer a
+  `routine` or `reversible` decision request as the `model` actor, never as a
+  human, and every such answer is listed for veto.
 - **General agent replacement.** Repository exploration, root-cause investigation,
   source-bound feasibility and repair remain in their existing activities.
 - **New deterministic classification.** Existing typed codes, validation, identity
@@ -375,6 +389,12 @@ design and authorized no implementation by itself.
    and its own adoption decision. Any automatic application of annotations or descriptive tags needs its own evidence
    and action contract. Keep execution-bearing tags (`ui`, `os:`, `crew-purpose:`,
    approval/review skips and instruction mappings) outside that automatic scope.
+5. **Precedent-answered decisions — proposed** ([ORB-21089]). The
+   [consumer spec](specs/precedent-decisions.md) files seven slices as proposed
+   tasks ([ORB-21091]–[ORB-21097]): request risk tier and category, model-answer
+   provenance and veto, the precedent-provider contract, packet-bound choices in
+   the service, the shadow consumer, evaluator contract `/4`, and per-category
+   enablement with demotion. None is approved to build.
 
 ## Open questions
 
@@ -413,6 +433,14 @@ design and authorized no implementation by itself.
 
 ## Task References
 
+- [ORB-21097] — proposes category enablement, self-answer, holdback and demotion for precedent decisions.
+- [ORB-21096] — proposes the `decision-assistance-eval/4` evaluator contract.
+- [ORB-21095] — proposes the shadow precedent-decision consumer.
+- [ORB-21094] — proposes packet-bound choice questions in the assistance service.
+- [ORB-21093] — proposes the precedent-provider contract and built-in provider.
+- [ORB-21092] — proposes model-answer provenance, the review gate and veto.
+- [ORB-21091] — proposes risk tier and category on decision requests.
+- [ORB-21089] — designs the precedent-answered decision consumer.
 - [ORB-20006] — implements the default-off delivery-quality shadow runtime.
 - [ORB-20004] — adds the offline ordinal evaluation contract for delivery-quality grades.
 - [ORB-20000] — proposes an independently evaluated advisory delivery-quality grader.

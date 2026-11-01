@@ -113,13 +113,14 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (9)
+### Building (10)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
 | [Crew Ladder](./design/crew-ladder/1_scope.md) | Phase 1 shipped (config, shadow, report); Daniel reviews, then file phase 2 (live propose trials) | claude |
+| [Decision Assistance](./design/decision-assistance/1_scope.md) | Review precedent-decision consumer; slices ORB-21091..21097 proposed; old rollout parked | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now that receipt compaction and accounting have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a due experiment through the human decision channel (decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Operator starts the three-arm trial (S7, unfiled); S8 readout [ORB-18544] is archived until it runs | claude |
@@ -158,7 +159,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
 | [Granted Tools](./design/granted-tools/1_scope.md) | Operate the shipped grants and reviewed mutation proposal path | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
-| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | — | claude |
+| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Review §11 precedent-answer changes; slices ORB-21091, ORB-21092, ORB-21097 proposed | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | — | codex |
@@ -182,11 +183,10 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Visual Review](./design/visual-review/1_scope.md) | Phase 7 only, each filed when needed; phases 1-6 are merged as ORB-19977..19982 | claude |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Repair precedent auto-answer (ORB-20822, ORB-20823) | Orbit |
 
-### Parked (2)
+### Parked (1)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Improve rubrics, adjudicate permitted data and register a fresh holdout; rollout stays parked. | codex |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 
 ## Designs
@@ -214,7 +214,7 @@ a conservative title/status fallback.
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
 | [Crew Ladder](./design/crew-ladder/1_scope.md) | Scope: an opt-in, operator-ordered ladder of crews (model and effort) per workspace; each complexity tier continuously trials the next cheaper rung on a small share of its tasks as a system-run experiment, promotes it on a sequential non-inferiority test and keeps going until a rung fails, so each tier settles at the cheapest crew that holds its quality, with demotion on evidence and, once the delivery-quality grader is adopted, a per-dimension code-quality guardrail | Draft | claude |
 | [Crew Performance](./design/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Draft | claude |
-| [Decision Assistance](./design/decision-assistance/1_scope.md) | Scope: optional typed model judgments, parked rollout and a proposed advisory delivery-quality grader. | Draft | codex |
+| [Decision Assistance](./design/decision-assistance/1_scope.md) | Scope: optional typed model judgments, parked rollout, a proposed delivery-quality grader and a proposed precedent-decision consumer. | Draft | codex |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
 | [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which shipped default routines and auto-tasks its workspaces carry through a persistent seeding policy and a TOML preset | Implemented | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
