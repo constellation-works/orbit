@@ -1486,11 +1486,14 @@ skipped without `--recheck`. When the selection is larger than the limit,
 its last claim; repeat with `--after <that claim-id>` and the same filters to
 visit every selected claim, unsuccessful outcomes included, and likewise
 under `--recheck`. A continuation claim outside the selection is refused.
-The follower opens `orbit.workflow.run.observe` and reads the stored records.
-That open, including the workspace discovery that precedes the read, does not
-reconcile stale runs and does not change run, task, or reservation state. A
-nonterminal leaf is `mismatch`; run hydration after the leaf has ended so the
-stored record is terminal. Ordinary `orbit run show` and
+The follower opens the required authenticated operator route
+`orbit.workflow.run.observe` and reads the stored records. That open,
+including the workspace discovery that precedes the read, does not reconcile
+stale runs and does not change run, task, or reservation state. A nonterminal
+leaf is `mismatch`; run hydration after the leaf has ended so the stored
+record is terminal. A follower that predates this route cannot serve the read
+(unknown tool), so hydration reports `unreachable` and the question stays open
+for a later run, never `absent`. Ordinary `orbit run show` and
 `orbit.workflow.run.show` still reconcile when they open. Hydration still
 accepts only a terminal matching tuple as hydrated evidence.
 
