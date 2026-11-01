@@ -77,7 +77,7 @@ macro_rules! assemble_config_settings {
     },
     machine_application_consent_max_days: u32 => u32 {
         key: "machine.application_consent_max_days", value_type: "integer",
-        description: "Longest lifetime, in days, of an application consent with constrained or named scopes.",
+        description: "Longest lifetime, in days, of an application consent with constrained, named or rate-limited scopes.",
         section: ConfigSection::Machine, order: 90,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_range(raw, DEFAULT_APPLICATION_CONSENT_MAX_DAYS, 1, 365, "machine.application_consent_max_days"),
