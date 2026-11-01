@@ -21,7 +21,7 @@ use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::bootstrap::workspace_authority::admit_workspace_layout_authority;
 pub use crate::bootstrap::workspace_authority::{
     AuthorityAdoptionEvidence, WorkspaceAuthorityAdoption, adopt_workspace_layout_authority,
-    verify_workspace_layout_authority,
+    layout_migration_fenced_authorities, verify_workspace_layout_authority,
 };
 #[cfg(target_os = "macos")]
 use crate::runtime::run_input::managed_dispatch_context_from_env;

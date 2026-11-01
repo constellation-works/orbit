@@ -9,6 +9,7 @@ mod waiters;
 #[cfg(test)]
 mod tests;
 
+pub(super) use guard::refresh_requested_for_this_process;
 pub use guard::{
     GenerationGuard, Participant, pending_switch_for_this_process, process_handover,
     process_participation,

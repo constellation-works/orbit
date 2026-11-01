@@ -337,6 +337,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
         },
         requested_at: Utc::now(),
         deadline: Utc::now() + chrono::Duration::seconds(60),
+        refresh: false,
     };
     serde_json::to_writer(&pending_file, &switch).unwrap();
     orbit_common::fs::io::sync_file(&pending_file).unwrap();

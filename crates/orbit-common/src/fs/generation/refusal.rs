@@ -165,10 +165,31 @@ pub(super) fn handover_outlasted(bound: Duration, holders: &[ParticipantRecord])
     OrbitError::Execution(format!(
         "the candidate is installed, but these Orbit processes did not hand over to it within \
          {}s ({QUIESCE_TIMEOUT_ENV}): {}; nothing was pinned or converged. A session hands over \
-         once its in-flight requests are answered. A re-run renames nothing, so no session hands \
-         over to it: close the live MCP clients, then re-run the update to converge",
+         once its in-flight requests are answered. Re-running the same update renames nothing; it \
+         asks sessions already running the installed executable to hand over to it in place, \
+         then converges",
         bound.as_secs(),
         describe_blockers(holders)
+    ))
+}
+
+/// Participants already running the installed generation, asked to hand
+/// over to it in place by an updater that renames nothing, still held the
+/// generation after `bound`. Nothing was pinned or converged.
+pub(super) fn refresh_outlasted(
+    bound: Duration,
+    asked: &[ParticipantRecord],
+    remaining: &[ParticipantRecord],
+) -> OrbitError {
+    refusal(format!(
+        "these Orbit processes run the installed executable but did not hand over to it in \
+         place within {}s ({QUIESCE_TIMEOUT_ENV}): {}; nothing was pinned or converged. A \
+         session hands over once its in-flight requests are answered, and only a build that \
+         understands an in-place refresh does; asked: {}. Retry once they are idle, or close \
+         their clients",
+        bound.as_secs(),
+        describe_blockers(remaining),
+        describe_blockers(asked)
     ))
 }
 

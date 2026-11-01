@@ -326,6 +326,30 @@ fn format_report(report: &UpdateReport, check: bool) -> String {
                 .join(", ")
         );
     }
+    if !report.same_generation.is_empty() {
+        let _ = writeln!(
+            text,
+            "  current:  {} (already running the installed executable; handed over to it in place)",
+            report
+                .same_generation
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    if !report.migration_fenced.is_empty() {
+        let _ = writeln!(
+            text,
+            "  fenced:   {} (pin held as the layout migration's exclusive fence, then pinned again)",
+            report
+                .migration_fenced
+                .iter()
+                .map(|root| root.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     for step in &report.steps {
         let _ = writeln!(
             text,
