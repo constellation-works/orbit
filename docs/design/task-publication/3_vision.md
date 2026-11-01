@@ -1,7 +1,7 @@
 ---
 title: Task Publication — Vision
 owner: codex
-last_updated: 2026-10-28
+last_updated: 2026-10-31
 last_validated: 2026-10-28
 status: Draft
 feature: task-publication
@@ -21,20 +21,29 @@ branch-scoped lineage per workspace in a private repository, dedicated to
 publication where the operator can make it so. Cross-workspace aggregation,
 offline mutation, automatic authority movement, and multi-writer convergence are
 separate capabilities with different access and safety contracts.
+Explicit authority transfer, with on-change publication as its bootstrap channel and
+the publication branch as its fence, is proposed in
+[owner-failover](../owner-failover/1_overview.md). Multi-writer convergence stays
+rejected there.
 
 ## 1. Open Questions
 
 1. What freshness objective justifies the weekly routine's cadence and any
    further trigger, given observed task-loss and recovery needs? V1 ships an
    explicit command and a routine seeded disabled; a post-task-write hook is
-   excluded.
+   excluded. [Owner failover §3](../owner-failover/2_design.md#3-cold-start-and-git-bootstrap)
+   proposes on-change debounced publication, still outside write acknowledgement.
 2. Should an explicit authority transfer carry the last publication generation
    as a fencing token, and what evidence must the old owner provide before the
-   new owner can publish?
+   new owner can publish? [Owner failover §4](../owner-failover/2_design.md#4-the-ownership-epoch-and-the-fence-commit)
+   proposes an ownership epoch carried by a compare-and-swap fence commit, with
+   [§7](../owner-failover/2_design.md#7-the-old-owner-rejoining) for the old
+   owner's rejoin.
 3. Is direct read-only rendering from fetched Git objects sufficient, or does
    offline inspection need a disposable indexed cache?
 4. What corpus size or fetch-latency threshold justifies checkpoint compaction,
-   Git LFS, or an object-store attachment backend?
+   Git LFS, or an object-store attachment backend? Owner failover proposes
+   lease-guarded checkpoint compaction ([§3.2](../owner-failover/2_design.md#32-bounding-repository-growth)).
 5. Can access between workspaces that share one private repository be isolated?
    Git hosts generally grant read access per repository, not per branch. V1
    answers no: branch-scoped lineages keep independent authorities from
@@ -115,6 +124,7 @@ authority merely because a machine can clone or push.
 - [Remote Access design](../remote-access/2_design.md)
 - [Federated MCP design](../federated-mcp/2_design.md)
 - [State and backup runbook](../../runbooks/state-and-backup.md)
+- [Owner Failover overview](../owner-failover/1_overview.md) (proposed)
 
 **External**
 
@@ -127,5 +137,6 @@ authority merely because a machine can clone or push.
 - [ORB-11068] — chose a dedicated private publication repository and deferred aggregation and synchronization.
 - [ORB-11077] — shipped the explicit-only v1 operator workflow and kept routine triggering, authority transfer, and multi-writer synchronization deferred.
 - [ORB-18375] — allowed branch-scoped lineages to share one publication repository, which answers the shared-repository question for branch serialization but not for repository-level access.
+- [ORB-20620] — proposed owner failover, which defines authority transfer and links from open questions 1, 2 and 4.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Vision
 owner: claude
-last_updated: 2026-10-28
+last_updated: 2026-10-31
 last_validated: 2026-10-28
 status: Draft
 feature: distributed-drain
@@ -31,6 +31,9 @@ when the executor declares `review_gate`; the executor's own switch is diagnosti
    deliberate revocation. It does not infer death from reservation expiry or absent owner-local
    runs. A later heartbeat could improve diagnosis, but automatic reassignment would still need
    the current attempt fencing and external-side-effect reconciliation contracts.
+   The owner side of this question, failover when the owner itself is down, is proposed in
+   [owner-failover](../owner-failover/1_overview.md). It keeps manual recovery: takeover is
+   operator-triggered, and claims never cross an ownership epoch.
 2. **Crew assignment and execution eligibility.** Per-executor eligibility is shipped:
    [ORB-13941] added crew filtering, [ORB-14005] added OS filtering, and [ORB-18316]
    added machine capability labels. [ORB-17304] made owner ordering scarcity-aware
@@ -43,6 +46,8 @@ when the executor declares `review_gate`; the executor's own switch is diagnosti
 4. **Cloud-offloaded owner store.** Federated-mcp's open question 4. If the coordination store
    leaves the owner host, pull becomes an HTTP call and the "always-on owner" decision dissolves.
    The pull contract is written to survive that: it names a store, not a machine.
+   Moving ownership between hosts during an outage, with the old owner rejoining, is proposed
+   separately in [owner-failover](../owner-failover/2_design.md).
 5. **Federated run inspection.** `orbit run` on the owner cannot see follower runs. With
    `job_run_machine` on the task, a read-only `execute`-class run lookup routed to that destination is
    the obvious shape; whether the dashboard should
@@ -108,6 +113,7 @@ throughput and time spent waiting on locks, CI, and landing in the shipped imple
 - [federated-mcp 4_decisions.md — An SSH login to a destination is ownership of it](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) (supersedes the removed destination-side caller-authorization spec)
 - [host-registry 3_vision.md](../host-registry/3_vision.md) — "checkoutless operations" gate
 - [runbooks/build-budget.md](../../runbooks/build-budget.md)
+- [owner-failover 1_overview.md](../owner-failover/1_overview.md) — proposed epoch-fenced owner handoff and takeover
 
 **External**
 
@@ -123,5 +129,6 @@ throughput and time spent waiting on locks, CI, and landing in the shipped imple
 - [ORB-14005] — routed tasks by validated executor OS requirements.
 - [ORB-17304] — implemented scarcity-aware admission against the live executor census.
 - [ORB-18316] — added task placement by required machine capability labels.
+- [ORB-20620] — proposed owner failover, linked from open questions 1 and 4.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
