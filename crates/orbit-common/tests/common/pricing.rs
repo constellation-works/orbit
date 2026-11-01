@@ -273,3 +273,90 @@ fn openai_prices_a_request_over_272k_input_tokens_at_the_long_context_tier() {
         "totals over 272K without per-request usage must stay unpriced, never estimated"
     );
 }
+
+// Reviewer decision (2026-11-01): OpenAI's 2026-08-21 changelog cut prices
+// gpt-5.6-sol at 4/20 with cache 0.4/5.0 from 2026-08-21T00:00:00Z. Before the
+// cut the July 30 row keeps its shipped rates, the open row takes over at its
+// observation boundary, and no invocation in between may be unpriced.
+#[test]
+fn gpt_5_6_sol_prices_the_august_21_cut_without_an_unpriced_gap() {
+    let cut: DateTime<Utc> = "2026-08-21T00:00:00Z".parse().unwrap();
+    let before_cut = cut - chrono::Duration::seconds(1);
+    // Gross input: cache reads and both cache writes are inside `input`, so
+    // the exclusive input is 10,000 tokens.
+    let mixed = TokenUsage {
+        input: 100_000,
+        cache_read: 20_000,
+        cache_create: 30_000,
+        cache_create_1h: 40_000,
+        output: 5_000,
+    };
+    // (usage, shipped July 30 rates, August 21 cut rates)
+    let cases = [
+        (
+            TokenUsage {
+                input: 1_000_000,
+                ..Default::default()
+            },
+            5.0,
+            4.0,
+        ),
+        (
+            TokenUsage {
+                input: 1_000_000,
+                cache_read: 1_000_000,
+                ..Default::default()
+            },
+            0.5,
+            0.4,
+        ),
+        (
+            TokenUsage {
+                input: 1_000_000,
+                cache_create: 1_000_000,
+                ..Default::default()
+            },
+            6.25,
+            5.0,
+        ),
+        (
+            TokenUsage {
+                output: 1_000_000,
+                ..Default::default()
+            },
+            30.0,
+            20.0,
+        ),
+        (mixed.clone(), 0.6475, 0.498),
+    ];
+    for (usage, shipped, cut_rate) in &cases {
+        assert_cost(
+            derive_cost_usd("gpt-5.6-sol", before_cut, usage, None),
+            *shipped,
+            &format!("gpt-5.6-sol on 2026-08-20 for {usage:?}"),
+        );
+        assert_cost(
+            derive_cost_usd("gpt-5.6-sol", cut, usage, None),
+            *cut_rate,
+            &format!("gpt-5.6-sol from 2026-08-21 for {usage:?}"),
+        );
+    }
+    // Every instant from the cut to the open row's boundary prices at the cut
+    // rates, including 2026-09-22T00:00:00Z, which the shipped table left
+    // unpriced, and the last microsecond before the open row.
+    for at in [
+        "2026-09-01T12:00:00Z",
+        "2026-09-21T23:59:59Z",
+        "2026-09-22T00:00:00Z",
+        "2026-10-22T12:00:00Z",
+        "2026-10-23T03:09:14.111506Z",
+        "2026-10-23T03:09:14.111507Z",
+    ] {
+        let at: DateTime<Utc> = at.parse().unwrap();
+        assert_cost(
+            derive_cost_usd("gpt-5.6-sol", at, &mixed, None),
+            0.498,
+            &format!("gpt-5.6-sol at {at} must not be unpriced"),
+        );
+    }
+}
