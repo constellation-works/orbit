@@ -8,6 +8,7 @@ import { writeFile } from "node:fs/promises";
 import { createCliContext, resultOf } from "./lib/cli-context.mjs";
 import { loadManifest } from "./lib/manifest.mjs";
 import {
+  attachFailureScreenshot,
   closeTarget,
   createUiContext,
   expandTargets,
@@ -305,8 +306,10 @@ async function runUiModules(modules, args) {
         }
         for (const result of list) {
           if (result.status === "fail") {
-            const shot = await ctx.screenshotFor(rule, target).catch(() => "");
-            if (shot && !result.evidence.includes(shot)) result.evidence.push(shot);
+            // Never silently discard a capture failure: a targeted
+            // capture that cannot frame the measured element retains an
+            // explicit diagnostic instead of a misleading screenshot.
+            await attachFailureScreenshot(ctx, rule, target, result);
           }
           results.push(result);
         }
