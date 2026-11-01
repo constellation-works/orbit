@@ -275,7 +275,7 @@ function autoTaskEditor(definition) {
   return autoTaskScheduleEditor({
     key,
     definition,
-    cronPreview: cronText,
+    cronPreview: (cron) => cronText(cron, definition.next_evaluation?.at),
     save: (schedule) => {
       const observed = editorObserved(key);
       return postJson("/api/auto-tasks/schedule", {
@@ -467,7 +467,7 @@ function autoTaskRow(payload, definition, workspaceId) {
     ]
     : [el("span", { class: "operation-cell-main muted", text: lastEvaluationText(definition) })];
   const schedule = definition.schedule || {};
-  const cronLabel = schedule.cron ? cronText(schedule.cron) : null;
+  const cronLabel = schedule.cron ? cronText(schedule.cron, definition.next_evaluation?.at) : null;
   const minutes = schedule.every_minutes;
   let scheduleLabel = definition.schedule_summary || "—";
   if (Number.isInteger(minutes) && minutes > 0) {
@@ -566,7 +566,7 @@ export function syncAutoTaskSchedulerNote() {
     return;
   }
   note.appendChild(el("span", { text: "Scheduled tasks are created by " }));
-  note.append(link, el("span", { text: ` (${cronText(scheduler.cron)}).` }));
+  note.append(link, el("span", { text: ` (${cronText(scheduler.cron, scheduler.next_evaluation?.at || scheduler.next_due)}).` }));
 }
 
 // The stats strip counts every open duplicate; only enabled skip-if-open ones

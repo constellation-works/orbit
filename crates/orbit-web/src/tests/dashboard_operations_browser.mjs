@@ -1731,14 +1731,45 @@ try {
   if (!afterForward.hash.includes('operations/auto-tasks') || !afterForward.autoTasks) {
     throw new Error(`forward did not restore auto-tasks: ${JSON.stringify(afterForward)}`);
   }
-  // A browser in UTC, a host cron zone elsewhere: triggers read in the host
-  // zone and agree with the UTC next fire beside them.
-  const utcPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
-  utcPage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
-  await utcPage.goto(`http://127.0.0.1:${server.address().port}/#operations/auto-tasks`);
-  await utcPage.addScriptTag({ type: 'module', url: '/cron-zone.mjs' });
-  await utcPage.waitForFunction(() => globalThis.cronZoneTestsPassed, undefined, { timeout: 15000 });
-  await utcPage.screenshot({ path: path.join(evidence, 'cron-zone-utc-browser.png') });
+  // A browser in UTC, a host cron zone elsewhere. The same rendered rows run
+  // with the clock frozen in summer, winter, and the minute before the Pacific
+  // fallback, so a future fire is not labelled with today's abbreviation.
+  const cronClocks = [
+    ['2026-07-15T18:00:00Z', 'summer'],
+    ['2026-12-15T18:00:00Z', 'winter'],
+    ['2026-11-01T08:59:00Z', 'transition'],
+  ];
+  for (const [frozenAt, season] of cronClocks) {
+    const cronPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
+    cronPage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
+    await cronPage.clock.setFixedTime(new Date(frozenAt));
+    await cronPage.goto(`http://127.0.0.1:${server.address().port}/#operations/auto-tasks`);
+    await cronPage.addScriptTag({ type: 'module', url: '/cron-zone.mjs' });
+    await cronPage.waitForFunction(() => globalThis.cronZoneTestsPassed || globalThis.cronZoneError, undefined, { timeout: 15000 });
+    const cronFailure = await cronPage.evaluate(() => globalThis.cronZoneError || '');
+    if (cronFailure) throw new Error(`cron zone (${season} clock ${frozenAt}): ${cronFailure}`);
+    const observed = await cronPage.evaluate(() => globalThis.cronZoneFrozenObserved);
+    if (observed !== new Date(frozenAt).toISOString()) {
+      throw new Error(`cron zone clock ${season}: expected ${new Date(frozenAt).toISOString()}, observed ${observed}`);
+    }
+    if (season === 'transition') {
+      const shoot = async (route, panel, width) => {
+        await cronPage.setViewportSize({ width, height: width === 375 ? 812 : 1000 });
+        await cronPage.evaluate((next) => globalThis.showCronZonePanel(next), route);
+        await cronPage.locator(panel).screenshot({
+          path: path.join(evidence, `cron-zone-${panel.slice(1)}-dark-${width}.png`),
+          animations: 'disabled',
+        });
+      };
+      await shoot('operations/auto-tasks', '#auto-tasks-panel', 1440);
+      await shoot('operations/auto-tasks', '#auto-tasks-panel', 375);
+      await shoot('operations/routines', '#routines-panel', 1440);
+      await shoot('operations/routines', '#routines-panel', 375);
+      await shoot('jobs/catalogue', '#jobs-panel', 1440);
+      await shoot('jobs/catalogue', '#jobs-panel', 375);
+    }
+    await cronPage.close();
+  }
   // State- and delivery-triggered routines read by their own trigger, and the
   // next-hour strip draws every slot of a frequent cron routine.
   const triggerPage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
