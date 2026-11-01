@@ -36,9 +36,12 @@ use super::review_modes::ReviewMode;
 /// scored residuals of this version only [ORB-20673]. 16: that correction
 /// counts one residual per distinct task, from the latest eligible stored
 /// forecast, so repeated snapshots cannot meet the minimum alone
-/// [ORB-20728]. A bump starts uncorrected; earlier versions keep their own
+/// [ORB-20728]. 17: that correction is applied to the full-script total
+/// and distributed over its steps, matching the full-task totals it is
+/// trained on, instead of applying the log-affine map per attempt step
+/// [ORB-20729]. A bump starts uncorrected; earlier versions keep their own
 /// scoring rules.
-pub(super) const MODEL_VERSION: u32 = 16;
+pub(super) const MODEL_VERSION: u32 = 17;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
