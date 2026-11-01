@@ -73,9 +73,10 @@ pub(crate) use admission::{
 pub(crate) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
-    normalize_evidence_gaps, required_machine, required_os, retained_review_evidence, review_filed,
-    reviewed_evidence_drops, routing_os, unauthorized_missing_targets, user_facing_ui,
-    validate_after_selectors, validate_recommendations,
+    contract_conflicts, normalize_evidence_gaps, required_machine, required_os,
+    retained_review_evidence, review_filed, reviewed_evidence_drops, routing_os,
+    unauthorized_missing_targets, user_facing_ui, validate_after_selectors,
+    validate_recommendations,
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
 pub(crate) use drain_promotion::{
@@ -189,6 +190,13 @@ pub(super) const CONTEXT_EVIDENCE_DROPPED: &str = "context_evidence_dropped";
 /// the pinned revision: null, or `{"evidence": "..."}` citing `path:line`.
 /// Apply records it as a REJECTED finding verdict and rejects the task.
 pub(super) const FINDING_INVALID: &str = "finding_invalid";
+
+/// The pilot's typed finding that an acceptance criterion names behaviour
+/// the pinned code or contract contradicts: an array of
+/// `{"criterion": <1-based index>, "evidence": "..."}`. Every entry holds
+/// promotion; there is no advisory opt-out. Absent or null on a historical
+/// receipt reads as empty.
+pub(super) const CONTRACT_CONFLICTS: &str = "contract_conflicts";
 
 /// Assessment field apply attaches when it rewrote a model formatting slip
 /// (today a scalar or missing `evidence_gaps`) instead of rejecting it.

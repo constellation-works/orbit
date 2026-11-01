@@ -14,7 +14,9 @@ use crate::application::task::{MachineRequirement, NativeOsRequirement};
 
 use super::input::{required_string, required_string_array, string_array_value};
 use super::source::{GitPathKind, SourceSnapshot};
-use super::{CONTEXT_EVIDENCE_DROPPED, FINDING_INVALID, VALIDATION_TOOL_WARNINGS};
+use super::{
+    CONTEXT_EVIDENCE_DROPPED, CONTRACT_CONFLICTS, FINDING_INVALID, VALIDATION_TOOL_WARNINGS,
+};
 
 pub(super) struct ValidatedSelectors {
     pub(super) values: Vec<String>,
@@ -206,7 +208,16 @@ pub(in super::super) fn member_ready(assessment: &Value) -> bool {
         .and_then(Value::as_array)
         .is_none_or(Vec::is_empty);
 
+    // A missing or null `contract_conflicts` on a historical receipt reads
+    // as empty; any present entry holds, with no advisory opt-out.
+    let no_contract_conflicts = match assessment.get(CONTRACT_CONFLICTS) {
+        None | Some(Value::Null) => true,
+        Some(Value::Array(findings)) => findings.is_empty(),
+        Some(_) => false,
+    };
+
     validation_tools_feasible
+        && no_contract_conflicts
         && matches!(
             assessment
                 .get("recommended_complexity")
@@ -336,6 +347,67 @@ pub(super) fn validate_recommendations(
             }
         }
     }
+    // `contract_conflicts` is optional for compatibility: absent or null
+    // reads as empty. A present entry is typed and always holds, so it
+    // carries no `holds_promotion` opt-out.
+    if let Some(findings) = assessment
+        .get(CONTRACT_CONFLICTS)
+        .filter(|value| !value.is_null())
+    {
+        let findings = findings.as_array().ok_or_else(|| {
+            DispatchError::action_failed(
+                action,
+                format!("task {task_id} {CONTRACT_CONFLICTS} must be an array"),
+            )
+        })?;
+        let mut seen = BTreeSet::new();
+        for finding in findings {
+            if finding.get("holds_promotion").is_some() {
+                return Err(DispatchError::action_failed(
+                    action,
+                    format!(
+                        "task {task_id} {CONTRACT_CONFLICTS} finding has no holds_promotion \
+                         opt-out; every entry holds promotion"
+                    ),
+                ));
+            }
+            let criterion = finding
+                .get("criterion")
+                .and_then(Value::as_u64)
+                .filter(|criterion| *criterion >= 1)
+                .ok_or_else(|| {
+                    DispatchError::action_failed(
+                        action,
+                        format!(
+                            "task {task_id} {CONTRACT_CONFLICTS} criterion must be a positive \
+                             1-based index"
+                        ),
+                    )
+                })?;
+            if !seen.insert(criterion) {
+                return Err(DispatchError::action_failed(
+                    action,
+                    format!(
+                        "task {task_id} {CONTRACT_CONFLICTS} names criterion {criterion} twice"
+                    ),
+                ));
+            }
+            finding
+                .get("evidence")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|evidence| !evidence.is_empty())
+                .ok_or_else(|| {
+                    DispatchError::action_failed(
+                        action,
+                        format!(
+                            "task {task_id} {CONTRACT_CONFLICTS} evidence must be a non-empty \
+                             string"
+                        ),
+                    )
+                })?;
+        }
+    }
     for field in ["duplicate_of", "already_landed"] {
         if assessment.get(field).is_none() {
             return Err(DispatchError::action_failed(
@@ -361,6 +433,45 @@ pub(super) fn validate_recommendations(
     )?;
     validate_optional_finding(action, task_id, assessment, FINDING_INVALID, &["evidence"])?;
     Ok(complexity)
+}
+
+/// Validate that every `contract_conflicts` entry names a criterion of
+/// this task. Shape was already checked by `validate_recommendations`;
+/// absent or null is no finding.
+pub(super) fn contract_conflicts(
+    action: &str,
+    task_id: &str,
+    assessment: &Value,
+    criteria: usize,
+) -> Result<(), DispatchError> {
+    let Some(entries) = assessment
+        .get(CONTRACT_CONFLICTS)
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(());
+    };
+    let invalid = |detail: &str| {
+        DispatchError::action_failed(
+            action,
+            format!("task {task_id} {CONTRACT_CONFLICTS} {detail}"),
+        )
+    };
+    for entry in entries
+        .as_array()
+        .ok_or_else(|| invalid("must be an array or null"))?
+    {
+        entry
+            .get("criterion")
+            .and_then(Value::as_u64)
+            .and_then(|criterion| usize::try_from(criterion).ok())
+            .filter(|criterion| (1..=criteria).contains(criterion))
+            .ok_or_else(|| {
+                invalid(&format!(
+                    "criterion must be a 1-based index of the task's {criteria} acceptance criteria"
+                ))
+            })?;
+    }
+    Ok(())
 }
 
 /// OS and native-facility tokens a criterion must name before `required_os`

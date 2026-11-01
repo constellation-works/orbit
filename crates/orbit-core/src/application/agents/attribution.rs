@@ -229,7 +229,11 @@ fn pilot_warning_charge(task: &TaskFacts) -> Option<Charge> {
 fn spec_warning(kind: &str) -> bool {
     matches!(
         kind,
-        "validation_tool_warnings" | "adr_conflicts" | "surface_warnings" | "utility_warnings"
+        "validation_tool_warnings"
+            | "adr_conflicts"
+            | "contract_conflicts"
+            | "surface_warnings"
+            | "utility_warnings"
     )
 }
 

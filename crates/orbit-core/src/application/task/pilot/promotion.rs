@@ -16,15 +16,18 @@ use orbit_types::task::{
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
-use super::VALIDATION_TOOL_WARNINGS;
+use super::{CONTRACT_CONFLICTS, VALIDATION_TOOL_WARNINGS};
 
 /// Warning-shaped findings. `validation_tool_warnings` is the deterministic
 /// boundary's own finding rather than the pilot's, but it withholds promotion
 /// for the same reason the others do: the task would be admitted with an
 /// acceptance check the implementation lane cannot run [ORB-11980].
-const WARNING_FIELDS: [&str; 5] = [
+/// `contract_conflicts` is the pilot's typed per-criterion contradiction
+/// finding; it holds for the same reason and has no advisory opt-out.
+const WARNING_FIELDS: [&str; 6] = [
     "blocked_by",
     "adr_conflicts",
+    CONTRACT_CONFLICTS,
     "utility_warnings",
     "surface_warnings",
     VALIDATION_TOOL_WARNINGS,
@@ -46,10 +49,14 @@ pub(super) fn finding_holds_promotion(field: &str, finding: &Value) -> bool {
 }
 
 /// Plain or structured finding text, shared with warning normalization.
+/// A typed `contract_conflicts` entry carries its text in `evidence`.
 pub(super) fn warning_text(finding: &Value) -> Option<&str> {
-    finding
-        .as_str()
-        .or_else(|| finding.get("text").and_then(Value::as_str))
+    finding.as_str().or_else(|| {
+        finding
+            .get("text")
+            .and_then(Value::as_str)
+            .or_else(|| finding.get("evidence").and_then(Value::as_str))
+    })
 }
 
 fn task_id_character(character: char) -> bool {
@@ -204,7 +211,14 @@ pub(crate) fn warning_hold_findings(
                 .filter_map(|value| {
                     finding_text(value).map(|text| DrainHoldFinding {
                         kind: (*field).to_string(),
-                        text,
+                        text: if *field == CONTRACT_CONFLICTS {
+                            match value.get("criterion").and_then(Value::as_u64) {
+                                Some(criterion) => format!("criterion {criterion}: {text}"),
+                                None => text,
+                            }
+                        } else {
+                            text
+                        },
                     })
                 })
         })
