@@ -415,6 +415,16 @@ follows the creation-intent rules below; without that authorization, name it
 as an evidence gap rather than declaring its missing selector, and never
 predict an unspecified new filename.
 
+When the plan creates a new Rust source or test file in a directory whose
+existing declaration file (`main.rs`, `mod.rs`, `lib.rs` or `<dir>.rs`)
+must declare it with a `mod` statement, declare that existing file with
+`file:` and record the reason in the description or authoring evidence.
+The new file itself stays under the creation-authorization rule below; the
+declaration file exists at the pinned revision, so declaring it does not
+predict a new filename. Do not declare a declaration file for a file the
+build discovers automatically, such as a crate-root `tests/*.rs` binary.
+A body-only edit to an existing module adds no declaration selector.
+
 For review-filed tasks, task-pilot keeps selectors the finding names as change
 targets. It may omit a selector it verifies as read-only evidence or an
 incidental shared-doc touch by recording its exact selector and inspection
