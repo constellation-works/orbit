@@ -178,26 +178,29 @@ After [ORB-10579], each price row also declares its `input_token_basis`, either 
 
 After [ORB-19680] (see [Prompt-size price tiers key on each request's own prompt](./4_decisions.md#prompt-size-price-tiers-key-on-each-requests-own-prompt)), long-context billing is a `prompt_tiers` list beside `prices`. Each tier row has a model, an effective period and an inclusive `min_prompt_tokens`, and carries the rates for one whole request whose own prompt reaches it. A prompt counts uncached input, cache reads and both cache writes after the base row's input basis. `InvocationTrace.long_prompt_requests` keeps the usage of each request at or over 100,000 prompt tokens. Codex's session rollout supplies it, one entry per `token_count` request. Claude's message stream shows each request's final prompt but not its final output, so it records an empty list when no request reaches the floor and nothing otherwise. It persists in the nullable `invocations.long_prompt_requests_json` column (migration v71). Derived cost prices the totals at the base row and adds each tiered request's tier-minus-base cost. An invocation without per-request usage keeps the base cost while its totals stay below the threshold. At or above it the derived cost is `null`, since totals do not identify the long requests. Grok reports only totals. Tier rows begin at their first verified observation, 2026-10-29T04:23:10Z, so earlier invocations keep their shipped pricing.
 
-For the exact model string `gpt-5.6-sol`, the current row starts at
-`2026-10-23T03:09:14.111507Z`, the audit's first verified current-price
-observation. This is a conservative observation boundary, not a verified
-provider change instant. The [August 21 changelog](https://developers.openai.com/api/docs/changelog)
-announces reduced input/output prices without an exact time or timezone.
-No calendar-date convention has been approved for historical repricing, so
-both shipped July rows remain intact: their post-August-21 estimates through
-September 21 remain unresolved, and the existing gap from September 22 up to
-the observation remains unknown (`derived_cost_usd: null`). A crew migration
-does not establish model retirement. Historical cache-read/write effective
-dates are independently unresolved; current rates are not backdated.
+For the exact model string `gpt-5.6-sol`, the August 21 changelog cut supersedes
+the earlier observation-only treatment (reviewer decision 2026-11-01, [ORB-20702]).
+The [August 21 changelog](https://developers.openai.com/api/docs/changelog) prices
+Sol at $4 input and $20 output, 20% and 33% lower, from that calendar date. It gives
+no time of day or timezone, so the row starts at `2026-08-21T00:00:00Z`. Three rows
+now cover the model. The July 30 row closes at that instant with its rates unchanged.
+The August 21 row runs to `2026-10-23T03:09:14.111507Z` at 4 input, 0.40 cached read,
+5.00 30m write, 5.00 1h fallback and 20 output. Its cache rates apply the caching
+guide's fixed ratios of input (10% and 125%) to the cut rate; no dated source gives a
+separate cache-rate change instant. The open row starts at `2026-10-23T03:09:14.111507Z`,
+the audit's first verified current-price observation. That boundary is an observation,
+not a verified provider change instant. The periods are half-open and do not overlap,
+so no invocation from August 21 onward is unpriced. The former September 22 gap and
+the July row's post-August-21 estimates no longer apply.
 
 The [Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
 and [pricing table](https://developers.openai.com/api/docs/pricing), rechecked
 on October 23, document standard short-context USD/M rates of 4 input,
 0.40 cached input and 20 output. The [caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
 distinguishes 30-minute writes at 1.25 times input (5/M) from 12-hour writes at
-2.5 times input (10/M). The new row uses the standard 30-minute write rate;
-its `cache_create_1h` rate of 5/M retains only the nonzero fallback for malformed
-legacy data. That Anthropic-named bucket does not represent OpenAI's 12-hour
+2.5 times input (10/M). The August 21 and open rows use the standard 30-minute
+write rate; their `cache_create_1h` rate of 5/M retains only the nonzero fallback
+for malformed legacy data. That Anthropic-named bucket does not represent OpenAI's 12-hour
 tier, which this table's token buckets cannot express. Fast, Ultrafast,
 long-context and 12-hour premiums are not approximated into the base row.
 The promotion continues at least through November 21; the row has no invented

@@ -86,9 +86,9 @@ fn colliding_run_ids_keep_invocations_in_their_own_workspace() {
 }
 
 #[test]
-fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observation() {
+fn stored_sol_costs_preserve_history_and_reprice_from_the_august_21_cut() {
     if !provider_ledger_isolated(
-        "stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observation",
+        "stored_sol_costs_preserve_history_and_reprice_from_the_august_21_cut",
     ) {
         return;
     }
@@ -111,13 +111,14 @@ fn stored_sol_costs_preserve_history_and_start_current_rates_at_verified_observa
         ("2026-07-17T00:00:00Z", Some(old_cost)),
         ("2026-07-29T23:59:59.999999999Z", Some(old_cost)),
         ("2026-07-30T00:00:00Z", Some(old_cost)),
-        // No calendar-date convention has authorized historical repricing.
+        // Reviewer decision 2026-11-01: the July 30 row holds until the
+        // August 21 cut, then the cut rates apply with no unpriced gap.
         ("2026-08-20T23:59:59.999999999Z", Some(old_cost)),
-        ("2026-08-21T00:00:00Z", Some(old_cost)),
-        ("2026-08-22T04:00:04.449861486Z", Some(old_cost)),
-        ("2026-09-21T23:59:59.999999999Z", Some(old_cost)),
-        ("2026-09-22T00:00:00Z", None),
-        ("2026-10-23T03:09:14.111506999Z", None),
+        ("2026-08-21T00:00:00Z", Some(current_cost)),
+        ("2026-08-22T04:00:04.449861486Z", Some(current_cost)),
+        ("2026-09-21T23:59:59.999999999Z", Some(current_cost)),
+        ("2026-09-22T00:00:00Z", Some(current_cost)),
+        ("2026-10-23T03:09:14.111506999Z", Some(current_cost)),
         ("2026-10-23T03:09:14.111507Z", Some(current_cost)),
         ("2026-10-23T03:09:14.111507001Z", Some(current_cost)),
         // [ORB-19680] Before the prompt-size tier's observation boundary,
