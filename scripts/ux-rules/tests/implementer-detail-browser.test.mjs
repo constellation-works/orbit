@@ -48,6 +48,7 @@ test("implementer detail collapsed labels are detected and readable labels pass"
     const before = await check(ctx);
     const failures = before.measurements.failures || [];
     assert.equal(before.status, "fail", JSON.stringify(before));
+    assert.equal(before.fingerprint, "ui.cramped-wrap|analytics-implementer-detail|dark|1440|default", JSON.stringify(before));
     for (const label of ["Cost coverage (counted attempts)", "Cost per landed task (USD)", "Cost missing-run attempts"]) {
       assert.ok(failures.some((f) => f.selector === "dt" && f.text === label), JSON.stringify(before));
     }
@@ -57,6 +58,7 @@ test("implementer detail collapsed labels are detected and readable labels pass"
     // Give the same dashboard data a readable, bounded two-column layout.
     await ctx.page.addStyleTag({ content: "#agents-detail .agents-stats { grid-template-columns: minmax(160px, 1fr) minmax(0, 1fr) !important; } #agents-detail .agents-stats dd { overflow-wrap: anywhere; }" });
     const after = await check(ctx);
+    assert.equal(after.fingerprint, before.fingerprint, JSON.stringify({ before, after }));
     assert.ok(!(after.measurements.failures || []).some((f) => /Cost/.test(f.text)), JSON.stringify(after));
     await stats.scrollIntoViewIfNeeded();
     await stats.screenshot({ path: path.join(ctx.outDir, "implementer-readable.png") });
