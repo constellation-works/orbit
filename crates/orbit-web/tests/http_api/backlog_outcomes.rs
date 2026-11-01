@@ -447,7 +447,7 @@ fn subsecond_and_immediate_returns_stay_drawable() {
                 block_that_returned(&fixture, delay);
                 let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
                 let forecast = forecast(&fixture);
-                assert_eq!(forecast["model_version"], 15);
+                assert_eq!(forecast["model_version"], 16);
                 assert_eq!(
                     forecast["inputs"]["outcomes"]["episodes"],
                     json!({"blocked": 1, "delivered": 1})
@@ -535,7 +535,7 @@ fn forecast_queued_against(
     dated_task(&fixture, status, steps);
     let id = backlog_task(&fixture, label, &["file:queued.rs"], &[], &[]);
     let forecast = forecast(&fixture);
-    assert_eq!(forecast["model_version"], 15, "{label}");
+    assert_eq!(forecast["model_version"], 16, "{label}");
     assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{label}");
     assert_eq!(forecast["forecast"]["tasks"], 1, "{label}");
     assert_eq!(
@@ -858,7 +858,7 @@ fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
             assert_eq!(cohort["tasks"], 1, "{response}");
             let simulated = prediction(&response, &queued);
             let stored = fixture.runtime.backlog_forecasts(1).unwrap().remove(0);
-            assert_eq!(stored.model_version, 15);
+            assert_eq!(stored.model_version, 16);
             let tasks: Value = serde_json::from_str(&stored.tasks_json).unwrap();
             let task = &tasks[0]["forecast"];
             assert_eq!(tasks[0]["id"], queued.as_str());
