@@ -243,7 +243,9 @@ spec:
        Before handing off a diff, also run the pre-handoff checks the workspace
        guide names for a diff (static guards, formatter, linters for what you
        changed) and fix what they report. They do not replace
-       `task.final_validation_commands`.
+       `task.final_validation_commands`, which comes only from the injected
+       execution envelope, is absent when empty, and is not an
+       `orbit.task.show` field.
 
     5. For an already-terminal run, follow Terminal source run. Use Direct
        delivery only as the last resort that section describes.
@@ -279,7 +281,7 @@ spec:
       same tests).
     - Follow the workspace guide; for example apply the formatter the command
       names. Confirm with the pre-handoff checks, and run the failing command
-      yourself only when `task.final_validation_commands` does not reserve it.
+      yourself only when the injected envelope list does not reserve it.
     - Orbit refuses to commit the repair, and skips the retry, when it changes
       Git or `.orbit` metadata or an environment file, leaves a symlink or
       gitlink, or would move a head already under before-PR review.

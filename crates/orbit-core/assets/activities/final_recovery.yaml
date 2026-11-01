@@ -434,7 +434,9 @@ spec:
     4. When you repaired a diff and will `resume`, first run the pre-handoff
        checks the workspace guide names for a diff (static guards, formatter,
        linters for what you changed) and fix what they report. They do not
-       replace `task.final_validation_commands`.
+       replace `task.final_validation_commands`, which comes only from the
+       injected execution envelope, is absent when empty, and is not an
+       `orbit.task.show` field.
 
     Decisions:
     A `decide` becomes a card the operator answers with one click, so write it
