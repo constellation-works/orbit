@@ -115,10 +115,14 @@ impl TransientInfrastructure {
         // `host_configuration`, or the typed display itself. A host-config
         // failure judges nothing about the candidate whatever step surfaced
         // it (a follower's tag-instructions load is not a delivery action),
-        // so it is classified before the delivery-action gate. The typed
-        // prefixes cannot be produced by quoting a log line.
-        if message.contains("remote tool failed (host_configuration)")
-            || message.starts_with("host configuration error on host '")
+        // so it is classified before the delivery-action gate. It is
+        // recognised only at the start of the error, after the one wrapper
+        // Orbit adds for a tag-instructions load: a validation failure's
+        // message starts with its own text (the command, then output), so
+        // quoting the marker there never matches.
+        let typed = strip_tag_instructions_wrapper(message);
+        if typed.starts_with("remote tool failed (host_configuration)")
+            || typed.starts_with("host configuration error on host '")
         {
             return Some(Self::HostConfiguration);
         }
@@ -148,6 +152,17 @@ impl TransientInfrastructure {
         }
         None
     }
+}
+
+/// The typed error after the `load tag instructions for `<activity>` (run
+/// <id>): ` wrapper the runtime host puts on a tag-instructions load failure,
+/// or `message` unchanged when it has no such wrapper. The activity name and
+/// run id are Orbit's own, so the first `): ` ends the wrapper.
+fn strip_tag_instructions_wrapper(message: &str) -> &str {
+    message
+        .strip_prefix("load tag instructions for `")
+        .and_then(|rest| rest.split_once("): "))
+        .map_or(message, |(_, typed)| typed)
 }
 
 /// The note of a [`TRANSIENT_INFRA_BLOCKED_EVENT`].
