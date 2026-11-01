@@ -560,3 +560,81 @@ fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget(
     assert_eq!(state.covered, revision(0));
     assert!(exhausted.receipts.is_empty());
 }
+
+/// [F2026-10-694] An executor that exits early with `incomplete_examination`
+/// evidence (`examination_complete=false`) no longer ends its frozen batch
+/// as a terminal block once the host proves the action stopped: the same
+/// batch is retried under the bounded budget and complete evidence from
+/// the retry is accepted.
+#[test]
+fn a_stopped_incomplete_examination_retries_the_same_batch_to_completion() {
+    let (store, host, trigger) = setup();
+    host.page(0, 2);
+    let first = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    host.evidence(&first);
+    host.evidence
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .examination_complete = false;
+    host.page(2, 2);
+
+    // While the action can still submit, incomplete evidence only records
+    // its typed reason; coverage stays owed on the same attempt.
+    let open = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(open.state, BatchState::Admitted);
+    assert_eq!(open.attempt, 1);
+    assert!(
+        open.reason.unwrap().contains("incomplete_examination"),
+        "the typed incomplete reason is recorded"
+    );
+
+    // The host proves the action stopped (its run failed and blocked the
+    // task): settlement claims the next attempt over the identical batch.
+    host.stopped.store(true, Ordering::SeqCst);
+    let settled = evaluate(store.as_ref(), &host, &trigger, true)
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(settled.state, BatchState::Claimed);
+    assert_eq!(settled.attempt, 2);
+    assert!(settled.action_id.is_none());
+    assert_eq!(settled.batch, first.batch);
+    assert!(
+        settled
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("incomplete_examination")
+    );
+
+    // After the backoff a fresh action is admitted for the same batch, and
+    // its complete evidence settles the debt.
+    host.stopped.store(false, Ordering::SeqCst);
+    let retried = evaluate_at(store.as_ref(), &host, &trigger, true, 6)
+        .unwrap()
+        .state
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(retried.state, BatchState::Admitted);
+    assert_ne!(retried.action_id, first.action_id);
+    assert_eq!(retried.batch, first.batch);
+
+    host.evidence(&retried);
+    let completed = evaluate_at(store.as_ref(), &host, &trigger, true, 7).unwrap();
+    let state = completed.state.unwrap();
+    assert_eq!(state.covered, revision(2));
+    assert!(state.active.is_none());
+    assert_eq!(completed.receipts.len(), 1);
+}

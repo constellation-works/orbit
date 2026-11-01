@@ -192,6 +192,7 @@
         "application/automation/tests/source.rs::timed_out_source_reaps_its_leader_and_kills_the_grandchild",
         "application/automation/tests/stall.rs::concurrent_reporters_for_one_divergence_persist_one_friction",
         "application/automation/tests/stall.rs::retries_and_sibling_consumers_reuse_one_divergence_record",
+        "application/automation/tests/task_outcome.rs::only_the_coupled_runs_failure_block_proves_the_action_stopped",
         "application/gc/tests/tmp.rs::preview_skips_entries_removed_after_the_listing",
         "application/job/pipeline/worker/tests/delivery_class.rs::class_is_captured_once_per_delivery_and_survives_tag_edits",
         "application/job/pipeline/worker/tests/delivery_class.rs::work_class_prefers_template_then_no_diff_then_change",
