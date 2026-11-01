@@ -437,6 +437,12 @@ while not ready.exists():
     if time.monotonic() >= deadline:
         os._exit(2)
     time.sleep(0.01)
+if mode == "cancel-parent-live":
+    # Keep this launcher alive while the worker waits. Once the launcher exits,
+    # the supervisor reaps the worker, and its SIGTERM handler overwrites the
+    # waiting marker within about 20 ms, the fixture's poll interval, so the
+    # poll could miss it.
+    os.waitpid(pid, 0)
 os._exit(0)
 """
 
@@ -2664,9 +2670,10 @@ def process_self_test():
                             unwind_observed["marker"] = values
                             return True
                         return False
-                    # The predicate returns as soon as the worker reports ready; the
-                    # bound only covers a loaded guard pool, where start-up can take
-                    # longer than 8 seconds.
+                    # The predicate returns as soon as the worker reports ready. The
+                    # launcher stays alive in "cancel-parent-live" mode, so the
+                    # waiting marker remains until this interrupt instead of being
+                    # overwritten by the supervisor's reap within the poll interval.
                     wait_until(ready_waiting, 60, "unwind worker did not become ready")
                     unwind_observed["info"] = _proc_identity(int(unwind_observed["marker"]["pid"]))
                     raised["done"] = True
@@ -2677,7 +2684,8 @@ def process_self_test():
             try:
                 with mock.patch("select.select", side_effect=mocked_select):
                     run([sys.executable, "-c", _HELD_WORKER, str(unwind_root),
-                         str(Path(env["TMPDIR"]) / "unwind-release"), str(unwind_ready), "cancel"],
+                         str(Path(env["TMPDIR"]) / "unwind-release"), str(unwind_ready),
+                         "cancel-parent-live"],
                         cwd=temp, env=env, timeout=15)
             except KeyboardInterrupt:
                 unwind_raised = True
