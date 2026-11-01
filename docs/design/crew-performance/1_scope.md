@@ -9,13 +9,13 @@ doc_role: scope
 type: design
 summary: "Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative)"
 tags: [crew-performance, crews, crew-pools, agent-scorecards, admission]
-last_updated: 2026-10-31
-last_validated: 2026-10-28
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 ---
 
 # Scope: performance-weighted crew selection
 
-Status: phases 1–4 implemented (type list, classification, the by-type cell report, the persisted hourly snapshot with its readiness line, performance-weighted draws with their provenance, and shadow modes with the share comparison report).
+Status: phases 1–4 are done — type list and cell report [ORB-17814], hourly snapshot [ORB-17816], weighted draws [ORB-17817], and the shadow share report [ORB-17818].
 Bearing: complexity and purpose pools (`workflow.<complexity>_complexity_crews`,
 `workflow.purpose_crews.*`) decide which crews may run a task, and their weights express the
 operator's preference among them. [Usage pressure](../usage-pressure/1_scope.md) scales those
@@ -69,7 +69,8 @@ paths = ["web/**"]
 ```
 
 - A task takes the **first** type whose `tags` it carries (any of) or whose `paths` match any of
-  its `context_files` (any of). A task matching none is `other`. One type per task keeps the
+  its `context_files` (any of). A `symbol:` selector matches by its backing file [ORB-17824].
+  A task matching none is `other`. One type per task keeps the
   evidence from being counted twice.
 - The type is read when the task is drawn, and the scorecard classifies historical tasks with the
   same list at scan time. Editing the list therefore re-sorts history, which is intended: the
@@ -176,7 +177,7 @@ creation and every admission pass.
   raw score, `n`, the shrunk score and the crew mean, plus the window, the type list's hash and
   `computed_at`.
 - The snapshot's cells read implementer execution scope `all`: managed and interactive tasks,
-  never unclassified ones ([agent-scorecards §5.2](../agent-scorecards/2_design.md#52-implementers)).
+  never unclassified ones ([agent-scorecards §5.2](../agent-scorecards/2_design.md#52-implementers), [ORB-20391]).
   Cells carry outcome scores only, with no token, cost or run-time field, so the managed-only
   cost rule has nothing to narrow here, and keeping interactive outcomes leaves draws unchanged.
 - A seeded routine refreshes it hourly. A dashboard scorecard scan refreshes it too.
@@ -220,7 +221,7 @@ reproduce the `--by-type` cells' `n` and raw values on the same scan. The export
 read-only: it writes no snapshot and refreshes no cache beyond the scan the scorecard
 already makes.
 
-The standalone script in `tools/crew-type-discovery` (not part of the workspace build)
+The standalone script in `tools/crew-type-discovery` [ORB-18143] (not part of the workspace build)
 reads that export from a file or stdin and, per `(crew, model, tier)` (or per tier with
 `--group-by tier`), fits a shallow regression tree on each task's score relative to its
 crew's own tier mean — the comparative-advantage target above. Features are tags and
@@ -281,16 +282,16 @@ changes no draws, pools, weights or configuration, and no routine runs it.
 
 1. **Type list and cell report.** `workflow.crew_performance_types`, classification, cell scores
    with two-level shrinkage, and `orbit agents scorecard --by-type`. Selection does not change.
-   This lets the operator see whether any type differs enough to route on.
+   This lets the operator see whether any type differs enough to route on. Done [ORB-17814].
 2. **Snapshot.** The store table, the hourly routine, staleness rules, and readiness and doctor
-   lines.
+   lines. Done [ORB-17816].
 3. **Weighted draws.** The `crew_performance*` keys, the factor beside pressure in the shared
    draw helper (`weighted_candidates` becomes the general weighting seam), run
-   provenance and history. Default `off`.
+   provenance and history. Default `off`. Done [ORB-17817].
 4. **Shadow trial.** `shadow_absolute` and `shadow_comparative` record the factor the draw
    would have used, with `applied: false`, and do not apply it. `orbit agents scorecard
    --role implementers --by-type --shadow` compares static, drawn and would-be shares.
-   Running the trial and choosing a default stay with the operator.
+   Running the trial and choosing a default stay with the operator. Done [ORB-17818].
 
 ## Open questions
 
@@ -320,7 +321,13 @@ changes no draws, pools, weights or configuration, and no routine runs it.
 
 ## Task References
 
-- [ORB-17118] — scores orchestrators on unit landings instead of complexity-weighted ones
-- [ORB-17779] — scores implementers against fleet rates for the same complexity tier
+- [ORB-17779] — scores implementers against fleet rates for the same complexity tier.
+- [ORB-17814] — adds the task-type list, cell scores and `orbit agents scorecard --by-type` without changing draws.
+- [ORB-17816] — persists the hourly crew-performance snapshot draws read.
+- [ORB-17817] — weights pool draws by absolute or comparative crew performance, default off.
+- [ORB-17818] — adds shadow modes and the share comparison report.
+- [ORB-17824] — classifies a `symbol:` context file by its backing path.
+- [ORB-18143] — adds the offline decision-tree report that suggests type-list entries.
+- [ORB-20391] — keeps snapshot cells on execution scope `all` while token metrics stay managed-only.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
