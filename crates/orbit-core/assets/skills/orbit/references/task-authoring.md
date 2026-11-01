@@ -95,7 +95,10 @@ instead. See [friction](friction.md) for workspace ownership and retry rules.
    Creation does not approve promotion, dispatch or completion.
 5. Read the returned ID using `fields: ["id"]` or a JSON parser. Never truncate a
    write response with `head`/`cut`. If the result is uncertain, list/search before
-   retrying: a lost reply does not mean the task was not created.
+   retrying: a lost reply does not mean the task was not created. `fields: ["id"]`
+   returns the bare ID and cannot carry the optional `warnings` metadata (see
+   Warnings below); omit `fields` when warnings matter. Never put `warnings`
+   in `fields`: it is not a task field, and the add is refused before it is stored.
 6. Wire `dependencies` (and any `child_of` relation) with `orbit.task.update`
    on the returned ID; creation refuses `dependencies`.
 
@@ -464,6 +467,11 @@ on add, approval, or updates to status, tags, context files or complexity:
 a backlog task with no footprint; and on approval: task-pilot blockers).
 Comments and other metadata edits do not repeat the footprint warning;
 readiness remains visible in the task response. Warnings never refuse the write.
+`warnings` is optional write-response metadata: it is absent when empty and is
+returned only on an object response, so omit `fields` on the write to receive it.
+It is not a projection selector, so a request selecting `warnings` is refused
+before persistence; fix the request by dropping that selector rather than
+replaying a write that already succeeded.
 Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an
