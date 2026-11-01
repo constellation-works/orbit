@@ -106,11 +106,16 @@ the first fungible task while opus-assigned and `os:macos` tasks queued.
   with the crew executor's `host_os`), the browser kit, and crew runnability. One shared
   predicate serves both eligibility and affinity, so they cannot disagree.
 - **Order.** `band → exclusive to the requester → priority → expiry → fewer eligible executors
-  → age → task ID`.
+  → usage pressure → age → task ID`.
   - A task is *exclusive* when the requester is its only eligible live executor. Exclusivity
     crosses priority but never band: critical and corrective work still leads.
   - The eligible-executor count is a within-priority tiebreak. A task the requester cannot run
     sorts last; the screen still decides whether it is offered.
+  - *Usage pressure* is the highest weekly usage pressure the requester reported for a member
+    of the task's crew pool; higher sorts first. It is the lowest-precedence key above age, it
+    applies under every affinity reach including `off`, and a requester that reported no
+    pressure (owner-local admission included) leaves every candidate at the shared neutral
+    value, so it reorders nothing.
 - **Degenerate cases.** If the census holds only the requester, every candidate ties on both
   keys, and the order is the canonical one. If the census cannot be read, admission keeps the
   canonical order with a warning; that is not an error.
@@ -120,7 +125,8 @@ the first fungible task while opus-assigned and `os:macos` tasks queued.
 - **Policy.** `workflow.admission_affinity` chooses how far exclusivity reaches:
   - `band` (default): the order above;
   - `priority`: exclusivity counts only within the same priority;
-  - `off`: no affinity at all, the canonical order alone.
+  - `off`: no affinity at all; usage pressure still applies above age, and without reported
+    pressure the order is the canonical one alone.
 - **Explainability.** An admitted receipt records `affinity`: the task's class (`exclusive`,
   `shared` or `fungible`, every live executor eligible), its eligible-executor count, the reach
   in force and the census machine ids it was ordered against. A same-request replay returns the
@@ -168,7 +174,7 @@ defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 | `caller_before_pr` | bool | Whether the calling drain captured before-PR review (`review.timing = "before_pr"`) at submission; diagnostic only, since a claimed leaf runs the review the `ship` contract captures [ORB-13908] |
 | `review_gate` | bool, optional | Whether the executor's claimed PR leaf runs the before-PR gate; an owner with `review.timing` at `before_pr` admits only an executor that declares it. Absent: `false` |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `machine_name` |
-| `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task) and `excluded` (`{crew, source, reason}` crews it will not run for the rest of its window). Absent: every crew is admissible |
+| `crews` | object, optional | Executor crew capability: `runnable` (crew names its window preflight found runnable; absent means unrestricted), `default_crew` (what a task naming no crew runs as there; absent admits no crew-less task), `excluded` (`{crew, source, reason}` crews it will not run while the exclusion stands; an authentication exclusion is scoped to the provider account and can lift within the window when a declared `auth_probe` passes) and the weekly usage pressure it reports per crew, which admission uses only as the lowest ordering tiebreak above age. Absent: every crew is admissible |
 | `os` | enum, optional | Executor host OS: `linux`, `macos` or `windows`. A task carrying `os:` tags is admitted only to an executor whose OS one of them names. Absent (an OS outside that set): only tasks without an `os:` tag are admissible |
 | `browser_kit` | bool, optional | Whether the executor's host has a verified headless browser kit (`orbit browser-kit verify` passed against the installed version). A task tagged `ui` is admitted only to an executor that declares one. Absent: `false`, so a request without the field is offered no `ui` task |
 | `admissible` | object, optional | The work the executor's host load forecast has room for, sent under `machine.auto_concurrency` `enforce` ([auto-concurrency §6](../../auto-concurrency/2_design.md#6-pull-drains)): `keys` (`{work_class, complexity}` pairs, `work_class` `change` or `no-diff`, `complexity` absent for unset) and `templates` (`auto-task:` template names). A template task is admissible when its template is listed, any other task when its work class and complexity are. Absent: every task is admissible |
@@ -265,8 +271,10 @@ for a pull drain as for a local one.
    not by the boundary. Look up the receipt by workspace, runtime machine namespace, and
    request ID. An existing ID with different input yields `request_mismatch`; identical input
    returns its original outcome without new admission, history, or reservation.
-   The exclusive section stalls every task write on the host, so it costs one decision, not the
-   partition [ORB-14724]. Candidates — the `backlog`, `in-progress` and `review` tasks and the
+   The exclusive section stalls task writes in the candidate's partition, so it costs one
+   decision, not the host [ORB-14724]; only a candidate whose dependency another partition
+   holds escalates to the host-wide section, and that decision is taken again host-wide
+   [ORB-15106]. Candidates — the `backlog`, `in-progress` and `review` tasks and the
    statuses of the backlog's dependencies — are selected from the generated task index before
    the section, under the ordinary shared boundary, as are pilot operator-validation holds for
    every backlog task. Inside, the section reads the in-flight tasks and computes their
@@ -477,7 +485,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, `before_landing` (for this executor), completion policy, optional durable authorization reference and, only when `before_pr` or `before_landing` is on, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, and `baseline_commands` when the owner lists any) |
+| `ship` | Owner-resolved mode, base/landing branches, `before_pr`, `before_landing` (for this executor), completion policy, optional durable authorization reference and, when `before_pr` or `before_landing` is on or an active selective before-landing policy is captured, the captured `review` contract (`contract_version`, `crew`, `budget`, `required_validation_commands`, `baseline_commands` when the owner lists any, and the selective policy when one is captured) |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations; `blocked_by` names the holder when known |
 | `crew_unavailable[]` | Ready candidates skipped because the executor cannot run their crew, with the reason; omitted when empty |
 | `os_unavailable[]` | Ready candidates skipped because their `os:` tags name no OS the executor runs, with the wait; omitted when empty |
@@ -511,6 +519,7 @@ read, so a preflight cannot report a verdict admission would not reach.
 | `version_mismatch` | Caller binary version differs from owner |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
 | `before_pr_unsupported` | The ship contract captures `before_pr` or `before_landing` (owner's `review.timing`, or a `review.before_landing_hosts` match for this executor) and the executor does not declare `review_gate`, or the ship mode is local (stored receipts may spell it `review_policy_unsupported`) |
+| `selective_review_unsupported` | The ship contract captures an active selective before-landing policy and the executor does not declare selective-review capability (`selective_review` with `review_gate`) on the PR route |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 | `ship_contract_mismatch` | A *new* request carries a ship contract other than the one the owner resolves now for the calling machine; replays keep their stored contract |

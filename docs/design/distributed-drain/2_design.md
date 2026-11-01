@@ -21,7 +21,7 @@ related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-1
 > drain protocol, operator CLI diagnostics and claim inspection, dashboard actions, shared
 > capacity and entry-point admission. Live on a replica: the routed follower peer and
 > `orbit run auto --pull`
-> (`workspace_pull_pipeline`). `application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
+> (`workspace_pull_pipeline`). `application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
 > is `true`; it remains the one source switch every mutating entry point names.
 
 This doc covers v1: one owner checkout, any number of replica checkouts on other hosts, each
@@ -239,10 +239,15 @@ window (one `workspace_pull_pipeline` run):
 - *Window preflight.* The first refill pass resolves every configured crew the way dispatch would
   — enabled, its provider's executor resolvable, and that executor's CLI found where a leaf would
   launch it — and stores the result on the drain's run state (`pull_crew_preflight`). It starts no
-  provider process. No shipped provider has a side-effect-free authentication probe, so an
-  unauthenticated CLI passes the preflight and is caught by its first claimed leaf (below).
+  provider process. The preflight runs no authentication probe, so an
+  unauthenticated CLI passes the preflight and is caught by its first claimed leaf (below); a
+  declared `auth_probe` runs only later, to recover an exclusion.
 - *Provider-unavailable exclusions.* A crew whose claimed leaf could not use its provider is
-  excluded for the rest of the window. The exclusions are derived each pass from this drain's own
+  excluded while the exclusion stands. An authentication exclusion is scoped to the provider
+  account that crew uses — the configured crews sharing that account, where a crew that sets
+  `env` is its own account — and a provider whose executor declares an `auth_probe` can be
+  re-admitted within the same window when the probe passes; without a declared probe the
+  exclusion lasts for the rest of the window. The exclusions are derived each pass from this drain's own
   admission records, so they survive a follower restart and end with the drain.
 
 A request without `crews` (owner-local admission) is unrestricted, as before. Crews are matched
@@ -347,8 +352,12 @@ the task or holds an unrelated record under the same id. Precedence matches a lo
 explicit run `crew`, then the task's crew, then the executor's `workflow.default_crew` only when
 the task names none. A task crew the executor does not configure, or has disabled, fails the leaf
 at run start with an error naming the crew, before `implement_one`. It never falls back to the
-default crew. Recovery activities such as the recovery hooks draw from the executor's complexity
-pools (`workflow.medium_complexity_crews`), falling back to its `workflow.default_crew`.
+default crew. Recovery activities such as the recovery hooks draw from the executor's
+purpose pools first — `workflow.purpose_crews.failure_recovery` (`workflow.purpose_crews.auto_fix`
+for an applicable `--auto-fix` completion recovery; final recovery uses
+`workflow.purpose_crews.final_recovery`) — falling back to the matching complexity pool
+(`workflow.medium_complexity_crews`, or the low pool under `--auto-fix`) while the purpose pool
+is unset, and then to its `workflow.default_crew`.
 
 **Claimed-mode implementation** ([ORB-13642]). The implementer writes no owner task state. Both
 claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
@@ -703,9 +712,12 @@ owns delivery:
   whose own stderr, terminal error, or structured provider failure reports an authentication failure with the typed
   `[provider_unavailable]` marker, and a launched leaf that ended on such a step settles as a
   `Release` carrying `provider_unavailable { crew, reason }`. The task returns to `backlog`, the
-  breaker does not count it, and the drain excludes every configured crew that resolves to the
-  same provider for the rest of its window — labels are parsed, so `anthropic` groups with
-  `claude` — so the same login is not spent again on another crew of that provider. The named
+  breaker does not count it, and the drain excludes every configured crew that shares the same
+  provider account — labels are parsed, so `anthropic` groups with `claude`, and a crew that
+  sets `env` is its own account — so the same login is not spent again on another crew of that
+  account. A provider whose executor declares an `auth_probe` can be re-admitted within the
+  same window when the probe passes; without a declared probe the exclusion lasts for the rest
+  of the window. The named
   crew is the one the leaf resolved at start.
   Claude error results with HTTP 401/403 or authentication failure text, Codex error/failed-turn
   frames, and Grok/Gemini error objects are provider evidence, even when the CLI exits 0.
@@ -762,8 +774,9 @@ owns delivery:
   evidence without excluding the crew or host. Unrelated work and required
   reviewers on that crew remain eligible. `transient` excludes the leaf's crew
   for the rest of the drain's window (source `leaf_released`). `provider` uses source
-  `provider_unavailable`: authentication excludes every configured crew of
-  that provider for the window, and capacity excludes only the leaf's crew,
+  `provider_unavailable`: authentication excludes every configured crew sharing
+  that provider account, until a declared `auth_probe` re-admits it within the window (without
+  a declared probe it lasts for the window), and capacity excludes only the leaf's crew,
   until its backoff's `until`. A usage limit ([ORB-14695]) is a
   `provider` release with `failure.provider_limit` set and is not budgeted. After [ORB-14697]
   the release excludes no crew: each pass reads the follower's provider-limit store and excludes
@@ -1291,7 +1304,7 @@ diagnostic and sleeps. Probes reduce failures but guarantee nothing after pull.
 
 | Check | Source of truth |
 |---|---|
-| Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); the first typed `provider_unavailable` authentication leaf excludes every crew of that provider |
+| Required crews and providers available and authenticated | The window's crew preflight (section 2, *Eligibility*); the first typed `provider_unavailable` authentication leaf excludes every crew sharing that provider account, until a declared `auth_probe` re-admits it within the window |
 | Binary version and type-derived pull request fingerprint match the owner | Owner read-only capability/version response; pull enforces parity again |
 | Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
 | Owner's review timing and executor gate capability | The owner captures the review contract at admission; when before-PR or before-landing review applies, only a PR-mode executor that declares `review_gate` is admitted |

@@ -7,8 +7,11 @@ spec:
   description: >
     Leaf recovery for a typed task-PR rebase conflict, including one discovered
     after PR publication during authorized completion or an `--auto-fix`
-    watch. It uses a crew drawn from the medium complexity pool (the low pool
-    under `--auto-fix`) to resolve the live conflict files, with any companion edit
+    watch. It uses a crew drawn from the failure-recovery purpose pool
+    (`workflow.purpose_crews.failure_recovery`, or `workflow.purpose_crews.auto_fix`
+    for an `--auto-fix` run's completion step), falling back to the medium
+    complexity pool (the low pool under `--auto-fix`) while that pool is unset,
+    to resolve the live conflict files, with any companion edit
     the resolution needs. The host executor then validates, stages, continues
     the stopped rebase, and carries the candidate onto the current base tip
     before one retry.

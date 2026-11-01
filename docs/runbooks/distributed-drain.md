@@ -1146,8 +1146,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   unrelated work and required reviewers on the same crew remain eligible.
   Any other `transient` release stops the drain offering that crew for the
   rest of its window. After
-  `provider`, an authentication failure stops every crew of that provider
-  (an `anthropic` crew is the same provider as `claude`); a capacity failure
+  `provider`, an authentication failure stops every crew sharing that provider
+  account (an `anthropic` crew is the same provider as `claude`, and a crew that
+  sets `env` is its own account), until a declared `auth_probe` re-admits it within
+  the window (without a declared probe it lasts for the window); a capacity failure
   stops only the crew the leaf ran, and only for a backoff of 10 minutes
   from when the leaf ended, doubling with each repeat for that crew in the
   window up to an hour, after which the drain offers it again. A usage limit stops no crew by itself:
@@ -1263,8 +1265,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   panel). The first line names the runnable crews. Each excluded crew is
   listed with its source and the reason: `preflight` (disabled, executor
   unresolved, or CLI not found), `provider_unavailable` (a claimed leaf's
-  provider could not authenticate, which lists every crew of that provider,
-  or reported its selected model at capacity, which lists that crew, with
+  provider could not authenticate, which lists every crew sharing that provider
+  account, or reported its selected model at capacity, which lists that crew, with
   the task and error, written `(provider_unavailable until <time>)`: a
   capacity exclusion lifts at `until` within the same drain), `leaf_released` (a claimed leaf was
   released for a `transient` failure other than a forge outage, with the
@@ -1280,7 +1282,7 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   Doctor warns about these on live drains; the dashboard shows the same data.
   Follow the hint on the named host. A declared `auth_probe` first runs after
   ten minutes, backs off to twenty then thirty minutes on failure, and
-  re-admits the provider's crews when it passes. Recovery is durable across
+  re-admits that account's crews when it passes. Recovery is durable across
   restart/resume; a later auth failure starts a new delay. Only active auth
   exclusions are probed while the drain is admitting. Claude ships a minimal
   Haiku probe; other providers currently need a new drain after re-login.
