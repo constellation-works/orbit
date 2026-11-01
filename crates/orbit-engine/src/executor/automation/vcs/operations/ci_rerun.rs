@@ -48,7 +48,19 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
         return Err(unreadable("superseded retry run"));
     }
     let run = prerequisite::checked_run(deadline, workspace, &snapshot, listed)?;
-    if run["status"] != "completed" || run["conclusion"] != "failure" {
+    let conclusion_only = roots.iter().all(|root| {
+        matches!(
+            root.signature.as_str(),
+            "concluded cancelled" | "concluded timed_out"
+        )
+    });
+    let run_conclusion = run["conclusion"].as_str();
+    let run_allowed = if conclusion_only {
+        matches!(run_conclusion, Some("failure" | "cancelled" | "timed_out"))
+    } else {
+        run_conclusion == Some("failure")
+    };
+    if run["status"] != "completed" || !run_allowed {
         return Err(unreadable("retry requires a completed failed attempt"));
     }
     let attempt = number(&run, "run_attempt", unreadable)?;
@@ -65,11 +77,11 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
     let mut names = BTreeSet::new();
     let mut failed = Vec::new();
     for job in jobs {
-        if !ids.insert(number(job, "id", unreadable)?)
-            || !names.insert(text(job, "name", unreadable)?)
-        {
+        let job_id = number(job, "id", unreadable)?;
+        if !ids.insert(job_id) || !names.insert(text(job, "name", unreadable)?) {
             return Err(unreadable("ambiguous retry job identity"));
         }
+        let stopped_root = conclusion_authenticated(&roots, job_id, job);
         same(&job["run_id"], &json!(run_id), "retry job run", unreadable)?;
         same(
             &job["run_attempt"],
@@ -79,10 +91,10 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
         )?;
         same(&job["head_sha"], &json!(head), "retry job head", unreadable)?;
         if job["status"] != "completed"
-            || !matches!(
+            || !(matches!(
                 job["conclusion"].as_str(),
                 Some("success" | "skipped" | "failure")
-            )
+            ) || stopped_root)
         {
             return Err(unreadable("pending or unknown retry job outcome"));
         }
@@ -91,20 +103,22 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
             .ok_or_else(|| unreadable("retry job steps"))?;
         let mut step_numbers = BTreeSet::new();
         for step in steps {
+            let step_conclusion = step["conclusion"].as_str();
+            let step_allowed = matches!(step_conclusion, Some("success" | "skipped" | "failure"))
+                || (stopped_root && matches!(step_conclusion, Some("cancelled" | "timed_out")));
             if !step_numbers.insert(number(step, "number", unreadable)?)
                 || step["status"] != "completed"
-                || !matches!(
-                    step["conclusion"].as_str(),
-                    Some("success" | "skipped" | "failure")
-                )
+                || !step_allowed
             {
                 return Err(unreadable("incomplete retry step outcomes"));
             }
         }
-        if job["conclusion"] != "failure" {
+        if job["conclusion"] != "failure" && !stopped_root {
             continue;
         }
-        if !steps.iter().any(|step| step["conclusion"] == "failure") {
+        if job["conclusion"] == "failure"
+            && !steps.iter().any(|step| step["conclusion"] == "failure")
+        {
             return Err(unreadable("failure without a failed step"));
         }
         let suffix = job["check_run_url"]
@@ -125,9 +139,22 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
                     && check["check_suite"]["id"] == run["check_suite_id"]
             })
             .ok_or_else(|| unreadable("retry job check binding"))?;
+        let check_conclusion_ok = if stopped_root {
+            match job["conclusion"].as_str() {
+                Some("cancelled") => {
+                    matches!(check["conclusion"].as_str(), Some("cancelled" | "failure"))
+                }
+                Some("timed_out") => {
+                    matches!(check["conclusion"].as_str(), Some("timed_out" | "failure"))
+                }
+                _ => false,
+            }
+        } else {
+            check["conclusion"] == "failure"
+        };
         if check["app"]["slug"] != "github-actions"
             || check["status"] != "completed"
-            || check["conclusion"] != "failure"
+            || !check_conclusion_ok
             || snapshot.required.iter().any(|gate| {
                 gate.context == job["name"]
                     && gate
@@ -188,6 +215,12 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
         );
         if root.check != expected_check {
             return Err(unreadable("retry root check identity"));
+        }
+        if conclusion_authenticated(&roots, root.job_id, job) {
+            // The provider conclusion is the evidence. The log is often gone.
+            root_ids.insert(root.job_id);
+            logs.push(json!({"job_id":root.job_id,"authenticated":"conclusion"}));
+            continue;
         }
         let log = recovery_log::complete_job_log(deadline, workspace, run_id, job, &source)?;
         let failed_steps = job["steps"]
@@ -273,4 +306,17 @@ pub(super) fn ci_rerun_plan(input: &Value) -> Result<Value, OrbitError> {
         return Err(unreadable("CI retry authorization exceeds its bound"));
     }
     Ok(json!({"plan":plan}))
+}
+
+/// A transient root authenticated by the provider conclusion, not a log.
+fn conclusion_authenticated(roots: &[CiRerunRoot], job_id: u64, job: &Value) -> bool {
+    let Some(conclusion) = job["conclusion"].as_str() else {
+        return false;
+    };
+    matches!(conclusion, "cancelled" | "timed_out")
+        && roots.iter().any(|root| {
+            root.job_id == job_id
+                && root.classification == "transient"
+                && root.signature == format!("concluded {conclusion}")
+        })
 }

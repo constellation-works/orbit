@@ -17,7 +17,19 @@ branch, base_branch = "orbit/landing-candidate", "agent-main"
 names = ["test", "lint", "independent"]
 
 def outcome(name, is_base=False):
+    if not is_base:
+        named = config.get("conclusions", {}).get(name)
+        if isinstance(named, str):
+            return named
     return "success" if is_base or (name == "independent" and not config.get("candidate")) or (applied and not config.get("repeat")) else "failure"
+
+def refuse_log(job):
+    if str(job) in {str(item) for item in config.get("log_404_jobs", [])}:
+        print("gh: HTTP 404", file=sys.stderr)
+        raise SystemExit(1)
+    if str(job) in {str(item) for item in config.get("log_truncated_jobs", [])}:
+        print("the job log is truncated and has no complete failing command", file=sys.stderr)
+        raise SystemExit(1)
 
 def emit(value):
     print(json.dumps(value))
@@ -99,12 +111,13 @@ if args[:2] == ["run", "view"]:
     if config.get("raw_fallback"):
         raise SystemExit
     job = args[args.index("--job") + 1]
+    refuse_log(job)
     print((root / f"retry-log-{job}").read_text(), end="")
     raise SystemExit
 if args[:2] == ["pr", "view"]:
     emit({"number": 42, "url": "https://github.com/orbit/test/pull/42", "state": "MERGED" if merged else "OPEN",
           "headRefName": branch, "baseRefName": base_branch, "headRefOid": head,
-          "mergeStateStatus": "CLEAN" if applied and not config.get("repeat") else "BLOCKED", "reviewDecision": "APPROVED",
+          "mergeStateStatus": "CLEAN" if applied and not config.get("repeat") and all(outcome(name) == "success" for name in names) else "BLOCKED", "reviewDecision": "APPROVED",
           "isDraft": False, "mergedAt": "2026-10-29T10:02:00Z" if merged else None, "mergeCommit": {"oid": head} if merged else None,
           "statusCheckRollup": [{"__typename": "CheckRun", "name": name, "workflowName": "CI",
                                  "status": "COMPLETED", "conclusion": outcome(name).upper()} for name in names]})
@@ -120,6 +133,7 @@ if args[1] == "graphql":
 endpoint = next((arg for arg in args[1:] if arg.startswith("repos/")), "")
 if "/actions/jobs/" in endpoint and endpoint.endswith("/logs"):
     job = endpoint.split("/actions/jobs/", 1)[1].split("/", 1)[0]
+    refuse_log(job)
     print((root / f"retry-log-{job}").read_text(), end="")
     raise SystemExit
 if "--include" in args and "actions/runs/700/jobs" in endpoint:

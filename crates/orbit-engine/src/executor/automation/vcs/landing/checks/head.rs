@@ -13,8 +13,8 @@ use super::super::super::pr::RequiredChecks;
 use super::annotations::source_annotations;
 use super::base_update::contains;
 use super::jobs::{
-    answers, commit_jobs, excerpt, failed_step, job_label, same_job, transient_evidence,
-    unsuccessful,
+    answers, commit_jobs, excerpt, exclusive_awaited_stop, failed_step, job_label, same_job,
+    transient_evidence, unsuccessful,
 };
 use super::log::job_log;
 use super::recovery::{CheckFailureClass, FailedJob};
@@ -144,6 +144,10 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     let mut details = Vec::new();
     let mut waits = Vec::new();
     let mut annotations = Vec::new();
+    // Cancelled and timed-out jobs are not candidate failures. They stop
+    // repair only when nothing else in the set is a source failure, so a
+    // mixed failure is still classified from its log.
+    let mut conclusion_stops = Vec::new();
     for check in failed {
         let label = match &check.0 {
             Some(workflow) => format!("{workflow} / {}", check.1),
@@ -173,6 +177,12 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 "the failed job behind check '{label}' reported no identity"
             ));
         };
+        if let Some(conclusion) = super::jobs::concluded_stopped(job) {
+            conclusion_stops.push(format!(
+                "the job '{label}' concluded {conclusion}: the runner stopped the job, not the candidate"
+            ));
+            continue;
+        }
         let log = match job_log(host, workspace, run_id, job_id, job, deadline_ms) {
             Ok(log) => log,
             Err(error) => {
@@ -200,6 +210,14 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                  the candidate",
                 job_label(job)
             ));
+        }
+        if exclusive_awaited_stop(&log).is_some() {
+            conclusion_stops.push(format!(
+                "the log of '{}' shows only that a job it awaited was cancelled or timed out, \
+                 not a candidate failure",
+                job_label(job)
+            ));
+            continue;
         }
         let signature = error_signature(&log, failed_step(job));
         if signature.step_fallback {
@@ -240,6 +258,9 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
         return HeadCheckEvidence::WaitForBase(waits.join("; "));
     }
     if details.is_empty() {
+        if !conclusion_stops.is_empty() {
+            return HeadCheckEvidence::Stop(conclusion_stops.join("; "));
+        }
         return HeadCheckEvidence::Stop(format!("the rollup names no failed check on head {head}"));
     }
     HeadCheckEvidence::Repair {

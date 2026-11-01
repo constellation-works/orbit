@@ -1112,7 +1112,7 @@ A failed pull request check, owed or not, is classified from its failed-step log
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
 within the inherited-recovery budget below; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
-once. An untouched-path failure waits for same-check base evidence: a successful completed push
+once. A job that concluded `cancelled` or `timed_out` is transient from that conclusion even when its log cannot be read, and so is a failure job whose log is only a `ci-await` of those conclusions or only a `ci-await` timeout. A job that concluded `failure` keeps log classification; a mixed failure is not reduced to this set. When the one shared rerun is already spent and those jobs are still cancelled or timed out, landing records `required CI jobs keep cancelling or timing out` and the job names, and dispatches no repair agent. An untouched-path failure waits for same-check base evidence: a successful completed push
 run of the same job on the accepted base or a descendant through the landing tip authorizes one
 rerun of the failed `pull_request` run on its unchanged head. The base run may predate the
 candidate failure; there is no run-time or job-start freshness test. Orbit requests
@@ -1132,7 +1132,8 @@ workflow-wide `--failed` action, it authenticates the **complete** latest-attemp
 listing, not only required failed checks. Every failed job must be an independently eligible
 transient/flaky root or a dependency-only waiter whose versioned evidence reaches those roots.
 An independent candidate failure vetoes the shared action and keeps its ordinary repair route;
-unreadable, pending, unknown or ambiguous evidence holds without granting retry or repair authority.
+unreadable, pending, unknown or ambiguous evidence holds without granting retry or repair authority,
+except a `cancelled` or `timed_out` conclusion, which is transient without a log.
 Neither matching text nor sharing a run proves a dependency.
 
 Retry authentication distinguishes a shortened display from an incomplete source. A fully

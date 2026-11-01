@@ -19,8 +19,16 @@
 //!   At the deadline, a red base stops in review with a base-never-recovered
 //!   reason.
 //! - **transient**: the log shows the network or the runner failing, by the
-//!   rule the validation gates already rerun on. The landing reruns the
-//!   failed jobs once and waits again.
+//!   rule the validation gates already rerun on. A job that concluded
+//!   `cancelled` or `timed_out` is transient from that conclusion alone,
+//!   even when its log cannot be read. A failure job whose log is only a
+//!   `ci-await` of those conclusions, or only a `ci-await` timeout, is the
+//!   same set. The landing reruns the failed jobs once and waits again.
+//!   When that rerun is already spent and the jobs are still cancelled or
+//!   timed out, it records `required CI jobs keep cancelling or timing out`
+//!   and the job names, and dispatches no repair. A job that concluded
+//!   `failure` keeps log classification, and a mixed failure is not reduced
+//!   to this set.
 //! - **base-suspect**: the log cites only files the candidate did not
 //!   change, and the base's recorded run does not fail it that way. A
 //!   successful same-job run on the accepted base ancestry, even if it
@@ -43,7 +51,8 @@
 //!   names no diagnostic, so its signature is only the failed step's name.
 //!   A failed read is not a successful empty answer, and neither proves the
 //!   base or the candidate at fault, so the landing stops in review and
-//!   spends nothing.
+//!   spends nothing. A missing log of a `cancelled` or `timed_out` job is
+//!   not this case: that conclusion is transient without the log.
 //!
 //! [ORB-16185] A required check that no failed job answers, such as a
 //! provider app's aggregate result beside passing analysis jobs, is not
