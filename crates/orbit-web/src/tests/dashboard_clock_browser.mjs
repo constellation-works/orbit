@@ -64,7 +64,7 @@ export async function assertClockRepaint(browser, origin, evidence) {
       await import('/app.js');
     });
     const detail = page.locator(`#task-detail-body [data-key="detail-${TASK_ID}"]`);
-    const planToggle = detail.locator('.detail-disclosures .field-block.collapsible h4');
+    const planToggle = detail.locator('.detail-disclosures .field-block.collapsible:has(.field-title:text-is("Plan")) h4');
     await planToggle.waitFor({ state: 'visible' });
 
     const readTimes = () => detail.evaluate((node) => {
