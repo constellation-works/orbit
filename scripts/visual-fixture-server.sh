@@ -4,10 +4,15 @@
 #   scripts/visual-fixture-server.sh <fixture>
 #
 # Seeds a disposable Orbit root and workspace from
-# crates/orbit-web/visual/fixtures/<fixture>.json, serves the real
-# dashboard on port zero, and prints ORBIT_VISUAL_URL=<loopback URL>
-# (plus ORBIT_VISUAL_TASK=<first seeded task id>) once listening.
-# The caller owns the process group and stops it.
+# crates/orbit-web/visual/fixtures/<fixture>.json. ORBIT_VISUAL_ORBIT
+# (or orbit on PATH) is the API backend on port zero. The workspace
+# front serves the admitted checkout's dashboard assets in front of
+# that backend and prints ORBIT_VISUAL_URL=<loopback URL> only after
+# declared assets load and API route presence is established. Proxied
+# requests stay on that backend's loopback origin; a network-path or
+# absolute-form target is refused before dispatch. Stdout
+# also names the source revision, renderer hash, asset hash and backend
+# identity separately. The caller owns the process group and stops it.
 #
 # Frozen server clock: when libfaketime's `faketime` is on PATH the
 # server runs under it with its wall clock frozen at the fixture
@@ -40,6 +45,13 @@ seed="$repo_root/crates/orbit-web/visual/fixtures/$fixture.json"
 
 if [ ! -f "$seed" ]; then
   echo "visual-fixture-server: no seed at $seed" >&2
+  exit 1
+fi
+# Fail before seeding when checkout assets are missing or unreadable.
+# The front refuses again at serve time; this only makes that visible
+# before the disposable backend starts.
+export ORBIT_FIXTURE_REPO="$repo_root"
+if ! node "$repo_root/scripts/visual-fixture-front.mjs" --check-assets; then
   exit 1
 fi
 mkdir -p "$root" "$home_dir" "$work"
@@ -154,46 +166,24 @@ if [ -z "$url" ]; then
   cat "$log" >&2 || true
   exit 1
 fi
-# Serve the experiment API data from the fixture; all other requests use the
-# real disposable dashboard server. No experiment is created in the store.
-if [ -n "$first_experiment" ] || [ "$fixture" = "implementers-scorecard" ]; then
-  FIXTURE_TASK="$first_task" node - "$url" "$seed" "$first_experiment" <<'NODE' &
-const http = require("http");
-const fs = require("fs");
-const upstream = new URL(process.argv[2]);
-const seed = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
-const id = process.argv[4];
-http.createServer((req, res) => {
-  const path = req.url.split("?")[0];
-  if (req.method === "GET" && path === "/api/agents/implementers/scorecard" && seed.scorecard) {
-    const window = new URL(req.url, upstream).searchParams.get("window") || "last500";
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ...seed.scorecard, window, requested_window: window }));
-    return;
-  }
-  const base = `/api/diagnostics/experiments/${encodeURIComponent(id)}`;
-  if (req.method === "GET" && (path === base || path === `${base}/readout`)) {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(path === base ? seed.experiment : seed.readout));
-    return;
-  }
-  const request = http.request(new URL(req.url, upstream), { method: req.method, headers: { ...req.headers, host: upstream.host } }, response => {
-    res.writeHead(response.statusCode, response.headers);
-    response.pipe(res);
-  });
-  request.on("error", error => { res.writeHead(502); res.end(String(error)); });
-  req.pipe(request);
-}).listen(0, "127.0.0.1", function () {
-  console.log(`ORBIT_VISUAL_TASK=${process.env.FIXTURE_TASK || ""}`);
-  console.log(`ORBIT_VISUAL_EXPERIMENT=${id}`);
-  console.log(`ORBIT_VISUAL_URL=http://127.0.0.1:${this.address().port}`);
-});
-NODE
-  proxy_pid=$!
-  trap 'kill "$proxy_pid" "$server_pid" 2>/dev/null || true' INT TERM EXIT
-  wait "$proxy_pid"
+# Checkout assets are served by the workspace front. The backend remains
+# the API, including for fixtures without an overlay. Overlays stay in
+# the front and are not a separate process.
+export ORBIT_FIXTURE_UPSTREAM="$url"
+export ORBIT_FIXTURE_SEED="$seed"
+export ORBIT_FIXTURE_TASK="${first_task:-}"
+export ORBIT_FIXTURE_EXPERIMENT="${first_experiment:-}"
+export ORBIT_FIXTURE_BACKEND="$orbit"
+export ORBIT_FIXTURE_PROVENANCE="$scratch/fixture-provenance.json"
+export ORBIT_FIXTURE_LAUNCHER="$repo_root/scripts/visual-fixture-server.sh"
+if [ -n "$first_experiment" ]; then
+  export ORBIT_FIXTURE_OVERLAY=experiment
+elif [ "$fixture" = "implementers-scorecard" ]; then
+  export ORBIT_FIXTURE_OVERLAY=scorecard
 else
-  [ -n "$first_task" ] && printf 'ORBIT_VISUAL_TASK=%s\n' "$first_task"
-  printf 'ORBIT_VISUAL_URL=%s\n' "$url"
-  wait "$server_pid"
+  export ORBIT_FIXTURE_OVERLAY=none
 fi
+node "$repo_root/scripts/visual-fixture-front.mjs" &
+front_pid=$!
+trap 'kill "$front_pid" "$server_pid" 2>/dev/null || true' INT TERM EXIT
+wait "$front_pid"
