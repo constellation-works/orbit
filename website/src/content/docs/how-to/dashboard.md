@@ -1381,7 +1381,11 @@ status, task, and body text, and **Show** filters by status:
 
 Each row shows the record's ID, when it was reported, a summary of its
 body, its status pill and tags, and `during <task-id>` when it was filed
-against a task. Select a row to open **Friction detail**: the full body,
+against a task. The list shows eight records at a time. **Previous** and
+**Next**, beside search and **Show**, move through the rest and leave the
+current search and status in place. The count next to **Knowledge** is the
+on-screen range against the total for the current status, such as
+`1–8/74`. Select a row to open **Friction detail**: the full body,
 its status, model, reported and resolved times, tags, and the task it
 names. On a narrow screen the detail opens inline under the row instead of
 in its own panel.
