@@ -66,6 +66,36 @@ const workspaceHolds = new Set();
 let heldWorkspaces = [];
 let heldConfigDelete = null;
 let holdConfigDelete = false;
+// A held host's drain readiness waits in `heldReadiness` until the test
+// settles it, so a response from the host being left can arrive after the
+// switch. `drainReadinessOverride` replaces only the hosts a scenario names.
+const readinessHolds = new Set();
+let heldReadiness = [];
+let drainPosts = [];
+let drainReadinessOverride = null;
+
+function readinessPayload(host) {
+  if (typeof drainReadinessOverride === 'function') {
+    const custom = drainReadinessOverride(host);
+    if (custom) return custom;
+  }
+  return { controls_authorized: true, tasks: [], capacity: { active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4 } };
+}
+
+function releaseHeldReadiness(host) {
+  const pending = [];
+  const keep = [];
+  for (const entry of heldReadiness) {
+    if (entry.host === host) pending.push(entry);
+    else keep.push(entry);
+  }
+  heldReadiness = keep;
+  for (const entry of pending) {
+    entry.res.writeHead(200, { 'content-type': 'application/json' });
+    entry.res.end(JSON.stringify(readinessPayload(entry.host)));
+  }
+  return pending.length;
+}
 const redundantConfig = {
   config_set: { authorized: true },
   sections: [{ token: 'workflow', keys: ['workflow.base_branch', 'pr.draft'].map((key) => ({
@@ -138,6 +168,17 @@ function hostApi(host, req, rest, url, res) {
     }
     const approved = rest.match(/^tasks\/([^/]+)\/approve$/);
     if (approved) return json({ ...tasksFor(host, workspace).find((task) => task.id === approved[1]), status: 'backlog' });
+    if (rest === 'workflows/auto' || rest === 'workflows/auto/stop') {
+      let raw = '';
+      req.on('data', (chunk) => { raw += chunk; });
+      req.on('end', () => {
+        let body = null;
+        try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
+        drainPosts.push({ host, rest, body });
+        json({ ok: true });
+      });
+      return;
+    }
     return json({ ok: true });
   }
   if (rest === 'workspaces') {
@@ -164,7 +205,10 @@ function hostApi(host, req, rest, url, res) {
     logStreams.push({ host, query: url.search, res });
     return;
   }
-  if (rest === 'workflows/auto/readiness') return json({ controls_authorized: true, tasks: [], capacity: { active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4 } });
+  if (rest === 'workflows/auto/readiness') {
+    if (readinessHolds.has(host)) { heldReadiness.push({ host, res }); return; }
+    return json(readinessPayload(host));
+  }
   if (rest === 'routines') return json({ machine_name: host, capabilities: {}, clock: {}, routines: [] });
   if (rest === 'job-runs') return json({ items: [{ run_id: `jrun-${host}-confirmed`, job_id: 'fixture_sweep', state: 'running', run_role: 'top-level',
     created_at: '2026-10-08T00:00:00Z', started_at: '2026-10-08T00:00:01Z', finished_at: null, duration_ms: null }], total: 1, limit: 100, truncated: false });
@@ -284,6 +328,14 @@ async function openPage(url, { viewport = { width: 1440, height: 900 }, init = n
 const selectedHost = () => page.evaluate(() => new URL(window.location.href).searchParams.get('host'));
 const taskRow = (id) => page.locator(`#tasks-body [data-key="task-${id}"]`);
 const capture = (name) => page.screenshot({ path: path.join(evidence, `${name}.png`), fullPage: false });
+
+async function captureDrainPanel(file, width) {
+  await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+  const pane = page.locator('#dock-pane-drain');
+  await pane.waitFor({ state: 'visible' });
+  await page.waitForTimeout(100);
+  await pane.screenshot({ path: path.join(evidence, file), animations: 'disabled' });
+}
 
 async function captureWidths(name) {
   for (const width of [1440, 768]) {
@@ -1031,6 +1083,134 @@ try {
   evidenceLog.servingShowHref = servingHref;
   await page.close();
 
+  // A host with a live drain, then a switch while that host's readiness is
+  // still in flight: the card and the Start form belong to the host on screen,
+  // and the late response does not paint the host that was left.
+  const drainingAlphaReadiness = () => ({
+    controls_authorized: true,
+    approvals: { enabled: true, approved_total: 4, held_total: 1, held_by_reason: { warnings: 1 } },
+    tasks: [],
+    capacity: {
+      active_leaf_runs: 9,
+      max_active_leaf_runs: 3,
+      free_slots: 0,
+      drain_phase: 'draining',
+      drain_run_id: 'jrun-20261101-alpha',
+      drain_status_run_id: 'jrun-20261101-alpha',
+      ends_at: new Date(Date.now() + 45 * 60 * 1000).toISOString(),
+      admitted_workers: 5,
+      running_admitted_workers: 2,
+      last_admission_forecast: {
+        mode: 'enforce',
+        forecast_at: '2026-11-01T00:00:00Z',
+        drain_live: false,
+        admitted: [],
+        skipped: [],
+      },
+    },
+  });
+  drainReadinessOverride = (host) => (host === SERVING ? drainingAlphaReadiness() : null);
+  await openPage('/?workspace=ws_orbit#tasks?dock=drain', { fresh: true });
+  await until('alpha drain is live', async () => {
+    const text = await page.locator('#auto-drain-body').innerText();
+    return text.includes('9/3 slots') && await page.locator('#auto-drain-body .drain-stop').count() > 0
+      && text.includes('Last forecast') && await page.locator('#auto-drain-live').count() > 0;
+  });
+  const toggles = ['auto-drain-complete', 'auto-drain-approve', 'auto-drain-auto-fix', 'auto-drain-review'];
+  await page.locator('[data-drain-focus="duration-4h"]').evaluate((node) => node.click());
+  await until('4h selected', async () => (await page.locator('[data-drain-focus="duration-4h"]').getAttribute('aria-pressed')) === 'true');
+  for (const id of toggles) {
+    await page.locator(`#${id}`).evaluate((node) => node.click());
+    await until(`${id} checked`, async () => page.locator(`#${id}`).isChecked());
+  }
+  await page.locator('#auto-drain-concurrency').evaluate((node) => {
+    node.value = '7';
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await until('concurrency remembered on alpha', async () => (await page.locator('#auto-drain-concurrency').inputValue()) === '7');
+  await captureDrainPanel('drain-panel-dark-1440-before.png', 1440);
+  await captureDrainPanel('drain-panel-dark-375-before.png', 375);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  readinessHolds.add(SERVING);
+  readinessHolds.add('hostb');
+  await page.locator('#refresh-btn').click();
+  await until('the held alpha readiness', () => heldReadiness.some((entry) => entry.host === SERVING));
+  await switchHost('hostb');
+  const drainCardSnapshot = () => page.evaluate(() => {
+    const body = document.getElementById('auto-drain-body');
+    const panel = document.getElementById('auto-drain-panel');
+    return {
+      body: body ? body.innerText : '',
+      when: document.getElementById('auto-drain-when')?.textContent || '',
+      phase: document.getElementById('auto-drain-phase-label')?.textContent || '',
+      stop: body ? body.querySelectorAll('.drain-stop').length : 0,
+      live: document.getElementById('auto-drain-live') ? 1 : 0,
+      alphaTitle: panel ? panel.querySelectorAll('[title*="jrun-20261101-alpha"]').length : 0,
+    };
+  });
+  const assertDrainClear = (snap, when) => {
+    assert(!snap.body.includes('9/3 slots'), `${when}: slots carried over: ${snap.body.slice(0, 300)}`);
+    assert(snap.stop === 0, `${when}: Stop is still shown`);
+    assert(snap.live === 0, `${when}: live counts are still shown`);
+    assert(!snap.body.includes('Last forecast'), `${when}: forecast carried over: ${snap.body.slice(0, 300)}`);
+    assert(!snap.body.includes('jrun-20261101-alpha') && !snap.body.includes('jrun-…alpha'), `${when}: run id carried over: ${snap.body.slice(0, 300)}`);
+    assert(snap.alphaTitle === 0, `${when}: run title carried over`);
+    assert(snap.when.trim() === '', `${when}: time left carried over (${snap.when})`);
+    assert(!snap.phase.includes('Draining'), `${when}: phase is ${snap.phase}`);
+  };
+  assertDrainClear(await drainCardSnapshot(), 'immediately after the switch');
+  await until('the held hostb readiness', () => heldReadiness.some((entry) => entry.host === 'hostb'));
+  const releasedAlpha = releaseHeldReadiness(SERVING);
+  assert(releasedAlpha >= 1, `the first host's readiness was still in flight: ${releasedAlpha}`);
+  await page.waitForTimeout(500);
+  assertDrainClear(await drainCardSnapshot(), 'after the late alpha readiness');
+  readinessHolds.delete('hostb');
+  const releasedHostb = releaseHeldReadiness('hostb');
+  assert(releasedHostb >= 1, `hostb readiness was held across the switch: ${releasedHostb}`);
+  await until('hostb drain is idle', async () => (await page.locator('#auto-drain-phase-label').innerText()).trim() === 'Idle');
+  await page.locator('#auto-drain-quick-start').waitFor({ state: 'visible' });
+  assert((await page.locator('[data-drain-focus="duration-1h"]').getAttribute('aria-pressed')) === 'true', 'hostb window length is its own default');
+  assert((await page.locator('[data-drain-focus="duration-4h"]').getAttribute('aria-pressed')) === 'false', 'hostb does not keep alpha\'s window length');
+  assert((await page.locator('#auto-drain-concurrency').inputValue()) === '', 'hostb parallel tasks is blank');
+  for (const id of toggles) {
+    assert(!(await page.locator(`#${id}`).isChecked()), `${id} is off on hostb`);
+  }
+  const hostbReads = routeLog.filter((entry) => entry.method === 'GET' && entry.path.includes('/api/on/hostb/workflows/auto/readiness'));
+  assert(hostbReads.length >= 1 && hostbReads.every((entry) => !entry.path.includes('concurrency=7')), `hostb readiness uses the selected host's form: ${JSON.stringify(hostbReads)}`);
+  assertDrainClear(await drainCardSnapshot(), 'after hostb readiness');
+  await captureDrainPanel('drain-panel-dark-1440.png', 1440);
+  await captureDrainPanel('drain-panel-dark-375.png', 375);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let startConfirm = '';
+  page.once('dialog', async (dialog) => {
+    startConfirm = dialog.message();
+    await dialog.accept();
+  });
+  await page.locator('#auto-drain-quick-start .drain-start').click();
+  await until('start posts to hostb', () => drainPosts.some((entry) => entry.host === 'hostb' && entry.rest === 'workflows/auto'));
+  assert(startConfirm.includes('Duration: 1h') && !startConfirm.includes('4h'), `start confirms the selected host's window: ${startConfirm}`);
+  const startPost = drainPosts.find((entry) => entry.host === 'hostb' && entry.rest === 'workflows/auto');
+  assert(startPost.body?.for_duration === '1h' && startPost.body?.concurrency == null
+    && startPost.body?.complete === false && startPost.body?.approve_proposed === false
+    && startPost.body?.auto_fix === false && !startPost.body?.review, `start posts hostb's form: ${JSON.stringify(startPost)}`);
+  const startRoute = routeLog.filter((entry) => entry.method === 'POST' && entry.path.includes('workflows/auto') && !entry.path.includes('/stop'));
+  assert(startRoute.length === 1 && startRoute[0].path.startsWith('/api/on/hostb/workflows/auto'), `start targets hostb: ${JSON.stringify(startRoute)}`);
+  readinessHolds.clear();
+  await switchHost('');
+  await until('the serving host\'s Stop returns', async () => await page.locator('#auto-drain-body .drain-stop').count() > 0);
+  page.once('dialog', async (dialog) => { await dialog.accept(); });
+  await page.locator('#auto-drain-body .drain-stop').click();
+  await until('stop posts to the serving host', () => drainPosts.some((entry) => entry.host === SERVING && entry.rest === 'workflows/auto/stop'));
+  assert(!drainPosts.some((entry) => entry.host !== SERVING && entry.rest === 'workflows/auto/stop'), `stop stays on the selected host: ${JSON.stringify(drainPosts)}`);
+  const stopRoute = routeLog.filter((entry) => entry.method === 'POST' && entry.path.includes('workflows/auto/stop'));
+  assert(stopRoute.some((entry) => entry.path.startsWith('/api/workflows/auto/stop')) && !stopRoute.some((entry) => entry.path.includes('/api/on/')), `stop targets the serving host: ${JSON.stringify(stopRoute)}`);
+  evidenceLog.drainHostSwitch = { start: startPost.body, stopHost: SERVING, releasedAlpha, releasedHostb };
+  drainReadinessOverride = null;
+  readinessHolds.clear();
+  for (const host of [...new Set(heldReadiness.map((entry) => entry.host))]) releaseHeldReadiness(host);
+  drainPosts = [];
+  await page.close();
+
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
@@ -1051,6 +1231,7 @@ try {
       'browser-history-restores-the-host-each-entry-names',
       'browser-history-restores-aggregate-after-a-single-workspace-host',
       'browser-serving-show-href-selects-serving-in-new-tab',
+      'browser-drain-card-and-form-follow-the-selected-host',
     ],
     viewports: ['1440', '768'],
     ...evidenceLog,
