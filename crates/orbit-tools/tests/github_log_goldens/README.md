@@ -1,13 +1,15 @@
 # CI log fixture goldens
 
 These are sanitized, captured-shape excerpts reconstructed from the historical
-runner samples in the existing regression tests, rather than new live GitHub
+runner samples in the retired regression tests, rather than new live GitHub
 reads. Repository names are fixture placeholders such as `acme/orbit` and
 `openai/orbit`; credentials are masks or visibly synthetic repeated-character
 tokens. No real credential was copied.
 
-JSON fixture names map to the existing unit tests below. A `/suffix` names a
-variant of that regression. Streamed `parts` concatenate strings and
+JSON fixture names map to the historical unit tests below: the named test
+files and functions were the cases' origins and have since been deleted, so
+the mapping is provenance, not a list of tests that still exist. A `/suffix`
+names a variant of that regression. Streamed `parts` concatenate strings and
 `{"text": "...", "repeat": N}` segments, keeping large source/retention-limit
 fixtures small on disk. The fixtures vary chunk boundaries, ANSI, Unicode,
 checkout attribution, omitted source, command completeness, rerun metadata,
@@ -30,8 +32,13 @@ The legacy test-only `bound_log_text` cases exercise the same guarantees
 through the production streamed collector rather than reproducing a private
 helper. Its streaming omission marker is part of the output contract.
 
-All existing unit tests remain. Retirement tasks can use this mapping when
-removing duplicated cases.
+The unit tests named in the mapping below no longer exist; they were
+retired after their cases moved here. The surviving carriers are the public
+golden tests in this directory's `mod.rs` (`streamed_log_fixture_goldens`,
+`fallback_fixture_goldens` and `request_fixture_goldens`, plus the boundary
+sweeps beside them), included as `github_log_goldens` under
+`public_tool_surface` in the `tools` integration test. Retirement tasks can
+use this mapping when removing duplicated cases.
 
 The registered `fallback.json` byte-window cases also cover opaque values after
 `Bearer`, Authorization headers, and API-key assignments. Assignment keys are
@@ -129,7 +136,7 @@ streamed carrier row took 25.486 seconds. No candidate hosted job has run as
 part of this native comparison. These measurements establish the native carrier
 target, not a hosted speedup or the whole-job 900-second budget.
 
-| Existing test file | Regression / fixture prefix | Golden |
+| Historical origin (deleted test file) | Regression / fixture prefix | Golden |
 | --- | --- | --- |
 | `discovery_requests.rs` | `dependabot_alert_request_is_bounded_and_projects_compact_evidence` | `requests.golden.json` |
 | `discovery_requests.rs` | `dependabot_pull_request_discovery_requests_and_projects_the_head_branch` | `requests.golden.json` |
