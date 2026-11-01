@@ -900,6 +900,32 @@ fn install_prepared_candidate(candidate: &Path, installed: &Path) {
     std::fs::rename(candidate, installed).expect("install prepared candidate");
 }
 
+#[cfg(unix)]
+#[test]
+fn oversized_unterminated_stdio_line_closes_session() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    assert_eq!(client.request("ping", Value::Null)["result"], json!({}));
+
+    // Exceed the 16 MiB line limit without a newline. The pump must close
+    // before an attacker can continue growing its partial-line buffer.
+    let chunk = vec![b'x'; 64 * 1024];
+    for _ in 0..256 {
+        client
+            .writer
+            .write_all(&chunk)
+            .expect("write bounded input");
+    }
+    let _ = client.writer.write_all(b"x");
+    assert!(
+        matches!(
+            client.lines.recv_timeout(RESPONSE_TIMEOUT),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "oversized unterminated line must close the session"
+    );
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes() {
     let workspace = McpWorkspace::init();
