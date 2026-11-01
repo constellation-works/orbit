@@ -89,6 +89,82 @@ fn failing_fingerprint_files_once_then_comments_on_change_and_pass() {
     );
 }
 
+fn aggregate_ui_fingerprint_reconciles_fail_to_pass_once() {
+    let (_root, runtime) = fixture("");
+    // Runner-produced stable aggregate identity (ORB-20885): the selector
+    // lives in measurements.failures, never in the fingerprint.
+    let fp = "ui.cramped-wrap|analytics-implementer-detail|dark|1440|default";
+    let ui = |status: &str, measurements: Value| {
+        let mut entry = result(status, "medium", fp, measurements);
+        entry["rule"] = json!("ui.cramped-wrap");
+        entry["target"] = json!({"id": "analytics-implementer-detail|dark|1440|default", "argv": [], "view": "analytics-implementer-detail", "width": 1440, "theme": "dark", "state": "default"});
+        entry
+    };
+    let fail_dt = document(vec![ui(
+        "fail",
+        json!({"matched": 3, "failures": [{"selector": "dt", "text": "Cost coverage"}]}),
+    )]);
+    let first = file(&runtime, fail_dt.clone(), json!({}));
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let task_id = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        runtime
+            .get_task(&task_id)
+            .unwrap()
+            .rule_fingerprint
+            .as_deref(),
+        Some(fp)
+    );
+    // Same failure again: nothing new.
+    let second = file(&runtime, fail_dt, json!({}));
+    assert_eq!(second["filed_count"], 0, "{second}");
+    assert_eq!(second["commented"].as_array().unwrap().len(), 0, "{second}");
+    // First failing element changes, same aggregate fingerprint: comment, no new task.
+    let fail_other = document(vec![ui(
+        "fail",
+        json!({"matched": 3, "failures": [{"selector": "span.other", "text": "Other"}]}),
+    )]);
+    let third = file(&runtime, fail_other, json!({}));
+    assert_eq!(third["filed_count"], 0, "{third}");
+    assert_eq!(third["commented"].as_array().unwrap().len(), 1, "{third}");
+    assert_eq!(third["commented"][0]["kind"], "measurements_changed");
+    // Skipped (unmeasured) cannot certify repair.
+    let skipped = file(
+        &runtime,
+        document(vec![ui("skipped", json!({"matched": 0}))]),
+        json!({}),
+    );
+    assert_eq!(
+        skipped["commented"].as_array().unwrap().len(),
+        0,
+        "{skipped}"
+    );
+    // Error cannot certify repair (it files its own broken-rule task, no pass comment).
+    let errored = file(
+        &runtime,
+        document(vec![ui("error", json!({"message": "boom"}))]),
+        json!({}),
+    );
+    assert_eq!(
+        errored["commented"].as_array().unwrap().len(),
+        0,
+        "{errored}"
+    );
+    // Readable pass reconciles the same task exactly once, no status change.
+    let passing = document(vec![ui("pass", json!({"matched": 3}))]);
+    let fourth = file(&runtime, passing.clone(), json!({}));
+    assert_eq!(fourth["filed_count"], 0, "{fourth}");
+    assert_eq!(fourth["commented"].as_array().unwrap().len(), 1, "{fourth}");
+    assert_eq!(fourth["commented"][0]["kind"], "pass");
+    assert_eq!(fourth["commented"][0]["task_id"], task_id);
+    let fifth = file(&runtime, passing, json!({}));
+    assert_eq!(fifth["commented"].as_array().unwrap().len(), 0, "{fifth}");
+    assert_eq!(
+        runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Proposed
+    );
+}
+
 fn oscillating_measurements_comment_on_return_to_earlier_value() {
     let (_root, runtime) = fixture("");
     let first = file(
@@ -585,6 +661,7 @@ crate::scenario_table!(
     mixed_surface_results_keep_their_filing_surface,
     duplicate_failing_fingerprint_in_one_document_files_once,
     failing_fingerprint_files_once_then_comments_on_change_and_pass,
+    aggregate_ui_fingerprint_reconciles_fail_to_pass_once,
     oscillating_measurements_comment_on_return_to_earlier_value,
     fail_pass_fail_pass_records_second_pass_transition,
     cap_takes_highest_severity_first_and_floor_records_only,

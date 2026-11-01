@@ -34,9 +34,8 @@ export function browserContextOptions(target) {
 }
 
 export function uiResultOf(rule, target, status, fields = {}) {
-  const selector = fields.selector ?? "";
-  const parts = [rule.id, target.view, target.theme, String(target.width), target.state];
-  if (selector) parts.push(selector);
+  const measurements = { ...(fields.measurements ?? {}) };
+  if (fields.selector) measurements.selector = fields.selector;
   return {
     rule: rule.id,
     target: {
@@ -49,9 +48,9 @@ export function uiResultOf(rule, target, status, fields = {}) {
     },
     status,
     severity: rule.severity,
-    measurements: fields.measurements ?? {},
+    measurements,
     evidence: fields.evidence ?? [],
-    fingerprint: parts.join("|"),
+    fingerprint: [rule.id, target.view, target.theme, String(target.width), target.state].join("|"),
   };
 }
 
@@ -445,7 +444,6 @@ export function verdict(ctx, rule, matched, failures, extra = {}) {
   }
   if (failures.length > 0) {
     return uiResultOf(rule, target, "fail", {
-      selector: failures[0].selector ?? "",
       measurements: { matched, failures: failures.slice(0, 20), ...extra },
     });
   }
