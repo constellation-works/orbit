@@ -385,7 +385,7 @@ so does giving it the name of an agent crew. A human crew:
 - is never drawn. `default_crew`, the crew pools, `purpose_crews` and
   experiment arms may not name it, and a redraw never picks it;
 - is closed only by you. An agent's `orbit.task.update` cannot move its task
-  to `done`;
+  to `done`, and agents keep the normal lifecycle on the task;
 - is left out of crew analytics, performance rankings and provider usage.
 
 The dashboard tags these tasks `for <name>`. The **My work** chip on the Tasks
@@ -397,6 +397,44 @@ terminal, or with `--non-interactive`, it uses the OS user name. Pass
 `--human-name <name>` to choose the name. If the name is already an agent
 crew, init asks again at a terminal and otherwise fails without writing
 anything. Running init again keeps the existing human crew.
+
+**Moving the task.** You can move a human-crew task from any status to any other
+with `orbit task update <id> --status <status>`, or with the status control on
+its dashboard detail. The dashboard offers every status for such a task. No plan,
+review, completion evidence or `--force` is needed, and a note stays optional.
+Each move is recorded in task history as a `forced` status change whose note
+names the human-crew bypass. Leaving `done` or `archived` still needs `--force`.
+A local run that still owns the task and has not finished refuses the move.
+
+Agents and MCP do not get this bypass. Their `orbit.task.update` calls on the same
+task follow the normal lifecycle.
+
+**Task body.** The person who does a human task reads the body to copy and run
+each step, so keep it to a short card:
+
+1. A one- or two-line summary as the first paragraph. The dashboard shows that
+   paragraph as the panel's summary.
+2. Numbered steps, written `1.` and `2.`.
+3. Each runnable command in its own fenced shell block. The dashboard gives each
+   block its own copy button.
+4. A `Verify:` line followed by one fenced command that shows the result.
+
+````markdown
+Renew the domain before it lapses.
+
+1. Open the registrar's renewal page and pay the fee.
+2. Run the check below.
+
+Verify:
+
+```sh
+whois example.com | grep -i "registry expiry"
+```
+````
+
+Filing warns, and does not refuse, when the body has no numbered steps, no fenced
+shell block, no `Verify:` line followed by a fenced command, or runs past 2000
+characters. Put long evidence in a task artifact instead.
 
 ### Reasoning effort
 
