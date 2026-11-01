@@ -292,6 +292,14 @@
   border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev);
   color: var(--fg-mute); font-size: 12px;
 }
+.all-keys-search { flex: 1 1 220px; min-width: 160px; }
+.all-keys-pager {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev);
+}
+.all-keys-range { color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
+.topic-controls .config-action:focus-visible, .all-keys-pager .config-action:focus-visible,
+.all-keys-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .topic-page .config-section > .config-action { margin: 10px 14px 12px; }
 .topic-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; }
 .topic-row {

@@ -226,6 +226,22 @@ try {
           },
         ],
       },
+      {
+        token: 'housekeeping',
+        title: 'Later keys',
+        keys: Array.from({ length: 60 }, (_, i) => ({
+          key: `housekeeping.later_${String(i).padStart(2, '0')}`,
+          label: `Later key ${i}`,
+          description: 'A later key in a long inventory.',
+          value_type: 'string',
+          value: `later-value-${i}-with-a-long-wrapped-token-${'x'.repeat(24)}`,
+          state: 'set',
+          settable: true,
+          source: { layer: 'workspace' },
+          built_in: { value: '' },
+          shadowed_by: [],
+        })),
+      },
     ],
   };
 
@@ -650,6 +666,42 @@ try {
   delete effectiveConfig.layers;
 
   // -------------------------------------------------------------------------
+  // Case (h): All keys is bounded, searchable, pageable, and Raw TOML is
+  // reachable without traversing the inventory; a later key still edits.
+  // -------------------------------------------------------------------------
+  await page.goto(`http://127.0.0.1:${port}/#config/all-keys`);
+  const allKeysSection = page.locator('section.config-section', { has: page.locator('.config-section-title', { hasText: 'All keys' }) });
+  await allKeysSection.waitFor({ state: 'visible' });
+  assert.equal(await allKeysSection.locator('.topic-row').count(), 25, 'initial All keys view shows one bounded page');
+  assert.match(await page.locator('.all-keys-range').textContent(), /Showing 1–25 of 65 keys · Page 1 of 3/);
+  const searchBox = page.locator('input.all-keys-search');
+  await searchBox.click();
+  await searchBox.pressSequentially('later_57');
+  await page.waitForFunction(() => document.querySelectorAll('section.config-section .topic-row[data-key="housekeeping.later_57"]').length === 1
+    && [...document.querySelectorAll('.topic-row')].filter((n) => n.dataset.key?.startsWith('housekeeping.later_')).length === 1);
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Search keys', 'typing in search keeps keyboard focus');
+  const laterRow = page.locator('.topic-row[data-key="housekeeping.later_57"]');
+  await laterRow.locator('button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+  assert.match(await drawer.locator('.config-key').first().textContent(), /housekeeping\.later_57/);
+  await drawer.locator('button.config-action:has-text("Close")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  await searchBox.fill('');
+  await page.waitForFunction(() => document.querySelector('.all-keys-range')?.textContent.includes('Page 1 of 3'));
+  await page.locator('.all-keys-pager button.config-action:has-text("Next")').click();
+  await page.waitForFunction(() => document.querySelector('.topic-row[data-key="housekeeping.later_20"]'));
+  await page.locator('select[aria-label="Topic filter"]').selectOption('housekeeping');
+  await page.waitForFunction(() => document.querySelector('.all-keys-range')?.textContent.includes('of 60 keys'));
+  assert.ok(await allKeysSection.locator('.topic-row').count() <= 25, 'Topic filter keeps the bounded page');
+  await page.locator('button.all-keys-jump-raw').click();
+  await page.waitForFunction(() => {
+    const raw = document.getElementById('config-raw-toml');
+    const rect = raw?.getBoundingClientRect();
+    return rect && rect.top < window.innerHeight && rect.bottom > 0;
+  });
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), 'Show workspace file', 'Jump to Raw TOML moves focus to its read controls');
+
+  // -------------------------------------------------------------------------
   // Case (d): Raw TOML block follows the latest Show click and names its file
   // -------------------------------------------------------------------------
   await page.goto(`http://127.0.0.1:${port}/#config/all-keys`);
@@ -811,6 +863,7 @@ try {
       'boolean-invalid-draft-refused-before-put',
       'boolean-false-round-trips',
       'enum-selection-refreshes-cli-preview-to-save-value',
+      'all-keys-bounded-searchable-pageable-with-raw-toml-jump',
     ],
   }, null, 2));
 
