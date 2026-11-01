@@ -116,3 +116,23 @@
 .fc-cov dd.fc-cov-count { order: -1; color: var(--fg); font: 600 20px var(--font-mono); font-variant-numeric: tabular-nums; }
 .fc-cov dd.fc-warn { color: var(--warn-fg); }
 .fc-cov dd.fc-cov-def { color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
+
+/* Residual time series: signed bars around a zero (p50) line. */
+.fc-ress { display: flex; flex-direction: column; gap: 16px; }
+.fc-res { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fc-res-head { display: flex; justify-content: space-between; gap: 8px; color: var(--fg); font: 13px var(--font-sans); }
+.fc-res-n { color: var(--fg-mute); }
+.fc-res-body { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; }
+.fc-res-axis { display: flex; flex-direction: column; justify-content: space-between; height: 120px; color: var(--fg-mute); font: 11px var(--font-mono); white-space: nowrap; }
+.fc-res-plot { position: relative; overflow-x: auto; padding-bottom: 18px; }
+.fc-res-zero { position: absolute; left: 0; right: 0; top: 60px; height: 1px; background: var(--fg-mute); }
+.fc-res-bars { position: relative; display: grid; grid-auto-flow: column; column-gap: 2px; grid-template-rows: 120px auto; width: max-content; min-width: 100%; }
+.fc-res-bar { position: relative; grid-row: 1; }
+.fc-res-bar.fc-res-split { margin-left: 8px; }
+.fc-res-fill { position: absolute; left: 0; right: 0; min-height: 2px; border-radius: 2px; }
+.fc-res-bar.fc-res-under .fc-res-fill, .fc-res-key.fc-res-under::before { background: var(--warn-fg); }
+.fc-res-bar.fc-res-over .fc-res-fill, .fc-res-key.fc-res-over::before { background: var(--accent); }
+.fc-res-bar.fc-res-old { opacity: 0.45; }
+.fc-res-version { grid-row: 2; align-self: end; margin-top: 4px; color: var(--fg-mute); font: 11px var(--font-mono); white-space: nowrap; }
+.fc-res-legend { display: flex; gap: 16px; color: var(--fg-mute); font: 12px var(--font-sans); }
+.fc-res-key::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; }

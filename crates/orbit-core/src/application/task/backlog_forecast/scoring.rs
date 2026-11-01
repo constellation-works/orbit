@@ -30,6 +30,12 @@
 //! waiting to return is not work. Earlier versions stored one delivery draw
 //! and keep their original measure (`task_hours_measure`).
 //!
+//! Each forecast row also carries its `residual`: the median over its scored
+//! tasks of `ln(actual / p50)` per metric (hours, tokens, USD) and, when the
+//! forecast is scored whole, the same log ratio of its time to drain. Log
+//! ratios are signed around zero and comparable across task sizes; a value
+//! is absent where the actual or the p50 is not positive.
+//!
 //! Hits are kept per model version: a version's quantiles mean something
 //! different from another's, so the top-level hit rates describe the
 //! current version alone and `by_model_version` holds every version's own.
@@ -114,6 +120,29 @@ fn attempt_work_hours(
         .last_setback(done)
         .map_or(after, |setback| setback.max(after));
     setbacks + super::forecast_usage(runs, Some(since)).hours
+}
+
+/// `ln(actual / p50)` for one scored actual: positive when the work took
+/// longer or cost more than the forecast's median, negative when less. Not
+/// defined (so not plotted) when either side is not positive.
+fn log_residual(actual: f64, quantiles: &Value) -> Option<f64> {
+    let p50 = quantiles.get("p50").and_then(Value::as_f64)?;
+    (actual > 0.0 && p50 > 0.0).then(|| (actual / p50).ln())
+}
+
+/// The median of `values`, rounded; `None` when empty.
+fn median_residual(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    let median = if values.len().is_multiple_of(2) {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    };
+    Some((median * 1000.0).round() / 1000.0)
 }
 
 /// How many actuals fell at or under p50 and p90.
@@ -236,6 +265,9 @@ pub(super) fn score_backlog_forecasts(
         let mut last_done: Option<DateTime<Utc>> = None;
         let mut tokens_total = Some(0.0);
         let mut usd_total = Some(0.0);
+        // Each scored task's `ln(actual / p50)` per metric, for the residual
+        // series; the same actuals and quantiles the hit rates read.
+        let mut task_residuals: [Vec<f64>; 3] = Default::default();
         for stored_task in &stored_tasks {
             let Some(task) = tasks.get(&stored_task.id) else {
                 excluded.missing += 1;
@@ -299,6 +331,7 @@ pub(super) fn score_backlog_forecasts(
             for (index, key) in keys.iter().enumerate() {
                 if let Some(actual) = actuals[index] {
                     hits.task[index].add(actual, &stored_task.forecast[*key]);
+                    task_residuals[index].extend(log_residual(actual, &stored_task.forecast[*key]));
                 }
             }
         }
@@ -340,13 +373,24 @@ pub(super) fn score_backlog_forecasts(
             hits.settled += 1;
             hits.not_drained += u64::from(!drained);
         }
+        let mut drain_residual = None;
         if whole && let Some(actual) = &actual {
             for (index, key) in TOTALS.iter().enumerate() {
                 if let Some(value) = actual[*key].as_f64() {
                     hits.total[index].add(value, &result[*key]);
+                    if index == 0 {
+                        drain_residual = log_residual(value, &result[*key]);
+                    }
                 }
             }
         }
+        let [hours_residuals, tokens_residuals, usd_residuals] = &mut task_residuals;
+        let residual = json!({
+            "hours": {"n": hours_residuals.len(), "median": median_residual(hours_residuals)},
+            "tokens": {"n": tokens_residuals.len(), "median": median_residual(tokens_residuals)},
+            "usd": {"n": usd_residuals.len(), "median": median_residual(usd_residuals)},
+            "time_to_drain_hours": drain_residual.map(|value| (value * 1000.0).round() / 1000.0),
+        });
         all_excluded.rejected += excluded.rejected;
         all_excluded.rescoped += excluded.rescoped;
         all_excluded.missing += excluded.missing;
@@ -369,6 +413,7 @@ pub(super) fn score_backlog_forecasts(
                 "usd": result["usd"],
             },
             "actual": actual,
+            "residual": residual,
         }));
     }
     let current = versions.remove(&current_version).unwrap_or_default();

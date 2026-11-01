@@ -625,6 +625,11 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
                 1.0
             );
             assert_eq!(calibration["forecasts"][0]["scored_whole"], true);
+            // Drain actual 1.0h against a 1.0h p50: a zero log residual.
+            assert_eq!(
+                calibration["forecasts"][0]["residual"]["time_to_drain_hours"],
+                0.0
+            );
             // A model-1 forecast is scored under its own version, never
             // blended into the current model's hit rates.
             assert_eq!(calibration["model_version"], before["model_version"]);
