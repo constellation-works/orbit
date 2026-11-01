@@ -146,3 +146,64 @@ fn doctor_refuses_orphan_task_stores_without_confirm_before_mutating_locks() {
         "stale lock holder must be cleared after confirmed repair"
     );
 }
+
+#[test]
+fn doctor_reports_a_misplaced_host_plugin_enablement_table_that_blocks_startup() {
+    let fixture = Fixture::new();
+    let config = fixture.home.join(".orbit/config.toml");
+    let mut host_config = fs::read_to_string(&config).unwrap_or_default();
+    host_config.push_str("\n[plugin_enablement]\ngraph = false\n");
+    fs::create_dir_all(config.parent().expect("config parent")).expect("create host root");
+    fs::write(&config, host_config).expect("write host config");
+
+    // A normal command still fails closed on the misplaced table.
+    let refused = fixture
+        .orbit()
+        .args(["task", "list", "--json"])
+        .output()
+        .expect("spawn orbit task list");
+    assert!(!refused.status.success(), "task list must refuse the table");
+    let refusal = String::from_utf8_lossy(&refused.stderr);
+    assert!(refusal.contains("plugin_enablement"), "{refusal}");
+
+    // `orbit doctor` still reports the finding, naming the host and file with
+    // the exact remediation, and exits nonzero.
+    let output = fixture
+        .orbit()
+        .args(["doctor", "--json"])
+        .output()
+        .expect("spawn orbit doctor");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let rows: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "doctor JSON parse error: {err}; stdout:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    let row = rows
+        .iter()
+        .find(|row| row["check"] == "plugin-enablement")
+        .unwrap_or_else(|| panic!("plugin-enablement row missing: {rows:?}"));
+    assert_eq!(row["status"], "error");
+    let message = row["message"].as_str().expect("message");
+    assert!(message.contains("this host"), "{message}");
+    assert!(message.contains("config.toml"), "{message}");
+    let remediation = row["remediation"].as_str().expect("remediation");
+    assert!(
+        remediation.contains("Remove [plugin_enablement] from"),
+        "{remediation}"
+    );
+    assert!(remediation.contains("--scope workspace"), "{remediation}");
+
+    // A repair flag needs a runtime, so it keeps failing closed.
+    let repair = fixture
+        .orbit()
+        .args(["doctor", "--fix-stale-locks", "--json"])
+        .output()
+        .expect("spawn orbit doctor --fix-stale-locks");
+    assert!(!repair.status.success());
+    assert!(
+        serde_json::from_slice::<Vec<Value>>(&repair.stdout).is_err(),
+        "a repair must not report a degraded health check"
+    );
+}

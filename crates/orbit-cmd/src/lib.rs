@@ -46,7 +46,7 @@ pub use diagnostics::DiagnosticsCommands;
 pub use doctor::{
     DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, RetiredConfigKeyRepair,
     WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes, doctor_row_json,
-    provider_limit_findings, run_doctor_report,
+    misplaced_plugin_enablement_row, provider_limit_findings, run_doctor_report,
 };
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 pub use task_store::{

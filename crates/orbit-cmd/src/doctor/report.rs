@@ -57,10 +57,24 @@ const REPORT_PROBES: &[DoctorProbe] = &[
 
 /// A `[plugin_enablement]` table in the global (host) config: refused at
 /// load, so every owner-served call fails until it is removed. Reported
-/// here directly from the file, so the row shows even though the layered
-/// config itself will not load.
+/// here directly from the file; when the table keeps the runtime from opening
+/// at all, [`misplaced_plugin_enablement_row`] gives the row without one.
 fn plugin_enablement_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     plugin_enablement_row_for(&runtime.global_root())
+}
+
+/// The `plugin-enablement` row for the host config under `global_root`, only
+/// when it holds the misplaced table.
+///
+/// `orbit doctor` calls this before any runtime exists: the table makes the
+/// layered config refuse to load, so the runtime the report probes need never
+/// opens. A clean, absent or unreadable host config yields `None`, leaving the
+/// caller's own error to stand.
+pub fn misplaced_plugin_enablement_row(
+    global_root: &std::path::Path,
+) -> Option<WorkspaceDoctorResult> {
+    let row = plugin_enablement_row_for(global_root);
+    (row.status == WorkspaceDoctorStatus::Error).then_some(row)
 }
 
 /// The `plugin-enablement` row for the host config under `global_root`.
