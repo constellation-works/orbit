@@ -31,6 +31,7 @@ mod creation;
 mod crew_selection;
 mod finding_invalid;
 mod freshness;
+mod frozen_review;
 mod inspection;
 mod malformed_input;
 // The provider fixture is an executable script.
