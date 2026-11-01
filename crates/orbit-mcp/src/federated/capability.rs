@@ -91,6 +91,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_agent_invoke"
         | "orbit_command_exec"
         | "orbit_workflow_run_list"
+        | "orbit_workflow_run_observe"
         | "orbit_workflow_run_show"
         | "orbit_workflow_run_resume" => McpToolClass::Execute,
         _ => McpToolClass::Unclassified,

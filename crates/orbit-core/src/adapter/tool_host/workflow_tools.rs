@@ -54,7 +54,8 @@ pub(super) fn dispatch(
             runtime.source_repair_request(session, &input)
         }
         WorkflowVerb::RunResume => resume(runtime, input, agent, model),
-        WorkflowVerb::RunShow => show(runtime, input),
+        WorkflowVerb::RunObserve => show(runtime, input, true),
+        WorkflowVerb::RunShow => show(runtime, input, false),
         WorkflowVerb::Ship => ship(runtime, input, agent, model, trigger),
     }
 }
@@ -137,9 +138,13 @@ pub(super) fn review_layer(
 /// dashboard about lineage instead of each reader seeing a different half of
 /// the truth. An unreadable state degrades to an empty list rather than
 /// failing the read.
-fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
+fn show(runtime: &OrbitRuntime, input: Value, observed: bool) -> Result<Value, OrbitError> {
     let id = orbit_common::protocol::tool_input::required_string(&input, &["id"], "id")?;
-    let run = runtime.show_job_run(&id)?;
+    let run = if observed {
+        runtime.show_job_run_observed(&id)?
+    } else {
+        runtime.show_job_run(&id)?
+    };
     let state = runtime.read_run_state(&run.run_id).ok().flatten();
     let recovery = runtime.collect_run_recovery_attempts(&run.run_id).ok();
     // An unreadable invocation store shows every activity as `unavailable`,

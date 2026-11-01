@@ -31,7 +31,7 @@ holds different evidence, which stands), unreachable (the follower could not be 
 (the follower holds no such run), mismatch (the follower's record is not this claim's) and \
 no_leaf_run. A build or step the follower's record never held stays unrecorded; nothing is \
 guessed from this owner's or any current build. Nothing is cancelled, retried or rewritten: no \
-task, claim or run changes.\n\
+task, claim or run changes. Followers must support the read-only observation route.\n\
 When more claims are selected than one run observes, the report's remaining counts them and \
 next_after_claim_id names the last claim visited; pass it back as --after with the same filters \
 to visit the next page, including claims whose outcome was absent, unreachable, mismatch or \
@@ -154,7 +154,7 @@ fn outcome_label(outcome: LeafHydrationOutcome) -> String {
 
 /// The operator's own read of a follower's run records: the existing
 /// federated client, opened as the operator, asking the follower for
-/// `orbit.workflow.run.show` in the workspace the operator named.
+/// `orbit.workflow.run.observe` in the workspace the operator named.
 struct OperatorRunObserver {
     global_root: PathBuf,
     caller: String,
@@ -189,7 +189,7 @@ impl FollowerRunObserver for OperatorRunObserver {
             }
         };
         client.call_tool(
-            "orbit.workflow.run.show",
+            "orbit.workflow.run.observe",
             json!({ "id": run_id, "workspace": selector }),
             ToolSessionContext::default(),
         )

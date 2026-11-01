@@ -35,7 +35,7 @@ pub const DEFAULT_LEAF_HYDRATION_LIMIT: usize = 25;
 ///
 /// The implementation belongs to the composition that owns the transport. It
 /// must be a read: `machine_id` names the follower, and the answer is the run
-/// record as the follower's `orbit.workflow.run.show` reports it.
+/// record as the follower's `orbit.workflow.run.observe` reports it.
 pub trait FollowerRunObserver {
     /// The run record `run_id` on the follower `machine_id`.
     fn observe_run(&self, machine_id: &str, run_id: &str) -> Result<Value, OrbitError>;

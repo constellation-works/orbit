@@ -120,6 +120,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.visual.capture",
             "orbit.workflow.auto",
             "orbit.workflow.run.list",
+            "orbit.workflow.run.observe",
             "orbit.workflow.run.resume",
             "orbit.workflow.run.show",
             "orbit.workflow.ship",

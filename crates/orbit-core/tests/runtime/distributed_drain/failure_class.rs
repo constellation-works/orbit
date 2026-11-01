@@ -494,7 +494,7 @@ fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
 }
 
 /// An operator's read of one follower run record, through the follower's own
-/// `orbit.workflow.run.show`; `alter` stands in for a follower that answers
+/// `orbit.workflow.run.observe`; `alter` stands in for a follower that answers
 /// otherwise.
 type Alter<'a> = Box<dyn Fn(&str, Value) -> Result<Value, OrbitError> + 'a>;
 
@@ -527,7 +527,7 @@ impl FollowerRunObserver for FollowerShow<'_> {
             .borrow_mut()
             .push((machine_id.to_string(), run_id.to_string()));
         let mut answer = self.pair.follower.run_tool_with_context_and_role(
-            "orbit.workflow.run.show",
+            "orbit.workflow.run.observe",
             json!({"id": run_id}),
             Role::Admin,
             ToolContext {
@@ -781,6 +781,100 @@ fn the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once() {
         hydrated,
         "a conflicting observation never overwrites the held evidence"
     );
+}
+
+/// Hydration must not reconcile either follower record while gathering evidence.
+fn hydration_observes_stored_runs_without_reconciliation() {
+    for orphan in [true, false] {
+        let (pair, drain, _) = a_released_failure(
+            "[provider_unavailable] claude provider authentication failure (HTTP 401)",
+            "provider",
+        );
+        let leaf = pair.leaf_runs()[0].clone();
+        forget_leaf_evidence(&pair);
+        let store = pair.follower.sqlite_store().unwrap();
+        let workspace = pair.follower.workspace_id().unwrap();
+        let mut run = pair.follower_jobs.get_job_run(&leaf).unwrap().unwrap();
+        run.finished_at = None;
+        run.duration_ms = None;
+        if orphan {
+            run.state = JobRunState::Running;
+            run.started_at = Some(Utc::now() - chrono::Duration::minutes(5));
+            run.pid = Some(u32::MAX);
+            run.pid_start_time = None;
+        }
+        store
+            .upsert_job_run_for_workspace(&workspace, &run, None)
+            .unwrap();
+        let mut drain_run = pair.follower_jobs.get_job_run(&drain).unwrap().unwrap();
+        drain_run.state = JobRunState::Running;
+        drain_run.started_at = Some(Utc::now() - chrono::Duration::minutes(5));
+        drain_run.finished_at = None;
+        drain_run.duration_ms = None;
+        drain_run.pid = Some(u32::MAX);
+        drain_run.pid_start_time = None;
+        store
+            .upsert_job_run_for_workspace(&workspace, &drain_run, None)
+            .unwrap();
+        let before_leaf =
+            serde_json::to_value(pair.follower_jobs.get_job_run(&leaf).unwrap()).unwrap();
+        let before_drain =
+            serde_json::to_value(pair.follower_jobs.get_job_run(&drain).unwrap()).unwrap();
+        let task = pair.owner_task(&pair.tasks[0]);
+        let reservations = || {
+            let conn = store.connection();
+            let conn = conn.lock().unwrap();
+            let mut stmt = conn.prepare("SELECT reservation_id, released_at FROM task_reservations ORDER BY reservation_id").unwrap();
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })
+                .unwrap();
+            rows.map(Result::unwrap).collect::<Vec<_>>()
+        };
+        {
+            let conn = store.connection();
+            conn.lock().unwrap().execute(
+                "INSERT INTO task_reservations (reservation_id, workspace_orbit_dir, workspace_id, task_ids_json, files_json, actor, created_at, expires_at, owner_run_id) VALUES (?1, ?2, ?3, ?4, '[]', 'fixture', '2020-01-01T00:00:00Z', '2999-01-01T00:00:00Z', ?5)",
+                rusqlite::params!["fixture-reservation", pair.follower_repo.join(".orbit").to_string_lossy().as_ref(), workspace, json!([pair.tasks[0]]).to_string(), leaf],
+            ).unwrap();
+        }
+        let before_reservations = reservations();
+        assert_eq!(
+            before_reservations,
+            vec![("fixture-reservation".to_string(), None)]
+        );
+        let denied = pair.follower.run_tool_with_context_and_role(
+            "orbit.workflow.run.observe",
+            json!({"id": leaf}),
+            Role::Admin,
+            ToolContext::default(),
+        );
+        assert!(
+            denied.is_err(),
+            "an agent without operator authority is refused"
+        );
+        let observer = FollowerShow::new(&pair);
+        let result = hydrate(&pair, &observer, false);
+        assert_eq!(
+            result[0].0,
+            if orphan {
+                LeafHydrationOutcome::Mismatch
+            } else {
+                LeafHydrationOutcome::Hydrated
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(pair.follower_jobs.get_job_run(&leaf).unwrap()).unwrap(),
+            before_leaf
+        );
+        assert_eq!(
+            serde_json::to_value(pair.follower_jobs.get_job_run(&drain).unwrap()).unwrap(),
+            before_drain
+        );
+        assert_eq!(pair.owner_task(&pair.tasks[0]), task);
+        assert_eq!(reservations(), before_reservations);
+    }
 }
 
 /// [ORB-20936] Bounded hydration traverses its whole selection by
@@ -2201,6 +2295,7 @@ crate::scenario_table!(
     an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it,
     the_owner_lists_a_follower_leaf_release_with_its_evidence_class,
     the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once,
+    hydration_observes_stored_runs_without_reconciliation,
     hydration_continuation_visits_every_selected_claim_at_limit_one,
     a_settlement_naming_another_leaf_run_records_no_evidence,
     a_bound_worker_cannot_hydrate_leaf_evidence,
