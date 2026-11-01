@@ -509,14 +509,17 @@ for someone to notice it. `pilot_warnings_held` targets
   with debounce 2 minutes, max-wait 10 minutes, at most 50 candidates and
   batches of 5 that share one stored crew.
 - **Pipeline.** `prepare_escalation_triage` pins the source revision,
-  re-checks each claimed member and draws one triager per task from the hard
-  tier through the finding-verifier draw, passing over the crew that wrote
-  the assessment (the pilot run's frozen draw) while the pool offers another,
-  else the inspection-capable default crew. It partitions the tasks by crew,
-  at most five per partition. `triage_escalation` then reads each hold at the
-  pinned revision. There is no apply step: members settle applied from their
-  markers, and a member the run left unmarked fails `no_triage_marker` and is
-  retried within the routine's budget.
+  re-checks each claimed member and draws one triager per task from
+  `workflow.purpose_crews.pilot_warning_triage` when it is set and holds an
+  inspection-capable member (recorded as `purpose:pilot_warning_triage`),
+  else from the hard tier through the finding-verifier draw, passing over
+  the crew that wrote the assessment (the pilot run's frozen draw) while the
+  pool offers another, else the inspection-capable default crew. It
+  partitions the tasks by crew, at most five per partition.
+  `triage_escalation` then reads each hold at the pinned revision. There is
+  no apply step: members settle applied from their markers, and a member the
+  run left unmarked fails `no_triage_marker` and is retried within the
+  routine's budget.
 - **Decision.** The triager calls `orbit.task.block_triage` with
   `subject: "pilot_warning"`. `candidates` lists the qualifying holds and why
   each other held task is excluded. `propose` records two or three options with
@@ -536,8 +539,8 @@ for someone to notice it. `pilot_warnings_held` targets
 Final recovery, or the blocked-task backstop outside a pipeline, makes one
 decision on each block; what it escalates waits for a reader.
 `block_escalated` targets the same `job:escalation_triage_pipeline` with
-`subject: block`, so one hard-tier lane reads pilot warning holds and
-escalated blocks. It replaced the hourly `blocked-task-triage` auto-task
+`subject: block`, so one escalation-triage lane reads pilot warning holds
+and escalated blocks. It replaced the hourly `blocked-task-triage` auto-task
 ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)):
 
 - **Membership.** A `blocked` task is a member while `triage_candidacy`, the
@@ -558,8 +561,10 @@ escalated blocks. It replaced the hourly `blocked-task-triage` auto-task
   batches of 5 that share one stored crew.
 - **Pipeline.** `prepare_escalation_triage` checks that the claim is of the
   `block` subject, re-checks each member against the shared rule and draws
-  one hard-tier triager per task exactly as for a pilot warning, with no
-  author to pass over. `triage_escalation` branches on the subject.
+  one triager per task from the hard tier through the finding-verifier draw,
+  with no author to pass over. Blocks have no `workflow.purpose_crews` pool:
+  only pilot warnings draw from `pilot_warning_triage` first.
+  `triage_escalation` branches on the subject.
 - **Decision.** The triager calls `orbit.task.block_triage` without
   `subject`, choosing one of six dispositions: `requeue` as a final-recovery
   requeue, `resume_run` on the episode's own failed run, or `rerun_ci`, which
