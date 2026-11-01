@@ -214,19 +214,6 @@ pub(super) fn load_rule_evidence(
     Ok(artifacts)
 }
 
-pub(super) fn artifacts_for_result(
-    evidence: &BTreeMap<String, TaskArtifact>,
-    result: &Value,
-) -> Vec<TaskArtifact> {
-    result
-        .get("evidence")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|name| name.as_str().and_then(|name| evidence.get(name)).cloned())
-        .collect()
-}
-
 // Pin each directory before opening the next component. A pathname check
 // followed by a final-component O_NOFOLLOW open would race parent symlinks.
 #[cfg(unix)]

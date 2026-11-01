@@ -2,6 +2,12 @@
 //! files once, a repeat files nothing, changed measurements comment, a
 //! pass comments exactly once, and the severity cap and floor hold.
 
+mod evidence;
+use evidence::{
+    evidence_payload_allocations_ignore_candidate_multiplicity,
+    repeated_evidence_is_attached_once_after_selection,
+};
+
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
@@ -670,6 +676,8 @@ fn mixed_surface_results_keep_their_filing_surface() {
 
 crate::scenario_table!(
     rule_findings_sweep_scenarios,
+    repeated_evidence_is_attached_once_after_selection,
+    evidence_payload_allocations_ignore_candidate_multiplicity,
     mixed_surface_results_keep_their_filing_surface,
     duplicate_failing_fingerprint_in_one_document_files_once,
     failing_fingerprint_files_once_then_comments_on_change_and_pass,
