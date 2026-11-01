@@ -670,3 +670,41 @@ fn scheduled_list_orders_future_tasks_and_labels_proposed() {
     let text = workspace.run(&["task", "show", &early], "show actual start");
     assert!(String::from_utf8_lossy(&text.stdout).contains("Actual start:"));
 }
+
+#[test]
+fn unknown_task_status_refusal_names_every_valid_status() {
+    let workspace = workspace();
+    // ORB-20838: agents guess statuses such as `open` or `todo`. The refusal must
+    // list the valid statuses so the agent can correct itself, and the guessed
+    // alias must still be refused rather than accepted.
+    const VALID_STATUSES: [&str; 9] = [
+        "proposed",
+        "backlog",
+        "in-progress",
+        "review",
+        "done",
+        "blocked",
+        "archived",
+        "rejected",
+        "someday",
+    ];
+    for guessed in ["open", "todo", "cancelled"] {
+        let input = format!(r#"{{"status":"{guessed}","workspace":"task-list-test"}}"#);
+        let refused = workspace.run_raw(&["tool", "run", "orbit.task.list", "--input", &input]);
+        let refusal = format!(
+            "{}{}",
+            String::from_utf8_lossy(&refused.stdout),
+            String::from_utf8_lossy(&refused.stderr)
+        );
+        assert!(
+            !refused.status.success(),
+            "unknown status `{guessed}` accepted: {refusal}"
+        );
+        for valid in VALID_STATUSES {
+            assert!(
+                refusal.contains(valid),
+                "refusal for `{guessed}` must list `{valid}`: {refusal}"
+            );
+        }
+    }
+}

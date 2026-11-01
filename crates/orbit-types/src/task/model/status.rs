@@ -181,7 +181,10 @@ impl FromStr for TaskStatus {
             "archived" => Ok(TaskStatus::Archived),
             "rejected" => Ok(TaskStatus::Rejected),
             "someday" => Ok(TaskStatus::Someday),
-            other => Err(format!("unknown task status: {other}")),
+            other => Err(format!(
+                "unknown task status: {other} (valid statuses: {})",
+                TaskStatus::ALL.map(TaskStatus::cli_name).join(", ")
+            )),
         }
     }
 }
