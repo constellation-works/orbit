@@ -147,6 +147,25 @@ let lastCleanRefresh = null;
 const TASKS_SLOW_READS_INTERVAL_MS = 5 * 60_000;
 let tasksSlowReads = { at: 0, scope: null };
 let lastRefreshTab = null;
+// Analytics › Metrics spends its ten-request refresh on chrome plus the
+// selected trend. The failing-job rail keeps the last count for this host
+// and workspace; the peek runs on arrival, after a scope change, and on the
+// same slow cadence as the Tasks page.
+let jobFailureMetricsRead = { at: 0, scope: null };
+
+function metricsJobFailurePeekDue(entered) {
+  if (activeTab !== "analytics" || activeAnalyticsSubtab !== "metrics" || isAggregateView()) return true;
+  const scope = `${getHostRevision()}:${getWorkspaceRevision()}`;
+  const due = entered || jobFailureMetricsRead.scope !== scope
+    || Date.now() - jobFailureMetricsRead.at >= TASKS_SLOW_READS_INTERVAL_MS;
+  if (due) jobFailureMetricsRead = { at: Date.now(), scope };
+  return due;
+}
+
+function retainJobFailureMetricsRead(scope, ok) {
+  if (ok !== false) return;
+  if (jobFailureMetricsRead.scope === scope) jobFailureMetricsRead = { at: 0, scope: null };
+}
 // The workspace visit whose crew options are cached, so a tick reuses them.
 let crewsRevision = null;
 let activeFrictionId = null;
@@ -1525,6 +1544,7 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // fetch (they'd 400) and render placeholders for the panels they feed. Only
   // the cross-workspace aggregate task list (/api/tasks/all) is fetched.
   const aggregate = isAggregateView();
+  const entered = lastRefreshTab !== activeTab;
   const slowReads = tasksSlowReadsDue(explicit);
 
   // The health strip is global; refresh on every tick alongside the active tab,
@@ -1544,8 +1564,17 @@ function activeRefreshJobs({ poll = false, explicit = false } = {}) {
     void peekRoutineFailures().catch(error => console.error(error));
   }
   // The Jobs catalogue reads the same failure streaks in its own request.
-  if (slowReads && (activeTab !== "jobs" || activeJobsSubtab !== "catalogue" || aggregate)) {
-    void peekJobFailures().catch(error => console.error(error));
+  // Metrics reuses the last scoped count so the selected trend still fits
+  // in the ten-request refresh. A failed Metrics read is retried next time.
+  const onMetrics = activeTab === "analytics" && activeAnalyticsSubtab === "metrics" && !aggregate;
+  if (slowReads && metricsJobFailurePeekDue(entered) && (activeTab !== "jobs" || activeJobsSubtab !== "catalogue" || aggregate)) {
+    const scope = `${getHostRevision()}:${getWorkspaceRevision()}`;
+    void peekJobFailures()
+      .then(ok => { if (onMetrics) retainJobFailureMetricsRead(scope, ok); })
+      .catch(error => {
+        if (onMetrics) retainJobFailureMetricsRead(scope, false);
+        console.error(error);
+      });
   }
   const jobs = [];
   const add = (panel, request) => jobs.push({ panel, request });

@@ -76,7 +76,39 @@ const initializer = `
     }
     if (api === '/api/workspaces') return json(workspaces);
     if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: [] });
-    if (api === '/api/routines') return json({ routines: [], clock: {} });
+    if (api === '/api/jobs/failure-streaks') {
+      if (!budget) return json({ threshold: 5, failing: [] });
+      if (globalThis.failJobFailures) return json({ error: 'streaks unavailable' }, 500);
+      const workspace = url.searchParams.get('workspace');
+      const busy = workspace === 'busy';
+      return json({ threshold: 3, failing: [{
+        job_id: busy ? 'sweep' : 'fixture',
+        count: busy ? 6 : 4,
+        since: '2026-10-02T00:00:00Z',
+        latest_run_id: busy ? 'jrun-busy-failed' : 'jrun-idle-failed',
+        latest_error: busy ? 'busy streak' : 'idle streak',
+        same_error: true,
+        truncated: false,
+      }] });
+    }
+    if (budget && api === '/api/jobs') {
+      const workspace = url.searchParams.get('workspace');
+      return json([{ job_id: workspace === 'busy' ? 'sweep' : 'fixture', manual_runnable: true }]);
+    }
+    if (api === '/api/routines') {
+      const workspace = url.searchParams.get('workspace');
+      const routines = [];
+      if (budget && (workspace === 'idle' || workspace === 'busy')) {
+        const busy = workspace === 'busy';
+        routines.push({
+          name: 'Fixture routine',
+          source: busy ? 'BusyWorkspaceWithAVeryLongUnbrokenNameForMobileLayout' : 'Idle workspace with ready work',
+          target: busy ? 'job:sweep' : 'job:fixture',
+          enabled: true,
+        });
+      }
+      return json({ routines, clock: {} });
+    }
     if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
     if (api === '/api/crews') return json({ crews: [] });
     // Render real Metrics controls so every trend's poll can be measured.
@@ -371,6 +403,108 @@ async function measurePoll(page) {
   });
   assert.equal(measured.sawFetching, true, 'a poll cycle started');
   return measured.requests.filter(url => !url.includes('/host/resources'));
+}
+
+// Tokens per task must stay inside the ten-request refresh, and the failing-job
+// rail and catalogue badge must follow the selected workspace across Metrics
+// and Jobs. The arrival read is not part of the measured refresh.
+async function assertJobFailureBadges(browser, port) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  fs.mkdirSync(path.join(evidence, 'screenshots'), { recursive: true });
+  const rail = () => page.locator('#rail-count-jobs-failing');
+  const go = async (route) => {
+    await page.evaluate(async (next) => {
+      const { setActiveTab } = await import('/js/router.js');
+      const meta = document.getElementById('meta-text');
+      setActiveTab(next);
+      const deadline = performance.now() + 3000;
+      let sawFetching = false;
+      while (performance.now() < deadline) {
+        const text = meta?.textContent || '';
+        if (text.startsWith('fetching')) sawFetching = true;
+        if (sawFetching && !text.startsWith('fetching')) return;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      throw new Error(`navigation did not settle on ${next}: ${meta?.textContent}`);
+    }, route);
+  };
+  try {
+    await page.goto(`http://127.0.0.1:${port}/?budget=1&workspace=idle#analytics/metrics`);
+    await page.waitForFunction(() => globalThis.fleetReady);
+    await settleDashboard(page);
+    await page.waitForFunction(() => {
+      const node = document.getElementById('rail-count-jobs-failing');
+      return node && !node.hidden && node.textContent === '1 failing' && node.title.includes('fixture:');
+    });
+    await page.screenshot({ path: path.join(evidence, 'screenshots', 'metrics-job-failure-rail-dark-1280.png'), animations: 'disabled' });
+    await page.getByRole('tab', { name: 'Tokens per task', exact: true }).click();
+    const counted = await measurePoll(page);
+    const paths = counted.map(value => new URL(value, 'http://fixture').pathname);
+    assert.ok(counted.length > 0 && counted.length <= 10, `tokens poll issued ${counted.length}: ${counted.join(', ')}`);
+    assert.ok(!paths.includes('/api/jobs/failure-streaks'), `tokens poll repeats failure streaks: ${counted.join(', ')}`);
+    assert.ok(paths.includes('/api/diagnostics/task_tokens'), 'tokens poll reads the selected trend');
+    for (const required of ['doctor', 'routines', 'audit/summary', 'job-runs', 'workflows/auto/readiness',
+      'diagnostics/implement_one', 'diagnostics/completions', 'tasks/completion-by-complexity', 'diagnostics/defects']) {
+      assert.ok(paths.includes(`/api/${required}`), `tokens poll retains ${required}: ${paths.join(', ')}`);
+    }
+    assert.equal(await rail().textContent(), '1 failing', 'the metrics poll keeps the idle failing-job count');
+
+    await go('jobs/catalogue');
+    await page.waitForFunction(() => {
+      const badge = document.querySelector('#jobs-body .job-failure-badge');
+      const node = document.getElementById('rail-count-jobs-failing');
+      return badge && badge.textContent.includes('Failing: 4 in a row') && badge.textContent.includes('idle streak')
+        && document.querySelector('#jobs-body .job-card')?.dataset.job === 'fixture'
+        && node && !node.hidden && node.textContent === '1 failing' && node.title.includes('fixture:') && !node.title.includes('sweep:');
+    });
+    await page.locator('#jobs-body .job-failure-badge').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, 'screenshots', 'jobs-catalogue-failure-dark-1280.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 375, height: 900 });
+    await page.locator('#jobs-body .job-failure-badge').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, 'screenshots', 'jobs-catalogue-failure-dark-375.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    await page.locator('#workspace-select').selectOption('busy');
+    await page.waitForFunction(() => {
+      const badge = document.querySelector('#jobs-body .job-failure-badge');
+      const node = document.getElementById('rail-count-jobs-failing');
+      return badge && badge.textContent.includes('Failing: 6 in a row') && badge.textContent.includes('busy streak')
+        && document.querySelector('#jobs-body .job-card')?.dataset.job === 'sweep'
+        && node && !node.hidden && node.textContent === '1 failing' && node.title.includes('sweep:') && !node.title.includes('fixture:');
+    });
+
+    await go('analytics/metrics');
+    const metricsPoll = await measurePoll(page);
+    const metricsPaths = metricsPoll.map(value => new URL(value, 'http://fixture').pathname);
+    assert.ok(metricsPoll.length > 0 && metricsPoll.length <= 10, `metrics poll after Jobs issued ${metricsPoll.length}: ${metricsPoll.join(', ')}`);
+    assert.ok(!metricsPaths.includes('/api/jobs/failure-streaks'), `metrics poll after Jobs repeats streaks: ${metricsPoll.join(', ')}`);
+    assert.equal(await rail().textContent(), '1 failing');
+    assert.match(await rail().getAttribute('title'), /sweep:/);
+    assert.doesNotMatch(await rail().getAttribute('title'), /fixture:/);
+
+    await page.evaluate(() => { globalThis.failJobFailures = true; });
+    await go('tasks');
+    await go('analytics/metrics');
+    await page.waitForFunction(() => document.getElementById('rail-count-jobs-failing')?.hidden === true);
+    await page.evaluate(() => { globalThis.failJobFailures = false; });
+    await go('jobs/catalogue');
+    await go('analytics/metrics');
+    await page.waitForFunction(() => {
+      const node = document.getElementById('rail-count-jobs-failing');
+      return node && !node.hidden && node.title.includes('sweep:') && !node.title.includes('fixture:');
+    });
+    assert.deepEqual(errors, []);
+    const report = {
+      tokensPoll: { count: counted.length, requests: counted },
+      metricsPollAfterJobs: { count: metricsPoll.length, requests: metricsPoll },
+    };
+    fs.writeFileSync(path.join(evidence, 'job-failure-badges.json'), JSON.stringify(report, null, 2));
+    return report;
+  } finally {
+    await page.close();
+  }
 }
 
 async function assertPollBudget(browser, port) {
@@ -726,8 +860,9 @@ try {
   await page.waitForFunction(() => document.querySelector('#workspace-select')?.value === 'idle');
   assert.deepEqual(errors, []);
   const polls = await assertPollBudget(browser, server.address().port);
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup, workspaceDefaults, fleetPartial, fleetStreamCadence, drainForecastFreshness,
-    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', `ready fleet hosts shown while another host is loading at ${fleetPartialWidths}px`, 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', `ready workspace focus preserved and Enter selects it when another host settles (success and failure, ${fleetPartialWidths}px)`, 'connected selected-workspace stream keeps an independent one-read-per-host fleet cadence for remote drain changes', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'host tabs show one host at a time and remember the choice', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
+  const jobFailureBadges = await assertJobFailureBadges(browser, server.address().port);
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, jobFailureBadges, warmup, workspaceDefaults, fleetPartial, fleetStreamCadence, drainForecastFreshness,
+    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', `ready fleet hosts shown while another host is loading at ${fleetPartialWidths}px`, 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', `ready workspace focus preserved and Enter selects it when another host settles (success and failure, ${fleetPartialWidths}px)`, 'connected selected-workspace stream keeps an independent one-read-per-host fleet cadence for remote drain changes', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'host tabs show one host at a time and remember the choice', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains', 'tokens poll omits a repeated failure-streak read', 'failing-job badges stay scoped across Metrics and Jobs'], errors }, null, 2));
   console.log('fleet browser startup, scope, mobile, and poll-budget checks passed');
 } finally {
   if (browser) await browser.close();
