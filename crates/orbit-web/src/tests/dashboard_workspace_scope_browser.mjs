@@ -220,7 +220,8 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       const start = page.locator('#auto-drain-quick-start-body .drain-start');
       const stop = page.locator('#auto-drain-body .drain-stop');
       await start.waitFor({ state: 'visible' });
-      if (!(await start.isEnabled()) || !(await stop.isEnabled())) throw new Error('Drain controls must remain enabled after chip interaction');
+      if (!(await start.isEnabled())) throw new Error('Drain Start must remain enabled after chip interaction');
+      if (await stop.count() !== 0) throw new Error('Drain Stop must stay absent while no auto-delivery window is live');
       for (const width of [1440, 375]) {
         await page.setViewportSize({ width, height: 1000 });
         await page.screenshot({ path: path.join(evidence, `drain-controls-dark-${width}.png`), animations: 'disabled' });
@@ -241,6 +242,8 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
       const confirmations = await page.evaluate(() => globalThis.scopeConfirmations);
       if (!confirmations.some(message => message.includes('Start'))) throw new Error('Starting a window must confirm');
       await page.setViewportSize({ width: 1280, height: 900 });
+      await stop.waitFor({ state: 'visible' });
+      if (!(await stop.isEnabled())) throw new Error('Drain Stop must be enabled once the window is live');
       await stop.click();
       await page.locator('#auto-drain-operation-feedback.success').waitFor({ state: 'visible' });
       if (!(await page.evaluate(() => globalThis.scopeConfirmations)).some(message => /Stop/.test(message))) {
