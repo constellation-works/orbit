@@ -346,14 +346,25 @@ assert.ok(!older.includes('mode_pooled_cell'), `older responses do not show a re
 assert.ok(!older.includes('Medium ·'), `older schedules name no review assumption: ${older}`);
 assert.deepEqual(coverageRow('Thin-cell fallbacks'), { text: '1', warn: true });
 
-function unavailableFixture({ flags = { regression_history_missing: true }, baseline = { time_to_drain_hours: { p50: 2.68, p90: null }, usd: { p50: 10, p90: 25 }, tokens: { p50: null, p90: null } }, support = { missing_fix_history: 36, history_fixes: 4, history_bundles: 5, history_thin: false } } = {}) {
-  const fixture = payload({ coverage: { regression_history_missing: 8, risk_unestimated: 0, regression_history_thin: 0 } });
+function unavailableFixture({
+  flags = { regression_history_missing: true },
+  baseline = { time_to_drain_hours: { p50: 2.68, p90: null }, usd: { p50: 10, p90: 25 }, tokens: { p50: null, p90: null } },
+  support = { missing_fix_history: 36, history_fixes: 4, history_bundles: 5, history_thin: false },
+  gaps = { unmeasured_delivery: 18, footprint_unrecoverable: 0, origin_completion_missing: 0 },
+  predictions = [task({ id: 'ORB-20790', title: 'Gapped pool', regression_bundle_samples: 56, regression_history_gaps: 8 })],
+  missing = 8,
+} = {}) {
+  const fixture = payload({
+    coverage: { regression_history_missing: missing, risk_unestimated: 0, regression_history_thin: 0 },
+    tasks: predictions,
+  });
   fixture.forecast.time_to_drain_hours = { p50: null, p90: null };
   fixture.forecast.usd = { p50: null, p90: null };
   fixture.forecast.tokens = { p50: null, p90: null };
   fixture.forecast.drain_probability = null;
   fixture.forecast.completion_probability = null;
   fixture.forecast.unavailable = { risk_unestimated: false, regression_history_missing: false, arrival_conflict_unknown: false, ...flags };
+  if (gaps) fixture.forecast.unavailable.regression_history_gaps = gaps;
   fixture.forecast.regression_rework = { available: false, support };
   if (baseline) fixture.forecast.pre_regression_baseline = baseline;
   return fixture;
@@ -361,26 +372,50 @@ function unavailableFixture({ flags = { regression_history_missing: true }, base
 const kpiFoot = (label) => [...body().querySelectorAll('.fc-kpi')].find((node) => node.textContent.includes(label))?.textContent ?? '';
 const compactLink = (summary) => forecast.drainBacklogForecastLink(summary);
 
-await render(unavailableFixture());
+const gappedFixture = unavailableFixture();
+await render(gappedFixture);
 const regressionText = text();
 const regressionBlock = body().querySelector('.fc-unavailable');
 const baselineBlockNode = body().querySelector('.fc-baseline');
+const absenceClaim = /no regression history|missing regression history/i;
 assert.ok(regressionBlock, `regression gap renders a visible reason block: ${regressionText}`);
 assert.equal(regressionBlock.dataset.forecastReason, 'regression_history_missing');
-assert.ok(/regression history/i.test(regressionBlock.textContent) && regressionBlock.textContent.includes('8 tasks'), `regression warning names the missing evidence: ${regressionBlock.textContent}`);
+assert.ok(/recorded pools contain gaps/i.test(regressionBlock.textContent) && /unmeasured delivery 18/.test(regressionBlock.textContent), `gapped pools name the gap, not absent history: ${regressionBlock.textContent}`);
+assert.ok(!absenceClaim.test(regressionBlock.textContent), `the warning does not claim regression history is absent: ${regressionBlock.textContent}`);
+assert.ok(!/unrecoverable footprint|missing origin completion/.test(regressionBlock.textContent), `a zero gap reason is not named: ${regressionBlock.textContent}`);
 assert.ok(body().querySelector('.fc-gap-note')?.textContent.includes('36'), `data gaps carry the regression support counts: ${regressionText}`);
+assert.ok(/recorded pools contain gaps/i.test(body().querySelector('.fc-gap-note')?.textContent || ''), `the data-gap note stays consistent with the warning: ${regressionText}`);
 assert.ok(!/90-day horizon/i.test(regressionBlock.textContent), `regression gap is not labelled horizon exceedance: ${regressionBlock.textContent}`);
 assert.ok(baselineBlockNode && baselineBlockNode.dataset.forecastBaseline === 'pre-regression', `baseline is labelled separately: ${regressionText}`);
 assert.ok(/excludes unsupported regression/i.test(regressionText) && /not the regression-adjusted/i.test(regressionText), `baseline states its limitation: ${regressionText}`);
 assert.ok(baselineBlockNode.textContent.includes('2.7h') && /p90\s*unknown/i.test(baselineBlockNode.textContent), `baseline keeps a missing p90 unknown, not zero: ${baselineBlockNode.textContent}`);
+const baselineFigures = body().querySelectorAll('.fc-baseline-fig');
+assert.equal(baselineFigures.length, 3, `time, cost and tokens are the drawn baseline figures: ${baselineFigures.map(node => node.textContent).join(' | ')}`);
+for (const figureNode of baselineFigures) {
+  assert.ok(/pre-regression baseline/i.test(figureNode.textContent), `every drawn baseline figure is labelled: ${figureNode.textContent}`);
+  assert.ok(!/(?:^|\s)\$0(?:\s|$)|\b0\.0h\b|\b0 tokens\b/.test(figureNode.textContent), `a missing baseline percentile is not drawn as zero: ${figureNode.textContent}`);
+}
+assert.ok(baselineFigures.some(node => /tokens/i.test(node.textContent) && /unknown/i.test(node.textContent)), `a null token percentile reads unknown: ${baselineFigures.map(node => node.textContent).join(' | ')}`);
+assert.equal(gappedFixture.forecast.time_to_drain_hours.p50, null);
+assert.equal(gappedFixture.forecast.time_to_drain_hours.p90, null);
+assert.equal(gappedFixture.forecast.tokens.p50, null);
+assert.equal(gappedFixture.forecast.tokens.p90, null);
+assert.equal(gappedFixture.forecast.usd.p50, null);
+assert.equal(gappedFixture.forecast.usd.p90, null);
 assert.ok(!body().querySelector('.fc-kpi'), 'unavailable adjusted forecast does not present null KPIs as figures');
-assert.deepEqual(coverageRow('Missing regression history'), { text: '8', warn: true });
-const regressionSummary = forecast.backlogForecastSummary(unavailableFixture());
+assert.deepEqual(coverageRow('Recorded pools contain gaps'), { text: '8', warn: true });
+assert.equal(coverageRow('Missing regression history'), null, 'a gapped pool is not titled as missing regression history');
+const regressionSummary = forecast.backlogForecastSummary(gappedFixture);
 assert.equal(regressionSummary.unavailable, true);
 assert.equal(regressionSummary.reasonKind, 'regression_history_missing');
+assert.equal(regressionSummary.drain, null);
+assert.equal(regressionSummary.cost, null);
+assert.equal(regressionSummary.tokens, null);
 const regressionLink = compactLink(regressionSummary);
 assert.ok(regressionLink.getAttribute('href')?.includes('analytics/forecast') || String(regressionLink.href || '').includes('analytics/forecast'), 'compact regression link stays navigable');
 assert.equal(regressionLink.dataset.forecastReason, 'regression_history_missing');
+assert.ok(/recorded pools contain gaps/i.test(regressionLink.textContent) && /unmeasured delivery 18/.test(regressionLink.textContent), `compact reason names the gaps: ${regressionLink.textContent}`);
+assert.ok(!absenceClaim.test(regressionLink.textContent), `compact reason does not claim regression history is absent: ${regressionLink.textContent}`);
 assert.ok(/regression/i.test(regressionLink.title), 'compact link keeps the reason in its tooltip');
 // The link's own accessible detail, not a bar row's spoken figures.
 const linkHidden = link => link.children.find(child => classesOf(child).includes('visually-hidden'));
@@ -388,6 +423,33 @@ const baselineRows = regressionLink.querySelectorAll('.drain-backlog-forecast-ba
 assert.deepEqual(baselineRows.map(row => [row.dataset.metric, row.querySelector('.drain-forecast-figure-main')?.textContent]), [['drain', '2.7h – unknown'], ['cost', '$10 – $25']], `compact link draws only the baseline's rows [ORB-20453]: ${regressionLink.textContent}`);
 assert.ok(linkHidden(regressionLink)?.textContent.includes('36'), `compact accessible detail carries support counts: ${regressionLink.textContent}`);
 assert.ok(/excludes unsupported regression/i.test(linkHidden(regressionLink)?.textContent || ''), `compact accessible detail labels the baseline: ${regressionLink.textContent}`);
+
+const absentByBundles = unavailableFixture({
+  support: { missing_fix_history: 2, history_fixes: 0, history_bundles: 0, history_thin: false },
+  gaps: { unmeasured_delivery: 0, footprint_unrecoverable: 0, origin_completion_missing: 0 },
+  predictions: [task({ id: 'ORB-1', title: 'Empty pool', regression_bundle_samples: 0, regression_history_gaps: 0 })],
+  missing: 1,
+});
+await render(absentByBundles);
+const absentByBundlesWarning = body().querySelector('.fc-unavailable')?.textContent || '';
+assert.ok(/no regression history/i.test(absentByBundlesWarning), `an empty bundle pool may still say history is absent: ${absentByBundlesWarning}`);
+assert.ok(!/recorded pools contain gaps/i.test(absentByBundlesWarning), `an empty pool is not described as a gapped pool: ${absentByBundlesWarning}`);
+assert.equal(body().querySelector('.fc-unavailable')?.dataset.forecastReason, 'regression_history_missing');
+const absentBySamples = unavailableFixture({
+  support: { missing_fix_history: 1, history_fixes: 4, history_bundles: 5, history_thin: false },
+  gaps: { unmeasured_delivery: 0, footprint_unrecoverable: 0, origin_completion_missing: 0 },
+  predictions: [
+    task({ id: 'ORB-2', title: 'Empty counted pool', regression_bundle_samples: 0, regression_history_gaps: 0 }),
+    task({ id: 'ORB-3', title: 'Another empty pool', regression_bundle_samples: 0, regression_history_gaps: 0 }),
+  ],
+  missing: 2,
+});
+await render(absentBySamples);
+const absentBySamplesWarning = body().querySelector('.fc-unavailable')?.textContent || '';
+const absentBySamplesLink = compactLink(forecast.backlogForecastSummary(absentBySamples));
+assert.ok(/no regression history|missing regression history/i.test(`${absentBySamplesWarning} ${absentBySamplesLink.textContent}`), `every counted task at zero samples may still say history is absent: ${absentBySamplesWarning} ${absentBySamplesLink.textContent}`);
+assert.ok(!/recorded pools contain gaps/i.test(`${absentBySamplesWarning} ${absentBySamplesLink.textContent}`), `zero-sample pools are not described as gapped: ${absentBySamplesWarning}`);
+assert.equal(absentBySamplesLink.dataset.forecastReason, 'regression_history_missing');
 
 const approvedFixture = unavailableFixture();
 approvedFixture.backlog.proposed = 2;

@@ -266,6 +266,73 @@ function backlogForecastFreshness(payload) {
   return "Forecast freshness unavailable";
 }
 
+// Reasons already counted on `unavailable.regression_history_gaps`. A zero
+// count is not a reason to name. Order follows the forecast response.
+const REGRESSION_GAP_REASON_ORDER = ["unmeasured_delivery", "footprint_unrecoverable", "origin_completion_missing"];
+const REGRESSION_GAP_REASON_LABELS = {
+  unmeasured_delivery: "unmeasured delivery",
+  footprint_unrecoverable: "unrecoverable footprint",
+  origin_completion_missing: "missing origin completion",
+};
+
+function regressionGapReasonLabel(key) {
+  return REGRESSION_GAP_REASON_LABELS[key] || String(key).split("_").join(" ");
+}
+
+function taskPredictions(forecast) {
+  return Array.isArray(forecast?.task_predictions) ? forecast.task_predictions : [];
+}
+
+function regressionGapReasons(forecast) {
+  const gaps = forecast?.unavailable?.regression_history_gaps;
+  if (!gaps || typeof gaps !== "object" || Array.isArray(gaps)) return [];
+  const preferred = REGRESSION_GAP_REASON_ORDER.filter((key) => Object.prototype.hasOwnProperty.call(gaps, key));
+  const rest = Object.keys(gaps).filter((key) => !REGRESSION_GAP_REASON_ORDER.includes(key));
+  return [...preferred, ...rest].flatMap((key) => {
+    const count = forecastCount(gaps[key]);
+    return count > 0 ? [{ key, count, label: regressionGapReasonLabel(key) }] : [];
+  });
+}
+
+function regressionGapReasonPhrase(forecast) {
+  return regressionGapReasons(forecast).map((reason) => `${reason.label} ${reason.count}`).join(", ");
+}
+
+function regressionGapBecause(forecast) {
+  const named = regressionGapReasonPhrase(forecast);
+  return named ? `recorded pools contain gaps (${named})` : "recorded pools contain gaps";
+}
+
+// A recorded pool contains a gap when the scenario names a positive gap
+// reason, or a counted task still has bundle samples and gaps in its pool.
+function recordedPoolsContainGaps(forecast) {
+  if (regressionGapReasons(forecast).length) return true;
+  return taskPredictions(forecast).some((row) => forecastCount(row?.regression_bundle_samples) > 0 && forecastCount(row?.regression_history_gaps) > 0);
+}
+
+// A present zero. A missing field is unknown, not an empty pool.
+function regressionSampleCount(row) {
+  if (!row || !Object.prototype.hasOwnProperty.call(row, "regression_bundle_samples")) return null;
+  return forecastCount(row.regression_bundle_samples);
+}
+
+// History is absent only for an empty pool: no bundles, or every counted
+// task at zero samples. A nonempty pool that holds a gap is not absent.
+function regressionHistoryIsAbsent(forecast) {
+  if (recordedPoolsContainGaps(forecast)) return false;
+  const bundles = num(forecast?.regression_rework?.support?.history_bundles);
+  if (bundles === 0) return true;
+  const samples = taskPredictions(forecast).map(regressionSampleCount);
+  return samples.length > 0 && samples.every((count) => count === 0);
+}
+
+function withheldTaskPhrase(forecast, count) {
+  const tasks = `${count} task${count === 1 ? "" : "s"}`;
+  if (recordedPoolsContainGaps(forecast)) return `${tasks} withheld because recorded pools contain gaps`;
+  if (regressionHistoryIsAbsent(forecast)) return `${tasks} missing regression history`;
+  return `${tasks} whose regression follow-up cannot be estimated`;
+}
+
 function supportText(forecast, payload) {
   const support = forecast?.regression_rework?.support;
   const coverage = payload?.coverage || {};
@@ -276,7 +343,7 @@ function supportText(forecast, payload) {
     if (num(support.history_bundles) != null) parts.push(`${forecastCount(support.history_bundles)} regression bundles`);
     if (support.history_thin) parts.push("regression history is thin");
   }
-  if (num(coverage.regression_history_missing)) parts.push(`${forecastCount(coverage.regression_history_missing)} tasks missing regression history`);
+  if (num(coverage.regression_history_missing)) parts.push(withheldTaskPhrase(forecast, forecastCount(coverage.regression_history_missing)));
   if (num(coverage.risk_unestimated)) parts.push(`${forecastCount(coverage.risk_unestimated)} tasks with unestimated risk`);
   if (num(coverage.regression_history_thin)) parts.push(`${forecastCount(coverage.regression_history_thin)} tasks with thin regression history`);
   return parts.length ? `Available evidence: ${parts.join(" · ")}.` : "";
@@ -288,7 +355,19 @@ export function forecastUnavailableInfo(forecast, payload = {}) {
   const unavailable = forecast?.unavailable;
   if (!unavailable || typeof unavailable !== "object") return null;
   const reasons = [];
-  if (unavailable.regression_history_missing) reasons.push({ kind: "regression_history_missing", label: "Missing regression history", detail: "Regression follow-up work cannot be estimated for some tasks, so the regression-adjusted forecast is unavailable." });
+  if (unavailable.regression_history_missing) {
+    const named = regressionGapReasonPhrase(forecast);
+    let label = "Missing regression history";
+    let detail = "Regression follow-up work cannot be estimated for some tasks, so the regression-adjusted forecast is unavailable.";
+    if (recordedPoolsContainGaps(forecast)) {
+      label = named ? `Recorded pools contain gaps (${named})` : "Recorded pools contain gaps";
+      detail = `Regression follow-up cannot be estimated because ${regressionGapBecause(forecast)}, so the regression-adjusted forecast is unavailable.`;
+    } else if (!regressionHistoryIsAbsent(forecast)) {
+      label = "Regression follow-up unestimated";
+      detail = "Regression follow-up cannot be estimated for some tasks, so the regression-adjusted forecast is unavailable.";
+    }
+    reasons.push({ kind: "regression_history_missing", label, detail });
+  }
   if (unavailable.risk_unestimated) reasons.push({ kind: "risk_unestimated", label: "Risk not estimated", detail: "Regression risk is not estimated for some tasks, so the adjusted forecast is unavailable." });
   if (unavailable.arrival_conflict_unknown) reasons.push({ kind: "arrival_conflict_unknown", label: "Arrival conflicts unknown", detail: "Whether arriving tasks would conflict with this backlog is unknown, so the adjusted forecast is unavailable." });
   if (!reasons.length) return null;
@@ -726,9 +805,16 @@ function unavailableWarning(text, kind) {
 function warningLine(info, hasBaseline) {
   const missing = forecastCount(lastPayload.coverage?.regression_history_missing);
   const lead = hasBaseline ? "Baseline only — " : "No forecast — ";
-  const text = info.kind === "regression_history_missing" && missing
-    ? `${lead}regression follow-up work isn't included because ${missing} task${missing === 1 ? " has" : "s have"} no regression history.`
-    : `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
+  const forecast = lastPayload.forecast;
+  const tasks = `${missing} task${missing === 1 ? "" : "s"}`;
+  let text = `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
+  if (info.kind === "regression_history_missing" && recordedPoolsContainGaps(forecast)) {
+    text = `${lead}regression follow-up cannot be estimated because ${regressionGapBecause(forecast)}.`;
+  } else if (info.kind === "regression_history_missing" && missing && regressionHistoryIsAbsent(forecast)) {
+    text = `${lead}regression follow-up work isn't included because ${tasks} ${missing === 1 ? "has" : "have"} no regression history.`;
+  } else if (info.kind === "regression_history_missing" && missing) {
+    text = `${lead}regression follow-up cannot be estimated for ${tasks}.`;
+  }
   return unavailableWarning(text, info.kind);
 }
 
@@ -807,7 +893,7 @@ function answerCard() {
       const figures = el("div", { class: hasBaseline ? "fc-figures fc-baseline" : "fc-figures" }, [
         hasBaseline ? figure("Time to drain", baseline.time_to_drain_hours, formatForecastHours, "pre-regression baseline", unknown) : null,
         approvedFigure(),
-        hasBaseline ? figure("Cost", baseline.usd, formatForecastUsd, costedFoot(), unknown) : null,
+        hasBaseline ? figure("Cost", baseline.usd, formatForecastUsd, ["pre-regression baseline", costedFoot()], unknown) : null,
       ]);
       if (hasBaseline) figures.dataset.forecastBaseline = "pre-regression";
       if (figures.children.length) children.push(figures);
@@ -982,8 +1068,19 @@ function coverageItems() {
     ["review_mode_unknown", "Unknown review assumption", coverage.review_mode_unknown, "The task's review mode could not be resolved, so it is not treated as a measured review policy. An unknown assumption uses the mode-pooled fallback."],
     ["history_review_mode_unknown", "History with unknown review", coverage.history_review_mode_unknown, "Deliveries in the lookback whose review evidence is missing or contradictory. They are not a measured review mode."],
   ] : [];
+  const poolsHaveGaps = recordedPoolsContainGaps(lastPayload.forecast);
+  const historyAbsent = regressionHistoryIsAbsent(lastPayload.forecast);
+  const namedGaps = regressionGapReasonPhrase(lastPayload.forecast);
+  const historyLabel = poolsHaveGaps
+    ? "Recorded pools contain gaps"
+    : historyAbsent ? "Missing regression history" : "Regression follow-up unestimated";
+  const historyHint = poolsHaveGaps
+    ? `Regression follow-up cannot be estimated because ${namedGaps ? `recorded pools contain gaps (${namedGaps})` : "recorded pools contain gaps"}. The pre-regression baseline excludes that follow-up work.`
+    : historyAbsent
+      ? "Tasks whose pool has no regression history, so regression follow-up cannot be estimated. The pre-regression baseline excludes that follow-up work."
+      : "Tasks whose regression follow-up cannot be estimated from recorded fix history. This is why the adjusted forecast may be unavailable; the pre-regression baseline excludes that follow-up work.";
   const regressionItems = ["regression_history_missing", "risk_unestimated", "regression_history_thin"].some((key) => Object.prototype.hasOwnProperty.call(coverage, key)) ? [
-    ["regression_history_missing", "Missing regression history", coverage.regression_history_missing, "Tasks whose regression follow-up cannot be estimated from recorded fix history. This is why the adjusted forecast may be unavailable; the pre-regression baseline excludes that follow-up work."],
+    ["regression_history_missing", historyLabel, coverage.regression_history_missing, historyHint],
     ["risk_unestimated", "Risk not estimated", coverage.risk_unestimated, "Tasks whose regression risk has no estimate."],
     ["regression_history_thin", "Thin regression history", coverage.regression_history_thin, "Tasks with some regression history, but fewer bundles than the minimum sample."],
   ] : [];
