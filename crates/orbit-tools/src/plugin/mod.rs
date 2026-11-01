@@ -40,10 +40,10 @@ pub use build::{
     prebuilt_outputs_present, run_plugin_build,
 };
 pub use callback::{
-    CallbackResolution, HOST_ROUTED_CALLBACK_TOOLS, HostRouteOutcome, ORBIT_PLUGIN_CALLBACK_ENV,
-    ORBIT_PLUGIN_CALLBACK_FD_ENV, ORBIT_PLUGIN_ENV, PLUGIN_CALLBACK_FD, PLUGIN_HOST_ROUTE_FD,
-    PluginCallbackIdentity, PluginCallbackSession, forward_host_routed_callback,
-    is_host_routed_callback_tool, resolve_plugin_callback, resolve_plugin_callback_session,
+    CallbackResolution, HostRouteOutcome, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV,
+    ORBIT_PLUGIN_ENV, PLUGIN_CALLBACK_FD, PLUGIN_HOST_ROUTE_FD, PluginCallbackIdentity,
+    PluginCallbackSession, forward_host_routed_callback, is_host_routed_callback_tool,
+    pin_routed_application_task, resolve_plugin_callback, resolve_plugin_callback_session,
     retired_callback_credential, stale_plugin_callback_session_count, unidentified_plugin_child,
 };
 pub use envelope::{

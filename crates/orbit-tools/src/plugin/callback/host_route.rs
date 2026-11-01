@@ -8,7 +8,7 @@
 //! spawned the backend can: it already holds the child's callback session,
 //! and it runs outside the plugin sandbox.
 //!
-//! When a session's ceiling admits one of [`HOST_ROUTED_CALLBACK_TOOLS`], the
+//! When a session's ceiling admits a tool [`routes_on_host`] sends, the
 //! host creates a datagram socket pair, keeps one end and hands the child the
 //! other at [`PLUGIN_HOST_ROUTE_FD`], beside the callback credential. Like the
 //! credential it survives a cleared environment, `exec` and `setsid`, and a
@@ -26,14 +26,22 @@
 //! route proves only that the caller descends from this backend, which is
 //! what the credential descriptor already proves.
 //!
-//! **The route has a closed tool list.** Decision-channel callbacks and exact
-//! application completion callbacks run here. The completion operations also
-//! require application authority in the host-minted record. Every request is
-//! still held to the plugin allowlist and session ceiling; the runtime checks
-//! consent, input, digest, workspace, expiry and revocation before a mutation.
+//! **The route has a closed tool list.** Decision-channel callbacks run here,
+//! and so does every tool an application consent may list as a callback (the
+//! ceiling table's callback column), but only for a session the host bound to
+//! an application: the consent witness those calls are admitted against is
+//! hidden from every plugin child. Every request is still held to the plugin
+//! allowlist and session ceiling; the runtime checks consent, input, digest,
+//! workspace, expiry and revocation before it runs anything.
+//!
+//! **The route holds the session's pin.** A callback admitted under a `pin`
+//! predicate binds its task for the rest of the invocation. The pin lives in
+//! the route, which the host owns and which lives exactly as long as the
+//! session: the child can neither write it nor reset it by reconnecting.
 
 use std::cell::RefCell;
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use serde_json::{Value, json};
@@ -48,42 +56,89 @@ use super::SessionRecord;
 /// confined child cannot do.
 pub const PLUGIN_HOST_ROUTE_FD: i32 = 4;
 
-/// Closed host-route list: decision-channel reads and separately consented
-/// application completion operations. The latter require an app-bound record.
-pub const HOST_ROUTED_CALLBACK_TOOLS: [&str; 4] = [
-    "orbit.decision.digest",
-    "orbit.decision.submit",
-    "orbit.task.update",
-    "orbit.decision.answer",
-];
+/// Decision-channel callbacks: always host-routed, because they read the
+/// channel store no plugin child may read.
+const DECISION_CHANNEL_CALLBACK_TOOLS: [&str; 2] =
+    ["orbit.decision.digest", "orbit.decision.submit"];
 
-/// Whether `tool` is a callback the host route runs on the host.
+/// Whether `tool` is a callback the host route may run on the host: a
+/// decision-channel callback, or a tool an application consent may list as a
+/// callback.
 pub fn is_host_routed_callback_tool(tool: &str) -> bool {
-    HOST_ROUTED_CALLBACK_TOOLS.contains(&tool)
+    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
+        || orbit_common::governance::authorization::application_callback_tool(tool)
 }
 
-/// Whether `tool` is an application completion callback: host-routed only
-/// for a session the host bound to an application. Without one, a plugin
-/// granted the tool keeps calling it in its own sandbox, as before.
-pub(super) fn is_application_completion_tool(tool: &str) -> bool {
-    matches!(tool, "orbit.task.update" | "orbit.decision.answer")
-}
-
-/// Whether `record`'s child sends `tool` over the host route.
+/// Whether `record`'s child sends `tool` over the host route. An application
+/// callback tool is routed only for a session bound to an application;
+/// without one, a plugin granted the tool keeps calling it in its own
+/// sandbox, as before.
 pub(super) fn routes_on_host(record: &SessionRecord, tool: &str) -> bool {
-    is_host_routed_callback_tool(tool)
-        && (!is_application_completion_tool(tool) || record.application.is_some())
+    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
+        || (record.application.is_some()
+            && orbit_common::governance::authorization::application_callback_tool(tool))
+}
+
+/// The task a `pin` callback bound for one host route's session.
+type PinnedTask = Arc<Mutex<Option<String>>>;
+
+/// The session a host-route call runs under, and that session's pin.
+#[derive(Clone)]
+#[cfg_attr(not(unix), allow(dead_code))]
+struct RoutedCallback {
+    record: SessionRecord,
+    pinned: PinnedTask,
 }
 
 thread_local! {
     /// The session a host-route call runs under, set only by the route's own
     /// server thread for the length of one call.
-    static ROUTED_CALLBACK: RefCell<Option<SessionRecord>> = const { RefCell::new(None) };
+    static ROUTED_CALLBACK: RefCell<Option<RoutedCallback>> = const { RefCell::new(None) };
 }
 
-/// The session the current thread is answering a host-route call for.
+/// The session the current thread is answering a host-route call for, with
+/// the task its application invocation has pinned so far.
 pub(super) fn routed_callback_record() -> Option<SessionRecord> {
-    ROUTED_CALLBACK.with(|routed| routed.borrow().clone())
+    ROUTED_CALLBACK.with(|routed| {
+        routed.borrow().as_ref().map(|routed| {
+            let mut record = routed.record.clone();
+            if let Some(application) = record.application.as_mut() {
+                application
+                    .pinned_task
+                    .clone_from(&routed.pinned.lock().unwrap_or_else(PoisonError::into_inner));
+            }
+            record
+        })
+    })
+}
+
+/// Pin `task` for the rest of the application invocation the current
+/// host-route call runs under. Refused when another task is already pinned,
+/// and outside a host-route call, where no host-owned pin exists.
+pub fn pin_routed_application_task(task: &str) -> Result<(), OrbitError> {
+    ROUTED_CALLBACK.with(|routed| {
+        let routed = routed.borrow();
+        let Some(routed) = routed
+            .as_ref()
+            .filter(|routed| routed.record.application.is_some())
+        else {
+            return Err(OrbitError::CapabilityDenied(
+                "a pinned application callback runs only on the plugin host route".into(),
+            ));
+        };
+        let mut pinned = routed.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        match pinned.as_deref() {
+            Some(current) if current != task => Err(OrbitError::CapabilityDenied(
+                "application callback names a task other than the one this invocation pinned"
+                    .into(),
+            )),
+            Some(_) => Ok(()),
+            None => {
+                *pinned = Some(task.to_owned());
+                Ok(())
+            }
+        }
+    })
 }
 
 /// What a forwarded call came back with.
@@ -274,11 +329,15 @@ mod unix {
                 lift_above(OwnedFd::from(child_end), PLUGIN_HOST_ROUTE_FD).map_err(io)?;
             host_end.set_read_timeout(Some(POLL)).map_err(io)?;
             let stop = Arc::new(AtomicBool::new(false));
+            let routed = RoutedCallback {
+                record,
+                pinned: PinnedTask::default(),
+            };
             let server = std::thread::Builder::new()
                 .name("orbit-plugin-host-route".to_string())
                 .spawn({
                     let stop = Arc::clone(&stop);
-                    move || serve(&host_end, &record, host.as_ref(), &stop)
+                    move || serve(&host_end, &routed, host.as_ref(), &stop)
                 })
                 .map_err(io)?;
             Ok(Self {
@@ -326,13 +385,13 @@ mod unix {
 
     fn serve(
         socket: &UnixDatagram,
-        record: &SessionRecord,
+        routed: &RoutedCallback,
         host: &dyn OrbitToolHost,
         stop: &AtomicBool,
     ) {
         while !stop.load(Ordering::Relaxed) {
             match receive_connection(socket) {
-                Ok(Some(stream)) => answer(stream, record, host),
+                Ok(Some(stream)) => answer(stream, routed, host),
                 Ok(None) => {}
                 Err(error)
                     if matches!(
@@ -344,7 +403,7 @@ mod unix {
                 Err(error) => {
                     tracing::warn!(
                         target: "orbit.tools.plugin",
-                        plugin = %record.plugin,
+                        plugin = %routed.record.plugin,
                         "the plugin host route stopped: {error}"
                     );
                     return;
@@ -353,9 +412,10 @@ mod unix {
         }
     }
 
-    /// Answer one call. Every request is decided under `record`, the session
+    /// Answer one call. Every request is decided under `routed`, the session
     /// the host minted for this child; nothing in the request names one.
-    fn answer(mut stream: UnixStream, record: &SessionRecord, host: &dyn OrbitToolHost) {
+    fn answer(mut stream: UnixStream, routed: &RoutedCallback, host: &dyn OrbitToolHost) {
+        let record = &routed.record;
         let _ = stream.set_read_timeout(Some(FRAME_TIMEOUT));
         let _ = stream.set_write_timeout(Some(FRAME_TIMEOUT));
         let response = match read_frame(&mut stream, MAX_REQUEST_BYTES)
@@ -367,13 +427,13 @@ mod unix {
             Err(error) => unanswered_response(&error),
             Ok((tool, _)) if !routes_on_host(record, &tool) => {
                 unanswered_response(&OrbitError::PolicyDenied(format!(
-                    "the plugin host route admits only {}; completion operations require an \
-                     application-bound host session; '{tool}' is refused",
-                    HOST_ROUTED_CALLBACK_TOOLS.join(" and ")
+                    "the plugin host route admits only {} and, for an application-bound host \
+                     session, application callback operations; '{tool}' is refused",
+                    DECISION_CHANNEL_CALLBACK_TOOLS.join(" and ")
                 )))
             }
             Ok((tool, input)) => {
-                let result = run_as(record, || host.execute_host_routed_callback(&tool, input));
+                let result = run_as(routed, || host.execute_host_routed_callback(&tool, input));
                 answered_response(&result)
             }
         };
@@ -386,16 +446,16 @@ mod unix {
         }
     }
 
-    /// Run `call` with this thread resolving `record` as its callback session,
+    /// Run `call` with this thread resolving `routed` as its callback session,
     /// and clear it again however `call` ends.
-    fn run_as<T>(record: &SessionRecord, call: impl FnOnce() -> T) -> T {
+    fn run_as<T>(routed: &RoutedCallback, call: impl FnOnce() -> T) -> T {
         struct Clear;
         impl Drop for Clear {
             fn drop(&mut self) {
                 ROUTED_CALLBACK.with(|routed| routed.borrow_mut().take());
             }
         }
-        ROUTED_CALLBACK.with(|routed| *routed.borrow_mut() = Some(record.clone()));
+        ROUTED_CALLBACK.with(|slot| *slot.borrow_mut() = Some(routed.clone()));
         let _clear = Clear;
         call()
     }
@@ -417,9 +477,10 @@ mod unix {
             return None;
         }
         // Only a process holding a credential the host wrote forwards: an
-        // ordinary caller may have any socket on the number. A completion
-        // tool forwards only under an application-bound record; otherwise it
-        // runs in the backend's own sandbox like any granted callback.
+        // ordinary caller may have any socket on the number. An application
+        // callback tool forwards only under an application-bound record;
+        // otherwise it runs in the backend's own sandbox like any granted
+        // callback.
         let record = crate::plugin::callback::resolution::credential_from_descriptor(
             &crate::plugin::callback::resolution::callback_dir(global_root),
         )?;

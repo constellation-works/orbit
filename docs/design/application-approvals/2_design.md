@@ -412,9 +412,11 @@ and the new ones marked **new**:
    invocation's `bindings` and `pinned_task` in context. The first match wins. **New:**
    if the entry bound `artifact_sha256`, recompute the bound task's artifact digest and
    refuse a mismatch (`bound artifact changed`). If a `pin` predicate matched with no
-   pin set yet, record `pinned_task` in the host-owned session record, using the same
-   in-place rewrite `bind_application` uses. No match is a refusal: `completion callback
-   is outside application consent`.
+   pin set yet, record `pinned_task` in the session's host route
+   (`pin_routed_application_task`), which the host owns and which lives exactly as long
+   as the session. The child can neither write nor reset it, and a rewrite of the
+   session record cannot race `bind_pid`. A pin outside a host-route call is refused.
+   No match is a refusal: `completion callback is outside application consent`.
 7. Record the invocation in the audit slot and the session (:409-411).
 
 Execution (**new**, `crates/orbit-core/src/application/application_authority.rs`):
@@ -432,8 +434,11 @@ Execution (**new**, `crates/orbit-core/src/application/application_authority.rs`
   `application:<id>`. Their own catalogue rows and floors still apply.
 
 Host route (**new**): an app-bound session sends every consented callback tool to the
-host, not only the two completion tools. `is_application_completion_tool`
-(`host_route.rs:68`) becomes the ceiling table's callback column.
+host, not only the two completion tools. The routed set is the ceiling table's callback
+column (`application_callback_tool` in `catalog.rs`), so `orbit.task.show` and
+`orbit.task.artifact.get` are routed too. The read executors run in the adapter
+(`execute_application_read`, `crates/orbit-core/src/adapter/tool_host/task/read.rs`),
+because the projection and artifact serialization they reuse live there.
 
 ### 5.1 Evaluating a constrained operation
 
@@ -557,10 +562,11 @@ The reader keeps accepting schema 4 records, including app-bound ones, by defaul
 new invocation fields. This differs from today's rule, which drops the previous schema
 when it carries an application binding (`record_schema_is_readable`,
 `crates/orbit-tools/src/plugin/callback/storage.rs:97-103`). It keeps long-lived
-backends working across the upgrade. A defaulted invocation has no bindings, so it can
-match only exact scopes, which is all a schema 4 record could hold. The MCP backend key
-already serializes the invocation (`mcp.rs:167-185`), so constrained invocations get one
-backend per bound entry, never a shared one.
+backends working across the upgrade. A schema 4 record reads with `pinned_task`
+defaulted; any bindings a slice 2 host wrote into it are host-written and read as they
+are. The MCP backend key already serializes the invocation (`mcp.rs:167-185`), so
+constrained invocations get one backend per bound entry, never a shared one; slice 3
+changes no key. The pin is per host route, so it never crosses backends.
 
 **Audit rows.** The new fields are additive and serde-defaulted. Old rows read as
 `match: exact` with no bindings.

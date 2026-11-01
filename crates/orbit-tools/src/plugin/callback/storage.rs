@@ -94,13 +94,13 @@ pub(super) fn session_process_is_live(record: &SessionRecord) -> bool {
     process_start_key(record.pid).is_some_and(|key| key.starttime == record.starttime)
 }
 
-/// The current schema, or the previous one without an application binding
-/// (which that schema cannot express), so an upgrade keeps running backends'
-/// callbacks working.
+/// The current schema or the previous one, application-bound records
+/// included, so an upgrade keeps running backends' callbacks working.
 fn record_schema_is_readable(record: &SessionRecord) -> bool {
-    record.schema_version == SESSION_SCHEMA_VERSION
-        || (record.schema_version == PREVIOUS_SESSION_SCHEMA_VERSION
-            && record.application.is_none())
+    matches!(
+        record.schema_version,
+        SESSION_SCHEMA_VERSION | PREVIOUS_SESSION_SCHEMA_VERSION
+    )
 }
 
 pub(super) fn parse_session(bytes: &[u8]) -> Option<SessionRecord> {

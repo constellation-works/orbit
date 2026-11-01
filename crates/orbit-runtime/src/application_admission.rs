@@ -30,6 +30,16 @@ pub(crate) struct ConstrainedAdmission {
     pub(crate) bindings: BTreeMap<String, Value>,
     pub(crate) text_digests: BTreeMap<String, ApplicationTextDigest>,
     pub(crate) predicate: Option<ApplicationPredicateEvidence>,
+    /// The task a callback's `pin` predicate binds, when none was pinned yet.
+    pub(crate) pin: Option<String>,
+}
+
+/// What a callback is evaluated against: the entry's admitted values and the
+/// task the invocation has pinned so far.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallbackBindings<'a> {
+    pub(crate) bindings: &'a BTreeMap<String, Value>,
+    pub(crate) pinned_task: Option<&'a str>,
 }
 
 /// The first field of a constrained operation that failed, and why. The
@@ -58,13 +68,16 @@ impl ConstraintRefusal {
     }
 }
 
-/// Evaluate a constrained entry's `fields` against the call input on current
-/// state. `Ok(Err(_))` is a refusal; `Err(_)` is a host failure.
-pub(crate) fn evaluate_constrained_entry(
+/// Evaluate a constrained operation's `fields` against the call input on
+/// current state: an entry when `callback` is `None`, otherwise a callback
+/// against the entry's bindings. `Ok(Err(_))` is a refusal; `Err(_)` is a
+/// host failure.
+pub(crate) fn evaluate_constrained(
     kernel: &RuntimeKernel,
     consent: &ApplicationConsent,
     fields: &BTreeMap<String, ApplicationConstraint>,
     input: &Value,
+    callback: Option<CallbackBindings<'_>>,
 ) -> Result<Result<ConstrainedAdmission, ConstraintRefusal>, OrbitError> {
     let Some(object) = input.as_object() else {
         return Ok(Err(ConstraintRefusal {
@@ -87,22 +100,25 @@ pub(crate) fn evaluate_constrained_entry(
             return Ok(Err(ConstraintRefusal::new(field, "missing")));
         };
         let required = constraint.required_form();
-        let check = EntryCheck {
+        let check = FieldCheck {
             kernel,
             consent,
             input,
             field,
+            callback,
         };
         if let Err(refusal) = check.value(required, value, &mut admitted)? {
             return Ok(Err(refusal));
         }
-        if IDENTITY_FIELDS.contains(&field.as_str())
-            || matches!(
-                required,
-                ApplicationConstraint::Task(_)
-                    | ApplicationConstraint::Sha256(_)
-                    | ApplicationConstraint::Token(_)
-            )
+        // Bindings are the entry's; a callback is held to them, not adding.
+        if callback.is_none()
+            && (IDENTITY_FIELDS.contains(&field.as_str())
+                || matches!(
+                    required,
+                    ApplicationConstraint::Task(_)
+                        | ApplicationConstraint::Sha256(_)
+                        | ApplicationConstraint::Token(_)
+                ))
         {
             admitted.bindings.insert(field.clone(), value.clone());
         }
@@ -110,14 +126,15 @@ pub(crate) fn evaluate_constrained_entry(
     Ok(Ok(admitted))
 }
 
-struct EntryCheck<'a> {
+struct FieldCheck<'a> {
     kernel: &'a RuntimeKernel,
     consent: &'a ApplicationConsent,
     input: &'a Value,
     field: &'a str,
+    callback: Option<CallbackBindings<'a>>,
 }
 
-impl EntryCheck<'_> {
+impl FieldCheck<'_> {
     fn value(
         &self,
         constraint: &ApplicationConstraint,
@@ -147,7 +164,10 @@ impl EntryCheck<'_> {
                 .as_str()
                 .is_some_and(|selector| self.selects_consent_workspace(selector)),
             ApplicationConstraint::Task(predicate) => match value.as_str() {
-                Some(id) => self.task_matches(id, predicate, admitted)?,
+                Some(id) => {
+                    self.pin_admits(id, predicate, admitted)
+                        && self.task_matches(id, predicate, admitted)?
+                }
                 None => false,
             },
             ApplicationConstraint::Transition(transition) => {
@@ -161,11 +181,18 @@ impl EntryCheck<'_> {
                         .is_some_and(|s| allowed.iter().any(|a| a == s) && seen.insert(s))
                 })
             }),
-            // Bound values, artifact pointers and nested optionals belong to
-            // callbacks or are refused at consent; an entry never admits them.
-            ApplicationConstraint::Bound(_)
-            | ApplicationConstraint::ArtifactJson(_)
-            | ApplicationConstraint::Optional(_) => false,
+            // The entry's admitted value; an `id` is also held to the pin.
+            // An entry never admits it.
+            ApplicationConstraint::Bound(entry_field) => self.callback.is_some_and(|callback| {
+                callback.bindings.get(entry_field) == Some(value)
+                    && (self.field != "id"
+                        || callback
+                            .pinned_task
+                            .is_none_or(|pinned| value.as_str() == Some(pinned)))
+            }),
+            // Artifact pointers are admitted from slice 5; nested optionals
+            // are refused at consent.
+            ApplicationConstraint::ArtifactJson(_) | ApplicationConstraint::Optional(_) => false,
         };
         if passed { Ok(Ok(())) } else { refuse() }
     }
@@ -175,6 +202,29 @@ impl EntryCheck<'_> {
             || Path::new(selector)
                 .canonicalize()
                 .is_ok_and(|path| path == Path::new(&self.consent.workspace_root))
+    }
+
+    /// A `pin` predicate on a callback admits the task already pinned, or
+    /// any task when none is, recording it to pin. Without `pin` this passes.
+    fn pin_admits(
+        &self,
+        id: &str,
+        predicate: &ApplicationTaskPredicate,
+        admitted: &mut ConstrainedAdmission,
+    ) -> bool {
+        if !predicate.pin {
+            return true;
+        }
+        let Some(callback) = self.callback else {
+            return false;
+        };
+        match callback.pinned_task {
+            Some(pinned) => pinned == id,
+            None => {
+                admitted.pin = Some(id.to_owned());
+                true
+            }
+        }
     }
 
     /// The task named by `id` exists here and its current tags, status and

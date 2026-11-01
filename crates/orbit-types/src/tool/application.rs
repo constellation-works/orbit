@@ -285,6 +285,10 @@ pub struct ApplicationInvocation {
     /// Task state the constrained entry was admitted on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predicate: Option<ApplicationPredicateEvidence>,
+    /// The task a `pin` callback predicate bound for the rest of this
+    /// invocation. Set only on a callback, from the host-owned session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_task: Option<String>,
 }
 
 impl ApplicationInvocation {
@@ -297,6 +301,7 @@ impl ApplicationInvocation {
             bindings: BTreeMap::new(),
             text_digests: BTreeMap::new(),
             predicate: None,
+            pinned_task: None,
         }
     }
 }

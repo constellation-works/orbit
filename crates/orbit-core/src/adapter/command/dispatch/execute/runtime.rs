@@ -301,11 +301,17 @@ impl OrbitRuntime {
                 };
                 let application =
                     self.admit_application_call(name, &input, &mut session_context, enforcement)?;
-                if application
-                    && let Some(output) =
+                if application {
+                    if let Some(output) =
                         self.execute_application_builtin(name, &input, &session_context)?
-                {
-                    return Ok(output);
+                    {
+                        return Ok(output);
+                    }
+                    if let Some(output) =
+                        self.execute_application_read(name, &input, &session_context)?
+                    {
+                        return Ok(output);
+                    }
                 }
                 #[cfg(unix)]
                 if self.tool_registry().plugin_binding(name).is_some() {

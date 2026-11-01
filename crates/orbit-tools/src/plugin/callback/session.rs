@@ -33,6 +33,9 @@ pub(super) const TOKEN_HEX_LEN: usize = TOKEN_BYTES * 2;
 /// this process read before it is rejected.
 pub(super) const MAX_SESSION_BYTES: usize = 8 * 1024;
 
+/// Version 5 marks an application invocation that may carry constrained
+/// evidence (entry bindings, text digests, the predicate it was admitted on)
+/// and a pin slot; a reader that only knows version 4 would ignore them.
 /// Version 4 binds an optional application scope so an older reader cannot
 /// ignore it and answer completion calls under a wider callback allowlist.
 /// Version 3 records carried their own token, which is what lets a child verify
@@ -46,11 +49,13 @@ pub(super) const MAX_SESSION_BYTES: usize = 8 * 1024;
 /// this host cannot read is counted stale by `orbit plugin doctor` and swept
 /// when the next backend starts, so refusing it never leaves an orphan no
 /// surface mentions [ORB-12879].
-pub(super) const SESSION_SCHEMA_VERSION: u32 = 4;
+pub(super) const SESSION_SCHEMA_VERSION: u32 = 5;
 
 /// The previous schema, still read so callbacks from backends a pre-upgrade
-/// host started keep resolving. It carries no application binding.
-pub(super) const PREVIOUS_SESSION_SCHEMA_VERSION: u32 = 3;
+/// host started keep resolving, application-bound ones included: its
+/// invocation reads with the newer fields defaulted, so it carries no pin and
+/// matches exactly what it was admitted for.
+pub(super) const PREVIOUS_SESSION_SCHEMA_VERSION: u32 = 4;
 
 /// Live callback session the host minted for one backend child.
 #[derive(Debug)]
@@ -125,8 +130,10 @@ impl PluginCallbackSession {
         if invocation.is_none() && self.record.application.is_none() {
             return Ok(());
         }
+        // A pin is host-route state, never part of what the child is handed.
         self.record.application = invocation.cloned().map(|mut invocation| {
             invocation.callback = true;
+            invocation.pinned_task = None;
             Box::new(invocation)
         });
         if session_bytes(&self.record)?.len() > MAX_SESSION_BYTES {
@@ -246,7 +253,7 @@ impl PluginCallbackSession {
     }
 
     /// Give the child a route back to `host` for the callbacks only the host
-    /// can answer ([`super::HOST_ROUTED_CALLBACK_TOOLS`]), when this session's
+    /// can answer (`super::host_route::routes_on_host`), when this session's
     /// ceiling admits one of them and the caller supplied a host. Calls on the
     /// route are answered under this session for as long as it lives.
     ///

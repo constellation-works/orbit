@@ -237,7 +237,9 @@ A backend reaches its `orbit.decision.digest` and `orbit.decision.submit`
 callbacks through a host route, sandboxed or not: when the call's ceiling
 admits either tool, the host passes the child one end of a socket pair beside its
 callback credential, and the child's nested `orbit` hands the call back over it
-instead of opening the store. The host answers only those two tools, for the
+instead of opening the store. The host answers only those two tools, plus an
+application-bound session's consented callbacks
+([application-approvals](../application-approvals/2_design.md) §5), for the
 session it minted, through the same dispatch, ceiling, governed row and audit as
 any identified callback, so the §3.3 caller and channel binding checks run
 unchanged; a confined child itself still cannot read the store.

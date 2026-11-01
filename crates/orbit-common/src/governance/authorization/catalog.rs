@@ -199,6 +199,14 @@ pub fn application_operation_ceiling(tool: &str) -> Option<&'static ApplicationO
         .find(|ceiling| ceiling.tool == tool)
 }
 
+/// Whether a consent may list `tool` as a completion callback: the ceiling
+/// table's callback column, exact or constrained. An application-bound plugin
+/// session sends every such tool to the host, where the consent witness is.
+pub fn application_callback_tool(tool: &str) -> bool {
+    application_operation_ceiling(tool)
+        .is_some_and(|ceiling| ceiling.constrained_callback || !ceiling.exact_fields.is_empty())
+}
+
 /// Whether a built-in tool, or one of the input fields it would be called
 /// with, carries an Operator floor in the governed-operation catalogue. Such
 /// an operation is never application authority, whatever a consent says.

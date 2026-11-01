@@ -19,7 +19,7 @@ use orbit_types::tool::{
 use serde_json::Value;
 
 use crate::application_admission::{
-    ConstrainedAdmission, admit_within_rate_limit, evaluate_constrained_entry,
+    CallbackBindings, ConstrainedAdmission, admit_within_rate_limit, evaluate_constrained,
 };
 use crate::application_consent::{
     OperationRole, validate_consent_request_v2, validate_constrained_fields,
@@ -43,11 +43,6 @@ pub fn take_application_audit() -> Option<ApplicationInvocation> {
 /// limit afresh.
 pub fn finish_application_dispatch() {
     RATE_LIMIT_CHARGED.with(|charged| charged.borrow_mut().clear());
-}
-
-/// Refusal for a constrained callback until bound callbacks land.
-fn constrained_callback_not_admitted() -> OrbitError {
-    OrbitError::CapabilityDenied("constrained application callbacks are not yet admitted".into())
 }
 
 impl RuntimeKernel {
@@ -474,21 +469,60 @@ impl RuntimeKernel {
                     OrbitError::CapabilityDenied("invalid application callback scope".into())
                 })?;
             self.validate_application_operation(&scope.operation, OperationRole::Entry)?;
-            if !scope
-                .callbacks
-                .iter()
-                .any(|op| op.tool == tool && op.input.as_ref() == Some(input))
-            {
-                if scope
-                    .callbacks
-                    .iter()
-                    .any(|op| op.tool == tool && op.is_constrained())
-                {
-                    return Err(constrained_callback_not_admitted());
+            // Every callback rechecks the payload the entry was admitted on.
+            self.recheck_bound_application_artifact(&invocation)?;
+            let mut refusals = Vec::new();
+            let mut matched = None;
+            for callback in scope.callbacks.iter().filter(|op| op.tool == tool) {
+                match (&callback.input, &callback.fields) {
+                    (Some(exact), None) if exact == input => {
+                        matched = Some((callback, ConstrainedAdmission::default()));
+                        break;
+                    }
+                    (None, Some(fields)) => {
+                        let bindings = CallbackBindings {
+                            bindings: &invocation.bindings,
+                            pinned_task: invocation.pinned_task.as_deref(),
+                        };
+                        match evaluate_constrained(
+                            self,
+                            &record.consent,
+                            fields,
+                            input,
+                            Some(bindings),
+                        )? {
+                            Ok(admission) => {
+                                matched = Some((callback, admission));
+                                break;
+                            }
+                            Err(refusal) => refusals.push(refusal.describe()),
+                        }
+                    }
+                    _ => {}
                 }
-                return Err(OrbitError::CapabilityDenied(
-                    "completion callback is outside application consent".into(),
-                ));
+            }
+            let Some((callback, admission)) = matched else {
+                return Err(OrbitError::CapabilityDenied(if refusals.is_empty() {
+                    "completion callback is outside application consent".into()
+                } else {
+                    format!(
+                        "completion callback is outside application consent: {}",
+                        refusals.join("; ")
+                    )
+                }));
+            };
+            self.validate_application_operation(
+                callback,
+                OperationRole::Callback {
+                    entry: &scope.operation,
+                },
+            )?;
+            if let Some(task) = admission.pin {
+                orbit_tools::plugin::pin_routed_application_task(&task)?;
+                invocation.pinned_task = Some(task);
+            }
+            if callback.is_constrained() {
+                invocation.text_digests = admission.text_digests;
             }
         } else {
             let scopes = &record.consent.scopes;
@@ -504,7 +538,7 @@ impl RuntimeKernel {
                         break;
                     }
                     (None, Some(fields)) => {
-                        match evaluate_constrained_entry(self, &record.consent, fields, input)? {
+                        match evaluate_constrained(self, &record.consent, fields, input, None)? {
                             Ok(admission) => {
                                 matched = Some((index, admission));
                                 break;
@@ -556,6 +590,26 @@ impl RuntimeKernel {
         APPLICATION_AUDIT.with(|state| *state.borrow_mut() = Some(invocation.clone()));
         session.application = Some(Box::new(invocation));
         Ok(true)
+    }
+
+    /// Refuse a callback once the artifact the entry's `task` predicate bound
+    /// no longer has the digest the entry was admitted on.
+    fn recheck_bound_application_artifact(
+        &self,
+        invocation: &ApplicationInvocation,
+    ) -> Result<(), OrbitError> {
+        let Some(evidence) = &invocation.predicate else {
+            return Ok(());
+        };
+        let Some(artifact) = &evidence.artifact else {
+            return Ok(());
+        };
+        match self.task_artifact_sha256(&evidence.task, &artifact.path) {
+            Ok(Some(actual)) if actual == artifact.sha256 => Ok(()),
+            _ => Err(OrbitError::CapabilityDenied(
+                "bound artifact changed since the application entry was admitted".into(),
+            )),
+        }
     }
 
     /// Charge one call to a scope's rate limit; `false` when the window is
