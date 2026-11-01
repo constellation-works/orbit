@@ -1,6 +1,7 @@
 // Orbit dashboard task detail: the detail body, its tabs and the runs tab.
 
-import { captureWorkspaceVisit, el, elapsedDurationInfo, fetchJson, fmtDuration, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
+import { captureWorkspaceVisit, copyWithFeedback, el, elapsedDurationInfo, fetchJson, fmtDuration, isAggregateView, makeDisclosure, makeToggleRow, stateCell } from './common.js';
+import { humanCrewFor } from './task-crew.js';
 import { absTimeNode, canMutateTask, fmtAbsTimeValue, pullRequestLink, refreshTasks, rerender, taskRunHref, taskState, taskWorkspacePath, GITHUB_PR_REF_SYSTEM } from './task-shared.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, claimAttention, deliverySteps, lastKnownClaims } from './distributed.js';
 import { buildTaskMeta, buildStageStrip } from './task-lifecycle.js';
@@ -55,6 +56,42 @@ export function detailFeedbackSignature(taskId) {
   }
   return parts.join("|");
 }
+// Fenced commands in a task description, in order.
+export function humanTaskCommands(text) {
+  const out = [];
+  const re = /```[^\n]*\n([\s\S]*?)```/g;
+  let m; while ((m = re.exec(String(text || "")))) { const c = m[1].replace(/\n$/, ""); if (c.trim()) out.push(c); }
+  return out;
+}
+export function humanTaskSteps(text) {
+  return String(text || "").split("\n").map((l) => l.trim()).filter((l) => /^([-*]|\d+[.)])\s+/.test(l)).map((l) => l.replace(/^([-*]|\d+[.)])\s+/, ""));
+}
+// Compact human-crew panel: summary, steps, one copy button per command,
+// plus copy-all (the verify/run-all action).
+export function buildHumanTaskPanel(task) {
+  const crew = humanCrewFor(task);
+  if (!crew) return null;
+  const desc = String(task.description || "");
+  const summary = desc.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)[0] || task.title || "";
+  const steps = humanTaskSteps(desc);
+  const commands = humanTaskCommands(desc);
+  const panel = el("div", { class: "human-task-panel" });
+  panel.appendChild(el("div", { class: "human-task-head" }, [
+    el("span", { class: "human-task-badge", text: `For you · ${crew.name}` }),
+    commands.length ? (() => { const b = el("button", { class: "action human-copy-all", type: "button", text: "Copy all commands" }); b.addEventListener("click", (e) => { e.stopPropagation(); copyWithFeedback(b, commands.join("\n")); }); return b; })() : null,
+  ]));
+  if (summary) panel.appendChild(el("p", { class: "human-task-summary", text: summary.replace(/^#+\s*/, "") }));
+  if (steps.length) { const ol = el("ol", { class: "human-task-steps" }); for (const s of steps) ol.appendChild(el("li", { text: s.replace(/`([^`]+)`/g, "$1") })); panel.appendChild(ol); }
+  for (const cmd of commands) {
+    const btn = el("button", { class: "action human-copy-cmd", type: "button", text: "Copy" });
+    btn.setAttribute("aria-label", `Copy command: ${cmd.split("\n")[0]}`);
+    btn.addEventListener("click", (e) => { e.stopPropagation(); copyWithFeedback(btn, cmd); });
+    panel.appendChild(el("div", { class: "human-command" }, [el("pre", { class: "human-command-code", text: cmd }), btn]));
+  }
+  if (!steps.length && !commands.length) panel.appendChild(el("p", { class: "field-empty", text: "No steps or commands in the description yet." }));
+  return panel;
+}
+
 export function buildTaskDetail(task, context, drain = null) {
   const detail = el("div", { class: "row-detail task-detail" });
   detail.addEventListener("click", (e) => e.stopPropagation());
@@ -143,6 +180,9 @@ export function buildTaskDetail(task, context, drain = null) {
   const known = lastKnownClaims(task.id);
   if (known) paintDelivery(known);
 
+  const humanPanel = buildHumanTaskPanel(task);
+  if (humanPanel) leftCol.appendChild(humanPanel);
+
   if (showsEditor("acceptance_criteria")) {
     const count = Array.isArray(task.acceptance_criteria) ? task.acceptance_criteria.length : 0;
     const actions = actionSlot();
@@ -214,6 +254,8 @@ export function buildTaskDetail(task, context, drain = null) {
       count: disclosedDecisions.length,
     });
   }
+  // Answered state (picked option, by whom, when) for any task.
+  addField(disclosures, "Decision history", taskDecision.buildAnsweredDecisions(task, context), true, true);
 
   if (task.plan && task.plan.trim()) {
     addField(disclosures, "Plan", taskFields.taskMarkdownPanel(taskFields.markdownView(task.plan)), true, true);
