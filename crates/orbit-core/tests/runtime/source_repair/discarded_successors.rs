@@ -171,6 +171,8 @@ pub(super) fn discard_across_successors_keeps_every_refusal() {
         "no_discard",
         "successor_pushed",
         "successor_handoff_published",
+        "successor_committed",
+        "successor_uncommitted_work",
         "successor_live",
         "successor_unauthenticated_output",
         "successor_resumed_candidate",
@@ -218,6 +220,16 @@ pub(super) fn discard_across_successors_keeps_every_refusal() {
                     output: json!({"decision":"blocked_failure_pr","task_id":f.task}),
                 });
                 f.runtime.write_run_state(&held.run_id, &state).unwrap();
+            }
+            "successor_committed" => {
+                // [ORB-20970] A commit the next adoption would not resume.
+                state.record_pipeline_output("commit", json!({"committed":true}));
+                f.runtime.write_run_state(&held.run_id, &state).unwrap();
+            }
+            "successor_uncommitted_work" => {
+                // [ORB-20970] Files in the held attempt's checkout, no commit.
+                let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+                std::fs::write(checkout.join("unfinished.txt"), "unfinished work\n").unwrap();
             }
             "successor_live" => {
                 held.state = JobRunState::Running;

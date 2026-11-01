@@ -1261,7 +1261,11 @@ discard is needed. The next run implements fresh, reusing neither the
 discarded head nor its PR, only when the host records prove the whole chain.
 Every attempt between the discard and the new run must be a conclusively
 stopped (failed or cancelled), owner-local single-task attempt with no
-preservation record, push, PR or publishing failure handoff. Its
+preservation record, push, PR or publishing failure handoff, and with no
+`commit` checkpoint and no uncommitted work in its checkout. A successor with a
+commit checkpoint or uncommitted work does not prove the discard still governs:
+the next run would implement fresh over that commit or work, so the legacy
+refusal below applies and the candidate is reconciled explicitly. Its
 authenticated worktree checkpoint must name the next older run as its prior
 run, and its authenticated `resume_candidate` checkpoint must record a fresh
 outcome. The first attempt after the discard must record that it refused the
