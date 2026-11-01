@@ -698,6 +698,14 @@ pub trait NullRuntimeHost: Send + Sync {
         Err(unsupported_dispatch_capability(provider))
     }
 
+    fn verify_script_output_set(
+        &self,
+        _consumer_run_id: &str,
+        _set: &orbit_types::workflow::activity_job::ScriptOutputSet,
+    ) -> Result<(), String> {
+        Err("this host keeps no script output files".to_string())
+    }
+
     fn run_script_step(
         &self,
         request: &crate::context::ScriptStepRequest,
@@ -848,6 +856,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _step_id: &str,
         _output: &Value,
         _compound_outputs: &BTreeMap<String, Value>,
+        _script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
         Ok(())
     }

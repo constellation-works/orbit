@@ -109,6 +109,7 @@ pub(super) fn rewind_to_completion(
         state.step_outputs.remove(&index);
         state.step_output_pointers.remove(&index);
         state.compound_outputs.remove(&index);
+        state.script_output_sets.remove(&index);
         state.pipeline_patches.remove(&index);
         if let Some(pipeline) = state.pipeline.as_object_mut() {
             pipeline.remove(&step.id);

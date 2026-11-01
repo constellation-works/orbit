@@ -270,6 +270,10 @@ impl orbit_engine::test_support::NullRuntimeHost for ForgeHost {
         step_id: &str,
         output: &Value,
         _compound_outputs: &BTreeMap<String, Value>,
+        _: &std::collections::BTreeMap<
+            String,
+            orbit_types::workflow::activity_job::ScriptOutputSet,
+        >,
     ) -> Result<(), DispatchError> {
         self.checkpoints
             .lock()

@@ -91,6 +91,15 @@ pub struct PipelineState {
     /// the step's own output (and a top-level fan-in alias, which equals it).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub compound_outputs: BTreeMap<u32, BTreeMap<String, Value>>,
+    /// Script output sets a completed top-level step exposed, keyed by
+    /// global step index, then by the pipeline key (the script step's id,
+    /// nested ones included) whose `steps.<id>.files` it backs. Resume
+    /// reseeds them with the outputs, after checking each against its
+    /// producer record. Kept after terminal compaction: they are the run's
+    /// durable references to the files.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub script_output_sets:
+        BTreeMap<u32, BTreeMap<String, crate::workflow::activity_job::ScriptOutputSet>>,
     /// Per-step pipeline patches keyed by global step index.
     /// Successful steps merge these patches into `pipeline`.
     #[serde(default)]
@@ -227,6 +236,7 @@ impl PipelineState {
             crew_selection: None,
             step_outputs: BTreeMap::new(),
             compound_outputs: BTreeMap::new(),
+            script_output_sets: BTreeMap::new(),
             pipeline_patches: BTreeMap::new(),
             step_output_pointers: BTreeMap::new(),
             step_states: BTreeMap::new(),
@@ -572,6 +582,21 @@ impl PipelineState {
             self.compound_outputs.remove(&step_index);
         } else {
             self.compound_outputs.insert(step_index, outputs);
+        }
+        self.updated_at = Utc::now();
+    }
+
+    /// Replace the script output sets recorded for `step_index`; an empty
+    /// map clears them, as [`Self::record_compound_outputs`] does.
+    pub fn record_script_output_sets(
+        &mut self,
+        step_index: u32,
+        sets: BTreeMap<String, crate::workflow::activity_job::ScriptOutputSet>,
+    ) {
+        if sets.is_empty() {
+            self.script_output_sets.remove(&step_index);
+        } else {
+            self.script_output_sets.insert(step_index, sets);
         }
         self.updated_at = Utc::now();
     }

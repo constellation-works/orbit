@@ -101,10 +101,16 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
         step_id: &str,
         output: &Value,
         compound: &BTreeMap<String, Value>,
+        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
-        self.fixture
-            .runtime
-            .checkpoint_step(run_id, index, step_id, output, compound)
+        self.fixture.runtime.checkpoint_step(
+            run_id,
+            index,
+            step_id,
+            output,
+            compound,
+            script_outputs,
+        )
     }
 
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {

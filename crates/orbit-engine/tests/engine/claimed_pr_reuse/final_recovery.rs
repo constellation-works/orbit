@@ -353,6 +353,10 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
         id: &str,
         output: &Value,
         compound: &BTreeMap<String, Value>,
+        _: &std::collections::BTreeMap<
+            String,
+            orbit_types::workflow::activity_job::ScriptOutputSet,
+        >,
     ) -> Result<(), DispatchError> {
         if id == "pr_open" {
             self.publications.lock().unwrap().push(output.clone());

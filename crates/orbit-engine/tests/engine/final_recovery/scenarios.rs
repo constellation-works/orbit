@@ -176,6 +176,10 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
         step_id: &str,
         output: &Value,
         _: &std::collections::BTreeMap<String, Value>,
+        _: &std::collections::BTreeMap<
+            String,
+            orbit_types::workflow::activity_job::ScriptOutputSet,
+        >,
     ) -> Result<(), DispatchError> {
         self.checkpoints
             .lock()

@@ -57,6 +57,10 @@ pub(super) fn checkpoint_step(
     step_id: &str,
     output: &serde_json::Value,
     compound_outputs: &std::collections::BTreeMap<String, serde_json::Value>,
+    script_outputs: &std::collections::BTreeMap<
+        String,
+        orbit_types::workflow::activity_job::ScriptOutputSet,
+    >,
 ) -> Result<(), orbit_engine::DispatchError> {
     super::checkpoints::checkpoint_step(
         runtime,
@@ -65,6 +69,7 @@ pub(super) fn checkpoint_step(
         step_id,
         output,
         compound_outputs,
+        script_outputs,
     )?;
     // The step is durable, so this is a safe point to yield to an upgrade.
     runtime.yield_run_at_step_boundary(run_id);

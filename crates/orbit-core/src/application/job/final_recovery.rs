@@ -343,6 +343,7 @@ fn record_decision(
                 state.step_states.retain(|index, _| keep(index));
                 state.step_outputs.retain(|index, _| keep(index));
                 state.compound_outputs.retain(|index, _| *index < from);
+                state.script_output_sets.retain(|index, _| *index < from);
             }
             state.updated_at = Utc::now();
             Ok(())

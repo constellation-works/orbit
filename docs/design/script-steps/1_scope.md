@@ -1,11 +1,11 @@
 ---
 title: "Scope: Script steps"
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 stage: building
-next: "Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 (files, macOS profile) is not yet filed"
+next: "Phases 1-2 landed ([ORB-19983], [ORB-19985]) and declared output files ([ORB-20866]); the rest of phase 3 (files.inputs, the attach action, macOS profile) is not yet filed"
 feature: script-steps
 doc_role: scope
 type: design
@@ -21,7 +21,8 @@ witness, `orbit script grant|revoke|list|show`, the governed rows and doctor
 findings. Phase 2 ([ORB-19985]) runs a granted step on Linux under
 `linux-bwrap-script-v1` (no network, `env_pass` or `files.inputs` yet), with the
 `script.execution` audit, `orbit run show` and `orbit script history`; other hosts
-refuse with `script_sandbox_unavailable`. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
+refuse with `script_sandbox_unavailable`. [ORB-20866] added declared output files
+(`files.outputs`, §4 Files out) from phase 3. This doc is the design deliverable of [ORB-19294]. It reverses the removal recorded in
 [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)
 ([ORB-00374]) by taking the alternative that decision recorded and set aside:
 "retrofit the sandbox/policy/cwd pipeline". It also narrows the reach of
@@ -551,16 +552,71 @@ unless the operator listed it.
   resolve physically inside the cwd tree or a granted `read_root`. Each one is
   bind-mounted (Linux) or copied (macOS) read-only at `in/<as>`. A missing input
   refuses the step before spawn.
-- **Files out.** After exit 0, Orbit collects regular files at the top level of
-  `out/`; symlinks and subdirectories are refused. The default caps are 8 files of at
-  most 1 MiB each, matching the task-artifact limit. The grant may raise them, up to
-  64 files of 64 MiB each. Files go to the run's artifact store under
-  `script/<step_id>/out/` and are exposed as `steps.<id>.files`: `[{name, path,
-  bytes, sha256}]`. Over-cap output fails the step (`script_outputs_over_cap`). It is
-  all or nothing, so a later step never sees part of a set.
+- **Files out.** Implemented ([ORB-20866]). A script opts in by declaring
+  `files.outputs` caps; a manifest without them keeps the JSON-only behavior and its
+  `out/` is discarded with the scratch. After exit 0 with valid stdout, Orbit collects
+  the regular files at the top level of the scratch `out/`. Names are ASCII letters,
+  digits, `.`, `_` and `-`, at most 128 bytes and never starting with `.`. A symlink, a
+  subdirectory, any other entry kind or an unsafe name rejects the whole set. Each file
+  is opened without following links and must be the inode the listing saw.
+  - **Caps.** The effective caps are the manifest's `max_files` and `max_file_bytes`,
+    which must sit within the grant. The grant defaults to 8 files of at most 1 MiB,
+    matching the task-artifact limit. The operator raises it at grant time with
+    `orbit script grant <name> --output-max-files <n> --output-max-file-bytes <b>`.
+    Hard ceilings are 64 files and 64 MiB per file. A set's total is bounded by
+    files × bytes and never exceeds 256 MiB. A manifest asking more than its grant
+    refuses before spawn with `grant_insufficient`, naming the flag to re-grant with.
+    Each grant states its limits again, so a re-grant without the flags returns to the
+    default and nothing widens a grant automatically.
+  - **Store.** Kept files are copied into a run-owned store in the workspace state
+    directory, `scripts/outputs/<run_id>/<set_id>/files/<name>`, with a
+    `producer.json` record of the set. The copy is staged and renamed in, so a set is
+    published whole or not at all. Bytes are copied exactly; the audit blob store,
+    which redacts text, is not used.
+  - **Exposure.** `steps.<id>.files` is `[{name, path, bytes, media_type, sha256}]`,
+    sorted by name. A template selects a file by name (`steps.render.files.shot.png.sha256`)
+    or index (`steps.render.files.0.path`). `media_type` comes from the extension
+    (`application/octet-stream` otherwise).
+  - **Failure.** Over-cap output, whether by count, file size or total, fails the step
+    with `script_outputs_over_cap`. Rejected entries fail it with
+    `script_outputs_invalid`, and a store write failure with
+    `script_outputs_unavailable`. All three are non-retryable, and the step exposes no
+    file. A nonzero exit, a timeout or invalid stdout collects nothing.
 
-`steps.<id>.files` is a second key beside `output` in the step map. It is persisted in
-the step record, so resume reseeds it the way it reseeds output.
+`steps.<id>.files` is a second key beside `output` in the step map. The set is
+checkpointed with the step in the run state (`script_output_sets`), and the
+`script.execution` audit records `output_set_id` and `output_files`. Resume reseeds
+the set only after checking it against the store: the set ID must match its
+descriptor and the pipeline key it backs, the producing run must be the resumed run
+or one of its `retry_source_run_id` ancestors, `producer.json` must match the
+checkpointed descriptor, each path must be the store path, and each file must
+re-hash to its recorded size and SHA-256. Any mismatch, including a missing file or
+a genuine set from an unrelated run of the workspace, refuses resume with
+`script_outputs_unavailable` instead of re-running the producer. A descriptor confers
+no authority without a matching producer record, so a forged path to a host file is
+refused. The same holds inside compound steps. A loop, fan-out or parallel step that
+completes checkpoints the sets behind every entry it exposed. A `parallel:` branch
+that succeeds before a sibling parks is checkpointed as a `script_branch` record
+holding its output, its exposed entries and their exact sets. On resume, the branch
+is restored only after every set verifies. A failed check refuses the whole block
+before any branch runs, and the branch is never re-run to replace a lost set. A
+branch whose scripts kept no files keeps its earlier checkpoint shape. A fan-out
+worker's sets stay in that worker's private pipeline and are not exposed to the
+parent.
+
+**Consumer interface.** A later step consumes a set only through the
+`steps.<id>.files` template key. The descriptor's fields are stable: `name`, `path`,
+`bytes`, `media_type` and `sha256`, with the set's `workspace_id`, `run_id`,
+`step_id` and `set_id` kept in the run state. Inside the producing run, the
+references are trusted because the engine wrote them from a verified store
+publication. Outside that run, a descriptor's JSON and digest are claims and not
+authority. A host-side consumer honours them only through
+`RuntimeHost::verify_script_output_set`, which checks the producer record and
+re-hashes the bytes. A consumer reads bytes from the store `path` and never from
+the producer's scratch or any other host path. A consumer that must fit a larger
+evidence set into the caps, for example by deduplicating content-identical files,
+does so in the producing script before it writes `out/`. Orbit never drops files to
+fit: an over-cap set fails whole.
 
 **Why.** JSON in and out is the shape every other step already speaks, so templates,
 `when:` guards and later steps need nothing new. Declared files cover what JSON can't,
@@ -691,10 +747,26 @@ to another machine would run code where nobody approved it.
   job's load with `ResolveError::UnknownRefKind`, as `type: shell` fails today. A
   routine targeting the job reports a per-file load error and fires nothing. An older
   binary ignores `.orbit/resources/scripts/`.
-- **Persisted runs.** `script_execution` and `steps.<id>.files` are additive, optional
-  fields on the persisted step record, and readers tolerate their absence. An older
-  binary can't resume a run with a script step, because the job no longer loads, so the
-  run stays unresumable on that binary instead of running the step.
+- **Persisted runs.** `script_execution` (with `output_set_id` and `output_files`) and
+  the run state's `script_output_sets` are optional fields that this binary reads as
+  absent when missing. A JSON-only script writes neither, so its records keep their
+  earlier bytes. A binary from before script steps can't resume a run with a script
+  step, because the job no longer loads, so the run stays unresumable on that binary
+  instead of running the step.
+- **Older writers of kept output files.** A binary that runs script steps but predates
+  kept output files would drop `script_output_sets` on its next rewrite of the run
+  state, and would read a `script_branch` checkpoint as the branch's own output.
+  Skipping the empty fields does not protect a run once a set exists. So this binary
+  fences such writers instead of trusting them to retain the fields. A workspace it
+  opens is at workspace layout version 8 (`script-output-set-checkpoints`, a breaking
+  migration with no file change). A binary below layout 8 refuses to open the
+  workspace and names the migration. Upgrade admission compares layout ledgers, not
+  executable digests, so neither side joins beside the other. While an older
+  participant such as a configured stdio MCP server is live, this binary refuses
+  before it migrates or writes anything, and the layout stays at its earlier version.
+  It proceeds once that client is quiesced or handed over through the usual upgrade
+  handoff. An older participant that starts later is refused too, so no older writer
+  rewrites run state that may hold a set.
 - **Grants.** `script_grant` is a new host table added by an additive migration inside
   the release-gated compatibility window ([ORB-15732]). Old binaries never read it. A
   witness with an unknown `orbit.script.grant.v<N>` version refuses.
@@ -711,10 +783,11 @@ a binary that can't enforce its grant.
 |---|---|---|
 | `machine.script_timeout_max_seconds` | `3600` | Ceiling on any grant's `timeout_max_seconds` on this host |
 | `machine.script_scratch_max_bytes` | `1GiB` | Ceiling on any grant's scratch size |
-| `machine.script_output_files_max` | `64` × `64MiB` | Ceiling on any grant's output-file caps |
 | `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks, with a Linux warning when a scope is unavailable (macOS launches uncontained without a warning); `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
 
-Host keys, not workspace keys. Each grant's limits must sit at or below them.
+Host keys, not workspace keys. Each grant's limits must sit at or below them. Output-file
+caps have no key: their ceilings are fixed at 64 files, 64 MiB per file and 256 MiB per
+set (§4 Files out).
 
 ### Surfaces
 
@@ -974,8 +1047,8 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 
    It covers use cases A (without network) and C, and lands the decision record that
    supersedes ORB-00374's removal.
-3. **Files and macOS.** Not yet filed. This phase adds `files.inputs` and `files.outputs` with
-   `steps.<id>.files`, a deterministic action that attaches those files to a task as
+3. **Files and macOS.** Declared output files (`files.outputs` with `steps.<id>.files`)
+   landed in [ORB-20866]; the rest is not yet filed. This phase adds `files.inputs`, a deterministic action that attaches those files to a task as
    artifacts, the `macos-sandbox-script-v1` profile, `RLIMIT_*` limits, the
    root probes and TCC reporting, and nested-sandbox refusal. It covers use case B, and
    orbit-office items 4 and 5.
@@ -1055,6 +1128,7 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-19294] — designs script steps (this doc).
 - [ORB-19983] — phase 1: added script manifests, `target: script:` parsing, the grant store and `orbit script grant|revoke|list|show`; nothing executes.
 - [ORB-19985] — phase 2: Linux execution under `linux-bwrap-script-v1`, `script.execution` audit and `orbit script history`.
+- [ORB-20866] — phase 3 part: declared output files kept as run-owned, digest-verified sets exposed as `steps.<id>.files`, with grant output caps.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
 - [ORB-11294] — restored `local_shell` as a deterministic action; the Bearing and

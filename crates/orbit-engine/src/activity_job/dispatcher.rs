@@ -355,6 +355,19 @@ pub enum DispatchError {
         message: String,
     },
 
+    /// A script step's declared output files broke a rule (over a cap, a
+    /// symlink, a directory, an unsafe name), could not be stored, or a
+    /// resumed run's recorded set no longer matches its producer record.
+    /// `code` is a `script_outputs_*` failure code. No partial set is ever
+    /// exposed. Not retried: the same `out/` or record gives the same
+    /// answer.
+    #[error("{code}: step `{step_id}`: {message}; no output file of the step is exposed")]
+    ScriptOutputFiles {
+        code: &'static str,
+        step_id: String,
+        message: String,
+    },
+
     /// Job validation rejected the spec at load time.
     #[error("job validation failed: {0}")]
     JobValidation(String),
@@ -417,6 +430,7 @@ impl DispatchError {
                 | DispatchError::AutoTaskParked(_)
                 | DispatchError::ScriptRefused { .. }
                 | DispatchError::ScriptOutputInvalid { .. }
+                | DispatchError::ScriptOutputFiles { .. }
                 | DispatchError::ProtocolSkew(_)
         )
     }
@@ -431,6 +445,7 @@ impl DispatchError {
         match self {
             DispatchError::WorktreeIntegrity { code, .. } => code,
             DispatchError::ScriptRefused { code, .. } => code,
+            DispatchError::ScriptOutputFiles { code, .. } => code,
             DispatchError::ScriptOutputInvalid { .. } => {
                 orbit_types::workflow::activity_job::script_failure::OUTPUT_INVALID
             }

@@ -48,6 +48,23 @@ macro_rules! dispatch_methods {
             request: &crate::context::ScriptStepRequest,
         ) -> crate::context::ScriptStepRun;
 
+        /// Check a script output set a resumed run's checkpoint names against
+        /// the producer record the host stored beside the files, and re-hash
+        /// every file. `Err` names what is missing or differs; the engine
+        /// then refuses the resume rather than expose the references. A
+        /// descriptor alone confers nothing. A host that keeps no script
+        /// output files refuses every set.
+        ///
+        /// `consumer_run_id` is the run that would use the set. The set's
+        /// producing run must be that run or one of its `retry_source`
+        /// ancestors (the resume lineage), so a genuine set another run of
+        /// the workspace kept cannot be substituted into a checkpoint.
+        fn verify_script_output_set(
+            &self,
+            consumer_run_id: &str,
+            set: &orbit_types::workflow::activity_job::ScriptOutputSet,
+        ) -> Result<(), String>;
+
         /// Resolve the registered `local_shell` executor definition backing a
         /// deterministic shell step [ORB-11294].
         ///

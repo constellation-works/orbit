@@ -1,4 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+
+use orbit_types::workflow::activity_job::ScriptOutputSet;
 
 use super::*;
 
@@ -13,10 +15,20 @@ pub(super) fn run_parallel(
         .parent_stack_snapshot()
         .map_err(|err| DispatchError::AuditFailed(format!("{err:?}")))?;
 
+    // Restore succeeded branches before any branch runs. A restored script
+    // branch whose kept output files are missing or changed refuses the
+    // whole block here, so a sibling's success under `any`/`quorum` cannot
+    // mask it and the branch is never re-run to paper over the loss.
+    let mut restored: Vec<Option<StepOutcome>> = Vec::with_capacity(branches.len());
+    for branch in branches {
+        restored.push(restored_branch(step, branch, ctx)?);
+    }
+
     let results: Vec<(String, Result<StepOutcome, DispatchError>)> = thread::scope(|scope| {
         let handles: Vec<_> = branches
             .iter()
-            .map(|branch| {
+            .zip(restored)
+            .map(|(branch, restored)| {
                 let branch_id = branch.id.clone();
                 let join_branch_id = branch_id.clone();
                 let ctx_ref = ctx;
@@ -32,7 +44,7 @@ pub(super) fn run_parallel(
                             );
                         }
                     };
-                    if let Some(restored) = restored_branch(step, branch, ctx_ref) {
+                    if let Some(restored) = restored {
                         return (branch_id, Ok(restored));
                     }
                     let result = run_step(branch, ctx_ref);
@@ -170,20 +182,66 @@ pub(super) fn run_parallel(
 /// replayed, because that raw output does not carry the nested entries.
 const COMPOUND_BRANCH_CHECKPOINT_KIND: &str = "compound_branch";
 
+/// Marker on the checkpoint of a branch (target or compound) whose script
+/// steps kept output files. Beside the output and exposed entries it holds
+/// `script_output_sets`, the exact descriptors behind each entry's
+/// `steps.<id>.files`, keyed by pipeline key. A branch whose scripts kept no
+/// files keeps the target or compound shape above, unchanged.
+const SCRIPT_BRANCH_CHECKPOINT_KIND: &str = "script_branch";
+
 /// The recorded output of a succeeded branch a resumed auto-task job
 /// restores. Target and compound branches are both restored whole. A
 /// compound branch also puts back the nested outputs and fan-in aliases it
-/// exposed. A branch with no success checkpoint still runs.
-fn restored_branch(step: &JobV2Step, branch: &JobV2Step, ctx: &ExecCtx<'_>) -> Option<StepOutcome> {
-    let stored = ctx
+/// exposed. A branch with no success checkpoint still runs (`Ok(None)`).
+///
+/// A branch checkpointed with script output sets restores each set only
+/// after the host verifies it (producing run in this run's lineage, the
+/// producer record, every file's size and digest). Any mismatch or missing
+/// file is an `Err`: the branch is not re-run, which would mint a new set
+/// and hide that the accepted one is gone.
+fn restored_branch(
+    step: &JobV2Step,
+    branch: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+) -> Result<Option<StepOutcome>, DispatchError> {
+    let Some(stored) = ctx
         .restored_branches
-        .as_ref()?
-        .get(&step.id)?
-        .get(&branch.id)?
-        .clone();
-    let (output, exposed) = match &branch.body {
-        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => (stored, serde_json::Map::new()),
-        _ => restored_compound_branch(&stored)?,
+        .as_ref()
+        .and_then(|branches| branches.get(&step.id)?.get(&branch.id))
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let (output, exposed, sets) = if let Some(script) = restored_script_branch(&stored) {
+        let (output, exposed, sets) = script.map_err(|reason| {
+            unavailable_branch_sets(
+                step,
+                branch,
+                &format!("has a malformed checkpoint: {reason}"),
+            )
+        })?;
+        for key in sets.keys() {
+            if key != &branch.id && !exposed.contains_key(key) {
+                return Err(unavailable_branch_sets(
+                    step,
+                    branch,
+                    &format!("checkpoints an output set for `{key}`, which it did not expose"),
+                ));
+            }
+        }
+        super::execute::verify_resumed_output_sets(ctx.host, &ctx.run_id, &sets)?;
+        (output, exposed, sets)
+    } else {
+        let (output, exposed) = match &branch.body {
+            JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {
+                (stored, serde_json::Map::new())
+            }
+            _ => match restored_compound_branch(&stored) {
+                Some(restored) => restored,
+                None => return Ok(None),
+            },
+        };
+        (output, exposed, BTreeMap::new())
     };
     emit_job_event_lossy(
         &ctx.audit,
@@ -196,15 +254,66 @@ fn restored_branch(step: &JobV2Step, branch: &JobV2Step, ctx: &ExecCtx<'_>) -> O
             ),
         },
     );
+    let record = |key: &str, value: Value| match sets.get(key) {
+        Some(set) => record_pipeline_with_files(ctx, key, value, set),
+        None => record_pipeline(ctx, key, value),
+    };
     for (key, value) in &exposed {
-        record_pipeline(ctx, key, value.clone());
+        record(key, value.clone());
     }
-    record_pipeline(ctx, &branch.id, output.clone());
-    Some(StepOutcome {
+    record(&branch.id, output.clone());
+    Ok(Some(StepOutcome {
         success: true,
         output,
         message: None,
-    })
+    }))
+}
+
+fn unavailable_branch_sets(step: &JobV2Step, branch: &JobV2Step, reason: &str) -> DispatchError {
+    DispatchError::ScriptOutputFiles {
+        code: orbit_types::workflow::activity_job::script_failure::OUTPUTS_UNAVAILABLE,
+        step_id: branch.id.clone(),
+        message: format!(
+            "resume refused: branch `{}` of parallel step `{}` {reason}",
+            branch.id, step.id
+        ),
+    }
+}
+
+/// Exposed pipeline entries and the output sets behind them, as a script
+/// branch checkpoint carries them.
+type ScriptBranchParts = (
+    Value,
+    serde_json::Map<String, Value>,
+    BTreeMap<String, ScriptOutputSet>,
+);
+
+/// Split a script branch checkpoint. `None` when the value is not that
+/// envelope; `Some(Err)` when it is but a part is missing or unreadable,
+/// which refuses rather than replays.
+fn restored_script_branch(stored: &Value) -> Option<Result<ScriptBranchParts, String>> {
+    let object = stored.as_object()?;
+    if object.get("kind").and_then(Value::as_str) != Some(SCRIPT_BRANCH_CHECKPOINT_KIND) {
+        return None;
+    }
+    Some((|| {
+        let output = object.get("output").ok_or("no output")?.clone();
+        let exposed = object
+            .get("exposed")
+            .and_then(Value::as_object)
+            .ok_or("no exposed entries")?
+            .clone();
+        let sets = object
+            .get("script_output_sets")
+            .ok_or("no output sets")?
+            .clone();
+        let sets: BTreeMap<String, ScriptOutputSet> =
+            serde_json::from_value(sets).map_err(|error| format!("output sets: {error}"))?;
+        if sets.is_empty() {
+            return Err("no output sets".to_string());
+        }
+        Ok((output, exposed, sets))
+    })())
 }
 
 /// Split a compound branch checkpoint into its own output and the other
@@ -220,8 +329,8 @@ fn restored_compound_branch(stored: &Value) -> Option<(Value, serde_json::Map<St
     Some((output, exposed))
 }
 
-/// Checkpoint value for a succeeded compound branch: its output, plus the
-/// other parent-pipeline entries the branch exposed.
+/// The parent-pipeline entries a succeeded compound branch exposed, other
+/// than its own output.
 ///
 /// Step ids are unique, but a fan-in alias may equal another step id, and
 /// `collect_step_keys` also names each fan-out worker and its descendants.
@@ -229,11 +338,10 @@ fn restored_compound_branch(stored: &Value) -> Option<(Value, serde_json::Map<St
 /// under a worker id belongs to another producer. Skip that private
 /// namespace unless this branch's own fan-in alias uses the id: that alias
 /// is a parent write, even when it collides with a worker id.
-fn compound_branch_checkpoint_value(
+fn compound_branch_exposed(
     branch: &JobV2Step,
     ctx: &ExecCtx<'_>,
-    output: &Value,
-) -> Value {
+) -> serde_json::Map<String, Value> {
     let mut keys = Vec::new();
     super::execute::collect_step_keys(branch, &mut keys);
     let private_worker_keys = fan_out_worker_local_keys(branch);
@@ -251,11 +359,21 @@ fn compound_branch_checkpoint_value(
             exposed.insert(key.to_string(), unwrap_step_output(value));
         }
     }
-    serde_json::json!({
-        "kind": COMPOUND_BRANCH_CHECKPOINT_KIND,
-        "output": output,
-        "exposed": Value::Object(exposed),
-    })
+    exposed
+}
+
+/// The script output sets behind the branch's own entry and the entries it
+/// exposed, read from the pipeline the branch wrote.
+fn branch_output_sets(
+    branch: &JobV2Step,
+    ctx: &ExecCtx<'_>,
+    exposed: &serde_json::Map<String, Value>,
+) -> BTreeMap<String, ScriptOutputSet> {
+    let pipeline = ctx.pipeline_snapshot();
+    std::iter::once(branch.id.as_str())
+        .chain(exposed.keys().map(String::as_str))
+        .filter_map(|key| Some((key.to_string(), step_output_set(pipeline.get(key)?)?)))
+        .collect()
 }
 
 /// Step ids a fan-out worker and its descendants write only into that
@@ -336,9 +454,27 @@ fn checkpoint_branch(
     if !outcome.success || ctx.restored_branches.is_none() {
         return Ok(outcome);
     }
-    let recorded = match &branch.body {
-        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => outcome.output.clone(),
-        _ => compound_branch_checkpoint_value(branch, ctx, &outcome.output),
+    let exposed = match &branch.body {
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => serde_json::Map::new(),
+        _ => compound_branch_exposed(branch, ctx),
+    };
+    let sets = branch_output_sets(branch, ctx, &exposed);
+    let recorded = if !sets.is_empty() {
+        serde_json::json!({
+            "kind": SCRIPT_BRANCH_CHECKPOINT_KIND,
+            "output": outcome.output,
+            "exposed": Value::Object(exposed),
+            "script_output_sets": sets,
+        })
+    } else {
+        match &branch.body {
+            JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => outcome.output.clone(),
+            _ => serde_json::json!({
+                "kind": COMPOUND_BRANCH_CHECKPOINT_KIND,
+                "output": outcome.output,
+                "exposed": Value::Object(exposed),
+            }),
+        }
     };
     ctx.host
         .checkpoint_parallel_branch(&ctx.run_id, &step.id, &branch.id, &recorded)

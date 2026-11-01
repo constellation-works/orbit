@@ -77,6 +77,18 @@ impl RuntimeHost for OrbitRuntime {
         crate::application::job::script_step::run_script_step(self, request)
     }
 
+    fn verify_script_output_set(
+        &self,
+        consumer_run_id: &str,
+        set: &orbit_types::workflow::activity_job::ScriptOutputSet,
+    ) -> Result<(), String> {
+        crate::application::job::script_outputs::verify_script_output_set(
+            self,
+            consumer_run_id,
+            set,
+        )
+    }
+
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
         crate::runtime::RuntimeKernel::worker_invocation(self).cloned()
     }
@@ -811,8 +823,17 @@ impl RuntimeHost for OrbitRuntime {
         step_id: &str,
         output: &Value,
         compound_outputs: &BTreeMap<String, Value>,
+        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
-        recovery::checkpoint_step(self, run_id, step_index, step_id, output, compound_outputs)
+        recovery::checkpoint_step(
+            self,
+            run_id,
+            step_index,
+            step_id,
+            output,
+            compound_outputs,
+            script_outputs,
+        )
     }
 
     fn observe_auto_task_step(

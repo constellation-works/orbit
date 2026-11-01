@@ -24,10 +24,10 @@ pub use hosts::{
     RebaseRecoveryAttemptScope, ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
     ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, ScriptStepEnd,
-    ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading, SteeringRoundAdmission,
-    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
-    StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate,
-    UnlockedPathValidation, ValidatedTree, WorktreeGcTaskLookup,
+    ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading,
+    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
+    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree, WorktreeGcTaskLookup,
 };
 pub use outcome::{
     WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, baseline_red_hold_update,

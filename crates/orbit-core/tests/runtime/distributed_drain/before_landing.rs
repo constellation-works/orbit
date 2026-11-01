@@ -58,6 +58,7 @@ fn a_claimed_before_landing_review_reads_the_current_implementers_summary() {
                 "implement_bundle",
                 &json!({}),
                 &BTreeMap::from([("implement_one".into(), implementation)]),
+                &BTreeMap::new(),
             )
             .unwrap();
         leaf.gate_input["before_landing"] = json!(true);

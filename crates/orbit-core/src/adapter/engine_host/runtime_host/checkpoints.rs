@@ -12,7 +12,8 @@ use crate::runtime::recovery_authority::RecoveryAuthority;
 /// `PipelineState` so an interrupted run can be resumed without
 /// re-executing completed steps. The step's output lands in
 /// `step_outputs[step_index]` and a compound step's other exposed entries
-/// in `compound_outputs[step_index]` (what resume seeds from); every entry
+/// in `compound_outputs[step_index]` and the script output sets behind them
+/// in `script_output_sets[step_index]` (what resume seeds from); every entry
 /// is also merged into `pipeline` by key (what mid-run readers such as step
 /// recovery and `orbit run show` key by). A missing run row (direct
 /// `execute_job` callers that never persisted a run) is a silent no-op —
@@ -24,6 +25,7 @@ pub(super) fn checkpoint_step(
     step_id: &str,
     output: &Value,
     compound_outputs: &BTreeMap<String, Value>,
+    script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
 ) -> Result<(), DispatchError> {
     // [ORB-11253] Read-modify-write in one transaction rather than a
     // separate read and write: an operator run control written into this
@@ -40,6 +42,7 @@ pub(super) fn checkpoint_step(
                 None,
             );
             state.record_compound_outputs(step_index, compound_outputs.clone());
+            state.record_script_output_sets(step_index, script_outputs.clone());
             for (key, value) in compound_outputs {
                 state.record_pipeline_output(key, value.clone());
             }

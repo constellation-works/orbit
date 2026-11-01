@@ -39,6 +39,9 @@ macro_rules! recovery_methods {
         /// `PipelineState` (`step_outputs[step_index]`,
         /// `compound_outputs[step_index]`, and `pipeline` by key) so an
         /// interrupted run can be resumed without re-executing completed steps.
+        /// `script_outputs` holds the script output sets behind the exposed
+        /// entries, by pipeline key (`script_output_sets[step_index]`), and
+        /// belongs to the same write.
         /// Both halves belong to one write: a step recorded as completed without
         /// its compound outputs would resume with those entries missing. A host
         /// without run storage records nothing. Checkpoint failures are non-fatal to the run: the executor
@@ -50,6 +53,7 @@ macro_rules! recovery_methods {
             step_id: &str,
             output: &Value,
             compound_outputs: &BTreeMap<String, Value>,
+            script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
         ) -> Result<(), DispatchError>;
 
         /// Observe one `auto-task:` step pass deterministically (ORB-20158):

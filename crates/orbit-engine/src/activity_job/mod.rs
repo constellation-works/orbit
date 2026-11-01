@@ -40,5 +40,5 @@ pub use catalog::{
 };
 pub use script_catalog::{
     ScriptArgError, ScriptAsset, ScriptLoadError, ScriptSnapshot, V2ScriptCatalog,
-    load_script_asset, load_script_snapshot, render_script_args,
+    load_script_asset, load_script_snapshot, render_script_args, script_stdout_output,
 };

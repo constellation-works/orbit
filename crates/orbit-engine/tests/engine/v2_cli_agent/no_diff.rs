@@ -247,6 +247,10 @@ impl orbit_engine::test_support::NullRuntimeHost for SummaryDeliveryHost {
         step_id: &str,
         output: &Value,
         compound_outputs: &std::collections::BTreeMap<String, Value>,
+        _: &std::collections::BTreeMap<
+            String,
+            orbit_types::workflow::activity_job::ScriptOutputSet,
+        >,
     ) -> Result<(), DispatchError> {
         let mut state = self.state.lock().unwrap();
         state.record_pipeline_output(step_id, output.clone());

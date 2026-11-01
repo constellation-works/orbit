@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::activity_job::{V2ActivityCatalog, resolve_job_target_refs};
+use orbit_types::workflow::activity_job::{ScriptOutputSet, script_failure};
 use orbit_types::workflow::{JobRunState, PipelineState};
 
 use super::*;
@@ -97,7 +98,8 @@ pub fn execute_job_with_resume(
         _ => None,
     };
 
-    let pipeline = seed_pipeline_from_resume(job, resume);
+    let (pipeline, output_sets) = seed_pipeline_from_resume(job, resume);
+    verify_resumed_output_sets(host, run_id, &output_sets)?;
     let preparation_refresh = if let Some(resume) = resume {
         crate::executor::automation::vcs::reconcile_resumed_failure_handoff(
             host, job, run_id, resume, &pipeline,
@@ -111,7 +113,7 @@ pub fn execute_job_with_resume(
         audit: audit.clone(),
         host,
         input: base_input.clone(),
-        pipeline: Arc::new(Mutex::new(pipeline_steps_from_raw(pipeline))),
+        pipeline: Arc::new(Mutex::new(pipeline_steps_from_raw(pipeline, output_sets))),
         resumed_diagnostics: Arc::new(Mutex::new(seed_diagnostics_from_resume(job, resume))),
         recovery_activity,
         failure_activity,
@@ -362,12 +364,14 @@ pub fn execute_job_with_resume(
         let compound_outputs = pipeline_before
             .map(|before| compound_outputs_since(&ctx, step, &before))
             .unwrap_or_default();
+        let script_outputs = exposed_output_sets(&ctx, &step.id, &compound_outputs);
         checkpoint_completed_step(
             &ctx,
             step_index,
             &step.id,
             &outcome.output,
             &compound_outputs,
+            &script_outputs,
         );
         index += 1;
     }
@@ -409,15 +413,21 @@ fn lineage_forge_hold(
 /// alias (always the same value as that output, so it is derived rather
 /// than stored), then the nested entries in `compound_outputs`. Checkpoints
 /// recorded before `compound_outputs` existed restore the first two only.
+///
+/// The second map holds the script output sets behind `steps.<id>.files`,
+/// by pipeline key. A step's recorded sets are restored only for keys that
+/// step wrote, and a later step's write of a key drops an earlier set, so a
+/// set never outlives the output it belongs to.
 fn seed_pipeline_from_resume(
     job: &JobV2,
     resume: Option<&PipelineState>,
-) -> HashMap<String, Value> {
+) -> (HashMap<String, Value>, HashMap<String, ScriptOutputSet>) {
     let Some(state) = resume else {
-        return HashMap::new();
+        return (HashMap::new(), HashMap::new());
     };
 
     let mut seeded = HashMap::new();
+    let mut sets: HashMap<String, ScriptOutputSet> = HashMap::new();
     for (index, step) in job.steps.iter().enumerate() {
         let step_index = index as u32;
         if state.step_states.get(&step_index) != Some(&JobRunState::Success) {
@@ -429,21 +439,88 @@ fn seed_pipeline_from_resume(
         // A guarded fan-out checkpoints null when skipped. It did not
         // publish its collect alias; restoring that null can overwrite a
         // sibling's real collection (notably the empty verification path).
+        let mut written: Vec<&str> = Vec::new();
         if let Some(alias) = fan_in_alias(step)
             && output.is_array()
         {
             seeded.insert(alias.to_string(), output.clone());
+            written.push(alias);
         }
         seeded.insert(step.id.clone(), output.clone());
+        written.push(&step.id);
         if let Some(nested) = state.compound_outputs.get(&step_index) {
             seeded.extend(
                 nested
                     .iter()
                     .map(|(key, value)| (key.clone(), value.clone())),
             );
+            written.extend(nested.keys().map(String::as_str));
+        }
+        let recorded = state.script_output_sets.get(&step_index);
+        for key in written {
+            match recorded.and_then(|recorded| recorded.get(key)) {
+                Some(set) => sets.insert(key.to_string(), set.clone()),
+                None => sets.remove(key),
+            };
         }
     }
-    seeded
+    (seeded, sets)
+}
+
+/// Refuse a resume whose recorded output sets are not the ones their
+/// producer stored: a descriptor is a claim, honoured only while it names
+/// the pipeline key it backs, came from this run or a run it resumes, and
+/// the host's producer record and the stored bytes still match it. A
+/// missing, edited, forged or foreign set stops the run (or the restored
+/// branch) before any step uses it, rather than handing a later step
+/// references to files that are gone or different. Restoring the set is
+/// never replaced by re-running its producer, which would hide the loss.
+pub(super) fn verify_resumed_output_sets<'a>(
+    host: &dyn RuntimeHost,
+    run_id: &str,
+    sets: impl IntoIterator<Item = (&'a String, &'a ScriptOutputSet)>,
+) -> Result<(), DispatchError> {
+    let mut sets: Vec<(&String, &ScriptOutputSet)> = sets.into_iter().collect();
+    sets.sort_by_key(|(key, _)| *key);
+    for (key, set) in sets {
+        let refused = |reason: String| DispatchError::ScriptOutputFiles {
+            code: script_failure::OUTPUTS_UNAVAILABLE,
+            step_id: key.clone(),
+            message: format!(
+                "resume refused: the checkpointed output set {} {reason}",
+                set.set_id
+            ),
+        };
+        if set.step_id != *key {
+            return Err(refused(format!(
+                "was produced by step `{}`, not this step",
+                set.step_id
+            )));
+        }
+        if !set.identity_matches() {
+            return Err(refused("does not match its own identity".to_string()));
+        }
+        host.verify_script_output_set(run_id, set)
+            .map_err(refused)?;
+    }
+    Ok(())
+}
+
+/// The script output sets behind the entries a completed top-level step
+/// exposed (its own id and its compound entries), for its checkpoint.
+fn exposed_output_sets(
+    ctx: &ExecCtx<'_>,
+    step_id: &str,
+    compound_outputs: &BTreeMap<String, Value>,
+) -> BTreeMap<String, ScriptOutputSet> {
+    let pipeline = ctx.pipeline_snapshot();
+    std::iter::once(step_id)
+        .chain(compound_outputs.keys().map(String::as_str))
+        .filter_map(|key| {
+            let set = step_output_set(pipeline.get(key)?)?;
+            Some((key.to_string(), set))
+        })
+        .collect()
 }
 
 /// Carry only conflict diagnostics for incomplete steps, without turning
@@ -571,11 +648,16 @@ fn checkpoint_completed_step(
     step_id: &str,
     output: &Value,
     compound_outputs: &BTreeMap<String, Value>,
+    script_outputs: &BTreeMap<String, ScriptOutputSet>,
 ) {
-    if let Err(error) =
-        ctx.host
-            .checkpoint_step(&ctx.run_id, step_index, step_id, output, compound_outputs)
-    {
+    if let Err(error) = ctx.host.checkpoint_step(
+        &ctx.run_id,
+        step_index,
+        step_id,
+        output,
+        compound_outputs,
+        script_outputs,
+    ) {
         tracing::warn!(
             target: "orbit.engine.job_executor",
             run_id = %ctx.run_id,
