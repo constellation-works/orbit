@@ -1,6 +1,5 @@
 // Orbit dashboard audit-domain rendering and actions: the event log (Health ›
-// Incidents › Events), the tool-call summary (Analytics › Reliability › Tools)
-// and the denial count on the Health rail entry.
+// Incidents › Events) and the tool-call summary (Analytics › Reliability › Tools).
 // Pure vanilla JS, split into ES modules with no build step.
 
 import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, syncNodes, makeToggleRow, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
@@ -551,30 +550,6 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 
   container.appendChild(grid);
   return container;
-}
-
-// The canonical denial count of /api/audit/summary (`denials`: denied audit
-// rows plus v2 loop denials) rides on the Health rail entry. Its route opens
-// Health › Incidents › Events filtered to denials for the window it counted.
-function renderDenialCount(data) {
-  const node = $("rail-count-denials");
-  if (!node) return;
-  const denials = Number(data && data.denials) || 0;
-  const window = (data && data.window) || "24h";
-  node.hidden = denials === 0;
-  node.textContent = denials ? `${denials >= 10000 ? `${(denials / 1000).toFixed(1)}k` : denials} denied` : "";
-  if (!denials) {
-    node.title = "";
-    delete node.dataset.route;
-    return;
-  }
-  const sql = Number(data.denials_sql) || 0;
-  const v2 = Number(data.denials_v2) || 0;
-  node.title = `${denials} policy denials in the ${window} window (${sql} audit rows, ${v2} loop denials). Click to open Health › Incidents › Events filtered to denials.`;
-  const sp = new URLSearchParams();
-  if (window !== "all") sp.set("since", window);
-  sp.set("status", "denied");
-  node.dataset.route = `diagnostics/incidents/events?${sp.toString()}`;
 }
 
 // ORB-20482 — the failures-by-tool table reached 50 rows, pushing the rest
@@ -1142,7 +1117,6 @@ export {
   effectiveAuditWindow,
   // refresh entry points
   fetchAndRenderAudit,
-  renderDenialCount,
   renderAuditSummary,
   // module init
   buildAuditChips,

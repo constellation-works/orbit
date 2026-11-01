@@ -168,13 +168,13 @@ all values. Wider cards show those columns. Top duration ranks named tools
 only, excluding the synthetic `unknown` bucket and empty names before choosing
 the top eight.
 
-The denial badge on the Health rail entry shows the canonical policy-decision
-count (`denials` in `/api/audit/summary`, split in its title into audit rows,
-`denials_sql`, and loop denials, `denials_v2`). Clicking it opens Health › Incidents › Events
-filtered to `status=denied` for the window it counted. That list holds every
+The Health rail shows no denial count. The canonical policy-decision count is
+still `denials` in `/api/audit/summary` (the sum of `denials_sql`, audit rows,
+and `denials_v2`, loop denials). To list denials, open Health › Incidents › Events
+with the `status=denied` filter for the window you need. That list holds every
 denied audit row, including the lock-contention and settlement refusals the
 count excludes, and not the loop denials, so its length can differ from the
-badge.
+count.
 `GET /api/diagnostics/denials` still returns the per-denial evidence:
 `policy_decisions` (`total`, `sql`, `v2`), `evidence_scan_limit`, the evidence
 `total` and `recent_denials`. Evidence scans are capped at 1,000 rows per

@@ -1064,8 +1064,8 @@ assert(failingBadge.textContent.includes('Failing: 17 in a row since Sep 6'), `b
 assert(failingBadge.textContent.includes('same error ×17') && failingBadge.textContent.includes('[provider_capacity] 429 Too Many Requests'), `badge names the shared error and the latest one: ${failingBadge.textContent}`);
 assert(descendants(failingBadge).some(node => node.tagName === 'A' && node.getAttribute('href')?.includes('jrun-orphan')), 'badge links to the latest failed run');
 assert(['fixture', 'parked_pipeline', 'task_auto_pipeline', longTaskJobId].every(id => !failureBadgeOf(id)), 'jobs below the threshold show no failure badge');
-assert(!get('rail-count-jobs-failing').hidden && get('rail-count-jobs-failing').textContent === '1 failing', `Jobs rail counts failing jobs: ${get('rail-count-jobs-failing').textContent}`);
-assert(!get('rail-count-job-failures').hidden && get('rail-count-job-failures').textContent === '1 job' && get('rail-count-job-failures').title.includes('task_pr_pipeline: Failing: 17 in a row'), 'Health rail counts failing jobs and names them');
+assert(!get('rail-count-jobs-failing').hidden && get('rail-count-jobs-failing').textContent === '1 failing' && get('rail-count-jobs-failing').title.includes('task_pr_pipeline: Failing: 17 in a row'), `Jobs rail counts failing jobs and names them: ${get('rail-count-jobs-failing').textContent}`);
+assert(!get('rail-count-job-failures'), 'the Health rail carries no job-failure pill; the Jobs pill is the only failing-job count');
 // Varying errors and a scan that ended inside the streak read honestly.
 jobFailures = { threshold: 5, failing: [{ ...failureStreak, same_error: false, truncated: true, count: 100 }] };
 await fetchAndRenderJobs();
@@ -1075,7 +1075,7 @@ assert(varyingBadge.textContent.includes('Failing: at least 100 in a row') && va
 jobFailures = { threshold: 0, failing: [] };
 await fetchAndRenderJobs();
 assert(!descendants(get('jobs-body')).some(node => String(node.className || '').includes('job-failure-badge')), 'threshold 0 shows no badge');
-assert(get('rail-count-jobs-failing').hidden && get('rail-count-job-failures').hidden, 'threshold 0 hides the rail counts');
+assert(get('rail-count-jobs-failing').hidden, 'threshold 0 hides the rail count');
 jobFailures = { threshold: 5, failing: [failureStreak] };
 await fetchAndRenderJobs();
 
