@@ -32,7 +32,7 @@ human update path (`update_task_as_human`,
 [automation-triggers](../automation-triggers/3_vision.md)), and the plugin standard
 ([plugins](../plugins/1_scope.md)). Anchors verified at `1985068c2`
 (2026-10-25), except the two `authorization/` line anchors in Shape, re-checked at
-`323daecd6` (2026-10-30); [2_design.md](./2_design.md) cites them per mechanism.
+`88a5b1d26` (2026-11-01); [2_design.md](./2_design.md) cites them per mechanism.
 
 ## Problem
 
@@ -107,7 +107,7 @@ fingerprint). The plugin never writes the task; it submits a *decision submissio
 to one governed core tool, and core either applies it as the human or refuses it.
 [2_design.md](./2_design.md) §3 shows the fit with `CallerProvenance`
 (`crates/orbit-common/src/governance/authorization/caller.rs:18`) and
-`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog.rs:434`).
+`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog.rs:448`).
 
 ### Email transport (plugin)
 

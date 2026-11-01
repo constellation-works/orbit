@@ -2,7 +2,7 @@
 title: Orbit MCP — Vision
 owner: codex
 last_updated: 2026-10-28
-last_validated: 2026-10-28
+last_validated: 2026-11-01
 status: Draft
 feature: mcp-bridge
 doc_role: vision
@@ -17,7 +17,7 @@ related_artifacts: [ORB-11009, ORB-11008]
 # Orbit MCP — Vision
 
 Direct v1 provides local stdio, direct SSH stdio, server-side resolution,
-destination-side caller policy, one Core dispatch boundary, and audit context.
+authority selected by the destination's startup argv, one Core dispatch boundary, and audit context.
 The separately selected federated mode adds an operator-configured mux and
 host-qualified routing. Future work should preserve the direct shape and add
 complexity only for a demonstrated requirement.
