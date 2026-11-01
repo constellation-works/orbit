@@ -258,7 +258,12 @@ spec:
        `orbit.task.show`, then send `orbit.task.update` the deduplicated union
        of ALL existing selectors plus yours (`allow_missing_context: true` for
        a file you will create): the list replaces the old one, so never send
-       additions alone. Revert accidental edits. Comment and stop when the
+       additions alone. A source-repair run (an operator-admitted repair of
+       an already published PR) is bound to its admitted scope, so
+       `orbit.task.update` refuses its `context_files` edits: when refused,
+       resend the summary or comment without `context_files` and keep your
+       changes; the delivery commit widens the selectors over the paths you
+       changed. Revert accidental edits. Comment and stop when the
        work turns out broad, ambiguous or out of scope. Never delete
        unrelated material as cleanup.
     5. Follow the workspace guide for repository practices and preserve

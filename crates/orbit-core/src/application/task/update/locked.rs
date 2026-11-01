@@ -8,6 +8,8 @@ use orbit_types::task::{
     GRANTED_TOOLS_CHANGED_EVENT, RecordedFinalRecovery, Task, TaskDecision, TaskHistoryEntry,
     TaskStatus, canonical_artifact_path, granted_tools_change_note,
 };
+use orbit_types::workflow::{SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED};
+use serde_json::Value;
 
 use super::super::TaskRecordUpdateParams;
 use super::super::TaskRecords;
@@ -26,7 +28,7 @@ use super::entry::{
     LockedTaskUpdate, StatusAuthority, TaskFieldWriter, TaskUpdateContext, task_field_writer,
 };
 use crate::OrbitRuntime;
-use crate::application::task::TaskReviewPort;
+use crate::application::task::{TaskJobPort, TaskReviewPort};
 
 impl OrbitRuntime {
     /// Apply an update, holding the task's write lock across the whole
@@ -266,12 +268,31 @@ impl OrbitRuntime {
                 "task {id} is in-progress; discard a preserved candidate after its run stops"
             )));
         }
+        // Only the caller's own replacement counts: normalization may write
+        // back a re-canonicalized stored list for an unrelated edit.
+        let explicit_context_files = params.context_files.is_some();
         let validated = self.validate_and_normalize_task_field_edits(id, &task, params, writer)?;
         let crew_assignment = validated.crew_assignment;
         let crew_source = validated.crew_source;
         let crew_redraw_history = validated.crew_redraw_history;
         let granted_tools_change = validated.granted_tools_change;
         params = validated.params;
+        if explicit_context_files
+            && !system_writer
+            && let (Some(owner), Some(requested)) =
+                (artifact_owner.as_deref(), params.context_files.as_ref())
+            && *requested != task.context_files
+            && self.live_source_repair_owned_by(&task, owner)?
+        {
+            return Err(OrbitError::PolicyDenied(format!(
+                "task {id} is being repaired by source-repair run `{owner}`, whose publication \
+                 authority is bound to the admitted task scope, so this run cannot replace \
+                 `context_files`; nothing in this update was written. Resend it without \
+                 `context_files` (execution_summary and comment are accepted) and keep your \
+                 changes in the worktree: the delivery commit widens `context_files` with the \
+                 paths you actually changed."
+            )));
+        }
         // Operator work is completed by its operator: an agent-attributed
         // update cannot close a human crew's task, before or after a crew
         // change in the same write.
@@ -602,5 +623,48 @@ impl OrbitRuntime {
             previous_status,
             status_note: written_note,
         })
+    }
+}
+
+impl OrbitRuntime {
+    /// Whether `owner` is the live source-repair run this task's history
+    /// links to it [ORB-21019].
+    ///
+    /// Read under the task's write lock from the run store and the system
+    /// `source_repair_linked` history entry; request input and actor labels
+    /// contribute nothing. A run that is terminal, carries no source-repair
+    /// admission for this task, or was never linked by the system is not one.
+    fn live_source_repair_owned_by(&self, task: &Task, owner: &str) -> Result<bool, OrbitError> {
+        let Some(run) = self.stored_job_run(owner)? else {
+            return Ok(false);
+        };
+        if run.state.is_terminal() {
+            return Ok(false);
+        }
+        let Some(admission) = run
+            .input
+            .as_ref()
+            .and_then(|input| input.get(SOURCE_REPAIR_KEY))
+        else {
+            return Ok(false);
+        };
+        let Some(request_key) = admission.get("request_key").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+        if admission["binding"]["task_id"].as_str() != Some(task.id.as_str()) {
+            return Ok(false);
+        }
+        Ok(self.get_task_history(&task.id)?.iter().any(|entry| {
+            entry.event == SOURCE_REPAIR_LINKED
+                && entry.by == SYSTEM_ACTOR_LABEL
+                && entry
+                    .note
+                    .as_deref()
+                    .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                    .is_some_and(|link| {
+                        link["run_id"].as_str() == Some(owner)
+                            && link["request_key"].as_str() == Some(request_key)
+                    })
+        }))
     }
 }

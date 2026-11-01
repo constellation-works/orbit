@@ -304,6 +304,12 @@ struct Publication {
 
 impl Publication {
     fn new() -> Self {
+        Self::with_worker(|_, _, _| {})
+    }
+
+    /// Prepare the publication, letting `worker` act as the repair run's
+    /// agent in its checkout before the host commit.
+    fn with_worker(worker: impl FnOnce(&Fixture, &str, &std::path::Path)) -> Self {
         let f = Fixture::publication();
         let binding = f.inspect();
         let submitted = f
@@ -320,6 +326,7 @@ impl Publication {
         let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
         f.action("candidate_resume", json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"]}));
         std::fs::write(checkout.join("source.txt"), "metadata settling repair\n").unwrap();
+        worker(&f, &id, &checkout);
         f.action("git_commit", json!({"job_run_id":id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
         f.action("candidate_validate", json!({"job_run_id":id,"completed_task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
         let pushed = f.action("git_push", json!({"job_run_id":id,"workspace_path":checkout,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]}));
@@ -1110,6 +1117,96 @@ fn publication_history_refuses_unreadable_reservations_without_note_fallback() {
     }
 }
 
+/// [ORB-21019] The repair run's agent cannot replace the admitted scope with
+/// `orbit.task.update`: that rewrote the task digest and the same-PR
+/// publication guard then refused validated, pushed source. The refusal
+/// writes nothing; the summary alone lands, and the host commit widens the
+/// footprint with run provenance, so the same PR still publishes.
+fn repair_run_footprint_edits_refuse_and_host_widening_publishes() {
+    let p = Publication::with_worker(|f, run, checkout| {
+        let as_run = |input: Value| {
+            RuntimeHost::run_tool_with_context_and_role(
+                &f.runtime,
+                "orbit.task.update",
+                input,
+                orbit_types::policy::Role::Agent,
+                orbit_tools::ToolContext {
+                    reservation_owner: Some(orbit_tools::ReservationOwnerContext {
+                        owner_run_id: run.to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+        };
+        std::fs::write(checkout.join("outside.txt"), "a genuine outside change\n").unwrap();
+        let before = f.runtime.get_task(&f.task).unwrap();
+        let history = f.runtime.get_task_history(&f.task).unwrap();
+        for selectors in [
+            vec!["file:outside.txt"],
+            vec!["file:source.txt", "file:outside.txt"],
+        ] {
+            let error = as_run(json!({
+                "id": f.task,
+                "context_files": selectors,
+                "allow_missing_context": true,
+                "execution_summary": "repaired the visibility error",
+            }))
+            .expect_err("a repair run's scope edit must be refused");
+            let message = error.to_string();
+            assert!(
+                message.contains("without `context_files`")
+                    && message.contains("delivery commit widens"),
+                "the refusal names the host-commit continuation: {message}"
+            );
+            assert_eq!(
+                f.runtime.get_task(&f.task).unwrap(),
+                before,
+                "nothing persists"
+            );
+            assert_eq!(f.runtime.get_task_history(&f.task).unwrap(), history);
+        }
+        // An echo of the stored scope changes nothing and is not refused.
+        as_run(json!({"id": f.task, "context_files": before.context_files}))
+            .expect("a canonical echo of the stored scope is admitted");
+        as_run(json!({"id": f.task, "execution_summary": "repaired the visibility error"}))
+            .expect("the summary alone is admitted");
+        assert_eq!(
+            f.runtime.get_task(&f.task).unwrap().execution_summary,
+            "repaired the visibility error"
+        );
+    });
+    let widened = p
+        .f
+        .runtime
+        .get_task_history(&p.f.task)
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            entry.by == "system" && entry.event == orbit_types::task::CONTEXT_FILES_WIDENED_EVENT
+        })
+        .filter_map(orbit_types::task::ContextFilesWidening::from_entry)
+        .filter(|widening| widening.selectors.contains(&"file:outside.txt".to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        widened.len(),
+        1,
+        "one host widening covers the outside change"
+    );
+    assert_eq!(widened[0].run_id, p.id, "with this repair run's provenance");
+    assert_eq!(
+        widened[0].step,
+        orbit_types::task::ContextWideningStep::Implement
+    );
+    std::fs::write(&p.f.answer, p.current.to_string()).unwrap();
+    let opened = orbit_engine::test_support::with_vcs_retry_wait(
+        |_| panic!("the converged head publishes without waiting"),
+        || p.open().unwrap(),
+    );
+    assert_eq!(opened["pr_reused"], true, "the same PR still publishes");
+    assert_eq!(p.last_evidence()["settling"]["decision"], "settled");
+}
+
 crate::scenario_table!(
     same_pr_publication_scenarios,
     same_pr_publication_retains_each_refused_observation,
@@ -1119,5 +1216,6 @@ crate::scenario_table!(
     publication_lag_rechecks_identity_authority_and_remote_on_convergence,
     publication_lag_budget_survives_repeated_action_calls,
     publication_history_replays_legacy_notes_and_typed_decisions,
-    publication_history_refuses_unreadable_reservations_without_note_fallback
+    publication_history_refuses_unreadable_reservations_without_note_fallback,
+    repair_run_footprint_edits_refuse_and_host_widening_publishes
 );
