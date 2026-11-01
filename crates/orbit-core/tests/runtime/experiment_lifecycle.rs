@@ -383,6 +383,91 @@ fn start_accepts_after_experiments_are_enabled_on_an_open_runtime() {
     assert_eq!(started.status, "running");
 }
 
+/// [ORB-20670] A legacy draft whose stored primary metric is step-local is
+/// refused at start with the whole-task alternatives, before any enrollment;
+/// a draft with a whole-task primary still starts.
+#[test]
+fn start_refuses_legacy_step_local_primary() {
+    if !super::dispatch_admission::isolated(
+        "experiment_lifecycle::start_refuses_legacy_step_local_primary",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let job_path = capture_job(root.path());
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "experiment-lifecycle-test".into(),
+        reason: None,
+    };
+
+    // A draft stored before step-local primaries were refused on write.
+    let legacy_id = draft_experiment(&runtime, "legacy-step-local", actor.clone());
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE experiments SET primary_metric = 'implement_tokens' WHERE id = ?1",
+            [&legacy_id],
+        )
+        .unwrap();
+
+    let error = runtime
+        .change_experiment(&legacy_id, ExperimentChange::Start, actor.clone())
+        .unwrap_err();
+    assert!(
+        matches!(&error, OrbitError::InvalidInput(message) if message.contains("implement_tokens") && message.contains("step-local") && message.contains("choose a whole-task metric") && message.contains("total_tokens")),
+        "start must refuse a step-local stored primary with the whole-task alternatives, got {error:?}"
+    );
+    let legacy = runtime.experiment_view(&legacy_id).unwrap();
+    assert_eq!(legacy.status, "draft");
+    assert!(
+        legacy.events.iter().all(|event| event.kind != "started"),
+        "a refused start must not record a start event: {:?}",
+        legacy.events
+    );
+
+    // The refused start enrolls nothing.
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Task admitted after a refused legacy start".into(),
+            complexity: TaskComplexity::Medium,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .unwrap();
+    let capture = submit_experiment_capture(&runtime, &job_path, &task.id);
+    assert!(
+        capture["assignments"].as_array().unwrap().is_empty(),
+        "a refused start enrolled the task: {capture}"
+    );
+    assert!(runtime.task_experiments(&task.id).unwrap().is_empty());
+
+    // A draft with a whole-task primary still starts.
+    let started = runtime
+        .change_experiment(
+            &draft_experiment(&runtime, "whole-task-primary", actor.clone()),
+            ExperimentChange::Start,
+            actor,
+        )
+        .unwrap();
+    assert_eq!(started.status, "running");
+}
+
 fn capture_job(root: &std::path::Path) -> std::path::PathBuf {
     let job_path = root.join("task_local_pipeline.yaml");
     std::fs::write(

@@ -517,15 +517,7 @@ fn apply_definition(
     if let Some(metric) = input.primary_metric {
         validate_metric("primary_metric", &metric)?;
         if experiment_metric_is_step_local(&metric) {
-            let alternatives = EXPERIMENT_METRICS
-                .iter()
-                .copied()
-                .filter(|name| !experiment_metric_is_step_local(name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(OrbitError::InvalidInput(format!(
-                "primary metric `{metric}` is step-local; choose a whole-task metric: {alternatives}"
-            )));
+            return Err(OrbitError::InvalidInput(step_local_primary_detail(&metric)));
         }
         experiment.primary_metric = Some(metric);
     }
@@ -576,6 +568,19 @@ fn position_u32(position: usize) -> u32 {
     u32::try_from(position).unwrap_or(u32::MAX)
 }
 
+/// The refusal detail for a step-local primary metric, naming the whole-task
+/// alternatives. Definition writes and the start precondition share it so a
+/// legacy draft points at the same fix.
+fn step_local_primary_detail(metric: &str) -> String {
+    let alternatives = EXPERIMENT_METRICS
+        .iter()
+        .copied()
+        .filter(|name| !experiment_metric_is_step_local(name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("primary metric `{metric}` is step-local; choose a whole-task metric: {alternatives}")
+}
+
 /// Whether a draft is complete enough to start, short of the checks that
 /// read the repository or the tool registry. Returns each arm's overlay.
 fn validate_startable(
@@ -601,8 +606,12 @@ fn validate_startable(
     if let Some(arm) = record.arms.iter().find(|arm| arm.weight == 0) {
         return Err(refuse(format!("arm `{}` has weight 0", arm.name)));
     }
-    if record.experiment.primary_metric.is_none() {
-        return Err(refuse("it has no primary metric".into()));
+    match record.experiment.primary_metric.as_deref() {
+        None => return Err(refuse("it has no primary metric".into())),
+        Some(metric) if experiment_metric_is_step_local(metric) => {
+            return Err(refuse(step_local_primary_detail(metric)));
+        }
+        Some(_) => {}
     }
     require_lines_changed_guardrail(
         record.experiment.primary_metric.as_deref(),
