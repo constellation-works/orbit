@@ -818,3 +818,40 @@ fn bare_rule_id_in_two_files_does_not_auto_answer() {
     assert_eq!(raised["state"], "answered", "{raised}");
     assert_eq!(raised["resolution"]["answered_by"], "precedent");
 }
+
+#[test]
+fn rule_edits_preserve_unparsed_content_and_crlf() {
+    let fx = Fixture::new();
+    let digest = corpus_content_digest(b"pub fn price() {}\n");
+    let original = format!(
+        "{}\nProse café stays.\n\n```yaml\nid: bad\nstatus: typo\n```\n\n## Later\nFin.\n",
+        rule_doc("1", "current", "2020-01-01", false, &digest)
+    )
+    .replace('\n', "\r\n");
+    fx.write_rules(&original);
+    fx.operator()
+        .set_decision_rule_auto("pricing/sign-off", true, "human:operator")
+        .unwrap();
+    let expected = original.replace(
+        "auto: false\r\n",
+        "auto: true\r\nauto_set_by: \"operator\"\r\n",
+    );
+    assert_eq!(String::from_utf8(fx.rule_bytes()).unwrap(), expected);
+    fx.operator()
+        .set_decision_rule_auto("pricing/sign-off", false, "human:operator")
+        .unwrap();
+    assert_eq!(String::from_utf8(fx.rule_bytes()).unwrap(), original);
+
+    let proposals = consolidate_decision_corpus(
+        &[document(&original)],
+        &[],
+        &[digest_of("src/lib.rs", &digest)],
+        TODAY,
+    );
+    assert_eq!(proposals.len(), 1);
+    assert!(proposals[0].markdown.contains("Prose café stays.\r\n\r\n```yaml\r\nid: bad\r\nstatus: typo\r\n```\r\n\r\n## Later\r\nFin.\r\n"));
+    assert_eq!(
+        parse_decision_rules(&proposals[0].markdown)[0].status,
+        CorpusRuleStatus::Stale
+    );
+}
