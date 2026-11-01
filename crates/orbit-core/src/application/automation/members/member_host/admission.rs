@@ -1,4 +1,3 @@
-use chrono::Utc;
 use orbit_automation::AutomationError;
 use orbit_automation::members::{MemberAdmission, MemberHost};
 use orbit_common::{NotFoundKind, OrbitError};
@@ -154,7 +153,7 @@ impl Host<'_> {
             for id in &member.task_ids {
                 let escalation = match self
                     .cached_task(id)
-                    .and_then(|task| self.escalation_of(&task, Utc::now()))
+                    .and_then(|task| self.escalation_of(&task))
                 {
                     Ok(escalation) => escalation,
                     Err(OrbitError::NotFound {

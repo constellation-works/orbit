@@ -591,34 +591,21 @@ pub(crate) fn run_sweep_at_with_providers_at(
             if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
                 continue;
             }
-            // A transient-infrastructure block whose probe passes goes back
-            // onto its candidate before the backstop looks at blocked tasks.
-            if runtime.worker_invocation().is_none() && runtime.coordination_write_owner().is_none()
-            {
-                match runtime.requeue_cleared_transient_infra_blocks() {
-                    Ok(requeued) if !requeued.is_empty() => tracing::info!(
-                        target: "orbit.core.sweep",
-                        workspace = %workspace.name,
-                        requeued = requeued.len(),
-                        "sweep.transient_infra_requeue"
-                    ),
-                    Ok(_) => {}
-                    Err(error) => tracing::warn!(
-                        target: "orbit.core.sweep",
-                        workspace = %workspace.name,
-                        error = %error,
-                        "sweep.transient_infra_requeue_failed"
-                    ),
-                }
-            }
+            // The tick rechecks every blocked task first (a merged PR, green
+            // required checks, a cleared infrastructure block) and settles
+            // those without an agent.
             match runtime.run_blocked_task_recovery_tick(now_utc) {
                 Ok(tick) => {
-                    if !tick.dispatched.is_empty() || !tick.settled.is_empty() {
+                    if !tick.dispatched.is_empty()
+                        || !tick.settled.is_empty()
+                        || !tick.rechecked.is_empty()
+                    {
                         tracing::info!(
                             target: "orbit.core.sweep",
                             workspace = %workspace.name,
                             dispatched = tick.dispatched.len(),
                             settled = tick.settled.len(),
+                            rechecked = tick.rechecked.len(),
                             "sweep.blocked_task_recovery"
                         );
                     }

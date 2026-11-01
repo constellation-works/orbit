@@ -156,11 +156,13 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
                     id: "1".to_string(),
                     label: "Drop criterion 2".to_string(),
                     consequence: "the old API stays retired".to_string(),
+                    option: None,
                 },
                 DecisionAnswer {
                     id: "dismiss".to_string(),
                     label: "Dismiss".to_string(),
                     consequence: "Leave blocked, stop asking for this episode.".to_string(),
+                    option: None,
                 },
             ],
             DecisionBinding::BlockEpisode {
@@ -335,11 +337,13 @@ fn decision_channel_cli_registers_submits_and_revokes() {
                     id: "1".to_string(),
                     label: "Drop criterion 2".to_string(),
                     consequence: "the old API stays retired".to_string(),
+                    option: None,
                 },
                 DecisionAnswer {
                     id: "dismiss".to_string(),
                     label: "Dismiss".to_string(),
                     consequence: "Leave blocked, stop asking for this episode.".to_string(),
+                    option: None,
                 },
             ],
             DecisionBinding::BlockEpisode {

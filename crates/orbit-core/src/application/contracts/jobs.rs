@@ -4,7 +4,7 @@
 /// The job a follower drain runs.
 pub const PULL_DRAIN_JOB: &str = "workspace_pull_pipeline";
 
-/// The job the `pilot_warnings_held` and `block_escalated` triggers submit.
+/// The job the `pilot_warnings_held` trigger submits.
 pub const ESCALATION_TRIAGE_JOB: &str = "escalation_triage_pipeline";
 
 /// The job that verifies review-filed findings.

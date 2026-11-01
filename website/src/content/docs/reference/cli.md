@@ -114,8 +114,8 @@ waits for the scheduled instant before admitting the task.
 ### Decision requests
 
 With `decision_channel.enabled` on (see [Configuration](../config/)), work
-held on a human decision — a blocked-task triage proposal or a task-pilot
-admission hold — raises a decision request. `orbit task show` lists a task's
+held on a human decision — a blocked task's final-recovery decision card or a
+task-pilot admission hold — raises a decision request. `orbit task show` lists a task's
 open requests in `open_decisions`.
 
 | Command | Purpose |

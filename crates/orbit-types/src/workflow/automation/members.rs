@@ -24,9 +24,10 @@ pub enum StateTriggerKind {
     /// A `proposed` task whose latest applied task-pilot assessment holds
     /// promotion on warning findings, not yet triaged for that assessment.
     PilotWarningsHeld,
-    /// A `blocked` task whose current block episode awaits triage: final
-    /// recovery escalated it, or it has no decision past the backstop's age
-    /// limit, and nobody outside Orbit's automation touched it since.
+    /// Retired: blocked-task triage no longer exists, because final recovery
+    /// is the single decider for a blocked task. Retained so persisted member
+    /// state and existing definitions still deserialize; the routine loader
+    /// skips a definition on it as retired and it observes no members.
     BlockEscalated,
     /// A task with an open decision request that has not yet been notified:
     /// one member per open request, fingerprinted by that request, so each

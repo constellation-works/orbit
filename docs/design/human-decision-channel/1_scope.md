@@ -87,7 +87,7 @@ unchanged.
 Core gains one record, `DecisionRequest`: the task, the gate kind
 (`block_triage`, `pilot_admission`, `proposed_approval`, `review_approval`), the
 allowed answers as stable ids taken from the source of truth that raised the hold
-(triage option ids, `PilotAdmissionVerdict` spellings, `approve`/`reject`), a
+(decision option ids, `PilotAdmissionVerdict` spellings, `approve`/`reject`), a
 stale-guard binding (block episode key, pilot `operation_id`, or task revision), an
 expiry, and a state (`open`, `answered`, `superseded`, `expired`). Requests are
 stored beside the task's own history rather than in a new store, listed through new
@@ -223,7 +223,7 @@ independently deliverable and useful before email exists.
 
 ## Acceptance (feature level)
 
-- Given a blocked task triaged `propose` with the channel enabled, exactly one email
+- Given a blocked task whose final recovery `decide`d with the channel enabled, exactly one email
   per block episode offers the triage's options; replying `2` records option 2 as the
   human, with channel provenance, and a confirmation mail follows.
 - Given a pilot admission hold, replying `approve-anyway` (or its digest number)

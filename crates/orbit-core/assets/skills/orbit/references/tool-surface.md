@@ -409,57 +409,24 @@ forwarded caller machine ID — attribution, not a grant — plus the workspace
 checkout and cwd. See [remote-access.md](../../orbit-setup/references/remote-access.md). Do not
 relaunch a server with more privileges to work around a denied call.
 
-### Blocked-task triage
+### Pilot-warning triage
 
-`orbit_task_block_triage` (`orbit.task.block_triage`) records one triage
-decision on a blocked task's current block episode. `candidates` lists the
-episodes that await triage: the final-recovery decision escalated, or the block
-has no decision and the backstop never decides it (it is older than 72 hours).
-An episode already triaged, or touched by a human after the block, is excluded.
-Each other action records one decision on a qualifying episode, as one task
-comment plus a history marker, and refuses any other episode. No action
-completes, rejects or archives a task.
+`orbit_task_block_triage` (`orbit.task.block_triage`) serves pilot-warning
+triage only. A blocked task is decided by final recovery, which opens a decision
+request an operator answers, so `subject: block` is refused with a message
+naming final recovery. The default subject is `pilot_warning`: the actions read
+`proposed` tasks whose latest task-pilot assessment holds promotion on warning
+findings.
 
-- `requeue` returns the task to `backlog` as a final-recovery requeue, counted
-  against the requeue bound shared with final recovery: 2 per 24 hours. Past the
-  bound, for a task tagged `security` or `security-review`, or for a run another
-  machine executed, the requeue is recorded as refused with the human action and
-  the task stays blocked. When the count cannot be read, nothing is written and
-  the refusal says so.
-- `propose` records the quoted blocker, two or three options with their
-  consequences and ready-to-apply replacement text, and a recommendation. It
-  changes nothing else.
-- `report` records the human action. It changes nothing else.
-- `resume_run` resumes the episode's own failed run (`run_id`, as the candidate
-  lists it) from its checkpoints, as `orbit job resume` does, and counts within
-  the same 2-per-24-hours bound. It is refused for another run, a run that is
-  not resumable, an exhausted or unreadable bound, a `security` or
-  `security-review` tag, or a run another machine executed.
-- `rerun_ci` re-requests the checks that failed on the task's recorded pull
-  request at `head_sha`, through the workspace's forge, then requeues the task
-  within the bound so its next run continues the publication. It is refused when
-  the task records no pull request, the head moved, no required check failed, or
-  the history records the head's failure as inherited from the base
-  (`pr_auto_fix_base_red`, `ci_base_suspect`), plus every refusal a requeue has.
-  If a request fails after it starts, its outcome may be uncertain: the
-  recorded comment and response identify acknowledged and uncertain runs,
-  and the requeue still counts. Inspect the uncertain run before retrying.
-- `friction_reported` links an existing friction record (`friction_id`) or files
-  one during the task (`friction_title` and `friction_body`), records its id on
-  the episode marker and comment with the human action, and leaves the task
-  blocked.
-
-A refused `resume_run`, `rerun_ci` or `friction_reported` changes nothing and
-records nothing, so the episode still awaits triage.
-
-With `subject` `pilot_warning`, the same actions read `proposed` tasks whose
-latest task-pilot assessment holds promotion on warning findings. `candidates`
-lists each held assessment that is not yet triaged and has no operator decision,
-quoting its holding findings. `propose` and `report` record one comment quoting
-those findings plus a `pilot_warning_triaged` history marker, which excludes that
-assessment afterwards, and they refuse a task that no longer qualifies. `requeue`
-is refused. A pilot-warning triage never approves, promotes, clears the hold or
-edits any other task field.
+`candidates` lists each held assessment that is not yet triaged and has no
+operator decision, quoting its holding findings. `propose` opens a decision card
+(a summary, two or three options with their consequences, and a recommendation;
+an option approves the task, re-pilots it or rewrites a field) and records one
+comment quoting those findings plus a `pilot_warning_triaged` history marker,
+which excludes that assessment afterwards. `report` records the human action the
+same way. Both refuse a task that no longer qualifies. `requeue`, `resume_run`,
+`rerun_ci` and `friction_reported` are refused. A pilot-warning triage never
+approves, promotes, clears the hold or edits any other task field.
 
 Inspection proof: a decision on a task that a live escalation triage run holds
 must carry that run's proof, in three fields:

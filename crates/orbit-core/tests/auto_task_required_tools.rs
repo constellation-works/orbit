@@ -672,11 +672,11 @@ fn shipped_template_task_add_payloads_use_only_declared_keys() {
     );
 }
 
-/// The escalation triage lane that replaced the blocked-task-triage
-/// auto-task requeues only through `orbit.task.block_triage`, whose shared
-/// bound and refusals it cannot bypass: its activity withholds every agent
-/// tool that would edit, requeue or resume a task another way, and lets
-/// it file the friction an Orbit-defect block needs.
+/// The escalation triage lane records pilot-warning dispositions only through
+/// `orbit.task.block_triage`, whose shared refusals it cannot bypass: its
+/// activity withholds every agent tool that would edit, requeue or resume a
+/// task another way, and lets it file the friction an Orbit-defect finding
+/// needs.
 #[test]
 fn escalation_triage_holds_no_operator_only_tool() {
     let activity: serde_yaml::Value =
@@ -700,12 +700,6 @@ fn escalation_triage_holds_no_operator_only_tool() {
     assert!(
         !disallowed.contains(&"orbit.task.block_triage")
             && !disallowed.contains(&"orbit.friction.add"),
-        "the triager records block dispositions and Orbit-defect frictions: {disallowed:?}"
-    );
-    let routine: serde_yaml::Value =
-        serde_yaml::from_str(include_str!("../assets/routines/blocked_task_triage.yaml")).unwrap();
-    assert_eq!(
-        routine["enabled"], false,
-        "[ORB-10549] the replacing routine ships inert"
+        "the triager records pilot-warning dispositions and Orbit-defect frictions: {disallowed:?}"
     );
 }

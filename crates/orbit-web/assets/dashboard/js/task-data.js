@@ -155,7 +155,6 @@ export function taskDetailState(task, context) {
 export function forgetTaskDetailLoad(taskId) {
   taskDetailLoads.delete(taskId);
   taskDrainLoads.delete(taskId);
-  taskState.taskDecisionLoads.delete(taskId);
 }
 
 function loadTaskDrainReadiness(task, context) {

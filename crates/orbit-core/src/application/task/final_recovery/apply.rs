@@ -4,7 +4,9 @@ use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
+    DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption, DecisionRequest,
     FINAL_RECOVERY_DECIDED_EVENT, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
+    decision_option_answers,
 };
 use orbit_types::workflow::{
     FinalRecoveryDecision, TRANSIENT_INFRA_BLOCKED_EVENT, TransientInfraBlock,
@@ -16,12 +18,13 @@ use super::super::helpers::SYSTEM_ACTOR_LABEL;
 use super::super::legacy_decisions;
 use super::super::lifecycle::{ensure_completion_run_stopped, ensure_post_deploy_criteria_met};
 use super::super::resolves::pending_resolves_history;
-use super::FINAL_RECOVERY_REQUEUED_EVENT;
+use super::mechanical::FrictionRef;
 use super::request::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TERMINAL_REFUSAL_MARK,
 };
 use super::revision::FinalRecoveryTaskRevision;
 use super::verify::verify_on_base;
+use super::{FINAL_RECOVERY_REQUEUED_EVENT, FINAL_RECOVERY_RESUMED_EVENT};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskJobPort, TaskRecords};
 
@@ -32,16 +35,31 @@ const ESCALATED_EVENT: &str = "final_recovery_escalated";
 
 /// One planned write: the status, its history event and note, and the
 /// comment that records the decision.
-struct Plan {
-    status: TaskStatus,
-    event: &'static str,
-    note: String,
-    comment: String,
-    execution_summary: Option<String>,
-    outcome: FinalRecoveryOutcome,
+pub(super) struct Plan {
+    pub(super) status: TaskStatus,
+    pub(super) event: &'static str,
+    pub(super) note: String,
+    pub(super) comment: String,
+    pub(super) execution_summary: Option<String>,
+    pub(super) outcome: FinalRecoveryOutcome,
     /// The engine's transient-infrastructure classification an escalation
     /// carries, recorded beside it for the cleared-infra requeue.
-    infra: Option<TransientInfraBlock>,
+    pub(super) infra: Option<TransientInfraBlock>,
+    /// A step already moved the task out of `blocked` (a resume readmits
+    /// it), so the write expects whatever status it now has.
+    pub(super) readmitted: bool,
+    /// History the write appends beside the decision's own.
+    pub(super) history: Vec<TaskHistoryEntry>,
+    /// The decision request a blocked task carries for its human.
+    pub(super) raise: Option<RaisedDecision>,
+}
+
+/// The decision request an escalation opens on the task it blocks.
+pub(super) struct RaisedDecision {
+    summary: String,
+    answers: Vec<DecisionAnswer>,
+    recommended: Option<String>,
+    human_action: Option<String>,
 }
 
 impl OrbitRuntime {
@@ -286,6 +304,9 @@ impl OrbitRuntime {
                             evidence_commit: commit,
                         },
                         infra: None,
+                        readmitted: false,
+                        history: Vec::new(),
+                        raise: None,
                     }
                 }
                 Err(reason) => {
@@ -302,6 +323,14 @@ impl OrbitRuntime {
                             request.base_ref
                         ),
                         Some(reason.clone()),
+                    )
+                    .with_human_request(
+                        &reason,
+                        &format!(
+                            "Find the commit that delivers this task on '{}', or move the task \
+                             by hand.",
+                            request.base_ref
+                        ),
                     )
                 }
             },
@@ -321,6 +350,9 @@ impl OrbitRuntime {
                 execution_summary: None,
                 outcome: FinalRecoveryOutcome::Rejected,
                 infra: None,
+                readmitted: false,
+                history: Vec::new(),
+                raise: None,
             },
             FinalRecoveryDecision::Archive { reason } => Plan {
                 status: TaskStatus::Archived,
@@ -334,6 +366,9 @@ impl OrbitRuntime {
                 execution_summary: None,
                 outcome: FinalRecoveryOutcome::Archived,
                 infra: None,
+                readmitted: false,
+                history: Vec::new(),
+                raise: None,
             },
             FinalRecoveryDecision::Requeue { reason } => {
                 let bound = request.requeue_bound;
@@ -356,6 +391,11 @@ impl OrbitRuntime {
                         ),
                         Some(limit.clone()),
                     )
+                    .with_human_request(
+                        &limit,
+                        "The failure keeps recurring; fix its cause before moving the task back \
+                         to backlog.",
+                    )
                 } else {
                     Plan {
                         status: TaskStatus::Backlog,
@@ -376,12 +416,85 @@ impl OrbitRuntime {
                         execution_summary: None,
                         outcome: FinalRecoveryOutcome::Requeued,
                         infra: None,
+                        readmitted: false,
+                        history: Vec::new(),
+                        raise: None,
                     }
+                }
+            }
+            FinalRecoveryDecision::ResumeRun { run_id, reason } => {
+                self.plan_resume_run(task, request, &header, run_id.trim(), reason)
+            }
+            FinalRecoveryDecision::RerunCi { head_sha, reason } => {
+                self.plan_rerun_ci(task, request, &header, head_sha.trim(), reason)
+            }
+            FinalRecoveryDecision::FrictionReported {
+                friction_id,
+                friction_title,
+                friction_body,
+                human_action,
+                summary,
+            } => {
+                let friction = match (friction_id, friction_title, friction_body) {
+                    (Some(id), _, _) if !id.trim().is_empty() => FrictionRef::Existing(id.trim()),
+                    (_, Some(title), Some(body)) => FrictionRef::File {
+                        title: title.trim(),
+                        body: body.trim(),
+                    },
+                    _ => {
+                        return Err(OrbitError::Execution(
+                            "friction_reported reached the applier without a friction".to_string(),
+                        ));
+                    }
+                };
+                self.plan_friction_reported(
+                    task,
+                    request,
+                    &header,
+                    friction,
+                    human_action,
+                    summary.as_deref(),
+                )
+            }
+            FinalRecoveryDecision::Decide {
+                summary,
+                options,
+                recommended,
+            } => {
+                let answers = decision_option_answers(options, *recommended).map_err(|error| {
+                    OrbitError::InvalidInput(format!("final recovery decide: {error}"))
+                })?;
+                let recommended_id = recommended.to_string();
+                let listing = answers
+                    .iter()
+                    .map(|answer| {
+                        format!(
+                            "option {}: {}\n  consequence: {}",
+                            answer.id, answer.label, answer.consequence
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Plan {
+                    raise: Some(RaisedDecision {
+                        summary: summary.trim().to_string(),
+                        answers,
+                        recommended: Some(recommended_id.clone()),
+                        human_action: None,
+                    }),
+                    ..Plan::escalated(
+                        request,
+                        &header,
+                        summary.trim(),
+                        &format!("{listing}\nrecommended: option {recommended_id}"),
+                        None,
+                    )
                 }
             }
             FinalRecoveryDecision::Escalate {
                 diagnosis,
                 human_action,
+                summary,
             } => match infra {
                 // The engine classified the failure; the block names its
                 // condition so a passing probe requeues it.
@@ -404,12 +517,18 @@ impl OrbitRuntime {
                     diagnosis.trim(),
                     &format!("human_action: {}", human_action.trim()),
                     None,
+                )
+                .with_human_request(
+                    summary
+                        .as_deref()
+                        .unwrap_or_else(|| first_sentences(diagnosis)),
+                    human_action,
                 ),
             },
         })
     }
 
-    /// Final-recovery requeues and blocked-task triage resumes recorded in
+    /// Final-recovery requeues and resumes (and the retired blocked-task triage's) recorded in
     /// the trailing `window`: the one count the requeue bound reads, shared
     /// by final recovery and the blocked-task triage. A caller that cannot
     /// read it must not requeue or resume.
@@ -432,6 +551,7 @@ impl OrbitRuntime {
                 matches!(
                     entry.event.as_str(),
                     FINAL_RECOVERY_REQUEUED_EVENT
+                        | FINAL_RECOVERY_RESUMED_EVENT
                         | super::super::blocked_recovery::BLOCKED_TASK_TRIAGE_RESUMED_EVENT
                 ) && entry.at >= since
             })
@@ -467,11 +587,12 @@ impl OrbitRuntime {
                 outcome,
             }),
         });
-        let published = if matches!(plan.outcome, FinalRecoveryOutcome::Requeued) {
-            self.published_owner_preservation(task, &request.run_id)?
-        } else {
-            None
-        };
+        let published =
+            if matches!(plan.outcome, FinalRecoveryOutcome::Requeued) && !plan.readmitted {
+                self.published_owner_preservation(task, &request.run_id)?
+            } else {
+                None
+            };
         let infra = plan
             .infra
             .as_ref()
@@ -492,7 +613,8 @@ impl OrbitRuntime {
         let transition = plan.status != task.status;
         // A requeue is a new retry decision even if the task is already in
         // backlog. Its event must guard cleanup and count toward the bound.
-        let record_status = transition || matches!(plan.outcome, FinalRecoveryOutcome::Requeued);
+        let record_status = !plan.readmitted
+            && (transition || matches!(plan.outcome, FinalRecoveryOutcome::Requeued));
         self.with_mutation(|| {
             let updated = self.stores().task_records().update(
                 &task.id,
@@ -508,13 +630,14 @@ impl OrbitRuntime {
                         .into_iter()
                         .chain(published.clone())
                         .chain(infra.clone())
+                        .chain(plan.history.clone())
                         .chain(if transition && plan.status == TaskStatus::Done {
                             pending_resolves_history(task)
                         } else {
                             Vec::new()
                         })
                         .collect(),
-                    expected_status: Some(vec![task.status]),
+                    expected_status: (!plan.readmitted).then(|| vec![task.status]),
                     ..Default::default()
                 },
             )?;
@@ -525,8 +648,95 @@ impl OrbitRuntime {
                 },
             ))
         })?;
+        if let Some(raise) = &plan.raise
+            && plan.status == TaskStatus::Blocked
+        {
+            self.raise_final_recovery_decision(&task.id, raise)?;
+        }
         Ok(())
     }
+
+    /// Open the decision request a blocked task's human answers, bound to
+    /// the block episode this decision just recorded (or the current one,
+    /// when the task was already blocked). Raised unconditionally: the
+    /// request is how final recovery asks, whatever the digest channel
+    /// setting says. The caller holds the task write lock.
+    fn raise_final_recovery_decision(
+        &self,
+        task_id: &str,
+        raise: &RaisedDecision,
+    ) -> Result<(), OrbitError> {
+        let history = self.get_task_history(task_id)?;
+        let Some(blocked) = history
+            .iter()
+            .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        else {
+            return Ok(());
+        };
+        let now = Utc::now().max(blocked.at);
+        let mut request = DecisionRequest::new(
+            task_id.to_string(),
+            DecisionGate::BlockTriage,
+            raise.answers.clone(),
+            DecisionBinding::BlockEpisode {
+                episode: blocked
+                    .at
+                    .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            },
+            "final_recovery".to_string(),
+            now,
+        )
+        .with_summary(raise.summary.clone(), raise.recommended.clone());
+        if let Some(action) = &raise.human_action {
+            request = request.with_human_action(action.clone());
+        }
+        let entry = request.history_entry(SYSTEM_ACTOR_LABEL);
+        self.with_mutation(|| {
+            let updated = self.stores().task_records().update(
+                task_id,
+                StoreTaskUpdateParams {
+                    actor: SYSTEM_ACTOR_LABEL.to_string(),
+                    append_history: vec![entry.clone()],
+                    expected_status: Some(vec![TaskStatus::Blocked]),
+                    ..Default::default()
+                },
+            )?;
+            Ok((
+                updated,
+                OrbitEvent::TaskUpdated {
+                    id: task_id.to_string(),
+                },
+            ))
+        })?;
+        Ok(())
+    }
+}
+
+/// The opening of `text` for a card: its first two sentences, at most 280
+/// characters.
+fn first_sentences(text: &str) -> &str {
+    let text = text.trim();
+    let mut end = text.len();
+    let mut sentences = 0;
+    for (index, ch) in text.char_indices() {
+        if matches!(ch, '.' | '!' | '?')
+            && text[index + ch.len_utf8()..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace)
+        {
+            sentences += 1;
+            if sentences == 2 {
+                end = index + ch.len_utf8();
+                break;
+            }
+        }
+    }
+    let mut end = end.min(280);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 #[cfg(test)]
@@ -553,10 +763,13 @@ impl Plan {
             execution_summary: None,
             outcome: FinalRecoveryOutcome::Refused { reason },
             infra: None,
+            readmitted: false,
+            history: Vec::new(),
+            raise: None,
         }
     }
 
-    fn escalated(
+    pub(super) fn escalated(
         request: &FinalRecoveryRequest,
         header: &str,
         diagnosis: &str,
@@ -576,7 +789,33 @@ impl Plan {
                 reason: override_reason,
             },
             infra: None,
+            readmitted: false,
+            history: Vec::new(),
+            raise: None,
         }
+    }
+
+    /// This escalation opening a decision request that asks only for an
+    /// action outside Orbit: `summary`, the exact `human_action` and one
+    /// "Done — requeue" answer.
+    pub(super) fn with_human_request(mut self, summary: &str, human_action: &str) -> Self {
+        self.raise = Some(RaisedDecision {
+            summary: summary.trim().to_string(),
+            answers: vec![DecisionAnswer {
+                id: "done".to_string(),
+                label: "Done — requeue".to_string(),
+                consequence: "Confirms the action was taken; the task returns to backlog."
+                    .to_string(),
+                option: Some(DecisionOption {
+                    summary: "Done — requeue".to_string(),
+                    rewrite: None,
+                    action: Some(orbit_types::task::DecisionAction::Requeue),
+                }),
+            }],
+            recommended: Some("done".to_string()),
+            human_action: Some(human_action.trim().to_string()),
+        });
+        self
     }
 }
 

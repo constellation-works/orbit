@@ -143,6 +143,7 @@ fn decision_answer(id: &str, label: &str, consequence: &str) -> DecisionAnswer {
         id: id.into(),
         label: label.into(),
         consequence: consequence.into(),
+        option: None,
     }
 }
 

@@ -74,7 +74,8 @@ struct Handoff {
 
 #[derive(Default)]
 struct ForgeState {
-    /// Fail the merged listing, as a forge outage would.
+    /// Fail the merged listing and every lookup by number, as a forge outage
+    /// would.
     fail_merged: bool,
     /// What the most-recently-merged listing returns.
     recent: Vec<MergedPullRequest>,
@@ -143,6 +144,9 @@ impl TaskPrForge for FakeForge {
         number: u64,
     ) -> Result<Option<MergedPullRequest>, OrbitError> {
         let state = self.0.lock().unwrap();
+        if state.fail_merged {
+            return Err(OrbitError::Execution("forge unavailable".into()));
+        }
         if state.unmerged.contains_key(&number) {
             return Ok(None);
         }

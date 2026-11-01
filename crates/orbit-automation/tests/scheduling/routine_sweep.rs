@@ -749,33 +749,6 @@ policy:
     }
 }
 
-/// The seeded pilot-warning and blocked-task triage routines share
-/// `job:escalation_triage_pipeline` but watch different trigger kinds. Each
-/// owns its own consumer and member set, so enabling both runs both rather
-/// than skipping both as duplicate owners. [ORB-17918]
-#[test]
-fn state_routines_of_different_kinds_on_one_target_both_run() {
-    let store = Store::open_in_memory().expect("in-memory store");
-    let coll = collection(vec![
-        state_routine("pilot-warning-triage", "pilot_warnings_held"),
-        state_routine("blocked-task-triage", "block_escalated"),
-    ]);
-
-    let reports = run_sweep_core(
-        &store,
-        &coll,
-        &FakeDispatch::default(),
-        SweepOptions::default(),
-        ts(2026, 1, 1, 0, 0, 0),
-    )
-    .unwrap();
-
-    for report in &reports {
-        assert_eq!(report.action, "state", "{} should evaluate", report.routine);
-        assert_eq!(report.reason.as_deref(), Some("debouncing"));
-    }
-}
-
 /// The migration guard keeps the cases it was written for: a temporal routine
 /// and a state routine on one target, or two state routines of one kind, still
 /// skip each other as duplicate owners. [ORB-11331]

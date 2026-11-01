@@ -24,15 +24,16 @@
 //! way, before any write.
 
 use orbit_common::{DecisionRefusalCode, OrbitError};
+use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
-    DECISION_ANSWERED_EVENT, DecisionGate, DecisionRequest, DecisionRequestState,
-    DecisionResolution, PilotAdmissionVerdict, ReadinessGap, ReadinessStage, TaskHistoryEntry,
-    TaskStatus, readiness_gaps,
+    DECISION_ANSWERED_EVENT, DecisionAction, DecisionAnswer, DecisionGate, DecisionOption,
+    DecisionRequest, DecisionRequestState, DecisionResolution, PilotAdmissionVerdict, ReadinessGap,
+    ReadinessStage, TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus, readiness_gaps,
 };
 use serde_json::{Value, json};
 
 use super::TaskRecordUpdateParams;
-use super::params::TaskUpdateParams;
+use super::params::{TaskAddParams, TaskUpdateParams};
 use super::transitions::DeferredApprovalEffects;
 use crate::OrbitRuntime;
 use crate::application::task::{PilotAdmissionHold, TaskRecords, TriageTarget};
@@ -61,9 +62,14 @@ pub(crate) fn decision_request_json(request: &DecisionRequest) -> Value {
 }
 
 /// The compact `open_decisions[]` entry `orbit.task.show` carries: the
-/// request id, its gate, the answer ids a surface may offer, and expiry.
+/// request id, its gate, the answer ids a surface may offer, expiry, and the
+/// decision card: the short `summary`, the `human_action` of a request only a
+/// person outside Orbit can resolve, and `options` (each answer's id, label,
+/// consequence and whether it is the `recommended` one) so a surface renders
+/// one button per option without a second read.
 pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
-    json!({
+    let recommended = request.recommended.as_deref();
+    let mut entry = json!({
         "id": request.id,
         "gate": request.gate.as_str(),
         "answers": request
@@ -71,8 +77,27 @@ pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
             .iter()
             .map(|answer| answer.id.clone())
             .collect::<Vec<_>>(),
+        "options": request
+            .answers
+            .iter()
+            .map(|answer| {
+                json!({
+                    "id": answer.id,
+                    "label": answer.label,
+                    "consequence": answer.consequence,
+                    "recommended": recommended == Some(answer.id.as_str()),
+                })
+            })
+            .collect::<Vec<_>>(),
         "expires_at": request.expires_at.to_rfc3339(),
-    })
+    });
+    if let Some(summary) = &request.summary {
+        entry["summary"] = json!(summary);
+    }
+    if let Some(action) = &request.human_action {
+        entry["human_action"] = json!(action);
+    }
+    entry
 }
 
 impl OrbitRuntime {
@@ -188,6 +213,15 @@ impl OrbitRuntime {
         provenance: Option<String>,
     ) -> Result<DecisionRequest, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        if is_automation_actor(&actor_label) {
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::CallerNotAllowed,
+                format!(
+                    "decision request `{request_id}` is answered by a human; `{}` is automation, so nothing was applied",
+                    actor_label.trim()
+                ),
+            ));
+        }
         let not_found = || {
             OrbitError::decision_refused(
                 DecisionRefusalCode::RequestNotFound,
@@ -292,6 +326,14 @@ impl OrbitRuntime {
             .find(|answer| answer.id == answer_id)
             .map(|answer| answer.label.as_str())
             .unwrap_or(answer_id);
+        if matches!(
+            request.gate,
+            DecisionGate::BlockTriage | DecisionGate::ProposedApproval
+        ) && let Some(answer) = request.answers.iter().find(|answer| answer.id == answer_id)
+            && let Some(option) = &answer.option
+        {
+            return self.apply_option_answer(request, answer, option, note, actor_label, via);
+        }
         match request.gate {
             DecisionGate::BlockTriage => {
                 if answer_id == "dismiss" {
@@ -414,6 +456,170 @@ impl OrbitRuntime {
                 }
             }
         }
+    }
+
+    /// Apply a one-click option as the human: its rewrite, then its action,
+    /// then the move out of `blocked` (or the approval or re-pilot of a held
+    /// proposed task), with one comment naming the option and the note. The
+    /// caller holds the task's write lock and records the resolution, so the
+    /// whole answer closes the request in one operation. Everything refusable
+    /// is refused before the first write; a `split` files its follow-up
+    /// first, so a failure there applies nothing to this task.
+    fn apply_option_answer(
+        &self,
+        request: &DecisionRequest,
+        answer: &DecisionAnswer,
+        option: &DecisionOption,
+        note: Option<&str>,
+        actor_label: &str,
+        via: &str,
+    ) -> Result<Option<DeferredApprovalEffects>, OrbitError> {
+        let task_id = request.task_id.as_str();
+        let task = self.get_task(task_id)?;
+        let refuse = |reason: &str| {
+            OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotApplicable,
+                format!(
+                    "option `{}` cannot be applied ({reason}); nothing was applied and the request stays open",
+                    answer.id
+                ),
+            )
+        };
+        let blocked = request.gate == DecisionGate::BlockTriage;
+        let expected = if blocked {
+            TaskStatus::Blocked
+        } else {
+            TaskStatus::Proposed
+        };
+        if task.status != expected {
+            return Err(refuse(&format!(
+                "the task is {}, not {expected}",
+                task.status
+            )));
+        }
+
+        let mut params = TaskUpdateParams::default();
+        let mut applied = Vec::new();
+        if let Some(rewrite) = &option.rewrite {
+            if let Some(description) = &rewrite.description
+                && description.trim() != task.description.trim()
+            {
+                params.description = Some(description.clone());
+                applied.push("description rewritten");
+            }
+            if let Some(criteria) = &rewrite.acceptance_criteria
+                && *criteria != task.acceptance_criteria
+            {
+                params.acceptance_criteria = Some(criteria.clone());
+                applied.push("acceptance criteria rewritten");
+            }
+        }
+        let rewrites = !applied.is_empty();
+        let action_kind = option.action.as_ref().map(DecisionAction::kind);
+        if option.action.is_none() && !rewrites {
+            return Err(refuse("its rewrite leaves the task as it is"));
+        }
+        if !blocked && matches!(option.action, Some(DecisionAction::RePilot)) && !rewrites {
+            return Err(refuse(
+                "a proposed task is only re-assessed after a material edit, and this option rewrites nothing",
+            ));
+        }
+        // A proposed task that the option approves must clear the same
+        // screen an approval answer clears, before its rewrite lands.
+        let approves = !blocked
+            && matches!(
+                option.action,
+                Some(DecisionAction::Requeue | DecisionAction::ChangeCrew { .. })
+                    | Some(DecisionAction::Split { .. })
+            );
+        if approves {
+            self.ensure_proposal_admissible(task_id)?;
+        }
+
+        let mut consequence = format!("Consequence: {}", answer.consequence);
+        if !applied.is_empty() {
+            consequence.push_str(&format!("\nApplied: {}.", applied.join(", ")));
+        }
+        if let Some(kind) = action_kind {
+            consequence.push_str(&format!("\nAction: {kind}."));
+        }
+        let comment = decision_comment(
+            request,
+            &answer.id,
+            &format!("option {} — {}", answer.id, option.summary),
+            via,
+            note,
+            &consequence,
+        );
+        params.comment = Some(comment.clone());
+        let actor = actor_label.to_string();
+        let backlog = if blocked {
+            Some(TaskStatus::Backlog)
+        } else {
+            None
+        };
+
+        match &option.action {
+            None | Some(DecisionAction::Requeue | DecisionAction::RePilot) => {
+                params.status = backlog;
+            }
+            Some(DecisionAction::ChangeCrew { crew }) => {
+                params.crew = Some(Some(crew.clone()));
+                params.status = backlog;
+            }
+            Some(DecisionAction::Split {
+                title,
+                description,
+                acceptance_criteria,
+            }) => {
+                let follow_up = self.add_task(TaskAddParams {
+                    title: title.clone(),
+                    description: description.clone(),
+                    acceptance_criteria: acceptance_criteria.clone(),
+                    relations: vec![TaskRelation {
+                        relation_type: TaskRelationType::SpawnedFrom,
+                        target: task.id.clone(),
+                        regression: None,
+                    }],
+                    context_files: task.context_files.clone(),
+                    priority: task.priority,
+                    status: Some(TaskStatus::Proposed),
+                    comment: Some(format!(
+                        "Filed by decision request {} on {} (option {}: {}).",
+                        request.id, task.id, answer.id, option.summary
+                    )),
+                    ..TaskAddParams::default()
+                })?;
+                params.comment = Some(format!(
+                    "{comment}\nFollow-up task filed: {} (proposed).",
+                    follow_up.id
+                ));
+                params.status = backlog;
+            }
+            Some(DecisionAction::Reject) => {
+                let reason = note.map(str::to_string).unwrap_or_else(|| {
+                    format!(
+                        "rejected via option {} of decision request {}",
+                        answer.id, request.id
+                    )
+                });
+                self.reject_task(task_id, reason, Some(comment))?;
+                return Ok(None);
+            }
+            Some(DecisionAction::Archive) => {
+                params.status = Some(TaskStatus::Archived);
+            }
+        }
+        self.update_task_as_human(task_id, params, actor)?;
+        if approves {
+            let (_, effects) = self.approve_task_guarded_deferring_effects(
+                task_id,
+                note.map(str::to_string),
+                None,
+            )?;
+            return Ok(Some(effects));
+        }
+        Ok(None)
     }
 
     /// The task-pilot preparation and admission checks a digest-raised

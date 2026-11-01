@@ -44,10 +44,10 @@ mod episode;
 mod input;
 mod next_step;
 mod readout;
+mod recheck;
 pub(in crate::application::task) use readout::block_json;
 pub(crate) mod steps;
 mod triage;
-mod triage_recovery;
 
 pub use episode::{
     BlockEpisode, BlockSource, EpisodeDisposition, FinalRecoveryRecord, episode_disposition,
@@ -55,20 +55,28 @@ pub use episode::{
 pub(crate) use input::BlockedRecoveryPreparation;
 pub use input::{BlockedRecoveryInput, BlockedRecoveryTick, BlockedRecoveryView};
 pub use next_step::BlockedNextStep;
-pub(crate) use triage::block_triaged_at;
+pub use recheck::{BLOCKED_TASK_RECHECKED_EVENT, BlockedRecheckSettlement, RecheckKind};
 pub use triage::{
-    BLOCKED_TASK_TRIAGED_EVENT, BlockTriageDecision, BlockTriageRequest, BlockedTriageView,
-    TriageBasis, TriageCandidacy, TriageEpisode, TriageFriction, TriageOption, TriageTarget,
-    triage_candidacy,
+    BLOCKED_TASK_TRIAGE_RESUMED_EVENT, BLOCKED_TASK_TRIAGED_EVENT, BlockedTriageView, TriageBasis,
+    TriageCandidacy, TriageEpisode, TriageTarget, triage_candidacy,
 };
-pub(in crate::application::task) use triage::{
-    proposal_text, quote, triage_text, validated_proposal,
-};
-pub use triage_recovery::BLOCKED_TASK_TRIAGE_RESUMED_EVENT;
 
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_types::task::{Task, TaskHistoryEntry};
+
+/// The run that blocked `task`: the one its current block episode names, else
+/// the one it last ran.
+pub(in crate::application::task) fn blocking_run_of(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+) -> Option<String> {
+    readout::current_block(history)
+        .and_then(readout::blocking_run_id)
+        .map(str::to_string)
+        .or_else(|| task.job_run_id.clone())
+}
 
 /// The job the backstop dispatches, one run per block episode.
 pub const BLOCKED_TASK_RECOVERY_JOB: &str = "blocked_task_recovery_pipeline";
@@ -88,13 +96,18 @@ const RUN_SCAN_LIMIT: usize = 500;
 const TRIGGER_NAME: &str = "blocked-task-recovery";
 const TRIGGER_CONSUMER: &str = "clock-sweep";
 /// The `final_recovery` decisions the backstop applies. `resume` is absent: a
-/// blocked task has no live run to resume.
-pub(crate) const BACKSTOP_DECISIONS: [&str; 5] = [
+/// blocked task has no live run to resume in place, so `resume_run` starts a
+/// resumed run instead.
+pub(crate) const BACKSTOP_DECISIONS: [&str; 9] = [
     "complete_no_diff",
     "reject",
     "archive",
     "requeue",
     "escalate",
+    "decide",
+    "resume_run",
+    "rerun_ci",
+    "friction_reported",
 ];
 /// What the backstop's lane cannot do, stated in its agent's input.
 pub(crate) const BACKSTOP_LANE_CONTRACT: &str = "Blocked-task backstop: the failed run is over and \
@@ -102,7 +115,7 @@ pub(crate) const BACKSTOP_LANE_CONTRACT: &str = "Blocked-task backstop: the fail
     after your decision; nothing you change in it is committed or delivered, so do not implement \
     or validate the task there. `resume` is not available and is applied as `escalate`. When the \
     task's work should continue, escalate naming `retained_candidate`, or requeue for a fresh \
-    attempt. `retained_candidate` is evidence only: never modify it.";
+    attempt. `resume_run` and `rerun_ci` are the mechanical steps to try before a human decides. `retained_candidate` is evidence only: never modify it.";
 
 /// The checkout a recovery run's agent inspects: a detached linked worktree of
 /// the base, private to the run and removed when its decision is applied.

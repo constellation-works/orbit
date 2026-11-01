@@ -116,15 +116,15 @@ never fire on a quiet tree.
 
 `skip_unless_blocked_candidates: true` — also a definition-file field — mints
 only when at least one blocked task's current block episode awaits triage,
-under the rule the [blocked-task triage](automation.md#blocked-task-triage)
-applies. Otherwise the tick skips with reason `no_blocked_candidates` and a
+under the rule final recovery's [block handling](automation.md#what-a-block-gets-mechanical-steps-a-recheck-then-a-decision-card)
+uses. Otherwise the tick skips with reason `no_blocked_candidates` and a
 detail naming how many blocked tasks it read. The skip is reported and kept
 on the cursor like a `skip_if_unchanged` skip, and `orbit auto-task show
 <name>` displays both the precondition and the last skip. It fails open too:
 a probe that cannot read the blocked tasks mints and records why. No shipped
-default carries it: the `blocked-task-triage` routine, which replaced the
-retired auto-task of that name, applies the same rule itself
-([automation.md](automation.md#blocked-task-triage)).
+default carries it: the retired `blocked-task-triage` auto-task did, and
+final recovery now decides blocked tasks
+([automation.md](automation.md#what-a-block-gets-mechanical-steps-a-recheck-then-a-decision-card)).
 
 ## Managing definitions
 
@@ -554,8 +554,8 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   `pilot-block-report.json` with `partial` true and `pilot-block-cursor.json`
   with `resume_after` set to the last processed event. Its first input is the
   disposition `escalation_triage_pipeline` recorded (the `pilot_warning_triaged`
-  and `blocked_task_triaged` markers and comments, whose named human actions
-  recur), then task history, `pilot_warnings` and run records for what triage
+  and, on older history, `blocked_task_triaged` markers and comments, plus final
+  recovery's decision cards, whose named human actions recur), then task history, `pilot_warnings` and run records for what triage
   did not cover. It groups them by cause and routes each group that recurs (at
   least 3 occurrences across 2 tasks) to its source: the filer that writes
   unverifiable tasks, the task-pilot activity for holds that proved harmless,

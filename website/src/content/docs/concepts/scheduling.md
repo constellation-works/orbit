@@ -88,8 +88,8 @@ becomes true for a subject (`condition`); see
   for up to `timeout_minutes`.
 - **Seeded mostly disabled.** `orbit workspace init` writes task pilot, task
   publication, worktree and store GC, CI and dependency-alert sweeps, the
-  daily UX-rules routine, and the finding-verification, pilot-warning and
-  blocked-task triage routines, all with `enabled: false`. The one exception is the hourly crew-performance
+  daily UX-rules routine, and the finding-verification and pilot-warning
+  triage routines, all with `enabled: false`. The one exception is the hourly crew-performance
   refresh, seeded enabled; while crew performance is off, its action skips
   the scan and writes no snapshot.
 

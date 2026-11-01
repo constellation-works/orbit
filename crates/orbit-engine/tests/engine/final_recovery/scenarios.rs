@@ -513,9 +513,14 @@ fn a_resume_reruns_from_the_named_step_and_the_run_completes() {
     assert_eq!(input["allowed_resume_step_ids"], json!(["work"]));
     assert_eq!(input["step_recovery_attempts"], json!([]));
     assert_eq!(input["log_tail"], "this run's failure log");
-    // The in-pipeline lane applies every decision, `resume` included, so its
-    // input carries none of the blocked-task backstop's lane restrictions.
-    for restriction in ["decisions", "lane_contract", "retained_candidate"] {
+    // The in-pipeline lane applies every decision, `resume` included, but not
+    // `resume_run`: the live run resumes through `resume`, never a second
+    // resume of itself. It carries none of the backstop's other restrictions.
+    let decisions = input["decisions"].as_array().expect("decisions list");
+    assert!(decisions.contains(&json!("resume")), "{input}");
+    assert!(!decisions.contains(&json!("resume_run")), "{input}");
+    assert!(decisions.contains(&json!("decide")), "{input}");
+    for restriction in ["lane_contract", "retained_candidate"] {
         assert!(input.get(restriction).is_none(), "{restriction}: {input}");
     }
 }

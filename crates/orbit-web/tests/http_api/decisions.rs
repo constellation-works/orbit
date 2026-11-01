@@ -95,6 +95,7 @@ fn decision_answer_refusals_keep_structured_client_errors() {
                     id: "dismiss".into(),
                     label: "Dismiss".into(),
                     consequence: "Leave blocked".into(),
+                    option: None,
                 }],
                 DecisionBinding::BlockEpisode {
                     episode: blocked_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),

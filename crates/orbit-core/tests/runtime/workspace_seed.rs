@@ -764,3 +764,43 @@ crate::scenario_table!(
     implicit_runtime_open_and_workspace_init_preserve_legacy_skill_trees,
     settings_only_migration_waits_for_crud_and_preserves_concurrent_settings
 );
+
+/// Blocked-task triage is retired: a fresh workspace seeds no
+/// `blocked_task_triage` routine while its sibling pilot-warning routine still
+/// seeds, and a full sync retires an unedited copy an earlier release wrote
+/// instead of keeping a routine on the retired `block_escalated` trigger.
+#[test]
+fn blocked_task_triage_is_not_seeded_and_an_unedited_earlier_copy_is_retired_by_sync() {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("routines");
+    assert!(
+        !catalog.join("blocked_task_triage.yaml").exists(),
+        "a fresh workspace seeds no blocked-task triage routine"
+    );
+    assert!(
+        catalog.join("pilot_warning_triage.yaml").exists(),
+        "pilot-warning triage still seeds"
+    );
+
+    let earlier = include_str!("../../assets/routines/retired/blocked_task_triage.yaml");
+    record_unedited_retired_default(&catalog, "blocked_task_triage", earlier);
+    let report = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&identity()),
+        "main",
+        false,
+    )
+    .expect("full sync");
+    assert!(
+        report.actions.iter().any(|action| {
+            action.kind == "routine"
+                && action.name == "blocked_task_triage"
+                && action.outcome == ManagedArtifactOutcome::Retired
+        }),
+        "an unedited earlier copy is retired: {report:?}"
+    );
+    assert!(!catalog.join("blocked_task_triage.yaml").exists());
+}

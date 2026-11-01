@@ -22,6 +22,23 @@ const tasks = [
     block: { cause: 'infra', reason: ${JSON.stringify(reason)}, at: '${at}', run_id: 'jrun-block-fixture', comment_index: 1, next_action: ${JSON.stringify(nextAction)} },
     next_step: { run_id: 'jrun-block-fixture', resume_command: null, requeue_command: 'orbit task update BLOCK-1 --status backlog' } },
   { id: 'BLOCK-2', title: 'Investigate an undocumented block', status: 'blocked', block: { at: null, reason: null, run_id: null, comment_index: null, next_action: null } },
+  { id: 'BLOCK-4', title: 'Decide how to unblock a failed delivery', status: 'blocked',
+    block: { cause: 'escalation', reason: 'Required check test-shard-2 failed on head abc123: api::v1::compat panicked after the v1 API was retired.', at: '${at}', run_id: 'jrun-block-fixture', comment_index: 1, next_action: null },
+    open_decisions: [{ id: 'DR-BLOCK-4', gate: 'block_triage', expires_at: '2099-01-01T00:00:00Z', answers: ['1', '2', '3'],
+      summary: 'A retired API still backs criterion 2, so the test fails on every retry.',
+      options: [
+        { id: '1', label: 'Drop criterion 2', consequence: 'The retired API stays retired; the task returns to backlog without that criterion.', recommended: false },
+        { id: '2', label: 'Restore the v1 API', consequence: 'The v1 API comes back and the task is re-piloted with criterion 2 kept as written.', recommended: true },
+        { id: '3', label: 'Split the compat work', consequence: 'Files a follow-up for the compat shim and returns this task to backlog.', recommended: false },
+      ] }] },
+  { id: 'PILOT-1', title: 'Add a dashboard filter', status: 'proposed',
+    pilot_warnings: [{ kind: 'surface_warnings', text: 'The task edits crates/orbit-web/src/api but declares only the dashboard assets.' }],
+    open_decisions: [{ id: 'DR-PILOT-1', gate: 'proposed_approval', expires_at: '2099-01-01T00:00:00Z', answers: ['1', '2'],
+      summary: 'The declared surface misses the API handler the filter needs.',
+      options: [
+        { id: '1', label: 'Widen the surface and approve', consequence: 'Adds the API handler to the declared surface and moves the task to backlog.', recommended: true },
+        { id: '2', label: 'Archive', consequence: 'The task is archived and never runs.', recommended: false },
+      ] }] },
   // A stale projection must never put a block callout on another status.
   { id: 'BLOCK-3', title: 'Continue a queued task', status: 'backlog', block: { reason: 'stale block' } },
 ].map(task => ({ priority: 'medium', type: 'feature', complexity: 'medium', crew: 'sol',
@@ -72,6 +89,8 @@ try {
         await callout.waitFor({ state: 'visible' });
         assert.ok((await callout.innerText()).includes(reason), 'Overview shows the recorded reason');
         assert.ok((await callout.innerText()).includes(nextAction), 'Overview shows the recorded operator action');
+        assert.equal(await callout.locator('details.task-block-details[open]').count(), 0, 'Details starts collapsed');
+        await callout.locator('details.task-block-details > summary').click();
         assert.equal(await callout.locator('[data-clock-at]').count(), 1, 'The block carries an absolute timestamp');
         assert.equal(await callout.locator('[data-clock-at]').getAttribute('data-clock-at'), at);
         assert.ok((await callout.getByRole('link', { name: 'View run' }).getAttribute('href')).includes('run_id=jrun-block-fixture'));
@@ -83,15 +102,44 @@ try {
       await page.screenshot({ path: path.join(evidence, `task-block-${view}-${before ? 'before-' : ''}dark-${width}.png`) });
     }
     if (!before) {
+      await page.locator('.task-block-callout details.task-block-details').evaluate(node => { node.open = true; });
       await page.getByRole('button', { name: 'Read escalation' }).click();
       await page.locator('#comment-BLOCK-1-2').waitFor({ state: 'visible' });
       assert.match(await page.locator('#task-detail-body [role="tab"][aria-selected="true"]').innerText(), /^Comments/, 'The evidence action opens the matching comment');
       await page.goto(origin + '#tasks/BLOCK-2');
       await page.locator('.task-block-callout').waitFor({ state: 'visible' });
       assert.match(await page.locator('.task-block-reason').innerText(), /no.*reason.*recorded/i, 'A block without a reason explicitly says so');
+      await page.locator('.task-block-callout details.task-block-details > summary').click();
       assert.match(await page.locator('.task-block-time').innerText(), /not recorded/i, 'An unknown timestamp is explicit');
       await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running' || !animation.effect?.target?.closest?.('#task-detail-pane')));
       await page.screenshot({ path: path.join(evidence, `task-block-unknown-dark-${width}.png`) });
+      // The decision card: summary, one button per option with its consequence,
+      // the recommended one marked, a note field, and the raw diagnosis under Details.
+      await page.goto(origin + '#tasks/BLOCK-4');
+      const card = page.locator('.task-block-callout');
+      await card.locator('.decision-card').waitFor({ state: 'visible' });
+      assert.match(await card.locator('.decision-summary').innerText(), /retired API still backs criterion 2/);
+      assert.deepEqual(await card.locator('.decision-answer').allInnerTexts(), ['Drop criterion 2', 'Restore the v1 API', 'Split the compat work']);
+      assert.equal(await card.locator('.decision-consequence').count(), 3, 'Each option shows its consequence');
+      assert.equal(await card.locator('.decision-option.recommended .decision-recommended').count(), 1, 'One option is marked recommended');
+      assert.equal(await card.locator('.decision-note').count(), 1, 'The card has a note field');
+      assert.ok(!(await card.locator('.task-block-reason, .decision-summary').allInnerTexts()).join(' ').includes('test-shard-2'), 'The raw diagnosis stays out of the card face');
+      const cardBox = await card.boundingBox();
+      assert.ok(cardBox.x >= 0 && cardBox.x + cardBox.width <= width + 1, 'The decision card fits the viewport');
+      await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running' || !animation.effect?.target?.closest?.('#task-detail-pane')));
+      await page.screenshot({ path: path.join(evidence, `task-block-decision-dark-${width}.png`) });
+      await card.locator('details.task-block-details > summary').click();
+      assert.match(await card.locator('.task-block-diagnosis').innerText(), /test-shard-2 failed on head abc123/, 'The raw diagnosis opens under Details');
+      await page.screenshot({ path: path.join(evidence, `task-block-decision-details-dark-${width}.png`) });
+      await page.goto(origin + '#tasks/PILOT-1');
+      const hold = page.locator('.pilot-warnings');
+      await hold.locator('.decision-card').waitFor({ state: 'visible' });
+      assert.deepEqual(await hold.locator('.decision-answer').allInnerTexts(), ['Widen the surface and approve', 'Archive']);
+      assert.equal(await hold.locator('.decision-option.recommended').count(), 1);
+      assert.equal(await hold.locator('.decision-note').count(), 1);
+      assert.equal(await hold.locator('details.task-block-details[open]').count(), 0, 'The pilot findings start collapsed');
+      await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running' || !animation.effect?.target?.closest?.('#task-detail-pane')));
+      await page.screenshot({ path: path.join(evidence, `task-pilot-hold-dark-${width}.png`) });
       await page.goto(origin + '#tasks/BLOCK-3');
       await page.locator('#detail-BLOCK-3 .task-levers').waitFor({ state: 'visible' });
       assert.equal(await page.locator('.task-block-callout').count(), 0, 'Other statuses never show a block callout');

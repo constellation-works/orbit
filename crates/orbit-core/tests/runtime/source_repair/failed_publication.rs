@@ -54,6 +54,7 @@ fn infra_escalate(
             decision: orbit_types::workflow::FinalRecoveryDecision::Escalate {
                 diagnosis: format!("step `{failed_step}` failed on transient infrastructure"),
                 human_action: "wait for the condition to clear".into(),
+                summary: None,
             },
             resume_step_index: None,
             preserved_steps: Vec::new(),

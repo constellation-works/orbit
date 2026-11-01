@@ -114,6 +114,7 @@ impl Fixture {
         self.runtime.run_tool("orbit.task.update", input).unwrap();
     }
 
+    /// Start `task` and let final recovery escalate it as a two-option decision.
     fn escalate(&self, task: &str) {
         self.update(json!({"id": task, "status": "in_progress"}));
         self.runs.set(self.runs.get() + 1);
@@ -133,9 +134,13 @@ impl Fixture {
                     requeue_bound: Default::default(),
                 },
                 Some(&json!({
-                    "decision": "escalate",
-                    "diagnosis": "the worker crashed",
-                    "human_action": "choose a scope",
+                    "decision": "decide",
+                    "summary": "Criterion 2 contradicts the retired API.",
+                    "options": [
+                        {"summary": "Drop criterion 2", "consequence": "the old API stays retired", "rewrite": {"acceptance_criteria": ["Recovered."]}},
+                        {"summary": "Keep the API", "consequence": "the retirement is reverted", "rewrite": {"acceptance_criteria": ["Recovered.", "The API answers."]}},
+                    ],
+                    "recommended": 1,
                 })),
             )
             .unwrap();
@@ -145,23 +150,8 @@ impl Fixture {
         );
     }
 
-    /// Raise one open decision request on `task`'s escalated episode.
+    /// The one open decision request `escalate` raised on `task`'s episode.
     fn raise_request(&self, task: &str) -> orbit_types::task::DecisionRequest {
-        let input = json!({
-            "action": "propose",
-            "id": task,
-            "blocker": "criterion 2 contradicts the retired API",
-            "options": [
-                {"summary": "Drop criterion 2", "consequences": "the old API stays retired", "replacement": "- Recovered."},
-                {"summary": "Keep the API", "consequences": "the retirement is reverted", "replacement": "- Recovered.\n- The API answers."},
-            ],
-            "recommended": 1,
-            "model": "claude",
-            "workspace": self.repo.to_string_lossy(),
-        });
-        self.runtime
-            .run_tool("orbit.task.block_triage", input)
-            .unwrap();
         let requests = self.runtime.get_task_decision_requests(task).unwrap();
         assert_eq!(requests.len(), 1, "{requests:?}");
         assert_eq!(

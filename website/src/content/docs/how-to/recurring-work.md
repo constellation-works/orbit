@@ -153,7 +153,7 @@ the `claude` CLI.
 ## 2. Turn on routines
 
 `orbit workspace init` seeds the default routines into `.orbit/routines/`: task
-pilot, finding verification, pilot-warning triage, blocked-task triage,
+pilot, finding verification, pilot-warning triage,
 worktree GC, store GC (daily audit and run-state retention), the
 CI-failure and dependency-alert sweeps, crew-performance refresh,
 [task publication](../task-publication/#scheduled-publication) (weekly Sunday

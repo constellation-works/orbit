@@ -88,6 +88,8 @@ pub struct BlockedRecoveryTick {
     pub dispatched: Vec<(String, String)>,
     /// Tasks whose recovery run ended without a decision and were escalated.
     pub settled: Vec<String>,
+    /// Blocked tasks the deterministic recheck settled without an agent.
+    pub rechecked: Vec<super::BlockedRecheckSettlement>,
 }
 
 /// One blocked task as the backstop sees it, for `orbit doctor`.

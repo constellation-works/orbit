@@ -6,26 +6,22 @@ spec:
   type: deterministic
   description: >
     Select the escalated holds an escalation triage run reads and assign each
-    its triager. With subject pilot_warning (the default) a task qualifies
-    while it is proposed, its latest applied task-pilot assessment holds
-    promotion on warning findings, no operator recorded a task-pilot
-    admission decision on that assessment, and no pilot_warning_triaged
-    marker names it. With subject block a task qualifies while it is blocked
-    and its current block episode awaits triage under the shared rule: final
-    recovery escalated it, or it has no decision and is older than the
-    backstop's 72-hour limit, no blocked_task_triaged marker records it, and
-    nobody outside Orbit's automation touched it since the block. With
-    task_ids it triages those tasks; a named task that does not qualify, or
+    its triager. A task qualifies while it is proposed, its latest applied
+    task-pilot assessment holds promotion on warning findings, no operator
+    recorded a task-pilot admission decision on that assessment, and no
+    pilot_warning_triaged marker names it. The retired subject block (blocked
+    tasks are decided by final recovery) is refused with a migration message.
+    With task_ids it triages those tasks; a named task that does not qualify, or
     that another live triage run holds, settles superseded with its reason.
-    Without task_ids it selects every qualifying task of the subject, oldest
-    first, up to max_tasks, and counts the rest in `excluded_by_reason`. A
-    state claim must be of the subject's trigger kind. It pins one
+    Without task_ids it selects every qualifying task, oldest first, up to
+    max_tasks, and counts the rest in `excluded_by_reason`. A state claim
+    must be of the `pilot_warnings_held` trigger kind. It pins one
     landing-branch revision without changing the primary HEAD, index or
     working files; outside a Git work tree it pins none and reports a null
-    `source_revision`. Each pilot-warning task's triager is drawn from
+    `source_revision`. Each task's triager is drawn from
     workflow.purpose_crews.pilot_warning_triage while it is set, keeping only
-    crews whose executor declares `inspection_args`. An unset pool, a pool
-    with no such crew, and every block task draw from the hard complexity
+    crews whose executor declares `inspection_args`. An unset pool or a pool
+    with no such crew draws from the hard complexity
     pool's inspection-capable crews (or the next tier up, or the default crew
     when its executor declares them). Either draw passes over the crew that
     wrote a held assessment when the pool offers another, and each task's row

@@ -224,6 +224,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                                published. After the run stops, `orbit task requeue` does it at \
                                once."
                     .into(),
+                summary: None,
             },
             resume_step_index: None,
             preserved_steps: Vec::new(),
@@ -324,7 +325,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             failed_step_id: step.id.clone(),
             decision: FinalRecoveryDecision::Escalate {
                 diagnosis: format!("unchanged completion reuse refused: candidate-changed: {refusal}; original error: {error_message}"),
-                human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(),
+                human_action: "Inspect the publication and admit current-policy source repair when its evidence or inputs changed.".into(), summary: None,
             },
             resume_step_index: None,
             preserved_steps: Vec::new(),
@@ -402,6 +403,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                     "Inspect the failed run and its final-recovery invocation, then move \
                                the task by hand."
                         .to_string(),
+                summary: None,
             },
             None,
         ),
@@ -438,6 +440,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             human_action:
                 "Inspect the refused repair and its candidate ownership before resuming the run."
                     .into(),
+            summary: None,
         };
         resume_index = None;
     }

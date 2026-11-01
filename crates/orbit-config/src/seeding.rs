@@ -33,7 +33,6 @@ pub const SHIPPED_DEFAULT_ROUTINES: &[&str] = &[
     "task_pilot",
     "finding_verification",
     "pilot_warning_triage",
-    "blocked_task_triage",
     "worktree_gc",
     "task_publication",
     "store_gc",
@@ -42,7 +41,12 @@ pub const SHIPPED_DEFAULT_ROUTINES: &[&str] = &[
 ];
 
 /// Default routines a prior release shipped and this one no longer seeds.
-pub const RETIRED_DEFAULT_ROUTINES: &[&str] = &["auto_task_scheduler", "task_triage", "ship_sweep"];
+pub const RETIRED_DEFAULT_ROUTINES: &[&str] = &[
+    "auto_task_scheduler",
+    "task_triage",
+    "ship_sweep",
+    "blocked_task_triage",
+];
 
 /// Names of the default auto-tasks this Orbit ships, in seeding order.
 pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[

@@ -118,10 +118,6 @@ impl PilotAdmissionVerdict {
             ),
             Self::Rescope => ("Rescope", "The acceptance criteria changed."),
         };
-        DecisionAnswer {
-            id: self.as_str().to_string(),
-            label: label.to_string(),
-            consequence: consequence.to_string(),
-        }
+        DecisionAnswer::plain(self.as_str(), label, consequence)
     }
 }

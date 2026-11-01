@@ -3,6 +3,7 @@
 import { captureWorkspaceVisit, el, postJson, runHref, bindTaskLink } from './common.js';
 import { drainReadinessFor, drainReadinessView } from './drain-waits.js';
 import * as taskShared from './task-shared.js';
+import * as taskDecision from './task-decision.js';
 
 const OPERATOR_RECORD_REFUSAL_MS = 20000;
 
@@ -152,7 +153,10 @@ export function buildDeliveryAttentionBanner(task) {
   ]);
 }
 
-export function buildPilotWarnings(task) {
+// The pilot-hold callout on a proposed task: the pilot warning triage's summary
+// and one button per option when it opened a decision, else the findings and
+// the plain hold explanation. The raw findings sit under a collapsed "Details".
+export function buildPilotWarnings(task, detail, context) {
   const findings = pilotWarnings(task);
   if (!findings.length) return null;
   const labels = {
@@ -160,14 +164,24 @@ export function buildPilotWarnings(task) {
     validation_tool_warnings: "Validation tool", blocked_by: "Prerequisite",
     adr_conflicts: "Conflict",
   };
+  const decision = taskDecision.pilotHoldDecision(task);
+  const list = el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
+    el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
+    el("span", { text: finding.text }),
+  ])));
   const content = el("div", { class: "task-attention-content" }, [
     el("h3", { class: "task-attention-title", text: "Pilot warnings" }),
-    el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }),
-    el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
-      el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
-      el("span", { text: finding.text }),
-    ]))),
   ]);
+  if (decision && detail && context) {
+    content.appendChild(taskDecision.buildDecisionCard(task, decision, detail, context));
+    content.appendChild(el("details", { class: "task-block-details" }, [
+      el("summary", { text: "Details" }),
+      list,
+    ]));
+  } else {
+    content.appendChild(el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }));
+    content.appendChild(list);
+  }
   return el("section", { class: "task-attention warning pilot-warnings", "aria-label": "Pilot warnings" }, [
     el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
     content,

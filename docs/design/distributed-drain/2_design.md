@@ -1509,51 +1509,39 @@ tell a seeded copy from an operator's (`RETIRED_ROUTINE_FILES` in
 `crates/orbit-core/src/application/routines/seed.rs`). That name stays reserved.
 
 A failed run parks its task in `blocked` with the failure and `job_run_machine` attached. Final
-recovery (or, outside a pipeline, the blocked-task backstop) makes one decision on each block;
-what it escalates waits for a reader. The seeded `blocked_task_triage` routine ([ORB-17744],
-shipped disabled) is that reader, not a classifier that re-backlogs on its own. It replaced the
-hourly `blocked-task-triage` auto-task ([ORB-17245]) with an event trigger on the hard-tier
-`escalation_triage_pipeline` that also triages pilot warning holds, which it may only propose on
-or report:
+recovery (or, outside a pipeline, the blocked-task backstop) is the single decider for each block
+([ORB-20629]). The seeded `blocked_task_triage` routine ([ORB-17744]), the `block_escalated`
+trigger and the `blocked_task_triaged` producer are retired; the `escalation_triage_pipeline` now
+reads pilot warning holds only.
 
-- **Which blocks.** Its `block_escalated` state trigger
-  ([automation triggers §6.2](../automation-triggers/2_design.md#62-escalated-blocks-block_escalated))
-  admits each block episode (the latest transition into `blocked`) once, after debounce: one
-  whose final-recovery decision escalated, or one with no decision older than the backstop's
-  72 hours. An episode a human set or touched after the block, or one already triaged, is left
-  alone. Membership is exactly `triage_candidacy` in
-  `crates/orbit-core/src/application/task/blocked_recovery/triage.rs`, the rule the triage tool
-  applies too, so the trigger never races in-pipeline recovery: candidacy needs final recovery's
-  decision first. A later block on the same task is a new episode.
-- **One decision per episode,** by a triager drawn from `workflow.hard_complexity_crews`, through
-  `orbit.task.block_triage`, which writes a `blocked_task_triaged` history marker; the routine
-  settles each member from that marker. The tool records one of six dispositions. `requeue`
-  returns a mechanical block as a final-recovery requeue: the same `final_recovery_requeued`
-  event and the same `FinalRecoveryRequeueBound` (2 per 24 hours). `resume_run` resumes the
-  episode's own failed run from its checkpoints, and `rerun_ci` re-requests the failed checks on
-  the task's pull request at the head the triager inspected, then requeues the task. Those three
-  share the one bound, so triage and final recovery share one count, and an unreadable count
-  refuses. `friction_reported` links or files one friction record for an Orbit defect with no
-  supported recovery and leaves the task blocked; it is not bounded. `propose` gets one comment
-  with options and replacement text, and `report` names the human action for a human-only block.
-- **Guards.** A requeue, `resume_run` or `rerun_ci` is refused for a run another machine executed,
-  or for a task tagged `security` or `security-review`. `rerun_ci` is also refused when the task
-  records no pull request, the head moved since the triager inspected it, no required check
-  failed, or the history records that head's failure as inherited from the base
-  (`pr_auto_fix_base_red`, `ci_base_suspect`). Operator-only or exhausted-bound requeue refusals
-  are recorded with their human action; the task stays blocked and the marker settles the episode.
-  A requeue preflight failure (including an unsettled run) or an unreadable recent-count error
-  returns before triage is written, leaving the episode awaiting triage. If the count cannot be
-  read, record a `report` that the block remains unresolved; do not assume a marker exists. A
-  refused `resume_run` or `rerun_ci` also records nothing, so the episode still awaits triage.
-- **Host-specific failures stay visible.** The triager's activity withholds task update, lifecycle,
-  and direct requeue and run-resume tools, so it cannot edit a task or force anything. Its only
-  write path to a block is `block_triage`, which applies the bounds and guards above.
-- **The retired auto-task.** `blocked-task-triage` is no longer seeded. Its last template stays as
-  provenance (`RETIRED_AUTO_TASK_FILES` in `crates/orbit-core/src/application/auto_tasks/retired.rs`):
-  `orbit workspace sync` retires a seeded copy, settings-only forks included, with its
-  settings entry, and preserves an operator-edited copy. When the retired copy was enabled, sync
-  says the routine replaces it. It never enables the routine.
+- **Bounded mechanical steps first.** Before it escalates, final recovery may `resume_run` the
+  failed run from its checkpoints, `rerun_ci` on the task's pull request, `requeue` it,
+  `complete_no_diff` it, or link a friction record (`friction_reported`). Each runs at most once
+  per head or run and is recorded in the task history (`final_recovery_resumed`,
+  `final_recovery_ci_rerun`, `final_recovery_requeued`). Resume, CI rerun and requeue share the
+  one `FinalRecoveryRequeueBound` (2 per 24 hours), and an unreadable count refuses. A refused
+  step escalates, with the refusal in the comment.
+- **A deterministic recheck.** The backstop tick settles, with no agent, a blocked task whose pull
+  request merged outside Orbit (it follows the merge to `done`), whose failing required check is
+  green on the base again, or whose infrastructure block cleared, and appends a
+  `blocked_task_rechecked` history entry naming the kind and why.
+- **A decision card for what remains.** Final recovery `escalate`s with the diagnosis and the one
+  human action, or `decide`s: a short summary, two or three options with consequences, and a
+  recommendation. An option carries an optional field rewrite and an optional action (`requeue`,
+  `re_pilot`, `change_crew`, `split`, `reject`, `archive`), and one with neither is refused. The
+  request opens at the `block_triage` gate of the [human decision
+  channel](../human-decision-channel/2_design.md).
+- **One human answer applies it.** Answering records a comment naming the option and note,
+  applies the rewrite, runs the action, moves the task out of `blocked` and closes the request in
+  one operation. An answer attributed to an agent is refused.
+- **Guards.** A requeue, resume or CI rerun is refused for a task tagged `security` or
+  `security-review` or a run another machine executed; a CI rerun is also refused when the head
+  moved, no required check failed, or the head's failure is recorded as inherited from the base
+  (`pr_auto_fix_base_red`, `ci_base_suspect`).
+- **Retired provenance.** A seeded `blocked_task_triage` routine file is removed by
+  `orbit workspace sync` when unedited; one that still loads is skipped as retired. The earlier
+  `blocked-task-triage` auto-task stays retired provenance (`RETIRED_AUTO_TASK_FILES` in
+  `crates/orbit-core/src/application/auto_tasks/retired.rs`).
 
 ### 7.3 Ship sweep
 
@@ -1756,6 +1744,7 @@ this table retains its requirements without claiming the entire matrix was execu
 - [ORB-16890] — returned a task whose spent repair's candidate still fails a required check at landing to the backlog with that candidate and stop, within a two-requeue budget, instead of leaving it in `review`.
 - [ORB-17245] — shipped the `blocked-task-triage` auto-task: one disposition per escalated block episode, requeues within the shared final-recovery bound (§7.2).
 - [ORB-17744] — replaced that auto-task with the `blocked_task_triage` routine: a `block_escalated` event trigger on the hard-tier escalation triage pipeline (§7.2).
+- [ORB-20629] — retired that routine: final recovery became the single decider for blocked tasks, with bounded mechanical steps, a deterministic recheck and a decision card (§7.2).
 - [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
 - [ORB-17304] — ordered pull and owner-local admission against the live executor census (§2, §9).
 - [ORB-17292] — reported each claimed leaf's crew and model with its settlement and kept them on the owner's settlement record, handoffs included, for the agent scorecards.

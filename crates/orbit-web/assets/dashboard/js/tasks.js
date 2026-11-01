@@ -48,7 +48,6 @@ onWorkspaceChange(() => {
   taskState.fieldFeedback.clear();
   clearTaskDataCaches();
   recoveryRefusals.clear();
-  taskState.taskDecisionLoads.clear();
   taskState.expandedComments.clear();
   taskComments.rawComments.clear();
   taskState.restoredCommentHash = null;

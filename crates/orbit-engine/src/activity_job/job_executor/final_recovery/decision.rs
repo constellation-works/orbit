@@ -123,6 +123,7 @@ pub(super) fn admit_resume_step(
                         "Repair the worktree and resume the run from `{failed}` or an earlier \
                          step after the first, or move the task by hand."
                     ),
+                    summary: None,
                 },
                 None,
                 None,

@@ -1096,7 +1096,7 @@ projections_test!(
 );
 
 // Detail = shared show record plus dashboard extras (`status_transitions`,
-// `job_run_navigable`, `readiness.preparing`, held/blocked `escalation_triage`);
+// `job_run_navigable`, `readiness.preparing`, held `escalation_triage`);
 // an unconfigured crew reads as `crew_unresolved`, not the default crew.
 projections_test!(
     task_detail_and_list_rows_serve_the_shared_task_projection,
@@ -1225,9 +1225,15 @@ projections_test!(
         assert_fields!(raw["block"], "reason": json!("the failure needs an operator"), "run_id": json!(run_id), "next_action": json!("move the task back to backlog after fixing the cause"));
         check_eq!(raw["block"]["at"] => raw["final_recovery"]["at"]; "block at matches recovery at");
         check!(raw["final_recovery"]["at"].as_str().unwrap().contains('T'); "recovery timestamp: {raw}");
-        assert_fields!(raw["escalation_triage"], "available": json!(true), "subject": json!("block"), "run_id": Value::Null);
+        check!(raw["escalation_triage"].is_null(); "a blocked task is decided by final recovery, so it has no triage readout: {raw}");
         let mut detail = raw.clone();
-        strip(&mut detail, DETAIL_EXTRAS);
+        // A blocked task has no triage readout: final recovery decides it.
+        let extras: Vec<&str> = DETAIL_EXTRAS
+            .iter()
+            .copied()
+            .filter(|key| *key != "escalation_triage")
+            .collect();
+        strip(&mut detail, &extras);
         if let Some(readiness) = detail.get_mut("readiness").and_then(Value::as_object_mut) {
             readiness.remove("preparing");
         }
@@ -1262,8 +1268,7 @@ projections_test!(
         );
         let again = task_detail(&server, &blocked);
         check!(again.get("next_step").is_some() && again.get("final_recovery").is_some(); "detail after comment keeps guidance: {again}");
-        // The operator comment above is a human touch since the escalation, so the readout stays but no longer offers the action.
-        assert_fields!(again["escalation_triage"], "available": json!(false), "subject": json!("block"));
+        check!(again["escalation_triage"].is_null(); "a blocked task keeps no triage readout after a comment: {again}");
         no_keys(
             &task_detail(&server, &plain),
             &["next_step", "final_recovery", "block", "escalation_triage"],

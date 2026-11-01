@@ -445,6 +445,7 @@ fn an_escalation_blocks_the_task_and_continues_into_the_failure_path() {
         FinalRecoveryDecision::Escalate {
             diagnosis: "the provider rejected the push".to_string(),
             human_action: "grant the token repository write access".to_string(),
+            summary: None,
         },
         None,
     );

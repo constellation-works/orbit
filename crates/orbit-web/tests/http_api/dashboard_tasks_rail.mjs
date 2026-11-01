@@ -1319,75 +1319,97 @@ assert.deepEqual(selectedRows(), []);
 assert.ok(!window.location.hash.includes('open='), 'a closed pane names no task');
 delete window.history;
 
-// ORB-18240: `open_decisions` is compact (answer ids only), so a triage
-// request's numeric ids "1" and "2" say nothing. The detail reads the full
-// request from the decisions API and shows each option's label and consequence
-// beside its button; the button still submits the stable id.
+// A decision request renders as a card in the task detail: the short summary,
+// one button per option beside its consequence with the recommended one marked,
+// and a note field. `open_decisions` carries the whole card, so the detail makes
+// no second read; the button submits the stable option id with the note.
 common.setWorkspace('ws_orbit');
 const decisionRequest = {
-  id: 'DR-1', gate: 'block_triage', state: 'open', expires_at: '2026-11-01T00:00:00Z',
-  answers: [
-    { id: '1', label: 'Drop criterion 2', consequence: 'The retired API stays retired and the task returns to backlog.' },
-    { id: '2', label: 'Restore the v1 API', consequence: 'The v1 API comes back and criterion 2 is kept as written.' },
+  id: 'DR-1', gate: 'block_triage', expires_at: '2026-11-01T00:00:00Z',
+  summary: 'The v1 API was retired but criterion 2 still depends on it.',
+  answers: ['1', '2'],
+  options: [
+    { id: '1', label: 'Drop criterion 2', consequence: 'The retired API stays retired and the task returns to backlog.', recommended: false },
+    { id: '2', label: 'Restore the v1 API', consequence: 'The v1 API comes back and criterion 2 is kept as written.', recommended: true },
   ],
 };
 const decisionTask = task(120, {
-  status: 'blocked', open_decisions: [{ id: 'DR-1', gate: 'block_triage', expires_at: decisionRequest.expires_at, answers: ['1', '2'] }],
+  status: 'blocked',
+  block: { reason: 'raw diagnosis: cargo test failed in api::v1::compat', at: '2026-10-31T10:00:00Z', run_id: 'jrun-1' },
+  open_decisions: [decisionRequest],
 });
 const decisionReads = [];
 const decisionPosts = [];
-let decisionList = null;
 context.fetch = (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
   if (options.method === 'POST') {
     decisionPosts.push({ path: url.pathname, workspace: url.searchParams.get('workspace'), body: JSON.parse(options.body) });
     return new Promise(() => {});
   }
-  assert.equal(url.pathname, '/api/decisions', `the detail reads only the decisions API: ${path}`);
-  decisionReads.push({ task_id: url.searchParams.get('task_id'), workspace: url.searchParams.get('workspace') });
-  return decisionList.promise;
+  decisionReads.push(url.pathname);
+  return Promise.resolve(readinessResponse({ tasks: [] }));
 };
-const decisionContext = { ...taskContext, getActiveStatuses: () => new Set(['blocked']), statusOrder: ['blocked'] };
+const decisionContext = { ...taskContext, getActiveStatuses: () => new Set(['blocked', 'proposed']), statusOrder: ['blocked', 'proposed'] };
 const paintDecision = item => {
   served = { total: 1, limit: 50, offset: 0, next_cursor: null };
   currentTasks = [item];
   renderTasks([item], decisionContext);
 };
-decisionList = holdRead();
 paintDecision(decisionTask);
 clickTitle(byId['tasks-body'].querySelector('.row button.title'));
-assert.equal(paneBody.querySelectorAll('.decision-answer').length, 0, 'no answer control is offered before its meaning is known');
-assert.ok(paneBody.querySelector('.decision-pending').textContent.includes('Loading'), 'the detail says the options are loading');
-decisionList.resolve(readinessResponse({ items: [decisionRequest], total: 1 }));
 await settleReads();
-assert.deepEqual(decisionReads, [{ task_id: 'ORB-120', workspace: 'ws_orbit' }], 'one workspace-scoped read for the task');
-const decisionButtons = paneBody.querySelectorAll('.decision-answer');
-assert.deepEqual(decisionButtons.map(node => node.textContent), ['Drop criterion 2', 'Restore the v1 API'], 'each button reads its label, not its numeric id');
+assert.ok(!decisionReads.includes('/api/decisions'), 'the card needs no read of the decisions API');
+const blockCard = paneBody.querySelector('.task-block-callout');
+assert.equal(blockCard.querySelector('.decision-summary').textContent, decisionRequest.summary, 'the card leads with the short summary');
+const decisionButtons = blockCard.querySelectorAll('.decision-answer');
+assert.deepEqual(decisionButtons.map(node => node.textContent), ['Drop criterion 2', 'Restore the v1 API'], 'one button per option, by label');
 assert.deepEqual(
-  paneBody.querySelectorAll('.decision-option').map(node => node.querySelector('.decision-consequence').textContent),
-  decisionRequest.answers.map(answer => answer.consequence),
+  blockCard.querySelectorAll('.decision-option').map(node => node.querySelector('.decision-consequence').textContent),
+  decisionRequest.options.map(option => option.consequence),
   'each consequence sits beside its own option',
 );
-paneBody.querySelector('.decision-note').value = '';
+assert.equal(blockCard.querySelectorAll('.decision-recommended').length, 1, 'exactly one option is marked recommended');
+assert.ok(blockCard.querySelectorAll('.decision-option')[1].classList.contains('recommended'), 'the recommended option is the second');
+const blockDetails = blockCard.querySelector('details.task-block-details');
+assert.ok(blockDetails && !blockDetails.getAttribute('open'), 'Details stays collapsed');
+assert.ok(blockDetails.textContent.includes('raw diagnosis: cargo test failed'), 'the raw diagnosis lives under Details');
+assert.ok(blockDetails.textContent.includes('View run'), 'View run lives under Details');
+assert.ok(!blockCard.querySelector('.decision-summary').textContent.includes('raw diagnosis'), 'the raw diagnosis is not the summary');
+assert.equal(paneBody.querySelectorAll('.decision-requests').length, 0, 'a card-rendered request is not repeated under Decision needed');
+blockCard.querySelector('.decision-note').value = 'checked the compat shim';
 decisionButtons[1].dispatch('click');
-assert.deepEqual(decisionPosts.map(post => [post.path, post.workspace, post.body]), [['/api/decisions/DR-1/answer', 'ws_orbit', { answer: '2' }]], 'the stable id is what is submitted');
+assert.deepEqual(
+  decisionPosts.map(post => [post.path, post.workspace, post.body]),
+  [['/api/decisions/DR-1/answer', 'ws_orbit', { answer: '2', note: 'checked the compat shim' }]],
+  'the stable id is submitted with the note',
+);
 
-// A failed read offers no blind buttons, and Retry reads again.
+// A block with no decision shows the summary and the exact human action.
 decisionPosts.length = 0;
-decisionReads.length = 0;
-decisionList = holdRead();
-paintDecision({ ...decisionTask, id: 'ORB-121' });
+paintDecision(task(121, {
+  status: 'blocked',
+  block: { reason: 'The deploy key was revoked.', next_action: 'Rotate the deploy key in the host settings, then move the task to backlog.', at: '2026-10-31T10:00:00Z' },
+}));
 clickTitle(byId['tasks-body'].querySelector('.row button.title'));
-decisionList.resolve(readinessResponse({ error: 'decisions unavailable' }, false));
 await settleReads();
-assert.equal(paneBody.querySelectorAll('.decision-answer').length, 0, 'a failed read leaves no unlabeled answer buttons');
-assert.ok(paneBody.querySelector('.decision-pending').textContent.includes('decisions unavailable'));
-decisionList = holdRead();
-decisionList.resolve(readinessResponse({ items: [decisionRequest], total: 1 }));
-paneBody.querySelector('.decision-requests').querySelectorAll('button').find(node => node.textContent === 'Retry').dispatch('click');
+const noDecision = paneBody.querySelector('.task-block-callout');
+assert.equal(noDecision.querySelector('.task-block-reason').textContent, 'The deploy key was revoked.');
+assert.ok(noDecision.querySelector('.decision-human-action').textContent.includes('Rotate the deploy key in the host settings'), 'the exact human action is shown');
+assert.equal(noDecision.querySelectorAll('.decision-answer').length, 0, 'no option buttons without a decision');
+assert.ok(noDecision.querySelector('details.task-block-details'), 'Details is still offered');
+
+// The pilot-hold card on a proposed task carries the same card.
+paintDecision(task(122, {
+  status: 'proposed',
+  pilot_warnings: [{ kind: 'surface_warnings', text: 'Touches crates/orbit-web/src/api outside the declared surface.' }],
+  open_decisions: [{ ...decisionRequest, id: 'DR-2', gate: 'proposed_approval', summary: 'Widen the declared surface, then approve.' }],
+}));
+clickTitle(byId['tasks-body'].querySelector('.row button.title'));
 await settleReads();
-assert.equal(decisionReads.length, 2, 'Retry reads the decisions again');
-assert.equal(paneBody.querySelectorAll('.decision-answer').length, 2, 'the retried read restores the labeled options');
+const pilotCard = paneBody.querySelector('.pilot-warnings');
+assert.equal(pilotCard.querySelector('.decision-summary').textContent, 'Widen the declared surface, then approve.');
+assert.equal(pilotCard.querySelectorAll('.decision-answer').length, 2, 'one button per option on the pilot hold');
+assert.ok(pilotCard.querySelector('details.task-block-details').textContent.includes('outside the declared surface'), 'the raw findings sit under Details');
 
 // ORB-19489: a reload evaluates the whole renderer graph again. Seed storage
 // before evaluation so loading preferences too early cannot silently use defaults.
