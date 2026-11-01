@@ -266,6 +266,37 @@ pub struct ApplicationArtifactEvidence {
     pub sha256: String,
 }
 
+/// How this call was matched to its scope. Absent on the wire means exact,
+/// which is how every row written before consent v2 still reads.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationAdmissionMatch {
+    /// Structural equality with the scope's `input`.
+    #[default]
+    Exact,
+    /// The scope's `fields` constraints admitted the call.
+    Constrained,
+}
+
+impl ApplicationAdmissionMatch {
+    fn is_exact(value: &Self) -> bool {
+        matches!(value, Self::Exact)
+    }
+}
+
+/// Why a constrained call was refused. Field values from the call are not
+/// recorded: `field` is a consent-authored name, or absent when the failure
+/// is not one field (an unlisted key, or the scope's rate limit).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationAuditRefusal {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    pub constraint: String,
+}
+
 /// Host-minted reference passed to a plugin instead of the app credential.
 /// It is authoritative only inside a verified host callback session.
 ///
@@ -276,6 +307,17 @@ pub struct ApplicationInvocation {
     pub consent: ApplicationConsent,
     pub scope_index: usize,
     pub callback: bool,
+    /// The scope's `name`, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_name: Option<String>,
+    /// `constrained` for a fields match. Omitted when exact, so older rows
+    /// and exact calls still read as an exact match.
+    #[serde(
+        rename = "match",
+        default,
+        skip_serializing_if = "ApplicationAdmissionMatch::is_exact"
+    )]
+    pub admission_match: ApplicationAdmissionMatch,
     /// The entry's admitted values for identity and digest fields.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, Value>,
@@ -289,6 +331,13 @@ pub struct ApplicationInvocation {
     /// invocation. Set only on a callback, from the host-owned session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_task: Option<String>,
+    /// The entry row's `execution_id`, set on callback rows so one approval's
+    /// callbacks can be listed from the entry. Absent on the entry itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_execution_id: Option<String>,
+    /// Set when a constrained scope, or its rate limit, refused the call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<ApplicationAuditRefusal>,
 }
 
 impl ApplicationInvocation {
@@ -298,10 +347,14 @@ impl ApplicationInvocation {
             consent,
             scope_index,
             callback,
+            scope_name: None,
+            admission_match: ApplicationAdmissionMatch::Exact,
             bindings: BTreeMap::new(),
             text_digests: BTreeMap::new(),
             predicate: None,
             pinned_task: None,
+            entry_execution_id: None,
+            refused: None,
         }
     }
 }

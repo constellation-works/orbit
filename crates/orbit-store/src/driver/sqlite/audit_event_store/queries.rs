@@ -89,6 +89,13 @@ impl Store {
             conditions
                 .push("NOT (COALESCE(role, '') = 'unverified' AND status = 'success')".to_string());
         }
+        if let Some(ref entry_execution_id) = filter.application_entry_execution_id {
+            conditions.push(format!(
+                "json_extract(application_json, '$.entry_execution_id') = ?{}",
+                param_values.len() + 1
+            ));
+            param_values.push(Box::new(entry_execution_id.clone()));
+        }
 
         let where_clause = if conditions.is_empty() {
             String::new()

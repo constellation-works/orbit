@@ -13,13 +13,15 @@ use orbit_common::governance::authorization::{
 use orbit_common::security::application_credential::ApplicationCredential;
 use orbit_store::contracts::{ApplicationConsentRecord, ApplicationConsentStoreBackend};
 use orbit_types::tool::{
-    ApplicationConsent, ApplicationConsentRequest, ApplicationInvocation, ApplicationOperation,
-    McpCapability, ToolSessionContext,
+    ApplicationAdmissionMatch, ApplicationAuditRefusal, ApplicationConsent,
+    ApplicationConsentRequest, ApplicationInvocation, ApplicationOperation, McpCapability,
+    ToolSessionContext,
 };
 use serde_json::Value;
 
 use crate::application_admission::{
-    CallbackBindings, ConstrainedAdmission, admit_within_rate_limit, evaluate_constrained,
+    CallbackBindings, ConstrainedAdmission, ConstraintRefusal, admit_within_rate_limit,
+    evaluate_constrained,
 };
 use crate::application_consent::{
     OperationRole, validate_consent_request_v2, validate_constrained_fields,
@@ -43,6 +45,37 @@ pub fn take_application_audit() -> Option<ApplicationInvocation> {
 /// limit afresh.
 pub fn finish_application_dispatch() {
     RATE_LIMIT_CHARGED.with(|charged| charged.borrow_mut().clear());
+}
+
+/// Record the first constrained refusal on the audit slot filled at the
+/// start of admission. Bindings, text digests and predicate evidence already
+/// on the slot stay: a callback refusal must not drop the entry's evidence,
+/// and a failed admission's own values are never copied onto it.
+fn stamp_application_refusal(
+    scope_index: usize,
+    scope_name: Option<String>,
+    field: Option<String>,
+    constraint: &str,
+    constrained: bool,
+) {
+    APPLICATION_AUDIT.with(|state| {
+        let mut slot = state.borrow_mut();
+        let Some(invocation) = slot.as_mut() else {
+            return;
+        };
+        invocation.scope_index = scope_index;
+        invocation.scope_name.clone_from(&scope_name);
+        invocation.admission_match = if constrained {
+            ApplicationAdmissionMatch::Constrained
+        } else {
+            ApplicationAdmissionMatch::Exact
+        };
+        invocation.refused = Some(ApplicationAuditRefusal {
+            scope_name,
+            field,
+            constraint: constraint.to_owned(),
+        });
+    });
 }
 
 impl RuntimeKernel {
@@ -460,6 +493,9 @@ impl RuntimeKernel {
                 "application consent belongs to another workspace".into(),
             ));
         }
+        // Set from the callback that matched, not the first one of this
+        // tool. An exact callback of a constrained entry stays exact.
+        let mut matched_callback_constrained = None;
         if invocation.callback {
             let scope = record
                 .consent
@@ -472,6 +508,7 @@ impl RuntimeKernel {
             // Every callback rechecks the payload the entry was admitted on.
             self.recheck_bound_application_artifact(&invocation)?;
             let mut refusals = Vec::new();
+            let mut first_refusal: Option<ConstraintRefusal> = None;
             let mut matched = None;
             for callback in scope.callbacks.iter().filter(|op| op.tool == tool) {
                 match (&callback.input, &callback.fields) {
@@ -495,13 +532,27 @@ impl RuntimeKernel {
                                 matched = Some((callback, admission));
                                 break;
                             }
-                            Err(refusal) => refusals.push(refusal.describe()),
+                            Err(refusal) => {
+                                if first_refusal.is_none() {
+                                    first_refusal = Some(refusal.clone());
+                                }
+                                refusals.push(refusal.describe());
+                            }
                         }
                     }
                     _ => {}
                 }
             }
             let Some((callback, admission)) = matched else {
+                if let Some(refusal) = first_refusal {
+                    stamp_application_refusal(
+                        invocation.scope_index,
+                        scope.name.clone(),
+                        refusal.field,
+                        refusal.constraint,
+                        true,
+                    );
+                }
                 return Err(OrbitError::CapabilityDenied(if refusals.is_empty() {
                     "completion callback is outside application consent".into()
                 } else {
@@ -521,12 +572,15 @@ impl RuntimeKernel {
                 orbit_tools::plugin::pin_routed_application_task(&task)?;
                 invocation.pinned_task = Some(task);
             }
-            if callback.is_constrained() {
+            let constrained = callback.is_constrained();
+            if constrained {
                 invocation.text_digests = admission.text_digests;
             }
+            matched_callback_constrained = Some(constrained);
         } else {
             let scopes = &record.consent.scopes;
             let mut refusals = Vec::new();
+            let mut first_refusal: Option<(usize, Option<String>, ConstraintRefusal)> = None;
             let mut matched = None;
             for (index, scope) in scopes.iter().enumerate() {
                 if scope.operation.tool != tool {
@@ -543,11 +597,17 @@ impl RuntimeKernel {
                                 matched = Some((index, admission));
                                 break;
                             }
-                            Err(refusal) => refusals.push(format!(
-                                "scope `{}` {}",
-                                scope.name.as_deref().unwrap_or("unnamed"),
-                                refusal.describe()
-                            )),
+                            Err(refusal) => {
+                                if first_refusal.is_none() {
+                                    first_refusal =
+                                        Some((index, scope.name.clone(), refusal.clone()));
+                                }
+                                refusals.push(format!(
+                                    "scope `{}` {}",
+                                    scope.name.as_deref().unwrap_or("unnamed"),
+                                    refusal.describe()
+                                ));
+                            }
                         }
                     }
                     _ => {}
@@ -556,6 +616,15 @@ impl RuntimeKernel {
             let Some((index, admission)) = matched else {
                 // Name each constrained scope's failing field and constraint
                 // kind; never a value the call sent.
+                if let Some((index, scope_name, refusal)) = first_refusal {
+                    stamp_application_refusal(
+                        index,
+                        scope_name,
+                        refusal.field,
+                        refusal.constraint,
+                        true,
+                    );
+                }
                 return Err(OrbitError::CapabilityDenied(if refusals.is_empty() {
                     "operation or input is outside application consent".into()
                 } else {
@@ -575,6 +644,13 @@ impl RuntimeKernel {
                     input,
                 )?
             {
+                stamp_application_refusal(
+                    index,
+                    scopes[index].name.clone(),
+                    None,
+                    "rate_limit",
+                    scopes[index].operation.is_constrained(),
+                );
                 return Err(OrbitError::CapabilityDenied(format!(
                     "application scope `{}` reached its rate limit of {} admissions per {} seconds",
                     scopes[index].name.as_deref().unwrap_or("unnamed"),
@@ -586,6 +662,23 @@ impl RuntimeKernel {
             invocation.bindings = admission.bindings;
             invocation.text_digests = admission.text_digests;
             invocation.predicate = admission.predicate;
+            invocation.admission_match = if scopes[index].operation.is_constrained() {
+                ApplicationAdmissionMatch::Constrained
+            } else {
+                ApplicationAdmissionMatch::Exact
+            };
+        }
+        invocation.scope_name = record
+            .consent
+            .scopes
+            .get(invocation.scope_index)
+            .and_then(|scope| scope.name.clone());
+        if let Some(constrained) = matched_callback_constrained {
+            invocation.admission_match = if constrained {
+                ApplicationAdmissionMatch::Constrained
+            } else {
+                ApplicationAdmissionMatch::Exact
+            };
         }
         APPLICATION_AUDIT.with(|state| *state.borrow_mut() = Some(invocation.clone()));
         session.application = Some(Box::new(invocation));

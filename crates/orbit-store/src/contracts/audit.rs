@@ -63,6 +63,9 @@ pub struct AuditEventFilter {
     /// Drop successful rows recorded by the `unverified` caller. Failures and
     /// denials from that caller stay listed.
     pub exclude_unverified_success: bool,
+    /// Application callback rows whose `entry_execution_id` is this entry
+    /// row's `execution_id`.
+    pub application_entry_execution_id: Option<String>,
     pub limit: usize,
     /// Rows to skip after ordering (newest first). Pushed into SQL so a
     /// caller can page past the first `limit` rows without prefetching the

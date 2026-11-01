@@ -131,9 +131,15 @@ impl PluginCallbackSession {
             return Ok(());
         }
         // A pin is host-route state, never part of what the child is handed.
+        // The entry dispatch's execution id is, so each callback audit row
+        // can be listed from that entry.
         self.record.application = invocation.cloned().map(|mut invocation| {
             invocation.callback = true;
             invocation.pinned_task = None;
+            if invocation.entry_execution_id.is_none() {
+                invocation.entry_execution_id =
+                    orbit_common::observability::audit_id::current_dispatch_execution_id();
+            }
             Box::new(invocation)
         });
         if session_bytes(&self.record)?.len() > MAX_SESSION_BYTES {

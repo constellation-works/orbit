@@ -130,6 +130,7 @@ pub(super) async fn list_audit(Ws(runtime): Ws, Query(q): Query<AuditQuery>) -> 
         lease_id: q.lease.filter(|value| !value.is_empty()),
         before_id: q.before,
         exclude_unverified_success: q.hide_unverified.unwrap_or(false),
+        application_entry_execution_id: None,
         limit,
         offset,
     };

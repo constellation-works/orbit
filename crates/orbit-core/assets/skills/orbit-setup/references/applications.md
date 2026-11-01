@@ -105,7 +105,13 @@ witness is hidden from the plugin sandbox.
 
 A scope's optional `rate_limit` (`{"admissions": N, "window_seconds": S}`)
 caps the calls admitted under it in any trailing window of `S` seconds; one
-over the limit is refused and audited. A scope without one has no limit.
+over the limit is refused and audited. The limit is off unless the operator
+sets one: a scope without `rate_limit` has no limit.
+
+`orbit application consent` and `orbit application rotate` print one plain
+line for each constrained scope: its name, the tool, each constraint, the
+consent expiry, and the rate limit when one is set. An exact scope is not
+summarized that way.
 
 Consent is reusable for those exact calls until expiry or revocation; it does
 not supply idempotency or prove a fresh human interaction per invocation. Use
@@ -199,10 +205,18 @@ secret-management lifecycle.
 `orbit audit list --tool <tool> --format json` and `orbit audit show` expose an
 `application` object on invocations and authenticated refusals. It contains the
 host-issued application id, consent id, workspace/root, operator attribution,
-consent provenance/time/expiry, effective exact scopes, selected scope and
-callback flag. The attempted tool/input remains the call's own audit context.
-Unauthenticated labels never populate this object. MCP client attribution stays
-in `self_reported_actor`; it is not an authenticated app identity. Credential
+consent provenance/time/expiry, the scopes the operator reviewed, the selected
+scope name and index, whether the call matched exactly or by constraints
+(`match`), and the callback flag. A constrained admission also records
+`bindings` (identity and digest values only), `text_digests` (sha256 and
+length, never the text) and `predicate` (the task state admission read). Each
+callback row sets `entry_execution_id` to the entry row's execution id, and
+`orbit audit show` of that entry lists those callbacks. A constrained refusal
+adds `refused` with the scope name, the field and the constraint kind, and no
+values from the call. The attempted tool remains the call's own audit context;
+call arguments are not copied into the application object. Unauthenticated
+labels never populate this object. MCP client attribution stays in
+`self_reported_actor`; it is not an authenticated app identity. Credential
 values never appear in either field. Consent, rotation and revocation also have
 their own application audit events.
 
