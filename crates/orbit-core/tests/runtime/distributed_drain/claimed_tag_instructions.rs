@@ -356,7 +356,10 @@ fn a_claimed_leaf_receives_the_same_brief_and_rechecks_material() {
             &pair.follower_repo,
             &["reset", "-q", "--hard", "FETCH_HEAD"],
         );
+        let drain = pair.run_drain();
         if changed_material {
+            // An edited description or criteria holds admission until an
+            // explicit re-assessment (ORB-21073): no claim, no dispatch.
             owner
                 .update_task_as_human(
                     task,
@@ -367,8 +370,50 @@ fn a_claimed_leaf_receives_the_same_brief_and_rechecks_material() {
                     "operator".into(),
                 )
                 .unwrap();
+            let held = pair.pass(&drain);
+            assert_eq!(
+                held["admitted"], 0,
+                "edited requirements must not dispatch: {held}"
+            );
+            assert!(held["error"].is_null(), "{held}");
+            assert!(!pair.owner_has_claim_for_task(task));
+            let recorded = pair
+                .follower
+                .read_run_state(&drain)
+                .unwrap()
+                .unwrap()
+                .pull_drain
+                .drain_last_pass
+                .unwrap();
+            let wait = recorded
+                .deferred
+                .iter()
+                .chain(&recorded.excluded)
+                .find(|entry| entry.task_id == *task)
+                .expect("stale requirement hold is recorded");
+            assert_eq!(wait.reason.as_deref(), Some("owner_hold"));
+            assert!(
+                wait.detail
+                    .as_deref()
+                    .unwrap()
+                    .contains("orbit task repilot")
+            );
+            // Explicitly certify the changed description before admission.
+            super::super::explore_brief::pilot_brief(owner, repo, task);
+            // Plan is brief material but not part of the description/criteria
+            // seal, so this edit does not hold admission. The claimed leaf
+            // must still recheck it and drop the brief.
+            owner
+                .update_task_as_human(
+                    task,
+                    TaskUpdateParams {
+                        plan: Some("Inspect the farewell behavior in src/lib.rs.".into()),
+                        ..Default::default()
+                    },
+                    "operator".into(),
+                )
+                .unwrap();
         }
-        let drain = pair.run_drain();
         let leaf = pair.launched_leaf(&drain, 1, std::process::id());
         let record = pair.admission(&leaf);
         let receipt = record.receipt.as_ref().unwrap();

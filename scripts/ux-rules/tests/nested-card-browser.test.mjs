@@ -26,8 +26,10 @@ const NAMED = {
 // exemption, were the same full-bleed unframed shape.
 const SAME_SHAPE = ["jobs-live", "analytics-metrics", "settings"];
 
+// The floated child keeps position: static but is out of normal flow, so it
+// must fail even though it is flush, zero-margin and filled (ORB-21076).
 const POSITIVE_MARKUP = `
-<section class="panel" id="ux-nested-positive" style="display:block;width:360px;margin:16px;border:1px solid #2c333b;background:#121519">
+<section class="panel" id="ux-nested-positive" style="display:flow-root;width:360px;margin:16px;border:1px solid #2c333b;background:#121519">
   <div id="ux-band" style="display:block;background:#0b0d10;margin:0;border-bottom:1px solid #2c333b;padding:8px 12px">Band</div>
   <div id="ux-negative" style="display:block;box-sizing:border-box;width:100%;margin:-8px 0 0 0;background:#243044;padding:8px">Negative margin card</div>
   <div id="ux-filled" style="display:block;background:#243044;margin:12px;padding:8px">Filled card</div>
@@ -35,6 +37,7 @@ const POSITIVE_MARKUP = `
   <div id="ux-fullwidth" style="display:block;box-sizing:border-box;width:100%;margin:0;background:#243044;border:1px solid #8aa;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.4);padding:8px">Full width card</div>
   <div id="ux-separated" style="display:block;width:100%;margin:8px 0;background:#243044;padding:8px">Separated full-width card</div>
   <div id="ux-group" role="group" style="display:block;background:#243044;margin:12px;padding:8px">Group</div>
+  <div id="ux-floated" style="float:left;width:100%;height:30px;margin:0;background:#243044">Floated full-width band</div>
 </section>`;
 
 function failuresOf(result) {
@@ -90,9 +93,13 @@ test("panel bands are not nested cards and real cards still are", { timeout: 240
       assert.equal(failed.has("#doctor-controls"), false, JSON.stringify([...failed]));
       assert.equal(failed.has("#ux-band"), false, JSON.stringify([...failed]));
       assert.equal(failed.has("#ux-group"), false, JSON.stringify([...failed]));
-      for (const selector of ["#ux-filled", "#ux-bordered", "#ux-fullwidth", "#ux-separated", "#ux-negative"]) {
+      for (const selector of ["#ux-filled", "#ux-bordered", "#ux-fullwidth", "#ux-separated", "#ux-negative", "#ux-floated"]) {
         assert.equal(failed.has(selector), true, JSON.stringify([...failed]));
       }
+      const floated = failuresOf(result).find((item) => item.selector === "#ux-floated");
+      assert.equal(floated.band, false);
+      assert.equal(floated.filled, true);
+      assert.equal(floated.bordered, false);
       const fullWidth = failuresOf(result).find((item) => item.selector === "#ux-fullwidth");
       assert.equal(fullWidth.band, false);
       assert.equal(fullWidth.filled, true);
