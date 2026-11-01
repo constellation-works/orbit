@@ -96,6 +96,10 @@ const DIAG_LIMIT = positiveIntParam("diag", 50);
 let errorDiagLimit = DIAG_LIMIT;
 let incidentDiagLimit = DIAG_LIMIT;
 const FRICTION_LIMIT = positiveIntParam("frictions", 100);
+// A render bound for records already fetched. FRICTION_LIMIT is only how
+// many one request may return; painting all of them made the Knowledge pane
+// many screens tall. Eight cards keep Previous and Next beside the filters.
+const FRICTION_PAGE_SIZE = 8;
 
 const FRICTION_STATUSES = ["open", "triaged", "resolved"];
 const DEFAULT_FRICTION_STATUS_FILTER = "active";
@@ -148,6 +152,8 @@ let crewsRevision = null;
 let activeFrictionId = null;
 let frictionSearchQuery = "";
 let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
+let frictionPage = 0;
+let frictionListScope = null;
 
 // Health strip state
 let lastSummary = null;
@@ -523,6 +529,75 @@ function frictionAvailableCount(stats = {}) {
   return total;
 }
 
+function frictionVisibleWindow(items) {
+  const fetched = items.length;
+  const pageCount = Math.max(1, Math.ceil(fetched / FRICTION_PAGE_SIZE));
+  if (frictionPage > pageCount - 1) frictionPage = pageCount - 1;
+  if (frictionPage < 0) frictionPage = 0;
+  const start = frictionPage * FRICTION_PAGE_SIZE;
+  return { fetched, pageCount, start, visible: items.slice(start, start + FRICTION_PAGE_SIZE) };
+}
+
+function paintFrictionCount(portion, available) {
+  const count = $("knowledge-count");
+  if (!count) return;
+  const label = frictionFilterLabel();
+  const shown = portion.visible.length;
+  if (shown === 0) {
+    count.textContent = `0/${available}`;
+    count.title = `Showing 0 of ${available} ${label} frictions`;
+    return;
+  }
+  const from = portion.start + 1;
+  const to = portion.start + shown;
+  const paged = portion.fetched > FRICTION_PAGE_SIZE;
+  count.textContent = paged ? `${from}\u2013${to}/${available}` : `${shown}/${available}`;
+  count.title = portion.fetched === available
+    ? `Showing ${from}\u2013${to} of ${available} ${label} frictions`
+    : `Showing ${from}\u2013${to} of ${portion.fetched} fetched ${label} frictions; ${available} ${label} in total`;
+}
+
+function markFrictionPageButton(button, enabled) {
+  button.setAttribute("aria-disabled", enabled ? "false" : "true");
+  button.classList.toggle("is-disabled", !enabled);
+}
+
+function renderFrictionPagination(portion, available) {
+  const nav = $("friction-pagination");
+  const previous = $("frictions-previous");
+  const next = $("frictions-next");
+  const status = $("friction-page-status");
+  if (!nav || !previous || !next || !status) return;
+  const paged = portion.fetched > FRICTION_PAGE_SIZE;
+  nav.hidden = !paged;
+  if (!paged) return;
+  const from = portion.start + 1;
+  const to = portion.start + portion.visible.length;
+  const label = frictionFilterLabel();
+  status.textContent = `${from}\u2013${to} of ${portion.fetched}`;
+  nav.title = portion.fetched === available
+    ? `Friction records ${from}\u2013${to} of ${portion.fetched} ${label}`
+    : `Loaded ${portion.fetched} of ${available} ${label} frictions`;
+  markFrictionPageButton(previous, frictionPage > 0);
+  markFrictionPageButton(next, frictionPage < portion.pageCount - 1);
+  const focused = document.activeElement;
+  if (focused && focused.getAttribute("aria-disabled") === "true" && nav.contains(focused)) {
+    const fallback = [previous, next].find((button) => button.getAttribute("aria-disabled") !== "true");
+    if (fallback) fallback.focus();
+  }
+}
+
+function stepFrictionPage(delta) {
+  const items = Array.isArray(lastFrictionPayload.items) ? lastFrictionPayload.items : [];
+  const pageCount = Math.max(1, Math.ceil(items.length / FRICTION_PAGE_SIZE));
+  const next = frictionPage + delta;
+  if (next < 0 || next >= pageCount) return;
+  frictionPage = next;
+  renderFrictions(lastFrictionPayload);
+  const pane = document.querySelector('.tab-pane[data-tab="knowledge"]');
+  if (pane) pane.scrollTop = 0;
+}
+
 function renderFrictions(payload) {
   const body = $("frictions-body");
   if (!body) return;
@@ -532,16 +607,17 @@ function renderFrictions(payload) {
   const accordion = frictionAccordionMedia.matches;
   renderFrictionStats(stats);
   const available = frictionAvailableCount(stats);
-  const count = $("knowledge-count");
-  count.textContent = `${items.length}/${available}`;
-  count.title = `Showing ${items.length} of ${available} ${frictionFilterLabel()} frictions`;
+  const portion = frictionVisibleWindow(items);
+  paintFrictionCount(portion, available);
+  renderFrictionPagination(portion, available);
+  const visible = portion.visible;
 
-  if (items.length > 0 && !items.some((item) => item.id === activeFrictionId)) {
-    activeFrictionId = accordion ? null : items[0].id;
+  if (visible.length > 0 && !visible.some((item) => item.id === activeFrictionId)) {
+    activeFrictionId = accordion ? null : visible[0].id;
   }
-  if (items.length === 0) activeFrictionId = null;
+  if (visible.length === 0) activeFrictionId = null;
 
-  if (items.length === 0) {
+  if (visible.length === 0) {
     const suffix = frictionSearchQuery ? " match the current search." : ".";
     syncNodes(body, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
@@ -553,7 +629,7 @@ function renderFrictions(payload) {
 
   const frag = document.createDocumentFragment();
 
-  for (const friction of items) {
+  for (const friction of visible) {
     const title = friction.title || friction.id;
     const expanded = activeFrictionId === friction.id;
     const detailId = `friction-accordion-${friction.id}`;
@@ -616,7 +692,8 @@ function renderFrictions(payload) {
   }
 
   syncNodes(body, Array.from(frag.children));
-  renderFrictionDetail(accordion ? null : items.find((item) => item.id === activeFrictionId) || items[0]);
+  const selected = visible.find((item) => item.id === activeFrictionId) || null;
+  renderFrictionDetail(accordion ? null : selected);
 }
 
 function renderFrictionDetail(friction, detail = $("friction-detail")) {
@@ -837,6 +914,21 @@ function wireFrictionStatusFilter() {
 function wireFrictionResponsiveDetail() {
   frictionAccordionMedia.addEventListener("change", () => {
     renderFrictions(lastFrictionPayload);
+  });
+}
+
+function wireFrictionPagination() {
+  const previous = $("frictions-previous");
+  const next = $("frictions-next");
+  if (!previous || !next || previous.dataset.wired === "true") return;
+  previous.dataset.wired = "true";
+  previous.addEventListener("click", () => {
+    if (previous.getAttribute("aria-disabled") === "true") return;
+    stepFrictionPage(-1);
+  });
+  next.addEventListener("click", () => {
+    if (next.getAttribute("aria-disabled") === "true") return;
+    stepFrictionPage(1);
   });
 }
 
@@ -1824,6 +1916,8 @@ function fetchAndRenderFrictions() {
   if (isAggregateView()) {
     renderPanelPlaceholder("frictions-body");
     renderKnowledgeDetailPlaceholder("friction");
+    const nav = $("friction-pagination");
+    if (nav) nav.hidden = true;
     return Promise.resolve();
   }
   const statuses = frictionStatusFilter === "active" ? ["open", "triaged"] : [frictionStatusFilter];
@@ -1838,6 +1932,11 @@ function fetchAndRenderFrictions() {
     Promise.all(listRequests),
     fetchJson("/api/frictions/stats"),
   ]), ([payloads, stats]) => {
+    const scope = `${frictionStatusFilter}:${frictionSearchQuery}`;
+    if (scope !== frictionListScope) {
+      frictionListScope = scope;
+      frictionPage = 0;
+    }
     const items = payloads
       .flatMap((payload) => Array.isArray(payload && payload.items) ? payload.items : [])
       .sort((a, b) => {
@@ -2070,6 +2169,7 @@ initTaskCreate({ getWorkspaces: () => dashboardWorkspaces });
 wireFrictionSearch();
 wireFrictionStatusFilter();
 wireFrictionResponsiveDetail();
+wireFrictionPagination();
 wireTaskIdResolver();
 buildAuditChips(auditContext());
 wireAuditSearch(auditContext());
