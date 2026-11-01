@@ -773,6 +773,69 @@ fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
 }
 
 #[test]
+fn contract_conflict_holds_promotion_and_advisory_matching_criterion_does_not() {
+    // A criterion naming behaviour the pinned contract contradicts is held
+    // through the typed finding, which has no advisory opt-out.
+    let workspace = workspace(None);
+    let runtime = &workspace.runtime;
+    let task = qualifying_task(runtime);
+    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+    let applied = pilot_with_findings(
+        &workspace,
+        &task,
+        &drain,
+        &pilot,
+        None,
+        json!({"contract_conflicts": [{
+            "criterion": 1,
+            "evidence": "README.md at the pinned revision contradicts the criterion as written",
+        }]}),
+    );
+    let decision = &applied["drain_approval"][0];
+    assert_eq!(decision["decision"], "withhold", "{decision}");
+    assert_eq!(decision["classification"], "warnings", "{decision}");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::Proposed
+    );
+    assert_eq!(approvals(runtime, &task), 0);
+    let comments = runtime.get_task_comments(&task.id).expect("comments");
+    let warnings =
+        super::super::promotion::task_pilot_warnings(TaskStatus::Proposed, &comments, &[], &|_| {
+            false
+        });
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0].kind, "contract_conflicts");
+    assert!(warnings[0].text.contains("criterion 1"), "{warnings:?}");
+
+    // The matching criterion is not held for this signature: an advisory
+    // utility finding on an otherwise promotable task still promotes.
+    let workspace2 = super::persist::workspace(None);
+    let runtime = &workspace2.runtime;
+    let task = qualifying_task(runtime);
+    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+    let applied = pilot_with_findings(
+        &workspace2,
+        &task,
+        &drain,
+        &pilot,
+        None,
+        json!({"utility_warnings": [{
+            "text": "Criterion 1 matches the pinned contract in README.md",
+            "holds_promotion": false,
+        }]}),
+    );
+    let decision = &applied["drain_approval"][0];
+    assert_eq!(decision["decision"], "promote", "{decision}");
+    assert_eq!(decision["approved"], true, "{decision}");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(approvals(runtime, &task), 1);
+}
+
+#[test]
 fn completed_prerequisite_lost_before_approval_still_holds() {
     if crate::application::tests::run_isolated_test(
         "application::task::pilot::tests::drain_promotion::completed_prerequisite_lost_before_approval_still_holds",

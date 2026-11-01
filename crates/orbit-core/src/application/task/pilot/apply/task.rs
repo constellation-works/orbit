@@ -28,10 +28,11 @@ use super::super::persist::{
 use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
-    FINDING_INVALID, PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps,
-    post_deploy, required_machine, required_os, required_string, required_string_array,
-    retained_review_evidence, review_filed, reviewed_evidence_drops, unauthorized_missing_targets,
-    user_facing_ui, validate_after_selectors, validate_recommendations,
+    FINDING_INVALID, PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, contract_conflicts,
+    normalize_evidence_gaps, post_deploy, required_machine, required_os, required_string,
+    required_string_array, retained_review_evidence, review_filed, reviewed_evidence_drops,
+    unauthorized_missing_targets, user_facing_ui, validate_after_selectors,
+    validate_recommendations,
 };
 use super::admission::{
     Admission, CheckedAdmission, PreparedTaskSnapshot, PromotionAuthority, ValidatedTask,
@@ -434,6 +435,8 @@ fn assess_with(
     };
     invalid_finding_target(context, task_id, &assessment, &current)?;
     let criteria = current.acceptance_criteria.len();
+    contract_conflicts(action, task_id, &assessment, criteria)
+        .map_err(refused(task_id, "invalid"))?;
     let native_os = required_os(
         action,
         task_id,

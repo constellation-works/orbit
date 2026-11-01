@@ -191,6 +191,23 @@ spec:
               type: array
               items:
                 type: string
+            contract_conflicts:
+              description: >
+                Typed per-criterion contradictions: a criterion names
+                behaviour the pinned code or contract contradicts. Every
+                entry holds promotion; there is no holds_promotion opt-out.
+                A criterion that matches the pinned contract gets no entry.
+              type: array
+              items:
+                type: object
+                required: [criterion, evidence]
+                properties:
+                  criterion:
+                    type: integer
+                    minimum: 1
+                  evidence:
+                    type: string
+                    minLength: 1
             utility_warnings:
               description: >
                 Findings with explicit admission severity. Advisory observations
@@ -597,6 +614,18 @@ spec:
       existing pilot-warning hold and triage path; never invent a prerequisite
       ID or relax the repository's rules. A hypothetical example or a
       criterion expecting a refusal is not a required available contract.
+    - **Contract contradiction.** When a criterion names a command, key,
+      behaviour or contract that is absent or contrary at the pinned
+      revision — the criterion cannot be met as written without weakening
+      it — add `{"criterion":N,"evidence":"..."}` to `contract_conflicts`,
+      citing the pinned contract (`path:line` at the revision, the checked
+      schema, or the governing guide rule) and what the criterion requires
+      instead. Report the contradiction only there for this signature:
+      never file it as a `utility_warnings` or `surface_warnings` finding
+      with `holds_promotion: false`, and never add a `holds_promotion`
+      field to a `contract_conflicts` entry; every entry holds promotion.
+      A criterion that matches the pinned contract gets no entry. Do not
+      weaken, restate or drop the criterion to clear the hold.
     - **Artifacts.** Screenshots and task artifacts are always feasible; never
       report them. Owner mode attaches with `artifact_attachment.owner` when
       `owner_granted` is true; claimed mode always attaches declared files
@@ -719,6 +748,10 @@ spec:
       and for every other task, return null.
     - `adr_conflicts`: only concrete conflicts with current code or a current
       contract; a historical ADR alone is no reason to block or reshape work.
+    - `contract_conflicts`: `{"criterion":N,"evidence":"..."}` for each
+      criterion that contradicts the pinned code or contract (see Contract
+      contradiction above). Every entry holds promotion and carries no
+      `holds_promotion` field; leave it empty for a matching criterion.
     - `blocked_by` and `adr_conflicts` are arrays of plain strings, never
       objects, and every entry holds promotion. Each combines the finding and
       its citation, for example "the module this task would change still
@@ -734,9 +767,9 @@ spec:
       present, leave `duplicate_of` and `already_landed` null and return
       selectors for the current repair.
 
-    Set `holds_promotion: true` only for a hard blocker, one that makes correct
-    delivery as written impossible: criteria that contradict each other or the
-    current code or contract; criteria the lane cannot satisfy or validate on
+    A criterion contradicting the pinned code or contract goes in
+    `contract_conflicts`, never here. Set `holds_promotion: true` only for a hard blocker, one that makes correct
+    delivery as written impossible: criteria that contradict each other; criteria the lane cannot satisfy or validate on
     its own host (every finding from Tool feasibility, Sandbox deferral, Owner
     machine and the Native OS tag conflict); authority or tools the lane cannot
     obtain; an explicit comment-led duplicate reference whose current scope,
@@ -847,6 +880,7 @@ spec:
         "release_action_required":null,
         "finding_invalid":null,
         "adr_conflicts":[],
+        "contract_conflicts":[],
         "utility_warnings":[],
         "surface_warnings":[],
         "required_os":[],
