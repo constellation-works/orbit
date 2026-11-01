@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Task/Reservation Commit Boundary"
-last_validated: 2026-10-23
+last_validated: 2026-11-01
 ---
 # Task/Reservation Commit Boundary
 
@@ -120,7 +120,10 @@ may show the decided envelope while its history is still being applied.
 
 The lease's name is not synced, which keeps every sync out of the section. A host crash can
 therefore lose a lease whose decision survived, so opening a partition's boundary, which every
-process does before it reads, replays any unsettled row whose lease nobody holds. A
+process does before it reads, replays any unsettled row whose lease nobody holds. Detection
+never rests on lease files or the legacy marker alone: the interrupted check, the sidecar
+fast path's nothing-to-recover check and pending recovery all also consult the unsettled
+journal rows and probe each row's lease. A
 compensation or replay that fails leaves the lease dead and returns the error: the partition
 stays closed until recovery succeeds, rather than opening with unknown commit state.
 
@@ -201,8 +204,14 @@ opens use `workspace_observational_backends` when a read-only command's partitio
 or coordination setup encounters a filesystem permission denial. This includes writable
 runtime opens before CLI tool dispatch: an absent partition reads as empty, and an actual
 mutation still fails at its storage write. The observation handle creates no partition,
-lock, or journal marker during construction and retains journal-binding verification and
-recovery before exposure. The task and
+lock, or journal marker during construction on a settled partition, and retains
+journal-binding verification. Recovery is fenced before exposure there too: when an
+unsettled journal row's lease nobody holds, a handle that may write replays the decision
+as the normal constructor does, and a genuinely read-only handle (a read-only store or
+registry) refuses construction with a recovery-required error instead of exposing the
+unapplied task, history, comment, artifact or reservation sidecars as settled. Reads
+through a composed handle likewise settle or fail before exposing state, never serving
+the old sidecars while recovery is owed. The task and
 reservation stores come from the same composition; the uncoordinated reservation factory
 has been removed. A durable `.task-commit-required` marker makes legacy task compositions
 refuse access to a coordinated partition, including compositions opened before activation.

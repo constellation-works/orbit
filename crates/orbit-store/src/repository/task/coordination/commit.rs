@@ -79,8 +79,10 @@ impl TaskCommitBoundary {
     }
 
     /// Whether nothing in this partition awaits recovery: no commit lease
-    /// outlived its committer and no older version's commit marker is
-    /// present. The check [`Self::recover_if_pending`] makes first, taking no
+    /// outlived its committer, no older version's commit marker is
+    /// present, and no unsettled journal row's lease nobody holds (a host
+    /// crash can lose that lease's unsynced name while its decision
+    /// survives). The check [`Self::recover_if_pending`] makes first, taking no
     /// lock and creating nothing, for a read that may then skip the
     /// partition's sections. A commit that dies after this answer leaves its
     /// own bundle's lease dead, which that bundle's readers check under its
@@ -95,8 +97,10 @@ impl TaskCommitBoundary {
             // unsettled on purpose.
             return Ok(());
         }
-        // A lease outlives its committer's lock only if that committer died.
-        if self.dead_commit_lease()? {
+        // A lease outlives its committer's lock only if that committer died,
+        // and a host crash can lose the lease's name while its unsettled
+        // journal row survives: either one is recovery owed before exposure.
+        if self.dead_commit_lease()? || self.has_unowned_unsettled_commit()? {
             return self.recover_in(section);
         }
         if !self.pending_marker_path().try_exists()? {

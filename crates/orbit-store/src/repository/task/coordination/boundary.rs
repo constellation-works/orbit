@@ -303,8 +303,14 @@ impl TaskCommitBoundary {
     }
 
     /// Observation-only handle: no directory creation, lock files, or marker
-    /// writes. It still refuses a partition bound to a different coordination
-    /// journal, which only reads the marker.
+    /// writes on a settled partition. It still refuses a partition bound to
+    /// a different coordination journal, which only reads the marker.
+    ///
+    /// Recovery is fenced before exposure here too: an unsettled journal
+    /// row whose lease nobody holds (a dead lease, or one whose unsynced
+    /// name a host crash lost) is replayed when this handle may write, and
+    /// refused with a recovery-required error when it may not. Observation
+    /// never exposes the unapplied sidecars as settled.
     pub fn for_observation(
         store: Store,
         registry: TaskRegistryStore,
@@ -320,6 +326,20 @@ impl TaskCommitBoundary {
             lock_options: boundary_lock_options(),
         };
         boundary.verify_journal_binding()?;
+        if boundary.has_unowned_unsettled_commit()? {
+            if boundary.store.is_read_only() || boundary.registry.is_read_only()? {
+                return Err(OrbitError::Store(format!(
+                    "task partition '{}' has a committed decision awaiting recovery; \
+                     open it with a writable coordinated composition to replay it \
+                     before observing",
+                    boundary.workspace_id
+                )));
+            }
+            // Replay as the normal constructor does. A handle that cannot
+            // write (a read-only filesystem, say) fails here instead of
+            // exposing state the decision has not reached.
+            boundary.recover_unowned_commits()?;
+        }
         Ok(boundary)
     }
 

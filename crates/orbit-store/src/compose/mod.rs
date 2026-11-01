@@ -195,9 +195,12 @@ pub struct CoordinatedWorkspaceBackends {
 /// Compose one workspace's task and reservation persistence over an
 /// observation-only commit boundary.
 ///
-/// Reads the same partition state as [`workspace_coordinated_backends`] and
-/// settles an interrupted commit the same way, but opening it initializes
-/// nothing: no partition directory, lock file, or journal marker. Used by a
+/// Reads the same partition state as [`workspace_coordinated_backends`], but
+/// opening it initializes nothing on a settled partition: no partition
+/// directory, lock file, or journal marker. When an unsettled journal row's
+/// lease nobody holds, a writable handle replays the decision before
+/// exposure and a read-only handle refuses with a recovery-required error;
+/// neither exposes unapplied sidecars as settled. Used by a
 /// read-only join of a foreign generation, a read-only command whose partition
 /// does not exist yet, and any open of an existing partition on storage the
 /// process cannot write.
