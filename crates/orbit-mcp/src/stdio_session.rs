@@ -26,7 +26,8 @@
 //! executable with that state in [`RESUME_ENV`]. Because `exec` keeps the pid
 //! and the stdio descriptors, the client sees one uninterrupted session. The
 //! new process replays the `initialize` request into its server rather than
-//! expecting a second handshake.
+//! expecting a second handshake. Replay keeps the client's metadata and
+//! restores the protocol version that handshake agreed.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -42,7 +43,6 @@ use orbit_common::fs::generation;
 use rmcp::ServiceExt;
 use rmcp::model::{
     ClientJsonRpcMessage, ClientNotification, ClientRequest, InitializeRequestParams,
-    RequestMetaObject,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -269,10 +269,10 @@ async fn serve_plain(
     let transport = (reader, tokio::io::stdout());
     let running = match initialize {
         Some(request) => {
-            server
-                .apply_initialize(&request, &RequestMetaObject::default())
+            let peer_info = server
+                .resumed_peer_info(request)
                 .map_err(|error| start_error(&error))?;
-            rmcp::service::serve_directly(server, transport, Some(request))
+            rmcp::service::serve_directly(server, transport, Some(peer_info))
         }
         None => server
             .serve(transport)
@@ -330,11 +330,11 @@ async fn serve_handing_over(
     };
     let running = match initialize {
         Some(request) => {
-            server
-                .apply_initialize(&request, &RequestMetaObject::default())
+            let peer_info = server
+                .resumed_peer_info(request)
                 .map_err(|error| start_error(&error))?;
             tracing::info!(target: "orbit.mcp", "resumed the stdio session after an executable handover");
-            rmcp::service::serve_directly(server, (reader, writer), Some(request))
+            rmcp::service::serve_directly(server, (reader, writer), Some(peer_info))
         }
         None => server
             .serve((reader, writer))

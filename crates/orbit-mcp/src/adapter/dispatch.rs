@@ -490,6 +490,22 @@ impl OrbitToolServer {
         self.adopt_announced_session(session_context_from_initialize(request, transport_meta));
         Ok(())
     }
+
+    /// Peer info for a session resumed after an executable handover.
+    ///
+    /// [`Self::apply_initialize`] keeps the client's metadata, announced
+    /// workspace and worker binding. `serve_directly` then treats this value
+    /// as the negotiated peer, so the protocol version is the one `initialize`
+    /// would have agreed, not the version the client first requested.
+    pub(crate) fn resumed_peer_info(
+        &self,
+        mut request: InitializeRequestParams,
+    ) -> Result<InitializeRequestParams, McpError> {
+        self.apply_initialize(&request, &RequestMetaObject::default())?;
+        let negotiated = self.negotiate_initialize(&request)?;
+        request.protocol_version = negotiated.protocol_version;
+        Ok(request)
+    }
 }
 
 impl ServerHandler for OrbitToolServer {
