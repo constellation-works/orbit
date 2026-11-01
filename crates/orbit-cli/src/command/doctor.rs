@@ -128,7 +128,14 @@ impl DoctorCommand {
         if self.command.is_some() || repairs {
             return None;
         }
-        let global_root = orbit_cmd::registry_runtime::global_root_for(root_override).ok()?;
+        let cwd = std::env::current_dir().ok()?;
+        let global_root =
+            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::resolve_roots_for_cwd(
+                &cwd,
+                root_override,
+            )
+            .ok()?
+            .global_root;
         let misplaced = orbit_cmd::misplaced_plugin_enablement_row(&global_root)?;
         let runtime = WorkspaceDoctorResult {
             duration_ms: 0,
