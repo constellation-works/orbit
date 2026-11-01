@@ -9,7 +9,7 @@ links: [ORB-19533, ORB-19553, ORB-19680, ORB-19863]
 
 ## Signature
 
-Pilot `adr_conflicts` or `utility_warnings`: the criterion names a command, key or behavior that is absent or contrary at the pinned revision, for example doubled braces versus Axum 0.8 single braces (ORB-18291), `orbit run ship-sweep` absent (ORB-19437), `make release-check` before publication (ORB-19553), append-only pricing history versus a backdated row (ORB-19680, ORB-20702), a serialization test for a pure refactor versus the test policy (ORB-18754).
+Pilot `contract_conflicts` (earlier receipts filed it as `adr_conflicts` or `utility_warnings`): the criterion names a command, key or behavior that is absent or contrary at the pinned revision, for example doubled braces versus Axum 0.8 single braces (ORB-18291), `orbit run ship-sweep` absent (ORB-19437), `make release-check` before publication (ORB-19553), append-only pricing history versus a backdated row (ORB-19680, ORB-20702), a serialization test for a pure refactor versus the test policy (ORB-18754).
 
 ## Mechanism
 
