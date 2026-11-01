@@ -60,7 +60,7 @@ missing_docs = "warn"
 
 [workspace.dependencies]
 assert_cmd = "2"
-base64 = "0.22"
+base64 = "0.23"
 # Condition triggers parse and evaluate CEL predicates [ORB-19990]. Orbit owns
 # the type checker over the parsed AST (the crate ships none); regex and the
 # encoder extension stay off because `matches()` is refused.

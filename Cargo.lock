@@ -2116,7 +2116,7 @@ dependencies = [
 name = "orbit-core"
 version = "0.42.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake3",
  "chrono",
  "fs2",
@@ -2194,7 +2194,7 @@ dependencies = [
 name = "orbit-mcp"
 version = "0.42.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "libc",
  "orbit-common",
@@ -2353,7 +2353,7 @@ name = "orbit-web"
 version = "0.42.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "blake3",
  "chrono",
  "clap",
