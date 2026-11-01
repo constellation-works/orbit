@@ -67,19 +67,24 @@ export function updateJobFailureBadges(failing) {
 }
 
 // Keep the rail pill true from every tab, including before Jobs is opened.
-// A reply from an earlier host/workspace visit must not restore a stale count.
+// The dashboard chooses when to call this; Analytics › Metrics reuses the
+// last scoped count between arrivals. A reply from an earlier host or
+// workspace visit must not restore a stale count. Returns false only when
+// this visit's read failed, so the caller can retry it.
 export async function peekJobFailures() {
   if (isAggregateView() || !selectedWorkspace()) {
     updateJobFailureBadges([]);
-    return;
+    return true;
   }
   const visit = captureWorkspaceVisit();
   const request = ++jobFailureRequest;
   try {
     const payload = await fetchJson("/api/jobs/failure-streaks");
     if (visit.isCurrent() && request === jobFailureRequest) updateJobFailureBadges(payload?.failing);
+    return true;
   } catch (_) {
     if (visit.isCurrent() && request === jobFailureRequest) updateJobFailureBadges([]);
+    return false;
   }
 }
 
