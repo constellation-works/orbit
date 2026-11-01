@@ -40,9 +40,18 @@ let releaseGet = null;
 let delayJobRunsWorkspace = null;
 let releaseJobRuns = null;
 let failJobRunsWorkspace = null;
-// The jobs at or above jobs.failure_streak_warn: task_pr_pipeline failed 17 runs
-// in a row with one error; `fixture` and the others have no streak at threshold.
-const failureStreak = { job_id: 'task_pr_pipeline', count: 17, since: '2026-09-06T09:30:00Z', latest_run_id: 'jrun-orphan', latest_error: 'review: [provider_capacity] 429 Too Many Requests', same_error: true, truncated: false };
+// The jobs at or above jobs.failure_streak_warn: fixture (manual-runnable)
+// failed 17 runs in a row with one error; the others have no streak at
+// threshold. Delivery jobs are not counted: the badge counts only catalogue jobs.
+const failureStreak = { job_id: 'fixture', count: 17, since: '2026-09-06T09:30:00Z', latest_run_id: 'jrun-orphan', latest_error: 'review: [provider_capacity] 429 Too Many Requests', same_error: true, truncated: false };
+const catalogJobsFixture = [
+  { job_id: 'fixture', manual_runnable: true, supports_no_input_submission: true },
+  { job_id: 'parked_pipeline', manual_runnable: true, supports_no_input_submission: true },
+  { job_id: 'sweep', manual_runnable: true, supports_no_input_submission: true },
+  { job_id: 'task_auto_pipeline', manual_runnable: false, supports_no_input_submission: false },
+  { job_id: 'task_pr_pipeline', manual_runnable: false, supports_no_input_submission: false },
+  { job_id: longTaskJobId, manual_runnable: false, supports_no_input_submission: false },
+];
 let jobFailures = { threshold: 5, failing: [failureStreak] };
 let workspaceTwoRunId = null;
 let nextTask = 1;
@@ -221,6 +230,7 @@ globalThis.fetch = async (path, options = {}) => {
       ? [{ name: 'graph-refresh', source: 'one', target: 'job:graph_refresh_pipeline', plugin_inactive: true, reason: "seeded by plugin:graph@1.0.0, which is switched off in workspace 'one'; run `orbit plugin enable graph --scope workspace` there to fire it again" }]
       : [],
   });
+  if (url.pathname === '/api/jobs') return response(catalogJobsFixture);
   if (url.pathname === '/api/jobs/failure-streaks') return response(jobFailures);
   if (url.pathname === '/api/job-runs') {
     if (workspace === delayJobRunsWorkspace) await new Promise(resolve => { releaseJobRuns = resolve; });
@@ -946,7 +956,7 @@ assert(descendants(taskCards[0]).some(node => node.textContent === 'ORB-15001' &
 const untaskedCards = Array.from(runningStrip.querySelectorAll('.operation-running-card:not(.operation-running-task)'));
 assert(untaskedCards.length === 1 && untaskedCards[0].textContent.includes('jrun-fixture-running'), 'a run with no task keeps its own card');
 const jobCards = descendants(get('jobs-body')).filter(node => String(node.className || '').includes('job-card'));
-assert(jobCards.length === 5 && ['fixture', 'task_pr_pipeline', 'parked_pipeline', 'task_auto_pipeline', longTaskJobId].every(id => jobCards.some(card => card.dataset.job === id)), `catalogue unions routine targets (paused included) and run job ids: ${jobCards.map(card => card.dataset.job)}`);
+assert(jobCards.length === 2 && ['fixture', 'parked_pipeline'].every(id => jobCards.some(card => card.dataset.job === id)) && ['task_pr_pipeline', 'task_auto_pipeline', longTaskJobId].every(id => !jobCards.some(card => card.dataset.job === id)), `catalogue shows only server manual-runnable jobs from routine targets and run job ids: ${jobCards.map(card => card.dataset.job)}`);
 const fixtureCard = jobCards.find(card => card.dataset.job === 'fixture');
 const jobRunButton = id => {
   const card = descendants(get('jobs-body')).find(node => node.dataset?.job === id);
@@ -1000,7 +1010,7 @@ assert(fixtureCard.textContent.includes('orbit run job fixture --workspace one')
       ...(originalLastOperations || {}),
       routines: [{ source: workspaceName, target: 'job:sweep', name: 'Sweep', enabled: true, cron: '0 * * * *', description: 'Sweep.', next_evaluation: { state: 'scheduled', at: '2026-09-07T21:30:00Z' } }],
     };
-    jobsMod.renderJobs({ runs: { items: [] }, view: 'catalogue' });
+    jobsMod.renderJobs({ runs: { items: [] }, view: 'catalogue', catalogJobs: catalogJobsFixture });
     const cards = descendants(get('jobs-body')).filter((node) => String(node.className || '').includes('job-card'));
     const sweepCard = cards.find((card) => card.dataset.job === 'sweep');
     assert(sweepCard, `spaced workspace renders its sweep job: ${workspaceName}`);
@@ -1038,8 +1048,8 @@ assert(fixtureCard.textContent.includes('orbit run job fixture --workspace one')
   await fetchAndRenderJobs();
   assert(get('jobs-body').textContent.includes('orbit run job fixture --workspace one'), 'restored workspace renders its unquoted command');
 }
-assert(jobRunButton('task_pr_pipeline')?.disabled, 'delivery job needs task input');
-assert(descendants(jobCards.find(card => card.dataset.job === 'task_pr_pipeline')).some(node => String(node.title).includes('Use Ship or Drain')), 'disabled delivery button explains its reason');
+assert(!descendants(get('jobs-body')).some(node => node.dataset?.job === 'task_pr_pipeline'), 'delivery job is hidden from the catalogue');
+assert(!get('jobs-body').textContent.includes('Delivery jobs require'), 'catalogue no longer shows a disabled delivery Run button');
 assert(requests.some(r => r.path === '/api/job-runs' && r.workspace === 'one'), 'jobs read the workspace-scoped recent runs');
 delayPost = true;
 runButton.click(); runButton.click(); await tick();
@@ -1057,19 +1067,19 @@ assert(get('job-operation-feedback').textContent === '', 'job submission receipt
 // A job at or above the failure-streak threshold carries a warning with its
 // streak, latest error and a link to the newest failed run; others show none.
 await fetchAndRenderJobs();
-const failureBadgeOf = id => descendants(descendants(get('jobs-body')).find(node => node.dataset?.job === id)).find(node => String(node.className || '').includes('job-failure-badge'));
-const failingBadge = failureBadgeOf('task_pr_pipeline');
+const failureBadgeOf = id => { const card = descendants(get('jobs-body')).find(node => node.dataset?.job === id); return card ? descendants(card).find(node => String(node.className || '').includes('job-failure-badge')) : undefined; };
+const failingBadge = failureBadgeOf('fixture');
 assert(failingBadge, 'a job at the failure threshold shows a failure badge');
 assert(failingBadge.textContent.includes('Failing: 17 in a row since Sep 6'), `badge states the streak and its start: ${failingBadge.textContent}`);
 assert(failingBadge.textContent.includes('same error ×17') && failingBadge.textContent.includes('[provider_capacity] 429 Too Many Requests'), `badge names the shared error and the latest one: ${failingBadge.textContent}`);
 assert(descendants(failingBadge).some(node => node.tagName === 'A' && node.getAttribute('href')?.includes('jrun-orphan')), 'badge links to the latest failed run');
-assert(['fixture', 'parked_pipeline', 'task_auto_pipeline', longTaskJobId].every(id => !failureBadgeOf(id)), 'jobs below the threshold show no failure badge');
-assert(!get('rail-count-jobs-failing').hidden && get('rail-count-jobs-failing').textContent === '1 failing' && get('rail-count-jobs-failing').title.includes('task_pr_pipeline: Failing: 17 in a row'), `Jobs rail counts failing jobs and names them: ${get('rail-count-jobs-failing').textContent}`);
+assert(['parked_pipeline', 'task_auto_pipeline', longTaskJobId].every(id => !failureBadgeOf(id)), 'jobs below the threshold or hidden from the catalogue show no failure badge');
+assert(!get('rail-count-jobs-failing').hidden && get('rail-count-jobs-failing').textContent === '1 failing' && get('rail-count-jobs-failing').title.includes('fixture: Failing: 17 in a row'), `Jobs rail counts only catalogue failing jobs and names them: ${get('rail-count-jobs-failing').textContent}`);
 assert(!get('rail-count-job-failures'), 'the Health rail carries no job-failure pill; the Jobs pill is the only failing-job count');
 // Varying errors and a scan that ended inside the streak read honestly.
 jobFailures = { threshold: 5, failing: [{ ...failureStreak, same_error: false, truncated: true, count: 100 }] };
 await fetchAndRenderJobs();
-const varyingBadge = failureBadgeOf('task_pr_pipeline');
+const varyingBadge = failureBadgeOf('fixture');
 assert(varyingBadge.textContent.includes('Failing: at least 100 in a row') && varyingBadge.textContent.includes('errors vary') && !varyingBadge.textContent.includes('same error'), `varying, truncated streak: ${varyingBadge.textContent}`);
 // A threshold of 0 turns the warning off: no badge and no rail count.
 jobFailures = { threshold: 0, failing: [] };

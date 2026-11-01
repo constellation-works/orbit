@@ -694,7 +694,7 @@ try {
             jobsPillHidden: document.getElementById('rail-count-jobs-failing')?.hidden,
           };
         });
-        if (failure.failing.join() !== 'task_pr_pipeline' || !failure.text.includes('Failing: 17 in a row since') || !failure.badgeInside || !failure.linkInside || failure.jobsPillHidden || failure.jobsPill !== '1 failing') {
+        if (failure.failing.join() !== 'fixture' || !failure.text.includes('Failing: 17 in a row since') || !failure.badgeInside || !failure.linkInside || failure.jobsPillHidden || failure.jobsPill !== '1 failing') {
           throw new Error(`Failing-job badge at ${viewport.name}: ${JSON.stringify(failure)}`);
         }
         const failingRow = page.locator('#jobs-body .job-card:has(.job-failure-badge)');
