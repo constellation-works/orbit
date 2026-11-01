@@ -416,7 +416,7 @@ fn process_group_is_alive(pgid: libc::pid_t) -> bool {
 /// Returns true only for Running runs whose owner is conclusively stale
 /// (Mismatch or Missing). Other classifications keep the run live.
 #[cfg(unix)]
-pub(super) fn running_run_owner_is_stale(run: &JobRun) -> bool {
+pub(crate) fn running_run_owner_is_stale(run: &JobRun) -> bool {
     running_run_owner_stale_reason(run).is_some()
 }
 
@@ -514,7 +514,7 @@ pub(super) fn stale_pending_run_message(run: &JobRun, reason: PendingStaleReason
 }
 
 #[cfg(not(unix))]
-pub(super) fn running_run_owner_is_stale(_run: &JobRun) -> bool {
+pub(crate) fn running_run_owner_is_stale(_run: &JobRun) -> bool {
     false
 }
 
