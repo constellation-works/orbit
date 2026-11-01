@@ -2,7 +2,9 @@
 //! incomplete coverage evidence: its run fails, the task blocks through
 //! `workflow_run_failed`, and delivery settlement must claim the same frozen
 //! batch for attempt 2 instead of holding it admitted forever. The second
-//! attempt's complete evidence then settles coverage.
+//! attempt's complete evidence then settles coverage. A run that ends
+//! `timeout` or `cancelled` blocks the task through the same event but keeps
+//! its own recovery, so settlement leaves its admitted attempt in place.
 
 use super::*;
 
@@ -87,6 +89,18 @@ fn put_coverage(
 
 /// Bind `task` to a fresh executor run naming it, as worktree setup does.
 fn executor_run(workspace: &Workspace, task: &str) -> String {
+    executor_run_owned_by(workspace, task, std::process::id())
+}
+
+/// A process id that no longer names a live process.
+fn exited_pid() -> u32 {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+fn executor_run_owned_by(workspace: &Workspace, task: &str, pid: u32) -> String {
     let run = workspace
         .jobs
         .insert_job_run(
@@ -99,7 +113,7 @@ fn executor_run(workspace: &Workspace, task: &str) -> String {
         .unwrap();
     workspace
         .jobs
-        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .mark_job_run_running(&run.run_id, Utc::now(), pid)
         .unwrap();
     workspace
         .runtime
@@ -118,11 +132,22 @@ fn executor_run(workspace: &Workspace, task: &str) -> String {
     run.run_id
 }
 
-fn an_incomplete_frozen_review_is_retried_on_the_same_batch_and_can_settle() {
-    let workspace = Workspace::new();
-    let definition = definition(&workspace);
+/// An admitted frozen review whose executor, owned by process `pid`,
+/// submitted incomplete evidence from a run that is still running.
+struct IncompleteReview {
+    now: chrono::DateTime<Utc>,
+    batch: CoverageBatch,
+    review: String,
+    run_id: String,
+}
+
+fn admit_incomplete_review(
+    workspace: &Workspace,
+    definition: &orbit_types::workflow::AutoTaskDefinition,
+    pid: u32,
+) -> IncompleteReview {
     let now = Utc::now();
-    let baseline = evaluate_auto_task(&workspace.runtime, &definition, false, now).unwrap();
+    let baseline = evaluate_auto_task(&workspace.runtime, definition, false, now).unwrap();
     assert_eq!(baseline.reason, "baselined", "{baseline:?}");
     let base = baseline.state.unwrap();
 
@@ -182,33 +207,78 @@ fn an_incomplete_frozen_review_is_retried_on_the_same_batch_and_can_settle() {
     let store = workspace.runtime.automation_store().unwrap();
     assert!(store.automation_commit(&base, &admitted, None).unwrap());
 
-    // The executor submits incomplete evidence, then its run fails: the task
-    // blocks through the real run-terminalization path.
-    let run_id = executor_run(&workspace, &review.id);
-    let incomplete = evidence_template(&attempt);
-    assert!(!incomplete.examination_complete);
-    put_coverage(&workspace, &review.id, &run_id, &incomplete);
+    let run_id = executor_run_owned_by(workspace, &review.id, pid);
+    put_coverage(workspace, &review.id, &run_id, &evidence_template(&attempt));
+    IncompleteReview {
+        now,
+        batch,
+        review: review.id,
+        run_id,
+    }
+}
+
+/// Terminalize the review's run in `state`. The task blocks through the run's
+/// `workflow_run_failed` event whatever the state.
+fn end_run(workspace: &Workspace, review: &IncompleteReview, state: JobRunState) {
     workspace
         .runtime
         .finalize_job_run_with_reservation_cleanup(
-            &run_id,
-            JobRunState::Failed,
+            &review.run_id,
+            state,
             Utc::now(),
             Some(1),
             TaskReservationReleaseReason::RunTerminal,
         )
         .unwrap();
-    let blocked = workspace.runtime.get_task(&review.id).unwrap();
+    let blocked = workspace.runtime.get_task(&review.review).unwrap();
     assert_eq!(blocked.status, TaskStatus::Blocked, "{blocked:?}");
     assert!(
         workspace
             .runtime
-            .get_task_history(&review.id)
+            .get_task_history(&review.review)
             .unwrap()
             .iter()
             .any(|entry| entry.event == "workflow_run_failed"),
-        "the block is the failed run's"
+        "the block is the run's"
     );
+}
+
+/// Settlement leaves the attempt-1 action admitted on the frozen batch.
+fn assert_attempt_one_stays_admitted(
+    workspace: &Workspace,
+    definition: &orbit_types::workflow::AutoTaskDefinition,
+    review: &IncompleteReview,
+) {
+    let settled = evaluate_auto_task(
+        &workspace.runtime,
+        definition,
+        false,
+        review.now + Duration::minutes(1),
+    )
+    .unwrap();
+    let active = settled
+        .state
+        .as_ref()
+        .and_then(|state| state.active.clone())
+        .expect("the batch stays owed");
+    assert_eq!(active.attempt, 1, "{active:?}");
+    assert_eq!(active.state, BatchState::Admitted, "{active:?}");
+    assert_eq!(active.action_id.as_deref(), Some(review.review.as_str()));
+    assert_eq!(active.batch, review.batch);
+}
+
+fn an_incomplete_frozen_review_is_retried_on_the_same_batch_and_can_settle() {
+    let workspace = Workspace::new();
+    let definition = definition(&workspace);
+    let incomplete = admit_incomplete_review(&workspace, &definition, std::process::id());
+    let now = incomplete.now;
+    let batch = incomplete.batch.clone();
+    let after = batch.through_inclusive.clone();
+    let store = workspace.runtime.automation_store().unwrap();
+    // The executor's run fails: the task blocks through the real
+    // run-terminalization path.
+    end_run(&workspace, &incomplete, JobRunState::Failed);
+    let review = workspace.runtime.get_task(&incomplete.review).unwrap();
 
     // Settlement claims attempt 2 over the same frozen batch.
     let settled = evaluate_auto_task(
@@ -279,7 +349,67 @@ fn an_incomplete_frozen_review_is_retried_on_the_same_batch_and_can_settle() {
     assert_eq!(receipts[0].action_id, second_task);
 }
 
+/// A timed-out run is resumed, which re-admits the same task; a retry minted
+/// beside it would review the batch twice.
+fn a_timed_out_frozen_review_keeps_its_admitted_attempt() {
+    let workspace = Workspace::new();
+    let definition = definition(&workspace);
+    let review = admit_incomplete_review(&workspace, &definition, std::process::id());
+    end_run(&workspace, &review, JobRunState::Timeout);
+    assert_attempt_one_stays_admitted(&workspace, &definition, &review);
+}
+
+/// Cancellation under the default blocking policy is an operator's decision,
+/// not a stop that earns a retry.
+fn a_cancelled_frozen_review_keeps_its_admitted_attempt() {
+    let workspace = Workspace::new();
+    let definition = definition(&workspace);
+    let review = admit_incomplete_review(&workspace, &definition, std::process::id());
+    end_run(&workspace, &review, JobRunState::Cancelled);
+    assert_attempt_one_stays_admitted(&workspace, &definition, &review);
+}
+
+/// An operator's later block supersedes the failure's block, even though the
+/// run is `failed` and its owner is gone.
+fn an_operator_block_after_a_failed_frozen_review_is_not_that_failures_stop() {
+    let workspace = Workspace::new();
+    let definition = definition(&workspace);
+    let review = admit_incomplete_review(&workspace, &definition, exited_pid());
+    end_run(&workspace, &review, JobRunState::Failed);
+    for (status, event) in [
+        (TaskStatus::Backlog, "operator_requeue"),
+        (TaskStatus::Blocked, "operator_block"),
+    ] {
+        workspace
+            .runtime
+            .apply_task_automation_update(
+                &review.review,
+                TaskAutomationUpdate {
+                    status: Some(status),
+                    status_event: Some(event.into()),
+                    status_note: Some("held for a decision".into()),
+                    ..TaskAutomationUpdate::default()
+                },
+            )
+            .unwrap();
+    }
+    let history = workspace.runtime.get_task_history(&review.review).unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .rev()
+            .find(|entry| entry.to_status.is_some())
+            .map(|entry| entry.event.as_str()),
+        Some("operator_block"),
+        "{history:?}"
+    );
+    assert_attempt_one_stays_admitted(&workspace, &definition, &review);
+}
+
 crate::scenario_table!(
     frozen_review_continuation_scenarios,
     an_incomplete_frozen_review_is_retried_on_the_same_batch_and_can_settle,
+    a_timed_out_frozen_review_keeps_its_admitted_attempt,
+    a_cancelled_frozen_review_keeps_its_admitted_attempt,
+    an_operator_block_after_a_failed_frozen_review_is_not_that_failures_stop,
 );
