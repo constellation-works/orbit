@@ -4,7 +4,7 @@
 
 use chrono::{Duration, Utc};
 use orbit_core::JobRunState;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
@@ -73,6 +73,63 @@ fn failure_streaks_list_the_jobs_at_the_default_threshold() {
                 "below the threshold, still reported"
             );
             assert!(streak("healthy").is_null());
+        },
+    );
+}
+
+#[test]
+fn non_runnable_jobs_are_hidden_from_the_failing_badge_and_report_runnability() {
+    isolated(
+        "job_failure_streaks::non_runnable_jobs_are_hidden_from_the_failing_badge_and_report_runnability",
+        || {
+            let fixture = Fixture::new();
+            seed_fixture(&fixture);
+            // A delivery pipeline: server reports it not manual-runnable, so
+            // its streak must not count toward the catalogue-only badge.
+            fixture.job("task_pr_pipeline");
+            seed_runs(
+                &fixture,
+                "task_pr_pipeline",
+                &[
+                    JobRunState::Failed,
+                    JobRunState::Failed,
+                    JobRunState::Failed,
+                    JobRunState::Failed,
+                    JobRunState::Failed,
+                    JobRunState::Failed,
+                ],
+            );
+            let server = fixture.server(true);
+
+            let page = json_ok(server.get("/api/jobs/failure-streaks?workspace=ws_http_fixture"));
+            let failing = page["failing"].as_array().unwrap();
+            assert_eq!(failing.len(), 1, "{page}");
+            assert_eq!(failing[0]["job_id"], "broken");
+
+            // The manual run route refuses the same job the catalogue hides.
+            let refused = server.send(
+                "POST",
+                "/api/jobs/task_pr_pipeline/run?workspace=ws_http_fixture",
+                json!({}),
+            );
+            assert!(!refused.status().is_success(), "{}", refused.status());
+
+            let jobs = json_ok(server.get("/api/jobs?workspace=ws_http_fixture"));
+            let field = |name: &str, key: &str| -> Value {
+                jobs.as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|job| job["job_id"] == name)
+                    .unwrap_or_else(|| panic!("{name} missing from {jobs}"))[key]
+                    .clone()
+            };
+            assert_eq!(field("broken", "manual_runnable"), true);
+            assert_eq!(field("broken", "supports_no_input_submission"), true);
+            assert_eq!(field("task_pr_pipeline", "manual_runnable"), false);
+            assert_eq!(
+                field("task_pr_pipeline", "supports_no_input_submission"),
+                false
+            );
         },
     );
 }

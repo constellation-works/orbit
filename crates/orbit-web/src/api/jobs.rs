@@ -197,8 +197,11 @@ pub(super) async fn list_jobs(Ws(runtime): Ws) -> Response {
 
 /// Jobs whose current failure streak has reached `jobs.failure_streak_warn`,
 /// with that threshold. The dashboard reads this for the catalogue badges and
-/// the Jobs and Health rail counts. A threshold of 0 turns the warning off:
-/// nothing is computed and `failing` is empty. Display only.
+/// the Jobs rail count. Only manual-runnable jobs — the jobs the Catalogue
+/// shows — are counted, so the badge stays consistent with what the operator
+/// can see there; delivery and other non-runnable jobs' streaks do not count.
+/// A threshold of 0 turns the warning off: nothing is computed and `failing`
+/// is empty. Display only.
 pub(super) async fn list_job_failure_streaks(Ws(runtime): Ws) -> Response {
     use orbit_core::application::job::JobCatalogFilter;
     match blocking("list job failure streaks", move || {
@@ -209,6 +212,7 @@ pub(super) async fn list_job_failure_streaks(Ws(runtime): Ws) -> Response {
         let job_ids: Vec<String> = runtime
             .list_job_catalog_with_last_run(true, JobCatalogFilter::All)?
             .into_iter()
+            .filter(|(entry, _)| entry.supports_no_input_submission())
             .map(|(entry, _)| entry.job_id)
             .collect();
         let failing = runtime

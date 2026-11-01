@@ -30,8 +30,11 @@ import {
 import { jobIdFromTarget, scopedRoutines, updateRoutineFailureBadge } from './operations-routines.js';
 
 // ---------------------------------------------------------------------------
-// Jobs. The catalogue is projected from routine targets and recent runs.
-// Manual Run submits catalog jobs; delivery pipelines use Ship or Drain.
+// Jobs. The catalogue is projected from routine targets and recent runs,
+// filtered to the jobs the server reports as manual-runnable
+// (`manual_runnable` from /api/jobs, backed by
+// supports_no_input_submission). Delivery and other child-only or
+// task-input jobs never appear there; their runs stay in Live and History.
 
 const JOB_RUN_LIMIT = 100;
 export let lastJobs = null;
@@ -95,25 +98,38 @@ function jobFailureBadge(streak, workspaceId) {
 
 function jobFamily(jobId) {
   if (/sweep|gc|pilot|triage|scheduler/.test(jobId)) return "sweep";
-  if (/^(task|workspace|epic)_/.test(jobId)) return "delivery";
   return "other";
 }
 
-function jobCatalog(routinesPayload, runs, workspaceName) {
+// Server-reported runnability: /api/jobs entries carry `manual_runnable`
+// (alias `supports_no_input_submission`). Unknown jobs are not runnable.
+function manualRunnableIds(catalogJobs) {
+  const ids = new Set();
+  for (const job of Array.isArray(catalogJobs) ? catalogJobs : []) {
+    const runnable = job?.manual_runnable ?? job?.supports_no_input_submission ?? job?.run_available;
+    if (runnable === true) ids.add(job.job_id || job.name);
+  }
+  return ids;
+}
+
+function jobCatalog(routinesPayload, runs, workspaceName, catalogJobs) {
+  const runnable = manualRunnableIds(catalogJobs);
   const catalog = new Map();
   const entry = (jobId) => {
+    if (!runnable.has(jobId)) return null;
     if (!catalog.has(jobId)) catalog.set(jobId, { id: jobId, routines: [], runs: [], running: 0, lastRun: null });
     return catalog.get(jobId);
   };
   for (const routine of routinesPayload?.routines || []) {
     if (routine.source !== workspaceName) continue;
     const jobId = jobIdFromTarget(routine.target);
-    if (jobId) entry(jobId).routines.push(routine);
+    if (jobId) entry(jobId)?.routines.push(routine);
   }
   const sorted = [...runs].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   for (const run of sorted) {
     if (!run.job_id) continue;
     const job = entry(run.job_id);
+    if (!job) continue;
     job.runs.push(run);
     if (run.state === "running" || run.state === "pending") job.running += 1;
     if (!job.lastRun) job.lastRun = run;
@@ -205,9 +221,7 @@ function jobRow(job, workspace, streak) {
   const last = job.lastRun;
   const command = jobCommand(job.id, workspace);
   const key = `job:run:${workspace.id}:${job.id}`;
-  const runReason = jobFamily(job.id) === "delivery"
-    ? "Delivery jobs require task input or a delivery window. Use Ship or Drain."
-    : controlReason(operationsState.lastOperations, "job_run");
+  const runReason = controlReason(operationsState.lastOperations, "job_run");
   const pending = pendingOperations.has(key);
   const run = el("button", { class: "operation-button primary job-run", text: pending ? "Submitting…" : "Run ▸", title: runReason || `Run ${job.id} in ${workspace.name}` });
   run.type = "button";
@@ -270,7 +284,7 @@ function jobRow(job, workspace, streak) {
         el("code", { class: "mono", text: command }),
         copy,
       ]),
-      el("p", { class: "operation-control-note", text: "Run submits without extra input. Delivery jobs need a task id and are started through Ship or Drain." }),
+      el("p", { class: "operation-control-note", text: "Run submits without extra input." }),
       recent.length
         ? el("ul", { class: "operation-recent-runs" }, recent.map((run) => el("li", {}, [
           outcomeDot(run.state),
@@ -324,15 +338,14 @@ export function renderJobs(payload) {
     count.textContent = `${running.length} run${running.length === 1 ? "" : "s"} in flight · ${workspace.name}`;
     return;
   }
-  const catalog = jobCatalog(operationsState.lastOperations, runs, workspace.name);
+  const catalog = jobCatalog(operationsState.lastOperations, runs, workspace.name, payload.catalogJobs);
   const failing = new Map((payload.failures?.failing || []).map((streak) => [streak.job_id, streak]));
   if (catalog.size === 0) {
-    body.appendChild(el("div", { class: "empty-state", text: "No job has been referenced by a routine or run in this workspace recently." }));
+    body.appendChild(el("div", { class: "empty-state", text: "No manually runnable job has been referenced by a routine or run in this workspace recently." }));
   } else {
     const jobs = [...catalog.values()].sort((a, b) => a.id.localeCompare(b.id));
     const groups = [
       ["accent", "Sweeps", "housekeeping and intake · safe to run by hand", jobs.filter((job) => jobFamily(job.id) === "sweep")],
-      ["delivery", "Delivery", "task and workspace pipelines · started by a ship or a drain, by hand only with a task_id", jobs.filter((job) => jobFamily(job.id) === "delivery")],
       ["", "Other", "", jobs.filter((job) => jobFamily(job.id) === "other")],
     ];
     const columns = ["Job", "Scheduled by", "Last run", "Active", ""];
@@ -361,7 +374,9 @@ export function fetchAndRenderJobs() {
       fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}${live ? "&state=active" : ""}`),
       // The streak read must not take the catalogue down with it.
       live ? null : fetchJson("/api/jobs/failure-streaks").catch(() => null),
-    ]).then(([routines, runs, failures]) => ({ routines, runs, failures, view: live ? "live" : "catalogue" })),
+      // Server-reported runnability decides which jobs the catalogue shows.
+      live ? null : fetchJson("/api/jobs"),
+    ]).then(([routines, runs, failures, catalogJobs]) => ({ routines, runs, failures, catalogJobs, view: live ? "live" : "catalogue" })),
     (payload) => {
       // Only a fresh catalogue/live read adopts its routines snapshot. A
       // repaint from cached jobs must retain a newer Routines readback.

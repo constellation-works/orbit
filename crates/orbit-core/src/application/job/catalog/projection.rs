@@ -51,6 +51,7 @@ pub fn job_catalog_to_json_with_last_run(
     job: &JobCatalogEntry,
     last_run: Option<&JobRun>,
 ) -> Value {
+    let manual_runnable = job.supports_no_input_submission();
     let mut value = json!({
         "job_id": job.job_id.clone(),
         "schema_version": job.spec.schema_version,
@@ -58,6 +59,8 @@ pub fn job_catalog_to_json_with_last_run(
         "state": job.state().to_string(),
         "default_input": job.spec.default_input,
         "max_active_runs": job.spec.max_active_runs,
+        "manual_runnable": manual_runnable,
+        "supports_no_input_submission": manual_runnable,
         "steps": job.spec.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
         "path": job.path.display().to_string(),
     });
