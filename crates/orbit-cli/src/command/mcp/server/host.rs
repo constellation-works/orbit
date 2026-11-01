@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSelection};
 use orbit_cmd::task_owner::{self, WorkspaceIdentity};
+use orbit_common::governance::operation::OperationVerb;
+use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
@@ -305,11 +307,47 @@ impl ServerMcpHost {
         context: &ToolSessionContext,
     ) -> Result<(Arc<OrbitRuntime>, ResolvedWorkspaceSelection), OrbitError> {
         let selected = self.workspace_selection(name, input, context)?;
-        let runtime = self.open_selected_runtime(&selected)?;
+        // Canonical dotted name: the MCP adapter maps the advertised
+        // underscore form before this host sees the call. Federated workspace
+        // discovery without crews does not open a runtime. Crew attachment
+        // keeps the writable open below.
+        let runtime = if name == WorkflowVerb::RunObserve.tool_name() {
+            self.open_observation_runtime(&selected)?
+        } else {
+            self.open_selected_runtime(&selected)?
+        };
         Ok((runtime, selected))
     }
 
+    /// Stored-record observation. The workspace open that precedes the handler
+    /// must not reconcile stale runs or repair tasks, and this runtime must
+    /// not occupy the writable cache: a later ordinary tool, including
+    /// `orbit.workflow.run.show`, still reconciles on its own open.
+    fn open_observation_runtime(
+        &self,
+        selected: &ResolvedWorkspaceSelection,
+    ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+        self.workspace_runtimes
+            .resolve_observation(&self.global_root, selected, || {
+                let runtime = RegisteredRuntimeFactory::open_registered_checkout_observational(
+                    &self.global_root,
+                    &selected.workspace,
+                    &selected.checkout,
+                )?
+                .with_workspace_explicitly_selected(true);
+                tracing::debug!(
+                    target: RUNTIME_OPEN_LOG_TARGET,
+                    workspace_id = %selected.workspace.id,
+                    "{OPENED_WORKSPACE_RUNTIME_LOG}"
+                );
+                Ok(runtime)
+            })
+    }
+
     /// The shared long-lived runtime for one resolved checkout.
+    ///
+    /// Ordinary workspace tools and crew attachment use this open, which
+    /// reconciles stale runs. Observation does not.
     fn open_selected_runtime(
         &self,
         selected: &ResolvedWorkspaceSelection,
