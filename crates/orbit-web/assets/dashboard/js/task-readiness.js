@@ -85,19 +85,26 @@ function deliveryAttentionTitle(task, attention) {
   if (attention.run_state) parts.push(`delivery run ${attention.run_state}`);
   if (attention.repairing) parts.push("a live run is repairing the pull request");
   if (attention.as_of) parts.push(`as of ${attention.as_of}`);
-  return parts.length ? `${task.status} · ${deliveryAttentionLabel(attention)}: ${parts.join(", ")}` : `${task.status} · ${deliveryAttentionLabel(attention)}`;
+  // A live repair still names the blocker it is repairing.
+  const label = deliveryAttentionLabel(attention);
+  const state = attention.repairing ? `repairing ${label}` : label;
+  return parts.length ? `${task.status} · ${state}: ${parts.join(", ")}` : `${task.status} · ${state}`;
 }
 
+// A live run repairing the pull request reads `repairing` with its auto-fix
+// attempt where the blocker was; the tooltip and aria-label still name the blocker.
 export function buildDeliveryAttentionBadge(task) {
   const attention = task.delivery_attention;
   if (!attention) return [];
-  const label = deliveryAttentionLabel(attention);
+  const repairing = Boolean(attention.repairing);
+  const attempt = attention.attempt != null && attention.budget != null ? ` ${attention.attempt}/${attention.budget}` : "";
+  const text = repairing ? `${task.status} · repairing${attempt}` : `${task.status} · ${deliveryAttentionLabel(attention)}`;
   return [el("span", {
-    class: "delivery-attention-badge",
+    class: repairing ? "delivery-attention-badge repairing" : "delivery-attention-badge",
     role: "img",
     "aria-label": deliveryAttentionTitle(task, attention),
     title: deliveryAttentionTitle(task, attention),
-    text: `${task.status} · ${label}`,
+    text,
   })];
 }
 
@@ -134,10 +141,11 @@ export function buildDeliveryAttentionBanner(task) {
   } else if (attention.pr_number) {
     actions.appendChild(el("span", { class: "attention-action", text: `PR #${attention.pr_number}` }));
   }
-  return el("section", { class: "task-attention warning delivery-attention", "aria-label": "Delivery needs attention" }, [
+  const state = attention.repairing ? "Delivery repairing" : "Delivery needs attention";
+  return el("section", { class: "task-attention warning delivery-attention", "aria-label": state }, [
     el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
     el("div", { class: "task-attention-content" }, [
-      el("h3", { class: "task-attention-title", text: `Delivery needs attention · ${deliveryAttentionLabel(attention)}` }),
+      el("h3", { class: "task-attention-title", text: `${state} · ${deliveryAttentionLabel(attention)}` }),
       ...lines.map((line) => el("p", { class: "task-attention-body", text: line })),
       actions.children.length ? actions : null,
     ]),
