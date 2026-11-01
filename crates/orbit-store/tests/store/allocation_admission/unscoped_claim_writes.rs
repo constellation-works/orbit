@@ -2,6 +2,7 @@
 //! phases keep the store's existing unscoped-write behavior.
 
 use super::*;
+use orbit_store::contracts::TaskDocumentUpdateParams;
 
 fn append_unscoped_history(owner: &Coordinated, task_id: &str) -> Result<(), OrbitError> {
     owner
@@ -218,5 +219,150 @@ fn settled_claim_phases_keep_unscoped_task_commits() {
         &landed.owner,
         &landed.claim.task_id,
         ExecutionClaimPhase::Landed,
+    );
+}
+
+fn update_unscoped_document(owner: &Coordinated, task_id: &str) -> Result<(), OrbitError> {
+    owner.backends.task.document.update_task_document(
+        task_id,
+        TaskDocumentUpdateParams {
+            actor: "test".into(),
+            title: Some("unscoped update probe".into()),
+            ..Default::default()
+        },
+    )
+}
+
+fn assert_unscoped_update_names_recovery(
+    owner: &Coordinated,
+    task_id: &str,
+    phase: ExecutionClaimPhase,
+    recovery: &str,
+) {
+    let error =
+        update_unscoped_document(owner, task_id).expect_err("protecting claim refuses task update");
+    assert!(
+        matches!(error, OrbitError::InvalidInput(_)),
+        "{phase:?} keeps the invalid-input refusal: {error}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("active execution claim requires a claim-scoped mutation"),
+        "{phase:?} keeps the claim-scoped mutation fence: {message}"
+    );
+    assert!(
+        message.contains(&format!("(task {task_id}, run ")),
+        "{phase:?} names the claiming run: {message}"
+    );
+    assert!(
+        message.contains(recovery),
+        "{phase:?} names its recovery: {message}"
+    );
+}
+
+#[test]
+fn unscoped_task_update_names_phase_recovery() {
+    if !allocation_admission_isolated(
+        "unscoped_claim_writes::unscoped_task_update_names_phase_recovery",
+    ) {
+        return;
+    }
+
+    let claimed_owner = Coordinated::fixture();
+    let claimed_task = claimed_owner.create_task("claimed update phase");
+    let claimed = claimed_owner
+        .pull(&owner_request("claimed-update-phase"))
+        .claim
+        .expect("claim admitted");
+    assert_eq!(claimed.phase, ExecutionClaimPhase::Claimed);
+    assert_unscoped_update_names_recovery(
+        &claimed_owner,
+        &claimed_task.id,
+        ExecutionClaimPhase::Claimed,
+        "wait for it to settle",
+    );
+
+    let running = Delivery::admit(done_ship());
+    assert_eq!(
+        running.owner.claims()[0].phase,
+        ExecutionClaimPhase::Running
+    );
+    assert_unscoped_update_names_recovery(
+        &running.owner,
+        &running.claim.task_id,
+        ExecutionClaimPhase::Running,
+        "wait for it to settle",
+    );
+    let artifact_error = running
+        .owner
+        .upsert_artifacts(
+            &running.claim.task_id,
+            vec![json_artifact("probe.json".into(), b"{}".to_vec())],
+        )
+        .expect_err("protecting claim refuses artifact write");
+    assert!(
+        artifact_error
+            .to_string()
+            .contains("recover the claim from the owner's operator console"),
+        "Running artifact refusal names its recovery: {artifact_error}"
+    );
+
+    let handed_off = Delivery::admit(done_ship());
+    handed_off
+        .accept(Some(OWNER_POLICY))
+        .expect("handoff accepted");
+    assert_eq!(
+        handed_off.owner.claims()[0].phase,
+        ExecutionClaimPhase::HandedOff
+    );
+    assert_unscoped_update_names_recovery(
+        &handed_off.owner,
+        &handed_off.claim.task_id,
+        ExecutionClaimPhase::HandedOff,
+        "land it through that authority",
+    );
+
+    let repair = Delivery::admit(done_ship());
+    repair.accept(Some(OWNER_POLICY)).expect("handoff accepted");
+    let accepted = repair
+        .owner
+        .backends
+        .commit_boundary
+        .accepted_handoff(&repair.claim.claim_id)
+        .expect("accepted handoff");
+    let operator = repair.operator();
+    repair
+        .owner
+        .mutate(
+            &operator,
+            "dispatch-update-probe",
+            &ClaimMutation::DispatchLanding {
+                handoff_id: accepted.handoff_id.clone(),
+                job_run_id: None,
+            },
+        )
+        .expect("landing attempt dispatched");
+    repair
+        .owner
+        .mutate(
+            &operator,
+            "stop-update-probe",
+            &ClaimMutation::StopLanding {
+                handoff_id: accepted.handoff_id,
+                reason: "candidate needs a repair".into(),
+                repairable: true,
+                requeue: false,
+            },
+        )
+        .expect("repairable landing stop");
+    assert_eq!(
+        repair.owner.claims()[0].phase,
+        ExecutionClaimPhase::RepairPending
+    );
+    assert_unscoped_update_names_recovery(
+        &repair.owner,
+        &repair.claim.task_id,
+        ExecutionClaimPhase::RepairPending,
+        "automatic repair is pending",
     );
 }

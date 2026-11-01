@@ -44,7 +44,7 @@ mod artifact_paths;
 mod artifacts;
 mod creation_grant;
 mod crud;
-mod desktop;
+pub(crate) mod desktop;
 mod envelope_cache;
 mod index;
 mod listing;
