@@ -51,6 +51,7 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
             "plugins",
             "plugin_enablement",
             crate::TAG_INSTRUCTIONS_KEY,
+            crate::AGENT_CORPUS_KEY,
             crate::REVIEW_SKIP_TAGS_KEY,
             // Read by runtime admission; recognize the leaves without hiding unknown siblings.
             "visual_review.manifests",

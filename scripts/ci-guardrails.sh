@@ -550,6 +550,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-cli-imports.sh"
   run_guard "$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"
   run_guard "$repo_root/scripts/generate-doc-indexes.sh" --check
+  run_guard "$repo_root/scripts/test-agent-corpus.py"
   run_guard "$repo_root/scripts/check-installer-pubkey.sh"
   run_guard "$repo_root/scripts/check-dependency-direction.sh"
   run_guard "$repo_root/scripts/check-workflow-yaml.py"

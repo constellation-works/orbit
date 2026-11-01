@@ -774,6 +774,14 @@ pub trait NullRuntimeHost: Send + Sync {
         false
     }
 
+    fn agent_corpus_for_activity(
+        &self,
+        _run_id: &str,
+        _activity_name: &str,
+    ) -> Result<Option<orbit_types::workflow::AgentCorpusInjection>, DispatchError> {
+        Ok(None)
+    }
+
     fn tag_instructions_for_activity(
         &self,
         _run_id: &str,

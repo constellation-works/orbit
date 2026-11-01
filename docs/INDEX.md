@@ -140,7 +140,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982 | claude |
 
-### Shipped (35)
+### Shipped (36)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -179,6 +179,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | — | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
+| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | — | Orbit |
 
 ### Parked (2)
 
@@ -251,6 +252,7 @@ a conservative title/status fallback.
 | [Ux Rules](./design/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one task per failing rule and target, so the LLM reviews keep only the judgement work | Draft | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Scope: for tasks tagged verify-mock-ui, the implementer compares its build against the attached mocks while it works, then Orbit captures the mocked views on the final candidate, runs deterministic checks, and has a vision crew compare each capture with its mock, with findings verified by a different crew | Draft | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Draft | claude |
+| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Pinned activity-scoped corpus guidance and deterministic append proposals | implemented | Orbit |
 
 ### Archived designs
 

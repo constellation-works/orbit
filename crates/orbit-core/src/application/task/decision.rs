@@ -280,11 +280,12 @@ impl OrbitRuntime {
                     operation_id: Some(request.id.clone()),
                     decision: None,
                 };
+                let corpus_append = self.decision_corpus_append(&request, &resolution)?;
                 self.stores().task_records().update(
                     &task_id,
                     TaskRecordUpdateParams {
                         actor: actor_label.clone(),
-                        append_history: vec![entry],
+                        append_history: std::iter::once(entry).chain(corpus_append).collect(),
                         ..Default::default()
                     },
                 )?;

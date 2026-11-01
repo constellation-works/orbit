@@ -1091,6 +1091,31 @@ The task pilot already reads the code a task will change to propose its lock foo
 
 Settings are read when the runtime opens.
 
+### `[workflow.agent_corpus]` — activity-scoped workspace knowledge
+
+```toml
+[workflow.agent_corpus]
+agent_implement = "docs/agents/corpus/INDEX.md"
+final_recovery = "docs/agents/corpus/INDEX.md"
+task_pilot = "docs/agents/corpus/INDEX.md"
+triage_escalation = "docs/agents/corpus/INDEX.md"
+```
+
+Unset by default. Map exact activity names to the same repository-relative
+corpus index (at most 32 activities; absolute and traversal paths are refused).
+The host reads generated rows at the run's base revision, selects only matching
+`applies_to` rows, and omits resolved issues. It injects at most 8 KiB, with a
+note when rows are omitted, and records `activity.agent_corpus_applied` with
+paths, revision, digest and truncation in the run audit trail. A claimed run
+uses the owner's captured rows. Unmapped activities receive nothing.
+
+Human decision answers and typed engine recovery matches create deterministic
+append proposals in task history. Batch materialization creates ordinary
+reviewed corpus changes; it never commits or merges automatically. Generate
+and check the index with `scripts/agent-corpus.py` and `--check`, respectively.
+See [workspace agent corpus](design/workspace-agent-corpus/1_scope.md) for document
+schema, append materialization and the orbit-office Library boundary.
+
 ### `[workflow.tag_instructions.<tag>]` — extra instructions for tagged tasks
 
 ```toml

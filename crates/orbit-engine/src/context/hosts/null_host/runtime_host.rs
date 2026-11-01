@@ -613,6 +613,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Option<Value> {
         NullRuntimeHost::regression_risk_for_agent_input(self, run_id, activity_name, input)
     }
+    fn agent_corpus_for_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+    ) -> Result<Option<orbit_types::workflow::AgentCorpusInjection>, DispatchError> {
+        NullRuntimeHost::agent_corpus_for_activity(self, run_id, activity_name)
+    }
+
     fn tag_instructions_for_activity(
         &self,
         run_id: &str,

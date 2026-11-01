@@ -168,6 +168,20 @@ pub(super) fn dispatch_prepared_provider(
                 .collect(),
         });
     }
+    if let Some(corpus) = host.agent_corpus_for_activity(run_id, activity_name)? {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(&corpus.text);
+        audit.emit_lossy(V2AuditEventKind::AgentCorpusApplied {
+            step_id: step_id.to_string(),
+            activity_name: activity_name.to_string(),
+            index: corpus.index,
+            revision: corpus.revision,
+            paths: corpus.rows.iter().map(|row| row.path.clone()).collect(),
+            sha256: corpus.sha256,
+            bytes: corpus.text.len(),
+            truncated: corpus.truncated,
+        });
+    }
     // Direct dispatches build the recovery input themselves and never pass
     // through bind_recovery_context. Stamp the same host pin onto the
     // envelope the provider reads. Admission below still recomputes the chain

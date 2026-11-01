@@ -110,8 +110,8 @@ pub struct ResolvedConfig {
     /// inherits the host state. Always empty for the global layer, which
     /// refuses the table.
     pub plugin_enablement: BTreeMap<String, bool>,
-    /// `[workflow.tag_instructions.<tag>]`: which file, if any, replaces
-    /// Orbit's shipped default instruction for a tag and role.
+    /// Trusted file mappings: `[workflow.tag_instructions.<tag>]` for tag
+    /// instructions and `[workflow.agent_corpus]` for activity index rows.
     pub tag_instructions: crate::TagInstructionSettings,
     /// `[workflow.review_skip_tags.<tag>]`: path allow-list and optional
     /// guard under which a candidate carrying `<tag>` skips agent review.

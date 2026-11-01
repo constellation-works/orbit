@@ -171,6 +171,14 @@ macro_rules! dispatch_methods {
             input: &Value,
         ) -> Result<Vec<TagInstruction>, DispatchError>;
 
+        /// Pinned generated corpus rows selected by exact activity name.
+        /// Hosts without this capability answer with no guidance.
+        fn agent_corpus_for_activity(
+            &self,
+            run_id: &str,
+            activity_name: &str,
+        ) -> Result<Option<orbit_types::workflow::AgentCorpusInjection>, DispatchError>;
+
         /// What `activity_name` of `run_id` does with the explore brief of the
         /// task its `input` names: the outcome its audit row records and, for
         /// a `fresh` or `drifted` brief with delivery on, the task context's
