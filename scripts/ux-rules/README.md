@@ -49,7 +49,7 @@ A UI `check(ctx)` reads `ctx.page` and `ctx.target`, and returns results built w
 | `ui.even-row-panels` | Panels side by side in one row have heights within 4px. |
 | `ui.bounded-length` | Page `scrollHeight` at most 12 viewports; lists over 150 rows need a pagination control. |
 | `ui.nested-card` | No bordered or filled box directly inside a bordered panel without a grouping role or label. |
-| `ui.contrast` | Visible text at least 4.5:1 (3:1 large) against its effective background; gradient-backed text is recorded unmeasurable. |
+| `ui.contrast` | Visible text at least 4.5:1 (3:1 large) against its effective background; gradient-backed text is recorded unmeasurable. Text inside a natively disabled control (`button`, `input`, `select`, `textarea`, `optgroup` or `option` matching `:disabled`, which includes controls disabled by a disabled fieldset outside its first legend) is exempt and counted as `disabled_exempt`. `aria-disabled`, colour tokens and cosmetic classes do not exempt. |
 | `ui.accessible-name` | Visible buttons, links, inputs, selects, textareas and images have a name (text, `aria-label`/`aria-labelledby`, label, `alt`, or title); decorative images (`alt=""`) pass. |
 | `ui.console-clean` | No page errors, console errors, failed same-origin requests, off-loopback requests, or blocked non-GET requests while rendering. |
 | `ui.forecast-unavailable-reason` | API-shaped fixture rule: when `GET /api/diagnostics/backlog_forecast` (fetched in the page's workspace scope) reports unavailable reasons, the view carries `data-forecast-reason` with a known kind (`regression_history_missing`, `risk_unestimated`, `arrival_conflict_unknown`, …) and visible reason text. |

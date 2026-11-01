@@ -141,7 +141,7 @@ Seeded from the two prompts. Each line is one rule.
 | ui | `even-row-panels` | Panels side by side in one row have equal heights. |
 | ui | `bounded-length` | Page `scrollHeight` at most N viewports, and lists past N rows paginated or capped. |
 | ui | `nested-card` | No bordered or filled box directly inside a bordered panel without a grouping role. |
-| ui | `contrast` | Text at least 4.5:1 (3:1 for large text) against its effective background. |
+| ui | `contrast` | Text at least 4.5:1 (3:1 for large text) against its effective background; text inside natively disabled controls is exempt (inactive components). |
 | ui | `accessible-name` | Buttons, links, inputs and images have an accessible name. |
 | ui | `console-clean` | No page errors, console errors or failed same-origin requests while rendering. |
 | cli | `help-alignment` | In grouped help, sibling rows' descriptions start in one column with at least two spaces after the longest name, at 60, 80 and 120 columns through a PTY, and piped. |
