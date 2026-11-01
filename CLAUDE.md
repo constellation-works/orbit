@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit agent guide: rules, branching, gates, code and test standards, local CodeQL"
-last_validated: 2026-10-30
+last_validated: 2026-11-01
 ---
 
 # Orbit — agent guide

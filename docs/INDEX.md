@@ -128,7 +128,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | Phases 1-2 landed ([ORB-19983], [ORB-19985]); phase 3 (files, macOS profile) is not yet filed | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed | claude |
 
-### Designing (8)
+### Designing (7)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -139,9 +139,8 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 | [Ux Rules](./design/ux-rules/1_scope.md) | Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase | claude |
-| [Visual Review](./design/visual-review/1_scope.md) | UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982 | claude |
 
-### Shipped (36)
+### Shipped (37)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -180,6 +179,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | — | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
+| [Visual Review](./design/visual-review/1_scope.md) | Phase 7 only, each filed when needed; phases 1-6 are merged as ORB-19977..19982 | claude |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Repair precedent auto-answer (ORB-20822, ORB-20823) | Orbit |
 
 ### Parked (2)

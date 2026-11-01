@@ -1,11 +1,11 @@
 ---
 title: "Scope: visual review of UI changes"
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
-stage: designing
-next: "UX rules ORB-19974/19975 first (view manifest, browser settings); then phases 1-6 as ORB-19977..19982"
+stage: shipped
+next: "Phase 7 only, each filed when needed; phases 1-6 are merged as ORB-19977..19982"
 feature: visual-review
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [visual-review, ui, mocks, review-gate, task-artifacts, finding-verificati
 
 # Scope: visual review of UI changes
 
-Status: design only, nothing built. This scope states the problem, the shape and the phasing;
+Status: phases 1-6 are merged and the configuration keys below are implemented in `orbit-config`; phase 7 items are filed only when needed. This scope states the problem, the shape and the phasing;
 [2_design.md](./2_design.md) specifies each mechanism. The feature keeps both files (rather
 than the scope track's single file) because the mock convention, capture, the implementer's
 self-check, checks, image delivery, findings and measurement are separate mechanisms that
@@ -123,7 +123,7 @@ The mechanisms, each specified in [2_design.md](./2_design.md):
 
 ### Configuration
 
-Proposed keys. Every key is read by the owner and captured into a claim's contract, like the
+Keys, implemented in `orbit-config`. Every key is read by the owner and captured into a claim's contract, like the
 review contract.
 
 | Key | Default | Meaning |
