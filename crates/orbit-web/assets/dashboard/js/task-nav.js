@@ -1,6 +1,6 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
 
-import { captureWorkspaceVisit, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
+import { captureWorkspaceVisit, getWorkspace, isWorkspaceListReady, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
 import { $, taskState, onDecisionAnswered, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, STATUS_LABELS } from './task-shared.js';
 import { forgetTaskDetailLoad } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
@@ -67,6 +67,7 @@ function sameIds(a, b) {
 }
 // Throttled: callers on every chip refresh may call it freely.
 async function refreshWaitingCount(context) {
+  if (!isWorkspaceListReady() || (!getWorkspace() && !isAggregateView())) return;
   if (waitingFetchPending || Date.now() - waitingFetchAt < 15000) return;
   // Federated/aggregate: loaded tasks already carry open_decisions and crew,
   // so count locally — a workspace-spanning /api/decisions read has no scope.
