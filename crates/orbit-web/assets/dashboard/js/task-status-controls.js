@@ -1,7 +1,7 @@
 // Orbit dashboard task status and crew controls: the status and crew selects, their forced-status confirmation and their apply functions.
 
 import { captureWorkspaceVisit, el, patchJson, isAggregateView } from './common.js';
-import { taskState, rerender, statusOrder, statusTransitions, statusTransition, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS } from './task-shared.js';
+import { taskState, rerender, statusOrder, statusTransitions, statusTransition, usesHumanCrewBypass, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS } from './task-shared.js';
 import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
 import { applyUpdatedTask, currentCrewTask, loadTaskDetail, mergeTaskRecord } from './task-data.js';
 import { collapseTask, stopRowInteraction } from './task-nav.js';
@@ -13,13 +13,19 @@ const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
 export function buildStatusUpdateControl(task, context) {
   const cell = el("span", { class: "status-cell" });
   cell.dataset.status = task.status || "";
-  const targets = statusTransitions(task).map((transition) => transition.status);
+  // A human crew's task takes every status directly: no off-table group and
+  // no forced confirmation, because the server applies it as the operator's
+  // own work and records it as a human-crew bypass.
+  const humanBypass = usesHumanCrewBypass(task);
+  const targets = humanBypass
+    ? statusOrder(context).filter((status) => status && status !== task.status)
+    : statusTransitions(task).map((transition) => transition.status);
   // ORB-12445: an operator may move a task to any status from any status, the
   // same override the bare CLI spells `--force`. The governed targets keep the
   // plain list; everything else the lifecycle table refuses is offered under a
   // marked group so the two are never confused, and a terminal task is no
   // longer a dead control.
-  const forcedTargets = statusOrder(context).filter(
+  const forcedTargets = humanBypass ? [] : statusOrder(context).filter(
     (status) => status && status !== task.status && !targets.includes(status),
   );
   const mutable = canMutateTask(task);
@@ -193,12 +199,15 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   const visit = captureWorkspaceVisit();
   const mutationPath = visit.path(taskMutationPath(task));
   if (!nextStatus || nextStatus === task.status || !canMutateTask(task)) return;
-  let transition = statusTransition(task, nextStatus);
+  // A human crew's task skips the lifecycle gates server-side: send the bare
+  // status, with no evidence prompt, forced confirmation or detail lookup.
+  const humanBypass = usesHumanCrewBypass(task) && statusOrder(context).includes(nextStatus);
+  let transition = humanBypass ? null : statusTransition(task, nextStatus);
   // A target the projection did not offer is an override, not a mistake: the
   // operator gets one confirm naming the move, and the PATCH carries `force`
   // so the server applies it and records the `forced` history event. A target
   // that is not a lifecycle status at all stays a refusal.
-  const forced = !transition;
+  const forced = !humanBypass && !transition;
   // A refusal before any write. Beside an open detail's control it stays until
   // the next change; on a folded row or notice it expires like the feedback it
   // replaced, so a refused undo does not linger there.
@@ -212,7 +221,7 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   // A summary row lists the governed targets but not what each one requires —
   // the `done` requirement depends on the task's job run, which only the
   // detail endpoint reads. Ask it before deciding whether to prompt.
-  if (!forced && !("required_field" in transition)) {
+  if (!humanBypass && !forced && !("required_field" in transition)) {
     taskState.statusFeedback.set(task.id, { kind: "pending", text: "checking…" });
     rerender(context);
     let detail;
@@ -243,7 +252,7 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   }
 
   const payload = forced ? { status: nextStatus, force: true } : { status: nextStatus };
-  if (!forced && transition.required_field) {
+  if (!humanBypass && !forced && transition.required_field) {
     const evidence = collectStatusTransitionEvidence(task, nextStatus, transition.required_field);
     if (!evidence) {
       refuse(statusTransitionEvidenceUnavailable(transition.required_field));
@@ -264,7 +273,7 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
       text: forced ? "status forced" : "status saved",
     };
     const reverse = statusTransition(updatedTask, previousValue);
-    if (reverse && !reverse.required_field) {
+    if (usesHumanCrewBypass(updatedTask) || (reverse && !reverse.required_field)) {
       feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
     }
     taskState.statusFeedback.set(task.id, feedback);

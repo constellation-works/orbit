@@ -87,7 +87,13 @@ new task with a `regression_from` relation. Only an operator's
 `orbit task archive <id>` is that table's move to `archived` (`done` and
 `rejected` are not sources). `rejected` returns to `backlog` or
 `in-progress`. Follow supported transitions and the assigned workflow; agents
-have no lifecycle force override.
+have no lifecycle force override. A task assigned to a human crew
+(`[crews.<name>] kind = "human"`) is operator work: the operator's own
+`orbit task update --status` or dashboard status control sets any status from
+`proposed` to `done` with no plan, review, evidence or `--force`, and task
+history records it as a `forced` entry naming the human-crew bypass. Agents and
+MCP stay on the normal lifecycle for that task, and leaving `done` or
+`archived` still needs `--force`.
 
 When you work a task directly in an interactive session instead of through a
 drain, set its `context_files` to the files the work will touch as you claim

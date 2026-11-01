@@ -11,10 +11,13 @@ use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::job::TaskPilotSubmitError;
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{
+    TaskAddParams, TaskUpdateAuthority, TaskUpdateParams, TaskWriteScreen,
+};
 use orbit_core::{TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
+use orbit_types::task::Task;
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -65,6 +68,10 @@ impl HumanCrewFixture {
     }
 
     fn task(&self, title: &str, crew: Option<&str>) -> String {
+        self.task_in(title, crew, TaskStatus::Backlog)
+    }
+
+    fn task_in(&self, title: &str, crew: Option<&str>, status: TaskStatus) -> String {
         self.runtime
             .add_task(TaskAddParams {
                 title: title.into(),
@@ -73,12 +80,34 @@ impl HumanCrewFixture {
                 complexity: TaskComplexity::Low,
                 context_files: vec!["file:src/lib.rs".into()],
                 crew: crew.map(str::to_string),
-                status: Some(TaskStatus::Backlog),
+                status: Some(status),
                 ..Default::default()
             })
             .unwrap()
             .id
             .to_string()
+    }
+
+    /// The operator surfaces' status write (`orbit task update --status`, the
+    /// dashboard's PATCH): the lifecycle authority, with no `--force`.
+    fn operator_status(
+        &self,
+        task: &str,
+        status: TaskStatus,
+    ) -> Result<Task, orbit_core::OrbitError> {
+        self.runtime
+            .update_task_screened(
+                task,
+                TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+                &TaskWriteScreen::unbound(false),
+                TaskUpdateAuthority::Lifecycle,
+                None,
+                None,
+            )
+            .map(|written| written.task)
     }
 
     fn update(&self, input: Value) -> Result<Value, orbit_core::OrbitError> {
@@ -149,6 +178,78 @@ fn an_agent_cannot_close_a_human_crew_task_and_an_operator_can() {
     fx.update(json!({ "id": task, "status": "done" }))
         .expect("the operator closes it");
     assert_eq!(fx.runtime.get_task(&task).unwrap().status, TaskStatus::Done);
+}
+
+/// A human crew's task is operator work done outside any pipeline, so the
+/// operator closes it from any status without a plan, review, evidence or
+/// `--force`; an agent or MCP caller keeps the lifecycle on the same task, so
+/// assigning a human crew never skips review. Each bypass is a forced-style
+/// history entry naming the actor, the move and the human crew.
+#[test]
+fn an_operator_moves_a_human_crew_task_to_any_status_and_an_agent_cannot() {
+    let fx = HumanCrewFixture::new();
+
+    // An agent crew's task keeps the table for the operator too.
+    let agent_task = fx.task_in("Rename renew", Some("sol"), TaskStatus::Proposed);
+    let refused = fx
+        .operator_status(&agent_task, TaskStatus::Done)
+        .expect_err("done is reachable only from review on an agent crew's task");
+    assert!(
+        refused
+            .to_string()
+            .contains("'done' is reachable only from 'review'"),
+        "{refused}"
+    );
+
+    let task = fx.task_in("Renew the domain", Some("dk"), TaskStatus::Proposed);
+    for (attempt, expected) in [
+        (
+            fx.update(json!({ "id": task, "status": "done", "model": "claude", "execution_summary": "Renewed." })),
+            "cannot move from 'proposed' to 'done'",
+        ),
+        (
+            fx.update(json!({ "id": task, "status": "done" })),
+            "'done' is reachable only from 'review'",
+        ),
+        (
+            fx.update(json!({ "id": task, "status": "in-progress" })),
+            "requires a non-empty execution plan",
+        ),
+    ] {
+        let refusal = attempt.expect_err("the tool surface keeps the lifecycle");
+        assert!(refusal.to_string().contains(expected), "{refusal}");
+        assert_eq!(
+            fx.runtime.get_task(&task).unwrap().status,
+            TaskStatus::Proposed
+        );
+    }
+
+    let done = fx
+        .operator_status(&task, TaskStatus::Done)
+        .expect("the operator closes a proposed human-crew task directly");
+    assert_eq!(done.status, TaskStatus::Done);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let entry = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == "forced")
+        .expect("the bypass is recorded like a forced transition");
+    assert_eq!(entry.from_status, Some(TaskStatus::Proposed));
+    assert_eq!(entry.to_status, Some(TaskStatus::Done));
+    assert!(!entry.by.is_empty());
+    assert!(
+        entry
+            .note
+            .as_deref()
+            .is_some_and(|note| note.contains("human-crew bypass") && note.contains("'dk'")),
+        "{entry:?}"
+    );
+
+    // Out of `done` the existing force rules still apply.
+    let reopen = fx
+        .operator_status(&task, TaskStatus::Backlog)
+        .expect_err("reopening needs --force");
+    assert!(reopen.to_string().contains("cannot move from"), "{reopen}");
 }
 
 #[test]
