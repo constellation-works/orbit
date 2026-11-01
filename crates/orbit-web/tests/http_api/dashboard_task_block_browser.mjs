@@ -119,8 +119,12 @@ try {
       const card = page.locator('.task-block-callout');
       await card.locator('.decision-card').waitFor({ state: 'visible' });
       assert.match(await card.locator('.decision-summary').innerText(), /retired API still backs criterion 2/);
-      assert.deepEqual(await card.locator('.decision-answer').allInnerTexts(), ['Drop criterion 2', 'Restore the v1 API', 'Split the compat work']);
-      assert.equal(await card.locator('.decision-consequence').count(), 3, 'Each option shows its consequence');
+      // The shared renderer lists the recommended option first (ORB-20737); the
+      // rest keep server order, so option 1 still precedes option 3.
+      assert.deepEqual(await card.locator('.decision-answer').allInnerTexts(), ['Restore the v1 API', 'Drop criterion 2', 'Split the compat work'], 'The recommended option leads and the others keep server order');
+      assert.deepEqual(await card.locator('.decision-answer').evaluateAll(nodes => nodes.map(node => node.title)), ['Answer DR-BLOCK-4 with option 2', 'Answer DR-BLOCK-4 with option 1', 'Answer DR-BLOCK-4 with option 3'], 'Each button keeps its own option id');
+      assert.deepEqual(await card.locator('.decision-consequence').allTextContents(), ['The v1 API comes back and the task is re-piloted with criterion 2 kept as written.', 'The retired API stays retired; the task returns to backlog without that criterion.', 'Files a follow-up for the compat shim and returns this task to backlog.'], 'Each consequence sits beside its own option');
+      assert.equal(await card.locator('.decision-option').first().locator('.decision-recommended').count(), 1, 'The recommended option is the first listed');
       assert.equal(await card.locator('.decision-option.recommended .decision-recommended').count(), 1, 'One option is marked recommended');
       assert.equal(await card.locator('.decision-note').count(), 1, 'The card has a note field');
       assert.ok(!(await card.locator('.task-block-reason, .decision-summary').allInnerTexts()).join(' ').includes('test-shard-2'), 'The raw diagnosis stays out of the card face');
