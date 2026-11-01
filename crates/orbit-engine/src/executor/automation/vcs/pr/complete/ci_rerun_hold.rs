@@ -32,10 +32,73 @@ pub(super) struct CiRerunHold {
     current: Option<(String, u64, bool)>,
 }
 
+/// Planner and read outcome driving one hold transition. The throttled-read
+/// outcome is kept distinct so it never clears the hold clock [ORB-20781].
+pub(super) enum CiRerunRecoveryOutcome<'a> {
+    /// The planner asked to wait; the hold may still hold or expire.
+    Waiting(&'a str),
+    /// The planner retried CI.
+    Retried,
+    /// The planner did not hold on this poll.
+    NotEligible,
+    /// The planner stopped completion with this reason.
+    Stopped(&'a str),
+    /// A throttled log read deferred this poll; preserve the hold clock.
+    ThrottledReadDeferred,
+    /// A non-throttled planner read failed; clear and use evidence gates.
+    ReadFailed,
+}
+
+/// What one hold transition tells the poll loop to do next.
+pub(super) enum CiRerunHoldStep {
+    /// Continue with this infrastructure-wait value.
+    Hold(bool),
+    /// Stop completion with this reason.
+    Stop(String),
+    /// Preserve the hold; the caller defers the throttled read and repolls.
+    PreserveHold,
+}
+
 impl CiRerunHold {
     /// Forget the hold: the planner acted or did not hold on this poll.
     pub(super) fn clear(&mut self) {
         self.current = None;
+    }
+
+    /// The single hold transition point, keyed by planner and read outcome:
+    /// clear on a defined set of outcomes, keep across deferred reads.
+    pub(super) fn apply_recovery<H: RuntimeHost + ?Sized>(
+        &mut self,
+        host: &H,
+        auto_fix: &AutoFix,
+        head: Option<&str>,
+        outcome: CiRerunRecoveryOutcome<'_>,
+        waited_seconds: u64,
+        last_poll: bool,
+    ) -> Result<CiRerunHoldStep, OrbitError> {
+        Ok(match outcome {
+            CiRerunRecoveryOutcome::Waiting(reason) => CiRerunHoldStep::Hold(self.still_holds(
+                host,
+                auto_fix,
+                head,
+                reason,
+                waited_seconds,
+                last_poll,
+            )?),
+            CiRerunRecoveryOutcome::Retried => {
+                self.clear();
+                CiRerunHoldStep::Hold(true)
+            }
+            CiRerunRecoveryOutcome::NotEligible | CiRerunRecoveryOutcome::ReadFailed => {
+                self.clear();
+                CiRerunHoldStep::Hold(false)
+            }
+            CiRerunRecoveryOutcome::Stopped(reason) => {
+                self.clear();
+                CiRerunHoldStep::Stop(reason.to_owned())
+            }
+            CiRerunRecoveryOutcome::ThrottledReadDeferred => CiRerunHoldStep::PreserveHold,
+        })
     }
 
     /// Record the planner's hold and say whether it still holds this poll.
