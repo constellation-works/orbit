@@ -12,7 +12,7 @@ use orbit_types::tool::{
     McpToolAnnotations, McpToolDefinition, McpToolScope, ToolParam, ToolSchema, ToolSessionContext,
 };
 use rmcp::ServiceExt;
-use rmcp::model::{CallToolRequestParams, ClientInfo, Meta};
+use rmcp::model::{CallToolRequestParams, ClientConfig, RequestMetaObject};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::TcpStream;
@@ -267,8 +267,8 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         service.waiting().await.expect("wait for MCP fixture");
     });
 
-    let mut client_info = ClientInfo::default();
-    client_info.meta = Some(Meta(
+    let mut client_info = ClientConfig::default();
+    client_info.meta = Some(RequestMetaObject::from(
         json!({ "orbit": { "workspace": "/tmp/generic-workspace" } })
             .as_object()
             .expect("initialize metadata")
@@ -280,7 +280,10 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         .expect("connect MCP fixture");
 
     let initialized = client.peer_info().expect("initialize result");
-    assert_eq!(initialized.server_info.name, "orbit-mcp");
+    assert_eq!(
+        initialized.server_info.as_ref().expect("server info").name,
+        "orbit-mcp"
+    );
     assert!(
         initialized
             .instructions
@@ -494,8 +497,8 @@ async fn loopback_listener_round_trips_a_session_and_records_the_peer_ip() {
 
     let stream = TcpStream::connect(addr).await.expect("connect over TCP");
     let (client_read, client_write) = tokio::io::split(stream);
-    let mut client_info = ClientInfo::default();
-    client_info.meta = Some(Meta(
+    let mut client_info = ClientConfig::default();
+    client_info.meta = Some(RequestMetaObject::from(
         json!({ "orbit": { "workspace": "/tmp/listener-workspace" } })
             .as_object()
             .expect("initialize metadata")
@@ -510,6 +513,8 @@ async fn loopback_listener_round_trips_a_session_and_records_the_peer_ip() {
             .peer_info()
             .expect("initialize result")
             .server_info
+            .as_ref()
+            .expect("server info")
             .name,
         "orbit-mcp"
     );
@@ -688,8 +693,8 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
             .await
             .expect("wait");
     });
-    let mut info = ClientInfo::default();
-    info.meta = Some(Meta(json!({"orbit":{"workspace":"session-default","actor":"human","effective_capabilities":["operator"]}, "ui":{"authority":"human"}}).as_object().unwrap().clone()));
+    let mut info = ClientConfig::default();
+    info.meta = Some(RequestMetaObject::from(json!({"orbit":{"workspace":"session-default","actor":"human","effective_capabilities":["operator"]}, "ui":{"authority":"human"}}).as_object().unwrap().clone()));
     let client = info
         .serve((client_read, client_write))
         .await
@@ -840,7 +845,7 @@ async fn mixed_dot_underscore_names_cannot_shadow_presentation_entrypoints() {
                 .await
                 .expect("wait");
         });
-        let client = ClientInfo::default()
+        let client = ClientConfig::default()
             .serve((client_read, client_write))
             .await
             .expect("client");
@@ -934,8 +939,8 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
             .await
             .unwrap();
     });
-    let mut info = ClientInfo::default();
-    info.meta = Some(Meta(
+    let mut info = ClientConfig::default();
+    info.meta = Some(RequestMetaObject::from(
         json!({"orbit":{"workspace":"session-default","effective_capabilities":["operator"]}})
             .as_object()
             .unwrap()
@@ -1063,10 +1068,10 @@ async fn client_handshake_does_not_advertise_retired_desktop_tools() {
             let service = server.serve(server_io).await.unwrap();
             service.waiting().await.unwrap();
         });
-        let mut info = ClientInfo::default();
+        let mut info = ClientConfig::default();
         info.client_info.name = "orbit-federated-mux".into();
         if !legacy {
-            info.meta = Some(Meta(
+            info.meta = Some(RequestMetaObject::from(
                 json!({"orbit":{"domain_contract":1}})
                     .as_object()
                     .unwrap()
@@ -1136,8 +1141,8 @@ async fn a_lock_wait_timeout_is_a_retryable_lock_busy_on_the_wire() {
         let service = server.serve(server_io).await.expect("serve");
         service.waiting().await.expect("wait");
     });
-    let mut info = ClientInfo::default();
-    info.meta = Some(Meta(
+    let mut info = ClientConfig::default();
+    info.meta = Some(RequestMetaObject::from(
         json!({ "orbit": { "workspace": "/tmp/owner" } })
             .as_object()
             .expect("initialize metadata")
@@ -1223,7 +1228,7 @@ async fn host_metadata_drives_selector_echo_and_presentation_without_builtin_nam
             .await
             .unwrap();
     });
-    let client = ClientInfo::default().serve(client_io).await.unwrap();
+    let client = ClientConfig::default().serve(client_io).await.unwrap();
     let listed = client.peer().list_all_tools().await.unwrap();
     assert!(listed.iter().any(|tool| tool.name == "orbit_ui_inspect"));
     for tool in &listed {
@@ -1328,7 +1333,7 @@ async fn delivery_refusal_crosses_the_mcp_wire() {
             .await
             .unwrap();
     });
-    let client = ClientInfo::default().serve(client_io).await.unwrap();
+    let client = ClientConfig::default().serve(client_io).await.unwrap();
     let result = client
         .peer()
         .call_tool(call("demo_echo", json!({"value":"head"})))

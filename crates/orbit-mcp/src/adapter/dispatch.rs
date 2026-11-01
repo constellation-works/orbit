@@ -13,10 +13,10 @@ use orbit_types::tool::{
 use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, CustomRequest, CustomResult, Implementation,
-    InitializeRequestParams, InitializeResult, ListResourcesResult, ListToolsResult, Meta,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult, ServerCapabilities,
-    ServerInfo,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CustomRequest, CustomResult,
+    Implementation, InitializeRequestParams, InitializeResult, ListResourcesResult,
+    ListToolsResult, MetaObject, PaginatedRequestParams, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, RequestMetaObject, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::{Map, Value};
@@ -449,9 +449,9 @@ impl OrbitToolServer {
     pub(crate) fn apply_initialize(
         &self,
         request: &InitializeRequestParams,
-        transport_meta: &Meta,
+        transport_meta: &RequestMetaObject,
     ) -> Result<(), McpError> {
-        let metadata = request
+        let metadata: &MetaObject = request
             .meta
             .as_ref()
             .map(|meta| &meta.0)
@@ -552,12 +552,12 @@ impl ServerHandler for OrbitToolServer {
             return std::future::ready(Err(error));
         }
         if context.peer.peer_info().is_none() {
-            context.peer.set_peer_info(request);
+            context.peer.set_peer_info(request.clone());
         }
-        std::future::ready(Ok(self.get_info()))
+        std::future::ready(self.negotiate_initialize(&request))
     }
 
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let implementation = Implementation::new("orbit-mcp", env!("CARGO_PKG_VERSION"));
         let capabilities = ServerCapabilities::builder()
             .enable_tools()
@@ -648,7 +648,7 @@ impl ServerHandler for OrbitToolServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         if request.uri != presentation::RESOURCE_URI
             && request.uri != presentation::LEGACY_RESOURCE_URI
         {
@@ -657,17 +657,19 @@ impl ServerHandler for OrbitToolServer {
                 Some(serde_json::json!({ "code": "resource_not_found" })),
             ));
         }
-        Ok(ReadResourceResult::new(vec![
-            presentation::resource_content(&request.uri),
-        ]))
+        Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
+            vec![presentation::resource_content(&request.uri)],
+        )))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        self.dispatch_tool_call(request).await
+    ) -> Result<CallToolResponse, McpError> {
+        Ok(CallToolResponse::Complete(
+            self.dispatch_tool_call(request).await?,
+        ))
     }
 }
 
@@ -680,7 +682,7 @@ fn invalid_definitions_mcp_error(error: OrbitError) -> McpError {
 
 pub(super) fn session_context_from_initialize(
     request: &InitializeRequestParams,
-    transport_meta: &Meta,
+    transport_meta: &RequestMetaObject,
 ) -> ToolSessionContext {
     // rmcp moves wire `_meta` to the request context. Prefer params-level meta
     // for in-process callers, then fall back to the transport-level value.
@@ -710,7 +712,7 @@ pub(super) fn session_context_from_initialize(
 /// anonymous. There is no fallback to another source of identity.
 fn self_reported_actor_from_initialize(
     request: &InitializeRequestParams,
-    transport_meta: &Meta,
+    transport_meta: &RequestMetaObject,
 ) -> Option<String> {
     meta_string(request.meta.as_ref().map(|meta| &meta.0), "actor")
         .or_else(|| meta_string(Some(&transport_meta.0), "actor"))
@@ -721,7 +723,7 @@ fn self_reported_actor_from_initialize(
 
 /// Read `_meta.orbit.<key>`, accepting both the nested object and the flat
 /// dotted spelling clients use when they cannot build nested `_meta`.
-fn meta_string(meta: Option<&rmcp::model::JsonObject>, key: &str) -> Option<String> {
+fn meta_string(meta: Option<&MetaObject>, key: &str) -> Option<String> {
     meta.and_then(|meta| {
         meta.get("orbit")
             .and_then(|orbit| orbit.get(key))

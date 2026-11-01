@@ -23,7 +23,7 @@ orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 orbit-registry = { path = "../orbit-registry" }
 orbit-tools = { path = "../orbit-tools" }
-rmcp = { version = "2.1.0", default-features = false, features = ["client", "server", "transport-io"] }
+rmcp = { version = "3.8", default-features = false, features = ["client", "server", "transport-io"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "rt", "sync", "time"] }
