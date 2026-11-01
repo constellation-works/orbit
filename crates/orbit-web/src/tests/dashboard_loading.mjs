@@ -25,7 +25,6 @@ let crewReads = 0;
 let summaryReads = 0;
 const summaryQueries = [];
 const auditQueries = [];
-let summaryDenials = 0;
 const codebaseQueries = [];
 let frictionTitle = 'stable friction title';
 let frictionBody = 'stable friction body';
@@ -207,7 +206,7 @@ function fixture(url) {
     }
     case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
-    case '/api/audit/summary': summaryReads++; summaryQueries.push(url.searchParams.get('since')); return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, denials: summaryDenials, denials_sql: summaryDenials, denials_v2: 0, window: '24h',
+    case '/api/audit/summary': summaryReads++; summaryQueries.push(url.searchParams.get('since')); return { events: summaryReads, failed_runs: terminalRunFixture ? 3 : 0, window: '24h',
       tool_call_failure_rate: { failed: 0, total: summaryReads, denied: 0 } };
     case '/api/codebase/analytics': {
       codebaseQueries.push(url.searchParams);
@@ -885,10 +884,7 @@ await settle();
 check(frictionText().includes('during ORB-200') && !frictionText().includes('during ORB-100'), 'edited during-task replaces the list meta');
 check(frictionText().includes('retitled friction') && frictionText().includes('rewritten friction body'), 'later field edits keep the updated title and body');
 
-// Analytics › Codebase: its hash restores the view through the router. The
-// denial badge on Health opens Health › Incidents › Events filtered to
-// denials; the Events tab itself opens on failures and denials.
-summaryDenials = 4;
+// Analytics › Codebase: its hash restores the view through the router.
 window.location.hash = '#analytics/codebase?window=30d&rollup=crate';
 await settle();
 check(node('analytics-codebase-main').style.display !== 'none' && document.querySelector('.tab-pane.active')?.dataset.tab === 'analytics', '#analytics/codebase restores the Codebase view');
@@ -912,18 +908,16 @@ window.location.hash = '#analytics/codebase/file?window=30d&rollup=crate';
 await settle();
 check(codebaseKeys().includes('hotspots'), 'a file hash without a path falls back to Hotspots');
 check(node('agents-roles')?.querySelector('[data-view="pilots"]'), 'task-pilot ranking destination is available under Agents > Pilots');
-const denialBadge = node('rail-count-denials');
-check(denialBadge.closest('.tab')?.dataset.tab === 'diagnostics', 'the denial badge sits on the Health rail entry');
-check(!denialBadge.hidden && denialBadge.textContent === '4 denied', 'the denial badge shows the canonical denial count');
-denialBadge.click();
+check(!node('rail-count-denials'), 'the Health rail carries no denial badge');
+// Events still filters to denials from its hash, which the rail no longer links to.
+window.location.hash = '#diagnostics/incidents/events?since=24h&status=denied';
 await settle();
-check(window.location.hash === '#diagnostics/incidents/events?since=24h&status=denied' && node('diagnostics-events-main').style.display !== 'none', `the denial badge opens Events filtered to denials: ${window.location.hash}`);
-check(document.querySelector('#incidents-views .subtab.active')?.dataset.view === 'events', 'the badge lands on the Events view of Incidents');
+check(window.location.hash === '#diagnostics/incidents/events?since=24h&status=denied' && node('diagnostics-events-main').style.display !== 'none', `the denied filter opens Events: ${window.location.hash}`);
+check(document.querySelector('#incidents-views .subtab.active')?.dataset.view === 'events', 'the denied filter lands on the Events view of Incidents');
 click(document.querySelector('#incidents-views [data-view="incidents"]')); await settle();
 check(window.location.hash.startsWith('#diagnostics/incidents?') && node('diagnostics-events-main').style.display === 'none', 'the Incidents view tab leaves Events');
 click(document.querySelector('#incidents-views [data-view="events"]')); await settle();
 check(new URLSearchParams(window.location.hash.split('?')[1]).get('status') === 'denied', 'Events keeps the filter it was left with');
-summaryDenials = 0;
 
 // Tools uses Analytics' selected window rather than a remembered Events
 // cutoff. A tool row then opens evidence for the window its summary shows.

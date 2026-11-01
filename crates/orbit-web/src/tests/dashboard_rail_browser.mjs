@@ -35,10 +35,10 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h#tasks`);
   await page.evaluate(() => document.fonts.ready);
   const cases = [
-    { name: 'four-digit', events: '6837', denials: '33 denied', routines: '33 routines' },
-    { name: 'five-digit', events: '68.4k', denials: '333 denied', routines: '333 routines' },
-    { name: 'large', events: '987.7k', denials: '12.3k denied', routines: '1000 routines' },
-    { name: 'cleared', events: '6837', denials: '', routines: '' },
+    { name: 'four-digit', events: '6837', routines: '33 routines' },
+    { name: 'five-digit', events: '68.4k', routines: '333 routines' },
+    { name: 'large', events: '987.7k', routines: '1000 routines' },
+    { name: 'cleared', events: '6837', routines: '' },
   ];
   for (const width of [1440, 1280, 1024, 761, 760, 390, 375]) {
     await page.setViewportSize({ width, height: 900 });
@@ -47,14 +47,9 @@ try {
         for (const node of document.querySelectorAll('.rail .tab > .rail-count')) {
           node.textContent = fixture.events;
         }
-        for (const [id, text] of [
-          ['rail-count-denials', fixture.denials],
-          ['rail-count-routine-failures', fixture.routines],
-        ]) {
-          const node = document.getElementById(id);
-          node.textContent = text;
-          node.hidden = !text;
-        }
+        const routines = document.getElementById('rail-count-routine-failures');
+        routines.textContent = fixture.routines;
+        routines.hidden = !fixture.routines;
       }, fixture);
       await page.evaluate(() => new Promise(requestAnimationFrame));
       const layout = await page.locator('.rail .tab').evaluateAll(nodes => {
@@ -185,11 +180,9 @@ try {
       workspace.setAttribute('aria-label', 'Workspace');
       workspace.add(new Option('Fixture workspace', 'ws_fixture'));
       document.getElementById('rail-workspace').append(workspace);
-      for (const [id, text] of [['rail-count-denials', '33 denied'], ['rail-count-routine-failures', '33 routines']]) {
-        const node = document.getElementById(id);
-        node.hidden = false;
-        node.textContent = text;
-      }
+      const routines = document.getElementById('rail-count-routine-failures');
+      routines.hidden = false;
+      routines.textContent = '33 routines';
       const router = await import('/static/js/router.js');
       const state = { diagSubtab: 'incidents', incidentsView: 'incidents', analyticsSubtab: 'metrics',
         reliabilityView: 'pipeline', agentsRole: 'orchestrators', configSubtab: 'workflow' };

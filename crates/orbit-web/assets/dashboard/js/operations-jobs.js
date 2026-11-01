@@ -51,23 +51,19 @@ function failureStreakSummary(streak) {
   return `${streak.job_id}: ${failureStreakText(streak)}${streak.same_error ? ` (same error ×${streak.count})` : ""}`;
 }
 
-// The Jobs and Health rail pills count the failing jobs. Health's is the
-// attention pill that is visible from every tab; Jobs' sits beside its
-// pending/running volume count. Both are display only.
+// The Jobs rail pill counts the failing jobs. It sits beside the pending/running
+// volume count and is display only, visible from every tab.
 export function updateJobFailureBadges(failing) {
   jobFailureRequest += 1;
   const jobs = failing || [];
-  const title = jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "";
-  for (const [id, text] of [["rail-count-jobs-failing", `${jobs.length} failing`], ["rail-count-job-failures", `${jobs.length} job${jobs.length === 1 ? "" : "s"}`]]) {
-    const node = $(id);
-    if (!node) continue;
-    node.hidden = jobs.length === 0;
-    node.textContent = jobs.length ? text : "";
-    node.title = title;
-  }
+  const node = $("rail-count-jobs-failing");
+  if (!node) return;
+  node.hidden = jobs.length === 0;
+  node.textContent = jobs.length ? `${jobs.length} failing` : "";
+  node.title = jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "";
 }
 
-// Keep the rail pills true from every tab, including before Jobs is opened.
+// Keep the rail pill true from every tab, including before Jobs is opened.
 // A reply from an earlier host/workspace visit must not restore a stale count.
 export async function peekJobFailures() {
   if (isAggregateView() || !selectedWorkspace()) {

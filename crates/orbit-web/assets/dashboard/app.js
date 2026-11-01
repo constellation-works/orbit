@@ -5,7 +5,7 @@ import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, re
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { initLocks, paintLocks } from './js/locks.js';
-import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
+import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
 import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgentsRole, wireAgentControls } from './js/agents.js';
@@ -1101,15 +1101,12 @@ function truncate(text, max) {
 // restores every panel.
 
 // ORB-00039: in aggregate mode the per-workspace fetches are skipped, so the
-// panels they feed (audit summary, locked files) show an inline placeholder and
-// the summary's rail counts are cleared rather than left displaying one
-// workspace's stale counts.
+// panels they feed (audit summary, locked files) show an inline placeholder.
 function renderAggregatePlaceholders() {
   renderPanelPlaceholder("audit-summary-body");
   renderPanelPlaceholder("locks-body");
   const locksCount = $("locks-count");
   if (locksCount) locksCount.textContent = "—";
-  resetSummaryCounts();
 }
 
 // Most Health panels are fed exclusively by per-workspace endpoints and
@@ -1132,11 +1129,6 @@ function renderKnowledgeDetailPlaceholder(prefix) {
   renderPanelPlaceholder(`${prefix}-detail`);
   const count = $(`${prefix}-detail-count`);
   if (count) count.textContent = "—";
-}
-
-// Health denials are scoped to the summary window.
-function resetSummaryCounts() {
-  renderDenialCount(null);
 }
 
 // ORB-10874: the single-workspace list endpoint filters server-side, so the
@@ -1821,7 +1813,6 @@ function fetchAndRenderSummary() {
   const since = (toolsOpen ? toolsWindowFor().window : effectiveAuditWindow()) || "24h";
   return requestPanel("audit-summary-body", since, () => fetchJson(`/api/audit/summary?since=${encodeURIComponent(since)}`), (data) => {
     lastSummary = data;
-    renderSummaryCounts(data);
     renderAuditSummary(data, auditContext());
   });
 }
@@ -1873,11 +1864,6 @@ function setRailCount(id, value, alert = false, title = "", format = formatBigIn
   node.textContent = empty ? "" : format(value);
   node.classList.toggle("alert", Boolean(alert) && !empty);
   node.title = empty ? "" : title;
-}
-
-// Health's denial badge follows the summary window.
-function renderSummaryCounts(data) {
-  if (data) renderDenialCount(data);
 }
 
 function formatBigInt(n) {
@@ -2059,7 +2045,6 @@ onWorkspaceChange(() => {
   for (const id of ["tasks-count", "diag-count", "task-filter-summary"]) {
     if ($(id)) $(id).textContent = "—";
   }
-  resetSummaryCounts();
   setRailCount("rail-count-jobs", null);
 });
 resetPanel("tasks-body", "tasks-count");

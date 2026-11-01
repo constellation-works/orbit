@@ -822,17 +822,9 @@ function initTabsImpl(ctx) {
         setActiveTabImpl(ctx, "jobs/live", { refresh: false });
         return;
       }
-      // The denial badge opens Health › Incidents › Events filtered to
-      // denials for the window it counted; the Health label keeps the view
-      // already on screen.
-      // The failing-jobs pills open the catalogue, where the badge names the job.
-      if (event.target?.closest?.("#rail-count-jobs-failing, #rail-count-job-failures")) {
+      // The failing-jobs pill opens the catalogue, where the badge names the job.
+      if (event.target?.closest?.("#rail-count-jobs-failing")) {
         setActiveTabImpl(ctx, "jobs/catalogue", { refresh: false });
-        return;
-      }
-      const denials = event.target && event.target.closest && event.target.closest("#rail-count-denials");
-      if (denials && denials.dataset.route && tab.dataset.tab === "diagnostics") {
-        setActiveTabImpl(ctx, denials.dataset.route, { refresh: false });
         return;
       }
       setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false });

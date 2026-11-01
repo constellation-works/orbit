@@ -3,8 +3,8 @@
 // the top of each signal, Show all, the path search, hidden columns, the
 // regression filters and footnotes), the file view with its related files,
 // Coupling & locks, the regression-risk marks view and a poll that keeps the
-// reader's place; and the Health denial badge that opens Events filtered to
-// denials, with Events' default failure + denied filter.
+// reader's place; and Health's Events filtered to denials, with Events' default
+// failure + denied filter.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -113,7 +113,7 @@ const make = (tag, id, parent) => {
 };
 const body = new Node('body');
 const layout = make('main', 'analytics-codebase-main', body);
-for (const id of ['audit-count', 'audit-body', 'codebase-controls', 'codebase-body', 'rail-count-denials', 'audit-search', 'audit-filter']) {
+for (const id of ['audit-count', 'audit-body', 'codebase-controls', 'codebase-body', 'audit-search', 'audit-filter']) {
   make('div', id, layout);
 }
 make('p', 'codebase-purpose', byId['codebase-controls']);
@@ -757,19 +757,9 @@ assert.match(audit.buildAuditHash(), /status=non_success/, 'an unknown status fa
 click(statusChips().find(chip => chip.dataset.status === 'all'));
 assert.equal(window.location.hash, '#diagnostics/incidents/events?since=24h&status=all', 'the all chip writes status=all');
 
-// The denial badge on Health shows the canonical count and routes to Events
-// filtered to denials for the window it counted.
-const badge = byId['rail-count-denials'];
-audit.renderDenialCount({ denials: 4, denials_sql: 3, denials_v2: 1, window: '7d' });
-assert.equal(badge.hidden, false);
-assert.equal(badge.textContent, '4 denied');
-assert.match(badge.title, /3 audit rows, 1 loop denials/);
-assert.equal(badge.dataset.route, 'diagnostics/incidents/events?since=7d&status=denied');
-audit.applyAuditHashQuery(new URLSearchParams(badge.dataset.route.split('?')[1]));
-assert.equal(audit.buildAuditHash(), '#diagnostics/incidents/events?since=7d&status=denied', 'the badge lands on Events filtered to denials');
-audit.renderDenialCount({ denials: 0, window: '7d' });
-assert.equal(badge.hidden, true, 'no denials, no badge');
-assert.equal(badge.dataset.route, undefined);
+// Health's Events still filters to denials for the window it was opened on.
+audit.applyAuditHashQuery(new URLSearchParams('since=7d&status=denied'));
+assert.equal(audit.buildAuditHash(), '#diagnostics/incidents/events?since=7d&status=denied', 'a denied filter lands on Events filtered to denials');
 
 // Workspace listeners also request panels outside the scenario being served.
 // Complete those owned fetches so fetchJsonPage's finally clears each real
@@ -778,4 +768,4 @@ for (const request of unresolved) request.resolve(response({ error: 'Fixture tea
 await settle();
 assert.equal(unresolved.size, 0, 'fixture teardown leaves no unanswered fetches');
 
-console.log('codebase view, Events default filter and denial badge behaviors passed');
+console.log('codebase view, Events default filter and denied filter behaviors passed');

@@ -297,9 +297,9 @@ try {
   assert(rail.text === '1 err · 2 warn' && rail.alert, `the Health rail item counts failures and warnings: ${JSON.stringify(rail)}`);
   assert(rail.lines === 1 && !rail.clipped, `the rail count fits on one line inside the item: ${JSON.stringify(rail)}`);
 
-  // A wide failure pill beside a denial pill must not squeeze the Health label.
-  await page.locator('#rail-count-denials').evaluate((node) => {
-    node.textContent = '9 denied';
+  // A wide failure pill beside a routine-failure pill must not squeeze the Health label.
+  await page.locator('#rail-count-routine-failures').evaluate((node) => {
+    node.textContent = '9 routines';
     node.hidden = false;
     node.classList.add('alert');
   });
@@ -321,7 +321,7 @@ try {
   evidenceLog.desktopRailLayout = desktopRailLayout;
   assert(desktopRailLayout.label === 'Health' && desktopRailLayout.labelFits,
     `the desktop Health label remains fully readable beside its counts: ${JSON.stringify(desktopRailLayout)}`);
-  assert(desktopRailLayout.counts.map((item) => item.text).join('|') === '1 err · 2 warn|9 denied',
+  assert(desktopRailLayout.counts.map((item) => item.text).join('|') === '1 err · 2 warn|9 routines',
     `both desktop Health counts remain visible: ${JSON.stringify(desktopRailLayout)}`);
   assert(desktopRailLayout.counts[0].bounds.top >= desktopRailLayout.labelBounds.bottom
     && desktopRailLayout.counts[1].bounds.top >= desktopRailLayout.counts[0].bounds.bottom,
@@ -351,7 +351,7 @@ try {
   evidenceLog.phoneRailLayout = phoneRailLayout;
   assert(phoneRailLayout.label === 'Health' && phoneRailLayout.labelFits && phoneRailLayout.tabVisible && !phoneRailLayout.pageOverflow,
     `the horizontal phone rail shows the full Health label without page overflow: ${JSON.stringify(phoneRailLayout)}`);
-  assert(phoneRailLayout.counts.map((item) => item.text).join('|') === '1 err · 2 warn|9 denied'
+  assert(phoneRailLayout.counts.map((item) => item.text).join('|') === '1 err · 2 warn|9 routines'
     && phoneRailLayout.counts.every((item) => Math.abs(item.bounds.top - phoneRailLayout.labelBounds.top) <= 1),
   `both Health counts stay alongside the label on the phone rail: ${JSON.stringify(phoneRailLayout)}`);
   await page.setViewportSize({ width: 1440, height: 900 });
