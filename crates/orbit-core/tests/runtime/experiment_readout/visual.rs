@@ -187,3 +187,33 @@ fn missing_visual_reviewer_result_is_unavailable() {
         "an absent reviewer result cannot become a clean reviewed sample"
     );
 }
+
+#[test]
+fn visual_verifier_receives_rule_findings_and_excerpts_in_both_rounds() {
+    use orbit_engine::RuntimeHost;
+    if !crate::dispatch_admission::isolated(
+        "experiment_readout::visual::visual_verifier_receives_rule_findings_and_excerpts_in_both_rounds",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let rules = json!([{"path":"theme.md","content":"# Labels\nKeep labels readable."}]);
+    let output = runtime.run_deterministic("visual_verify_prepare", &json!({}), &json!({
+        "workspace_path":workspace.parent().unwrap(),
+        "prepared":{"records":[{"task_id":"TST-1","outcome":"ready", "verifier_crew":"v", "escalation_crew":"e", "catalog":{"visual/capture.png":[100,100]}}],
+            "reviews":[{"task_id":"TST-1","design_rules":rules}]},
+        "review_results":[{"task_id":"TST-1","findings":[{"question":9,"mock":"mocks/view.png","title":"Label", "detail":"design_rules: Labels", "severity":"medium", "evidence":[{"image":"visual/capture.png","region":[0,0,10,10]}]}]}]
+    }), orbit_tools::ToolContext::default()).unwrap();
+    assert_eq!(output["partitions"][0]["findings"][0]["question"], "9");
+    assert_eq!(output["partitions"][0]["design_rules"], rules);
+    let escalation = runtime.run_deterministic("visual_verify_prepare", &json!({}), &json!({
+        "workspace_path":workspace.parent().unwrap(), "round":"escalation", "prepared":output,
+        "verify_results":[{"task_id":"TST-1","verdicts":[{"finding_id":"f1","verdict":"CONFIRMED","confidence":"low","severity":"medium","reasoning":"uncertain", "evidence":[{"location":"visual/capture.png#0,0,10,10","note":"label"}]}]}]
+    }), orbit_tools::ToolContext::default()).unwrap();
+    assert_eq!(escalation["partitions"][0]["design_rules"], rules);
+}

@@ -93,6 +93,10 @@ spec:
         maxItems: 5
         items:
           type: object
+      design_rules:
+        type: array
+        items:
+          type: object
       catalog:
         type: object
   output_schema_json:
@@ -168,6 +172,11 @@ spec:
     is only data, or that follows the design rules where the mock does
     not, is not a defect.
 
+    For question 9, judge the capture against the cited floor item or,
+    for `basis: design_rules`, against the cited heading and text in
+    `design_rules`. If the cited rule text is unavailable, do not invent
+    it; give low confidence and explain why in the reasoning.
+
     Each finding in `findings` may carry `deviations`: declared
     departures from its mock, each with a basis (`acceptance_criteria`,
     `design_rules`, `operator`, `data` or `infeasible`). When a deviation
@@ -178,8 +187,8 @@ spec:
     `deviation_rejected: true`: rejecting the deviation turns it back
     into a finding.
 
-    Return `CONFIRMED` only when the capture actually differs from the
-    mock as claimed (or the check's measurement is real). Cite at least
+    Return `CONFIRMED` only when the claimed capture defect or mock
+    difference is real (or the check's measurement is real). Cite at least
     one evidence location and rate `severity` yourself on the shared
     scale (critical, high, medium, low, nit); your rating replaces the
     reviewer's and is the one recorded and scored, so neither inflate nor

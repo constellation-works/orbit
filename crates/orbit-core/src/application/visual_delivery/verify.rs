@@ -68,6 +68,10 @@ fn initial_prepare(
         let dispatch = dispatches
             .iter()
             .find(|dispatch| dispatch.get("task_id").and_then(Value::as_str) == Some(&task_id));
+        record["design_rules"] = dispatch
+            .and_then(|item| item.get("design_rules"))
+            .cloned()
+            .unwrap_or_else(|| json!([]));
         let max_findings = record
             .pointer("/budget/max_findings")
             .and_then(Value::as_u64)
@@ -272,6 +276,7 @@ fn partition(
         "image_input": {"images": images},
         "staged_images": staged,
         "findings": findings,
+        "design_rules": record.get("design_rules").cloned().unwrap_or_else(|| json!([])),
         "catalog": record.get("catalog").cloned().unwrap_or_else(|| json!({})),
     }))
 }
@@ -379,9 +384,9 @@ fn comparison_finding(
     };
     if !matches!(
         question.as_str(),
-        "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8"
+        "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
     ) {
-        return Err(format!("question {question:?} is not 1-8"));
+        return Err(format!("question {question:?} is not 1-9"));
     }
     let mock = non_empty(raw, "mock")?;
     let title = non_empty(raw, "title")?;
