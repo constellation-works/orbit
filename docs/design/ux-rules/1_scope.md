@@ -212,6 +212,14 @@ id and argv for CLI), never a measurement or the failing element's selector, so 
 defect keeps one fingerprint while its numbers or its first failing element change. The
 selector stays in `measurements`.
 
+The script adapter exports evidence to declared `ORBIT_SCRIPT_OUT` outputs before removing
+surface scratch. Content SHA-256 names deduplicate equal captures, with a finite bound of
+64 unique files × 1 MiB. Evidence paths in the merged report name those output members;
+the standalone runner report above still uses paths relative to its output directory.
+Malformed, missing, symlinked, escaped and over-budget evidence fails explicitly. Operators
+reduce captures or split runs on exhaustion, and update/regrant existing script manifests
+with `files.outputs: {max_files: 64, max_file_bytes: 1048576}`. Read/network grants stay unchanged.
+
 ### Filing
 
 A generic deterministic activity, `file_rule_findings`, reads a results file and keeps one
@@ -225,6 +233,15 @@ schema above can use it.
 | `pass` | exists | Comment once: the rule passes at this commit, with the measurements. No status change: the operator or the task's own delivery closes it. |
 | `error` | — | One task per rule, not per target, tagged `ux-rules-error`: the rule is broken. |
 
+- **Durable evidence.** The job binds `evidence_step: run` and
+  `evidence_files: "{{ steps.run.files }}"`. The filer uses its host-attested consumer run,
+  the exact executing definition's direct producer index and successful checkpoint, and
+  the existing output-set verifier (workspace, run/resume lineage, producer record and
+  digests). It attaches only named, bounded members after scratch cleanup. Substitution,
+  missing checkpoints and unsupported loop/parallel producers refuse before task mutation.
+  Standalone evidence directories are confined to the workspace; paths alone never confer
+  host read authority. Repeated findings retain their original attached evidence and dedup
+  behavior; a pass only comments and does not change task status.
 - **Cap.** At most `ux_rules.max_new_tasks` (default 10) new tasks per run, highest severity
   first; the rest are listed in the run's results and filed on later runs.
 - **Fingerprint storage.** The fingerprint is a task field written at filing

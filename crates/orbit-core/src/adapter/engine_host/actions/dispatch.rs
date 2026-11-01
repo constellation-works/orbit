@@ -204,7 +204,7 @@ pub(crate) fn run_deterministic(
         // Keep one task per rule-result fingerprint from a results document
         // any workspace script wrote; surface-agnostic by schema.
         CoreDeterministicAction::FileRuleFindings => {
-            rule_findings_filing::file_rule_findings(runtime, input)
+            rule_findings_filing::file_rule_findings(runtime, input, owner_run_id(&tool_context))
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // The admissible work for one drain iteration [ORB-10819]: the

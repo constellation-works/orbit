@@ -8,8 +8,8 @@ spec:
     Keep one task per rule-result fingerprint from a results document in the
     ux-rules.json schema, written by any workspace script. A new failing
     fingerprint files one proposed bug task carrying the fingerprint in its
-    rule_fingerprint field, the measurements, the evidence (attached when
-    the evidence files are reachable) and a reproduce command naming the
+    rule_fingerprint field, the measurements, the evidence (validated and attached from declared script
+    outputs or a workspace-confined evidence directory) and a reproduce command naming the
     rule and target. An open owner is commented only when its measurements
     changed; a fingerprint that passes again gets exactly one comment and no
     status change. Rule errors file one task per rule, tagged
@@ -30,9 +30,15 @@ spec:
       results_file:
         type: string
         description: Path of a rule-results file, resolved under the workspace root when relative. Evidence paths resolve beside it.
+      evidence_step:
+        type: string
+        description: Unique direct preceding script step whose persisted output set supplies evidence. Requires a host-attested consumer run; loop and parallel producers are refused.
+      evidence_files:
+        type: array
+        description: Bind steps.<producer>.files exactly. Descriptors are checked against the producer checkpoint, stored record, workspace, run lineage and file digests; paths alone grant no read authority.
       evidence_dir:
         type: string
-        description: Directory evidence paths in an inline results document resolve against.
+        description: Workspace-confined directory for standalone inline results. Missing, escaped, symlinked or oversized evidence refuses filing before task mutations. Ignored with evidence_step.
       max_new_tasks:
         type: [number, 'null']
         minimum: 1
