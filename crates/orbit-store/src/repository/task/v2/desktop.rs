@@ -21,7 +21,7 @@ fn revision(bundle: &TaskBundleV2) -> Result<String, OrbitError> {
 /// Why an active claim refuses desktop writes, and the supported way out: a
 /// claim-scoped mutation, never a status change. The task and claiming run are
 /// named so a refusal can be traced without a second lookup.
-fn active_claim_reason(claim: &crate::contracts::ExecutionClaim) -> String {
+pub(crate) fn active_claim_reason(claim: &crate::contracts::ExecutionClaim) -> String {
     let identity = format!(
         " (task {}, run {})",
         claim.task_id, claim.run_context.run_id

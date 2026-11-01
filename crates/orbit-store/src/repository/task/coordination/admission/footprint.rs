@@ -43,10 +43,9 @@ impl TaskCommitBoundary {
 
     pub(crate) fn refuse_unscoped_claim_write(&self, task_id: &str) -> Result<(), OrbitError> {
         if let Some(claim) = self.protecting_claim_for_task(task_id)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "active execution claim requires a claim-scoped mutation (task {}, run {})",
-                claim.task_id, claim.run_context.run_id
-            )));
+            return Err(OrbitError::InvalidInput(
+                crate::repository::task::v2::desktop::active_claim_reason(&claim),
+            ));
         }
         Ok(())
     }
