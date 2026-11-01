@@ -32,6 +32,14 @@ Stop Orbit workers, MCP servers, timers, and dashboards before replacing a datab
 the damaged main file and any `-wal` and `-shm` sidecars together before attempting salvage.
 Do not overwrite the last known-good backup.
 
+Do not open and close an extra ordinary descriptor to an active SQLite database for
+header inspection or permission repair. POSIX record locks belong to the process, so an
+uncoordinated close can cancel locks held by another connection. Orbit's header inspection
+uses SQLite-owned VFS handles; safe permission repair is platform-limited, with an explicit
+offline-repair refusal where unsupported. See [private SQLite permissions](./state-and-backup.md#private-sqlite-permissions).
+Removing such a source-level hazard does not establish the cause of an observed corruption
+incident, and a structurally valid salvage is not evidence that every payload survived.
+
 ## Recover in priority order
 
 ### 1. Restore from backup
