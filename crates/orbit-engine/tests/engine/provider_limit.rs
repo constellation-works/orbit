@@ -319,11 +319,10 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
                 );
             }
             "codex" => {
-                let expected = Local
+                let expected = Utc
                     .with_ymd_and_hms(2026, 10, 9, 15, 42, 0)
                     .single()
-                    .unwrap()
-                    .with_timezone(&Utc);
+                    .unwrap();
                 assert_eq!(limit.resets_at, Some(expected), "{label}");
                 assert_eq!(limit.model.as_deref(), Some("gpt-5.1-codex-max"));
             }
@@ -394,6 +393,7 @@ fn an_antigravity_error_result_on_exit_zero_is_a_usage_limit() {
 /// `rate_limit_info` names the window and its epoch reset, and fails the turn
 /// even on exit 0.
 fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
+    let before = Local::now().date_naive();
     let (_, message, _, _) = dispatch(
         0,
         &case(
@@ -406,12 +406,13 @@ fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
         ),
     );
     let limit = typed_limit(message.as_deref(), "codex");
+    let after = Local::now().date_naive();
     let local = limit
         .resets_at
         .expect("codex said when it resets")
         .with_timezone(&Local);
     assert_eq!((local.hour(), local.minute()), (15, 42), "{message:?}");
-    assert_eq!(local.date_naive(), Local::now().date_naive());
+    assert!(local.date_naive() >= before && local.date_naive() <= after);
     assert_eq!(limit.model, None, "the limit names no model");
 
     let resets_at = DateTime::from_timestamp(1_791_561_600, 0).unwrap();
@@ -533,28 +534,37 @@ fn a_crew_accounts_limit_names_its_account() {
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn provider_limit_contracts_1() {
-    crate::git_fixture::isolated(module_path!(), "provider_limit_contracts_1", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "usage_limits_are_typed_only_from_text_the_failed_provider_wrote",
-                usage_limits_are_typed_only_from_text_the_failed_provider_wrote,
-            ),
-            (
-                "an_antigravity_error_result_on_exit_zero_is_a_usage_limit",
-                an_antigravity_error_result_on_exit_zero_is_a_usage_limit,
-            ),
-            (
-                "reported_resets_and_windows_are_read_from_the_providers_own_words",
-                reported_resets_and_windows_are_read_from_the_providers_own_words,
-            ),
-            (
-                "a_usage_limit_skips_recovery_and_keeps_the_candidate",
-                a_usage_limit_skips_recovery_and_keeps_the_candidate,
-            ),
-            (
-                "a_crew_accounts_limit_names_its_account",
-                a_crew_accounts_limit_names_its_account,
-            ),
-        ]);
-    });
+    let parent_timezone = std::env::var_os("TZ");
+    crate::git_fixture::isolated_with_timezone(
+        module_path!(),
+        "provider_limit_contracts_1",
+        Some("UTC"),
+        || {
+            assert_eq!(std::env::var("TZ").as_deref(), Ok("UTC"));
+            assert_eq!(Local::now().offset().local_minus_utc(), 0);
+            crate::git_fixture::run_scenarios(&[
+                (
+                    "usage_limits_are_typed_only_from_text_the_failed_provider_wrote",
+                    usage_limits_are_typed_only_from_text_the_failed_provider_wrote,
+                ),
+                (
+                    "an_antigravity_error_result_on_exit_zero_is_a_usage_limit",
+                    an_antigravity_error_result_on_exit_zero_is_a_usage_limit,
+                ),
+                (
+                    "reported_resets_and_windows_are_read_from_the_providers_own_words",
+                    reported_resets_and_windows_are_read_from_the_providers_own_words,
+                ),
+                (
+                    "a_usage_limit_skips_recovery_and_keeps_the_candidate",
+                    a_usage_limit_skips_recovery_and_keeps_the_candidate,
+                ),
+                (
+                    "a_crew_accounts_limit_names_its_account",
+                    a_crew_accounts_limit_names_its_account,
+                ),
+            ]);
+        },
+    );
+    assert_eq!(std::env::var_os("TZ"), parent_timezone);
 }
