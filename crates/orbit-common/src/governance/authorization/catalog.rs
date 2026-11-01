@@ -82,9 +82,10 @@ pub struct ApplicationOperationCeiling {
     pub constrained_fields: &'static [&'static str],
 }
 
-/// The closed built-in application-consent ceiling table. It replaces the
-/// former two-tool allow list; `orbit.auto_task.add` and `update` join it
-/// with their payload-bound callbacks.
+/// The closed built-in application-consent ceiling table, currently listing
+/// `orbit.task.update`, `orbit.decision.answer`, `orbit.task.show` and
+/// `orbit.task.artifact.get`. The `orbit.auto_task.add` and `update` rows are
+/// not present yet and remain refused until slice 5.
 pub const APPLICATION_OPERATION_CEILINGS: &[ApplicationOperationCeiling] = &[
     ApplicationOperationCeiling {
         tool: "orbit.task.update",
