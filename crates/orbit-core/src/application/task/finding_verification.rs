@@ -598,7 +598,7 @@ pub(crate) fn next_tier(tier: TaskComplexity) -> Option<TaskComplexity> {
 
 /// Whether `crew` is the one `label` names: by crew name, model, provider or
 /// the agent family of either.
-fn crew_named_by(crew: &Crew, label: &str) -> bool {
+pub(crate) fn crew_named_by(crew: &Crew, label: &str) -> bool {
     let label = label.trim().to_ascii_lowercase();
     if label.is_empty() {
         return false;

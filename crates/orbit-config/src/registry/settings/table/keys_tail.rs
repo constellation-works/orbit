@@ -396,6 +396,12 @@ macro_rules! with_tail_keys {
         section: ConfigSection::Delivery, order: 105,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw),
     },
+    workflow_purpose_crews_pilot_warning_triage: Vec<String> => Vec<String> {
+        key: "workflow.purpose_crews.pilot_warning_triage", value_type: "array<string>",
+        description: "Weighted crew pool for pilot-warning escalation triage; only crews whose executor declares inspection_args are drawn.",
+        section: ConfigSection::Delivery, order: 106,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
     workflow_purpose_crews_pre_landing_review: Option<Vec<String>> => operation::ReviewCrewSetting {
         key: "workflow.purpose_crews.pre_landing_review", value_type: "array<string>",
         description: "Crew or pool for before-PR and before-landing review; unset uses review.",

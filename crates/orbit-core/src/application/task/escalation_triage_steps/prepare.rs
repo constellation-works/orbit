@@ -1,6 +1,7 @@
 //! Select the escalated holds an escalation triage run reads (held pilot
-//! assessments, or block episodes awaiting triage), draw each one's
-//! hard-tier crew and partition them by crew.
+//! assessments, or block episodes awaiting triage), draw each one's crew
+//! (a pilot warning's from its purpose pool, else the hard tier) and partition
+//! them by crew.
 
 use std::cell::OnceCell;
 use std::collections::BTreeSet;
@@ -10,10 +11,12 @@ use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::automation::members::StateTriggerKind;
+use orbit_types::workflow::{ActivityCrewPoolMember, CrewPurpose};
 use serde_json::{Value, json};
 
 use super::{HeldPilotWarnings, PilotWarningCandidacy};
 use crate::OrbitRuntime;
+use crate::application::contracts::{ESCALATION_TRIAGE_JOB, PURPOSE_SOURCE_PREFIX};
 use crate::application::task::TriageCandidacy;
 use crate::application::task::batch_prepare::{
     BatchSpec, Qualification, held_by_run_detail, prepare_batch,
@@ -22,10 +25,10 @@ use crate::application::task::pilot::input::requested_workspace_root;
 use crate::application::task::pilot::requested_base_branch;
 use crate::application::task::pilot::source::{SourceSnapshot, resolve_source_snapshot};
 use crate::application::task::{TaskAutomationPort, TaskDistributedPort, TaskJobPort};
-use crate::application::task::{TaskListFilter, VerifierAssignment};
+use crate::application::task::{TaskListFilter, crew_named_by};
 
-/// Refuting a pilot finding takes the strongest reading of the source, so
-/// every triager is drawn from this tier.
+/// Refuting a pilot finding takes the strongest reading of the source, so a
+/// triager with no purpose pool to draw from comes from this tier.
 const TRIAGE_TIER: TaskComplexity = TaskComplexity::Hard;
 
 /// What one escalation triage run reads: the job's `subject` input.
@@ -68,6 +71,16 @@ impl Subject {
         match self {
             Self::PilotWarning => StateTriggerKind::PilotWarningsHeld,
             Self::Block => StateTriggerKind::BlockEscalated,
+        }
+    }
+
+    /// The purpose whose `workflow.purpose_crews` pool this subject's
+    /// triagers are drawn from while it is set. A block has none: its
+    /// triagers always draw from the hard tier.
+    fn purpose(self) -> Option<CrewPurpose> {
+        match self {
+            Self::PilotWarning => Some(CrewPurpose::PilotWarningTriage),
+            Self::Block => None,
         }
     }
 
@@ -149,14 +162,29 @@ pub(crate) fn prepare(
             }
         },
         |task, (mut row, author): (Value, Option<String>)| {
-            let triager = triager(runtime, task, author.as_deref())?;
+            let triager = triager(runtime, subject, task, author.as_deref())?;
             let crew = triager.crew.clone();
             row["crew"] = json!(crew);
             row["tier"] = json!(triager.tier);
+            row["crew_source"] = json!(triager.source);
+            row["eligible_pool"] = json!(triager.eligible_pool);
             Ok((row, crew))
         },
         skipped_detail,
-        |_, _| None,
+        |tasks, task_ids| {
+            let draws = tasks
+                .iter()
+                .filter(|task| task_ids.iter().any(|id| task["task_id"] == *id))
+                .map(|task| {
+                    json!({
+                        "task_id": task["task_id"],
+                        "source": task["crew_source"],
+                        "eligible_pool": task["eligible_pool"],
+                    })
+                })
+                .collect::<Vec<_>>();
+            Some(("draws", json!(draws)))
+        },
     )
 }
 
@@ -222,24 +250,72 @@ fn assessment_author(
         .and_then(|state| runtime.pilot_assessment_crew(state)))
 }
 
-/// `task`'s triager: a hard-tier draw that can inspect source natively,
-/// passing over the assessment's author while the pool offers another, else
-/// the inspection-capable default crew, exactly as a finding verifier is
-/// drawn. With neither, preparation fails with `inspection_crew_unavailable`
-/// before any triager launches.
+/// One triager draw: the crew, where it was drawn from and the weights the
+/// draw ran on.
+struct TriagerDraw {
+    crew: String,
+    /// The complexity tier drawn from; `None` for a purpose-pool draw.
+    tier: Option<TaskComplexity>,
+    /// `purpose:<purpose>`, `pool:<tier>`, or `default`.
+    source: String,
+    eligible_pool: Vec<ActivityCrewPoolMember>,
+}
+
+/// `task`'s triager: a draw from the subject's `workflow.purpose_crews` pool,
+/// when it has one that is set and holds a member that can inspect source
+/// natively, else the hard tier's inspection-capable draw, else the
+/// inspection-capable default crew, exactly as a finding verifier is drawn.
+/// Either draw passes over the assessment's author while the pool offers
+/// another. With none eligible, preparation fails with
+/// `inspection_crew_unavailable` before any triager launches.
 fn triager(
     runtime: &OrbitRuntime,
+    subject: Subject,
     task: &Task,
     author: Option<&str>,
-) -> Result<VerifierAssignment, OrbitError> {
+) -> Result<TriagerDraw, OrbitError> {
     let avoid = author.into_iter().collect::<Vec<_>>();
+    if let Some(purpose) = subject.purpose()
+        && let Some((candidates, _)) = runtime.purpose_pool_candidates(purpose, true)?
+    {
+        let preferred = candidates
+            .iter()
+            .filter(|candidate| {
+                !avoid
+                    .iter()
+                    .any(|label| crew_named_by(&candidate.crew, label))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let candidates = if preferred.is_empty() {
+            candidates
+        } else {
+            preferred
+        };
+        let source = format!("{PURPOSE_SOURCE_PREFIX}{purpose}");
+        let mut ticket = runtime
+            .seeded_crew_draw_tickets(format!("{ESCALATION_TRIAGE_JOB}:{}:{purpose}", task.id));
+        let draw = runtime.crew_pool_draw(candidates, &source, &mut *ticket)?;
+        return Ok(TriagerDraw {
+            crew: draw.crew.name,
+            tier: None,
+            source,
+            eligible_pool: draw.eligible_pool,
+        });
+    }
     if let Some(assignment) = runtime.draw_finding_verifier(task, TRIAGE_TIER, &avoid)? {
-        return Ok(assignment);
+        return Ok(TriagerDraw {
+            source: format!("pool:{}", assignment.tier),
+            crew: assignment.crew,
+            tier: Some(assignment.tier),
+            eligible_pool: assignment.eligible_pool,
+        });
     }
     let crew = runtime.inspection_default_crew(TRIAGE_TIER)?;
-    Ok(VerifierAssignment {
+    Ok(TriagerDraw {
         crew: crew.name,
-        tier: TRIAGE_TIER,
+        tier: Some(TRIAGE_TIER),
+        source: "default".to_string(),
         eligible_pool: Vec::new(),
     })
 }

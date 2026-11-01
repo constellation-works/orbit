@@ -44,6 +44,9 @@ pub enum CrewPurpose {
     /// The mock comparison reviewer and its in-line verifier. Only crews
     /// whose executor declares `image_input` are drawn.
     VisualReview,
+    /// Escalation triage of a task's held pilot assessment. Only crews whose
+    /// executor declares `inspection_args` are drawn.
+    PilotWarningTriage,
 }
 
 /// Names [`CrewPurpose::SweepTasks`] had as three purposes, which tasks
@@ -53,7 +56,7 @@ const LEGACY_SWEEP_PURPOSE_NAMES: &[&str] =
 
 impl CrewPurpose {
     /// Every purpose, in the order `orbit config show` lists them.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::TaskPilot,
         Self::FailureRecovery,
         Self::FinalRecovery,
@@ -63,6 +66,7 @@ impl CrewPurpose {
         Self::SweepTasks,
         Self::Explorer,
         Self::VisualReview,
+        Self::PilotWarningTriage,
     ];
 
     /// The purpose's stable name, as `workflow.purpose_crews.<name>` and the
@@ -78,6 +82,7 @@ impl CrewPurpose {
             Self::SweepTasks => "sweep_tasks",
             Self::Explorer => "explorer",
             Self::VisualReview => "visual_review",
+            Self::PilotWarningTriage => "pilot_warning_triage",
         }
     }
 
@@ -104,6 +109,7 @@ impl CrewPurpose {
             Self::SweepTasks => "workflow.purpose_crews.sweep_tasks",
             Self::Explorer => "workflow.purpose_crews.explorer",
             Self::VisualReview => "workflow.purpose_crews.visual_review",
+            Self::PilotWarningTriage => "workflow.purpose_crews.pilot_warning_triage",
         }
     }
 
@@ -134,6 +140,7 @@ impl CrewPurpose {
             Self::BaselineRedRepair | Self::SweepTasks | Self::VisualReview => {
                 Some("the task's complexity pool, then workflow.default_crew")
             }
+            Self::PilotWarningTriage => Some("workflow.hard_complexity_crews"),
         }
     }
 }

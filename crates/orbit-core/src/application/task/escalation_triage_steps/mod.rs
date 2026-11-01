@@ -7,7 +7,8 @@
 //! every promotion authority shares) waits until someone notices it. The
 //! seeded `pilot_warning_triage` routine (`kind: pilot_warnings_held`)
 //! admits each such assessment once; `prepare_escalation_triage` draws a
-//! hard-tier crew for it, and the `triage_escalation` agent records one
+//! crew for it from `workflow.purpose_crews.pilot_warning_triage` (else the
+//! hard tier), and the `triage_escalation` agent records one
 //! disposition through [`OrbitRuntime::record_pilot_warning_triage`]:
 //!
 //! - **propose** (decision): one comment quoting the holding findings, with

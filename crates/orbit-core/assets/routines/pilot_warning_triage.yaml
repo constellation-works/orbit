@@ -9,9 +9,9 @@
 # this routine finds each such assessment that no operator has decided and
 # the lane has not triaged and, once it has settled for debounce_minutes or
 # waited max_wait_minutes, submits up to batch_size of them that share one
-# stored crew into one `escalation_triage_pipeline` run. A hard-tier triager
-# reads each hold once and records a decision proposal or a human action
-# through `orbit.task.block_triage`; the `pilot_warning_triaged` marker it
+# stored crew into one `escalation_triage_pipeline` run. A triager drawn from
+# `workflow.purpose_crews.pilot_warning_triage` (else the hard tier) reads
+# each hold once and records a decision proposal or a human action through `orbit.task.block_triage`; the `pilot_warning_triaged` marker it
 # writes takes that assessment out of observation. The lane only proposes:
 # it never approves, promotes, clears a hold or edits task material. An
 # operator's approval or task-pilot admission decision also ends

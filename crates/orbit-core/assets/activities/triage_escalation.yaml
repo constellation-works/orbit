@@ -9,7 +9,7 @@ spec:
   # nothing to the repository.
   fsProfile: reviewer
   description: >
-    Hard-tier triage of escalated holds for one bounded partition of one
+    Read-only triage of escalated holds for one bounded partition of one
     subject. With subject pilot_warning, for each task whose latest
     task-pilot assessment holds promotion on warning findings, the triager
     reads the task and the source at the prepared revision and records
