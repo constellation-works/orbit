@@ -188,9 +188,10 @@ pressure means; click or **Pin open** keeps it open, and Esc or a click outside
 closes it. `+N more` (and, on narrow screens, the single summary chip) lists
 every provider. Counts in
 the selected window sit on the rail: failed, timed-out, and interrupted runs
-under **Runs**, and doctor warnings, policy denials, and failing routines under
-**Health**. Click a rail count to open the view behind it. The denial count
-opens **Health → Incidents → Events** filtered to denials.
+under **Runs**, and doctor errors, warnings, and failing routines under
+**Health**. Click a rail count to open the view behind it. The rail has no
+denial count. **Health → Incidents → Events** can be filtered to denials with
+its **denied** status.
 
 View URLs keep older section names: `#diagnostics/…` is Health,
 `#operations/…` is Automation, and `#config/…` is Settings. Plugins is
@@ -578,7 +579,7 @@ These counts answer different questions:
 |---|---|
 | **Runs** rail count | Job runs that failed, timed out, or were interrupted in the window that count was computed for. Click the count to open Runs on **Failed** for that window; the list total matches the count. |
 | Runs **Failed** filter | Failed, timed-out, and interrupted runs in the selected window. **All** drops the state filter and keeps the window. |
-| **Health** denial count | Policy denials in the window that count was computed for. Click it to open **Events** filtered to denials. |
+| **Health → Incidents → Events**, **denied** status | Audited calls recorded as denied. This is a filtered list, not a rail count. |
 | **Health → Incidents → Errors** | Step and event failures in the selected window. The panel header names the window and reports when retention or the stderr read cap leaves part of it unread. |
 
 From a terminal, the same facts come from `orbit task show <task-id>`,
