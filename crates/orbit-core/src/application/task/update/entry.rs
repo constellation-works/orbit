@@ -20,7 +20,8 @@ pub(super) enum StatusAuthority {
     Internal,
     /// Attributed operator and agent surfaces — the CLI `task update`, the
     /// dashboard, and the registered `orbit.task.update` tool. The lifecycle
-    /// table and local run ownership decide.
+    /// table and local run ownership decide, except that an operator's move of
+    /// a human crew's task skips the table and its evidence gates.
     Lifecycle,
     /// A human overriding the table or local run ownership from the bare CLI or the dashboard,
     /// recorded in task history as

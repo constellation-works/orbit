@@ -121,6 +121,15 @@ export function statusTransitions(task) {
     : [];
 }
 
+// The operator moves a human crew's task to any status without the lifecycle
+// gates, and the server applies it as a plain PATCH. A task already `done` or
+// `archived` keeps the governed list and the forced override.
+export function usesHumanCrewBypass(task) {
+  if (!task || !task.crew || task.status === "done" || task.status === "archived") return false;
+  const humanCrews = taskState.lastCrewPayload.human_crews || [];
+  return humanCrews.some((crew) => crew.name === task.crew);
+}
+
 export function statusTransition(task, targetStatus) {
   return statusTransitions(task).find((transition) => transition.status === targetStatus) || null;
 }

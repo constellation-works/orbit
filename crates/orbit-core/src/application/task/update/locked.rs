@@ -16,8 +16,9 @@ use super::super::helpers::{
     describe_optional_field_value,
 };
 use super::super::lifecycle::{
-    FORCED_STATUS_EVENT, ensure_completion_run_stopped, ensure_post_deploy_criteria_met,
-    ensure_status_change_allowed, ensure_status_change_not_run_owned,
+    FORCED_STATUS_EVENT, HUMAN_CREW_BYPASS_NOTE, ensure_completion_run_stopped,
+    ensure_post_deploy_criteria_met, ensure_status_change_allowed,
+    ensure_status_change_not_run_owned,
 };
 use super::super::params::TaskUpdateParams;
 use super::artifacts::admit_task_artifact_as;
@@ -160,8 +161,49 @@ impl OrbitRuntime {
         {
             ensure_status_change_not_run_owned(self, id)?;
         }
+        // The label matches the one `operator_write` derives below. An agent
+        // identity does not consult it, and resolving it would repeat work
+        // the canonical pair already settled.
+        let classification_label = if let Some(label) = actor_override.as_deref() {
+            normalize_attribution_label(label, None)
+        } else if canonical_agent.is_none() && canonical_model.is_none() {
+            super::super::helpers::effective_actor_label(&self.actor().label, None, None)?
+        } else {
+            String::new()
+        };
+        let writer = task_field_writer(
+            operator_decision_authority,
+            canonical_agent.as_deref(),
+            canonical_model.as_deref(),
+            &classification_label,
+        );
+        // An operator moving a human crew's task is not held to the lifecycle
+        // table or its plan, review, evidence and verdict gates: the operator
+        // does that work outside any pipeline. Only an attributed operator
+        // surface qualifies — the same writer class `--force` requires — so an
+        // agent, an MCP caller or Orbit's own machinery keeps the lifecycle,
+        // and assigning a task to a human crew is never a way to skip review.
+        // The move out of `done` or `archived` keeps the force rules.
+        let human_crew_bypass = if requested_status.is_some()
+            && status_authority == StatusAuthority::Lifecycle
+            && !system_writer
+            && !matches!(task.status, TaskStatus::Done | TaskStatus::Archived)
+            && writer == TaskFieldWriter::Operator
+        {
+            self.human_crew(task.crew.as_deref())
+                .map(|crew| crew.name.clone())
+        } else {
+            None
+        };
+        // The gates below see the bypass as the human override they already
+        // implement; only the history entry tells the two apart.
+        let gate_authority = if human_crew_bypass.is_some() {
+            StatusAuthority::Forced
+        } else {
+            status_authority
+        };
         if requested_status == Some(TaskStatus::Done)
-            && status_authority != StatusAuthority::Lifecycle
+            && gate_authority != StatusAuthority::Lifecycle
         {
             ensure_completion_run_stopped(
                 self,
@@ -169,7 +211,7 @@ impl OrbitRuntime {
                 params.job_run_id.as_ref().and_then(|id| id.as_deref()),
                 calling_run_id.as_deref(),
             )?;
-            let human_force = status_authority == StatusAuthority::Forced
+            let human_force = gate_authority == StatusAuthority::Forced
                 && operator_decision_authority
                 && canonical_agent.is_none()
                 && canonical_model.is_none()
@@ -182,7 +224,7 @@ impl OrbitRuntime {
         // [granted-tools §4] An attributed completion is held the same way:
         // a task is never done while a mutation it proposed did not happen.
         if requested_status == Some(TaskStatus::Done)
-            && status_authority == StatusAuthority::Lifecycle
+            && gate_authority == StatusAuthority::Lifecycle
         {
             self.ensure_mutation_proposals_applied(&task)?;
         }
@@ -198,7 +240,7 @@ impl OrbitRuntime {
             ));
         }
         if let Some(target) = requested_status
-            && status_authority == StatusAuthority::Lifecycle
+            && gate_authority == StatusAuthority::Lifecycle
         {
             ensure_status_change_allowed(self, &task, &params, target)?;
         }
@@ -224,22 +266,6 @@ impl OrbitRuntime {
                 "task {id} is in-progress; discard a preserved candidate after its run stops"
             )));
         }
-        // The label matches the one `operator_write` derives below. An agent
-        // identity does not consult it, and resolving it would repeat work
-        // the canonical pair already settled.
-        let classification_label = if let Some(label) = actor_override.as_deref() {
-            normalize_attribution_label(label, None)
-        } else if canonical_agent.is_none() && canonical_model.is_none() {
-            super::super::helpers::effective_actor_label(&self.actor().label, None, None)?
-        } else {
-            String::new()
-        };
-        let writer = task_field_writer(
-            operator_decision_authority,
-            canonical_agent.as_deref(),
-            canonical_model.as_deref(),
-            &classification_label,
-        );
         let validated = self.validate_and_normalize_task_field_edits(id, &task, params, writer)?;
         let crew_assignment = validated.crew_assignment;
         let crew_source = validated.crew_source;
@@ -271,7 +297,7 @@ impl OrbitRuntime {
         // material as it will be stored, since normalization can turn a
         // differently spelled tag into a review-finding tag.
         if let Some(target) = requested_status
-            && status_authority == StatusAuthority::Lifecycle
+            && gate_authority == StatusAuthority::Lifecycle
             && matches!(task.status, TaskStatus::Proposed | TaskStatus::Someday)
             && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
         {
@@ -504,7 +530,7 @@ impl OrbitRuntime {
         // A forced transition is still a transition: naming it in history is
         // what separates a human override from a governed lifecycle move.
         let status_event =
-            if status_authority == StatusAuthority::Forced && requested_status.is_some() {
+            if gate_authority == StatusAuthority::Forced && requested_status.is_some() {
                 Some(FORCED_STATUS_EVENT.to_string())
             } else if guard_work_start
                 && requested_status == Some(TaskStatus::InProgress)
@@ -521,6 +547,13 @@ impl OrbitRuntime {
         let evidence_attached = !params.upsert_artifacts.is_empty();
         let previous_status = task.status;
         let written_note = status_note.clone();
+        // The forced entry names the human-crew bypass; the operator's own
+        // note, optional, follows it.
+        let status_note = match (&human_crew_bypass, status_note) {
+            (Some(crew), Some(note)) => Some(format!("{HUMAN_CREW_BYPASS_NOTE} '{crew}': {note}")),
+            (Some(crew), None) => Some(format!("{HUMAN_CREW_BYPASS_NOTE} '{crew}'")),
+            (None, note) => note,
+        };
         let mut updated = self.with_mutation(|| {
             let updated = self.stores().task_records().update(
                 id,
