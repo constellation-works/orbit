@@ -150,10 +150,11 @@ def signal_confirmed(info, sig):
     except OSError:
         return False
 
-def reap(root):
+def reap(root, deadline_s=10, kill_grace_s=5):
     records = {}
     signaled = set()
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + deadline_s
+    kill_deadline = deadline + kill_grace_s
     own_sid = os.getsid(0)
     own_pgrp = os.getpgrp()
     while True:
@@ -194,7 +195,7 @@ def reap(root):
             break
         if not records and not live:
             break
-        if now >= deadline:
+        if now >= kill_deadline:
             break
         # Scheduling yield. Exit is the process identity disappearing, not this delay.
         try:
@@ -282,6 +283,11 @@ def child():
             f"fixture=qa-held-worker\npid={me}\nroot_held={int(root.exists())}\n"
             f"cwd={os.getcwd()}\nmode=complete\n")
         os._exit(0)
+    if mode == "ignore-term":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        ready.write_text(f"fixture=qa-held-worker\npid={me}\nwaiting=1\nmode={mode}\n")
+        while True:
+            signal.pause()
     def finish(_signum, _frame):
         ready.write_text(
             f"fixture=qa-held-worker\npid={me}\nroot_held={int(root.exists())}\n"
@@ -424,16 +430,21 @@ def _signal_confirmed(info, sig):
     return True
 
 
-def settle_detached_workers_under(root, deadline_s=10):
+def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
     """Stop processes whose cwd is still under root and wait until they exit.
 
-    Signals only a pid whose starttime still matches. A refused signal stays
-    recorded as not exited so cleanup cannot be reported as verified.
+    Signals only a pid whose starttime still matches. After the SIGTERM
+    deadline, SIGKILL is sent and the same identity is polled for up to
+    ``kill_grace_s``; return happens only when the identity is gone or the
+    bounded grace expires. A refused signal, or an identity that survives
+    the grace (for example in uninterruptible sleep), stays recorded as
+    not exited so cleanup cannot be reported as verified.
     """
     root = Path(root)
     records = {}
     signaled = set()
     deadline = time.monotonic() + deadline_s
+    kill_deadline = deadline + kill_grace_s
     me = os.getpid()
     while True:
         now = time.monotonic()
@@ -467,7 +478,7 @@ def settle_detached_workers_under(root, deadline_s=10):
             break
         if not records and not matched:
             break
-        if now >= deadline:
+        if now >= kill_deadline:
             break
         time.sleep(0.05)
     workers = []
@@ -2653,6 +2664,102 @@ while True:
                     except OSError:
                         pass
                     settle_proc.wait(timeout=5)
+
+            # A SIGTERM-ignoring setsid worker must be observed actually
+            # exited (identity gone at return, with no intervening sleep)
+            # before settle returns, on both the direct settlement path
+            # and the supervisor reap path.
+            ignore_root = Path(env["TMPDIR"]) / "settle-ignore-term-root"
+            ignore_root.mkdir()
+            ignore_ready = Path(env["TMPDIR"]) / "settle-ignore-term-ready"
+            ignore_script = (
+                "import os, signal, sys\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                "open(sys.argv[2], 'w').write("
+                "'fixture=qa-held-worker\\npid=%s\\nwaiting=1\\nmode=ignore-term\\n' % os.getpid())\n"
+                "while True:\n"
+                "    signal.pause()\n")
+            ignore_proc = subprocess.Popen(
+                [sys.executable, "-c", ignore_script, str(ignore_root), str(ignore_ready)],
+                cwd=ignore_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                wait_until(lambda: marker_values(ignore_ready).get("waiting") == "1", 5,
+                           "SIGTERM-ignoring settle worker did not start")
+                ignore_info = _proc_identity(ignore_proc.pid)
+                if ignore_info is None or ignore_info.get("pgrp") != ignore_proc.pid:
+                    raise AssertionError(f"SIGTERM-ignoring settle worker not setsid: {ignore_info}")
+                ignore_settlement = settle_detached_workers_under(
+                    ignore_root, deadline_s=1, kill_grace_s=5)
+                if _proc_alive(ignore_proc.pid, ignore_info["starttime"]):
+                    raise AssertionError("settle returned before SIGKILLed worker exited")
+                ignore_workers = ignore_settlement.get("workers") or []
+                if (len(ignore_workers) != 1 or ignore_workers[0].get("pid") != ignore_proc.pid
+                        or ignore_workers[0].get("exited") is not True):
+                    raise AssertionError(f"SIGTERM-ignoring settle record: {ignore_workers}")
+                ignore_proc.wait(timeout=5)
+                ownership_cases.append({"name": "settle-ignore-term",
+                                        "pid": ignore_proc.pid, "pgid": ignore_info.get("pgrp"),
+                                        "sid": ignore_info.get("sid"), "cwd": ignore_info.get("cwd"),
+                                        "cmdline": ignore_info.get("cmdline"),
+                                        "starttime": ignore_info.get("starttime"),
+                                        "root": str(ignore_root), "exited": True,
+                                        "record": ignore_workers[0]})
+            finally:
+                if ignore_proc.poll() is None:
+                    try:
+                        os.kill(ignore_proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                    ignore_proc.wait(timeout=5)
+
+            # An identity that survives the bounded grace stays exited=False.
+            stuck_root = Path(env["TMPDIR"]) / "settle-stuck-root"
+            stuck_root.mkdir()
+            stuck_ready = Path(env["TMPDIR"]) / "settle-stuck-ready"
+            stuck_proc = subprocess.Popen(
+                [sys.executable, "-c", ignore_script, str(stuck_root), str(stuck_ready)],
+                cwd=stuck_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                wait_until(lambda: marker_values(stuck_ready).get("waiting") == "1", 5,
+                           "stuck settle worker did not start")
+                with mock.patch.dict(globals(), {"_proc_alive": lambda _pid, _starttime: True}):
+                    stuck_settlement = settle_detached_workers_under(
+                        stuck_root, deadline_s=0.2, kill_grace_s=0.3)
+                stuck_workers = stuck_settlement.get("workers") or []
+                if (len(stuck_workers) != 1 or stuck_workers[0].get("pid") != stuck_proc.pid
+                        or stuck_workers[0].get("exited") is not False):
+                    raise AssertionError(f"surviving worker was not fail-closed: {stuck_workers}")
+            finally:
+                if stuck_proc.poll() is None:
+                    try:
+                        os.kill(stuck_proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                stuck_proc.wait(timeout=5)
+
+            reap_root = Path(env["TMPDIR"]) / "reap-ignore-term-root"
+            reap_root.mkdir()
+            reap_ready = Path(env["TMPDIR"]) / "reap-ignore-term-ready"
+            reap_evidence = run(
+                [sys.executable, "-c", _HELD_WORKER, str(reap_root),
+                 str(Path(env["TMPDIR"]) / "reap-ignore-term-release"), str(reap_ready),
+                 "ignore-term"], cwd=temp, env=env, timeout=30)
+            reap_marker = marker_values(reap_ready)
+            reap_pid = int(reap_marker["pid"]) if reap_marker.get("pid") else None
+            reap_workers = [worker for worker in reap_evidence.get("detached_workers") or []
+                            if worker.get("pid") == reap_pid]
+            if (reap_evidence.get("exit_code") != 0 or not reap_evidence.get("cleanup_verified")
+                    or reap_marker.get("mode") != "ignore-term" or len(reap_workers) != 1
+                    or reap_workers[0].get("exited") is not True
+                    or _proc_alive(reap_pid, reap_workers[0].get("starttime"))):
+                raise AssertionError(
+                    f"supervisor reap did not observe SIGTERM-ignoring worker exit: {reap_evidence}")
+            ownership_cases.append({"name": "reap-ignore-term", "pid": reap_pid,
+                                    "root": str(reap_root), "exited": True,
+                                    "cleanup_verified": reap_evidence["cleanup_verified"],
+                                    "record": reap_workers[0]})
         finally:
             scratch = Path(__file__).resolve().parent.parent / ".orbit" / "tmp"
             scratch.mkdir(parents=True, exist_ok=True)
