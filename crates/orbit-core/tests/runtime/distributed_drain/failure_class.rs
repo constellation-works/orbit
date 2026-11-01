@@ -783,6 +783,176 @@ fn the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once() {
     );
 }
 
+/// [ORB-20936] Bounded hydration traverses its whole selection by
+/// continuation: with `limit=1`, a later available claim is reached after an
+/// earlier absent one, and `--recheck` paging visits every claim instead of
+/// only the first page forever.
+fn hydration_continuation_visits_every_selected_claim_at_limit_one() {
+    let pair = Pair::with_crews(&[Some("sol"), Some("sol")]);
+    let drain = pair.run_drain();
+    let first = pair.running_leaf(&drain, 1);
+    pair.leaf_fails_with(
+        &first,
+        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
+    );
+    settle_only(&pair, &drain);
+    // A fresh drain: the first release excluded `sol` from the old window.
+    let drain = pair.run_drain();
+    let second = pair.running_leaf(&drain, 1);
+    assert_ne!(second, first);
+    pair.leaf_fails_with(
+        &second,
+        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
+    );
+    settle_only(&pair, &drain);
+
+    let settlements = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    assert_eq!(settlements.len(), 2, "{settlements:?}");
+    let selected: std::collections::BTreeSet<String> =
+        settlements.iter().map(|s| s.claim_id.clone()).collect();
+    let connection = pair.wire.owner.sqlite_store().unwrap().connection();
+    let removed = connection
+        .lock()
+        .unwrap()
+        .execute(
+            "DELETE FROM task_coordination_rows WHERE kind = 'distributed-leaf-run-evidence-v1'",
+            (),
+        )
+        .unwrap();
+    assert_eq!(removed, 2, "both settlements recorded evidence");
+
+    let claims_before: Vec<Value> = pair
+        .owner_claims()
+        .iter()
+        .map(|entry| entry["claim"].clone())
+        .collect();
+    let statuses_before: Vec<String> = pair
+        .tasks
+        .iter()
+        .map(|task| pair.owner_status(task))
+        .collect();
+
+    // One leaf's run is gone from its follower; the other's is available,
+    // whichever order the newest-first selection visits them in.
+    let absent_leaf = first.clone();
+    let observer = FollowerShow::altered(&pair, move |run, answer| {
+        if run == absent_leaf {
+            Err(OrbitError::NotFound {
+                kind: orbit_common::NotFoundKind::JobRun,
+                id: run.to_string(),
+                guidance: None,
+            })
+        } else {
+            Ok(answer)
+        }
+    });
+    let page = |after: Option<String>, recheck: bool| {
+        pair.wire
+            .owner
+            .hydrate_leaf_run_evidence(
+                &LeafHydrationRequest {
+                    limit: Some(1),
+                    recheck,
+                    after_claim_id: after,
+                    ..LeafHydrationRequest::default()
+                },
+                &observer,
+            )
+            .unwrap()
+    };
+
+    // First traversal: two bounded pages visit both claims exactly once.
+    let page1 = page(None, false);
+    assert_eq!(page1.rows.len(), 1, "{page1:?}");
+    assert_eq!(page1.remaining, 1, "{page1:?}");
+    let cursor = page1
+        .next_after_claim_id
+        .clone()
+        .expect("a continuation while claims remain");
+    assert_eq!(cursor, page1.rows[0].claim_id);
+    let page2 = page(Some(cursor), false);
+    assert_eq!(page2.rows.len(), 1, "{page2:?}");
+    assert_eq!(page2.remaining, 0, "{page2:?}");
+    assert_eq!(page2.next_after_claim_id, None, "{page2:?}");
+    assert_ne!(page1.rows[0].claim_id, page2.rows[0].claim_id);
+    let visited: std::collections::BTreeSet<String> = [&page1, &page2]
+        .iter()
+        .flat_map(|page| page.rows.iter().map(|row| row.claim_id.clone()))
+        .collect();
+    assert_eq!(visited, selected, "every selected claim is visited");
+    let outcomes: std::collections::BTreeSet<String> = [&page1, &page2]
+        .iter()
+        .flat_map(|page| page.rows.iter().map(|row| format!("{:?}", row.outcome)))
+        .collect();
+    assert_eq!(
+        outcomes,
+        std::collections::BTreeSet::from(["Absent".to_string(), "Hydrated".to_string()]),
+        "the unsuccessful outcome stays visible and the later claim hydrates"
+    );
+    assert!(
+        [&page1, &page2]
+            .iter()
+            .flat_map(|page| &page.rows)
+            .filter(|row| row.outcome == LeafHydrationOutcome::Absent)
+            .all(|row| row.detail.is_some()),
+        "the absent row says why"
+    );
+
+    // Recheck paging also visits the whole selection, not only page one.
+    let recheck1 = page(None, true);
+    assert_eq!(recheck1.remaining, 1, "{recheck1:?}");
+    let recheck2 = page(recheck1.next_after_claim_id.clone(), true);
+    assert_eq!(recheck2.remaining, 0, "{recheck2:?}");
+    assert_eq!(recheck2.next_after_claim_id, None);
+    let rechecked: std::collections::BTreeSet<String> = [&recheck1, &recheck2]
+        .iter()
+        .flat_map(|page| page.rows.iter().map(|row| row.claim_id.clone()))
+        .collect();
+    assert_eq!(rechecked, selected, "recheck visits every selected claim");
+    let recheck_outcomes: std::collections::BTreeSet<String> = [&recheck1, &recheck2]
+        .iter()
+        .flat_map(|page| page.rows.iter().map(|row| format!("{:?}", row.outcome)))
+        .collect();
+    assert_eq!(
+        recheck_outcomes,
+        std::collections::BTreeSet::from(["Absent".to_string(), "Replayed".to_string()]),
+        "{recheck1:?} {recheck2:?}"
+    );
+
+    // A continuation outside the selection is refused, not silently restarted.
+    let error = pair
+        .wire
+        .owner
+        .hydrate_leaf_run_evidence(
+            &LeafHydrationRequest {
+                limit: Some(1),
+                after_claim_id: Some("claim_not_selected".into()),
+                ..LeafHydrationRequest::default()
+            },
+            &observer,
+        )
+        .unwrap_err();
+    assert!(matches!(error, OrbitError::InvalidInput(_)), "{error:?}");
+
+    assert_eq!(
+        pair.owner_claims()
+            .iter()
+            .map(|entry| entry["claim"].clone())
+            .collect::<Vec<_>>(),
+        claims_before,
+        "no claim changes"
+    );
+    assert_eq!(
+        pair.tasks
+            .iter()
+            .map(|task| pair.owner_status(task))
+            .collect::<Vec<_>>(),
+        statuses_before,
+        "no task changes"
+    );
+    assert_eq!(pair.leaf_runs().len(), 2, "no run changes");
+}
+
 /// [ORB-20906] A settlement whose leaf run report is not the claim's own
 /// (another run, another job's identity, nothing to name) settles the claim
 /// as always and records no evidence: the owner never binds a report it
@@ -2031,6 +2201,7 @@ crate::scenario_table!(
     an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it,
     the_owner_lists_a_follower_leaf_release_with_its_evidence_class,
     the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once,
+    hydration_continuation_visits_every_selected_claim_at_limit_one,
     a_settlement_naming_another_leaf_run_records_no_evidence,
     a_bound_worker_cannot_hydrate_leaf_evidence,
     host_failures_release_the_claim_and_suppress_the_host_for_the_window,

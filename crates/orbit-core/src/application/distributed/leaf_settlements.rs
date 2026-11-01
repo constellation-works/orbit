@@ -198,7 +198,13 @@ impl crate::OrbitRuntime {
                 })
             })
             .collect::<Vec<_>>();
-        settlements.sort_by(|a, b| b.settled_at.cmp(&a.settled_at));
+        // Claim id breaks settled-at ties so the order is deterministic
+        // across calls; hydration continuation pages through this order.
+        settlements.sort_by(|a, b| {
+            b.settled_at
+                .cmp(&a.settled_at)
+                .then_with(|| a.claim_id.cmp(&b.claim_id))
+        });
         Ok(settlements)
     }
 

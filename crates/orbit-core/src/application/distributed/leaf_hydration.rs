@@ -63,6 +63,11 @@ pub struct LeafHydrationRequest {
     /// Most claims to observe; [`DEFAULT_LEAF_HYDRATION_LIMIT`] when `None`,
     /// at most [`MAX_LEAF_HYDRATION_LIMIT`].
     pub limit: Option<usize>,
+    /// Continue after this claim: skip every selected claim up to and
+    /// including it, in the newest-first selection. Pass the previous
+    /// report's `next_after_claim_id` to visit the next page, unsuccessful
+    /// outcomes included. An id the selection does not hold is refused.
+    pub after_claim_id: Option<String>,
 }
 
 /// What hydrating one claim came to.
@@ -101,8 +106,13 @@ pub struct LeafHydrationRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LeafHydrationReport {
     pub rows: Vec<LeafHydrationRow>,
-    /// Claims the request selected beyond the limit; run it again for them.
+    /// Selected claims after this page; pass `next_after_claim_id` back as
+    /// the next request's `after_claim_id` to visit them.
     pub remaining: usize,
+    /// The last claim this page visited, when `remaining` is not zero:
+    /// the continuation for the next bounded call. `None` when this page
+    /// visited the whole selection (or nothing at all).
+    pub next_after_claim_id: Option<String>,
 }
 
 impl OrbitRuntime {
@@ -128,11 +138,28 @@ impl OrbitRuntime {
             .clamp(1, MAX_LEAF_HYDRATION_LIMIT);
         let owner_workspace = self.workspace_id()?;
         let owner_machine = self.automation_machine_identity().map(str::to_string);
+        // The continuation names the last claim the previous page visited,
+        // which may since hold evidence and so leave the non-recheck
+        // selection: resolve it against the filtered settlements before
+        // that evidence filter, then apply the filter to what follows it.
         let mut selected = self
             .leaf_settlements(request.since, false)?
             .into_iter()
-            .filter(|settlement| selects(request, settlement))
+            .filter(|settlement| selects_filters(request, settlement))
             .collect::<Vec<_>>();
+        if let Some(after) = request.after_claim_id.as_deref() {
+            let Some(position) = selected
+                .iter()
+                .position(|settlement| settlement.claim_id == after)
+            else {
+                return Err(OrbitError::InvalidInput(format!(
+                    "continuation claim {after} is not in the selected settlements; \
+                     start again without a continuation, with the same filters"
+                )));
+            };
+            selected.drain(..=position);
+        }
+        selected.retain(|settlement| selects(request, settlement));
         let remaining = selected.len().saturating_sub(limit);
         selected.truncate(limit);
 
@@ -165,7 +192,14 @@ impl OrbitRuntime {
             };
             rows.push(row);
         }
-        Ok(LeafHydrationReport { rows, remaining })
+        let next_after_claim_id = (remaining > 0)
+            .then(|| rows.last().map(|row| row.claim_id.clone()))
+            .flatten();
+        Ok(LeafHydrationReport {
+            rows,
+            remaining,
+            next_after_claim_id,
+        })
     }
 
     /// The outcome for one claim: `Ok` when evidence was recorded or already
@@ -233,7 +267,7 @@ impl OrbitRuntime {
     }
 }
 
-fn selects(request: &LeafHydrationRequest, settlement: &LeafSettlement) -> bool {
+fn selects_filters(request: &LeafHydrationRequest, settlement: &LeafSettlement) -> bool {
     request
         .claim_id
         .as_deref()
@@ -245,7 +279,10 @@ fn selects(request: &LeafHydrationRequest, settlement: &LeafSettlement) -> bool 
         && request.machine.as_deref().is_none_or(|machine| {
             machine == settlement.machine_id || Some(machine) == settlement.machine_name.as_deref()
         })
-        && (request.recheck || settlement.run_evidence.provenance.is_none())
+}
+
+fn selects(request: &LeafHydrationRequest, settlement: &LeafSettlement) -> bool {
+    request.recheck || settlement.run_evidence.provenance.is_none()
 }
 
 /// `absent` only for the follower's own "no such run"; every other failure
