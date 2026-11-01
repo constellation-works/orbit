@@ -451,9 +451,6 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                     completion_deadline_ms,
                     diagnostic,
                 );
-                if !matches!(retry, Ok(CiRerunRecovery::Waiting(_))) {
-                    ci_rerun_hold.clear();
-                }
                 infrastructure_wait |= match retry {
                     // [ORB-20771] A planner hold is recorded and bounded; once
                     // it expires the failure takes the repair path below.
@@ -465,9 +462,16 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                         waited_seconds,
                         waited_seconds.saturating_add(poll_interval_seconds) >= max_wait_seconds,
                     )?,
-                    Ok(CiRerunRecovery::Retried) => true,
-                    Ok(CiRerunRecovery::NotEligible) => false,
+                    Ok(CiRerunRecovery::Retried) => {
+                        ci_rerun_hold.clear();
+                        true
+                    }
+                    Ok(CiRerunRecovery::NotEligible) => {
+                        ci_rerun_hold.clear();
+                        false
+                    }
                     Ok(CiRerunRecovery::Stopped(reason)) => {
+                        ci_rerun_hold.clear();
                         return Err(stopped(pr_number, &reason));
                     }
                     Err(error) => {
@@ -488,6 +492,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                             sleep(Duration::from_millis(wait_ms));
                             continue;
                         }
+                        ci_rerun_hold.clear();
                         // The existing evidence/hold route retains its typed
                         // refusal and any recorded base inheritance. A failed
                         // planner read grants no CI mutation permission.
