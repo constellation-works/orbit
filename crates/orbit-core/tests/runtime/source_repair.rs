@@ -13,6 +13,8 @@ use std::path::PathBuf;
 mod association;
 #[path = "source_repair/crew_redraw.rs"]
 mod crew_redraw;
+#[path = "source_repair/discarded_successors.rs"]
+mod discarded_successors;
 #[path = "source_repair/escalated_publication.rs"]
 mod escalated_publication;
 #[path = "source_repair/failed_publication.rs"]
@@ -79,6 +81,9 @@ use completion::{
 use crew_redraw::{
     crew_redraws_keep_every_other_adoption_refusal,
     system_crew_redraws_keep_the_preserved_publication_adoptable,
+};
+use discarded_successors::{
+    discard_across_successors_keeps_every_refusal, discard_survives_unpublished_held_successors,
 };
 use failed_successors::{
     failed_pre_adoption_chain_rebinds_the_original_publication,
@@ -873,6 +878,8 @@ crate::scenario_table!(
     published_requeue_refuses_changed_scope_head_and_incomplete_source,
     stopped_successor_is_explicitly_bound_when_repairing_older_publication,
     legacy_publication_behind_a_stopped_successor_cannot_start_fresh,
+    discard_survives_unpublished_held_successors,
+    discard_across_successors_keeps_every_refusal,
     failed_pre_adoption_chain_rebinds_the_original_publication,
     failed_successor_chain_keeps_every_neighboring_refusal,
     cancelled_published_repair_accepts_fresh_generation,

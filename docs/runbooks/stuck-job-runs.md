@@ -1254,6 +1254,21 @@ foreign source or ambiguous association stops admission. It never authorizes
 fresh replacement implementation for that known publication. Reconcile a
 merged/closed PR or uncertain merge intent explicitly before trying again.
 
+An operator discard (`--discard-candidate`) of a publishing run keeps
+governing after attempts that stopped without publishing, so no second
+discard is needed. The next run implements fresh, reusing neither the
+discarded head nor its PR, only when the host records prove the whole chain.
+Every attempt between the discard and the new run must be a conclusively
+stopped (failed or cancelled), owner-local single-task attempt with no
+preservation record, push, PR or publishing failure handoff. Its
+authenticated worktree checkpoint must name the next older run as its prior
+run, and its authenticated `resume_candidate` checkpoint must record a fresh
+outcome. The first attempt after the discard must record that it refused the
+discarded publisher's candidate (`candidate_discarded`) or found none. The
+publisher must be stopped, owner-local and without a preservation record.
+Anything else, including a newer execution, keeps the refusal below. A new
+publication after the discard goes through the normal adoption checks.
+
 For a publication requeued before preservation bindings were introduced, use
 explicit source repair against the **original publishing run**. Inspection also
 accepts an owner-local failed source with a durable applied final-recovery

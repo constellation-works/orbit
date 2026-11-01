@@ -473,6 +473,16 @@ impl OrbitRuntime {
         }
         if matching.is_empty() && !published {
             if !records.is_empty() || task.github_pr_number().is_some() {
+                // [ORB-20956] The discard predates the predecessor, but the
+                // host records prove every attempt since then implemented
+                // fresh because of it and published nothing.
+                if let Some(current) = current.as_ref()
+                    && self.discard_survives_unpublished_successors(
+                        &task, current, source_id, &entries, &records,
+                    )?
+                {
+                    return Ok(None);
+                }
                 // The immediate predecessor has no publication evidence. Its
                 // liveness cannot identify the older publisher; require the
                 // operator to select that source explicitly.
@@ -537,6 +547,153 @@ impl OrbitRuntime {
         }
         self.observe_published_source(source, task, false)
             .map(|(_, _, binding)| Some(binding))
+    }
+
+    /// [ORB-20956] Whether an operator's discard of a publication still
+    /// governs `current`, although conclusively stopped attempts that
+    /// published nothing ran between them, so the run implements fresh
+    /// without another discard.
+    ///
+    /// Walks the task's bindings from `current` back through `source_id`.
+    /// Each intervening attempt must be an owner-local single-task run that
+    /// stopped, kept no preservation record, published nothing (no push, PR
+    /// or publishing failure handoff), and whose authenticated host
+    /// checkpoints show it set up on the next older binding and implemented
+    /// fresh. The walk ends at the first attempt created after a discard
+    /// recorded since the next older binding began: that binding is the
+    /// discarded publisher, which must be a stopped owner-local run with
+    /// publication evidence and no preservation record, and the attempt's
+    /// fresh outcome must name it as the discarded source or have found no
+    /// candidate at all. Anything else is unproven, and the caller keeps its
+    /// refusal.
+    fn discard_survives_unpublished_successors(
+        &self,
+        task: &Task,
+        current: &JobRun,
+        source_id: &str,
+        entries: &[TaskHistoryEntry],
+        records: &[(chrono::DateTime<Utc>, PreservedPublication)],
+    ) -> Result<bool, OrbitError> {
+        let runs = self
+            .stores()
+            .jobs()
+            .list_job_runs_filtered(&JobRunQuery {
+                task_id: Some(task.id.clone()),
+                limit: Some(super::successor::SUCCESSOR_CHAIN_WINDOW),
+                include_steps: false,
+                ..Default::default()
+            })?
+            .into_iter()
+            .filter(|run| super::successor::binds_task(&run.job_id))
+            .collect::<Vec<_>>();
+        if runs.first().is_none_or(|run| run.run_id != current.run_id)
+            || runs.get(1).is_none_or(|run| run.run_id != source_id)
+        {
+            return Ok(false);
+        }
+        for pair in runs[1..].windows(2) {
+            let [member, older] = pair else {
+                return Ok(false);
+            };
+            let Some(member) = self.get_job_run_backend(&member.run_id)? else {
+                return Ok(false);
+            };
+            let Some(resumed) =
+                self.unpublished_fresh_attempt(task, &member, &older.run_id, records)?
+            else {
+                return Ok(false);
+            };
+            let discarded = entries.iter().any(|e| {
+                e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT
+                    && e.at >= older.created_at
+                    && e.at < member.created_at
+            });
+            if !discarded {
+                continue;
+            }
+            let names_discarded = resumed["reason_code"] == "candidate_discarded"
+                && resumed["source_run_id"] == older.run_id.as_str();
+            let found_none =
+                resumed["reason_code"] == "no_candidate" && resumed["source_run_id"].is_null();
+            let Some(publisher) = self.get_job_run_backend(&older.run_id)? else {
+                return Ok(false);
+            };
+            let published = self
+                .read_run_state(&publisher.run_id)?
+                .is_some_and(|state| {
+                    state.run_id == publisher.run_id
+                        && ["push", "pr_open"]
+                            .iter()
+                            .any(|k| state.pipeline.get(k).is_some_and(|v| !v.is_null()))
+                });
+            return Ok((names_discarded || found_none)
+                && published
+                && self.owner_source_identity(&publisher, task).is_ok()
+                && publisher.finished_at.is_some()
+                && run_owner_liveness(&publisher) == RunOwnerLiveness::Stopped
+                && !records
+                    .iter()
+                    .any(|(_, r)| r.source_run_id == publisher.run_id));
+        }
+        Ok(false)
+    }
+
+    /// The authenticated fresh `candidate_resume` output of `member`, when it
+    /// is a conclusively stopped owner-local attempt set up on `older_id`
+    /// that published nothing; `None` otherwise.
+    fn unpublished_fresh_attempt(
+        &self,
+        task: &Task,
+        member: &JobRun,
+        older_id: &str,
+        records: &[(chrono::DateTime<Utc>, PreservedPublication)],
+    ) -> Result<Option<Value>, OrbitError> {
+        if self.owner_source_identity(member, task).is_err()
+            || !matches!(member.state, JobRunState::Failed | JobRunState::Cancelled)
+            || member.finished_at.is_none()
+            || run_owner_liveness(member) != RunOwnerLiveness::Stopped
+            || records
+                .iter()
+                .any(|(_, r)| r.source_run_id == member.run_id)
+        {
+            return Ok(None);
+        }
+        let Some(state) = self.read_run_state(&member.run_id)? else {
+            return Ok(None);
+        };
+        // A failure handoff commits and publishes whatever the run left; only
+        // its recorded no-candidate outcome published nothing.
+        if state.run_id != member.run_id
+            || state.job_id != member.job_id
+            || ["push", "pr_open", "landing_push"]
+                .iter()
+                .any(|k| state.pipeline.get(k).is_some_and(|v| !v.is_null()))
+            || state
+                .failure_activity_checkpoint
+                .as_ref()
+                .is_some_and(|c| c.output["decision"] != "no_candidate")
+        {
+            return Ok(None);
+        }
+        let definition = self.source_repair_definition(member)?;
+        let checkpoint = |id, action| {
+            super::observation::authenticated_checkpoint(&definition, &state, id, action).ok()
+        };
+        let (Some(worktree), Some(resumed)) = (
+            checkpoint("worktree", "worktree_setup"),
+            checkpoint("resume_candidate", "candidate_resume"),
+        ) else {
+            return Ok(None);
+        };
+        let fresh = worktree["prior_job_run_id"] == older_id
+            && worktree["prior_foreign_run"].is_null()
+            && resumed["phase"] == "candidate_resume"
+            && resumed["outcome"] == "fresh"
+            && resumed["implement"] == true
+            && resumed["base_sha"] == worktree["base_sha"]
+            && resumed["reused_branch"].is_null()
+            && resumed["prior_pull_request"].is_null();
+        Ok(fresh.then(|| resumed.clone()))
     }
 
     /// Publication authority is the successful host adoption, never a caller's input.
