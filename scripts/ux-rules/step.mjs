@@ -1,6 +1,7 @@
 // Script-step adapter: run each surface independently and return one document.
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -100,6 +101,40 @@ async function unpackedKitRuntime(root) {
   return { libraryDirs, fontsConf };
 }
 
+
+// Export only bounded files under the surface's own output directory. The
+// digest names deduplicate repeated screenshots across surfaces and results.
+async function exportEvidence(results, surfaceOut, exported) {
+  const root = await realpath(surfaceOut);
+  for (const result of results) {
+    if (result.evidence === undefined) continue;
+    if (!Array.isArray(result.evidence)) throw new Error("evidence must be an array of relative paths");
+    const names = [];
+    for (const relative of result.evidence) {
+      if (typeof relative !== "string" || !relative || path.isAbsolute(relative) || relative.split(/[\\/]/).includes("..")) {
+        throw new Error(`invalid evidence path: ${JSON.stringify(relative)}`);
+      }
+      const resolved = await realpath(path.join(root, relative));
+      if (!resolved.startsWith(`${root}${path.sep}`)) throw new Error(`evidence escapes surface output: ${relative}`);
+      const info = await stat(resolved);
+      if (!info.isFile() || info.size > 1024 * 1024) throw new Error(`evidence must be a regular file no larger than 1 MiB: ${relative}`);
+      const bytes = await readFile(resolved);
+      if (bytes.length > 1024 * 1024) throw new Error(`evidence exceeds 1 MiB: ${relative}`);
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      let name = exported.get(digest);
+      if (!name) {
+        name = `${digest}${path.extname(relative).toLowerCase()}`;
+        if (exported.size >= 64) throw new Error("evidence exceeds 64 unique output files; reduce captures or increase the declared output budget");
+        if (!process.env.ORBIT_SCRIPT_OUT) throw new Error("evidence requires declared ORBIT_SCRIPT_OUT outputs");
+        await writeFile(path.join(process.env.ORBIT_SCRIPT_OUT, name), bytes);
+        exported.set(digest, name);
+      }
+      names.push(name);
+    }
+    result.evidence = names;
+  }
+}
+
 async function main() {
   let inputText = "";
   for await (const chunk of process.stdin) inputText += chunk;
@@ -112,6 +147,7 @@ async function main() {
   const scratch = await mkdtemp(path.join(os.tmpdir(), "ux-rules-"));
   const results = [];
   let commit = "";
+  const exported = new Map();
   try {
     for (const [index, surface] of input.surfaces.entries()) {
       const out = path.join(scratch, String(index));
@@ -134,8 +170,10 @@ async function main() {
         const report = JSON.parse(await readFile(path.join(out, "ux-rules.json"), "utf8"));
         if (!Array.isArray(report.results)) throw new Error("runner report has no results array");
         commit ||= report.commit || "";
+        await exportEvidence(report.results, out, exported).catch((error) => { error.evidenceFailure = true; throw error; });
         results.push(...report.results.map((result) => ({ ...result, surface })));
       } catch (error) {
+        if (error.evidenceFailure) throw error;
         const detail = (error.stderr || error.message || String(error)).trim();
         results.push({ surface, rule: `${surface}.runner`, target: { id: surface, argv: [] }, status: "error", severity: "medium", measurements: { reason: detail }, evidence: [], fingerprint: `${surface}.runner|${surface}` });
       }
