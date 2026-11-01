@@ -42,6 +42,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import xml.etree.ElementTree
 
 
@@ -821,109 +822,21 @@ def run_nextest(command, environment):
                 raise
 
 
-def observed_group_anchor(read_fd, write_fd):
-    """Return a preexec callback that reserves this session's process group.
-
-    ``start_new_session`` has already made the command the session leader.
-    The forked anchor ignores SIGTERM and stays in that group until the
-    supervisor's final SIGKILL, or until the supervisor closes ``write_fd``.
-    Reaping the leader therefore cannot free the group id for another group
-    before that signal. The anchor drops every other descriptor so it cannot
-    hold the command's output pipes open.
-    """
-
-    def spawn_observed_group_anchor():
-        if os.fork() == 0:
-            try:
-                os.close(write_fd)
-                signal.signal(signal.SIGTERM, signal.SIG_IGN)
-                null_fd = os.open(os.devnull, os.O_RDWR)
-                os.dup2(read_fd, 0)
-                os.dup2(null_fd, 1)
-                os.dup2(null_fd, 2)
-                if null_fd > 2:
-                    os.close(null_fd)
-                os.close(read_fd)
-                try:
-                    limit = os.sysconf("SC_OPEN_MAX")
-                except (OSError, ValueError):
-                    limit = 1024
-                if not isinstance(limit, int) or limit < 4 or limit > 65536:
-                    limit = 1024
-                os.closerange(3, limit)
-                while True:
-                    try:
-                        chunk = os.read(0, 4096)
-                    except OSError:
-                        break
-                    if not chunk:
-                        break
-            finally:
-                os._exit(0)
-        # The command itself must not keep the anchor's pipe open.
-        os.close(read_fd)
-        os.close(write_fd)
-
-    return spawn_observed_group_anchor
-
-
-def _close_observed_anchor(anchor_fd):
-    fd = anchor_fd[0]
-    if fd is None:
-        return
-    anchor_fd[0] = None
-    with contextlib.suppress(OSError):
-        os.close(fd)
-
-
-def _observed_group_reserved(process, anchor_fd):
-    """True while the unreaped leader or the still-held anchor reserves the group.
-
-    ``returncode`` stays None until this supervisor reaps the leader, so reading
-    it does not release the id. The anchor fd stays open until after the final
-    group signal; closing it is what lets the anchor exit.
-    """
-    if anchor_fd[0] is not None:
-        return True
-    return process.returncode is None
-
-
-def _signal_observed_group(process, anchor_fd, sig):
-    if not _observed_group_reserved(process, anchor_fd):
+def _stop_observed_group(process):
+    """Keep the child unreaped until after the last group signal."""
+    if process.returncode is not None:
         return
     with contextlib.suppress(OSError):
-        os.killpg(process.pid, sig)
-
-
-def _stop_observed_group(process, anchor_fd):
-    """TERM, a short grace, then KILL, only while this group id is still ours.
-
-    Waiting can reap the leader. The anchor keeps the id reserved across that
-    wait, so the final SIGKILL still names this group. Closing the anchor fd
-    releases the id, and this supervisor does not signal it again.
-    """
-    _signal_observed_group(process, anchor_fd, signal.SIGTERM)
-    leader_reaped = process.returncode is not None
-    if not leader_reaped:
-        try:
-            process.wait(timeout=0.1)
-            leader_reaped = True
-        except subprocess.TimeoutExpired:
-            leader_reaped = False
-        except OSError:
-            leader_reaped = process.returncode is not None
-    _signal_observed_group(process, anchor_fd, signal.SIGKILL)
-    if not leader_reaped and process.returncode is None:
-        # The leader is still our unreaped child, so this direct kill cannot
-        # land on a reused process-group id.
-        with contextlib.suppress(OSError):
-            process.kill()
-        with contextlib.suppress(OSError):
-            process.wait()
-    elif process.returncode is None:
-        with contextlib.suppress(OSError):
-            process.wait()
-    _close_observed_anchor(anchor_fd)
+        os.killpg(process.pid, signal.SIGTERM)
+    # Waiting on Popen here would reap the group leader and release its PID.
+    # Even a dead, unreaped leader reserves that number through escalation.
+    time.sleep(0.1)
+    with contextlib.suppress(OSError):
+        os.killpg(process.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        process.kill()
+    with contextlib.suppress(OSError):
+        process.wait()
 
 
 def run_observed(command, environment):
@@ -937,30 +850,13 @@ def run_observed(command, environment):
 
     A relay failure wakes the supervisor before it joins either reader. The
     command owns a session so cleanup can stop descendants holding the pipes,
-    even after the command exits. An anchor in that session keeps the group id
-    reserved until the final group signal. SIGTERM also enters this cleanup
+    even after the command exits. Its unreaped leader reserves the group id
+    until the final group signal. SIGTERM also enters this cleanup
     path when the surrounding executor stops the gate gracefully.
     """
-    read_fd, write_fd = os.pipe()
-    anchor_fd = [None]
-    process = None
-    try:
-        os.set_inheritable(read_fd, True)
-        os.set_inheritable(write_fd, True)
-        process = subprocess.Popen(
-            command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, start_new_session=True,
-            pass_fds=(read_fd, write_fd),
-            preexec_fn=observed_group_anchor(read_fd, write_fd))
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.close(read_fd)
-        with contextlib.suppress(OSError):
-            os.close(write_fd)
-        raise
-    anchor_fd[0] = write_fd
-    with contextlib.suppress(OSError):
-        os.close(read_fd)
+    process = subprocess.Popen(
+        command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, start_new_session=True)
     previous_sigterm = None
     started = []
     try:
@@ -1007,20 +903,16 @@ def run_observed(command, environment):
         return process.wait(), b"".join(lines).decode("utf-8", errors="replace")
     except BaseException:
         # Cleanup must not replace the original relay error. Kill the group
-        # after the grace, while the anchor still reserves its id, including
-        # when the leader has already been reaped: a descendant may ignore
+        # after the grace, before reaping the leader: a descendant may ignore
         # SIGTERM and still hold a reader's pipe.
         if previous_sigterm is not None:
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if process is not None:
-            _stop_observed_group(process, anchor_fd)
+            _stop_observed_group(process)
         for thread in started:
             thread.join()
         raise
     finally:
-        # Success only closes the anchor pipe. That exits the anchor without
-        # signaling a group id the leader wait may already have released.
-        _close_observed_anchor(anchor_fd)
         if previous_sigterm is not None:
             signal.signal(signal.SIGTERM, previous_sigterm)
         if process is not None:
