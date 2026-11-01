@@ -98,12 +98,17 @@ MCP stay on the normal lifecycle for that task, and leaving `done` or
 When you need a person to choose between known options, such as a sign-off, a
 price or a policy fork, raise `orbit.decision.raise` on a human-crew task you
 filed instead of writing a free-text human task: a question, two to four options
-(one-line label and consequence, exactly one `recommended`), and an optional
-`topic`. Only the operator answers; the answer is recorded in the task's history,
-completes the task and unblocks its `blocked_by` dependents. Free text stays for
-open-ended asks. A decision is scoped to its task, and past answers are never
-precedent. An answer that changes lasting behaviour or policy must be carried into
-the doc, config or code that owns it, in the PR of the task it unblocks.
+(one-line label and consequence, exactly one `recommended`), and a `topic` when
+a corpus rule should be able to match the request exactly. The operator answers,
+or a current corpus rule the operator marked `auto` answers an exact topic or
+rule id and records that answer as precedent. Either way the answer is in the
+task's history, completes the task and unblocks its `blocked_by` dependents.
+Free text stays for open-ended asks. Raw decision history is not authority.
+Only a merged `current` rule may be cited, and only while its review date has
+not passed and its `depends_on` digests still match. A stale or superseded
+rule is not cited and does not answer. You cannot set `auto`. An answer that
+changes lasting behaviour or policy must be carried into the doc, config or
+code that owns it, in the PR of the task it unblocks.
 Details: [Tool surface](references/tool-surface.md#raising-a-decision).
 
 When you work a task directly in an interactive session instead of through a

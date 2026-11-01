@@ -117,6 +117,15 @@ pub(super) fn dispatch(
         DecisionVerb::Answer => Err(OrbitError::PolicyDenied(
             "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
         )),
+        DecisionVerb::Reverse => Err(OrbitError::PolicyDenied(
+            "reversing a precedent answer is the operator's: use `orbit decision reverse`".into(),
+        )),
+        DecisionVerb::RuleAuto => Err(OrbitError::PolicyDenied(
+            "setting auto on a decision rule is the operator's: use `orbit decision rule-auto`".into(),
+        )),
+        DecisionVerb::Consolidate => Err(OrbitError::PolicyDenied(
+            "a consolidation proposal is a CLI read: use `orbit decision consolidate`".into(),
+        )),
         DecisionVerb::ChannelRegister
         | DecisionVerb::ChannelList
         | DecisionVerb::ChannelRevoke

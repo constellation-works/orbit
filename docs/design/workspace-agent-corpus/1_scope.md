@@ -50,7 +50,10 @@ a claimed worker uses that capture, never its own corpus mapping. An older
 owner's missing capture retains the existing tag-capture compatibility fallback.
 
 Dispatch appends only rows whose `applies_to` includes the exact activity;
-resolved issue rows are excluded. Implementing (`agent_implement`) and recovery
+resolved issue rows are excluded. A decision document contributes one line per
+current rule and nothing else. A decision document with no current rule is
+omitted. Current means `status: current`, `review_by` has not passed, and
+every `depends_on` digest still matches. Implementing (`agent_implement`) and recovery
 (`final_recovery`) use the same dispatch boundary. `triage_escalation`
 is the current triage activity name; `pilot_warning_triage` is only an example.
 An unmapped activity, an unset key, or no matching rows adds no section or audit
@@ -74,7 +77,8 @@ When the human-answer apply step records `decision_answered`, the same task
 record update appends a system `agent_corpus_append` history entry. It targets
 `decisions/orbit-requests.md`. The entry derives from the accepted request and
 human resolution, including all offered options and the note, not an agent's
-recommendation. Rejected, expired or automated answers write no corpus entry.
+recommendation. Rejected, expired or automated answers write no corpus entry. A precedent
+answer is not a human answer and writes no corpus entry.
 Decision source history remains authoritative if later batch publication fails.
 With the config unset, no outbox entry is written. Request identity makes
 materialization idempotent. The seed topic must exist before materialization.
@@ -116,11 +120,60 @@ histories are available. Counts and source links must agree with its report;
 its report artifact alone is not the corpus. Historical blocked-task backfill
 is separate and does not happen implicitly during injection.
 
+## Curated decision rules
+
+Raw decision history, including Entries, is not a rule and is not authority.
+A rule lives in an optional `## Rules` section of `decisions/<topic>.md`, one
+fenced YAML document per rule. The corpus generator does not require that
+section, so a history document with only Scope and Entries stays valid. A
+rule has:
+
+- `id`: a slug unique inside the topic file
+- `question`: the question pattern this rule answers
+- `answer`: the option id the rule chooses
+- `why`: why that option is the rule
+- `citations`: each human answer it was built from (`task`, `date` as
+  `YYYY-MM-DD`, `option`)
+- `depends_on`: `path` (a repo-relative file) or `config` (a dotted key),
+  each with the SHA-256 digest last confirmed
+- `status`: `current`, `stale`, or `superseded`
+- `review_by`: `YYYY-MM-DD`
+- `auto`: defaults to false. Consolidation never sets it
+- `auto_set_by`: `operator` only when the operator set `auto`
+
+A weekly workspace-local auto-task proposes rule edits. It is not a shipped
+default. The template is `decision-precedent.auto-task.yaml` beside this
+document. An operator copies it into `.orbit/auto_tasks/` and enables it
+there. The run calls `orbit decision consolidate`, which prints proposed file
+text and writes nothing. The pull request is the only place a rule changes,
+and a human merge is the curation step.
+
+Each run re-checks every rule. A later human answer that chooses a different
+option marks the old rule `superseded` (its id is renamed and `auto` is
+cleared) and writes a new `current` rule. A rule whose `depends_on` digest no
+longer matches, or whose `review_by` has passed, becomes `stale`. An already
+superseded rule stays superseded. Re-confirming a stale rule is an edit in
+that pull request. Only a `current` rule whose review date has not passed and
+whose digests still match is injected or cited.
+
+`auto: true` is operator-only (`orbit decision rule-auto`). An agent cannot
+set it, and neither can the precedent actor. When `orbit.decision.raise`
+names a topic or rule id that matches exactly one such current rule, and the
+rule's answer is one of the request's options, Orbit answers immediately with
+that option. The history actor is `precedent`, not a human. The record carries
+the rule id, the rule's citations, and that the operator approved the rule. A
+comment tells the operator how to reverse it. A non-auto, stale, superseded,
+ambiguous, or non-option match leaves the request open. Reversal is
+`orbit decision reverse`, operator-only. It re-opens the request and restores
+the task status from before the precedent answer.
+
 ## Authority and Library boundary
 
-This corpus holds Orbit issue mechanisms, Orbit decision-request precedent and
+This corpus holds Orbit issue mechanisms, Orbit decision-request history and
 standing workspace judgement rules. Daniel's product direction and general
 office knowledge remain in the orbit-office Library. No Library read or write
-is introduced. Precedent can justify a recommendation; a new decision still
-requires its own human answer. Task tags, comments and result messages cannot
-write trusted corpus text or select an arbitrary revision for injection.
+is introduced. Only a current rule may be cited. Raw entries never answer a
+new request. A current rule the operator marked auto may answer a request
+that names it exactly; every other new decision still requires its own human
+answer. Task tags, comments and result messages cannot write trusted corpus
+text or select an arbitrary revision for injection.

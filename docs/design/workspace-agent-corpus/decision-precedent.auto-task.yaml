@@ -1,0 +1,55 @@
+schemaVersion: 1
+name: decision-precedent
+description: Weekly proposal of curated decision rules from newly answered requests
+enabled: false
+schedule:
+  cron: 0 6 * * 1
+template:
+  title: Consolidate answered decisions into curated rules
+  description: |
+    Propose curated decision rules from human answers recorded since the last
+    successful run. This definition is workspace-local. Copy it to
+    `.orbit/auto_tasks/decision-precedent.yaml` and enable it there. It is not
+    a shipped default.
+
+    Raw decision history is not authority. The only edit this run makes is a
+    pull request. Do not edit a rule on the integration branch, in the working
+    tree outside that pull request, or by hand on a corpus file.
+
+    1. Read the newest done task tagged `decision-precedent` and, when it has
+       an artifact named `decision-precedent-cursor.json`, use its `since`
+       date. Otherwise omit `--since`.
+    2. Run `orbit decision consolidate` (add `--since YYYY-MM-DD` from that
+       cursor). The command prints a proposal and writes nothing.
+    3. When the proposal count is zero, record that in the execution summary
+       and finish without a repository change.
+    4. Otherwise put each proposed file at the path the proposal names, and
+       open a pull request whose body says a human merge is the curation step.
+       Re-confirming a stale rule is an edit in that pull request (set
+       `status` back to `current` and move `review_by` forward). Do not set
+       `auto` or `auto_set_by`. Only the operator sets `auto`, with
+       `orbit decision rule-auto`, after the merge.
+    5. Write `decision-precedent-cursor.json` on this task with `since` set to
+       today's date so the next run does not replay these answers.
+  acceptance_criteria:
+  - The run used `orbit decision consolidate` and did not write a corpus file except by the pull request that carries the printed proposal.
+  - A non-empty proposal is only the files that command printed, and no rule's `auto` or `auto_set_by` was set by this run.
+  - An empty proposal left the repository unchanged and said so in the execution summary.
+  task_type: chore
+  tags:
+  - decision-precedent
+  required_tools:
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  context_files:
+  - 'dir:docs/agents/corpus'
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-11-01T00:00:00Z
+updated_by: system
+updated_at: 2026-11-01T00:00:00Z

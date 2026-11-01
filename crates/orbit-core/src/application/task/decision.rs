@@ -216,12 +216,19 @@ impl OrbitRuntime {
         provenance: Option<String>,
     ) -> Result<DecisionRequest, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        if is_automation_actor(&actor_label) {
+        if is_automation_actor(&actor_label)
+            || actor_label.trim() == orbit_types::task::PRECEDENT_ACTOR
+        {
+            let who = actor_label.trim();
+            let why = if who == orbit_types::task::PRECEDENT_ACTOR {
+                "precedent answers are recorded only from an operator-approved corpus rule"
+            } else {
+                "is automation"
+            };
             return Err(OrbitError::decision_refused(
                 DecisionRefusalCode::CallerNotAllowed,
                 format!(
-                    "decision request `{request_id}` is answered by a human; `{}` is automation, so nothing was applied",
-                    actor_label.trim()
+                    "decision request `{request_id}` is answered by a human; `{who}` {why}, so nothing was applied"
                 ),
             ));
         }
@@ -272,6 +279,7 @@ impl OrbitRuntime {
                     provenance: provenance.clone(),
                     note: note.clone(),
                     answered_at: now,
+                    precedent: None,
                 };
                 let entry = TaskHistoryEntry {
                     at: now,

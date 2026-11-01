@@ -12,6 +12,16 @@ use crate::workflow::{HeldCandidate, ReviewGateHistoryNote};
 pub const DECISION_REQUESTED_EVENT: &str = "decision_requested";
 /// History event that records an applied answer to a [`DecisionRequest`].
 pub const DECISION_ANSWERED_EVENT: &str = "decision_answered";
+/// History event that re-opens a precedent answer. A later human answer
+/// clears it. Restoring status without this event does not reopen a request.
+pub const DECISION_REOPENED_EVENT: &str = "decision_reopened";
+/// Writer label of an answer applied from an operator-approved corpus rule.
+/// It is not a human answer and the human apply path refuses it.
+pub const PRECEDENT_ACTOR: &str = "precedent";
+/// Status-note marker on the bookkeeping status moves a precedent answer
+/// and its reversal write. Those moves must not permanently supersede the
+/// request: the reversal puts the task back and the request reads open again.
+pub const PRECEDENT_BOOKKEEPING_NOTE: &str = "precedent-bookkeeping";
 /// History event that records a decision token consumed by a refused
 /// submission that had already authenticated (design
 /// `docs/design/human-decision-channel/2_design.md` §2.3). The note names
@@ -538,6 +548,7 @@ fn task_revision_changed_since(request: &DecisionRequest, history: &[TaskHistory
     history
         .iter()
         .filter(|entry| entry.at > request.raised_at)
+        .filter(|entry| !is_precedent_bookkeeping(entry))
         .any(|entry| {
             entry.to_status.is_some()
                 || (entry.event == TASK_FIELDS_UPDATED_EVENT
@@ -551,6 +562,40 @@ fn task_revision_changed_since(request: &DecisionRequest, history: &[TaskHistory
                     && entry_candidate_identity(entry)
                         .is_some_and(|identity| candidate.as_deref() != Some(identity.as_str())))
         })
+}
+
+/// Whether a history entry is a precedent answer's bookkeeping status move
+/// or the matching reversal. Other status moves still supersede a request.
+pub fn is_precedent_bookkeeping(entry: &TaskHistoryEntry) -> bool {
+    entry.note.as_deref().is_some_and(|note| {
+        note == PRECEDENT_BOOKKEEPING_NOTE
+            || note.starts_with(&format!("{PRECEDENT_BOOKKEEPING_NOTE}:"))
+    })
+}
+
+/// One human answer a precedent rule cites.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrecedentSource {
+    /// Task whose human answer the rule cites.
+    pub task: String,
+    /// Calendar date of that answer (`YYYY-MM-DD`).
+    pub date: String,
+    /// Option id that answer chose.
+    pub option: String,
+}
+
+/// Audit fields that separate a precedent answer from a human one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrecedentCitation {
+    /// Corpus rule that supplied the option.
+    pub rule_id: String,
+    /// Human answers the rule was curated from.
+    pub citations: Vec<PrecedentSource>,
+    /// The operator set `auto` on the rule. Consolidation never does.
+    pub operator_approved: bool,
+    /// Task status to restore when the operator reverses the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_status: Option<TaskStatus>,
 }
 
 /// What an applied answer recorded on a [`DecisionRequest`].
@@ -574,6 +619,15 @@ pub struct DecisionResolution {
     pub note: Option<String>,
     /// When the answer was applied.
     pub answered_at: chrono::DateTime<chrono::Utc>,
+    /// Set only when `answered_by` is [`PRECEDENT_ACTOR`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precedent: Option<PrecedentCitation>,
+}
+
+/// Note body of a [`DECISION_REOPENED_EVENT`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DecisionReopenNote {
+    request_id: String,
 }
 
 /// A request for a human decision on held work, stored as a
@@ -746,14 +800,18 @@ impl DecisionRequest {
 }
 
 /// Every decision request in `history`, oldest first, with its effective
-/// state: a request is `answered` when a `decision_answered` entry (or its
-/// own resolution) records one, `expired` once its expiry passes, and
-/// `superseded` when its binding is no longer current or a newer request
-/// for the same task follows it. At most one request per task reads as `open`.
-/// An approval ([`DecisionBinding::TaskRevision`]) is superseded for good by a
-/// description or criteria edit, status move or, for a review approval, a
-/// candidate change after its raise, so restoring the earlier state does not
-/// reopen it.
+/// state: a request is `answered` when the latest of a `decision_answered`
+/// entry and a later [`DECISION_REOPENED_EVENT`] for the same request is the
+/// answer (or its own resolution records one), `expired` once its expiry
+/// passes, and `superseded` when its binding is no longer current or a newer
+/// request for the same task follows it. At most one request per task reads
+/// as `open`. An approval ([`DecisionBinding::TaskRevision`]) is superseded
+/// for good by a description or criteria edit, status move or, for a review
+/// approval, a candidate change after its raise, so restoring the earlier
+/// state does not reopen it. A precedent answer's bookkeeping status moves
+/// ([`is_precedent_bookkeeping`]) are not that status move: reversing the
+/// answer with [`DECISION_REOPENED_EVENT`] and restoring the prior status
+/// makes the request readable as open again.
 ///
 /// Supply the current task and its history. `pilot_operation` is the latest
 /// assessment operation id only while its admission hold still applies;
@@ -798,20 +856,41 @@ pub fn decision_requests_from_history(
                 }
             }
     };
-    let answered: std::collections::BTreeMap<String, DecisionResolution> = history
-        .iter()
-        .filter(|entry| entry.event == DECISION_ANSWERED_EVENT)
-        .filter_map(|entry| {
-            let resolution: DecisionResolution =
-                serde_json::from_str(entry.note.as_deref()?).ok()?;
+    // Oldest first. A later answer clears a reopen; a later reopen clears the
+    // answer. Anything else leaves the latest of the two in place.
+    let mut folded: std::collections::BTreeMap<String, (DecisionResolution, bool)> =
+        std::collections::BTreeMap::new();
+    for entry in history {
+        if entry.event == DECISION_ANSWERED_EVENT {
+            let Some(note) = entry.note.as_deref() else {
+                continue;
+            };
+            let Ok(resolution) = serde_json::from_str::<DecisionResolution>(note) else {
+                continue;
+            };
             let request_id = if resolution.request_id.is_empty() {
-                entry.operation_id.as_deref()?.to_string()
+                let Some(operation_id) = entry.operation_id.clone() else {
+                    continue;
+                };
+                operation_id
             } else {
                 resolution.request_id.clone()
             };
-            Some((request_id, resolution))
-        })
-        .collect();
+            folded.insert(request_id, (resolution, false));
+        } else if entry.event == DECISION_REOPENED_EVENT {
+            let Some(request_id) = entry.note.as_deref().and_then(|note| {
+                serde_json::from_str::<DecisionReopenNote>(note)
+                    .ok()
+                    .map(|reopen| reopen.request_id)
+                    .filter(|request_id| !request_id.is_empty())
+            }) else {
+                continue;
+            };
+            if let Some(state) = folded.get_mut(&request_id) {
+                state.1 = true;
+            }
+        }
+    }
     let mut requests: Vec<DecisionRequest> = history
         .iter()
         .filter_map(DecisionRequest::from_entry)
@@ -821,12 +900,19 @@ pub fn decision_requests_from_history(
         .map(|request| request.task_id.clone())
         .collect();
     for (index, request) in requests.iter_mut().enumerate() {
-        if let Some(resolution) = answered.get(&request.id) {
-            request.state = DecisionRequestState::Answered;
-            request.resolution = Some(resolution.clone());
+        if let Some((resolution, reopened)) = folded.get(&request.id) {
+            if *reopened {
+                request.resolution = None;
+            } else {
+                request.state = DecisionRequestState::Answered;
+                request.resolution = Some(resolution.clone());
+                continue;
+            }
         } else if request.resolution.is_some() || request.state == DecisionRequestState::Answered {
             request.state = DecisionRequestState::Answered;
-        } else if !binding_current(request)
+            continue;
+        }
+        if !binding_current(request)
             || task_revision_changed_since(request, history)
             || task_ids
                 .iter()

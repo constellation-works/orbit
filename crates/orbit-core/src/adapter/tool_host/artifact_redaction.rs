@@ -410,6 +410,9 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             DecisionVerb::List
             | DecisionVerb::Show
             | DecisionVerb::Answer
+            | DecisionVerb::Reverse
+            | DecisionVerb::RuleAuto
+            | DecisionVerb::Consolidate
             | DecisionVerb::Submit
             | DecisionVerb::Digest
             | DecisionVerb::ChannelRegister

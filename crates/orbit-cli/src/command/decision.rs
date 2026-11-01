@@ -92,7 +92,70 @@ impl Execute for DecisionCommand {
                 ))];
                 Ok(Payload::blocks(value, blocks).into())
             }
+            DecisionVerb::Reverse => {
+                let id = required(&input, "id")?;
+                let actor = operator_label(runtime);
+                let request = runtime.reverse_precedent_answer(&id, &actor)?;
+                let value = serde_json::to_value(&request).map_err(|error| {
+                    OrbitError::Execution(format!("serialize decision request: {error}"))
+                })?;
+                let blocks = vec![Block::text(format!(
+                    "Re-opened {}; the request on {} now reads {}.",
+                    request.id,
+                    request.task_id,
+                    request.state.as_str(),
+                ))];
+                Ok(Payload::blocks(value, blocks).into())
+            }
+            DecisionVerb::RuleAuto => {
+                let rule = required(&input, "rule")?;
+                let setting = required(&input, "auto")?;
+                let auto = match setting.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    other => {
+                        return Err(OrbitError::InvalidInput(format!(
+                            "`auto` must be on or off, not `{other}`"
+                        )));
+                    }
+                };
+                let actor = operator_label(runtime);
+                runtime.set_decision_rule_auto(&rule, auto, &actor)?;
+                let value = serde_json::json!({ "rule": rule, "auto": auto });
+                let word = if auto { "on" } else { "off" };
+                let blocks = vec![Block::text(format!("Set auto {word} on `{rule}`."))];
+                Ok(Payload::blocks(value, blocks).into())
+            }
+            DecisionVerb::Consolidate => {
+                let since = input.get("since").and_then(Value::as_str);
+                let value = runtime.consolidate_decision_precedent(since)?;
+                let count = value.get("count").and_then(Value::as_u64).unwrap_or(0);
+                let paths = value
+                    .get("proposals")
+                    .and_then(Value::as_array)
+                    .map(|proposals| {
+                        proposals
+                            .iter()
+                            .filter_map(|proposal| proposal.get("path").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default();
+                let blocks = vec![Block::text(format!(
+                    "Proposed {count} corpus file(s). Nothing was written. Open a pull request with these proposals; do not edit a rule outside that pull request.\n{paths}"
+                ))];
+                Ok(Payload::blocks(value, blocks).into())
+            }
         }
+    }
+}
+
+fn operator_label(runtime: &OrbitRuntime) -> String {
+    let label = runtime.actor_label().trim();
+    if label.is_empty() {
+        "human".to_string()
+    } else {
+        label.to_string()
     }
 }
 

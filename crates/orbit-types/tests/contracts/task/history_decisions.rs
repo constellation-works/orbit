@@ -245,6 +245,7 @@ fn invalidated_decision_bindings_preserve_answers_and_current_expiry() {
         provenance: None,
         note: None,
         answered_at: now,
+        precedent: None,
     };
     history.push(entry(
         DECISION_ANSWERED_EVENT,

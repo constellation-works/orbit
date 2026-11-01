@@ -133,7 +133,7 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Routine enablement | `orbit_routine_control` with `action: "list"` or `"toggle"`; operator authority and explicit `workspace` required | `orbit routine list/show` reads definitions and state. MCP toggle needs the observed `expected_enabled` and `target` plus desired `enabled`; after a lost reply, observe state before retrying. `orbit routine pause/resume` controls the separate host-local pause. |
 | Review recovery | `orbit_task_reconcile_review` (`inspect`, `submit`, `status`, `accept_baseline`) and `orbit_task_review_reset`; operator-only and unavailable to managed runs | `orbit task reconcile-review` and `orbit task review-reset`. Reconciliation judges a recovered delivery's changed merged head; reset closes an open attempt and renews one selected lineage budget with a reason, preserving history. Inspect authoritative state after a lost reply. |
 | Blocked-task requeue | `orbit_task_requeue` (`id`, `reason`, optional `discard_candidate`); operator-only and unavailable to managed runs | `orbit task requeue <id> --reason <why> [--discard-candidate]`. Returns a blocked task whose run has stopped to the backlog so its next run resumes the candidate and pull request its failure handoff published, after re-authenticating that publication, or the latest candidate a claim of the task kept, which a later claim that ended without one does not replace (`resumes.source: claim`); a live run or unsettled claim is refused. A changed task specification is refused; `discard_candidate` closes the task's undelivered Orbit pull requests (as `orbit task update --status backlog --discard-candidate` does) and reruns fresh. Nothing is written on a refusal. |
-| Human decision requests | `orbit.decision.list` and `orbit.decision.show` (read only; an agent may see a request, never answer it). `orbit.task.show` with `fields: ["open_decisions"]` lists one task's open requests | `orbit decision list` and `orbit decision show` (read). `orbit decision answer <id> <answer> [--note]` is operator-only, from the CLI or the dashboard. `orbit decision submit` and `orbit decision channel` manage registered decision channels |
+| Human decision requests | `orbit.decision.list` and `orbit.decision.show` (read only; an agent may see a request, never answer it or set `auto` on a rule). `orbit.task.show` with `fields: ["open_decisions"]` lists one task's open requests. A current rule the operator marked `auto` may answer an exact topic match and records that answer as precedent | `orbit decision list` and `orbit decision show` (read). `orbit decision answer <id> <answer> [--note]` is operator-only, from the CLI or the dashboard. `orbit decision reverse <id>` re-opens a precedent answer. `orbit decision rule-auto <rule> <on\|off>` is the only way to set `auto`, and it is operator-only. `orbit decision consolidate` prints a rule proposal and writes nothing. `orbit decision submit` and `orbit decision channel` manage registered decision channels |
 | Experiments | `orbit.experiment.show`, `orbit.experiment.list` and `orbit.experiment.readout` (read only; an agent may see an experiment's arms, event log and per-arm outcomes, never change it) | `orbit experiment show <id>`, `orbit experiment list` and `orbit experiment readout <id> [--metric <name>]` (read). `create`, `update`, `clone`, `start`, `pause`, `resume`, `reweight`, `conclude` and `abandon` are operator-only, as is the CLI-only `orbit experiment delete`, which removes a finished experiment that applied no live treatment. `conclude` stores the readout at that moment on the conclusion event and, when an arm is chosen, files one proposed task that names the experiment, arm, verdict and overlay. It changes no configuration or repository file. |
 | Crew ladder | `orbit.crew.ladder` (read only) | `orbit crew ladder [--json]`: per complexity tier, the pool, floor, candidate rung and the `system:crew-ladder` shadow trial with its would-be count, or why the tier has none. Trials are created, started and concluded at delivery admission, never by this read. |
 | Condition explain | `orbit.automation.explain` (read only; `definition`, optional `subject`) | `orbit automation explain <definition> [--subject <key>] [--json]`: a routine's or auto-task's condition over live state with its scope, prefilter, ownership verdict, up to 20 matches (with arm state and remaining hold) and closest misses, one subject's clause tree with operand values, and its durable tracking: stall, last pass and skip, recent fires with their upstream chain, and `self`. Writes nothing. `job:<name>` shows a job's auto-task steps instead: outer bound, revision pin, each step's resolved target auto-task (digest, enabled, own condition guard) and its waits and step reads; it evaluates no wait. An enabled job's executions run detached and park while a step waits. |
@@ -514,11 +514,23 @@ crew's, the call is refused with the reason and nothing is written; answering a
 request frees its slot.
 
 Answering stays the operator's (`orbit decision answer`, the dashboard or a
-registered channel); an agent label is refused. The answer is recorded in the
-task's history (who, when, which option, with the option's consequence in a
-comment), the task moves to `done`, and `blocked_by` dependents become eligible.
-A decision is a record of one task: do not treat a past answer as precedent. An
-answer that changes lasting behaviour or policy is carried by the task it
+registered channel), except when the request's `topic` matches exactly one
+current corpus rule the operator marked `auto` and that rule's option is one
+of the options you offered. That match answers immediately. The history actor
+is `precedent`, the record names the rule id and the rule's citations, and it
+states that the operator approved the rule. A comment tells the operator how
+to reverse it with `orbit decision reverse`. Reversal re-opens the request and
+restores the task status. An agent label cannot answer, cannot reverse, and
+cannot set `auto` (`orbit decision rule-auto` is operator-only). A non-auto,
+stale, superseded, or ambiguous rule does not answer; neither does a topic
+that is missing or only similar. The answer is recorded in the task's history
+(who, when, which option, with the option's consequence in a comment), the
+task moves to `done`, and `blocked_by` dependents become eligible. Raw
+decision history is not authority. Only a merged `current` rule whose review
+date has not passed and whose `depends_on` digests still match may be cited.
+A weekly consolidation proposes rule edits as a pull request and never edits
+a rule outside that pull request; a human merge is what makes a rule current.
+An answer that changes lasting behaviour or policy is carried by the task it
 unblocks into the doc, config or code that owns it, in that task's PR.
 
 ### Agent scorecards
