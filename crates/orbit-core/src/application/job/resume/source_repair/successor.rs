@@ -5,14 +5,14 @@ use orbit_types::workflow::SourceRepairSuccessor;
 
 /// The newest runs carrying the task read to find every binding between the
 /// source and the current one. A source older than this window is refused.
-const SUCCESSOR_CHAIN_WINDOW: usize = 64;
+pub(super) const SUCCESSOR_CHAIN_WINDOW: usize = 64;
 
 /// The candidate and publication checkpoints a newer execution must not hold.
 const PUBLICATION_KEYS: [&str; 4] = ["commit", "push", "pr_open", "landing_push"];
 
 /// A run of this job can bind the task. A gate or auto-dispatch wrapper also
 /// carries the task, but its delivery child is the binding.
-fn binds_task(job_id: &str) -> bool {
+pub(super) fn binds_task(job_id: &str) -> bool {
     matches!(job_id, "task_pr_pipeline" | "task_local_pipeline")
         || job_id.starts_with("task_claimed_")
 }
