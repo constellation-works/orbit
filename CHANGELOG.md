@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.42.0 — 2026-11-01
+
+### Breaking Changes
+
+- **Blocked-task triage retired**: `orbit.task.block_triage` no longer accepts `subject: block`, the `requeue`/`resume_run`/`rerun_ci`/`friction_reported` actions or the `blocker`, `run_id`, `head_sha` and `friction_*` fields → use final recovery's mechanical steps and `decide` decision. The seeded `blocked_task_triage` routine and `block_escalated` trigger are removed; old routine files load inert. ([ORB-20629])
+- **Fewer shipped auto-task defaults**: 8 auto-task definitions (backlog-hygiene, ci-budget-watch, crew-ladder-review, design-sync, flaky-test-hunt, structure-sweep, suppression-ratchet, workflow-health-audit) are no longer shipped, and 19 remain. Existing workspace copies keep working as workspace-local definitions → re-add a dropped one with `orbit auto-task add`. ([ORB-20704])
+
+### Highlights
+
+- **Decision requests**: agents raise multiple-choice decision requests to humans, and the dashboard shows them in a human-task view with copy-paste commands and one-click decisions. ([ORB-20736])
+- **Human-crew tasks**: the operator can move them to any status, and they use a short format with copy-paste commands. ([ORB-20727])
+- **`workspace sync --all`**: converges every workspace registered on the host in one command. ([ORB-20660])
+- **`no-drain` tag**: drains, followers and drain auto-approval skip tasks that carry it. ([ORB-20612])
+- **Better backlog forecasts**: forecast bias and quantiles are corrected from scored residuals, with a residual time-series chart under Analytics › Forecast. ([ORB-20673])
+- **Dashboard bounds**: Health Errors paginates, Frictions and Settings keys stay bounded, and the CLI wraps help text to the terminal width. ([ORB-20742])
+
 ## 0.39.0 — 2026-10-29
 
 ### Breaking Changes
