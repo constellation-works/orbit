@@ -413,7 +413,8 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   stays within 25,000 lines. If included code totals 25,000 lines or fewer, it
   makes one area. It does not file an area under 5,000 lines unless no in-bound
   merge is possible, and records the reason in `full-review-areas.json`. It
-  files one area-review chore per area, tagged `full-code-review` and
+  files at most 24 area-review chores per run (hardest and least recently
+  reviewed first; the rest are recorded as `deferred`), each tagged `full-code-review` and
   `no-diff-expected` (never `code-review`), at `hard` complexity or below with
   no pinned crew. Each area
   reviewer reads its whole area at that commit in partitions of at most 10,000

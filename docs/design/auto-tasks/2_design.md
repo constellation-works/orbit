@@ -358,7 +358,10 @@ review is deliberately not the steady state: one run fans the whole tree out
 as one area chore per 25,000-line area in a single mint (about 55 area chores
 on a 1.3M-line tree), which floods the backlog, while the `code-review`
 rotation already provides steady whole-tree coverage a little at a time. The
-snapshot stays available for the moments a complete, single-SHA reading of
+coordinator therefore files at most 24 area chores per run, hardest areas and
+least recently reviewed first, and records the remainder as `deferred` for the
+next run: runs that filed 48 to 71 areas at once had about half archived
+unread, while runs of 9 to 11 completed every area. The snapshot stays available for the moments a complete, single-SHA reading of
 the entire tree is worth that fan-out.
 
 ### 4e. `comment-hygiene`: the doc-duties ledger over code comments

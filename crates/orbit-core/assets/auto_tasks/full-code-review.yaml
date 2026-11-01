@@ -82,8 +82,9 @@ template:
     area under 5,000 lines unless no merge within the bound is possible;
     record the reason in `full-review-areas.json` when you do.
 
-    Every included file must belong to exactly one area. Use `dir:` selectors
-    for whole directories and `file:` selectors for direct files or file sets;
+    Every included file must belong to exactly one area in the partition. Use
+    `dir:` selectors for whole directories and `file:` selectors for direct
+    files or file sets;
     never select an entire parent alongside its children in different areas.
     A `dir:` selector may contain excluded files; the area's inventory, not
     its selector, defines what is reviewed. If a single included file exceeds
@@ -94,10 +95,30 @@ template:
     Before filing, verify all area counts against the bound and reconcile the
     inventories for gaps and duplicates. Write `.orbit/tmp/full-review-areas.json`
     with `schema_version: 1`, `pinned_sha`, `area_line_bound: 25000`, the areas
-    (name, selectors, file paths and per-file counts, total line count, and
-    the reason for any area under 5,000 lines), and exclusions (path pattern,
+    (name, selectors, file paths and per-file counts, total line count, the
+    reason for any area under 5,000 lines, and `deferred` with reason `cap` for
+    an area the cap below leaves unfiled), and exclusions (path pattern,
     reason and file count). Attach it to this coordinator task with
     `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/full-review-areas.json","path":"full-review-areas.json","model":"<agent-family>"}'`.
+
+    ## Cap and rank the filings
+
+    File at most **24** area reviews per run. Past runs that filed 48, 56 and
+    71 areas at once had only 17, 24 and 21 completed; the board could not
+    absorb the rest, and they were parked and archived unread, their pinned
+    commit stale. A run that filed 9 to 11 had every area completed.
+
+    When the partition has more than 24 areas, rank them (before writing
+    `full-review-areas.json`) and file the first 24: areas holding
+    concurrency, persistence, security boundaries or process control first;
+    then areas with no completed area review, then the oldest completed one. Find completed reviews with `orbit.task.list` (statuses
+    `["done"]`, tags `["full-code-review","no-diff-expected"]`, same `type` and
+    `model` filters as above); an area counts as reviewed when a completed
+    review's `context_files` cover its selectors. Break ties by commits since
+    that review (`git log --oneline <old sha>..<sha> -- <selectors>`), most
+    first. Do not file the rest: list each in `full-review-areas.json` as
+    `deferred` with reason `cap`, and in the execution summary. They hold no
+    completed review, so the next run ranks them first.
 
     ## File one area review per area
 
@@ -164,17 +185,38 @@ template:
     >   input, secrets in logs or output;
     > - resource bounds: unbounded buffers, queues, retries, recursion or file
     >   growth;
-    > - conformance to the repository's documented standards: its agent guide,
-    >   contributing guide, standards documents and lint configuration;
+    > - conformance of the code to the repository's documented standards: its
+    >   agent guide, contributing guide, standards documents and lint
+    >   configuration (never drift in the documents' own prose);
     > - tests that do not test what they claim: assertions that cannot fail,
     >   fixtures that bypass the code under test, names that promise behavior
     >   the body never exercises.
     >
-    > Verify every candidate against the code at the pinned SHA; a line that
-    > looks wrong but is guarded elsewhere is not a finding. Before filing,
-    > search for existing coverage with
-    > `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
-    > and skip anything an open `code-review` task already tracks. File each
+    > Filing bar. Past reviews had findings rejected as invalid, already fixed,
+    > duplicates of other work, or below the review bar; each rule below
+    > removes one of those causes.
+    > - Verify every candidate against the code at the pinned SHA; a line that
+    >   looks wrong but is guarded elsewhere is not a finding. A claim that
+    >   nothing validates, redacts, bounds or reaches a path needs a search of
+    >   every layer that could (callers, the storage or write boundary,
+    >   policy and deny lists); name what you searched in the description.
+    > - The pinned SHA ages while area reviews wait. Fetch the integration
+    >   branch and read the cited lines at its current tip
+    >   (`git show origin/<integration branch>:<path>`); skip a finding
+    >   already fixed there, and cite the tip SHA you checked.
+    > - Search for existing coverage with
+    >   `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
+    >   and skip anything any task already tracks, whatever its tags: an open
+    >   `code-review` finding, a repair or critical task, a done fix, or an
+    >   archived task whose recorded reason still applies. If an
+    >   `orbit.task.add` reply fails or cannot be parsed, search for the title
+    >   again before retrying; a retry after a landed add files a duplicate.
+    > - Rate each candidate on the severity scale below before filing. Skip
+    >   `nit`. Skip a `low` that is both cosmetic and recovered by a retry or
+    >   rerun, and file any other `low` only with the concrete input or
+    >   sequence that triggers it.
+    >
+    > File each
     > confirmed finding as its own task with
     > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review","full-code-review"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this area task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`,
     > citing `file:line` evidence at the pinned SHA. Derive canonical
@@ -265,15 +307,16 @@ template:
 
     ## Finish
 
-    Finish once every area task is filed. Record in the execution summary the
-    integration branch and pinned SHA, the area table (area name, directories,
-    measured line count, complexity) with any exclusions, and each area's task
-    ID.
+    Finish once every area task within the cap is filed. Record in the
+    execution summary the integration branch and pinned SHA, the area table
+    (area name, directories, measured line count, complexity) with any
+    exclusions, each filed area's task ID, and each deferred area.
   acceptance_criteria:
   - One integration-branch commit was pinned by full SHA and every area task names it.
   - Only code is partitioned (source, tests, build and maintenance scripts, CI workflows); documentation, lockfiles, manifests and declarative configuration, test data, generated, vendored, binary and asset files are excluded by recorded path pattern and never filed as an area.
   - Areas hold at most 25,000 text lines along directory or file boundaries, small candidates are merged toward the bound (one area when the included code totals 25,000 lines or fewer), any area under 5,000 lines records why no merge was possible, and measured inventories are in `full-review-areas.json`; an unpartitionable oversized file is reported as `review_incomplete`, never filed as an oversized area.
-  - Each bounded area has exactly one filed `chore` tagged `full-code-review` and `no-diff-expected` (never `code-review`), complexity `hard` at most, no crew, source `dir:` / `file:` context selectors, artifact read/write tools, a measured line count, the partitioned reading and resume brief, and a `spawned_from` relation to this task.
+  - At most 24 area reviews are filed per run, ranked hard-first then least recently reviewed; every area beyond the cap is recorded as `deferred` with reason `cap` in `full-review-areas.json` and the execution summary.
+  - Each filed area has exactly one `chore` tagged `full-code-review` and `no-diff-expected` (never `code-review`), complexity `hard` at most, no crew, source `dir:` / `file:` context selectors, artifact read/write tools, a measured line count, the partitioned reading and resume brief, and a `spawned_from` relation to this task.
   - The execution summary records the pinned SHA, the area table and every area task ID.
   task_type: chore
   tags:
