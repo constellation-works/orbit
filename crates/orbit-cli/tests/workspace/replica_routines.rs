@@ -675,7 +675,7 @@ fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() 
 
     // Model a deleted shipped default so restore would write its definition
     // and managed-asset record if the Core authority check were missing.
-    fs::remove_file(replica_repo.join(".orbit/auto_tasks/backlog-hygiene.yaml"))
+    fs::remove_file(replica_repo.join(".orbit/auto_tasks/friction-curation.yaml"))
         .expect("remove restore target in isolated fixture");
     let cursor_path = replica_repo.join(".orbit/state/auto-tasks.json");
     fs::create_dir_all(cursor_path.parent().expect("cursor parent"))
@@ -721,7 +721,7 @@ fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() 
         ],
         vec!["auto-task", "toggle", "qa-sweep", "on", "--json"],
         vec!["auto-task", "delete", "doc-duties", "--json"],
-        vec!["auto-task", "restore", "backlog-hygiene", "--json"],
+        vec!["auto-task", "restore", "friction-curation", "--json"],
         vec!["auto-task", "mint", "qa-sweep", "--json"],
     ] {
         let before = auto_task_state_snapshot(&replica_repo, &home);

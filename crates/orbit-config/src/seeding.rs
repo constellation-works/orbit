@@ -5,8 +5,8 @@
 //! Each key takes `"all"` (the default), `"none"`, or a list of shipped
 //! default names. Admission refuses a name this Orbit has never shipped, so a
 //! misspelling fails at config load instead of silently seeding nothing. A
-//! name a later release retired still admits: the workspace that listed it
-//! stays loadable, and the retired default is simply no longer seeded.
+//! name a later release retired or demoted still admits: the workspace that
+//! listed it stays loadable, and the default is simply no longer seeded.
 //!
 //! The shipped names live here because this crate admits the keys and cannot
 //! see the embedded assets; `orbit-core` asserts at compile time that its
@@ -53,18 +53,13 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "agent-guidance-audit",
     "auto-task-yield-review",
     "architecture-audit",
-    "backlog-hygiene",
-    "ci-budget-watch",
     "code-health-sweep",
-    "crew-ladder-review",
     "delivery-code-review",
     "dependency-freshness",
     "code-review",
     "comment-hygiene",
-    "design-sync",
     "doc-duties",
     "escape-to-guard",
-    "flaky-test-hunt",
     "friction-curation",
     "full-code-review",
     "host-health",
@@ -74,13 +69,26 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "qa-sweep",
     "run-failure-patterns",
     "security-review",
-    "structure-sweep",
-    "suppression-ratchet",
-    "workflow-health-audit",
 ];
 
 /// Default auto-tasks a prior release shipped and this one no longer seeds.
 pub const RETIRED_DEFAULT_AUTO_TASKS: &[&str] = &["blocked-task-triage"];
+
+/// Default auto-tasks a prior release shipped and this one demoted because
+/// they had not proven their yield. Nothing replaced them, so unlike a
+/// retired default a workspace's existing copy is kept: `orbit workspace
+/// sync` releases it as a workspace-local definition instead of retiring it.
+/// A name here still admits in `seeding.auto_tasks`.
+pub const DEMOTED_DEFAULT_AUTO_TASKS: &[&str] = &[
+    "backlog-hygiene",
+    "ci-budget-watch",
+    "crew-ladder-review",
+    "design-sync",
+    "flaky-test-hunt",
+    "structure-sweep",
+    "suppression-ratchet",
+    "workflow-health-audit",
+];
 
 /// Which shipped defaults of one kind a workspace carries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -164,7 +172,7 @@ pub(crate) fn admit_routine_seeding(
         SEEDING_ROUTINES_KEY,
         "routine",
         SHIPPED_DEFAULT_ROUTINES,
-        RETIRED_DEFAULT_ROUTINES,
+        &[RETIRED_DEFAULT_ROUTINES],
     )
 }
 
@@ -177,7 +185,7 @@ pub(crate) fn admit_auto_task_seeding(
         SEEDING_AUTO_TASKS_KEY,
         "auto-task",
         SHIPPED_DEFAULT_AUTO_TASKS,
-        RETIRED_DEFAULT_AUTO_TASKS,
+        &[RETIRED_DEFAULT_AUTO_TASKS, DEMOTED_DEFAULT_AUTO_TASKS],
     )
 }
 
@@ -186,7 +194,7 @@ fn admit_seeding_policy(
     key: &str,
     noun: &str,
     shipped: &[&str],
-    retired: &[&str],
+    formerly_shipped: &[&[&str]],
 ) -> Result<SeedingPolicy, OrbitError> {
     match raw {
         None => Ok(SeedingPolicy::All),
@@ -203,7 +211,11 @@ fn admit_seeding_policy(
             let mut admitted = BTreeSet::new();
             for name in names {
                 let name = name.trim().to_string();
-                if !shipped.contains(&name.as_str()) && !retired.contains(&name.as_str()) {
+                if !shipped.contains(&name.as_str())
+                    && !formerly_shipped
+                        .iter()
+                        .any(|names| names.contains(&name.as_str()))
+                {
                     return Err(OrbitError::InvalidInput(format!(
                         "{key} names '{name}', which is not a default {noun} Orbit ships; \
                          choose from {}",

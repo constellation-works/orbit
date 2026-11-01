@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-31
+last_updated: 2026-11-01
 last_validated: 2026-10-29
 status: Accepted
 stage: shipped
@@ -13,7 +13,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128, ORB-18129, ORB-18134]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128, ORB-18129, ORB-18134, ORB-20704]
 ---
 
 # Auto-tasks — Overview
@@ -114,7 +114,9 @@ becomes just the first definition.
 
 These YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. The directory also holds the retired
-`blocked-task-triage.yaml`, which `RETIRED_AUTO_TASK_FILES` registers instead. `orbit workspace init` materializes a
+`blocked-task-triage.yaml`, which `RETIRED_AUTO_TASK_FILES` registers instead.
+A definition joins this catalog only on proven yield
+([promotion](#promotion-to-the-shipped-defaults)). `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
 
@@ -210,21 +212,6 @@ definition of the same name.
   `sweep-cursor.json`, which the definition's `skip_if_unchanged` cursor
   (keyed on `qa-full-sweep-rollup`) reads to skip a tick when nothing has
   landed since.
-- `design-sync` — disabled-by-default reconciliation of at most three design
-  feature folders every 720 minutes, at medium complexity [ORB-18557]. Reads
-  `docs/design/CONVENTIONS.md` every run; without it, makes no edits or filings
-  and finishes as a successful no-op. Features with related task status
-  changes since their ledger date come first, oldest reconciliation first,
-  falling back to entry-doc validation and git dates. It checks stage, status,
-  next, phase/slice citations, implementation claims and Task References
-  against task records and code. Owner approval is required for `Accepted`;
-  integration-branch delivery is required for `shipped`. Design intent stays
-  intact: unexplained divergences get existing or proposed tasks, with at
-  most three filings per run. Frontmatter changes regenerate the doc index.
-  Each run attaches `design-sync-ledger.json` with per-feature outcomes and
-  cumulative state, including no-ops. It locks `dir:docs`; clean runs use
-  validated no-diff evidence. Mechanical documentation checks stay with
-  `doc-duties` at low complexity.
 - `doc-duties` — disabled-by-default daily validation of the
   least-recently-attempted tracked documentation. Candidates exclude generated
   and historical records, including paths in the repository's link-check or
@@ -320,10 +307,6 @@ definition of the same name.
   `pilot-block-report.json`, and files a regression when a done fix did not
   reduce its group. It never acts on an individual blocked or held task, and
   runs only on the owner (ORB-20516).
-- `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
-  orphaned in-progress/review, aged proposed, and dependency-unblocked idle
-  tasks. Its execution summary recommends human follow-up without changing task
-  status or dispatching work.
 - `delivery-code-review` — disabled-by-default review of newly landed
   deliveries. Its `enabled` flag is the after-landing review switch
   [ORB-13992]; the deprecated `operation.review_policy = after-landing`
@@ -391,7 +374,8 @@ definition of the same name.
   inventoried, but retirement tasks are filed only when the repository
   documents a support window; without one the inventory goes in the run
   summary and nothing is filed for retirement. Lint-suppression counting
-  belongs to the `suppression-ratchet` default. Each run files at most 6
+  belongs to a workspace's own `suppression-ratchet` definition, when it has
+  one. Each run files at most 6
   `proposed` tasks with `context_files` and a `spawned_from` relation to the
   minted chore, which is tagged `no-diff-expected` and never builds or runs
   tests.
@@ -423,43 +407,6 @@ definition of the same name.
   successful no-op that reports each ranking's below-support counts and files
   nothing.
   The minted chore is tagged `no-diff-expected` and never builds or runs tests.
-- `ci-budget-watch` — disabled-by-default daily measurement of the main
-  hosted test job's elapsed time against the repository's documented CI
-  budget. It discovers the job from the CI workflow files (a gate job that
-  waits on the test jobs, otherwise the job whose steps run the test
-  suite) and the budget (figure, statistic, and population, with its
-  `file:line` source) from the agent guides, contributing guide, and docs;
-  with no documented budget it records the trend and files nothing, and
-  with no hosted CI or unreachable run history it is a successful no-op
-  that states the reason. Each run attaches `ci-budget-watch/report.md`
-  with the last 20 completed runs (SHA, run id, conclusion, elapsed
-  seconds), the trend against the previous report, and the measurement
-  gaps. When over budget it keeps exactly one open `ci-budget` task:
-  an existing open one is updated with the new measurements, otherwise
-  one `proposed` repair task is filed with acceptance criteria,
-  `context_files`, and a `spawned_from` relation. The minted chore is
-  tagged `no-diff-expected` and never edits source, CI, or tests.
-- `flaky-test-hunt` — disabled-by-default weekly hunt for flaky tests in
-  hosted CI history over a 14-day window, on the integration branch and
-  recent pull-request runs. It finds flakes through 2 signals: a failed
-  run followed by a succeeded rerun of the same SHA in the same
-  workflow, and a failed run on one integration-branch commit followed
-  by a succeeded run on its immediate child when the diff between the
-  2 SHAs changed no test file, same-package file, excerpt-named file,
-  or suite-composition file. Test names and bounded failure excerpts
-  come from the failed runs' logs; runs whose logs cannot be parsed
-  are recorded as gaps and contribute nothing. Each run attaches
-  `flaky-test-hunt.json` with the flake count per test, every
-  occurrence's run ids and SHAs, excluded candidates, gaps, and a diff
-  against the previous run, and files at most 4 `proposed` fix tasks,
-  highest flake count first, tagged `ci-flake` with the verified test
-  file as `context_files` and a `spawned_from` relation, deduplicated
-  against open `ci-flake` and CI-failure-sweep tasks. A filed task
-  requires the root cause fixed or the test deleted as redundant, and
-  rejects silent retries or quarantine without an exit plan. With no
-  hosted CI or unreachable run history it is a successful no-op that
-  states the reason. The minted chore is tagged `no-diff-expected`
-  and never builds or runs tests.
 - `agent-guidance-audit` — disabled-by-default audit every 3 days of agent
   guidance files: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`,
   `.agents/skills/`, `copilot-instructions.md` under `.github`, and Cursor rule
@@ -474,28 +421,6 @@ definition of the same name.
   minted chore. Stylistic rewrites are not filed. The chore is tagged
   `no-diff-expected` and does not edit the repository. A workspace-authored
   `skill-validation` definition is left in place.
-- `structure-sweep` — disabled-by-default weekly scan in one pass over
-  source files and test files. It records the thresholds in every run
-  summary (a non-test source file over 1,000 lines, a module index file
-  over 400 lines of mostly logic, and a test file over 2,000 lines),
-  discovers languages and source and test roots from tracked files, and
-  keys layout candidates to the detected language's convention, recording
-  rejected leads with a reason. Each run files at most 4 `proposed`
-  restructuring or test-reduction tasks, largest first and grouped by
-  package or subsystem, each with `context_files` and a `spawned_from`
-  relation to the minted chore, which is itself tagged `no-diff-expected`
-  and never builds or runs tests. A test-reduction task keeps that file's
-  coverage — every scenario survives or is named with a reason — and
-  reports the test count before and after.
-- `crew-ladder-review` — disabled-by-default monthly (`0 9 1 * *`, host-local)
-  medium no-diff chore, seeded through both shipped registries like the other
-  24 defaults. Reviews per-tier exact model/effort/digest mature ladder and
-  operator trial evidence. Every run attaches
-  `crew-ladder-review.json` and fetches the prior review for deltas. At most three
-  duplicate-checked proposed configuration revisions or bounded evaluation tasks
-  carry exact targets, evidence and `spawned_from`. It never changes live routing,
-  effort, ordering, mode, grading or experiment lifecycle. Shadow projections
-  cannot substitute for mature actual trial quality. See [monthly ladder review](../crew-ladder/1_scope.md#monthly-evidence-review).
 
 - `auto-task-yield-review` — disabled-by-default monthly review of whether
   this workspace's enabled auto-task definitions pay for themselves. For
@@ -516,28 +441,6 @@ definition of the same name.
   never edits, toggles or mints definitions; changing configuration is
   the operator's decision.
 
-- `workflow-health-audit` — disabled-by-default weekly (`medium`) owner-only
-  validation of every effective job and routine, including triggers, admission,
-  no-ops, failure/recovery and durable effects. Recent run evidence and safe
-  existing isolated fixtures establish per-definition results; missing proof
-  never counts as validation. Up to five deduplicated concrete repairs become
-  proposed tasks; other actionable obstacles become frictions. Complete
-  coverage and overflow remain in `workflow-health-audit.json`. It does not
-  fire production workflows, invoke providers or alter live run state.
-
-- `suppression-ratchet` — disabled-by-default weekly (`hard`) static count of
-  lint suppressions, TODO/FIXME/HACK/XXX, ignored tests and language escape
-  hatches at one integration-branch SHA. Patterns follow detected languages;
-  package/area counts exclude vendored, generated and build output and split
-  justified from unjustified occurrences. `suppression-ratchet.json` carries
-  the baseline and comparison evidence; the first run files nothing. Later
-  runs file ratchet bugs naming introducing commits plus at most one small
-  reduction in the highest-churn eligible area, capped at three proposed tasks
-  with verified context and `spawned_from`. Categories are grouped when needed
-  to keep every increase covered within the cap. Justified occurrences are
-  never filed. This default owns suppression counting for the portable
-  `code-health-sweep`; the minted chore is `no-diff-expected` and never builds.
-
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. Final recovery decides blocked tasks now: it runs
 bounded mechanical steps, then escalates or opens a decision card
@@ -550,13 +453,48 @@ the routine replaces it. Sync never enables the routine. The
 `skip_unless_blocked_candidates` precondition stays available to
 workspace-authored definitions.
 
+## Promotion to the shipped defaults
+
+Every shipped default reaches every Orbit user, so the catalog holds only
+definitions that have proven their yield. A new recurring chore starts as a
+workspace-local definition (`orbit auto-task add`). It may be proposed for the
+shipped catalog only after it has shown yield in at least one workspace: tasks
+it filed that landed, or a diff of its own that merged, with a low share of
+duplicate or invalid rejections. `auto-task-yield-review` is the measure; its
+`auto-task-yield.json` reports those counts per definition over 30 days. The
+change that adds a default cites that evidence: the workspace, the window, the
+runs, the landed tasks or merged diffs, and the rejection share. A default
+that stops paying for itself is demoted the same way.
+
+In Orbit's own workspace, the workspace-authored `default-auto-task-audit`
+definition checks each newly shipped default against this rule and files a
+demotion proposal when the evidence is missing.
+
+### Demoted defaults
+
+A demoted default had not proven its yield and nothing replaced it.
+ORB-20704 demoted `backlog-hygiene`, `ci-budget-watch`, `crew-ladder-review`,
+`design-sync`, `flaky-test-hunt`, `structure-sweep`, `suppression-ratchet`
+and `workflow-health-audit`. Their names are listed in
+`orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`, which `seeding.auto_tasks`
+admission still accepts, and their templates are no longer embedded.
+
+Unlike a retired default, a demoted default's existing copy is kept. `orbit
+workspace sync` drops its managed-manifest provenance before reconciliation
+and reports one `migrated` action, leaving the file, its settings-table entry,
+its schedule and its cursor untouched. From then on the copy is a
+workspace-local definition: sync no longer refreshes it, `orbit auto-task show`
+reports its body as user-authored, and doctor does not report it as
+deprecated. The demoted bodies stay in `body-history.json`.
+
 ## Workspace-authored definitions in this repo
 
 Orbit's own checkout also carries extra `.orbit/auto_tasks/` files that are
 **not** embedded defaults. They may be enabled, name a family-specific crew, or
 encode this repository's branches and gates. Re-init preserves them:
 
-- `model-price-audit`, `release-prep`, `skill-validation`, and
+- `model-price-audit`, `release-prep`, `skill-validation`,
+  `default-auto-task-audit` (which audits the shipped defaults), and
   this repository's configured copies of catalog names such as `code-review` and
   `security-review`.
 - `qa-full-sweep`, this repository's Orbit-specific pre-release sign-off
@@ -566,6 +504,9 @@ encode this repository's branches and gates. Re-init preserves them:
   retire it, and sync reports that it occupies the bundled default's name.
 
 ## Task References
+
+- ORB-20704 — Demoted eight unproven defaults to workspace-local, keeping
+  existing copies, and made proven yield the condition for shipping a default.
 
 - [ORB-18557] — Adds the portable design-sync default and its reconciliation ledger.
 

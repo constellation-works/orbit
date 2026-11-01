@@ -23,14 +23,6 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
         include_str!("../assets/auto_tasks/architecture-audit.yaml"),
     ),
     (
-        "backlog-hygiene",
-        include_str!("../assets/auto_tasks/backlog-hygiene.yaml"),
-    ),
-    (
-        "ci-budget-watch",
-        include_str!("../assets/auto_tasks/ci-budget-watch.yaml"),
-    ),
-    (
         "code-health-sweep",
         include_str!("../assets/auto_tasks/code-health-sweep.yaml"),
     ),
@@ -45,10 +37,6 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
     (
         "doc-duties",
         include_str!("../assets/auto_tasks/doc-duties.yaml"),
-    ),
-    (
-        "flaky-test-hunt",
-        include_str!("../assets/auto_tasks/flaky-test-hunt.yaml"),
     ),
     (
         "friction-curation",

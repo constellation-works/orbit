@@ -701,7 +701,7 @@ Delivery automation dry runs defer mapped-tag decisions, including profiles with
 
 Mapped tags have the same protection as `skip-review`: only filing a task (including an auto-task definition) or an operator update may add one; an agent's update that adds one is refused, and removal is always allowed. A mapped tag skips review only, never validation: required validation, workspace gates and hosted CI still run. The built-in `skip-review` and `skip-validation` tags keep their behaviour above and cannot be remapped. Config validation refuses a mapping that reuses a built-in tag name, has an empty or malformed `paths`, or a `guard` that is absolute or contains `..`, naming the key. `orbit config show` lists the effective mappings under `Review skip tags:` (and as `review_skip_tags` in `--json`).
 
-The seeded template includes mappings for selected shipped auto-tasks' `auto-task:<name>` provenance tags, all limited to the documentation/CI paths shown above. Report-only `host-health` passes need no review-skip mapping. The template is not migrated into existing config files: `orbit init` leaves an existing config alone unless run with `--force`. To opt in on an existing install, add the same tables to its `config.toml`:
+The seeded template includes mappings for selected shipped auto-tasks' `auto-task:<name>` provenance tags, all limited to the documentation/CI paths shown above. Report-only `host-health` passes need no review-skip mapping. Defaults a release demoted to workspace-local lose their seeded mapping, but an existing config keeps any it already has. The template is not migrated into existing config files: `orbit init` leaves an existing config alone unless run with `--force`. To opt in on an existing install, add the same tables to its `config.toml`:
 
 ```toml
 [workflow.review_skip_tags."auto-task:agent-guidance-audit"]
@@ -710,13 +710,7 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 [workflow.review_skip_tags."auto-task:auto-task-yield-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
-[workflow.review_skip_tags."auto-task:crew-ladder-review"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
 [workflow.review_skip_tags."auto-task:architecture-audit"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
-[workflow.review_skip_tags."auto-task:backlog-hygiene"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
 [workflow.review_skip_tags."auto-task:delivery-code-review"]
@@ -728,9 +722,6 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 [workflow.review_skip_tags."auto-task:code-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
-[workflow.review_skip_tags."auto-task:ci-budget-watch"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
 [workflow.review_skip_tags."auto-task:code-health-sweep"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
@@ -738,9 +729,6 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
 [workflow.review_skip_tags."auto-task:escape-to-guard"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
-[workflow.review_skip_tags."auto-task:flaky-test-hunt"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
 [workflow.review_skip_tags."auto-task:friction-curation"]
@@ -762,12 +750,6 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
 [workflow.review_skip_tags."auto-task:security-review"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
-[workflow.review_skip_tags."auto-task:structure-sweep"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
-[workflow.review_skip_tags."auto-task:suppression-ratchet"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 ```
 
@@ -2952,7 +2934,7 @@ auto_tasks = "none"
 ```
 
 - **Every seeding path honours it.** `orbit workspace init`, `orbit workspace init --force`, `orbit workspace sync` and the create-only seeding `orbit init` runs over registered workspaces after an upgrade all reconcile through the policy. `"all"` also seeds a default a later release adds; `"none"` and a list never do.
-- **Admission.** A list name Orbit has never shipped fails config load, `orbit config set` and every seeding command, naming the key, the name and the shipped names. A name a later release retired still loads and simply seeds nothing. `orbit config keys` lists both keys.
+- **Admission.** A list name Orbit has never shipped fails config load, `orbit config set` and every seeding command, naming the key, the name and the shipped names. A name a later release retired or demoted still loads and simply seeds nothing; a demoted auto-task's existing copy stays as a workspace-local definition ([promotion on proven yield](design/auto-tasks/1_overview.md#promotion-to-the-shipped-defaults)). `orbit config keys` lists both keys.
 - **Narrowing retires by digest.** A default the policy leaves out is retired exactly as a default a release dropped: an unedited file Orbit seeded is removed, and a locally edited one moves under `.orbit/.retired-managed/` with a warning to migrate it under a new user-authored name. A file Orbit never recorded is left alone.
 - **Widening reseeds.** Adding a name back, or returning to `"all"`, seeds the shipped file again on the next sync.
 - **Opt-outs.** An opt-out recorded with `orbit auto-task delete` survives while the policy leaves that auto-task out. `orbit auto-task restore` refuses a left-out name and names the policy. For routines, a list policy is the durable per-name opt-out.

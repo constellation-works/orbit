@@ -3195,6 +3195,31 @@
           "no-diff-expected"
         ]
       }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "eba98d7549890535ee4f2e4d64042e51fd8df426636a072f272c39031023a932",
+      "revision": "5df2d4f60072866fff8d9cb90e335b766fe4d20f",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
     }
   ],
   "qa-full-sweep": [

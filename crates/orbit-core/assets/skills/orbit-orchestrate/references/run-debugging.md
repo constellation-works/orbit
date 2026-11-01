@@ -237,7 +237,7 @@ matches the artifacts before treating delivery as resolved. If the replay
 path or accepted history event is absent, the command has no accepted local
 replay evidence.
 
-This mechanism is separate from [hosted-check diagnosis](#hosted-check-failures-and-inherited-red-bases), which classifies provider jobs and their permitted landing reruns. A red or unproven base follows the separate [red-base hold procedure](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base). The weekly [`flaky-test-hunt` auto-task](../../orbit-setup/references/auto-tasks.md#the-twenty-three-seeded-definitions) analyzes hosted CI history and files tasks; it does not explain this local command replay.
+This mechanism is separate from [hosted-check diagnosis](#hosted-check-failures-and-inherited-red-bases), which classifies provider jobs and their permitted landing reruns. A red or unproven base follows the separate [red-base hold procedure](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base). A workspace-local `flaky-test-hunt` auto-task, where one is defined, analyzes hosted CI history and files tasks; it does not explain this local command replay.
 
 ## Hosted-check failures and inherited red bases
 

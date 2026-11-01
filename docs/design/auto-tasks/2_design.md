@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-31
+last_updated: 2026-11-01
 last_validated: 2026-10-29
 status: Accepted
 feature: auto-tasks
@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations-auto-tasks.js"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327, ORB-20704]
 ---
 
 # Auto-tasks — Design
@@ -425,70 +425,13 @@ at most two per run, `spawned_from` the hygiene task — never fixed in place,
 so each delivery stays a trivially reviewable comment-only change through
 normal validation and CI.
 
-### 4f. `design-sync`: design judgment alongside mechanical doc checks
+### 4f. Former defaults kept workspace-local
 
-The bundled `design-sync` default [ORB-18557] is disabled until enabled,
-runs every 720 minutes, uses `medium` complexity and `skip_if_open`, and
-mints a backlog chore tagged `design-sync` and `docs` with `dir:docs` as
-its footprint. It reads `docs/design/CONVENTIONS.md` before selecting work;
-repositories without it get a successful no-edit, no-filing no-op. No
-workspace identity, crew name or task ID is baked into its body, and its
-integration-branch placeholder is rendered by the same seeding path as
-the other defaults. `doc-duties` keeps its shipped mechanical checks and
-low complexity.
-
-Each run selects at most three feature folders, task-status changes since
-their previous ledger date first, then oldest reconciliation date with
-entry-doc `last_validated` and git-date fallbacks. Related tasks come from
-citations, separate path/slug/tag searches and verified relations, with each
-candidate confirmed through task records. Reconciliation checks stage,
-status, next, phase/slice citations, stale implementation prose and Task
-References against those records and the pinned checkout. A done task does
-not establish integration-branch delivery, and implementation never
-establishes owner approval of a Draft design. Historical decisions retain
-their reasoning and metadata; only links and Task References are corrected.
-
-The task corrects drift without changing design intent. An unexplained
-design/code divergence gets a cited open task or a proposed bug with the
-doc section, code location at HEAD, evidence, honest complexity, selectors
-for only the files its fix would modify, and a `spawned_from` relation.
-At most three tasks are filed per run, counting deprecation or archival
-follow-ups; these operations are never performed by the reconciliation
-itself. Frontmatter edits regenerate the repository's index. Fully checked
-features alone may advance an existing `last_validated` key.
-
-Every run attaches `design-sync-ledger.json` (schema version 1), including
-clean runs and repositories without conventions. Its `features` rows record
-selection order, changed-since-ledger, outcome, stage/status transitions,
-whether next changed, cited tasks and divergence tasks. Its cumulative
-`state` carries every other feature's date and outcome forward unchanged.
-The next run reads the newest completed design-sync chore's artifact, never
-its summary prose; missing ledgers and unverified evidence are explicit.
-Clean runs follow the workspace's validated no-diff evidence requirements.
-
-### 4g. `workflow-health-audit`: jobs and routines must produce their effects
-
-The weekly `workflow-health-audit` default inventories every effective job and
-routine, including disabled and custom definitions. Owner-only, non-reconciling
-inspection traces triggers through admission and terminal settlement, and checks
-durable effects rather than treating a green wrapper as proof of success. The
-seven-day scan uses up to 30 days for sparse definitions and records unobserved,
-unavailable and unvalidated rows explicitly. Existing isolated public-boundary
-fixtures can supply missing proof under the workspace's validation policy;
-production jobs and providers are never fired to manufacture coverage.
-
-Concrete, testable repairs become deduplicated proposed tasks. Other actionable
-obstacles become frictions naming the evidence or external action needed. Each
-pass files at most five new records and retains overflow. Its
-`workflow-health-audit.json` artifact contains the complete per-definition
-inventory, provenance, expected effects, evidence, validation gaps and finding
-dispositions. It complements `run-failure-patterns`: even a successful sweep
-with no output must explain eligible findings and their dispositions.
-
-Like other bundled defaults it is disabled until the operator enables it with
-`orbit auto-task toggle workflow-health-audit on`; `skip_if_open` prevents
-overlapping weekly audit tasks. Enabling or running the audit grants no
-production retry, dispatch, configuration, merge or release authority.
+`design-sync`, `workflow-health-audit` and six other former defaults are no
+longer shipped: they were demoted for unproven yield, and a workspace's
+existing copy is kept as a workspace-local definition
+([overview](1_overview.md#demoted-defaults)). Their design lives with the
+workspaces that keep them.
 
 ## 5. CRUD surfaces
 
@@ -578,6 +521,16 @@ it, and warns on each run that it occupies the bundled default's name; it is
 never retired, because retirement only considers names the previous manifest
 recorded. It stays the active definition and reports `body: forked` against
 the bundled body, so the settings-only fork migration leaves it alone too.
+
+A default demoted for unproven yield (`orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`)
+is not retired. Before reconciliation, `auto_tasks::demoted` drops each demoted
+name from the manifest and reports one `migrated` action, so reconciliation sees
+no recorded digest and leaves the file in place; the settings-table entry, which
+the loader applies by name, keeps applying. Create-only seeding releases
+nothing, `--check` reports the release without writing, and doctor's deprecated
+check and `--fix-stale-artifacts` skip those names while the manifest still
+records them. A compile-time assertion keeps the demoted list disjoint from the
+shipped and retired lists.
 
 ### 5c. Operator settings over bundled bodies
 

@@ -133,7 +133,6 @@ every action; current implementation and parked status are recorded above.
 | Later | Review severity suggestion | A confirmed finding and verified impact; choose one existing severity level or insufficient evidence. | Second opinion for the verifier; no defect confirmation, rejection or scorecard write by this service. |
 
 Existing instruction anchors for the later candidates are
-[backlog hygiene](../../../crates/orbit-core/assets/auto_tasks/backlog-hygiene.yaml),
 [friction curation](../../../crates/orbit-core/assets/auto_tasks/friction-curation.yaml),
 [escape-to-guard](../../../crates/orbit-core/assets/auto_tasks/escape-to-guard.yaml),
 [finding verification](../../../crates/orbit-core/assets/activities/verify_finding.yaml),

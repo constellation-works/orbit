@@ -326,9 +326,8 @@ They do not replace the list or bypass runtime capability, policy, filesystem,
 subprocess, or authentication checks. Invalid, inactive, wildcard, or
 non-agent-facing names fail dispatch before the provider starts.
 
-The shipped `backlog-hygiene`, `delivery-code-review`, and `friction-curation`
-defaults require `orbit.task.update` to persist their report or maintain task
-relations; `friction-curation` also requires `orbit.friction.update`, never the
+The shipped `delivery-code-review` and `friction-curation` defaults require
+`orbit.task.update` to persist their report or maintain task relations; `friction-curation` also requires `orbit.friction.update`, never the
 operator-only `orbit.friction.resolve`. These declarations can hold follower
 placement because task updates are denied in claimed mode and friction updates
 are outside the closed claimed-owner bridge. Required-tool metadata grants no
@@ -368,7 +367,7 @@ plugin being removed.
 
 <a id="the-twenty-three-seeded-definitions"></a>
 
-## The 27 seeded definitions
+## The 19 seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
@@ -462,18 +461,6 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   batch owed. Hands-on QA of recent changes is
   `qa-sweep`; hands-on QA of the whole product at one commit is
   `qa-full-sweep`.
-- **`design-sync`** (`medium`) — every 720 minutes. Reconciles at most three
-  feature folders against `docs/design/CONVENTIONS.md`, task status history
-  and code, changed since the prior ledger first, then oldest checked first.
-  Corrects stage, status, next, phase/slice citations, stale implementation
-  claims and Task References; acceptance needs recorded owner approval and
-  shipping needs integration-branch delivery. It preserves design intent and
-  historical decisions, finding or filing at most three proposed tasks for
-  unexplained divergences or archival follow-ups. Frontmatter changes
-  regenerate the repository's doc index. Every run attaches its cumulative
-  `design-sync-ledger.json`, including clean no-diff runs and a successful
-  no-edit, no-filing no-op when conventions are absent. It locks `dir:docs`;
-  `doc-duties` keeps its mechanical scope and low complexity.
 - **`doc-duties`** (`low`) — daily. Validates a small batch of the
   least-recently-attempted workspace documentation against current behavior,
   and corrects factual drift and broken links. Each run attaches a
@@ -517,8 +504,6 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   to `backlog`, and the run reads them back and edits only those files. A clean batch is a
   successful no-diff run with validated no-diff evidence, and the ledger is
   attached on every run.
-- **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
-  stalled and untriaged tasks. It does not change task status or dispatch work.
 - **`run-failure-patterns`** (`medium`) — weekly. Rate-driven: it always
   analyses the 7 days before scan start (the prior cursor only splits out
   new-since-cursor occurrences), computes per-job raw and folded failure rates
@@ -624,8 +609,8 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   filed for deletion by that pass. Compatibility retirement tasks are filed
   only when the repository documents a support window; otherwise the
   inventory is recorded in the run summary and nothing is filed for
-  retirement. It does not count lint suppressions; the `suppression-ratchet`
-  default owns that. Each run records a `code-health.json` artifact carried
+  retirement. It does not count lint suppressions; a workspace's own
+  `suppression-ratchet` definition owns that, when it has one. Each run records a `code-health.json` artifact carried
   between passes and files at most 6 `proposed` tasks, each with
   `context_files` and a `spawned_from` relation to the minted chore. The
   chore itself is tagged `no-diff-expected` and never builds or runs tests.
@@ -651,32 +636,6 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   coupling hotspot) rather than patching one regression. A run where every
   ranking sits below `min_support` is a successful no-op that reports each
   ranking's below-support counts and files nothing.
-- **`structure-sweep`** (`medium`) — weekly. Scans source files and test
-  files in one pass at the thresholds stated in its body and recorded in
-  every run summary (a non-test source file over 1,000 lines, a module
-  index file over 400 lines of mostly logic, and a test file over 2,000
-  lines). It discovers languages and source and test roots from tracked
-  files and keys layout candidates to the detected language's convention,
-  recording rejected leads with a reason. Each run files at most 4
-  `proposed` restructuring or test-reduction tasks, largest first and
-  grouped by package or subsystem, each with `context_files` and a
-  `spawned_from` relation to the minted chore, which is itself tagged
-  `no-diff-expected` and never builds or runs tests. A test-reduction
-  task keeps that file's coverage — every scenario survives or is named
-  with a reason — and reports the test count before and after.
-- **`crew-ladder-review`** (`medium`) — monthly, first day at 09:00 host-local
-  (`0 9 1 * *`), disabled until explicit opt-in. Reviews actual ladder and
-  operator experiment evidence by task tier and exact model, effort and
-  configuration digest, including mature quality, repair/regression and total
-  delivery cost/time. Shadow would-be assignments never prove candidate quality.
-  Every run attaches `crew-ladder-review.json`, fetching previous completed
-  review artifacts for deltas or recording a baseline. Files at most three
-  duplicate-checked proposed revisions/evaluations with precise targets and
-  evidence; it never rewrites pools/effort/order, changes modes or grading,
-  starts paid/live trials or concludes system-owned experiments. Off,
-  unconfigured, shadow-only and insufficient-history runs can succeed as
-  evidenced no-ops. Ordinary seeding selection, settings preservation, body
-  forks and opt-outs apply; no preset enables this review or the ladder.
 - **`auto-task-yield-review`** (`medium`) — monthly. Reports whether each
   enabled auto-task definition in this workspace pays for itself over the
   last 30 days: minted chores by final status and no-op successes, cost
@@ -688,53 +647,6 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   (cadence, merge, template fix or disable), each naming its definition
   and numbers. It never edits, toggles or mints definitions.
 
-- **`workflow-health-audit`** (`medium`) — weekly. Owner-only validation of
-  every loaded job and routine, from trigger and admission through durable
-  effects, including successful sweeps that produced no work. It uses run
-  evidence and safe existing isolated fixtures without firing production
-  workflows. Missing evidence stays explicit. Concrete repairs become
-  deduplicated proposed tasks; other actionable gaps become frictions, capped
-  at five new records with overflow in `workflow-health-audit.json`.
-
-- **`suppression-ratchet`** (`hard`) — weekly. Counts lint suppressions,
-  TODO/FIXME/HACK/XXX, ignored tests and language escape hatches per category
-  and package/area at a pinned integration-branch SHA. Language-specific
-  patterns exclude vendored, generated and build output; justified occurrences
-  are counted separately and never filed. `suppression-ratchet.json` stores
-  comparable counts and filing evidence: the first run is a baseline with no
-  filings; later runs file bugs for increases with introducing commits and at
-  most one small reduction in the highest-churn eligible area. At most three
-  proposed tasks, grouping increasing categories when necessary, each with
-  verified context and `spawned_from`. The minted chore is `no-diff-expected`
-  and never builds. This default owns the suppression counts delegated by
-  the portable `code-health-sweep`.
-- **`flaky-test-hunt`** (`hard`) — weekly. Hunts flaky tests in hosted CI
-  history over a 14-day window on the integration branch and recent
-  pull-request runs, through 2 signals: a failed run followed by a
-  succeeded rerun of the same SHA, and a fail-then-pass pair on
-  adjacent integration-branch commits when nothing relevant changed.
-  Test names and bounded failure excerpts come from the failed runs'
-  logs; unparseable logs are recorded as gaps. Each run attaches
-  `flaky-test-hunt.json` (flake count per test, occurrences with run
-  ids and SHAs, gaps) diffed against the previous run, and files at
-  most 4 `proposed` tasks tagged `ci-flake`, highest flake count
-  first, deduplicated against open `ci-flake` and CI-failure-sweep
-  tasks. Filed tasks require the root cause fixed or the test deleted
-  as redundant, never silent retries or quarantine without an exit
-  plan. With no hosted CI or unreachable history it is a successful
-  no-op stating the reason. The chore itself is tagged
-  `no-diff-expected` and never builds or runs tests.
-- **`ci-budget-watch`** (`medium`) — daily. Measures the main hosted test
-  job's elapsed time (discovered from the CI workflow files) against the
-  repository's documented CI budget (figure, statistic, and population
-  from the agent guides, contributing guide, and docs). Attaches
-  `ci-budget-watch/report.md` with the last 20 completed runs, the trend
-  against the previous report, and the measurement gaps. With no
-  documented budget it records the trend and files nothing; with no
-  hosted CI or unreachable history it is a successful no-op stating the
-  reason. When over budget it keeps exactly one open `ci-budget` task,
-  updating an existing one instead of filing a second. The chore itself
-  is tagged `no-diff-expected` and never edits source, CI, or tests.
 - **`agent-guidance-audit`** (`medium`) — every 3 days. Audits agent guidance
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`, `.agents/skills/`,
   `copilot-instructions.md` under `.github`, and Cursor rule files) at one pinned
@@ -756,6 +668,28 @@ precedence is `qa-sweep`, `security-review`, `code-review`, then
 `friction-curation`, regardless of tag order. Existing matching prefixes are
 not duplicated. Scheduler-minted parent tasks continue to use `[auto-task] `,
 which takes precedence when an `auto-task:<name>` provenance tag is present.
+
+## Shipped defaults are promoted on proven yield
+
+A definition does not start as a shipped default. It starts workspace-local
+(`orbit auto-task add`) and joins the shipped catalog only after it has shown
+yield in at least one workspace: tasks it filed that landed, or a diff of its
+own that merged, with a low share of duplicate or invalid rejections, as
+`auto-task-yield-review` measures them. A proposal to ship a new default cites
+that evidence: the workspace, the window, the runs, the landed tasks or merged
+diffs, and the rejection share. A default that stops paying for itself can be
+demoted the same way.
+
+These former defaults were demoted for unproven yield: `backlog-hygiene`,
+`ci-budget-watch`, `crew-ladder-review`, `design-sync`, `flaky-test-hunt`,
+`structure-sweep`, `suppression-ratchet` and `workflow-health-audit`.
+`blocked-task-triage` was retired earlier, superseded by final recovery. Orbit
+no longer seeds a demoted default, but a workspace that already has a copy
+keeps it: `orbit workspace sync` leaves the file, its settings and its schedule
+as they are and reports it once as `migrated` while it drops the copy's managed
+provenance. From then on it is a workspace-local definition that sync no longer
+refreshes, and `seeding.auto_tasks` still accepts its name. Delete it with
+`orbit auto-task delete <name>` if you no longer want it.
 
 ## Writing the body
 

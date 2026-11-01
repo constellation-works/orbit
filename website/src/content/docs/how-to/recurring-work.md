@@ -316,7 +316,7 @@ covers stalls and the shipped definitions.
 
 ## Built-in maintenance sweeps
 
-Use these six shipped auto-task definitions to find maintenance work in your
+Use these three shipped auto-task definitions to find maintenance work in your
 repository. They discover its languages, manifests, conventions, and CI
 configuration rather than assuming a particular toolchain. Start with the
 sweep that matches the decision you need to make:
@@ -325,18 +325,21 @@ sweep that matches the decision you need to make:
 |---|---|---|
 | `code-health-sweep` | You need evidence of dead code, duplication, unnecessary complexity, local architectural drift, or compatibility paths ready for retirement. | Every 4,320 minutes (3 days). |
 | `architecture-audit` | You need a package/module dependency graph and evidence for cycles, layering drift, misplaced abstractions, or package splits and merges. | Every 20,160 minutes (14 days). |
-| `structure-sweep` | Oversized or misgrouped source and test files make navigation and maintenance difficult. | Every 10,080 minutes (7 days). |
 | `dependency-freshness` | You need an inventory of outdated, unused, or duplicate dependencies and small upgrade/removal proposals. | `0 9 1 * *` — 09:00 on the first of each month. |
-| `flaky-test-hunt` | Hosted CI tests fail and then pass without a relevant change; you need failure-log evidence for fixes. | `15 8 * * 1` — Monday at 08:15. |
-| `ci-budget-watch` | You need hosted test-job timings compared with your repository's documented CI budget. | `45 1 * * *` — daily at 01:45. |
 
-All six ship **disabled**, with `skip-if-open` dedupe and assessment tasks
+All three ship **disabled**, with `skip-if-open` dedupe and assessment tasks
 entering `backlog`. Cron times use the host's local timezone; intervals are
 elapsed minutes, not fixed weekdays. The clock files a task; an agent must
 execute that task through your normal workflow to perform the assessment.
 The assessments gather evidence and file follow-up work, without editing
 your source, dependencies, tests, or CI configuration. They do not authorize
 dispatch, merge, or release.
+
+Earlier releases also shipped `structure-sweep`, `flaky-test-hunt` and
+`ci-budget-watch`. Orbit now ships a definition only after it has proven its
+yield as a workspace-local definition, so those three are no longer seeded. If
+your workspace already has a copy, `workspace sync` keeps it, with its
+settings, as a definition of your own that sync no longer refreshes.
 
 ### Inspect, preview, try, then enable
 
@@ -359,7 +362,7 @@ the text view shows the definition source, body management, settings, and
 schedule. `clock tick --dry-run --verbose` previews scheduling decisions
 without filing tasks. Disabled definitions do not fire. `show --preview`
 adds baseline/source diagnostics for delivery-triggered definitions; these
-six time-based definitions have no delivery baseline to preview.
+three time-based definitions have no delivery baseline to preview.
 
 Try one assessment before leaving it scheduled:
 
@@ -402,23 +405,12 @@ The source-oriented sweeps read a pinned integration-branch revision and
 discover your repository's own conventions. They do not run builds, tests,
 or timing experiments. Compatibility retirement needs a documented support
 window. Architecture changes need graph evidence; proposals that depend on
-unmeasured benefits get measurement prerequisites. Layout-only findings
-belong to `structure-sweep`, which uses source files over 1,000 lines,
-logic-heavy module indexes over 400 lines, and test files over 2,000 lines
-as size thresholds alongside language-specific layout checks.
+unmeasured benefits get measurement prerequisites.
 
 Dependency freshness needs ecosystem tooling, registry access, and upstream
 release notes to confirm upgrade targets. Missing tools are reported as
 gaps; unavailable network/registry access produces an evidence-bearing
 no-op. Advisory-covered dependencies belong to security work, not this sweep.
-
-The two CI sweeps need hosted CI configuration and granted, authenticated
-run-history tools; the flaky-test hunt also reads failure logs. They do not
-rerun tests locally. No hosted test job or unreachable history produces a
-report explaining the gap, not a claim that CI is healthy. Flake detection
-uses a 14-day window. CI budget watch measures the last 20 completed runs
-in the documented population; without a documented budget it records a
-trend and files no repair task.
 
 ### Find the evidence and follow-up work
 
@@ -436,14 +428,8 @@ Open the assessment task's artifacts and execution summary in the
   separately and do not count toward that cap.
 - **Architecture:** `architecture.json`, with up to three proposed
   improvement tasks, plus any measurement prerequisites.
-- **Structure:** scan evidence and candidate dispositions in the execution
-  summary, with up to four proposed tasks grouped by package or subsystem.
 - **Dependencies:** `dependency-freshness.json`, with up to three proposed
   upgrade or removal tasks.
-- **Flaky tests:** `flaky-test-hunt.json`, with up to four proposed
-  `ci-flake` fixes, highest flake count first.
-- **CI budget:** `ci-budget-watch/report.md`; an over-budget run comments on
-  existing `ci-budget` repair work or files one proposed repair task.
 
 The templates check existing work before filing and record covered,
 deferred, and rejected candidates. A run with no actionable findings can

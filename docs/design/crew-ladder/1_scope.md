@@ -47,10 +47,10 @@ separate evaluated proposal and an explicit adoption decision; §
 
 ## Monthly evidence review
 
-`crew-ladder-review` is a shipped, disabled monthly auto-task seeded by ordinary
-`orbit init` / `orbit workspace init`, with existing `all` / `none` / explicit
-seeding selection, settings preservation, fork and deletion opt-out behavior.
-Its `0 9 1 * *` schedule means the first day at 09:00 host-local; enabling the
+`crew-ladder-review` was a shipped default until it was demoted for unproven
+yield ([auto-task promotion](../auto-tasks/1_overview.md#promotion-to-the-shipped-defaults)).
+Orbit no longer seeds it; a workspace that already had a copy keeps it as a
+workspace-local definition, with its settings and schedule. Its `0 9 1 * *` schedule means the first day at 09:00 host-local; enabling the
 review does not enable the ladder. It mints a medium, backlog, no-diff chore
 with `skip_if_open` deduplication through the existing scheduler.
 

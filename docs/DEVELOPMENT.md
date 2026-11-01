@@ -546,7 +546,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   and `CI guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
-  400-second budget and the `ci-budget-watch` auto-task measure, and its
+  400-second budget measures, and its
   conclusion is the gate's result. The wait prints one
   `ci-await: <job> succeeded started=... completed=... elapsed_s=...` line per
   job. A shard's wait prints `ci-await: Test build step 'Upload nextest

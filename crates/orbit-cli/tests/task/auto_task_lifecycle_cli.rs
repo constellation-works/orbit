@@ -34,7 +34,7 @@ fn auto_task_add_settings_failure_leaves_no_definition_and_allows_retry() {
         return;
     }
     let fixture = Fixture::new();
-    let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
+    let shipped = fixture.json(&["auto-task", "show", "friction-curation", "--json"]);
     let shipped_path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
     let dir = shipped_path.parent().unwrap();
     // With existing definitions, the loader rejects settings before add can
@@ -82,17 +82,17 @@ fn auto_task_restore_manifest_failure_leaves_no_definition_and_allows_retry() {
         return;
     }
     let fixture = Fixture::new();
-    let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
+    let shipped = fixture.json(&["auto-task", "show", "friction-curation", "--json"]);
     let path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
     let original = fs::read(&path).unwrap();
     operator_json(
         &fixture,
-        &["auto-task", "delete", "backlog-hygiene", "--json"],
+        &["auto-task", "delete", "friction-curation", "--json"],
     );
     let manifest = path.parent().unwrap().join(".orbit-managed-assets.json");
     let saved_manifest = fs::read(&manifest).unwrap();
     fs::write(&manifest, "invalid manifest").unwrap();
-    let args = ["auto-task", "restore", "backlog-hygiene", "--json"];
+    let args = ["auto-task", "restore", "friction-curation", "--json"];
     let failure = fixture.command(&args).assert().failure();
     let stderr = String::from_utf8_lossy(&failure.get_output().stderr);
     assert!(
@@ -106,15 +106,15 @@ fn auto_task_restore_manifest_failure_leaves_no_definition_and_allows_retry() {
 
     fs::write(&manifest, saved_manifest).unwrap();
     let restored = fixture.json(&args);
-    assert_eq!(restored["name"], "backlog-hygiene");
+    assert_eq!(restored["name"], "friction-curation");
     assert_eq!(fs::read(&path).unwrap(), original);
     let state: serde_json::Value = serde_json::from_slice(&fs::read(&manifest).unwrap()).unwrap();
-    assert!(state["assets"]["backlog-hygiene"].is_string());
+    assert!(state["assets"]["friction-curation"].is_string());
     assert!(state.get("optedOut").is_none_or(|names| {
         !names
             .as_array()
             .unwrap()
-            .contains(&serde_json::json!("backlog-hygiene"))
+            .contains(&serde_json::json!("friction-curation"))
     }));
 }
 
@@ -190,7 +190,7 @@ fn auto_task_cli_update_preserves_explicit_empty_text_arguments() {
 
 fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     let fixture = Fixture::new();
-    let shipped = fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"]);
+    let shipped = fixture.json(&["auto-task", "show", "friction-curation", "--json"]);
     let shipped_path = PathBuf::from(shipped["definition_source"]["path"].as_str().unwrap());
     let original = fs::read(&shipped_path).unwrap();
     let removed = operator_json(
@@ -198,7 +198,7 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
         &[
             "auto-task",
             "delete",
-            "backlog-hygiene",
+            "friction-curation",
             "--reason",
             "Disposable fixture opt-out",
             "--json",
@@ -207,7 +207,7 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
     assert_eq!(removed["opted_out"], true);
     assert!(!shipped_path.exists());
     fixture
-        .command(&["auto-task", "show", "backlog-hygiene", "--json"])
+        .command(&["auto-task", "show", "friction-curation", "--json"])
         .assert()
         .failure();
     fixture
@@ -218,11 +218,11 @@ fn auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist() {
         !shipped_path.exists(),
         "sync must honor the recorded opt-out"
     );
-    let restored = fixture.json(&["auto-task", "restore", "backlog-hygiene", "--json"]);
+    let restored = fixture.json(&["auto-task", "restore", "friction-curation", "--json"]);
     assert_eq!(restored["enabled"], false);
     assert_eq!(fs::read(&shipped_path).unwrap(), original);
     assert_eq!(
-        fixture.json(&["auto-task", "show", "backlog-hygiene", "--json"])["enabled"],
+        fixture.json(&["auto-task", "show", "friction-curation", "--json"])["enabled"],
         false
     );
 
