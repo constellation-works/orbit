@@ -45,7 +45,14 @@ const CAPTURE_PARAMS: &[ParamSpec] = &[
         "id",
         ParamType::String,
         "Task ID whose `mocks/` artifacts name the views to capture.",
-        CliArgKind::flag("task"),
+        CliArgKind::Flag {
+            long: "id",
+            delimiter: None,
+            aliases: &["task"],
+            visible_aliases: &[],
+            value_name: None,
+            multiple: false,
+        },
         "Task whose mocks name the views to capture",
     )),
     both(

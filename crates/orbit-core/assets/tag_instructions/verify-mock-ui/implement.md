@@ -11,7 +11,7 @@ Run the self-check against your own working tree — the same capture the
 review will compare, before the review runs it:
 
 1. Before you change anything, run
-   `orbit visual capture --task <ID> --out "$ORBIT_SCRATCH_DIR/visual"` once
+   `orbit visual capture --id <ID> --out "$ORBIT_SCRATCH_DIR/visual"` once
    to see the starting point beside each mock.
 2. Build, then run it again. Read every `side-by-side.png` (mock left, your
    capture right) and answer the review's questions yourself for each mock:

@@ -251,7 +251,7 @@ configurable (`visual_review.block_at`).
 - A `verify-mock-ui` task with a mock whose name does not parse, or names a view, state,
   theme or width the manifest does not declare, is refused at admission naming the artifact
   and the reason.
-- On a kit host, `orbit visual capture --task <ID>` in the implementer's worktree writes, for
+- On a kit host, `orbit visual capture --id <ID>` in the implementer's worktree writes, for
   each mock, the capture of the uncommitted working tree and a side-by-side image with the
   mock, to scratch, and attaches nothing.
 - Given a delivery of a `verify-mock-ui` task on a kit host, Orbit attaches a capture of the
