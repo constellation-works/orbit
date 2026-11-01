@@ -442,7 +442,7 @@ const LIST: TaskOperation = TaskOperation {
                 "ops",
                 ParamType::Switch,
                 CliArgKind::flag("ops"),
-                "Output signal-tier JSON (id, title, type, status, priority only)",
+                "Output signal-tier JSON (id, parent_id, title, type, status, priority, complexity)",
             ),
             cli_only(
                 "full",

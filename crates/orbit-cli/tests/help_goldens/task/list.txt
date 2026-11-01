@@ -86,7 +86,7 @@ Options:
           Filter to tasks whose `context_files` selectors apply to this path. Selector forms supported: `file:`, `dir:`, `symbol:`, and bare paths. Bidirectional containment — passing a directory matches every selector under it
 
       --ops
-          Output signal-tier JSON (id, title, type, status, priority only)
+          Output signal-tier JSON (id, parent_id, title, type, status, priority, complexity)
 
       --full
           Show all table columns in text output

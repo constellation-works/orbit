@@ -325,6 +325,97 @@ fn an_agent_raises_a_decision_and_only_the_operator_answers_it() {
 }
 
 #[test]
+fn concurrent_raises_for_distinct_tasks_do_not_deadlock_on_bundle_locks() {
+    use std::sync::{Arc, Barrier};
+
+    let fx = Fixture::new();
+    let first = fx.task("First concurrent decision", "dk");
+    let second = fx.task("Second concurrent decision", "dk");
+    let barrier = Arc::new(Barrier::new(2));
+    let mut handles = Vec::new();
+    for (task, question) in [
+        (first.clone(), "First concurrent question?"),
+        (second.clone(), "Second concurrent question?"),
+    ] {
+        let runtime = fx.runtime.clone();
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            let mut input = raise_input(&task, question);
+            input["model"] = json!("claude");
+            orbit_core::test_support::with_decision_raise_checkpoint(
+                move || {
+                    barrier.wait();
+                },
+                || runtime.run_tool("orbit.decision.raise", input),
+            )
+        }));
+    }
+    let mut raised = Vec::new();
+    for handle in handles {
+        let result = handle.join().expect("raise thread panicked");
+        let value = result.unwrap_or_else(|error| {
+            panic!("concurrent raise must finish without a lock timeout: {error}")
+        });
+        assert_eq!(value["deduplicated"], false, "{value}");
+        raised.push(value);
+    }
+    assert_ne!(raised[0]["id"], raised[1]["id"]);
+    assert_eq!(
+        fx.runtime.get_task_decision_requests(&first).unwrap().len(),
+        1
+    );
+    assert_eq!(
+        fx.runtime
+            .get_task_decision_requests(&second)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn concurrent_same_question_raises_on_one_task_deduplicate() {
+    use std::sync::{Arc, Barrier};
+
+    let fx = Fixture::new();
+    let task = fx.task("Shared concurrent decision", "dk");
+    let barrier = Arc::new(Barrier::new(2));
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let runtime = fx.runtime.clone();
+        let barrier = Arc::clone(&barrier);
+        let task = task.clone();
+        handles.push(std::thread::spawn(move || {
+            let mut input = raise_input(&task, "Same concurrent question?");
+            input["model"] = json!("claude");
+            orbit_core::test_support::with_decision_raise_checkpoint(
+                move || {
+                    barrier.wait();
+                },
+                || runtime.run_tool("orbit.decision.raise", input),
+            )
+        }));
+    }
+    let mut raised = Vec::new();
+    for handle in handles {
+        raised.push(handle.join().expect("raise thread panicked").unwrap());
+    }
+    assert_eq!(raised[0]["id"], raised[1]["id"], "{raised:?}");
+    assert_eq!(
+        raised
+            .iter()
+            .filter(|value| value["deduplicated"] == true)
+            .count(),
+        1,
+        "{raised:?}"
+    );
+    assert_eq!(
+        fx.runtime.get_task_decision_requests(&task).unwrap().len(),
+        1
+    );
+}
+
+#[test]
 fn raising_is_refused_for_bad_input_agent_crews_and_past_the_caps() {
     let fx = Fixture::new();
 
