@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010, ORB-15327]
-last_validated: 2026-10-25
+last_validated: 2026-11-01
 ---
 
 # Full pre-release QA sweep
@@ -462,15 +462,20 @@ candidate earn those assertions.
 
 The command harness requires a POSIX host. It drains stdout and stderr while
 retaining at most one MiB per stream and marks truncated output. A disposable
-supervisor owns each command's process group until cleanup finishes. Timeout,
-normal command completion, and loss of the QA parent sweep the owned group.
-The report records whether cleanup was verified. A refused group signal or
-expired reap deadline fails with an explicit unverified cleanup outcome;
-timeout and lost-supervisor outcomes also fail. The harness scratch directory
-itself is removed with cleanup errors ignored, so a fixture child that
-outlives its test and writes into the tree during removal cannot lose the
-report; any leftover paths are recorded in the report's `scratch_cleanup`
-field as a warning instead.
+supervisor owns each command's process group and is a child subreaper, so a
+worker that starts its own session stays in the supervisor's tree. After the
+command leaves, the supervisor records that worker's process id, process
+group, working directory and command line, and waits until the process has
+exited before publishing the command result. Timeout, normal completion,
+owner loss and unwind all wait for that exit. The report records whether
+cleanup was verified. A refused group signal or expired reap deadline fails
+with an explicit unverified cleanup outcome; timeout and lost-supervisor
+outcomes also fail. The harness scratch directory is removed only after owned
+workers whose working directory is still under that root have exited.
+Removal still ignores ordinary cleanup errors, so a late fixture write during
+removal cannot lose the report. Leftover paths and any detached worker that
+is still alive are recorded on the report's `scratch_cleanup` field
+(`detached_workers`); a survivor is a warning rather than a clean cleanup.
 `python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.
