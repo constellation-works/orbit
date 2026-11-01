@@ -17,9 +17,9 @@ use std::sync::Arc;
 use orbit_core::application::codebase::{TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskinessModel};
 
 use orbit_core::application::task::{
-    PullRequestLinks, TaskOsReadout, TaskRow, job_run_is_locally_navigable, link_pull_requests,
-    mark_readiness_preparing, summary_status_transitions, task_detail_with_dashboard_extras,
-    task_pilot_warnings, tasks_in_pilot_preparation,
+    self, PullRequestLinks, TaskOsReadout, TaskRow, job_run_is_locally_navigable,
+    link_pull_requests, mark_readiness_preparing, summary_status_transitions,
+    task_detail_with_dashboard_extras, task_pilot_warnings, tasks_in_pilot_preparation,
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
@@ -113,7 +113,8 @@ pub(crate) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Tas
 /// run's recorded branch and worktree path on its execution machine. A task
 /// that was piloted, reviewed or recovered carries `handled_by`: those hands
 /// in time order, each derived from a durable record. Every task carries
-/// `riskiness`, as its list row does.
+/// `riskiness`, as its list row does, and an active triage/recovery binding
+/// carries `active_triage` on both surfaces.
 pub(crate) fn task_detail_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
@@ -173,6 +174,7 @@ pub(crate) struct TaskListProjection {
     delivery_attention: BTreeMap<String, Value>,
     /// Read once, on the page's first proposed or backlog row.
     preparing: OnceCell<BTreeSet<String>>,
+    active_triage: OnceCell<Result<BTreeMap<String, Value>, String>>,
     /// Reads the origin remote once, on the page's first unlinked PR ref.
     pull_request_links: PullRequestLinks,
     /// The page's riskiness model; `None` when it is unavailable.
@@ -187,6 +189,7 @@ impl TaskListProjection {
             local_machine_id: runtime.automation_machine_identity().map(str::to_string),
             delivery_attention: BTreeMap::new(),
             preparing: OnceCell::new(),
+            active_triage: OnceCell::new(),
             pull_request_links: PullRequestLinks::new(runtime),
             riskiness: None,
         }
@@ -203,7 +206,7 @@ impl TaskListProjection {
     }
 
     /// `runtime` is the one this projection was built from; it is read only
-    /// for the pilot preparations behind `readiness.preparing`.
+    /// for pilot preparation and active triage/recovery bindings.
     pub(crate) fn row_to_json(
         &self,
         runtime: &OrbitRuntime,
@@ -272,6 +275,16 @@ impl TaskListProjection {
         );
         if let Some(attention) = self.delivery_attention.get(&task.id) {
             object.insert("delivery_attention".to_string(), attention.clone());
+        }
+        let triage = self
+            .active_triage
+            .get_or_init(|| {
+                task::active_task_triage_map(runtime).map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(|error| OrbitError::Execution(error.clone()))?;
+        if let Some(triage) = triage.get(&task.id) {
+            object.insert("active_triage".to_string(), triage.clone());
         }
         object.insert(
             "riskiness".to_string(),

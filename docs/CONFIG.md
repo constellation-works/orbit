@@ -892,6 +892,16 @@ Task list/detail JSON and MCP expose the same `pilot_warnings` array of
 `{kind, text}` entries, and CLI readiness uses that source for warning holds.
 The dashboard drain payload omits per-finding text.
 
+Task rows and details also show a blue **triaging** pill while a triage or
+recovery run is bound to the task. It links to that run in the task's workspace;
+its tooltip names the recorded crew, or says the crew assignment is pending.
+The dashboard computes this from active escalation preparation and recovery
+checkpoints, including inline final recovery and the blocked-task backstop.
+The dashboard task payload exposes `active_triage`, an array of `{run_id, crew}`
+entries, only while such a binding is active. Finishing the run clears it;
+an inline recovery decision also clears it while delivery continues. The owner
+view uses the same projection in local and federated lists.
+
 The pilot checks concrete contracts required by a task's description and
 criteria against pinned source: tools and their output fields, schemas, port
 methods, config sections and authority requirements. It reads the workspace's

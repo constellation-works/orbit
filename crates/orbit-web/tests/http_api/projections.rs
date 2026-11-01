@@ -72,6 +72,117 @@ fn task_detail(server: &Server, id: &str) -> Value {
 fn task_page(server: &Server) -> Value {
     get_ok(server, "/api/tasks?workspace=ws_http_fixture")
 }
+
+projections_test!(
+    task_rows_and_details_show_active_triage_and_recovery,
+    fixture,
+    Fixture::new(),
+    {
+        let server = fixture.server(true);
+        let id = send_ok(
+            &server,
+            "POST",
+            "/api/tasks?workspace=ws_http_fixture",
+            json!({
+                "title": "Active intervention", "description": "Triage activity is visible",
+                "acceptance_criteria": ["Show the assigned run"], "complexity": "low"
+            }),
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let rt = &fixture.runtime;
+        for (index, job) in [
+            "escalation_triage_pipeline",
+            "task_pr_pipeline",
+            "blocked_task_recovery_pipeline",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let assert_visible = |expected: &Value| {
+                assert_eq!(
+                    &task_detail(&server, &id)["active_triage"],
+                    expected,
+                    "detail for {job}"
+                );
+                assert_eq!(
+                    &row_of(&task_page(&server), &id)["active_triage"],
+                    expected,
+                    "list for {job}"
+                );
+                let all = get_ok(&server, "/api/tasks/all");
+                assert_eq!(
+                    &row_of(&all, &id)["active_triage"],
+                    expected,
+                    "federated owner list for {job}"
+                );
+            };
+            let run_id = format!("jrun-active-triage-{index}");
+            let mut run = fixture.seed_run(&run_id, job, JobRunState::Pending);
+            run.input = Some(json!({"task_id": id, "task_ids": [id]}));
+            fixture.save_run(&run);
+            assert_visible(&if index == 1 {
+                Value::Null
+            } else {
+                json!([{"run_id": run_id, "crew": null}])
+            });
+            run.state = JobRunState::Running;
+            fixture.save_run(&run);
+            let mut state =
+                PipelineState::new(run_id.clone(), job.to_string(), run.input.clone().unwrap());
+            if index == 0 {
+                state.step_states.insert(0, JobRunState::Success);
+                state.step_outputs.insert(
+                    0,
+                    json!({
+                        "workspace_path": rt.paths().repo_root.canonicalize().unwrap(),
+                        "mode": "explicit", "task_ids": [id],
+                        "tasks": [{"task_id": id, "crew": "triager"}], "partitions": []
+                    }),
+                );
+            } else {
+                state.activity_crew_draws.insert(
+                    orbit_types::workflow::FINAL_RECOVERY_CREWS_KEY.into(),
+                    orbit_types::workflow::ActivityCrewDraw {
+                        crew: "recoverer".into(),
+                        source: "fixture".into(),
+                        eligible_pool: vec![],
+                    },
+                );
+                if index == 1 {
+                    state.final_recovery = Some(serde_json::from_value(json!({
+                        "key": {"run_id": run_id, "attempt": 1}, "failed_step_id": "implement_bundle",
+                        "task_id": id, "admitted_at": Utc::now()
+                    })).unwrap());
+                } else {
+                    state.step_states.insert(0, JobRunState::Success);
+                    state
+                        .step_outputs
+                        .insert(0, json!({"proceed": true, "recovery": {"task_id": id}}));
+                }
+            }
+            rt.write_run_state(&run_id, &state).unwrap();
+            let expected =
+                json!([{"run_id": run_id, "crew": if index == 0 {"triager"} else {"recoverer"}}]);
+            assert_visible(&expected);
+            // A resumed delivery keeps the checkpoint after its agent is done.
+            if index == 1 {
+                state.final_recovery.as_mut().unwrap().decision =
+                    Some(orbit_types::workflow::FinalRecoveryDecision::Resume {
+                        step_id: "implement_bundle".into(),
+                        rationale: "Repair handed back".into(),
+                    });
+                rt.write_run_state(&run_id, &state).unwrap();
+                assert_visible(&Value::Null);
+            }
+            run.state = JobRunState::Success;
+            run.finished_at = Some(Utc::now());
+            fixture.save_run(&run);
+            assert_visible(&Value::Null);
+        }
+    }
+);
 fn rows_of(page: &Value) -> &Vec<Value> {
     page["items"]
         .as_array()

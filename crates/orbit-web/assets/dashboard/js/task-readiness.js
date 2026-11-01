@@ -68,6 +68,24 @@ export function buildPilotWarningBadge(task) {
   }, [el("span", { text: "⚠", "aria-hidden": "true" }), ` pilot warnings · ${count}`])] : [];
 }
 
+// The server binds these runs to the task; ordinary delivery runs do not
+// imply triage. Keep the workspace on links from an aggregate owner view.
+export function buildActiveTriageBadges(task) {
+  return (Array.isArray(task.active_triage) ? task.active_triage : []).map((triage) => {
+    const title = triage.crew ? `Triaging with ${triage.crew}` : "Triaging · crew assignment pending";
+    const link = el("a", {
+      class: "chip active-triage-chip",
+      text: "triaging",
+      title,
+      "aria-label": `${title}; view run`,
+    });
+    link.href = taskShared.taskRunHref(task, triage.run_id);
+    link.addEventListener("click", (event) => event.stopPropagation());
+    link.addEventListener("keydown", (event) => event.stopPropagation());
+    return link;
+  });
+}
+
 function deliveryAttentionLabel(attention) {
   if (!attention) return null;
   if (attention.blocker === "failed_checks") return "CI failed";

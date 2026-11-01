@@ -802,6 +802,9 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
     row-gap: 4px;
   }
   .row > .title-line { grid-area: title; }
+  .row > .title-line:has(.active-triage-chip) { flex-wrap: wrap; height: auto; }
+  .row .title-line:has(.active-triage-chip) > .title { flex: 1 1 100%; }
+  .title-tags:has(.active-triage-chip) { flex: 0 1 auto; flex-wrap: wrap; max-width: 100%; }
   .row > .row-meta { grid-area: meta; }
   .row > .crew-cell { grid-area: crew; }
   .row > .task-quick-cell { grid-area: quick; }
@@ -1192,6 +1195,24 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
   border-color: var(--warn-line);
   white-space: nowrap;
 }
+
+.chip.active-triage-chip {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elev));
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  text-decoration: none;
+  white-space: nowrap;
+}
+.chip.active-triage-chip::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.chip.active-triage-chip:hover { text-decoration: underline; }
+.chip.active-triage-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-active-triage { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
 
 .delivery-attention-badge {
   color: var(--warn-fg);
