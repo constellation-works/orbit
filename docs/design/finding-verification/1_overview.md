@@ -1,8 +1,8 @@
 ---
 title: Finding Verification — Overview
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Accepted
 stage: shipped
 next: "—"
@@ -50,7 +50,7 @@ first is far cheaper, and it gives the operator the evidence either way.
 ## 2. Core Concepts
 
 - **Review finding** — a task of type `bug` tagged `code-review`,
-  `delivery-code-review`, `security-review` or `qa-sweep`.
+  `delivery-code-review`, `security-review`, `qa-sweep` or `visual-review`.
 - **Verdict** — `CONFIRMED` or `REJECTED`, with confidence, reasoning and
   evidence cited as `path:line` at the verified sha.
 - **Verification record** — the trusted `finding_verified` history entry that
