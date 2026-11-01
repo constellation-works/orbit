@@ -21,7 +21,7 @@
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
 import { renderRuns } from './runs.js';
-import { AGENT_ROLES } from './agents.js';
+import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
 
@@ -180,9 +180,11 @@ function healthHash(ctx) {
   return `#${incidentsRoute(ctx, view)}?${windowQuery()}`;
 }
 
-/// The canonical hash of the Agents role on screen, with the shared window.
+/// The canonical hash of the Agents role on screen, with the shared window
+/// and the panel's own `span` (a count window such as `last500`, or a
+/// calendar one), so a reload or copied link reopens the same comparison.
 function agentsHash(ctx) {
-  return `#analytics/agents/${ctx.getAgentsRole()}?${windowQuery()}`;
+  return `#analytics/agents/${ctx.getAgentsRole()}?${windowQuery()}&span=${encodeURIComponent(agentsSpan())}`;
 }
 
 /// The canonical hash of the Analytics view on screen. Codebase has its own
@@ -683,6 +685,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     setAnalyticsSubtabImpl(ctx, sub, view);
     setCostTabView(sub === "cost" ? query.get("tab") : null);
     if (sub === "agents") {
+      adoptAgentsSpan(query.get("span"));
       const role = AGENT_ROLES.includes(segments[2]) ? segments[2] : ctx.getAgentsRole();
       setAgentsRoleImpl(ctx, role);
     }
