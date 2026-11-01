@@ -371,7 +371,7 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
 
     let duplicate = fx
         .raise(raise_input(
-            &fx.task("Duplicate price question"),
+            &waiting,
             "Which price do we ship?",
             Some("pricing/sign-off"),
         ))
@@ -389,7 +389,7 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
 
     let still_open = fx
         .raise(raise_input(
-            &fx.task("Still the open question"),
+            &waiting,
             "Which price do we ship?",
             Some("pricing/sign-off"),
         ))
@@ -506,7 +506,7 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
     );
     let again = fx
         .raise(raise_input(
-            &fx.task("Repeat the answered wording"),
+            &decision,
             "Do we raise this year's price?",
             Some("pricing/sign-off"),
         ))
