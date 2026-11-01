@@ -164,11 +164,17 @@ cleared) and writes a new `current` rule. A rule whose `depends_on` digest no
 longer matches, or whose `review_by` has passed, becomes `stale`. An already
 superseded rule stays superseded. Replaying an answer a rule already cites
 (the default history run does) changes nothing: only a new human answer
-refreshes a rule's digests and review date, and a stale rule is otherwise
+later than the recorded citation refreshes a rule's digests and review date,
+and a stale rule is otherwise
 re-confirmed by an edit in that pull request. A bare topic that names a rule
 id held by exactly one decision file updates that file's rule; otherwise it
 keeps the `topic/topic` default. Only a `current` rule whose review date has not passed and
 whose digests still match is injected or cited.
+
+An older replay cannot replace a choice with a later human citation already
+recorded for that rule id, including a citation kept in its superseded
+history. Consolidation still emits proposal text only; a human merge is the
+curation step.
 
 `auto: true` is operator-only (`orbit decision rule-auto`). An agent cannot
 set it, and neither can the precedent actor. When `orbit.decision.raise`

@@ -356,10 +356,19 @@ fn apply_answer(
         .filter(|note| !note.is_empty())
         .unwrap_or("The operator chose this option.")
         .to_string();
-    // A replayed answer is history, not a new confirmation: it must not
-    // refresh digests or the review date, and an older answer must not
-    // supersede a rule a later answer already replaced.
+    // A replayed answer is history, not a new confirmation. It must not
+    // refresh authority or replace a choice with a later citation in its
+    // current or superseded history.
     let superseded_prefix = format!("{rule_id}--superseded-");
+    if rules.iter().any(|rule| {
+        (rule.id == rule_id || rule.id.starts_with(&superseded_prefix))
+            && rule
+                .citations
+                .iter()
+                .any(|citation| citation.date.as_str() > answer.answered_on.as_str())
+    }) {
+        return;
+    }
     if rules.iter().any(|rule| {
         (rule.id == rule_id || rule.id.starts_with(&superseded_prefix))
             && rule.citations.contains(&citation)
