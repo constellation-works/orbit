@@ -311,9 +311,11 @@ pub(in crate::executor::automation::vcs::operations) fn pr_status(
 ///
 /// `gh pr view --json statusCheckRollup` does not say, so this asks the
 /// GraphQL API for each rollup context's `isRequired` against the PR, with a
-/// check run's own and its app's identity. The
-/// answer carries the head commit it describes; the reader in `pr/answers.rs`
-/// refuses one that is truncated or names another head.
+/// check run's own and its app's identity. It also lists the names of every
+/// failed check run on that commit, superseded runs included, so a skipped
+/// or neutral rerun of a failed required check is told apart from one that
+/// never failed. The answer carries the head commit it describes; the reader
+/// in `pr/answers.rs` refuses one that is truncated or names another head.
 pub(in crate::executor::automation::vcs::operations) fn pr_required_checks(
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -329,7 +331,10 @@ pub(in crate::executor::automation::vcs::operations) fn pr_required_checks(
         statusCheckRollup{contexts(first:100){pageInfo{hasNextPage} nodes{__typename \
         ... on CheckRun{databaseId name status conclusion isRequired(pullRequestNumber:$pr) \
         checkSuite{app{databaseId} workflowRun{workflow{name}}}} \
-        ... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}}}}}}}}";
+        ... on StatusContext{context state isRequired(pullRequestNumber:$pr)}}}} \
+        checkSuites(first:100){pageInfo{hasNextPage} nodes{checkRuns(first:100,filterBy:{\
+        checkType:ALL,status:COMPLETED,conclusions:[FAILURE,CANCELLED,TIMED_OUT,ACTION_REQUIRED,\
+        STARTUP_FAILURE,STALE]}){pageInfo{hasNextPage} nodes{name}}}}}}}}}}";
     let args = vec![
         "api".to_string(),
         "graphql".to_string(),

@@ -310,6 +310,50 @@ fn absent_context_refreshes_an_accepted_handoff_without_changing_acceptance() {
     );
 }
 
+/// [ORB-20615] The accepted landing merges a mergeable head whose required
+/// check was skipped and never failed on it, as branch protection does. A
+/// skipped rerun of a check that failed on that head still refuses.
+#[test]
+fn regression_never_failed_skipped_required_check_lands_accepted_handoff() {
+    isolated(
+        "absent_context::regression_never_failed_skipped_required_check_lands_accepted_handoff",
+        |sandbox| {
+            for (case, failed, lands) in [
+                ("never_failed", "", true),
+                ("failed_then_skipped", "Protected (rust)\n", false),
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = setup(row, NEW);
+                    let mut host = accepted_landing(&fx, host);
+                    // An owed hosted check needs an explicit success; this
+                    // case is about branch-protection required checks only.
+                    host.context.owed_hosted_checks.clear();
+                    // Already current with its base, so no refresh re-gates it.
+                    fs::write(fx.forge.join("base-applied"), "current").unwrap();
+                    fs::write(fx.forge.join("required-skipped"), "").unwrap();
+                    fs::write(fx.forge.join("failed-history"), failed).unwrap();
+                    let landed = execute_deterministic_action(
+                        &host,
+                        "handoff_land",
+                        &json!({}),
+                        &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":30}),
+                        false,
+                        &HashMap::new(),
+                        None,
+                    );
+                    let merged = fs::read_to_string(fx.forge.join("mutations"))
+                        .unwrap_or_default()
+                        .contains("merge");
+                    assert_eq!(merged, lands, "{case}: {landed:?}");
+                    if lands {
+                        assert_eq!(landed.unwrap()["phase"], "landed", "{case}");
+                    }
+                });
+            }
+        },
+    );
+}
+
 #[test]
 fn review_decision_variants_gate_accepted_landing_and_preserve_spelling() {
     isolated(
@@ -1294,7 +1338,7 @@ pub(crate) fn adopted_policy_cases(cases: &[&str]) {
                     &host,
                     "handoff_land",
                     &json!({}),
-                    &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":0}),
+                    &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":30}),
                     false,
                     &HashMap::new(),
                     None,

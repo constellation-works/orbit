@@ -2004,7 +2004,10 @@ existing recovery activities, final validation and push do the repair:
   against its latest head-bound required-check results before merge. A red
   required result stays blocking regardless of attribution; only a later
   passing run on that same head or on the repaired head clears it. Skipped or
-  neutral reruns do not clear a failed required check. A failed required check
+  neutral reruns do not clear a required check that failed on that head, and
+  neither does a skip when the head's check history is unreadable. A required
+  check that concluded skipped or neutral without ever failing on the head (a
+  docs-only change) is satisfied, as branch protection reads it. A failed required check
   whose job log shows a code failure is compared with the current base
   before a repair is admitted. Orbit reads the latest push run of the same
   workflow on the exact base tip. When that run skipped the job (a docs-only

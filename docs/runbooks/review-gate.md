@@ -284,7 +284,7 @@ The owner enforces what it is owed in two places:
   `handoff_land` stops in review after `max_base_ci_cycles` observation cycles
   (default 3) or `max_wait_seconds` (default 3600 seconds), whichever comes
   first, and names the missing evidence. Branch protection may still treat a skipped or
-  neutral required check as satisfied; this gate does not. The candidate
+  neutral rerun of the failed required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
 
   Auto-fix completion uses a separate repair-admission policy: a source
@@ -294,7 +294,10 @@ The owner enforces what it is owed in two places:
   still requires the latest required results on the head being merged to
   pass, even when GitHub reports it as mergeable. A flaky or base-suspect
   classification never clears a red required check; only a later passing
-  run of that check on the same head or the repaired head does. Remaining
+  run of that check on the same head or the repaired head does. A skipped
+  or neutral required result counts as passed only when the head's check
+  history shows no failed run of that check, such as a docs-only change whose
+  required job never ran. Remaining
   suspicion records are written once per head, check and signature across
   base-tip changes.
 

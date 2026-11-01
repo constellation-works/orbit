@@ -1736,7 +1736,9 @@ one. From then on:
     even when the base tip changes. Every merge path separately checks the
     latest required results on the head being merged: neither flaky nor
     base-suspect attribution can clear a red check. A later passing run on
-    that head, including a repaired head, must clear it before merge.
+    that head, including a repaired head, must clear it before merge. A
+    skipped or neutral required result passes only when no run of that check
+    failed on the head.
     Without decisive evidence, `handoff_land` stops in review after
     `max_base_ci_cycles` (default 3) observation cycles or the existing
     `max_wait_seconds` deadline (default 3600 seconds), whichever comes first.
