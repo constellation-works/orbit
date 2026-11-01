@@ -295,6 +295,108 @@ fn every_worker_launch_outranks_the_user_manager_as_an_oom_victim() {
     }
 }
 
+/// A script scope with the user bus available launches under
+/// `orbit-script-*` [ORB-20661].
+#[test]
+fn script_scope_launcher_scopes_when_the_launch_env_reaches_the_bus() {
+    use super::super::scope::{
+        STRICT_WORKER_CONTAINMENT_ENV, ScriptScopeLauncher, script_scope_launcher_with_availability,
+    };
+    use orbit_common::test_env;
+
+    let _environment = test_env::scoped([(STRICT_WORKER_CONTAINMENT_ENV, None)]);
+    let launcher_env: Vec<(String, String)> = [
+        ("XDG_RUNTIME_DIR", "/run/user/1000"),
+        ("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus"),
+    ]
+    .iter()
+    .map(|(name, value)| (name.to_string(), value.to_string()))
+    .collect();
+    let launcher = script_scope_launcher_with_availability(
+        "run-1",
+        "step-1",
+        &settings(MemoryLimit::Infinity, MemoryLimit::Infinity),
+        &launcher_env,
+        Some(Ok(())),
+    )
+    .expect("available user scopes scope the script");
+    let ScriptScopeLauncher::Scoped { unit, argv } = launcher else {
+        panic!("available user scopes must scope the script, got {launcher:?}");
+    };
+    assert!(
+        unit.starts_with("orbit-script-") && unit.ends_with(".scope"),
+        "script scope unit must carry the orbit-script prefix: {unit}"
+    );
+    assert_eq!(argv.first().map(String::as_str), Some("systemd-run"));
+    assert!(argv.iter().any(|arg| arg == "--user"));
+    assert!(
+        argv.iter().any(|arg| arg == &format!("--unit={unit}")),
+        "script scope argv must name its unit: {argv:?}"
+    );
+}
+
+/// When the launch environment cannot reach the user bus, the probe says so
+/// before anything spawns: `warn` runs the script uncontained with that
+/// reason, `strict` refuses naming the missing bus [ORB-20661].
+#[cfg(target_os = "linux")]
+#[test]
+fn script_scope_probe_reports_a_missing_bus_in_the_launch_env() {
+    use super::super::scope::{
+        STRICT_WORKER_CONTAINMENT_ENV, ScriptScopeLauncher,
+        script_scope_launcher_with_availability, user_scope_availability_in_env,
+    };
+    use orbit_common::test_env;
+
+    let _environment = test_env::scoped([(STRICT_WORKER_CONTAINMENT_ENV, None)]);
+    // No bus locators: the launch-environment probe must fail up front,
+    // without spawning `systemd-run`.
+    let launcher_env: Vec<(String, String)> = [("PATH", "/usr/bin:/bin")]
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    let reason = user_scope_availability_in_env(&launcher_env)
+        .expect_err("a launch environment without bus locators cannot reach the user bus");
+    for name in ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] {
+        assert!(
+            reason.contains(name),
+            "the missing-bus reason must name {name}: {reason}"
+        );
+    }
+
+    let warn = script_scope_launcher_with_availability(
+        "run-1",
+        "step-1",
+        &settings(MemoryLimit::Infinity, MemoryLimit::Infinity),
+        &launcher_env,
+        None,
+    )
+    .expect("warn containment falls back uncontained");
+    let ScriptScopeLauncher::Uncontained { reason } = warn else {
+        panic!("warn containment must run uncontained, got {warn:?}");
+    };
+    assert!(
+        reason.contains("XDG_RUNTIME_DIR"),
+        "the recorded uncontained reason must name the missing bus: {reason}"
+    );
+
+    let strict_settings = WorkerContainmentSettings {
+        strict: true,
+        ..settings(MemoryLimit::Infinity, MemoryLimit::Infinity)
+    };
+    let refusal = script_scope_launcher_with_availability(
+        "run-1",
+        "step-1",
+        &strict_settings,
+        &launcher_env,
+        None,
+    )
+    .expect_err("strict containment refuses a script without its scope");
+    assert!(
+        refusal.contains("XDG_RUNTIME_DIR") && refusal.contains("DBUS_SESSION_BUS_ADDRESS"),
+        "the strict refusal must name the missing bus locators: {refusal}"
+    );
+}
+
 fn command_args(command: &Command) -> Vec<&str> {
     command
         .get_args()

@@ -71,6 +71,13 @@ pub(crate) const WORKER_OOM_SCORE_ADJ: i32 = 500;
 /// containment policy for every leaf it admits.
 pub(crate) const STRICT_WORKER_CONTAINMENT_ENV: &str = "ORBIT_WORKER_CONTAINMENT_STRICT";
 
+/// The user-bus locators `systemd-run --user` needs to reach the user
+/// manager. They belong only in the scope launcher's environment: the
+/// script's own environment is composed separately and never carries them
+/// unless a manifest grant puts them there.
+pub(crate) const USER_BUS_LOCATOR_ENV_VARS: [&str; 2] =
+    ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"];
+
 /// The limits applied to one worker scope, admitted from `machine.worker_*`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WorkerLimits {
@@ -305,6 +312,21 @@ pub(crate) fn script_scope_launcher(
     run_id: &str,
     step_id: &str,
     settings: &WorkerContainmentSettings,
+    launcher_env: &[(String, String)],
+) -> Result<ScriptScopeLauncher, String> {
+    script_scope_launcher_with_availability(run_id, step_id, settings, launcher_env, None)
+}
+
+/// [`script_scope_launcher`] with the availability verdict supplied, so a
+/// test states the probe outcome instead of reaching the host's user
+/// manager. `None` probes in `launcher_env`, the environment the launch
+/// itself will use.
+pub(crate) fn script_scope_launcher_with_availability(
+    run_id: &str,
+    step_id: &str,
+    settings: &WorkerContainmentSettings,
+    launcher_env: &[(String, String)],
+    availability: Option<Result<(), String>>,
 ) -> Result<ScriptScopeLauncher, String> {
     let inherited = std::env::var_os(STRICT_WORKER_CONTAINMENT_ENV);
     let strict =
@@ -317,7 +339,8 @@ pub(crate) fn script_scope_launcher(
             reason: "machine.worker_containment is off".into(),
         });
     };
-    if let Err(reason) = user_scope_availability() {
+    let availability = availability.unwrap_or_else(|| user_scope_availability_in_env(launcher_env));
+    if let Err(reason) = availability {
         if strict {
             return Err(reason);
         }
@@ -356,13 +379,11 @@ pub(crate) enum ScriptScopeLauncher {
 }
 
 /// Whether this process can create transient scopes in a user manager, probed
-/// once per process with the same properties a worker scope uses.
+/// with the same properties a worker scope uses.
 #[cfg(target_os = "linux")]
 fn user_scope_availability() -> Result<(), String> {
-    use std::sync::OnceLock;
-
-    static PROBE: OnceLock<Result<(), String>> = OnceLock::new();
-    PROBE.get_or_init(probe_user_scope).clone()
+    let parent: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+    user_scope_availability_in_os_env(&parent)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -370,8 +391,81 @@ fn user_scope_availability() -> Result<(), String> {
     Err("worker scopes need Linux with a systemd user manager".to_string())
 }
 
+/// Whether transient user scopes are reachable from `env` — the environment
+/// a scope launch will actually run with, not this process's ambient one.
+///
+/// The verdict is cached per user-bus locator pair, never process-wide: a
+/// result probed under one launch environment must not answer for another
+/// that lacks the bus [ORB-20661].
+pub(crate) fn user_scope_availability_in_env(env: &[(String, String)]) -> Result<(), String> {
+    let env: Vec<(OsString, OsString)> = env
+        .iter()
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+        .collect();
+    user_scope_availability_in_os_env(&env)
+}
+
 #[cfg(target_os = "linux")]
-fn probe_user_scope() -> Result<(), String> {
+fn user_scope_availability_in_os_env(env: &[(OsString, OsString)]) -> Result<(), String> {
+    use std::collections::BTreeMap;
+    use std::sync::{Mutex, OnceLock};
+
+    if let Some(reason) = missing_user_bus_reason(env) {
+        return Err(reason);
+    }
+    type ProbeCache = Mutex<BTreeMap<(Option<OsString>, Option<OsString>), Result<(), String>>>;
+    static PROBE: OnceLock<ProbeCache> = OnceLock::new();
+    let cache = PROBE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let key = (
+        user_bus_locator(env, USER_BUS_LOCATOR_ENV_VARS[0]),
+        user_bus_locator(env, USER_BUS_LOCATOR_ENV_VARS[1]),
+    );
+    if let Ok(cache) = cache.lock()
+        && let Some(verdict) = cache.get(&key)
+    {
+        return verdict.clone();
+    }
+    let verdict = probe_user_scope(env);
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(key, verdict.clone());
+    }
+    verdict
+}
+
+#[cfg(not(target_os = "linux"))]
+fn user_scope_availability_in_os_env(_env: &[(OsString, OsString)]) -> Result<(), String> {
+    Err("worker scopes need Linux with a systemd user manager".to_string())
+}
+
+/// The reason a user scope cannot be reached from `env`, when neither bus
+/// locator is set there. Naming both locators is the point: the strict
+/// refusal and the uncontained fallback must say what is missing instead of
+/// surfacing `systemd-run`'s own failure after a spawn.
+#[cfg(target_os = "linux")]
+fn missing_user_bus_reason(env: &[(OsString, OsString)]) -> Option<String> {
+    USER_BUS_LOCATOR_ENV_VARS
+        .iter()
+        .all(|name| user_bus_locator(env, name).is_none())
+        .then(|| {
+            format!(
+                "the user bus is unreachable from the scope launcher environment: neither \
+                 {} nor {} is set there, so `systemd-run --user` cannot connect to the \
+                 user manager",
+                USER_BUS_LOCATOR_ENV_VARS[0], USER_BUS_LOCATOR_ENV_VARS[1],
+            )
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn user_bus_locator(env: &[(OsString, OsString)], name: &str) -> Option<OsString> {
+    env.iter()
+        .rev()
+        .find(|(key, value)| key == name && !value.is_empty())
+        .map(|(_, value)| value.clone())
+}
+
+#[cfg(target_os = "linux")]
+fn probe_user_scope(env: &[(OsString, OsString)]) -> Result<(), String> {
     use std::io::Read;
     use std::time::{Duration, Instant};
 
@@ -380,7 +474,11 @@ fn probe_user_scope() -> Result<(), String> {
     // Every property a worker scope sets, so a manager too old for one of
     // them (`OOMPolicy=` on scopes) falls back here rather than failing each
     // worker launch.
+    // Probe in exactly the environment the launch will use: a cleared
+    // environment carrying only `env`, as supervision applies it.
     let mut child = Command::new(SYSTEMD_RUN)
+        .env_clear()
+        .envs(env.iter().map(|(name, value)| (name, value)))
         .args(["--user", "--scope", "--quiet", "--collect"])
         .args([
             "--property=MemoryHigh=infinity",
