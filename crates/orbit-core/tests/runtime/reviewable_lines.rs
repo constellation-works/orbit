@@ -5,7 +5,7 @@ use std::process::Output;
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
-use orbit_engine::RuntimeHost;
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::ReviewableLines;
 use orbit_types::workflow::automation::DirectLandingRequest;
 
@@ -134,5 +134,114 @@ fn two_task_landing_counts_only_that_tasks_reviewable_lines() {
             deleted: 0
         }),
         "task B keeps only its own seven lines"
+    );
+}
+
+/// Land one commit whose message is built from the two tasks created for it.
+/// The first task moves into done with a landing note naming that commit, so
+/// its row comes from the done-transition path, which attributes a single
+/// commit by the task ids its message names. Returns the reviewable lines
+/// recorded for the first task.
+fn single_commit_landing_reviewable(message: fn(&str, &str) -> String) -> Option<ReviewableLines> {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("old.txt"), "old\n").unwrap();
+    git(&repo, &["add", "old.txt"]);
+    git(&repo, &["commit", "-m", "base"]);
+
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = |title: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                complexity: TaskComplexity::Low,
+                task_type: Some(TaskType::Feature),
+                status: Some(TaskStatus::Backlog),
+                ..TaskAddParams::default()
+            })
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let owner = task("alpha");
+    let other = task("beta");
+
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(repo.join("src/a.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(repo.join("README.md"), "docs\n").unwrap();
+    git(&repo, &["add", "src/a.txt", "README.md"]);
+    git(&repo, &["commit", "-m", &message(&owner, &other)]);
+    let landed = head(&repo);
+
+    runtime
+        .apply_task_automation_update(
+            &owner,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    runtime
+        .apply_task_automation_update(&owner, TaskAutomationUpdate {
+            status: Some(TaskStatus::Done),
+            expected_status: Some(TaskStatus::Review),
+            status_note: Some(format!(
+                "completion authorized by test fixture; delivered by pull request #42 merged as {landed}"
+            )),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let rows = runtime.landed_diff_stats(None).unwrap();
+    rows.iter()
+        .find(|row| row.task_id == owner)
+        .unwrap_or_else(|| panic!("no landed row for {owner}; rows={rows:?}"))
+        .reviewable
+}
+
+/// A single commit naming only its own task, plus tokens shaped like task ids
+/// but not task ids of this workspace (UTF-8, SHA-256, GPT-5), keeps its
+/// reviewable lines as the denominator.
+#[test]
+fn single_commit_naming_its_own_task_and_technical_tokens_keeps_reviewable_lines() {
+    if !super::dispatch_admission::isolated(
+        "reviewable_lines::single_commit_naming_its_own_task_and_technical_tokens_keeps_reviewable_lines",
+    ) {
+        return;
+    }
+
+    assert_eq!(
+        single_commit_landing_reviewable(|owner, _| {
+            format!("feat: encode UTF-8 with SHA-256 and GPT-5 [{owner}]")
+        }),
+        Some(ReviewableLines {
+            added: 3,
+            deleted: 0
+        }),
+        "the commit names only its own task, so its two code lines and docs line are the denominator"
+    );
+}
+
+/// A single commit that names a second task of the workspace's own prefix
+/// cannot be attributed to the first, so its denominator stays unavailable.
+#[test]
+fn single_commit_naming_a_second_task_of_the_same_prefix_is_unavailable() {
+    if !super::dispatch_admission::isolated(
+        "reviewable_lines::single_commit_naming_a_second_task_of_the_same_prefix_is_unavailable",
+    ) {
+        return;
+    }
+
+    assert_eq!(
+        single_commit_landing_reviewable(|owner, other| format!("feat: alpha [{owner}] [{other}]")),
+        None,
+        "a commit naming a second task of the workspace prefix leaves the denominator unavailable"
     );
 }
