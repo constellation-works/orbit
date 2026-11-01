@@ -1,8 +1,8 @@
 ---
 title: Task Migration — Overview
 owner: claude
-last_updated: 2026-10-28
-last_validated: 2026-10-30
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 stage: shipped
 next: "—"
@@ -117,7 +117,20 @@ at, and import refuses an archive entry that is a link or special file.
 
 Import validates the manifest version and every bundle's integrity *before*
 touching state, so a corrupt or version-incompatible archive fails with no
-partial writes. During the mutation phase, fresh bundles and a source workspace
+partial writes. It then resolves id conflicts and any renumbered ids, and
+rejects a relation whose target is a task id under a prefix this registry
+knows, or under a prefix of an id this import will register, but that neither
+the accepted import set nor the existing registry contains. The rejection
+names the source task, the relation type and the missing target, and it
+happens before a canonical bundle is written and before a workspace or task
+binding is registered. Targets in the accepted set, including ids rewritten
+by `--on-conflict=renumber`, and targets already registered locally still
+resolve. A `ChildOf` target is the task's parent, so the same check covers
+parent links. A prefix this import will register counts as known, matching
+the index rebuild after those bindings exist. Foreign-prefix targets this
+registry has never issued, and that this import does not register, stay
+allowed to dangle. Cycles are still rejected when the index is rebuilt.
+During the mutation phase, fresh bundles and a source workspace
 registration created by the import are rolled back if a later write fails;
 owner-wins replacements remain because the owner's copy is authoritative.
 `--task-workspace` selects the task-registry

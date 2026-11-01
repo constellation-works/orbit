@@ -106,6 +106,73 @@ impl TaskRegistryStore {
             .collect()
     }
 
+    /// Reject a known-prefix relation target that neither the registry nor
+    /// `accepted_ids` resolves.
+    ///
+    /// Import calls this after conflict selection and id remapping, before it
+    /// registers a workspace or writes a bundle. `accepted_ids` are the final
+    /// ids that will land, so a target in that set resolves even though it is
+    /// not registered yet. A prefix of one of those ids counts as known: once
+    /// the binding exists, the index rebuild treats a missing target under
+    /// that prefix as dangling. A prefix this registry has never issued and
+    /// that this import will not register stays foreign and may dangle. The
+    /// error matches the diagnostic an index rebuild raises for the same edge.
+    pub(crate) fn reject_unresolved_import_relations(
+        &self,
+        partition_id: &str,
+        envelopes: &[TaskEnvelopeV2],
+        accepted_ids: &BTreeSet<String>,
+    ) -> Result<(), OrbitError> {
+        validate_partition_id(partition_id)?;
+        let conn = self.read()?;
+        let mut landing_prefixes = BTreeSet::new();
+        for id in accepted_ids {
+            if let Some(prefix) = task_id_prefix(id) {
+                landing_prefixes.insert(prefix.to_string());
+            }
+        }
+        for envelope in envelopes {
+            if let Some(prefix) = task_id_prefix(&envelope.id) {
+                landing_prefixes.insert(prefix.to_string());
+            }
+        }
+        let known = known_task_prefixes(&conn)?;
+        let mut candidates = BTreeSet::new();
+        for envelope in envelopes {
+            for relation in &envelope.relations {
+                if is_valid_orb_task_id(&relation.target)
+                    && relation.target != envelope.id
+                    && !accepted_ids.contains(&relation.target)
+                {
+                    candidates.insert(relation.target.clone());
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let registered = registered_task_ids(&conn, &candidates)?;
+        for envelope in envelopes {
+            for relation in &envelope.relations {
+                if !candidates.contains(&relation.target) || registered.contains(&relation.target) {
+                    continue;
+                }
+                let Some(prefix) = task_id_prefix(&relation.target) else {
+                    continue;
+                };
+                if !known.contains(prefix) && !landing_prefixes.contains(prefix) {
+                    continue;
+                }
+                return Err(unknown_relation_target(
+                    Some(envelope.id.as_str()),
+                    relation.relation_type,
+                    relation.target.as_str(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn indexed_relation_targets(
         &self,
         partition_id: &str,
