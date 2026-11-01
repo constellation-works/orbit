@@ -158,6 +158,11 @@
 /* Crew mix. */
 .ex-crew-rows { display: flex; flex-direction: column; gap: 10px; }
 .ex-crew-row { display: grid; grid-template-columns: minmax(80px, 140px) 1fr; align-items: baseline; gap: 10px; font: 13px var(--font-sans); }
+.ex-crew-row > * { min-width: 0; }
+/* Recorded effort is a full-width detail row, never a third auto-placed
+   child of the narrow label track: at 140px it wrapped 2015 chars over
+   121 lines (ui.cramped-wrap). */
+.ex-effort { grid-column: 1 / -1; overflow-wrap: anywhere; }
 .ex-crews { display: flex; flex-wrap: wrap; gap: 6px; }
 .ex-crew {
   display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 8px;

@@ -91,7 +91,7 @@ function pngSize(file) {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
 }
 
-test("experiment detail evidence frames Recorded effort and cleans up scroll and handles", {
+test("experiment detail Recorded effort passes and evidence machinery is covered", {
   timeout: 240000,
   skip: !process.env.PLAYWRIGHT_MODULE || !process.env.ORBIT_VISUAL_ORBIT,
 }, async () => {
@@ -107,22 +107,38 @@ test("experiment detail evidence frames Recorded effort and cleans up scroll and
   const handles = () => ctx.page.locator("[data-ux-evidence-target]").count();
   try {
     await ctx.openTarget(target1440, server.baseUrl, server.placeholders);
+    // ORB-20986: Recorded effort spans the full crew row, so the retained
+    // 2015-char fixture passes the rule with every recorded detail intact.
     const before = await check(ctx);
-    assert.equal(before.status, "fail", JSON.stringify(before));
     assert.equal(before.fingerprint, "ui.cramped-wrap|analytics-experiment-detail|dark|1440|default");
-    const failure = (before.measurements.failures || [])[0];
-    assert.ok(failure, JSON.stringify(before));
-    assert.equal(failure.selector, "span.mx-muted");
-    assert.equal(failure.chars, 2015);
-    assert.equal(failure.lines, 121);
-    assert.equal(failure.width_px, 140);
-    assert.match(failure.text, /^Recorded effort:/);
+    assert.ok(!(before.measurements.failures || []).some((f) => /^Recorded effort:/.test(f.text)), JSON.stringify(before));
+    const efforts = ctx.page.locator(".ex-crew-rows span.mx-muted", { hasText: "Recorded effort:" });
+    assert.match(await efforts.first().textContent(), /^Recorded effort: unknown crew · model-00/);
+    assert.match(await efforts.first().textContent(), /model-39/);
+    assert.equal((await efforts.nth(1).textContent()).trim(), "Recorded effort: unknown");
+    assert.equal(await handles(), 0, "a passing result stamps no handles");
+
+    // The evidence machinery below needs a failing result: stage one with a
+    // synthetic narrow row, then exercise framing, scroll restore, capture
+    // failure diagnostics and the 20-row cap against it.
+    await ctx.page.evaluate(() => {
+      const span = document.createElement("span");
+      span.id = "qa-cramped";
+      span.style.cssText = "display:block;width:40px";
+      span.textContent = "Synthetic cramped prose row with enough words to wrap narrowly across many lines of tiny text";
+      document.querySelector(".tab-pane.active").append(span);
+    });
+    const failing = await check(ctx);
+    assert.equal(failing.status, "fail", JSON.stringify(failing));
+    assert.equal(failing.fingerprint, before.fingerprint);
+    const failure = (failing.measurements.failures || []).find((f) => f.text.startsWith("Synthetic cramped"));
+    assert.ok(failure, JSON.stringify(failing));
     assert.ok(failure.evidence_selector);
-    assert.equal(await handles(), before.measurements.failures.length, "only kept failures are stamped");
-    assert.ok(before.measurements.failures.length <= 20);
+    assert.equal(await handles(), failing.measurements.failures.length, "only kept failures are stamped");
+    assert.ok(failing.measurements.failures.length <= 20);
     const framed = ctx.page.locator(failure.evidence_selector);
     assert.equal(await framed.count(), 1);
-    assert.match(await framed.textContent(), /^Recorded effort:/);
+    assert.match(await framed.textContent(), /^Synthetic cramped/);
 
     // Nested scroller starting at zero, plus a nonzero page-pane offset.
     await ctx.page.evaluate(() => {
@@ -133,13 +149,13 @@ test("experiment detail evidence frames Recorded effort and cleans up scroll and
       document.body.append(box);
       document.querySelector(".tab-pane.active").scrollTop = 123;
     });
-    const shot = await ctx.screenshotFor(rule, target1440, before);
+    const shot = await ctx.screenshotFor(rule, target1440, failing);
     assert.deepEqual(pngSize(path.join(outDir, shot)), { width: 1440, height: 900 });
     assert.equal(await handles(), 0, "capture removes every temporary handle");
     assert.equal(await ctx.page.evaluate(() => document.querySelector(".tab-pane.active").scrollTop), 123, "nonzero scroll restored");
     const repeated = await check(ctx);
-    assert.equal(repeated.fingerprint, before.fingerprint);
-    assert.equal((repeated.measurements.failures || [])[0]?.lines, 121);
+    assert.equal(repeated.fingerprint, failing.fingerprint);
+    assert.ok((repeated.measurements.failures || []).some((f) => f.text.startsWith("Synthetic cramped")));
     assert.equal(await handles(), repeated.measurements.failures.length);
     await ctx.screenshotFor(rule, target1440, repeated);
     assert.equal(await handles(), 0);
