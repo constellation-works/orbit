@@ -1,5 +1,5 @@
 //! Desktop review of a native publication after normal discard/requeue.
-use super::published_owner::publication_number;
+use super::published_owner::{publication_at, publication_number};
 use super::*;
 use orbit_types::desktop::{
     DesktopCriterionOutcome, DesktopReviewDecision, DesktopReviewVerdict, DesktopTaskOperation,
@@ -244,6 +244,84 @@ fn desktop_reviews_current_native_publication_after_discard() {
 crate::scenario_table!(
     desktop_native_publication_scenarios,
     desktop_reviews_current_native_publication_after_discard
+);
+
+/// GitHub reports a repository in its canonical case, while the identity the
+/// review compares against the origin remote is lowercased. A mixed-case
+/// publication with a closed historical reference must bind to its provider
+/// state, and a different owner or repository must still refuse.
+fn desktop_reviews_canonical_mixed_case_publication() {
+    const SLUG: &str = "NixOS/Nixpkgs";
+    let mut f = Fixture::new();
+    // The fixture seeds a lowercase reference for #17; the publication must
+    // record the forge's canonical URL instead.
+    f.replace_refs(Vec::new());
+    let origin = format!("https://github.com/{SLUG}.git");
+    let remote = f._root.path().join("origin.git");
+    git(&f.repo, &["remote", "set-url", "origin", &origin]);
+    git(
+        &f.repo,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", remote.display()),
+            &origin,
+        ],
+    );
+    publication_at(&mut f, false, false, true, "17", false, SLUG);
+    let single = snapshot(&f);
+    let accepted = write(&f, request(&f, &single, "mixed-case-first-review")).unwrap();
+    assert_eq!(accepted.snapshot.task.status, TaskStatus::Review);
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            orbit_core::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                discard_candidate: true,
+                ..Default::default()
+            },
+            "operator".into(),
+        )
+        .unwrap();
+    publication_at(&mut f, false, false, true, "18", true, SLUG);
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.external_refs.len(), 2, "{:?}", task.external_refs);
+    let observed = snapshot(&f);
+    assert_eq!(
+        observed.reviewed_head.as_deref(),
+        Some(f.head.as_str()),
+        "{:?}",
+        observed.reviewed_head_reason
+    );
+    let accepted = write(&f, request(&f, &observed, "mixed-case-review")).unwrap();
+    assert_eq!(accepted.snapshot.task.status, TaskStatus::Review);
+
+    // Provider answers and the checkpoint must agree on the owner and
+    // repository exactly, ignoring ASCII case only.
+    let provider = std::fs::read(&f.answer).unwrap();
+    for url in [
+        "https://github.com/Other/Nixpkgs/pull/18",
+        "https://github.com/NixOS/Other/pull/18",
+    ] {
+        let mut changed: Value = serde_json::from_slice(&provider).unwrap();
+        changed["url"] = json!(url);
+        std::fs::write(&f.answer, changed.to_string()).unwrap();
+        assert!(snapshot(&f).reviewed_head.is_none(), "{url}");
+    }
+    std::fs::write(&f.answer, &provider).unwrap();
+    let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    let mut changed = state.clone();
+    changed.pipeline["pr_open"]["pr_url"] = json!("https://github.com/NixOS/Other/pull/18");
+    f.runtime
+        .write_run_state(&f.source.run_id, &changed)
+        .unwrap();
+    assert!(snapshot(&f).reviewed_head.is_none(), "checkpoint");
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    assert_eq!(snapshot(&f).reviewed_head.as_deref(), Some(f.head.as_str()));
+}
+
+crate::scenario_table!(
+    desktop_mixed_case_publication_scenarios,
+    desktop_reviews_canonical_mixed_case_publication
 );
 
 /// A real same-PR rework authenticates the target through public inspection

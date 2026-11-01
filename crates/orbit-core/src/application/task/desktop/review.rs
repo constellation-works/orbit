@@ -190,14 +190,23 @@ impl OrbitRuntime {
             let repository = repository.strip_prefix("github.com/").ok_or_else(|| {
                 invalid("native publication requires an exact GitHub repository identity")
             })?;
+            // The identity is lowercased for comparison; the forge's URLs keep
+            // the repository's canonical case.
             let url = format!("https://github.com/{repository}/pull/{number}");
-            if proof.url.as_deref() != Some(url.as_str()) {
+            if !proof
+                .url
+                .as_deref()
+                .is_some_and(|proof_url| same_pull_request_url(proof_url, &url))
+            {
                 return Err(invalid("native publication URL and repository disagree"));
             }
             validate_publication_references(task, number, &url, false)?;
             let status = self.read_pull_request_status(&number.to_string())?;
             if status.number != Some(number)
-                || status.url.as_deref() != Some(url.as_str())
+                || !status
+                    .url
+                    .as_deref()
+                    .is_some_and(|status_url| same_pull_request_url(status_url, &url))
                 || status.head_branch.as_deref() != Some(proof.branch.as_str())
                 || status.base_branch.as_deref() != Some(proof.base_branch.as_str())
                 || status.head_sha.as_deref() != Some(proof.head.as_str())
@@ -206,9 +215,11 @@ impl OrbitRuntime {
                     "the provider no longer matches the authenticated native publication",
                 ));
             }
+            // The provider's own URL names the reviewed pull request, so
+            // evidence citing it matches the forge's canonical form.
             return Ok(Some(PullRequestSource::Native(DesktopPullRequest {
                 head: proof.head,
-                url: Some(url),
+                url: status.url,
                 completion_refusal: None,
             })));
         }
@@ -270,7 +281,7 @@ fn validate_publication_references(
             if reference
                 .url
                 .as_deref()
-                .is_some_and(|reference_url| reference_url != url)
+                .is_some_and(|reference_url| !same_pull_request_url(reference_url, url))
             {
                 return Err(invalid(
                     "the task's PR reference contradicts its authenticated publication URL",
@@ -293,4 +304,11 @@ fn validate_publication_references(
         ));
     }
     Ok(())
+}
+
+/// Two pull-request URLs name the same pull request when they differ only in
+/// ASCII case: GitHub owner and repository names are case-insensitive, and the
+/// forge reports them in canonical case.
+fn same_pull_request_url(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
 }
