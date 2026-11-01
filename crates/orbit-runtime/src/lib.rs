@@ -39,6 +39,7 @@
 orbit_common::isolate_test_process!();
 
 mod activity_catalog;
+mod application_admission;
 pub mod application_authority;
 mod application_consent;
 mod application_port;

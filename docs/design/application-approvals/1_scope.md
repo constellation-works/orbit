@@ -209,7 +209,7 @@ None open. Daniel answered all three on 2026-11-01; his words are quoted verbati
    is legitimately bulk.
    **Resolved:** "configurable, default off". A scope may carry an optional
    `rate_limit` (admissions per window), validated at consent time. A scope without one
-   has no limit. Enforcement lands with constrained admission (slice 2).
+   has no limit. Constrained admission (slice 2) enforces it.
 3. **Should Orbit bind the gateway draft digest?** Today only the gateway plugin checks
    it, because the draft lives in plugin state.
    **Resolved:** "No, plugin checks it". Orbit does not bind it; the gateway plugin

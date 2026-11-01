@@ -30,6 +30,15 @@ use crate::RuntimeKernel;
 /// owns it. Implemented once, by `orbit-core`'s composition root.
 pub trait ApplicationPort: Send + Sync {
     fn get_task(&self, kernel: &RuntimeKernel, id: &str) -> Result<Task, OrbitError>;
+    /// Lowercase hex SHA-256 of a task artifact's stored bytes (the bytes
+    /// `orbit.task.artifact.get` returns); `None` when the task has no
+    /// artifact at `path`.
+    fn task_artifact_sha256(
+        &self,
+        kernel: &RuntimeKernel,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<String>, OrbitError>;
     fn get_task_history(
         &self,
         kernel: &RuntimeKernel,
@@ -153,6 +162,14 @@ pub trait ApplicationPort: Send + Sync {
 impl RuntimeKernel {
     pub(crate) fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
         self.application.get_task(self, id)
+    }
+
+    pub(crate) fn task_artifact_sha256(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        self.application.task_artifact_sha256(self, id, path)
     }
 
     pub(crate) fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
