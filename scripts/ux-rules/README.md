@@ -134,7 +134,7 @@ The fingerprint is `rule id`, the target id, and the target argv (or the target 
 | `cli.json-valid` | `task list`, `workspace list`, and `config show` `--json` parse, and a second call keeps the same top-level shape. |
 | `cli.error-exit-codes` | An unknown task id, an unknown flag, and conflicting flags exit non-zero and name a next step. |
 | `cli.mcp-description-length` | Tool descriptions at most 1000 bytes. Field descriptions at most 800 bytes. |
-| `cli.mcp-cli-parity` | A tool and its CLI command agree on required inputs. `model` and `agent` are provenance on both sides and are ignored. A required MCP field that the CLI exposes as a global option, including `workspace`, is not a mismatch. Defaults are compared only when both sides state one. A tool with no CLI command is `skipped`. |
+| `cli.mcp-cli-parity` | A tool and its CLI command agree on required inputs. `model` and `agent` are provenance on both sides and are ignored. A required MCP field that the CLI exposes as a global option, including `workspace`, is not a mismatch. For `auto-task add` only, `schedule` is `--cron`, `--every-minutes`, or `--deliveries-landed` (the usage line cannot show that one-of group), and `template` is required `--title` when the tool describes `title` as a required template member. Other commands are compared by field name. Defaults are compared only when both sides state one. A tool with no CLI command is `skipped`. |
 
 ## Filing and the routine
 
