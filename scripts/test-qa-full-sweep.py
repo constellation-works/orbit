@@ -1800,6 +1800,29 @@ updated_at: 2026-01-01T00:00:00Z
             temp, ["legacy-dry-run-reports-pending-without-mutation"], pending_migration,
             accept_nonzero=True)
 
+    def adopted_isolated_authority(evidence):
+        # An explicit-root data directory records no authority on init. Adoption
+        # is the supported way to name the isolated root; it must not migrate.
+        body = parse_json(evidence, "authority adoption")
+        record = body.get("workspace_authority")
+        if not isinstance(record, dict):
+            raise ValueError("authority adoption returned no workspace_authority record")
+        if record.get("recorded") is not True or record.get("evidence") != "explicit_root":
+            raise ValueError("migration fixture did not record its isolated explicit-root authority")
+        authority = record.get("authority")
+        orbit_dir = record.get("orbit_dir")
+        isolated = migration_root.resolve()
+        if (not isinstance(authority, str) or not isinstance(orbit_dir, str)
+                or Path(authority).resolve() != isolated or Path(orbit_dir).resolve() != isolated):
+            raise ValueError("adoption recorded a workspace or authority other than the isolated root")
+        if record.get("layout_version") != 1 or migration_marker.read_bytes() != migration_before:
+            raise ValueError("authority adoption migrated or changed the legacy marker")
+
+    checked("migration-lifecycle",
+            [orbit_bin, "--root", str(migration_root), "migrate", "--adopt-authority",
+             str(migration_root), "--json"],
+            temp, ["isolated-explicit-root-authority-adopted"], adopted_isolated_authority)
+
     def applied_migration(evidence):
         body = parse_json(evidence, "confirmed migration")
         layout = body.get("layout", {})
