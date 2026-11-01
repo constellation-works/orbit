@@ -9,13 +9,16 @@ let layerFilter = 'all';
 let topicFilter = 'all';
 let allKeysQuery = '';
 let allKeysPage = 0;
+// The deep key each source (the ?key= link, the open drawer) last landed the
+// All keys pager on, so later renders leave the pager where the user moved it.
+let allKeysLanded = { link: null, drawer: null };
 const ALL_KEYS_PAGE_SIZE = 25;
 let rawScope = null;
 let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
 let notice = null;
 
-export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; rawScope = null; rawText = null; notice = null; }
+export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; allKeysLanded = { link: null, drawer: null }; rawScope = null; rawText = null; notice = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -389,6 +392,17 @@ function isFallbackPreserving(row) {
   if (row.fallback == null) return false;
   return valuesEqual(row.value, row.fallback.value);
 }
+// Pages to the page holding `key` the first time `source` names it. Once it has
+// landed, later renders with the same key leave the pager where the user moved
+// it; a render with no key re-arms the landing for the next time it is named.
+function landAllKeysPage(source, key, filtered) {
+  if (!key) { allKeysLanded[source] = null; return; }
+  if (key === allKeysLanded[source]) return;
+  const at = filtered.findIndex((r) => r.key === key);
+  if (at < 0) return;
+  allKeysPage = Math.floor(at / ALL_KEYS_PAGE_SIZE);
+  allKeysLanded[source] = key;
+}
 export function renderAllKeys(body, payload, context) {
   const rows = flatten(payload);
   const nodes = [];
@@ -456,13 +470,10 @@ export function renderAllKeys(body, payload, context) {
   const query = allKeysQuery.trim().toLowerCase();
   const filtered = rows.filter((r) => (layerFilter === 'all' || (r.source?.layer || r.state) === layerFilter || (layerFilter === 'built-in' && r.state !== 'set')) && (topicFilter === 'all' || topicOf(r.key) === topicFilter)
     && (!query || `${r.key} ${r.label || ''} ${display(r.value)}`.toLowerCase().includes(query)));
-  // A deep link (?key=…) or an open drawer names the intended key: land on
-  // the page holding it instead of leaving it beyond the bounded window.
-  const deepKey = drawer?.row?.key || new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key');
-  if (deepKey) {
-    const at = filtered.findIndex((r) => r.key === deepKey);
-    if (at >= 0) allKeysPage = Math.floor(at / ALL_KEYS_PAGE_SIZE);
-  }
+  // A deep link (?key=…) or an open drawer names an intended key: land on the
+  // page holding it, once per key, so Next and Previous are not snapped back.
+  landAllKeysPage('link', new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key'), filtered);
+  landAllKeysPage('drawer', drawer?.row?.key || null, filtered);
   const pageCount = Math.max(1, Math.ceil(filtered.length / ALL_KEYS_PAGE_SIZE));
   allKeysPage = Math.min(Math.max(0, allKeysPage), pageCount - 1);
   const pageStart = allKeysPage * ALL_KEYS_PAGE_SIZE;
