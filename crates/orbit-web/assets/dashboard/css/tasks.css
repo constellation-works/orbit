@@ -152,7 +152,7 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
   border-color: var(--border-strong);
   color: var(--fg);
 }
-#task-filter .chip-count { font-variant-numeric: tabular-nums; color: var(--fg-disabled); }
+#task-filter .chip-count { font-variant-numeric: tabular-nums; color: var(--fg-mute); }
 #task-filter .chip.active .chip-count { color: var(--fg-dim); }
 #task-filter .chip-count:empty { display: none; }
 /* More: a disclosure for the quieter toggles. Closed, it hides every one that

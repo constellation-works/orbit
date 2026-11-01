@@ -1601,7 +1601,72 @@ if (process.argv.includes('--browser')) {
       assert.deepEqual(await page.evaluate(() => globalThis.fixtureRequests), ['?workspace=ws_fixture'], 'discovery triggers one scoped decision read');
       assert.deepEqual(errors, [], 'startup has no browser or console errors');
       await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity));
-      await page.screenshot({ path: `.orbit/tmp/waiting-dark-${width}.png` });
+      const inspectChipColors = () => page.evaluate(() => {
+        const parse = value => {
+          const match = String(value).match(/rgba?\(([^)]+)\)/);
+          if (!match) return null;
+          const parts = match[1].split(',').map(part => Number.parseFloat(part));
+          return { r: parts[0], g: parts[1], b: parts[2], a: parts[3] === undefined ? 1 : parts[3] };
+        };
+        const blend = (fg, bg) => ({ r: fg.r * fg.a + bg.r * (1 - fg.a), g: fg.g * fg.a + bg.g * (1 - fg.a), b: fg.b * fg.a + bg.b * (1 - fg.a), a: 1 });
+        const luminance = color => {
+          const linear = value => { const channel = value / 255; return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4; };
+          return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
+        };
+        const count = document.querySelector('.waiting-filter .chip-count');
+        const chip = count?.closest('.chip');
+        if (!count || !chip) throw new Error('the informational waiting count is rendered inside its filter chip');
+        const foreground = parse(getComputedStyle(count).color);
+        const layers = [];
+        for (let node = count; node && node !== document.documentElement; node = node.parentElement) {
+          const background = parse(getComputedStyle(node).backgroundColor);
+          if (background && background.a > 0) layers.push(background);
+          if (background?.a === 1) break;
+        }
+        let background = { r: 255, g: 255, b: 255, a: 1 };
+        for (const layer of layers.reverse()) background = blend(layer, background);
+        const text = foreground.a < 1 ? blend(foreground, background) : foreground;
+        const foregroundLuminance = luminance(text);
+        const backgroundLuminance = luminance(background);
+        const contrast = (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+        const previous = document.querySelector('#tasks-previous');
+        const fgDim = document.createElement('span');
+        fgDim.style.color = getComputedStyle(document.documentElement).getPropertyValue('--fg-dim');
+        document.body.appendChild(fgDim);
+        const disabledColor = previous ? getComputedStyle(previous).color : null;
+        const expectedDisabledColor = getComputedStyle(fgDim).color;
+        fgDim.remove();
+        return {
+          count: count.textContent,
+          active: chip.classList.contains('active'),
+          color: getComputedStyle(count).color,
+          contrast,
+          previousDisabled: previous?.disabled ?? false,
+          previousColor: disabledColor,
+          expectedDisabledColor,
+          previousOpacity: previous ? getComputedStyle(previous).opacity : null,
+        };
+      });
+      const inactiveCount = await inspectChipColors();
+      assert.equal(inactiveCount.count, '1', 'the inactive informational count remains visible');
+      assert.equal(inactiveCount.active, false, 'the waiting chip starts inactive');
+      assert.ok(inactiveCount.contrast >= 4.5, `inactive informational count contrast is at least 4.5:1 (got ${inactiveCount.contrast})`);
+      await page.screenshot({ path: `.orbit/tmp/tasks-list-dark-${width}.png` });
+      await page.locator('.waiting-filter').click();
+      await page.waitForFunction(() => document.querySelector('.waiting-filter')?.classList.contains('active'));
+      const activeCount = await inspectChipColors();
+      assert.equal(activeCount.count, inactiveCount.count, 'activating the filter preserves its count');
+      assert.equal(activeCount.active, true, 'the waiting chip enters its active filter state');
+      assert.notEqual(activeCount.color, inactiveCount.color, 'the active count retains its distinct active styling');
+      assert.ok(activeCount.contrast >= 4.5, `active informational count contrast is at least 4.5:1 (got ${activeCount.contrast})`);
+      assert.equal(activeCount.previousDisabled, true, 'the previous-page control is natively disabled on the first page');
+      assert.equal(activeCount.previousColor, activeCount.expectedDisabledColor, 'the disabled page control retains its fg-dim color');
+      assert.equal(activeCount.previousOpacity, '0.55', 'the disabled page control retains its muted opacity');
+      await page.locator('.waiting-filter').click();
+      await page.waitForFunction(() => !document.querySelector('.waiting-filter')?.classList.contains('active'));
+      const restoredCount = await inspectChipColors();
+      assert.equal(restoredCount.count, inactiveCount.count, 'deactivating the filter preserves its count');
+      assert.equal(restoredCount.color, inactiveCount.color, 'the inactive count styling returns after the filter is cleared');
       await page.close();
     }
   } finally {
