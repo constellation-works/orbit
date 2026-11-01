@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -30,32 +31,500 @@ validate_npm_evidence = runpy.run_path(
 
 # The supervisor retains process-group ownership after the command exits. We
 # sweep its group before reaping it, avoiding a PID/group reuse window (STD-03 R14).
-_PROCESS_SUPERVISOR = """import os, signal, subprocess, sys, threading
-fd = int(sys.argv[1])
+# Descendants that call setsid leave that group. The supervisor is a child
+# subreaper so those workers stay in its tree, and it records each one and waits
+# for the process identity to disappear before publishing the command result.
+_PROCESS_SUPERVISOR = r"""import json, os, signal, subprocess, sys, threading, time
+result_fd = int(sys.argv[1])
 owner_fd = int(sys.argv[2])
-signal.signal(signal.SIGTERM, lambda *_: None)
+# SIGTERM stays at the default until the command is spawned. An ignored
+# signal would be inherited across exec, and the command's children would
+# then survive the group sweep. Only this supervisor ignores SIGTERM.
+signal.signal(signal.SIGUSR1, lambda *_: None)
+stop = threading.Event()
+
+def enable_subreaper():
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+        libc.prctl.restype = ctypes.c_int
+        return libc.prctl(36, 1, 0, 0, 0) == 0
+    except (OSError, AttributeError):
+        return False
+
+subreaper = enable_subreaper()
+
+def read_stat(pid):
+    try:
+        data = open(f"/proc/{pid}/stat", "rb").read()
+    except OSError:
+        return None
+    end = data.rfind(b")")
+    if end < 0:
+        return None
+    fields = data[end + 2:].split()
+    if len(fields) < 20:
+        return None
+    try:
+        return {"state": fields[0].decode(), "ppid": int(fields[1]), "pgrp": int(fields[2]),
+                "sid": int(fields[3]), "starttime": int(fields[19])}
+    except ValueError:
+        return None
+
+def identity(pid):
+    if os.path.isdir("/proc"):
+        stat = read_stat(pid)
+        if stat is None:
+            return None
+        try:
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            cwd = None
+        try:
+            raw = open(f"/proc/{pid}/cmdline", "rb").read()
+            cmdline = raw.replace(b"\0", b" ").decode(errors="replace").strip()[:240]
+        except OSError:
+            cmdline = ""
+        stat.update(pid=pid, cwd=cwd, cmdline=cmdline)
+        return stat
+    return None
+
+def snapshot():
+    found = {}
+    if os.path.isdir("/proc"):
+        try:
+            entries = os.listdir("/proc")
+        except OSError:
+            return found
+        for entry in entries:
+            if entry.isdigit():
+                info = identity(int(entry))
+                if info is not None:
+                    found[info["pid"]] = info
+        return found
+    try:
+        out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,sess="], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return found
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        pid, ppid, pgrp, sid = (int(part) for part in parts[:4])
+        found[pid] = {"pid": pid, "ppid": ppid, "pgrp": pgrp, "sid": sid, "starttime": 0,
+                      "state": "?", "cwd": None, "cmdline": ""}
+    return found
+
+def alive(pid, starttime):
+    info = identity(pid) if os.path.isdir("/proc") else snapshot().get(pid)
+    if info is None or info.get("state") == "Z":
+        return False
+    return info.get("starttime") == starttime
+
+def descendants(root):
+    procs = snapshot()
+    children = {}
+    for pid, info in procs.items():
+        children.setdefault(info["ppid"], []).append(pid)
+    owned = []
+    stack = [root]
+    seen = {root}
+    while stack:
+        current = stack.pop()
+        for child in children.get(current, ()):
+            if child not in seen and child in procs:
+                seen.add(child)
+                stack.append(child)
+                owned.append(procs[child])
+    return owned
+
+def signal_confirmed(info, sig):
+    if not alive(info["pid"], info["starttime"]):
+        return False
+    try:
+        os.kill(info["pid"], sig)
+        return True
+    except OSError:
+        return False
+
+def reap(root):
+    records = {}
+    signaled = set()
+    deadline = time.monotonic() + 10
+    own_sid = os.getsid(0)
+    own_pgrp = os.getpgrp()
+    while True:
+        now = time.monotonic()
+        # Same-group grandchildren stay reachable after reparenting. This
+        # process ignores SIGTERM, so the signal does not abandon the reap.
+        try:
+            os.killpg(own_pgrp, signal.SIGTERM)
+        except OSError:
+            pass
+        live = [info for info in descendants(root) if info.get("state") != "Z"]
+        for info in live:
+            pid = info["pid"]
+            current = records.get(pid)
+            if current is None or current["starttime"] != info["starttime"]:
+                records[pid] = {"pid": pid, "pgid": info["pgrp"], "sid": info["sid"],
+                                "ppid": info["ppid"], "cwd": info["cwd"], "cmdline": info["cmdline"],
+                                "starttime": info["starttime"], "exited": False,
+                                "detached": info["sid"] != own_sid or info["pgrp"] != own_pgrp}
+                signaled.discard(pid)
+            records[pid]["detached"] = records[pid]["detached"] or info["sid"] != own_sid or info["pgrp"] != own_pgrp
+            sig = signal.SIGKILL if now >= deadline else signal.SIGTERM
+            if sig == signal.SIGKILL or pid not in signaled:
+                if signal_confirmed(info, sig):
+                    signaled.add(pid)
+        for record in records.values():
+            if not alive(record["pid"], record["starttime"]):
+                record["exited"] = True
+        while True:
+            try:
+                waited, _status = os.waitpid(-1, os.WNOHANG)
+            except (ChildProcessError, OSError):
+                break
+            if waited == 0:
+                break
+        if records and all(record["exited"] for record in records.values()) and not [
+                info for info in descendants(root) if info.get("state") != "Z"]:
+            break
+        if not records and not live:
+            break
+        if now >= deadline:
+            break
+        # Scheduling yield. Exit is the process identity disappearing, not this delay.
+        try:
+            time.sleep(0.05)
+        except InterruptedError:
+            pass
+    detached = []
+    open_descendants = 0
+    for record in records.values():
+        record["exited"] = not alive(record["pid"], record["starttime"])
+        if not record["exited"]:
+            open_descendants += 1
+        if record["detached"]:
+            detached.append({key: record[key] for key in
+                             ("pid", "pgid", "sid", "ppid", "cwd", "cmdline", "starttime", "exited")})
+    return detached, open_descendants
+
 def watch_owner():
-    os.read(owner_fd, 1)
-    os.killpg(os.getpgrp(), signal.SIGKILL)
+    try:
+        os.read(owner_fd, 1)
+    except OSError:
+        pass
+    stop.set()
+    try:
+        os.kill(os.getpid(), signal.SIGUSR1)
+    except OSError:
+        pass
+
 threading.Thread(target=watch_owner, daemon=True).start()
+command = None
 try:
-    code = subprocess.call(sys.argv[3:])
+    command = subprocess.Popen(sys.argv[3:])
 except OSError as error:
     print(str(error), file=sys.stderr, flush=True)
-    code = 127
-os.write(fd, str(code).encode())
-os.close(fd)
-while True:
+    payload = {"exit_code": 127, "detached_workers": [], "open_descendants": 0, "subreaper": subreaper}
+else:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while command.poll() is None and not stop.is_set():
+        try:
+            command.wait(timeout=0.05)
+        except subprocess.TimeoutExpired:
+            pass
+        except InterruptedError:
+            pass
+    if command.poll() is None:
+        try:
+            os.kill(command.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            command.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+    detached, open_descendants = reap(os.getpid())
+    payload = {"exit_code": command.returncode, "detached_workers": detached,
+               "open_descendants": open_descendants, "subreaper": subreaper}
+try:
+    os.write(result_fd, json.dumps(payload).encode() + b"\n")
+    os.close(result_fd)
+except OSError:
+    os._exit(0)
+if stop.is_set():
+    os._exit(0)
+while not stop.is_set():
     signal.pause()
+os._exit(0)
 """
 _OUTPUT_LIMIT = 1_048_576
+# Controlled worker the sweep supervisor must own. The command exits only after
+# the child has called setsid, which is the shape of a detached pipeline worker.
+_HELD_WORKER = r"""# qa-held-worker
+import os, signal, sys, time
+from pathlib import Path
+root, release, ready, mode = sys.argv[1:5]
+root = Path(root)
+release = Path(release)
+ready = Path(ready)
+
+def child():
+    os.setsid()
+    os.chdir(root)
+    me = os.getpid()
+    if mode == "complete":
+        ready.write_text(
+            f"fixture=qa-held-worker\npid={me}\nroot_held={int(root.exists())}\n"
+            f"cwd={os.getcwd()}\nmode=complete\n")
+        os._exit(0)
+    def finish(_signum, _frame):
+        ready.write_text(
+            f"fixture=qa-held-worker\npid={me}\nroot_held={int(root.exists())}\n"
+            f"cwd={os.getcwd()}\nmode={mode}\n")
+        if mode == "cancel-hold":
+            fd = os.open(release, os.O_RDONLY)
+            os.read(fd, 1)
+            os.close(fd)
+        os._exit(0)
+    signal.signal(signal.SIGTERM, finish)
+    ready.write_text(f"fixture=qa-held-worker\npid={me}\nwaiting=1\nmode={mode}\n")
+    while True:
+        signal.pause()
+
+pid = os.fork()
+if pid == 0:
+    try:
+        child()
+    except Exception:
+        os._exit(1)
+deadline = time.monotonic() + 5
+while not ready.exists():
+    if time.monotonic() >= deadline:
+        os._exit(2)
+    time.sleep(0.01)
+os._exit(0)
+"""
+
+
+def _proc_stat(pid):
+    try:
+        data = open(f"/proc/{pid}/stat", "rb").read()
+    except OSError:
+        return None
+    end = data.rfind(b")")
+    if end < 0:
+        return None
+    fields = data[end + 2:].split()
+    if len(fields) < 20:
+        return None
+    try:
+        return {"state": fields[0].decode(), "ppid": int(fields[1]), "pgrp": int(fields[2]),
+                "sid": int(fields[3]), "starttime": int(fields[19])}
+    except ValueError:
+        return None
+
+
+def _proc_identity(pid):
+    """Process identity from /proc. None when the pid is gone or unreadable."""
+    if not os.path.isdir("/proc"):
+        return None
+    stat = _proc_stat(pid)
+    if stat is None:
+        return None
+    try:
+        cwd = os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        cwd = None
+    try:
+        raw = open(f"/proc/{pid}/cmdline", "rb").read()
+        cmdline = raw.replace(b"\0", b" ").decode(errors="replace").strip()[:240]
+    except OSError:
+        cmdline = ""
+    stat.update(pid=pid, cwd=cwd, cmdline=cmdline)
+    return stat
+
+
+def _proc_snapshot():
+    found = {}
+    if os.path.isdir("/proc"):
+        try:
+            entries = os.listdir("/proc")
+        except OSError:
+            return found
+        for entry in entries:
+            if entry.isdigit():
+                info = _proc_identity(int(entry))
+                if info is not None:
+                    found[info["pid"]] = info
+        return found
+    try:
+        output = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,sess="], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return found
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        try:
+            pid, ppid, pgrp, sid = (int(part) for part in parts[:4])
+        except ValueError:
+            continue
+        found[pid] = {"pid": pid, "ppid": ppid, "pgrp": pgrp, "sid": sid, "starttime": 0,
+                      "state": "?", "cwd": None, "cmdline": ""}
+    return found
+
+
+def _proc_alive(pid, starttime):
+    """True only while the same process identity is still running."""
+    if os.path.isdir("/proc"):
+        info = _proc_identity(pid)
+    else:
+        info = _proc_snapshot().get(pid)
+    if info is None or info.get("state") == "Z":
+        return False
+    return info.get("starttime") == starttime
+
+
+def _cwd_under(cwd, root: Path) -> bool:
+    """Whether a process cwd, including a deleted suffix, is inside root."""
+    if not isinstance(cwd, str) or not cwd:
+        return False
+    text = cwd[:-len(" (deleted)")] if cwd.endswith(" (deleted)") else cwd
+    if not text:
+        return False
+    root_text = os.path.abspath(root)
+    candidates = [os.path.abspath(text)]
+    try:
+        candidates.append(os.path.realpath(text))
+    except OSError:
+        pass
+    try:
+        root_real = os.path.realpath(root_text)
+    except OSError:
+        root_real = root_text
+    for candidate in candidates:
+        for base in {root_text, root_real}:
+            if candidate == base or candidate.startswith(base.rstrip(os.sep) + os.sep):
+                return True
+    return False
+
+
+def _signal_confirmed(info, sig):
+    if not _proc_alive(info["pid"], info["starttime"]):
+        return False
+    try:
+        os.kill(info["pid"], sig)
+    except OSError:
+        return False
+    return True
+
+
+def settle_detached_workers_under(root, deadline_s=10):
+    """Stop processes whose cwd is still under root and wait until they exit.
+
+    Signals only a pid whose starttime still matches. A refused signal stays
+    recorded as not exited so cleanup cannot be reported as verified.
+    """
+    root = Path(root)
+    records = {}
+    signaled = set()
+    deadline = time.monotonic() + deadline_s
+    me = os.getpid()
+    while True:
+        now = time.monotonic()
+        matched = []
+        for info in _proc_snapshot().values():
+            pid = info["pid"]
+            if pid <= 1 or pid == me or info.get("state") == "Z":
+                continue
+            if not _cwd_under(info.get("cwd"), root):
+                continue
+            matched.append(info)
+            current = records.get(pid)
+            if current is None or current["starttime"] != info["starttime"]:
+                records[pid] = {"pid": pid, "pgid": info["pgrp"], "sid": info["sid"],
+                                "ppid": info["ppid"], "cwd": info["cwd"], "cmdline": info["cmdline"],
+                                "starttime": info["starttime"], "exited": False}
+                signaled.discard(pid)
+        for info in matched:
+            record = records.get(info["pid"])
+            if record is None or record["starttime"] != info["starttime"]:
+                continue
+            sig = signal.SIGKILL if now >= deadline else signal.SIGTERM
+            if sig == signal.SIGKILL or info["pid"] not in signaled:
+                if _signal_confirmed(info, sig):
+                    signaled.add(info["pid"])
+        for record in records.values():
+            if not _proc_alive(record["pid"], record["starttime"]):
+                record["exited"] = True
+        pending = [info for info in matched if not records[info["pid"]]["exited"]]
+        if records and all(record["exited"] for record in records.values()) and not pending:
+            break
+        if not records and not matched:
+            break
+        if now >= deadline:
+            break
+        time.sleep(0.05)
+    workers = []
+    for record in records.values():
+        record["exited"] = not _proc_alive(record["pid"], record["starttime"])
+        workers.append({key: record[key] for key in
+                        ("pid", "pgid", "sid", "ppid", "cwd", "cmdline", "starttime", "exited")})
+    return {"workers": workers}
+
+
+def _fixture_ownership_roots(cwd, env):
+    """Private temp roots this command may settle. Never the workspace itself."""
+    if not env or not env.get("TMPDIR"):
+        return []
+    try:
+        cwd_path = Path(cwd).resolve()
+        tmp_path = Path(env["TMPDIR"]).resolve()
+    except OSError:
+        return []
+    try:
+        tmp_inside_cwd = tmp_path.is_relative_to(cwd_path)
+        cwd_inside_tmp = cwd_path.is_relative_to(tmp_path)
+    except ValueError:
+        return []
+    if tmp_inside_cwd and tmp_path != cwd_path:
+        return [tmp_path]
+    if cwd_inside_tmp:
+        return [cwd_path]
+    return []
+
+
+def _merge_worker_records(existing, extra):
+    merged = {}
+    for record in list(existing) + list(extra):
+        if not isinstance(record, dict) or not isinstance(record.get("pid"), int):
+            continue
+        current = merged.get(record["pid"])
+        if current is None or current.get("starttime") != record.get("starttime"):
+            merged[record["pid"]] = dict(record)
+        elif record.get("exited") is True:
+            current["exited"] = True
+    return list(merged.values())
+
+
+def _workers_clear(evidence):
+    if evidence.get("open_descendants") not in (0, None):
+        return False
+    workers = evidence.get("detached_workers") or []
+    return all(isinstance(worker, dict) and worker.get("exited") is True for worker in workers)
 
 
 def run(argv, *, cwd, env, timeout=180, input_text=None):
     started = datetime.now(timezone.utc).isoformat()
     evidence = {"command": argv, "started_at": started, "exit_code": None,
                 "stdout": "", "stderr": "", "outcome": "FAIL", "output_truncated": False,
-                "cleanup_verified": False}
+                "cleanup_verified": False, "detached_workers": [], "open_descendants": 0,
+                "subreaper": False}
     if os.name != "posix":
         evidence["stderr"] = "QA process-group supervision requires a POSIX host"
         return evidence
@@ -65,6 +534,7 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
     threads = []
     tails = {"stdout": bytearray(), "stderr": bytearray()}
     truncated = {"stdout": False, "stderr": False}
+    result_consumed = False
 
     def terminate_group():
         try:
@@ -97,6 +567,70 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             except BrokenPipeError:
                 pass
 
+    def consume_result(adopt_exit_code):
+        nonlocal result_consumed
+        if result_consumed:
+            return
+        result_consumed = True
+        chunks = []
+        remaining = _OUTPUT_LIMIT
+        while remaining > 0:
+            try:
+                chunk = os.read(read_fd, min(65_536, remaining))
+            except OSError:
+                chunk = b""
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+            if b"\n" in chunk:
+                break
+        raw = b"".join(chunks).split(b"\n", 1)[0].strip()
+        if not raw:
+            if adopt_exit_code and not evidence["stderr"]:
+                evidence["stderr"] = "QA supervisor exited without a command result"
+            return
+        try:
+            payload = json.loads(raw.decode())
+        except (json.JSONDecodeError, UnicodeError, TypeError):
+            payload = None
+        if not isinstance(payload, dict):
+            if adopt_exit_code and not evidence["stderr"]:
+                evidence["stderr"] = "QA supervisor exited without a command result"
+            return
+        workers = payload.get("detached_workers")
+        evidence["detached_workers"] = workers if isinstance(workers, list) else []
+        open_descendants = payload.get("open_descendants")
+        evidence["open_descendants"] = open_descendants if type(open_descendants) is int else 0
+        evidence["subreaper"] = bool(payload.get("subreaper"))
+        if not adopt_exit_code:
+            return
+        code = payload.get("exit_code")
+        if type(code) is int:
+            evidence["exit_code"] = code
+        elif not evidence["stderr"]:
+            evidence["stderr"] = "QA supervisor exited without a command result"
+
+    def await_supervisor_result():
+        """Ask the supervisor to reap, then read its record without a status."""
+        nonlocal owner_write_fd, result_consumed
+        if result_consumed or process is None:
+            return
+        if owner_write_fd is not None:
+            try:
+                os.close(owner_write_fd)
+            except OSError:
+                pass
+            owner_write_fd = None
+        try:
+            ready_fds, _, _ = select.select([read_fd], [], [], 10)
+        except (OSError, ValueError):
+            ready_fds = []
+        if ready_fds:
+            consume_result(False)
+        else:
+            result_consumed = True
+
     try:
         process = subprocess.Popen(
             [sys.executable, "-c", _PROCESS_SUPERVISOR, str(write_fd), str(owner_read_fd), *argv],
@@ -117,16 +651,15 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             threads.append(thread)
         ready, _, _ = select.select([read_fd], [], [], timeout)
         if ready:
-            code = os.read(read_fd, 64)
-            if code:
-                evidence["exit_code"] = int(code)
-            else:
-                evidence["stderr"] = "QA supervisor exited without a command result"
+            consume_result(True)
         else:
             evidence["stderr"] = f"timeout after {timeout}s"
             # Do not wait/reap before signalling: the live or zombie supervisor
             # reserves its own process-group identity throughout cleanup.
             terminate_group()
+            # The supervisor reaps other-session descendants before it publishes
+            # the record. A timeout must not adopt that command status.
+            await_supervisor_result()
     except (OSError, ValueError) as error:
         evidence["stderr"] = str(error)
         if process is not None:
@@ -140,6 +673,8 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             os.close(write_fd)
         if owner_read_fd is not None:
             os.close(owner_read_fd)
+        if not result_consumed:
+            await_supervisor_result()
         os.close(read_fd)
         if process is not None:
             swept = False
@@ -153,13 +688,22 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                 evidence["stderr"] += f"\nprocess-group cleanup failed: {error}"
                 # Closing the owner pipe also asks the supervisor to sweep its
                 # own group, if the host refuses the outer process's signal.
-                os.close(owner_write_fd)
-                owner_write_fd = None
+                if owner_write_fd is not None:
+                    os.close(owner_write_fd)
+                    owner_write_fd = None
+            workers_clear = _workers_clear(evidence)
+            supervisor_reaped = False
             try:
                 process.wait(timeout=5)
-                evidence["cleanup_verified"] = swept
+                supervisor_reaped = True
+                # Assign only after this first wait. An expired reap stays unverified
+                # even when the supervisor has already exited.
+                evidence["cleanup_verified"] = bool(swept and workers_clear)
+                if not workers_clear:
+                    evidence["stderr"] += "\ndetached worker still alive after fixture cleanup"
             except subprocess.TimeoutExpired:
                 evidence["exit_code"] = None
+                evidence["cleanup_verified"] = False
                 evidence["stderr"] += "\nsupervisor reap deadline expired; descendant cleanup is unverified"
                 # Reap the known supervisor only as a final bounded fallback.
                 # A refused group sweep remains an unknown cleanup outcome.
@@ -169,8 +713,25 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                     evidence["stderr"] += f"\nsupervisor direct kill failed: {error}"
                 try:
                     process.wait(timeout=5)
+                    supervisor_reaped = True
                 except subprocess.TimeoutExpired:
                     evidence["stderr"] += "\nsupervisor still could not be reaped"
+            if supervisor_reaped:
+                try:
+                    extra = []
+                    for root in _fixture_ownership_roots(cwd, env):
+                        extra.extend(settle_detached_workers_under(root).get("workers") or [])
+                    if extra:
+                        evidence["detached_workers"] = _merge_worker_records(
+                            evidence.get("detached_workers") or [], extra)
+                        if any(not (isinstance(worker, dict) and worker.get("exited") is True)
+                               for worker in extra):
+                            evidence["cleanup_verified"] = False
+                            if "detached worker still alive after fixture cleanup" not in evidence["stderr"]:
+                                evidence["stderr"] += "\ndetached worker still alive after fixture cleanup"
+                except OSError as error:
+                    evidence["cleanup_verified"] = False
+                    evidence["stderr"] += f"\ndetached worker settlement failed: {error}"
         if owner_write_fd is not None:
             os.close(owner_write_fd)
         for thread in threads:
@@ -1772,6 +2333,309 @@ def process_self_test():
                 owner.kill()
                 owner.wait(timeout=5)
 
+        # The submitting fixture is this held setsid worker. Exit is the process
+        # identity disappearing; the short sleeps below only yield the scheduler.
+        ownership_cases = []
+
+        def marker_values(path):
+            values = {}
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        values[key] = value
+            return values
+
+        def release_fifo(path):
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as error:
+                    if error.errno == errno.ENXIO and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                        continue
+                    raise
+                try:
+                    os.write(descriptor, b"x")
+                finally:
+                    os.close(descriptor)
+                return
+
+        def wait_until(predicate, limit_s, failure):
+            deadline = time.monotonic() + limit_s
+            while time.monotonic() < deadline:
+                if predicate():
+                    return
+                time.sleep(0.02)
+            raise AssertionError(failure)
+
+        try:
+            complete_root = Path(env["TMPDIR"]) / "complete-root"
+            complete_root.mkdir()
+            complete_ready = Path(env["TMPDIR"]) / "complete-ready"
+            complete = run([sys.executable, "-c", _HELD_WORKER, str(complete_root),
+                            str(Path(env["TMPDIR"]) / "complete-release"), str(complete_ready),
+                            "complete"], cwd=temp, env=env, timeout=15)
+            complete_marker = marker_values(complete_ready)
+            complete_pid = int(complete_marker["pid"])
+            complete_info = _proc_identity(complete_pid)
+            complete_workers = [worker for worker in complete.get("detached_workers") or []
+                                if worker.get("pid") == complete_pid]
+            if (complete["exit_code"] != 0 or not complete["cleanup_verified"]
+                    or complete_marker.get("fixture") != "qa-held-worker"
+                    or complete_marker.get("root_held") != "1"
+                    or complete_marker.get("mode") != "complete"
+                    or (complete_info is not None and "qa-held-worker" in complete_info.get("cmdline", ""))
+                    or len(complete_workers) > 1
+                    or any(worker.get("exited") is not True for worker in complete_workers)):
+                raise AssertionError(
+                    f"completion did not keep the root through worker exit: {complete_marker} {complete}")
+            if sys.platform.startswith("linux") and complete.get("subreaper") is not True:
+                raise AssertionError(f"Linux supervisor did not become a subreaper: {complete}")
+            ownership_cases.append({"name": "completion", "pid": complete_pid,
+                                    "cwd": complete_marker.get("cwd"), "root": str(complete_root),
+                                    "root_held": True, "exited": True,
+                                    "cleanup_verified": complete["cleanup_verified"],
+                                    "subreaper": complete.get("subreaper"),
+                                    "detached_workers": complete_workers})
+
+            hold_root = Path(env["TMPDIR"]) / "cancel-hold-root"
+            hold_root.mkdir()
+            hold_ready = Path(env["TMPDIR"]) / "cancel-hold-ready"
+            hold_release = Path(env["TMPDIR"]) / "cancel-hold-release"
+            os.mkfifo(hold_release)
+            hold_box = {}
+
+            def run_hold():
+                hold_box["evidence"] = run(
+                    [sys.executable, "-c", _HELD_WORKER, str(hold_root), str(hold_release),
+                     str(hold_ready), "cancel-hold"], cwd=temp, env=env, timeout=15)
+
+            hold_thread = threading.Thread(target=run_hold)
+            hold_thread.start()
+            try:
+                wait_until(lambda: marker_values(hold_ready).get("root_held") == "1", 8,
+                           "cancellation did not retain the worker and root")
+                hold_marker = marker_values(hold_ready)
+                hold_pid = int(hold_marker["pid"])
+                hold_info = _proc_identity(hold_pid)
+                if (not hold_thread.is_alive() or hold_info is None or hold_info.get("state") == "Z"
+                        or not hold_root.exists() or hold_info.get("pgrp") != hold_pid
+                        or "qa-held-worker" not in hold_info.get("cmdline", "")
+                        or not _cwd_under(hold_info.get("cwd"), hold_root)):
+                    raise AssertionError(
+                        f"held worker was not alive inside the root: {hold_marker} {hold_info}")
+                observed_hold = {"pid": hold_pid, "pgid": hold_info.get("pgrp"),
+                                 "sid": hold_info.get("sid"), "ppid": hold_info.get("ppid"),
+                                 "cwd": hold_info.get("cwd"), "cmdline": hold_info.get("cmdline"),
+                                 "starttime": hold_info.get("starttime"),
+                                 "root_held_while_alive": True, "root": str(hold_root)}
+                release_fifo(hold_release)
+                hold_thread.join(timeout=12)
+                if hold_thread.is_alive():
+                    raise AssertionError("cancellation did not finish after the worker was released")
+                hold_evidence = hold_box.get("evidence") or {}
+                matched = [worker for worker in hold_evidence.get("detached_workers") or []
+                           if worker.get("pid") == hold_pid
+                           and worker.get("starttime") == hold_info["starttime"]]
+                if (hold_evidence.get("exit_code") != 0 or not hold_evidence.get("cleanup_verified")
+                        or _proc_alive(hold_pid, hold_info["starttime"]) or len(matched) != 1
+                        or matched[0].get("exited") is not True or matched[0].get("pgid") != hold_pid
+                        or "qa-held-worker" not in matched[0].get("cmdline", "")):
+                    raise AssertionError(
+                        f"cancellation did not record the worker exit: {hold_evidence}")
+                if sys.platform.startswith("linux") and hold_evidence.get("subreaper") is not True:
+                    raise AssertionError("cancellation supervisor was not a subreaper")
+                ownership_cases.append({"name": "cancellation", "observed_alive": observed_hold,
+                                        "exited": True, "cleanup_verified": True,
+                                        "record": matched[0], "root": str(hold_root)})
+            finally:
+                if hold_thread.is_alive():
+                    try:
+                        release_fifo(hold_release)
+                    except OSError:
+                        pass
+                    hold_thread.join(timeout=12)
+
+            unwind_root = Path(env["TMPDIR"]) / "unwind-root"
+            unwind_root.mkdir()
+            unwind_ready = Path(env["TMPDIR"]) / "unwind-ready"
+            unwind_observed = {}
+            real_select = select.select
+            raised = {"done": False}
+
+            def mocked_select(read_fds, write_fds, except_fds, timeout=None):
+                if not raised["done"]:
+                    def ready_waiting():
+                        values = marker_values(unwind_ready)
+                        if values.get("waiting") == "1" and values.get("pid"):
+                            unwind_observed["marker"] = values
+                            return True
+                        return False
+                    wait_until(ready_waiting, 8, "unwind worker did not become ready")
+                    unwind_observed["info"] = _proc_identity(int(unwind_observed["marker"]["pid"]))
+                    raised["done"] = True
+                    raise KeyboardInterrupt
+                return real_select(read_fds, write_fds, except_fds, timeout)
+
+            unwind_raised = False
+            try:
+                with mock.patch("select.select", side_effect=mocked_select):
+                    run([sys.executable, "-c", _HELD_WORKER, str(unwind_root),
+                         str(Path(env["TMPDIR"]) / "unwind-release"), str(unwind_ready), "cancel"],
+                        cwd=temp, env=env, timeout=15)
+            except KeyboardInterrupt:
+                unwind_raised = True
+            unwind_marker = marker_values(unwind_ready)
+            unwind_info = unwind_observed.get("info")
+            if (not unwind_raised or unwind_marker.get("root_held") != "1" or not unwind_root.exists()
+                    or unwind_info is None
+                    or _proc_alive(int(unwind_marker["pid"]), unwind_info["starttime"])):
+                raise AssertionError(
+                    f"unwind left the worker or dropped the root: {unwind_marker} {unwind_info}")
+            ownership_cases.append({"name": "unwind", "pid": int(unwind_marker["pid"]),
+                                    "pgid": unwind_info.get("pgrp"), "sid": unwind_info.get("sid"),
+                                    "cwd": unwind_info.get("cwd"), "cmdline": unwind_info.get("cmdline"),
+                                    "starttime": unwind_info.get("starttime"), "root": str(unwind_root),
+                                    "root_held": True, "exited": True})
+
+            death_root = Path(env["TMPDIR"]) / "owner-death-root"
+            death_root.mkdir()
+            death_ready = Path(env["TMPDIR"]) / "owner-death-ready"
+            death_release = Path(env["TMPDIR"]) / "owner-death-release"
+            launcher = ("import importlib.util; from pathlib import Path; "
+                        "s=importlib.util.spec_from_file_location('qa',"
+                        + repr(str(Path(__file__).resolve())) + "); "
+                        "q=importlib.util.module_from_spec(s); s.loader.exec_module(q); "
+                        "q.run([" + repr(sys.executable) + ",'-c',q._HELD_WORKER,"
+                        + repr(str(death_root)) + "," + repr(str(death_release)) + ","
+                        + repr(str(death_ready)) + ",'cancel'],cwd=Path(" + repr(str(temp))
+                        + "),env=q.isolated_environment(Path(" + repr(str(temp)) + ")),timeout=20)")
+            death_owner = subprocess.Popen([sys.executable, "-c", launcher], env=env,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            death_info = {}
+            try:
+                def death_started():
+                    if death_owner.poll() is not None:
+                        return False
+                    values = marker_values(death_ready)
+                    if values.get("waiting") != "1":
+                        return False
+                    info = _proc_identity(int(values["pid"]))
+                    if info is None or info.get("state") == "Z":
+                        return False
+                    death_info["info"] = info
+                    return True
+                try:
+                    wait_until(death_started, 8, "owner-death worker did not start")
+                except AssertionError:
+                    output, errors = death_owner.communicate(timeout=2)
+                    raise AssertionError(
+                        f"owner-death worker did not start: {output!r} {errors!r}") from None
+                death_owner.kill()
+                death_owner.wait(timeout=5)
+                wait_until(lambda: marker_values(death_ready).get("root_held") == "1"
+                           and not _proc_alive(death_info["info"]["pid"], death_info["info"]["starttime"]),
+                           8, "owner death left the detached worker running")
+                if not death_root.exists():
+                    raise AssertionError("owner death removed the worker root before exit was observed")
+                ownership_cases.append({"name": "owner-death", "pid": death_info["info"]["pid"],
+                                        "pgid": death_info["info"].get("pgrp"),
+                                        "sid": death_info["info"].get("sid"),
+                                        "cwd": death_info["info"].get("cwd"),
+                                        "cmdline": death_info["info"].get("cmdline"),
+                                        "starttime": death_info["info"].get("starttime"),
+                                        "root": str(death_root), "root_held": True, "exited": True})
+            finally:
+                if death_owner.poll() is None:
+                    death_owner.kill()
+                    death_owner.wait(timeout=5)
+
+            settle_root = Path(env["TMPDIR"]) / "settle-root"
+            settle_root.mkdir()
+            settle_ready = Path(env["TMPDIR"]) / "settle-ready"
+            settle_release = Path(env["TMPDIR"]) / "settle-release"
+            os.mkfifo(settle_release)
+            settle_script = r"""# qa-held-worker
+import os, signal, sys
+root, release, ready = sys.argv[1:4]
+def finish(_signum, _frame):
+    open(ready, "w").write(
+        "fixture=qa-held-worker\npid=%s\nroot_held=%s\ncwd=%s\nmode=settle\n"
+        % (os.getpid(), int(os.path.isdir(root)), os.getcwd()))
+    fd = os.open(release, os.O_RDONLY)
+    os.read(fd, 1)
+    os.close(fd)
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, finish)
+open(ready, "w").write("fixture=qa-held-worker\npid=%s\nwaiting=1\nmode=settle\n" % os.getpid())
+while True:
+    signal.pause()
+"""
+            settle_proc = subprocess.Popen(
+                [sys.executable, "-c", settle_script, str(settle_root), str(settle_release),
+                 str(settle_ready)],
+                cwd=settle_root, start_new_session=True, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            settle_box = {}
+            try:
+                wait_until(lambda: marker_values(settle_ready).get("waiting") == "1", 5,
+                           "direct settle worker did not start")
+
+                def run_settle():
+                    settle_box["settlement"] = settle_detached_workers_under(settle_root)
+
+                settle_thread = threading.Thread(target=run_settle)
+                settle_thread.start()
+                try:
+                    wait_until(lambda: marker_values(settle_ready).get("root_held") == "1", 8,
+                               "direct settlement did not signal the worker while the root existed")
+                    settle_info = _proc_identity(settle_proc.pid)
+                    if (not settle_thread.is_alive() or settle_proc.poll() is not None
+                            or not settle_root.exists() or settle_info is None
+                            or settle_info.get("state") == "Z" or settle_info.get("pgrp") != settle_proc.pid
+                            or "qa-held-worker" not in settle_info.get("cmdline", "")):
+                        raise AssertionError(
+                            f"direct settle worker was not held alive: {settle_info}")
+                    release_fifo(settle_release)
+                    settle_thread.join(timeout=8)
+                    if settle_thread.is_alive():
+                        raise AssertionError("direct settlement did not observe worker exit")
+                    settle_workers = (settle_box.get("settlement") or {}).get("workers") or []
+                    if (len(settle_workers) != 1 or settle_workers[0].get("pid") != settle_proc.pid
+                            or settle_workers[0].get("exited") is not True):
+                        raise AssertionError(f"direct settlement record: {settle_workers}")
+                    settle_proc.wait(timeout=5)
+                    if _proc_alive(settle_proc.pid, settle_info["starttime"]):
+                        raise AssertionError("direct settle worker still alive")
+                    ownership_cases.append({"name": "scratch-root-settlement",
+                                            "pid": settle_proc.pid, "pgid": settle_info.get("pgrp"),
+                                            "sid": settle_info.get("sid"), "cwd": settle_info.get("cwd"),
+                                            "cmdline": settle_info.get("cmdline"),
+                                            "starttime": settle_info.get("starttime"),
+                                            "root": str(settle_root), "root_held_while_alive": True,
+                                            "exited": True, "record": settle_workers[0]})
+                finally:
+                    if settle_thread.is_alive():
+                        try:
+                            release_fifo(settle_release)
+                        except OSError:
+                            pass
+                        settle_thread.join(timeout=8)
+            finally:
+                if settle_proc.poll() is None:
+                    try:
+                        os.kill(settle_proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                    settle_proc.wait(timeout=5)
+        finally:
+            scratch = Path(__file__).resolve().parent.parent / ".orbit" / "tmp"
+            scratch.mkdir(parents=True, exist_ok=True)
+            (scratch / "detached-worker-ownership.json").write_text(
+                json.dumps({"fixture": "qa-held-worker", "cases": ownership_cases}, indent=2) + "\n")
+
 
 def builtin_init_self_test():
     """Disposable init must skip host preparation; an init failure must halt with a reason."""
@@ -2500,6 +3364,7 @@ def main():
     # is removed (observed OSError 66 from host-resource-pressure.json). That
     # cleanup failure must never take the report with it, so ignore it here
     # and record anything left behind as a warning below instead.
+    detached_worker_settlement = {"workers": []}
     with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch,
                                      ignore_cleanup_errors=True) as tmp:
         temp = Path(tmp)
@@ -2629,6 +3494,11 @@ def main():
                             "stdout":"", "stderr":str(error), "outcome":"FAIL",
                             "assertions":[], "candidate_id":candidate_id})
 
+        try:
+            detached_worker_settlement = settle_detached_workers_under(temp)
+        except OSError as error:
+            detached_worker_settlement = {"workers": [], "error": str(error)}
+
     # The scratch TemporaryDirectory above ignores cleanup errors, so a late
     # fixture write can leave paths behind. They are evidence of the race,
     # not of a scenario outcome, so record them as a warning on the report.
@@ -2647,6 +3517,18 @@ def main():
     elif scratch_leftovers:
         scratch_cleanup_warning = (f"harness scratch cleanup did not finish; {len(scratch_leftovers)} "
                                    "leftover path(s) remain under the scratch temp dir")
+    detached_workers = detached_worker_settlement.get("workers") or []
+    if detached_worker_settlement.get("error"):
+        settlement_warning = ("harness scratch cleanup did not finish; detached worker "
+                              f"settlement failed: {detached_worker_settlement['error']}")
+    elif any(worker.get("exited") is not True for worker in detached_workers):
+        settlement_warning = ("harness scratch cleanup did not finish; detached worker "
+                              "still alive after fixture cleanup")
+    else:
+        settlement_warning = None
+    if settlement_warning:
+        scratch_cleanup_warning = (f"{scratch_cleanup_warning}; {settlement_warning}"
+                                   if scratch_cleanup_warning else settlement_warning)
 
     covered = {result["scenario"] for result in results}
     for scenario in inventory["scenarios"]:
@@ -2673,7 +3555,8 @@ def main():
                         "capabilities":capabilities},
         "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
         "scratch_cleanup": {"leftover_paths": scratch_leftovers,
-                            "warning": scratch_cleanup_warning},
+                            "warning": scratch_cleanup_warning,
+                            "detached_workers": detached_workers},
         "results": results, "findings": decision_failures,
         "post_publish_handoff": {"npm_freshness":"PENDING", "website_freshness":"PENDING",
                                   "part_of_pre_release_decision":False},
