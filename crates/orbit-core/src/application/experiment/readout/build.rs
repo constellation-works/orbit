@@ -13,7 +13,7 @@ use crate::application::experiment::assignment::{
 use crate::application::experiment::definition::{ExperimentOverlay, validate_metric};
 use crate::application::experiment::overlay::instruction_role;
 use crate::application::experiment::readout::outcomes::{
-    METRIC_SPECS, Observed, Outcome, REGRESSION_WINDOW_DAYS, TaskOutcome, metric_spec,
+    Kind, METRIC_SPECS, Observed, Outcome, REGRESSION_WINDOW_DAYS, TaskOutcome, metric_spec,
 };
 
 use super::model::{
@@ -240,13 +240,31 @@ fn build_readout(
         .map(|spec| {
             tasks
                 .iter()
-                .filter_map(|task| match task.values.get(spec.name) {
-                    Some(Outcome::Value(value)) => Some(PrimaryObservation {
-                        arm: task.arm.clone(),
-                        assigned_at: task.assigned_at,
-                        value: *value,
-                    }),
-                    _ => None,
+                .filter_map(|task| {
+                    if spec.kind == Kind::Ratio {
+                        // Per-line metrics are never stored in `values`:
+                        // carry the numerator and measured line pair so the
+                        // cumulative series can take a ratio of sums.
+                        // `included_pair` excludes zero-line, unavailable
+                        // and numerator-less tasks.
+                        return metrics::included_pair(task, spec.name).map(|pair| {
+                            PrimaryObservation {
+                                arm: task.arm.clone(),
+                                assigned_at: task.assigned_at,
+                                value: pair.numerator,
+                                lines: Some(pair.lines),
+                            }
+                        });
+                    }
+                    match task.values.get(spec.name) {
+                        Some(Outcome::Value(value)) => Some(PrimaryObservation {
+                            arm: task.arm.clone(),
+                            assigned_at: task.assigned_at,
+                            value: *value,
+                            lines: None,
+                        }),
+                        _ => None,
+                    }
                 })
                 .collect()
         })

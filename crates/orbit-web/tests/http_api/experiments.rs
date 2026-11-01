@@ -159,3 +159,177 @@ fn experiment_authoring_routes_are_operator_only_and_record_core_events() {
         },
     );
 }
+
+/// A per-line primary's cumulative series is the ratio of accumulated
+/// numerators over accumulated reviewable lines, not a blank series and
+/// not a mean of per-task ratios; zero-line and unavailable tasks are out.
+#[test]
+fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
+    isolated(
+        "experiments::experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary",
+        || {
+            use orbit_core::application::experiment::{
+                ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+            };
+            use orbit_core::application::task::TaskAddParams;
+            use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+            use orbit_store::contracts::{
+                DiffClassCounts, ExperimentAssignment, ExperimentStoreBackend, LandedDiffSource,
+                LandedDiffStats, LandedDiffStoreBackend, ReviewableLines,
+            };
+            use orbit_types::telemetry::{InvocationTrace, TokenUsage};
+
+            let fixture = Fixture::new();
+            let config = fixture.work.join("config.toml");
+            let mut text = fs::read_to_string(&config).unwrap_or_default();
+            text.push_str("\n[experiments]\nenabled = true\n");
+            fs::write(&config, text).unwrap();
+            let runtime = &fixture.runtime;
+            let actor = ExperimentActor {
+                actor: "per-line-cumulative-test".into(),
+                reason: None,
+            };
+            let experiment = runtime
+                .create_experiment(
+                    "per-line-cumulative",
+                    ExperimentDefinitionInput {
+                        arms: Some(json!([
+                            { "name": "control", "control": true, "weight": 1 },
+                            { "name": "treatment", "weight": 1 }
+                        ])),
+                        primary_metric: Some("cost_per_line".into()),
+                        guardrails: Some(json!({"lines_changed": "+0"})),
+                        min_sample: Some(2),
+                        ..ExperimentDefinitionInput::default()
+                    },
+                    actor.clone(),
+                )
+                .unwrap();
+            runtime
+                .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+                .unwrap();
+
+            let mut seq = 0u64;
+            let mut measured = |arm: &str, cost: f64, lines: u64| {
+                seq += 1;
+                let task = runtime
+                    .add_task(TaskAddParams {
+                        title: format!("per-line cumulative {arm}"),
+                        complexity: TaskComplexity::Low,
+                        task_type: Some(TaskType::Chore),
+                        status: Some(TaskStatus::Done),
+                        ..TaskAddParams::default()
+                    })
+                    .unwrap();
+                let workspace_id = runtime.workspace_id().unwrap();
+                runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .assign_experiments(&workspace_id, &task.id, true, true, &|records, _, _| {
+                        let record = records
+                            .iter()
+                            .find(|record| record.experiment.id == experiment.id)
+                            .unwrap();
+                        let arm_row = record.arms.iter().find(|row| row.name == arm).unwrap();
+                        Ok(vec![ExperimentAssignment {
+                            experiment: experiment.id.clone(),
+                            task_id: task.id.to_string(),
+                            arm: Some(arm.into()),
+                            segment: Some(1),
+                            digest: Some(arm_row.overlay_digest.clone()),
+                            assigned_at: chrono::Utc::now(),
+                            forced: false,
+                            exclusion_reason: None,
+                        }])
+                    })
+                    .unwrap();
+                runtime
+                    .stores()
+                    .jobs()
+                    .insert_job_run(
+                        "task_local_pipeline",
+                        1,
+                        chrono::Utc::now(),
+                        Some(json!({ "task_ids": [task.id.to_string()] })),
+                        None,
+                    )
+                    .unwrap();
+                runtime
+                    .insert_invocation_trace_record(
+                        &orbit_store::contracts::InvocationInsertParams {
+                            agent_execution_id: None,
+                            job_run_id: format!("fixture-{}", task.id),
+                            account: None,
+                            activity_id: "agent_implement".into(),
+                            agent: "codex".into(),
+                            provider: None,
+                            model: Some("gpt-6.1-sol".into()),
+                            task_ids: vec![task.id.to_string()],
+                            trace: InvocationTrace {
+                                usage: TokenUsage::default(),
+                                provider_cost_usd: Some(cost),
+                                ..InvocationTrace::default()
+                            },
+                        },
+                    )
+                    .unwrap();
+                runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .record_landed_diff_stats(&LandedDiffStats {
+                        workspace_id,
+                        task_id: task.id.to_string(),
+                        base_commit: format!("{:040x}", seq * 2),
+                        landed_commit: format!("{:040x}", seq * 2 + 1),
+                        landed_at: chrono::Utc::now(),
+                        recorded_at: chrono::Utc::now(),
+                        job_run_id: None,
+                        source: LandedDiffSource::Landing,
+                        crew: None,
+                        model: None,
+                        complexity: None,
+                        task_type: None,
+                        code: DiffClassCounts {
+                            added: lines,
+                            deleted: 0,
+                            files: 1,
+                        },
+                        tests: DiffClassCounts::default(),
+                        other: DiffClassCounts::default(),
+                        reviewable: Some(ReviewableLines {
+                            added: lines,
+                            deleted: 0,
+                        }),
+                    })
+                    .unwrap();
+                task.id.to_string()
+            };
+            // Control 10/100 + 30/50 = 40/150; treatment 2/10 + 9/30 = 11/40.
+            measured("control", 10.0, 100);
+            measured("control", 30.0, 50);
+            measured("treatment", 2.0, 10);
+            measured("treatment", 9.0, 30);
+            measured("control", 99.0, 0);
+
+            let server = fixture.server(false);
+            let body = json_ok(server.get(&route(&format!("/{}/readout", experiment.id))));
+            let cumulative = &body["cumulative"];
+            assert_eq!(cumulative["metric"], json!("cost_per_line"), "{body}");
+            for (arm, want) in [("control", 40.0 / 150.0), ("treatment", 11.0 / 40.0)] {
+                let points = cumulative["arms"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["arm"] == json!(arm))
+                    .unwrap()["points"]
+                    .as_array()
+                    .unwrap()
+                    .clone();
+                let last = points.last().unwrap();
+                assert_eq!(last["n"], json!(2), "{arm}: {cumulative}");
+                let value = last["value"].as_f64().expect("non-null cumulative value");
+                assert!((value - want).abs() < 1e-9, "{arm}: {value} != {want}");
+            }
+        },
+    );
+}

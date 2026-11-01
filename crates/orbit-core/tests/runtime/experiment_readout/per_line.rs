@@ -394,6 +394,146 @@ fn ratio_of_sums_excludes_zero_and_unavailable_lines() {
     let payload = serde_json::to_value(cost_usd).unwrap();
     assert!(payload.get("zero_lines_excluded").is_none());
     assert!(payload.get("unavailable_lines_excluded").is_none());
+
+    // The dashboard cumulative series is built from these observations:
+    // a per-line primary must carry its numerator/line pair (excluded
+    // zero-line and unavailable tasks contribute none), not stay empty.
+    assert_eq!(readout.primary_observations.len(), 4);
+    let pairs = |arm: &str| {
+        let mut pairs: Vec<(f64, u64)> = readout
+            .primary_observations
+            .iter()
+            .filter(|observation| observation.arm == arm)
+            .map(|observation| {
+                (
+                    observation.value,
+                    observation.lines.expect("per-line observation lines"),
+                )
+            })
+            .collect();
+        pairs.sort_by(|left, right| left.0.total_cmp(&right.0));
+        pairs
+    };
+    assert_eq!(pairs("control"), vec![(10.0, 100), (30.0, 50)]);
+    assert_eq!(pairs("treatment"), vec![(2.0, 10), (9.0, 30)]);
+    let ratio = |arm: &str| {
+        let pairs = pairs(arm);
+        pairs.iter().map(|pair| pair.0).sum::<f64>()
+            / pairs.iter().map(|pair| pair.1).sum::<u64>() as f64
+    };
+    assert!(close(ratio("control"), 40.0 / 150.0));
+    assert!(close(ratio("treatment"), 11.0 / 40.0));
+}
+
+/// A `lead_time_per_line` primary likewise carries the lead-time numerator
+/// and its line pair, so its cumulative series is not empty.
+#[test]
+fn lead_time_per_line_primary_observations_carry_the_pair() {
+    if !crate::dispatch_admission::isolated(
+        "experiment_readout::per_line::lead_time_per_line_primary_observations_carry_the_pair",
+    ) {
+        return;
+    }
+    let (root, runtime) = open_runtime();
+    let global = root.path().join("home/.orbit");
+    let experiment = runtime
+        .create_experiment(
+            "per-line-lead-primary",
+            ExperimentDefinitionInput {
+                arms: Some(arms()),
+                primary_metric: Some("lead_time_per_line".into()),
+                guardrails: Some(json!({"lines_changed": "+0"})),
+                min_sample: Some(2),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor())
+        .unwrap();
+    // Control leads 10h/100 and 20h/50 (ratio of sums 0.2); treatment
+    // 4h/10 and 6h/30 (ratio of sums 0.25, mean of ratios 0.3).
+    measured(
+        &runtime,
+        &global,
+        &experiment.id,
+        "control",
+        Measured {
+            cost: 1.0,
+            lines: 100,
+            lead_hours: 10,
+        },
+        1,
+    );
+    measured(
+        &runtime,
+        &global,
+        &experiment.id,
+        "control",
+        Measured {
+            cost: 1.0,
+            lines: 50,
+            lead_hours: 20,
+        },
+        2,
+    );
+    measured(
+        &runtime,
+        &global,
+        &experiment.id,
+        "treatment",
+        Measured {
+            cost: 1.0,
+            lines: 10,
+            lead_hours: 4,
+        },
+        3,
+    );
+    measured(
+        &runtime,
+        &global,
+        &experiment.id,
+        "treatment",
+        Measured {
+            cost: 1.0,
+            lines: 30,
+            lead_hours: 6,
+        },
+        4,
+    );
+    let zero = enroll(&runtime, &experiment.id, "treatment", true);
+    lines(
+        &runtime,
+        &zero,
+        5,
+        0,
+        Some(ReviewableLines {
+            added: 0,
+            deleted: 0,
+        }),
+    );
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    assert_eq!(readout.primary_observations.len(), 4);
+    let ratio = |arm: &str| {
+        let pairs: Vec<(f64, u64)> = readout
+            .primary_observations
+            .iter()
+            .filter(|observation| observation.arm == arm)
+            .map(|observation| {
+                (
+                    observation.value,
+                    observation.lines.expect("per-line observation lines"),
+                )
+            })
+            .collect();
+        assert_eq!(pairs.len(), 2, "{arm}");
+        pairs.iter().map(|pair| pair.0).sum::<f64>()
+            / pairs.iter().map(|pair| pair.1).sum::<u64>() as f64
+    };
+    assert!(close(ratio("control"), 30.0 / 150.0));
+    assert!(close(ratio("treatment"), 10.0 / 40.0));
 }
 
 /// Improving cost per line while adding lines does not win.
