@@ -195,6 +195,7 @@ impl OrbitRuntime {
     /// for each such task before the run is submitted, which lifts the hold
     /// on every admission route for that scheduled time. The tool and
     /// dashboard surfaces always pass `false`.
+    // Public API: orbit-cli, orbit-web and the tool host pass these 11 positional arguments; a struct changes the signature.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_ship_run_with_containment(
         &self,
@@ -420,6 +421,7 @@ impl OrbitRuntime {
     /// the window where workspace policy applies none; every child it admits
     /// inherits the captured layer. It is refused before submission when the
     /// workspace delivers locally, and as on ship otherwise.
+    // Public API: orbit-cli, orbit-web and the desktop drain pass these 13 positional arguments; a struct changes the signature.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_workspace_auto_run_with_mode(
         &self,
