@@ -8,6 +8,7 @@ import {
   $,
   actionReason,
   clockHm,
+  cronDraftText,
   cronText,
   explainUnavailable,
   feedback,
@@ -275,7 +276,7 @@ function autoTaskEditor(definition) {
   return autoTaskScheduleEditor({
     key,
     definition,
-    cronPreview: (cron) => cronText(cron, definition.next_evaluation?.at),
+    cronPreview: (cron) => cronDraftText(cron, definition.schedule?.cron, definition.next_evaluation?.at),
     save: (schedule) => {
       const observed = editorObserved(key);
       return postJson("/api/auto-tasks/schedule", {
