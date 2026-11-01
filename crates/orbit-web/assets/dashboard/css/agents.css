@@ -20,8 +20,11 @@
   font-size: 13px;
   line-height: 1.5;
 }
+/* `.panel > .body` (components.css) zeroes the horizontal inset unless this
+   rule matches its specificity; the grid stays at class specificity so the
+   narrow-width template overrides below still win. */
+.panel > .body.agents-body { padding: 14px 16px 18px; }
 .agents-body {
-  padding: 14px 16px 18px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
   grid-template-areas:
@@ -322,7 +325,8 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
 }
 
 @media (max-width: 640px) {
-  .agents-body { padding: 10px; gap: 12px; }
+  .panel > .body.agents-body { padding: 10px; }
+  .agents-body { gap: 12px; }
   .agents-cause-row { grid-template-columns: minmax(0, 1fr) 5.5rem; }
   .agents-cause-row .agents-cause-bar { grid-column: 1 / -1; grid-row: 2; }
   /* Rank, crew and score fit the phone-width box together. */
