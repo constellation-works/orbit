@@ -726,6 +726,7 @@ fn implementer_regressions_do_not_rank_comparable_work() {
                             added: 25,
                             ..Default::default()
                         },
+                        reviewable: None,
                     })
                     .unwrap();
             }

@@ -13,6 +13,25 @@ pub struct DiffClassCounts {
     pub files: u64,
 }
 
+/// Reviewable lines added and deleted, the denominator of a per-line metric.
+///
+/// A pure rename and any path matched by `workflow.non_reviewable_paths` are
+/// left out. `None` on a row means the denominator was not recorded, or could
+/// not be recovered from that task's own commits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReviewableLines {
+    pub added: u64,
+    pub deleted: u64,
+}
+
+impl ReviewableLines {
+    /// Added plus deleted.
+    #[must_use]
+    pub const fn total(self) -> u64 {
+        self.added.saturating_add(self.deleted)
+    }
+}
+
 /// How a row was recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LandedDiffSource {
@@ -60,6 +79,10 @@ pub struct LandedDiffStats {
     pub code: DiffClassCounts,
     pub tests: DiffClassCounts,
     pub other: DiffClassCounts,
+    /// Reviewable added and deleted lines from this task's own commits.
+    /// `None` when the row predates the denominator, or attribution could
+    /// not be recovered without borrowing another task's range.
+    pub reviewable: Option<ReviewableLines>,
 }
 
 pub trait LandedDiffStoreBackend: Send + Sync {

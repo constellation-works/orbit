@@ -474,8 +474,11 @@ pub struct OrbitRuntimeSettings {
     light_delivery_paths: Vec<String>,
     /// `workflow.test_paths` and `workflow.non_code_paths` as compiled
     /// filters: how a landed diff's paths split into tests, other and code.
+    /// `workflow.non_reviewable_paths` drops paths from the reviewable-lines
+    /// denominator without changing that class split.
     diff_test_paths: orbit_common::fs::path_filter::PathFilter,
     diff_non_code_paths: orbit_common::fs::path_filter::PathFilter,
+    diff_non_reviewable_paths: orbit_common::fs::path_filter::PathFilter,
     /// `[workflow.regression_risk]`: whether implement and review prompts
     /// mark regression-prone context files, and the gates for a mark.
     regression_risk: orbit_config::RegressionRiskSettings,
@@ -551,6 +554,7 @@ impl OrbitRuntimeSettings {
         diff_path_filters: (
             orbit_common::fs::path_filter::PathFilter,
             orbit_common::fs::path_filter::PathFilter,
+            orbit_common::fs::path_filter::PathFilter,
         ),
         regression_risk: orbit_config::RegressionRiskSettings,
         explore: orbit_config::ExploreSettings,
@@ -607,6 +611,7 @@ impl OrbitRuntimeSettings {
             light_delivery_paths,
             diff_test_paths: diff_path_filters.0,
             diff_non_code_paths: diff_path_filters.1,
+            diff_non_reviewable_paths: diff_path_filters.2,
             regression_risk,
             explore,
             explore_brief,
@@ -721,6 +726,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn diff_non_code_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
         &self.diff_non_code_paths
+    }
+
+    pub(crate) fn diff_non_reviewable_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
+        &self.diff_non_reviewable_paths
     }
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {

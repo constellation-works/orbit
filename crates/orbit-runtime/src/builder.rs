@@ -398,6 +398,10 @@ pub(crate) fn build_context_from_roots(
                     "workflow.non_code_paths",
                     &runtime_config.snapshot.workflow_non_code_paths,
                 )?,
+                orbit_common::fs::path_filter::PathFilter::new(
+                    "workflow.non_reviewable_paths",
+                    &runtime_config.snapshot.workflow_non_reviewable_paths,
+                )?,
             ),
             runtime_config.snapshot.regression_risk(),
             runtime_config.snapshot.explore(),

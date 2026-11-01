@@ -561,6 +561,7 @@ crew_performance_window_days = 30
 | `workflow.light_delivery_paths` | `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]` | Path globs a candidate must change only within for a `skip-review` or `skip-validation` task to skip agent review or local validation. A leading `!` excludes. `[]` disables both tags. See [light delivery](#light-delivery-skip-review-and-skip-validation). |
 | `workflow.test_paths` | `["**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**", "**/testdata/**", "**/*_test.*", "**/*.test.*", "**/test_*.*", "**/*_spec.*", "**/*.spec.*"]` | **Advanced.** Path globs whose changed lines count as tests in landed-delivery diff stats. See [landed diff classification](#landed-diff-classification). |
 | `workflow.non_code_paths` | `["docs/**", "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.lock", "**/*.csv", "**/*.golden", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.webp", "**/*.svg", "**/*.ico", "**/LICENSE*"]` | **Advanced.** Path globs whose changed lines count as other (docs, config, data, assets) in landed-delivery diff stats; everything else is code. See [landed diff classification](#landed-diff-classification). |
+| `workflow.non_reviewable_paths` | `[]` | **Advanced.** Path globs left out of the reviewable-lines denominator. Docs and config stay reviewable; list lockfiles, goldens, snapshots and generated files here. Empty counts every line that is not a pure rename. Distinct from `workflow.non_code_paths`. See [landed diff classification](#landed-diff-classification). |
 | `workflow.review_skip_tags.<tag>.paths` | unset | Path globs (same syntax as `workflow.light_delivery_paths`; `["**"]` allowed) a candidate carrying `<tag>` must change only within to skip agent review. See [review-skip tags](#review-skip-tags-workflowreview_skip_tags). |
 | `workflow.review_skip_tags.<tag>.guard` | unset | Optional repository-relative executable, read from the delivery's base revision, that must exit 0 (with the base and head as its first two arguments) for `<tag>` to skip agent review. |
 | `visual_review.manifests` | `[]` | Repository-relative view manifests a `verify-mock-ui` task's `mocks/<view>[.<state>][.<theme>][.<width>].<ext>` names are validated against at promotion to backlog and at delivery admission, read at the base revision. Empty refuses such a task with `no_view_manifest`. `orbit visual capture --task <ID>` reads the same manifests from the working tree to render each mock's view from the current checkout (its implementer self-check, available in every mode). |
@@ -674,6 +675,13 @@ non_code_paths = ["docs/**", "**/*.md", "website/**"]
 ```
 
 A rename counts its changed lines only, and a binary file counts as a changed file with no lines. A change to either list applies to deliveries recorded after it; rows already recorded keep their classes.
+
+`workflow.non_reviewable_paths` is a separate exclusion for the reviewable-lines denominator used by the per-line experiment metrics. It uses the same glob syntax. Docs and config stay reviewable, so this list is not `non_code_paths` and it is not a built-in toolchain list: unset and `[]` exclude nothing. A pure rename (a path move with no edited lines) is also left out. Each task's count is taken from that task's own commits. A row recorded before the denominator existed, or whose commits cannot be isolated to that task, keeps an unavailable denominator and is never filled in by re-diffing a shared landing range. A change to the list applies only to deliveries recorded after it.
+
+```toml
+[workflow]
+non_reviewable_paths = ["**/*.golden", "**/*.lock", "**/generated/**"]
+```
 
 ### Review-skip tags: `workflow.review_skip_tags`
 

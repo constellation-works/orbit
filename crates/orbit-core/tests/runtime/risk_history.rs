@@ -76,6 +76,7 @@ fn seed_landed_task(runtime: &OrbitRuntime, lines: u64, regressed: bool) {
             },
             tests: DiffClassCounts::default(),
             other: DiffClassCounts::default(),
+            reviewable: None,
         })
         .unwrap();
 }

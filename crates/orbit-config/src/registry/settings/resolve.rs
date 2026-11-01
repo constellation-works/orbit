@@ -144,6 +144,15 @@ pub(super) fn resolve_non_code_paths(raw: Option<Vec<String>>) -> Result<Vec<Str
     resolve_path_filter_default("workflow.non_code_paths", raw, DEFAULT_NON_CODE_PATHS)
 }
 
+/// `workflow.non_reviewable_paths`: unset and `[]` exclude nothing. The
+/// default is empty so Orbit does not hard-code a toolchain's generated
+/// files; docs and config stay reviewable until a workspace lists them.
+pub(super) fn resolve_non_reviewable_paths(
+    raw: Option<Vec<String>>,
+) -> Result<Vec<String>, OrbitError> {
+    resolve_path_filter_default("workflow.non_reviewable_paths", raw, &[])
+}
+
 /// `workflow.unlocked_path_validation_commands`: blank entries are dropped,
 /// so a list of only blanks keeps full validation like an unset key.
 pub(super) fn resolve_unlocked_path_validation_commands(

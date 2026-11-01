@@ -1,7 +1,8 @@
 //! The statistics a readout reports: means and medians with seeded
-//! percentile-bootstrap intervals, Wilson intervals for rates, a
-//! post-stratified difference between two arms, and the chi-square test of
-//! observed arm counts against their weights.
+//! percentile-bootstrap intervals, Wilson intervals for rates, a ratio of
+//! sums with a paired task bootstrap, a post-stratified difference between
+//! two arms, and the chi-square test of observed arm counts against their
+//! weights.
 
 /// Bootstrap resamples per interval.
 const RESAMPLES: usize = 2_000;
@@ -126,6 +127,65 @@ pub(super) fn wilson(successes: usize, n: usize) -> Option<Interval> {
         (centre + half).min(1.0)
     };
     Some([low, high])
+}
+
+/// One task's numerator and its reviewable-line denominator.
+#[derive(Clone, Copy)]
+pub(super) struct WeightedPair {
+    pub(super) numerator: f64,
+    pub(super) lines: u64,
+}
+
+/// Sum of numerators divided by sum of lines. `None` when the lines sum to
+/// zero, which included pairs never do.
+pub(super) fn ratio_of_sums(pairs: &[WeightedPair]) -> Option<f64> {
+    let lines: u64 = pairs.iter().map(|pair| pair.lines).sum();
+    (lines > 0).then(|| pairs.iter().map(|pair| pair.numerator).sum::<f64>() / lines as f64)
+}
+
+/// A percentile-bootstrap interval of the ratio of sums, resampling tasks.
+/// `None` below two pairs.
+pub(super) fn paired_ratio_bootstrap(label: &str, pairs: &[WeightedPair]) -> Option<Interval> {
+    if pairs.len() < 2 {
+        return None;
+    }
+    let mut stream = Stream::seeded(label);
+    let draws = (0..RESAMPLES)
+        .filter_map(|_| {
+            let sample: Vec<WeightedPair> = (0..pairs.len())
+                .map(|_| pairs[stream.index(pairs.len())])
+                .collect();
+            ratio_of_sums(&sample)
+        })
+        .collect();
+    percentile_interval(draws)
+}
+
+/// Treatment ratio minus control ratio. The interval resamples each arm's
+/// tasks on its own. `None` when either arm has no lines. The interval is
+/// `None` while either arm has fewer than two pairs.
+pub(super) fn paired_ratio_difference(
+    label: &str,
+    control: &[WeightedPair],
+    treatment: &[WeightedPair],
+) -> Option<(f64, Option<Interval>)> {
+    let estimate = ratio_of_sums(treatment)? - ratio_of_sums(control)?;
+    if control.len() < 2 || treatment.len() < 2 {
+        return Some((estimate, None));
+    }
+    let mut stream = Stream::seeded(label);
+    let draws = (0..RESAMPLES)
+        .filter_map(|_| {
+            let control_sample: Vec<WeightedPair> = (0..control.len())
+                .map(|_| control[stream.index(control.len())])
+                .collect();
+            let treatment_sample: Vec<WeightedPair> = (0..treatment.len())
+                .map(|_| treatment[stream.index(treatment.len())])
+                .collect();
+            Some(ratio_of_sums(&treatment_sample)? - ratio_of_sums(&control_sample)?)
+        })
+        .collect();
+    Some((estimate, percentile_interval(draws)))
 }
 
 /// One stratum's control and treatment values.

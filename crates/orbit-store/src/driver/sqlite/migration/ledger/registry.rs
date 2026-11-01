@@ -767,12 +767,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_invocation_tool_calls_incomplete,
     },
+    // Nullable counts only. Existing rows stay NULL (unavailable) and are
+    // not recomputed. An older binary never reads or writes the columns.
+    Migration {
+        version: 84,
+        name: "landed_diff_reviewable_lines",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_landed_diff_reviewable_lines,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 83;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 84;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

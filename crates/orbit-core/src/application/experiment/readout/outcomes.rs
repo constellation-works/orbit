@@ -60,12 +60,14 @@ pub(super) enum Better {
     Higher,
 }
 
-/// How a metric is summarised: a mean of per-task values, or a rate of
-/// per-task 0/1 outcomes.
+/// How a metric is summarised: a mean of per-task values, a rate of
+/// per-task 0/1 outcomes, or a ratio of sums over reviewable lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Kind {
     Mean,
     Rate,
+    /// Arm total numerator divided by arm total reviewable lines.
+    Ratio,
 }
 
 pub(super) struct MetricSpec {
@@ -159,6 +161,20 @@ pub(super) const METRIC_SPECS: &[MetricSpec] = &[
         true,
     ),
     spec("lines_changed", Kind::Mean, Better::Lower, "lines", true),
+    spec(
+        "cost_per_line",
+        Kind::Ratio,
+        Better::Lower,
+        "usd_per_line",
+        true,
+    ),
+    spec(
+        "lead_time_per_line",
+        Kind::Ratio,
+        Better::Lower,
+        "hours_per_line",
+        true,
+    ),
     // Visual review §12.3: the post-landing comparison's severity-weighted
     // confirmed findings, the visual fixes and follow-ups of the delivery,
     // and its reviewer's CONFIRMED / (CONFIRMED + REJECTED).
@@ -201,6 +217,19 @@ pub(super) enum Outcome {
     Unmeasured,
 }
 
+/// Reviewable added plus deleted lines for one enrolled task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReviewableDenominator {
+    /// The task is not done, so a denominator is not due.
+    NotDone,
+    /// Done, and no landed-diff row in the read window.
+    Missing,
+    /// Done, with a measured total. Zero is a real zero, not a missing row.
+    Measured(u64),
+    /// Done, but the row has no recoverable denominator.
+    Unavailable,
+}
+
 /// One enrolled, unforced task with its outcomes.
 #[derive(Clone)]
 pub(super) struct TaskOutcome {
@@ -236,6 +265,9 @@ pub(super) struct TaskOutcome {
     pub(super) delivered_roles: BTreeSet<TagInstructionRole>,
     /// Present only for settled tasks with complete invocation cost coverage.
     pub(super) cost_source: Option<CostSource>,
+    /// Reviewable lines recorded for this task. Per-line metrics read this
+    /// instead of a per-task ratio in `values`.
+    pub(super) reviewable: ReviewableDenominator,
     pub(super) values: BTreeMap<&'static str, Outcome>,
 }
 
@@ -447,6 +479,7 @@ impl OrbitRuntime {
         let tokens = self.task_token_totals(Some(since))?;
         let spend = self.task_spend(&ids, since)?;
         let lines = self.landed_task_lines_changed(&ids, since)?;
+        let reviewable_rows = self.landed_task_reviewable_lines(&ids, since)?;
         let (run_events, run_digests, delivered_roles) =
             self.run_audit(experiment_id, &ids, since)?;
         let first_edits = self.first_implement_edits(Some(since))?;
@@ -620,6 +653,15 @@ impl OrbitRuntime {
                 "visual_verified_finding_rate",
                 settled(visual.verified_rate),
             );
+            let reviewable = if !done {
+                ReviewableDenominator::NotDone
+            } else {
+                match reviewable_rows.get(id) {
+                    None => ReviewableDenominator::Missing,
+                    Some(None) => ReviewableDenominator::Unavailable,
+                    Some(Some(lines)) => ReviewableDenominator::Measured(*lines),
+                }
+            };
             let crew_name = task.crew.clone().unwrap_or_else(|| "unset".to_string());
             let (admitted_pool, admitted_pool_label) =
                 match self.admitted_crew_pool(id, &crew_name)? {
@@ -646,6 +688,7 @@ impl OrbitRuntime {
                 assignment_digest: row.digest.clone(),
                 delivered_roles: delivered_roles.get(id).cloned().unwrap_or_default(),
                 cost_source,
+                reviewable,
                 values,
             });
         }
@@ -776,6 +819,33 @@ impl OrbitRuntime {
                 .map(|class| class.added + class.deleted)
                 .sum();
             *lines.entry(row.task_id).or_default() += changed;
+        }
+        Ok(lines)
+    }
+
+    /// Reviewable added plus deleted lines per task. `None` means at least
+    /// one row in the window has an unavailable denominator, so the task is
+    /// left out of per-line metrics rather than filled in from a shared range.
+    /// A task with no row is absent. Several measured rows add.
+    pub(crate) fn landed_task_reviewable_lines(
+        &self,
+        ids: &BTreeSet<String>,
+        since: DateTime<Utc>,
+    ) -> Result<BTreeMap<String, Option<u64>>, OrbitError> {
+        let mut lines: BTreeMap<String, Option<u64>> = BTreeMap::new();
+        for row in self.landed_diff_stats(Some(since))? {
+            if !ids.contains(&row.task_id) {
+                continue;
+            }
+            let slot = lines.entry(row.task_id).or_insert(Some(0));
+            match row.reviewable {
+                None => *slot = None,
+                Some(reviewable) => {
+                    if let Some(total) = slot.as_mut() {
+                        *total = total.saturating_add(reviewable.total());
+                    }
+                }
+            }
         }
         Ok(lines)
     }

@@ -554,6 +554,13 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: resolve_non_code_paths,
     },
+    workflow_non_reviewable_paths: Vec<String> => Vec<String> {
+        key: "workflow.non_reviewable_paths", value_type: "array<string>",
+        description: "Path globs excluded from the reviewable-lines denominator. Docs and config stay reviewable; list lockfiles, goldens, snapshots and generated files here. Empty counts every non-rename line.",
+        section: ConfigSection::Delivery, order: 74,
+        tier: ConfigKeyTier::Advanced,
+        resolve: resolve_non_reviewable_paths,
+    },
     workflow_unlocked_path_validation_commands: Vec<String> => Vec<String> {
         key: "workflow.unlocked_path_validation_commands", value_type: "array<string>",
         description: "Commands that replace full required validation for a prose-only repair.",

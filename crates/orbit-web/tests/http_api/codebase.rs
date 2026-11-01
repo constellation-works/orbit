@@ -2542,6 +2542,7 @@ fn landed_row(fixture: &Fixture, task_id: &str, seq: usize, lines: u64) {
             },
             tests: DiffClassCounts::default(),
             other: DiffClassCounts::default(),
+            reviewable: None,
         })
         .unwrap();
 }
