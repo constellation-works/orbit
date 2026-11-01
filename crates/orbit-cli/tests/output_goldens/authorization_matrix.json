@@ -66,6 +66,32 @@
   },
   {
     "surface": "cli_command",
+    "operation": "decision reverse",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
+    "operation": "decision rule-auto",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "cli_command",
     "operation": "gc audit",
     "required_any": [
       "operator"
@@ -955,6 +981,17 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.decision.consolidate",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.decision.digest",
     "required_any": [
       "operator"
@@ -980,6 +1017,28 @@
   {
     "surface": "tool",
     "operation": "orbit.decision.raise",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.decision.reverse",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.decision.rule_auto",
     "required_any": [],
     "verdicts": {
       "operator_terminal": "allow",

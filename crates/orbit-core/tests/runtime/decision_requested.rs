@@ -428,6 +428,7 @@ fn an_active_member_settles_when_its_request_is_answered() {
                     provenance: None,
                     note: None,
                     answered_at: Utc::now(),
+                    precedent: None,
                 })
                 .ok(),
                 from_status: None,

@@ -185,6 +185,30 @@ impl OrbitRuntime {
         )
     }
 
+    /// Bookkeeping status move for a precedent answer or its reversal.
+    ///
+    /// Internal authority, actor `precedent`, and the precedent bookkeeping
+    /// note. This is not the human funnel: it does not record a human-crew
+    /// bypass, and the note keeps the move from permanently superseding the
+    /// decision request.
+    pub(crate) fn update_task_as_precedent(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                status_note: Some(orbit_types::task::PRECEDENT_BOOKKEEPING_NOTE.to_string()),
+                actor_override: Some(orbit_types::task::PRECEDENT_ACTOR.to_string()),
+                status_authority: StatusAuthority::Internal,
+                ..Default::default()
+            },
+        )
+    }
+
     /// The human escape hatch behind `orbit task update --force`: apply the
     /// update even when the lifecycle table or local run ownership refuses
     /// the status change, and record the override in task history.

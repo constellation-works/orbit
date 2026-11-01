@@ -39,6 +39,12 @@ operation_registry! {
         Raise => RAISE,
         /// Answer one open decision request (operator CLI only).
         Answer => ANSWER,
+        /// Re-open a precedent answer (operator CLI only).
+        Reverse => REVERSE,
+        /// Set auto on one current corpus rule (operator CLI only).
+        RuleAuto => RULE_AUTO,
+        /// Propose corpus rule edits without writing them (operator CLI only).
+        Consolidate => CONSOLIDATE,
         /// Submit a human's answer through a registered decision channel.
         Submit => SUBMIT,
         /// Raise missing approval requests and return the decision digest.
@@ -188,7 +194,7 @@ const RAISE: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::Raise,
     cli_path: &["raise"],
     tool_name: "orbit.decision.raise",
-    tool_description: "Raise a multiple-choice decision request on a human-crew task you filed or were handed, instead of a free-text human task. Give a question and two to four options, each with a one-line label and a one-line consequence, exactly one marked recommended (it is listed first); an optional topic or corpus rule id lets a later reader match the request exactly. Only the operator can answer: the answer is recorded in the task's history, completes the task and unblocks its blocked_by dependents. The same open question is deduplicated to the existing request, a task holds one open request, and open agent-raised requests are capped per workspace and per filer; past a cap the call is refused and nothing is written. An answer that changes lasting behaviour must be carried into the owning doc, config or code by the task it unblocks.",
+    tool_description: "Raise a multiple-choice decision request on a human-crew task you filed or were handed, instead of a free-text human task. Give a question and two to four options, each with a one-line label and a one-line consequence, exactly one marked recommended (it is listed first); an optional topic or corpus rule id lets a later reader match the request exactly. The operator answers, or a current corpus rule the operator marked auto answers an exact topic match and records that answer as precedent: either way the answer is in the task's history, completes the task and unblocks its blocked_by dependents. The same open question is deduplicated to the existing request, a task holds one open request, and open agent-raised requests are capped per workspace and per filer; past a cap the call is refused and nothing is written. An answer that changes lasting behaviour must be carried into the owning doc, config or code by the task it unblocks.",
     cli_about: "Raise a multiple-choice decision request on a human-crew task",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
@@ -225,6 +231,77 @@ const ANSWER: OperationSpec<DecisionVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[REQUEST_ID, ANSWER_PARAMS],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+};
+
+const REVERSE: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::Reverse,
+    cli_path: &["reverse"],
+    tool_name: "orbit.decision.reverse",
+    tool_description: "Re-open a precedent answer as the operator. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool. The request becomes open again and the task returns to the status it had before the precedent answer. A human answer is refused and nothing changes.",
+    cli_about: "Re-open a precedent answer",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[REQUEST_ID],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+};
+
+const AUTO_SWITCH: &[EnumValue] = &[EnumValue::plain("on"), EnumValue::plain("off")];
+
+const RULE_REF: &[ParamSpec] = &[required(both(
+    "rule",
+    ParamType::String,
+    "The corpus rule, as `topic/rule` or a rule id that appears in exactly one topic file.",
+    CliArgKind::Positional,
+    "The corpus rule (`topic/rule` or a unique rule id)",
+))];
+
+const AUTO_SETTING: &[ParamSpec] = &[required(both(
+    "auto",
+    ParamType::Enum(AUTO_SWITCH),
+    "on lets this current rule answer an exact topic match. off clears that opt-in.",
+    CliArgKind::Positional,
+    "on or off",
+))];
+
+const RULE_AUTO: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::RuleAuto,
+    cli_path: &["rule-auto"],
+    tool_name: "orbit.decision.rule_auto",
+    tool_description: "Set auto on one current corpus decision rule as the operator. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool, so an agent session cannot mark a rule auto. on records that the operator approved the rule; off clears it. A stale or superseded rule is refused and nothing is written.",
+    cli_about: "Set auto on one current corpus rule",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[RULE_REF, AUTO_SETTING],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: None,
+};
+
+const CONSOLIDATE_PARAMS: &[ParamSpec] = &[both(
+    "since",
+    ParamType::String,
+    "Include human answers on or after this YYYY-MM-DD date. Omit to include every human answer.",
+    CliArgKind::flag("since"),
+    "Include human answers on or after this YYYY-MM-DD date",
+)];
+
+const CONSOLIDATE: OperationSpec<DecisionVerb> = OperationSpec {
+    verb: DecisionVerb::Consolidate,
+    cli_path: &["consolidate"],
+    tool_name: "orbit.decision.consolidate",
+    tool_description: "Propose corpus decision-rule edits from human answers. Operator CLI only: this operation has no MCP scope. It prints the proposed files and writes nothing. The proposal is what a pull request carries; a rule is never edited outside that pull request.",
+    cli_about: "Propose corpus decision-rule edits without writing them",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[CONSOLIDATE_PARAMS],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

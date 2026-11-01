@@ -512,9 +512,14 @@ impl Commands {
             // dispatch; the handler applies it as a human write.
             Commands::Decision(command) => {
                 use orbit_common::governance::decision::DecisionVerb;
-                let answers = command.command.spec.verb == DecisionVerb::Answer;
+                let (governed, subcommand) = match command.command.spec.verb {
+                    DecisionVerb::Answer => (true, "answer"),
+                    DecisionVerb::Reverse => (true, "reverse"),
+                    DecisionVerb::RuleAuto => (true, "rule-auto"),
+                    _ => (false, "answer"),
+                };
                 registry_operation(&command.command, runtime_dispatch!(Decision))
-                    .governed_when(answers, "decision", "answer")
+                    .governed_when(governed, "decision", subcommand)
             }
             Commands::Audit(command) => {
                 use super::super::audit::AuditSubcommand;

@@ -38,10 +38,11 @@ pub use record::{
 };
 pub use recovery::{PilotAdmissionVerdict, RecordedFinalRecovery};
 pub use request::{
-    DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_REQUESTED_EVENT,
-    DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS, DecisionAction,
-    DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption, DecisionOptionError,
-    DecisionOptionInput, DecisionRequest, DecisionRequestState, DecisionResolution,
-    DecisionRewrite, current_candidate_identity, decision_option_answers,
-    decision_requests_from_history, open_decision_requests,
+    DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_REOPENED_EVENT,
+    DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS,
+    DecisionAction, DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption,
+    DecisionOptionError, DecisionOptionInput, DecisionRequest, DecisionRequestState,
+    DecisionResolution, DecisionRewrite, PRECEDENT_ACTOR, PRECEDENT_BOOKKEEPING_NOTE,
+    PrecedentCitation, PrecedentSource, current_candidate_identity, decision_option_answers,
+    decision_requests_from_history, is_precedent_bookkeeping, open_decision_requests,
 };

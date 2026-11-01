@@ -883,6 +883,18 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "answering a decision request applies the operator's choice to held work as a human write, so an agent session never answers for a human",
     },
     GovernedOperation {
+        id: "decision reverse",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "reversing a precedent answer re-opens the request and restores the task status, so only the operator may undo an answer a rule applied",
+    },
+    GovernedOperation {
+        id: "decision rule-auto",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "marking a corpus rule auto lets that rule answer a matching request, so only the operator may set it",
+    },
+    GovernedOperation {
         id: "workspace teardown",
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator],

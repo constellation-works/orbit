@@ -188,6 +188,9 @@ impl OrbitRuntime {
                     .into_iter()
                     .find(|candidate| candidate.id == request.id)
                     .unwrap_or(request);
+                // Only a request this call just wrote can auto-answer. The
+                // dedupe branch above returns the open request untouched.
+                let stored = self.auto_answer_from_precedent(task.status, &stored)?;
                 outcome = Some(AgentDecisionRaised {
                     request: stored,
                     deduplicated: false,

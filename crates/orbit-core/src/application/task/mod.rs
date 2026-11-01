@@ -15,7 +15,9 @@ mod context_repair;
 mod context_widening;
 mod decision;
 mod decision_channel;
+mod decision_precedent;
 mod decision_raise;
+pub(crate) mod decision_rules;
 mod desktop;
 mod distributed_port;
 pub(crate) mod escalation_triage_steps;
@@ -103,6 +105,11 @@ pub use decision_channel::{
     DecisionSubmitParams, MAX_DECISION_RAW_MESSAGE_BYTES,
 };
 pub use decision_raise::{AgentDecisionRaise, AgentDecisionRaised};
+pub use decision_rules::{
+    ConsolidationAnswer, CorpusDecisionDocument, CorpusDecisionRule, CorpusDigest,
+    CorpusRuleStatus, ProposedCorpusDocument, citable_decision_rules, consolidate_decision_corpus,
+    corpus_content_digest, parse_decision_rules,
+};
 pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub(crate) use distributed_port::execution_claim_phase_label;
 pub use escalation_triage_steps::{
