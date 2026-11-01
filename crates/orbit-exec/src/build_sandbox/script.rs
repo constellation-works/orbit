@@ -198,6 +198,13 @@ pub fn compile_linux_script_argv(
     for git_dir in cwd_git_dirs(spec.cwd) {
         push_ro_bind(&mut args, &git_dir);
     }
+    // A mask is a tmpfs over the tree. It stays writable until the credential
+    // denies have mounted their own mountpoints inside it (`~/.orbit/run` lies
+    // under the global root), and goes read-only after them. A readable file
+    // the grant names inside a mask (the `orbit` binary under `~/.orbit/bin`)
+    // is bound again over the tmpfs; directories and everything else under a
+    // mask stay hidden.
+    let mut sealed = Vec::new();
     for masked in spec.masked {
         let Ok(masked) = masked.canonicalize() else {
             continue;
@@ -205,14 +212,21 @@ pub fn compile_linux_script_argv(
         if spec.cwd.starts_with(&masked) || !masked.is_dir() {
             continue;
         }
-        args.extend([
-            "--tmpfs".into(),
-            display(&masked),
-            "--remount-ro".into(),
-            display(&masked),
-        ]);
+        args.extend(["--tmpfs".into(), display(&masked)]);
+        for root in spec.readable {
+            if let Ok(root) = root.canonicalize()
+                && root.starts_with(&masked)
+                && root.is_file()
+            {
+                push_ro_bind(&mut args, &root);
+            }
+        }
+        sealed.push(masked);
     }
     push_credential_denies(&mut args, spec.home);
+    for masked in &sealed {
+        args.extend(["--remount-ro".into(), display(masked)]);
+    }
     args.extend([
         "--remount-ro".into(),
         "/".into(),

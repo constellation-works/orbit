@@ -671,3 +671,103 @@ mod script_linked_worktree {
         );
     }
 }
+
+/// The failing shape of a granted script whose read root is a file under the
+/// masked global root (`~/.orbit/bin/orbit`): the mask must neither hide the
+/// file nor leave the credential deny for `~/.orbit/run` nowhere to mount.
+#[cfg(target_os = "linux")]
+#[test]
+fn script_read_root_under_masked_global_root_starts_and_keeps_state_hidden() {
+    use orbit_exec::{ScriptRunEnd, ScriptSandboxRequest, ScriptSandboxSpec, run_script_sandboxed};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("fixture");
+    let home = dir.path().join("home");
+    let global = home.join(".orbit");
+    let tool = global.join("bin/orbit");
+    let cwd = dir.path().join("work");
+    let scratch = dir.path().join("scratch");
+    for path in [
+        &global.join("bin"),
+        &global.join("run"),
+        &global.join("state"),
+        &cwd,
+        &scratch,
+    ] {
+        fs::create_dir_all(path).expect("fixture directory");
+    }
+    for name in orbit_exec::SCRIPT_SCRATCH_DIRS {
+        fs::create_dir_all(scratch.join(name)).expect("scratch directory");
+    }
+    fs::write(&tool, "#!/bin/sh\necho tool-ran\n").expect("tool");
+    fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).expect("tool mode");
+    fs::write(global.join("state/secret"), "secret").expect("state");
+    fs::write(global.join("run/web-session.secret"), "secret").expect("run");
+    let masked = vec![global.clone()];
+    let readable = vec![tool.clone()];
+    let spec = ScriptSandboxSpec {
+        cwd: &cwd,
+        cwd_writable: false,
+        scratch: &scratch,
+        readable: &readable,
+        writable: &[],
+        masked: &masked,
+        home: Some(home.as_os_str()),
+    };
+
+    let args = compile_args(&spec);
+    let position = |flag: &str, path: &std::path::Path| {
+        let path = path.to_str().expect("path");
+        args.windows(2)
+            .rposition(|pair| pair[0] == flag && pair[1] == path)
+            .unwrap_or_else(|| panic!("no `{flag} {path}`"))
+    };
+    let run_deny = position("--tmpfs", &global.join("run"));
+    assert!(
+        position("--tmpfs", &global) < run_deny,
+        "the credential deny mounts inside the mask"
+    );
+    assert!(
+        run_deny < position("--remount-ro", &global),
+        "the mask goes read-only only after the credential denies"
+    );
+    assert!(
+        position("--tmpfs", &global) < position("--ro-bind", &tool),
+        "a read root inside the mask is bound over it"
+    );
+
+    if !build_sandbox_available("script_read_root_under_masked_global_root_starts") {
+        return;
+    }
+    let script = format!(
+        "'{}' && test ! -e '{}/state/secret' && test ! -e '{}/run/web-session.secret'",
+        tool.display(),
+        global.display(),
+        global.display()
+    );
+    let argv = vec!["/bin/sh".into(), "-c".into(), script];
+    let run = run_script_sandboxed(ScriptSandboxRequest {
+        sandbox: spec,
+        argv: &argv,
+        env: &[],
+        launcher: &[],
+        launcher_env: &[],
+        stdin: vec![],
+        timeout: Duration::from_secs(20),
+        scratch_cap_bytes: u64::MAX,
+    })
+    .expect("run script");
+    assert_eq!(
+        run.end,
+        ScriptRunEnd::Exited(0),
+        "{}",
+        String::from_utf8_lossy(&run.log)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "tool-ran\n");
+
+    fn compile_args(spec: &ScriptSandboxSpec<'_>) -> Vec<String> {
+        orbit_exec::compile_linux_script_argv(spec, &[], &["/bin/true".into()])
+            .expect("compile profile")
+    }
+}
