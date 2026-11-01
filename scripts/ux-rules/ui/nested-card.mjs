@@ -5,7 +5,8 @@
 // views) sit flush with the panel content box, have no margin, and carry no
 // side border, radius, shadow or outline. A top or bottom hairline is a
 // section divider. Inset, separated or framed boxes still fail, including a
-// full-width box that is actually a card.
+// full-width box that is actually a card. A floated box is out of normal flow
+// and still fails, even when it is flush with the content box.
 import { measureInPage, verdict } from "../lib/ui-context.mjs";
 
 export const rule = {
@@ -44,7 +45,9 @@ export async function check(ctx) {
         const shadow = Boolean(style.boxShadow) && style.boxShadow !== "none";
         const outline = Boolean(style.outlineStyle) && style.outlineStyle !== "none";
         const framed = sideOn(style, "Left") || sideOn(style, "Right") || radius || shadow || outline;
-        const flow = style.position === "static" || style.position === "relative";
+        // A float keeps position: static but is out of normal flow, so it never
+        // counts as a band.
+        const flow = (style.position === "static" || style.position === "relative") && style.float === "none";
         const flush = near(rect.left - contentLeft) && near(rect.right - contentRight);
         const stacked = margins.every((value) => near(value));
         result.push({
