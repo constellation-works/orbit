@@ -294,7 +294,7 @@ pub trait OrbitToolHost: Send + Sync {
     }
 
     /// Run one callback a plugin backend's child forwarded over its host
-    /// route (`plugin::HOST_ROUTED_CALLBACK_TOOLS`), through the same audited
+    /// route (`plugin::is_host_routed_callback_tool`), through the same audited
     /// dispatch a callback the child ran itself would take.
     ///
     /// The route calls this with the child's callback session resolved for

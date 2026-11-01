@@ -90,7 +90,18 @@ changed. A move to `backlog` is admitted only from `review` or `in-progress`.
 `execution_summary`; `note` needs a status change. The audit row's
 `application` object records the bound identity and digest values, a digest
 and length for each free-text field, and the task state admission read.
-Callbacks under a constrained scope are not admitted yet (`not yet admitted`).
+A plugin entry's callbacks are admitted the same way against the scope's
+listed callbacks: `bound` admits only the entry's admitted value for that
+field, and a `task` predicate with `pin: true` binds the first task a callback
+names for the rest of that entry call, refusing any other. When the entry's
+`task` predicate bound an artifact digest, every callback rechecks it, and
+`orbit.task.artifact.get` rechecks the bytes it returns, so a payload changed
+after the entry was admitted is refused (`bound artifact changed`).
+`orbit.task.show` returns only the fields the call names, within `id`,
+`status`, `tags`, `terminal`, `artifacts`, `crew`, `updated_at` and
+`execution_summary` (all of them when it names none). An application-bound
+plugin sends these callbacks to the host that spawned it, because the consent
+witness is hidden from the plugin sandbox.
 
 A scope's optional `rate_limit` (`{"admissions": N, "window_seconds": S}`)
 caps the calls admitted under it in any trailing window of `S` seconds; one

@@ -101,8 +101,8 @@ pub use catalog::{
     DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED, DESKTOP_TASK_COMPLETE, DESKTOP_TASK_EDIT,
     GOVERNED_OPERATIONS, GovernedOperation, INPUT_DEPENDENT_OPERATION_FLOORS, OperationSurface,
     PLUGIN_TOOL_AGENT_CALLABLE, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY,
-    TASK_GRANT_TOOLS_OPERATION_ID, application_operation_ceiling, application_operator_floored,
-    governed_command, governed_plugin_tool, governed_tool,
+    TASK_GRANT_TOOLS_OPERATION_ID, application_callback_tool, application_operation_ceiling,
+    application_operator_floored, governed_command, governed_plugin_tool, governed_tool,
 };
 pub use decision::{AuthorizationDenial, authorize};
 pub use env::{OPERATOR_OVERRIDE_ENV, agent_context_declared, operator_override_active};

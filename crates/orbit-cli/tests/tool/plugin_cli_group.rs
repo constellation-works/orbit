@@ -2301,3 +2301,7 @@ mod application_consent;
 #[cfg(unix)]
 #[path = "application_admission.rs"]
 mod application_admission;
+
+#[cfg(unix)]
+#[path = "application_callbacks.rs"]
+mod application_callbacks;

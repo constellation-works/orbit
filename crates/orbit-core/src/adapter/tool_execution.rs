@@ -121,11 +121,14 @@ impl OrbitRuntime {
             &mut tool_context.session_context,
             capability_enforcement,
         )?;
-        if application
-            && let Some(output) =
-                self.execute_application_builtin(name, &input, &tool_context.session_context)?
-        {
-            return Ok(output);
+        if application {
+            let session = &tool_context.session_context;
+            if let Some(output) = self.execute_application_builtin(name, &input, session)? {
+                return Ok(output);
+            }
+            if let Some(output) = self.execute_application_read(name, &input, session)? {
+                return Ok(output);
+            }
         }
         if !self.tool_registry().has(name) {
             self.ensure_tool_agent_facing_with_context(name, &tool_context)?;
