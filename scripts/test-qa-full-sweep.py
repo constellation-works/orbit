@@ -29,14 +29,104 @@ validate_npm_evidence = runpy.run_path(
     str(Path(__file__).with_name("check_npm_package.py")))["validate_evidence"]
 
 
+# Process table for hosts with no /proc (macOS). libproc reports pid, parent,
+# group, start time and working directory without a subprocess, so it works
+# where `ps` is denied. The same source runs in the supervisor and in this
+# module (see _DARWIN_PROC), so both read one identity.
+_DARWIN_PROC_TABLE = r"""import ctypes, ctypes.util, os, struct
+_libproc = None
+
+def _libproc_handle():
+    global _libproc
+    if _libproc is None:
+        try:
+            lib = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib", use_errno=True)
+            lib.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+            lib.proc_listpids.restype = ctypes.c_int
+            lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+            lib.proc_pidinfo.restype = ctypes.c_int
+        except (OSError, AttributeError):
+            return None
+        _libproc = lib
+    return _libproc
+
+def darwin_cmdline(pid):
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        mib = (ctypes.c_int * 3)(1, 49, pid)
+        size = ctypes.c_size_t(0)
+        if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0 or size.value < 4:
+            return ""
+        buf = ctypes.create_string_buffer(size.value)
+        if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+            return ""
+        raw = buf.raw[:size.value]
+        argc = struct.unpack_from("=i", raw, 0)[0]
+        rest = raw[4:]
+        rest = rest[rest.find(b"\0"):].lstrip(b"\0")
+        return b" ".join(rest.split(b"\0")[:max(argc, 0)]).decode(errors="replace").strip()[:240]
+    except (OSError, AttributeError, struct.error):
+        return ""
+
+def darwin_identity(pid, with_cmdline=True):
+    lib = _libproc_handle()
+    if lib is None:
+        return None
+    bsd = ctypes.create_string_buffer(136)
+    if lib.proc_pidinfo(pid, 3, 0, bsd, 136) != 136:
+        return None
+    status, = struct.unpack_from("=I", bsd, 4)
+    ppid, = struct.unpack_from("=I", bsd, 16)
+    pgrp, = struct.unpack_from("=I", bsd, 100)
+    sec, usec = struct.unpack_from("=QQ", bsd, 120)
+    try:
+        sid = os.getsid(pid)
+    except OSError:
+        sid = 0
+    cwd = None
+    path = ctypes.create_string_buffer(2352)
+    if lib.proc_pidinfo(pid, 9, 0, path, 2352) == 2352:
+        text = path.raw[152:152 + 1024].split(b"\0", 1)[0].decode(errors="replace")
+        cwd = text or None
+    return {"pid": pid, "ppid": ppid, "pgrp": pgrp, "sid": sid, "starttime": sec * 1_000_000 + usec,
+            "state": "Z" if status == 5 else "R", "cwd": cwd,
+            "cmdline": darwin_cmdline(pid) if with_cmdline else ""}
+
+def darwin_snapshot(with_cmdline=True):
+    lib = _libproc_handle()
+    if lib is None:
+        return None
+    count = lib.proc_listpids(1, 0, None, 0)
+    if count <= 0:
+        return None
+    pids = (ctypes.c_int * (count // 4 + 64))()
+    got = lib.proc_listpids(1, 0, pids, ctypes.sizeof(pids))
+    if got <= 0:
+        return None
+    found = {}
+    for pid in pids[:got // 4]:
+        if pid > 0:
+            info = darwin_identity(pid, with_cmdline)
+            if info is not None:
+                found[pid] = info
+    return found
+"""
+
 # The supervisor retains process-group ownership after the command exits. We
 # sweep its group before reaping it, avoiding a PID/group reuse window (STD-03 R14).
-# Descendants that call setsid leave that group. The supervisor is a child
-# subreaper so those workers stay in its tree, and it records each one and waits
-# for the process identity to disappear before publishing the command result.
+# Descendants that call setsid leave that group. On Linux the supervisor is a
+# child subreaper so those workers stay in its tree, and it records each one and
+# waits for the process identity to disappear before publishing the command
+# result. Hosts without subreaper support (macOS) reparent such a worker to
+# PID 1 instead, so the supervisor cannot see it; run() and main() then find it
+# by working directory under the root they own (settle_detached_workers_under).
 _PROCESS_SUPERVISOR = r"""import json, os, signal, subprocess, sys, threading, time
 result_fd = int(sys.argv[1])
 owner_fd = int(sys.argv[2])
+# Roots whose working-directory occupants the supervisor also owns when it is
+# not a subreaper: a detached worker is then reparented to PID 1 and only its
+# working directory still ties it to this command.
+roots = [root for root in json.loads(sys.argv[3]) if isinstance(root, str) and root]
 # SIGTERM stays at the default until the command is spawned. An ignored
 # signal would be inherited across exec, and the command's children would
 # then survive the group sweep. Only this supervisor ignores SIGTERM.
@@ -74,7 +164,10 @@ def read_stat(pid):
     except ValueError:
         return None
 
+# @DARWIN_PROC_TABLE@
 def identity(pid):
+    if sys.platform == "darwin" and not os.path.isdir("/proc"):
+        return darwin_identity(pid)
     if os.path.isdir("/proc"):
         stat = read_stat(pid)
         if stat is None:
@@ -105,6 +198,10 @@ def snapshot():
                 if info is not None:
                     found[info["pid"]] = info
         return found
+    if sys.platform == "darwin":
+        table = darwin_snapshot()
+        if table is not None:
+            return table
     try:
         out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,sess="], text=True)
     except (OSError, subprocess.CalledProcessError):
@@ -119,7 +216,8 @@ def snapshot():
     return found
 
 def alive(pid, starttime):
-    info = identity(pid) if os.path.isdir("/proc") else snapshot().get(pid)
+    direct = os.path.isdir("/proc") or sys.platform == "darwin"
+    info = identity(pid) if direct else snapshot().get(pid)
     if info is None or info.get("state") == "Z":
         return False
     return info.get("starttime") == starttime
@@ -140,6 +238,27 @@ def descendants(root):
                 stack.append(child)
                 owned.append(procs[child])
     return owned
+
+def cwd_under(cwd):
+    if not isinstance(cwd, str) or not cwd:
+        return False
+    if cwd.endswith(" (deleted)"):
+        cwd = cwd[:-len(" (deleted)")]
+    for candidate in {cwd, os.path.realpath(cwd)}:
+        for base in roots:
+            if candidate == base or candidate.startswith(base.rstrip(os.sep) + os.sep):
+                return True
+    return False
+
+def owned(root):
+    found = descendants(root)
+    if subreaper or not roots:
+        return found
+    seen = {info["pid"] for info in found}
+    for pid, info in snapshot().items():
+        if pid > 1 and pid != os.getpid() and pid not in seen and cwd_under(info.get("cwd")):
+            found.append(info)
+    return found
 
 def signal_confirmed(info, sig):
     if not alive(info["pid"], info["starttime"]):
@@ -165,7 +284,7 @@ def reap(root, deadline_s=10, kill_grace_s=5):
             os.killpg(own_pgrp, signal.SIGTERM)
         except OSError:
             pass
-        live = [info for info in descendants(root) if info.get("state") != "Z"]
+        live = [info for info in owned(root) if info.get("state") != "Z"]
         for info in live:
             pid = info["pid"]
             current = records.get(pid)
@@ -191,7 +310,7 @@ def reap(root, deadline_s=10, kill_grace_s=5):
             if waited == 0:
                 break
         if records and all(record["exited"] for record in records.values()) and not [
-                info for info in descendants(root) if info.get("state") != "Z"]:
+                info for info in owned(root) if info.get("state") != "Z"]:
             break
         if not records and not live:
             break
@@ -227,7 +346,7 @@ def watch_owner():
 threading.Thread(target=watch_owner, daemon=True).start()
 command = None
 try:
-    command = subprocess.Popen(sys.argv[3:])
+    command = subprocess.Popen(sys.argv[4:])
 except OSError as error:
     print(str(error), file=sys.stderr, flush=True)
     payload = {"exit_code": 127, "detached_workers": [], "open_descendants": 0, "subreaper": subreaper}
@@ -263,6 +382,11 @@ while not stop.is_set():
     signal.pause()
 os._exit(0)
 """
+_PROCESS_SUPERVISOR = _PROCESS_SUPERVISOR.replace("# @DARWIN_PROC_TABLE@\n", _DARWIN_PROC_TABLE)
+# Same source, loaded here so the outer settlement and the supervisor agree.
+_DARWIN_PROC = {}
+if sys.platform == "darwin":
+    exec(_DARWIN_PROC_TABLE, _DARWIN_PROC)  # noqa: S102 - constant source defined above
 _OUTPUT_LIMIT = 1_048_576
 # Controlled worker the sweep supervisor must own. The command exits only after
 # the child has called setsid, which is the shape of a detached pipeline worker.
@@ -335,9 +459,18 @@ def _proc_stat(pid):
         return None
 
 
+def _proc_table_native():
+    """Whether identities come from /proc or libproc, with working directories."""
+    if os.path.isdir("/proc"):
+        return True
+    return bool(_DARWIN_PROC) and _DARWIN_PROC["_libproc_handle"]() is not None
+
+
 def _proc_identity(pid):
-    """Process identity from /proc. None when the pid is gone or unreadable."""
+    """Process identity from /proc or libproc. None when the pid is gone or unreadable."""
     if not os.path.isdir("/proc"):
+        if _DARWIN_PROC and _DARWIN_PROC["_libproc_handle"]() is not None:
+            return _DARWIN_PROC["darwin_identity"](pid)
         return None
     stat = _proc_stat(pid)
     if stat is None:
@@ -368,6 +501,10 @@ def _proc_snapshot():
                 if info is not None:
                     found[info["pid"]] = info
         return found
+    if _DARWIN_PROC:
+        table = _DARWIN_PROC["darwin_snapshot"]()
+        if table is not None:
+            return table
     try:
         output = subprocess.check_output(["ps", "-axo", "pid=,ppid=,pgid=,sess="], text=True)
     except (OSError, subprocess.CalledProcessError):
@@ -387,7 +524,7 @@ def _proc_snapshot():
 
 def _proc_alive(pid, starttime):
     """True only while the same process identity is still running."""
-    if os.path.isdir("/proc"):
+    if _proc_table_native():
         info = _proc_identity(pid)
     else:
         info = _proc_snapshot().get(pid)
@@ -486,7 +623,10 @@ def settle_detached_workers_under(root, deadline_s=10, kill_grace_s=5):
         record["exited"] = not _proc_alive(record["pid"], record["starttime"])
         workers.append({key: record[key] for key in
                         ("pid", "pgid", "sid", "ppid", "cwd", "cmdline", "starttime", "exited")})
-    return {"workers": workers}
+    # cwd_visible is False on a host whose process table has no working
+    # directories (the ps fallback): a worker under root could not have been
+    # found, so an empty list there is not evidence of a clean root.
+    return {"workers": workers, "cwd_visible": _proc_table_native()}
 
 
 def _fixture_ownership_roots(cwd, env):
@@ -508,6 +648,15 @@ def _fixture_ownership_roots(cwd, env):
     if cwd_inside_tmp:
         return [cwd_path]
     return []
+
+
+def _ownership_root_texts(cwd, env):
+    """Both spellings (as given, and symlinks resolved) of each ownership root."""
+    texts = set()
+    for root in _fixture_ownership_roots(cwd, env):
+        texts.add(os.path.abspath(root))
+        texts.add(os.path.realpath(root))
+    return sorted(texts)
 
 
 def _merge_worker_records(existing, extra):
@@ -644,7 +793,8 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
 
     try:
         process = subprocess.Popen(
-            [sys.executable, "-c", _PROCESS_SUPERVISOR, str(write_fd), str(owner_read_fd), *argv],
+            [sys.executable, "-c", _PROCESS_SUPERVISOR, str(write_fd), str(owner_read_fd),
+             json.dumps(_ownership_root_texts(cwd, env)), *argv],
             cwd=cwd, env=env, start_new_session=True, pass_fds=(write_fd, owner_read_fd),
             stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -728,6 +878,13 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
                 except subprocess.TimeoutExpired:
                     evidence["stderr"] += "\nsupervisor still could not be reaped"
             if supervisor_reaped:
+                if not evidence["subreaper"] and not _proc_table_native():
+                    # No subreaper to keep a detached worker in the supervisor's
+                    # tree and no working-directory source to find it by: an empty
+                    # worker list proves nothing, so cleanup stays unverified.
+                    evidence["cleanup_verified"] = False
+                    evidence["stderr"] += ("\ndetached worker cleanup NOT_RUN: this host has no child "
+                                          "subreaper and no process working-directory source")
                 try:
                     extra = []
                     for root in _fixture_ownership_roots(cwd, env):
@@ -3648,7 +3805,10 @@ def main():
         scratch_cleanup_warning = (f"harness scratch cleanup did not finish; {len(scratch_leftovers)} "
                                    "leftover path(s) remain under the scratch temp dir")
     detached_workers = detached_worker_settlement.get("workers") or []
-    if detached_worker_settlement.get("error"):
+    if detached_worker_settlement.get("cwd_visible") is False:
+        settlement_warning = ("harness scratch cleanup did not finish; detached worker cleanup "
+                              "NOT_RUN: this host has no process working-directory source")
+    elif detached_worker_settlement.get("error"):
         settlement_warning = ("harness scratch cleanup did not finish; detached worker "
                               f"settlement failed: {detached_worker_settlement['error']}")
     elif any(worker.get("exited") is not True for worker in detached_workers):
