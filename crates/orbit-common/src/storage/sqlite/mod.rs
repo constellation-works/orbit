@@ -11,6 +11,7 @@
 mod connection;
 mod errors;
 mod hardening;
+mod header;
 mod wal_lease;
 
 pub mod pragma;

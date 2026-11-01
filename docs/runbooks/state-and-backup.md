@@ -13,6 +13,40 @@ last_validated: 2026-10-19
 Use this runbook to determine what Orbit state is authoritative, choose what to back up,
 restore a store database, or move task bundles between machines.
 
+SQLite observation reads the main-file header through SQLite's own VFS handle before
+starting a schema query. It never opens an ordinary extra database descriptor for this
+inspection. Published WAL/SHM sets remain live; incomplete sidecars still refuse or yield
+the explicitly warned main-file-only observation described by the storage API.
+
+## Private SQLite permissions
+
+Already-private `0600` writable files and `0400` read-only publications need no online
+permission change. New databases are published privately only after their staging data
+descriptor is closed, including when another constructor wins the publication race.
+
+Repairing an existing permissive SQLite database or sidecar now requires a safe pinned
+path-only mechanism. Linux x86-64 uses `O_PATH` plus `fchmodat2(AT_EMPTY_PATH)`; kernels
+without that operation and other Unix platforms/architectures, including macOS and
+Linux ARM64, refuse the repair before
+mutation. This is an intentional breaking change from automatic ordinary-descriptor
+repair. It does not change generic lock-file permission repair.
+
+| Platform | Already-private `0600` / `0400` | Existing permissive SQLite file |
+|---|---|---|
+| Linux x86-64 | Available | Pinned online repair when `fchmodat2` is supported; otherwise explicit offline-repair refusal |
+| Other Unix, including macOS and Linux ARM64 | Available | Explicit offline-repair refusal before mutation |
+| Non-Unix | Existing platform policy | No new Unix-mode repair policy |
+
+If Orbit reports that safe SQLite permission repair is unavailable, stop every process
+using the database first. Then, offline, restrict the main file and each existing WAL/SHM
+sidecar to owner-only access (`chmod 600` for writable state, or retain `chmod 400` for a
+read-only publication). Do not create missing sidecars. Restart only after checking the
+actual file set; do not substitute an ordinary-descriptor fallback while clients run.
+An operator's pre-upgrade permission preflight runs separately from SQLite: after
+quiescence, pin each known regular file without following symlinks, verify the opened
+inode with `fstat`, and change its mode through that handle. This is not an in-library
+fallback or permission to inspect arbitrary paths from a SQLite connection process.
+
 ## State inventory
 
 Two roots hold Orbit state. **Workspace state** lives in `<repo>/.orbit/`;

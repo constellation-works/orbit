@@ -14,9 +14,10 @@ use super::errors::{
     sqlite_path_error,
 };
 use super::hardening::{
-    database_uses_wal, harden_read_only_sqlite_files, harden_sqlite_files,
-    prepare_private_database_file, sidecar_metadata, sqlite_sidecar_paths, validated_sqlite_path,
+    harden_read_only_sqlite_files, harden_sqlite_files, prepare_private_database_file,
+    sidecar_metadata, sqlite_sidecar_paths, validated_sqlite_path,
 };
+use super::header::database_uses_wal;
 use super::pragma;
 
 /// Bytes in a WAL file header. A `-wal` of at most this size carries no
@@ -61,6 +62,10 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
         Err(error) => return Err(sqlite_path_error("inspect", &path, error)),
     }
 
+    // Refuse redirected companions before attempting any permission repair.
+    for sidecar in sqlite_sidecar_paths(&path) {
+        sidecar_metadata(&sidecar)?;
+    }
     prepare_private_database_file(&path)?;
     // Sidecars left beside a newly created database are checked too, before
     // SQLite opens them by path.
@@ -216,8 +221,30 @@ pub enum ObservationCurrency {
 /// main file without a wal-index is accepted as a degraded read; see
 /// `observation_currency`.
 pub fn open_observational(path: &Path) -> Result<OpenedConnection, OrbitError> {
-    let currency = observation_currency(path)?;
-    let connection = open_read_only_connection(path, currency)?;
+    let metadata =
+        fs::symlink_metadata(path).map_err(|error| sqlite_path_error("inspect", path, error))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(OrbitError::InvalidInput(format!(
+            "SQLite database must be a regular file, not a symlink: {}",
+            path.display()
+        )));
+    }
+    // No SQL/pragma runs until the SQLite-owned header and sidecar set decide
+    // whether a schema read could create a wal-index. Merely opening the normal
+    // SQLite main-file handle does not request a read transaction or WAL access.
+    let connection = open_read_only_connection(path, ObservationCurrency::Live)?;
+    let currency = observation_currency(path, &connection)?;
+    let connection = match currency {
+        ObservationCurrency::Live => connection,
+        ObservationCurrency::MainFileOnly => {
+            // The bundled Unix VFS opens immutable MAIN_DB files through its
+            // ordinary inode bookkeeping too; only the pager disables locking.
+            // Both handles therefore retain SQLite's deferred-close discipline.
+            drop(connection);
+            open_read_only_connection(path, currency)?
+        }
+    };
+    configure_observational_connection(&connection, path)?;
 
     // Opening is lazy, so an unreadable database or an unusable wal-index would
     // otherwise surface as an opaque failure inside whichever query happened to
@@ -267,12 +294,15 @@ pub fn open_observational(path: &Path) -> Result<OpenedConnection, OrbitError> {
 /// [`ObservationCurrency::MainFileOnly`] read. Nothing on disk proves it is
 /// quiescent — sidecar absence only says no writer holds it *right now* — so
 /// the caller receives the currency and a warning about the degraded read.
-fn observation_currency(path: &Path) -> Result<ObservationCurrency, OrbitError> {
+fn observation_currency(
+    path: &Path,
+    connection: &Connection,
+) -> Result<ObservationCurrency, OrbitError> {
     let [wal_path, shm_path] = sqlite_sidecar_paths(path);
     let wal = sidecar_metadata(&wal_path)?;
     let shm = sidecar_metadata(&shm_path)?;
 
-    if !database_uses_wal(path)? {
+    if !database_uses_wal(connection, path)? {
         return Ok(ObservationCurrency::Live);
     }
 
@@ -304,7 +334,7 @@ fn open_read_only_connection(
         uri.query_pairs_mut().append_pair("immutable", "1");
     }
 
-    let conn = Connection::open_with_flags(
+    Connection::open_with_flags(
         uri.as_str(),
         OpenFlags::SQLITE_OPEN_READ_ONLY
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
@@ -317,15 +347,17 @@ fn open_read_only_connection(
             "cannot open SQLite database for observational reads",
             &error,
         )
-    })?;
+    })
+}
 
-    pragma::set(&conn, "query_only", &"ON")
+fn configure_observational_connection(conn: &Connection, path: &Path) -> Result<(), OrbitError> {
+    pragma::set(conn, "query_only", &"ON")
         .map_err(|error| sqlite_operation_error(Some(path), "set query_only", &error))?;
-    pragma::set(&conn, "busy_timeout", &DEFAULT_BUSY_TIMEOUT_MS)
+    pragma::set(conn, "busy_timeout", &DEFAULT_BUSY_TIMEOUT_MS)
         .map_err(|error| sqlite_operation_error(Some(path), "set busy_timeout", &error))?;
-    pragma::set(&conn, "foreign_keys", &"ON")
+    pragma::set(conn, "foreign_keys", &"ON")
         .map_err(|error| sqlite_operation_error(Some(path), "enable foreign keys", &error))?;
-    Ok(conn)
+    Ok(())
 }
 
 /// The database's current state cannot be read from this process, and cannot

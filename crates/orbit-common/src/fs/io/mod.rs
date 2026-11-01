@@ -39,6 +39,8 @@ pub use lock::{
 pub(crate) use lock::{classify_lock_io, classify_or_wrap_lock_io};
 #[cfg(any(unix, windows))]
 pub use private::create_dir_symlink;
+#[cfg(feature = "sqlite")]
+pub(crate) use private::set_private_file_permissions;
 pub(crate) use private::{
     append_private_file, create_new_private_file, open_private_file,
     set_private_file_permissions_for_open_file, write_access_error_message,
@@ -47,8 +49,11 @@ pub use private::{
     create_private_dir, create_private_dir_all, is_readonly_or_access_error,
     open_read_only_no_follow,
 };
-#[cfg(feature = "sqlite")]
-pub(crate) use private::{open_regular_file_no_follow, set_private_file_permissions};
+#[cfg(all(unix, feature = "sqlite"))]
+pub(crate) use private::{
+    open_sqlite_permission_handle_no_follow, set_private_permissions_for_sqlite_handle,
+    set_read_only_private_file_permissions,
+};
 
 #[cfg(test)]
 mod tests;
