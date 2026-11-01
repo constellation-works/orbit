@@ -52,7 +52,8 @@ table is read from the host file and never from a probe.
 **Id-routed tools** take exactly one task id as their target and accept an optional
 `workspace`. Today these are `orbit.task.show`, `orbit.task.update`, `orbit.task.reject`,
 `orbit.task.delete`, `orbit.task.artifact.get`, `orbit.task.artifact.put`,
-`orbit.task.review_reset`, `orbit.task.reconcile_review` and `orbit.task.requeue`.
+`orbit.task.review_reset`, `orbit.task.reconcile_review`, `orbit.task.repilot`,
+`orbit.task.requeue`, `orbit.visual.capture` and `orbit.visual.accept_dispute`.
 
 The set is a static list in code. A test fails when a tool whose input schema has a required
 task `id` and an optional `workspace` is neither on the list nor explicitly excluded with a
