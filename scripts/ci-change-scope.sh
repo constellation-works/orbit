@@ -7,11 +7,12 @@
 #   docs      every changed path is Markdown outside crates/ and plugin/.
 #             Markdown under crates/ is compiled in (include_str! assets),
 #             plugin/ is the generated skill mirror, orbit-cli's tests read
-#             the configuration reference page, and scripts/test-* self-tests
-#             execute or digest RELEASING.md and npm/README.md, so each needs
-#             the full gate. A push also requires a successful completed full
-#             check on BEFORE; a previous push may have been replaced while
-#             pending.
+#             the configuration reference page, orbit-core's rule-findings
+#             sweep reads scripts/ux-rules/README.md, and scripts/test-*
+#             self-tests execute or digest RELEASING.md and npm/README.md, so
+#             each is not a docs-only run. A push also requires a successful
+#             completed full check on BEFORE; a previous push may have been
+#             replaced while pending.
 #   affected:<crate>,...
 #             a pull request whose changed paths sit in crates/ (Markdown
 #             aside): `ci-test-affected.py --pull-request-scope` names the
@@ -42,8 +43,8 @@ docs_only() {
     seen=1
     case "$path" in
       crates/* | plugin/*) return 1 ;;
-      # Read by orbit-cli's tests (FILE_READERS in ci-test-affected.py).
-      website/src/content/docs/reference/config.md) return 1 ;;
+      # Read by a Cargo test (FILE_READERS in ci-test-affected.py).
+      website/src/content/docs/reference/config.md | scripts/ux-rules/README.md) return 1 ;;
       # Executed by test-release-promotion.py; copied and digested by the
       # test-qa-full-sweep.py self-test (check_npm_package.py RUNTIME_FILES).
       RELEASING.md | npm/README.md) return 1 ;;

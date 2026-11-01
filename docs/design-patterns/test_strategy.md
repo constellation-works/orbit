@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-27
+last_validated: 2026-11-01
 ---
 # Boundary-First Testing
 
@@ -271,6 +271,14 @@ Required check names are unchanged, and `agent-main` push runs test every crate,
 | 41172682236, this change's own PR (touches `.github/` and `scripts/`) | `full`, every self-test | 445 s | 359 s (build 161 s, own partition 129 s) | 439 s | 333 s (guards 291 s) |
 
 In both runs the Check job's own checks (73–100 s) ended long before its wait, so the test lane binds. A leaf-crate PR now finishes in 349 s, against 520–560 s before (the leaf runs in the before cohort were `affected:` runs that still tested their feature anchors). A full-mode PR, one that changes `.github/`, `scripts/`, an undeclared non-crate path, a manifest or the lock file, still takes about 440 s. The guardrails no longer bind it (333 s beside a 439 s shard), but its full nextest partitions do. So the 400 s p90 holds only while full-mode runs stay under a tenth of PR runs. If they don't, the next lever is the full suite's partition time, not the guardrails. The p90 over the PR population is owed by the following runs: `scripts/ci-p90.py` (now defaulting to 400 s) over the latest 20 completed PR runs. No test was retired, consolidated, skipped, retried or weakened.
+
+A tenth pass (ORB-20920) shortens two parts of the path the 2026-11-01 watch measured at nearest-rank p90 578 s over 16 executed PR Check jobs (budget 400 s). No test was retired, and the hosted p90 after the change is still the operator measurement below.
+
+The guard pool reaped in launch order, so a slow early member kept the slots of members that had already finished. On run 41294900107 (CI guardrails job 124813628606) the width-4 pool's own durations replay to 487.5 s, matching the hosted phase wall of 488 s. `test-qa-full-sweep.py` was 241 s of that, and the exclusive lane summed to 120 s beside it. Replaying the same durations with free-slot admission, still at width 4, finishes the pool when the sweep finishes, at 241 s. The waiting download fixture (83 s) and the exclusive lane stay overlapped with that. Output is still printed in launch order, and the first failure in that order is still the pool's status. Required check names are unchanged.
+
+Some of those full runs were full only because a path outside `crates/` was absent from `FILE_READERS`. `scripts/ux-rules/ui/` and `scripts/ux-rules/lib/ui-context.mjs` select `orbit-core`: the visual-capture driver loads `ui/*.mjs`, and those rules import `ui-context.mjs`. `scripts/ux-rules/README.md` and `scripts/ux-rules/step.mjs` select `orbit-core`: the rule-findings sweep reads the README and copies `step.mjs`. Change scope treats that README as not docs-only, so a pull request that touches only that page still runs the `orbit-core` selection. `scripts/ux-rules/cli/`, `scripts/ux-rules/tests/`, `scripts/ux-rules/lib/cli-context.mjs`, `scripts/ux-rules/lib/manifest.mjs` and `scripts/test-qa-full-sweep.py` have no Cargo reader. The guardrail runs the sweep, and no CI job runs the Node tests under `scripts/ux-rules/tests/`, so those paths select no crate and the PR runs the always-run set. `scripts/ux-rules/run.mjs` stays undeclared, so a change to it runs the full suite. There is no parent `scripts/ux-rules/` prefix, because that would select `orbit-core` for the CLI and test files as well.
+
+An `orbit-core` selection is the eight-crate set measured at 545 s on run 41289004379. A full partition on this watch was 560–580 s, with list-build 273–294 s and nextest about 207–222 s on four cores, so archive-ready time plus nextest stays over 400 s for a full run and for that eight-crate set. The always-run-only class is the leaf measured at 341–404 s, and a scripts-only PR still runs the guardrail self-tests. The hosted sample after merge is `scripts/ci-p90.py` over the latest 20 completed `pull_request` `ci.yml` runs at a 400-second budget, with executed, skipped, cancelled, missing, failures and queue wait recorded separately. A local filtered timing does not establish that p90.
 
 The recurring `test-quality-audit` creates evidence-backed proposed tasks for critical coverage gaps, weak assertions, duplication, flaky or slow fixtures and regressions against this budget. It searches existing tasks before filing, links each finding to the audit, and records concrete acceptance criteria. The audit leaves a durable report even when no new finding is confirmed; it does not treat a quota of findings or deletions as success.
 
