@@ -7,6 +7,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::fs::generation::{ParticipantRecord, ParticipantRole};
 use serde::Serialize;
 
+use super::admission::CandidatePins;
 use super::converge::{ConvergenceStep, run_reporting_step, run_step};
 use super::environment::UpdateEnvironment;
 use super::local_candidate::LocalCandidateEvidence;
@@ -84,6 +85,15 @@ pub struct UpdateReport {
     /// the candidate once it is renamed over the executable.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub handover: Vec<HandoverProcess>,
+    /// Live processes an update that renamed nothing admitted because they
+    /// already run the installed executable and its compatibility identity,
+    /// and asked to hand over to it in place; their sessions continue.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub same_generation: Vec<HandoverProcess>,
+    /// Authorities whose candidate pin the update handed to the layout
+    /// migration's own exclusive fence before `migrate --confirm`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub migration_fenced: Vec<PathBuf>,
     /// What the operator must do to finish, when the run did not.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
@@ -136,14 +146,17 @@ impl UpdateReport {
     }
 }
 
-/// Run the convergence steps and settle the outcome.
+/// Run the convergence steps, holding `pins` through them, and settle the
+/// outcome.
 pub(super) fn finish(
     environment: &UpdateEnvironment,
     executable: &Path,
     mut report: UpdateReport,
     success_outcome: UpdateOutcome,
+    mut pins: CandidatePins,
 ) -> UpdateReport {
-    report.steps = converge_workspace(environment, executable);
+    report.steps = converge_workspace(environment, executable, &mut pins, &mut report);
+    drop(pins);
     let failed: Vec<&str> = report
         .steps
         .iter()
@@ -178,8 +191,13 @@ const BUNDLED_BWRAP_STEP: &[&str] = &["init", "--host-prerequisites-only", "--no
 /// Migrate `.orbit/` state, reconcile managed assets, then repoint the host
 /// clock unit — in that order — and refresh the bundled Bubblewrap when this
 /// host uses one.
-fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
-    let mut steps = workspace_steps(environment, executable);
+fn converge_workspace(
+    environment: &UpdateEnvironment,
+    executable: &Path,
+    pins: &mut CandidatePins,
+    report: &mut UpdateReport,
+) -> Vec<ConvergenceStep> {
+    let mut steps = workspace_steps(environment, executable, pins, report);
     steps.push(clock_step(environment, executable, &steps));
     steps.extend(bundled_bwrap_step(environment, executable));
     steps
@@ -214,8 +232,13 @@ fn bundled_bwrap_step(
     Some(run_step(executable, &cwd, None, BUNDLED_BWRAP_STEP))
 }
 
-fn workspace_steps(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
-    const STEPS: [&[&str]; 2] = [&["migrate", "--confirm"], &["workspace", "sync"]];
+fn workspace_steps(
+    environment: &UpdateEnvironment,
+    executable: &Path,
+    pins: &mut CandidatePins,
+    report: &mut UpdateReport,
+) -> Vec<ConvergenceStep> {
+    const STEPS: [&[&str]; 2] = [MIGRATE_STEP, &["workspace", "sync"]];
     let Some(workspace) = environment.workspace.as_ref() else {
         return STEPS
             .iter()
@@ -230,6 +253,9 @@ fn workspace_steps(environment: &UpdateEnvironment, executable: &Path) -> Vec<Co
     };
     let mut steps = Vec::new();
     for args in STEPS {
+        if args == MIGRATE_STEP {
+            yield_to_migration(workspace, pins, report);
+        }
         let step = run_step(
             executable,
             &workspace.cwd,
@@ -246,6 +272,32 @@ fn workspace_steps(environment: &UpdateEnvironment, executable: &Path) -> Vec<Co
         }
     }
     steps
+}
+
+const MIGRATE_STEP: &[&str] = &["migrate", "--confirm"];
+
+/// Before `migrate --confirm`, release the pins its layout migration fences
+/// itself (see [`CandidatePins::yield_to_layout_migration`]). The child runs
+/// under the authority its `--root`, or else the host-global root, resolves
+/// to, exactly as the update's own admission resolved it.
+fn yield_to_migration(
+    workspace: &super::environment::UpdateWorkspace,
+    pins: &mut CandidatePins,
+    report: &mut UpdateReport,
+) {
+    let child_root =
+        match orbit_core::runtime::resolve_generation_root(workspace.root_argument.as_deref()) {
+            Ok(root) => root,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.update",
+                    error = %error,
+                    "kept every generation pin: the migration's authority is unknown"
+                );
+                return;
+            }
+        };
+    report.migration_fenced = pins.yield_to_layout_migration(&child_root, &workspace.root);
 }
 
 /// Repoint the installed clock unit at the replacement executable.

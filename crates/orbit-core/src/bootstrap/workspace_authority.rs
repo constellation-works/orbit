@@ -474,6 +474,23 @@ fn fence_authorities(
     including_process: bool,
     unfenced: impl Fn(&Path, OrbitError) -> OrbitError,
 ) -> Result<(Vec<GenerationUpdate>, BTreeSet<PathBuf>), OrbitError> {
+    let authorities = authorities_to_fence(shared_root, process, including_process, &unfenced)?;
+    let admissions = authorities
+        .iter()
+        .map(|authority| {
+            GenerationUpdate::acquire(authority).map_err(|error| unfenced(authority, error))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok((admissions, authorities))
+}
+
+/// The authorities [`fence_authorities`] holds admission on, canonical.
+fn authorities_to_fence(
+    shared_root: &Path,
+    process: &Path,
+    including_process: bool,
+    unfenced: &impl Fn(&Path, OrbitError) -> OrbitError,
+) -> Result<BTreeSet<PathBuf>, OrbitError> {
     let ledger = read_authority_ledger(shared_root).map_err(|detail| {
         unfenced(
             shared_root,
@@ -500,13 +517,31 @@ fn fence_authorities(
             authorities.insert(authority);
         }
     }
-    let admissions = authorities
-        .iter()
-        .map(|authority| {
-            GenerationUpdate::acquire(authority).map_err(|error| unfenced(authority, error))
-        })
-        .collect::<Result<_, _>>()?;
-    Ok((admissions, authorities))
+    Ok(authorities)
+}
+
+/// The generation authorities, other than `global_root`'s own, that an open
+/// under `global_root` holds admission on exclusively while it migrates the
+/// layout of `shared_root` to `target_layout`: empty when the workspace is
+/// already at or past it.
+///
+/// `orbit update` pins the candidate generation in every authority it
+/// admitted against, and keeps those pins until convergence ends. Its
+/// `migrate --confirm` child cannot fence an authority the updater still
+/// pins, and an unregistered shared hold is indistinguishable from a foreign
+/// client. The updater therefore hands exactly these authorities to the
+/// migration's fence: it releases its pin on them before the step, and the
+/// fence takes them exclusively, refusing if anything joined in between.
+pub fn layout_migration_fenced_authorities(
+    global_root: &Path,
+    shared_root: &Path,
+    target_layout: u32,
+) -> Result<BTreeSet<PathBuf>, OrbitError> {
+    if current_layout_version(shared_root)? >= target_layout {
+        return Ok(BTreeSet::new());
+    }
+    let process = authority_root(global_root)?;
+    authorities_to_fence(shared_root, &process, false, &|_, error| error)
 }
 
 /// Whether every authority the ledger lists now, other than `process`, is

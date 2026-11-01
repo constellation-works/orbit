@@ -12,6 +12,20 @@
 //! recording the candidate. A holder that never registered (an
 //! `executable-generation-v1` binary, or a sandboxed child that cannot write
 //! the root) always refuses; one whose record is releasing is waited for.
+//!
+//! An updater that renames nothing, because the installed executable already
+//! is the generation it pins (re-running an update to finish convergence),
+//! takes [`GenerationUpdate::acquire_current`] instead: a long-lived
+//! participant already running exactly that executable digest and
+//! compatibility identity, with a resume capability, is admitted beside.
+//! Nothing is renamed, so nothing would hand it over; the admission records a
+//! pending refresh, which asks exactly those participants to hand over in
+//! place, to the installed executable they already run. Flock cannot count a
+//! shared lock's holders, so only the exclusive generation lock proves that
+//! no holder that never registered stands behind them:
+//! [`CurrentAdmission::pin`] waits for it as [`CandidateAdmission::pin`]
+//! does, and refuses when the registered participants are gone and the
+//! generation is still held.
 
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -27,9 +41,12 @@ use super::identity::{Access, CompatibilityIdentity, Envelope};
 use super::paths::{GENERATION_LOCK, validated_generation_root};
 use super::records::{Record, open, read_generation, write_compat};
 use super::refusal::{
-    SWITCH_PENDING, handover_outlasted, holders_outlasted, holders_refused, refusal, unwritable,
+    SWITCH_PENDING, handover_outlasted, holders_outlasted, holders_refused, refresh_outlasted,
+    refusal, unwritable,
 };
-use super::registry::{self, ParticipantRecord, pending_switch};
+use super::registry::{
+    self, ParticipantRecord, ParticipantRole, PendingClaim, PendingSwitch, pending_switch,
+};
 use crate::OrbitError;
 
 /// How often an updater looks again for short-lived participants to exit.
@@ -85,6 +102,83 @@ impl CandidateAdmission {
     }
 }
 
+/// The executable generation an updater that renames nothing re-pins: the
+/// digest and reported compatibility identity of the installed executable.
+pub struct InstalledGeneration<'a> {
+    pub digest: &'a str,
+    /// `None` for an executable that reports no compatibility identity: then
+    /// no live participant is known to run its generation.
+    pub identity: Option<&'a CompatibilityIdentity>,
+}
+
+impl InstalledGeneration<'_> {
+    /// Whether `holder` already runs exactly this generation, stays up
+    /// across operations and can hand over in place. A short-lived one is
+    /// waited for as ever; one without a resume capability still refuses.
+    fn runs(&self, holder: &ParticipantRecord) -> bool {
+        !holder.role.is_short_lived()
+            && holder.handover.is_some()
+            && holder.digest == self.digest
+            && self.identity == Some(&holder.identity)
+    }
+}
+
+/// Exclusive admission for an updater that renames nothing: every live
+/// participant either exited or already runs the installed generation and was
+/// asked to hand over to it in place, see [`GenerationUpdate::acquire_current`].
+pub struct CurrentAdmission {
+    update: GenerationUpdate,
+    digest: String,
+    current: Vec<ParticipantRecord>,
+    /// The pending refresh those participants hand over on. Dropping it
+    /// clears the request.
+    refresh: Option<PendingClaim>,
+}
+
+impl CurrentAdmission {
+    /// The live participants admitted beside because they already run the
+    /// installed generation; each hands over in place before the pin. Empty
+    /// when nothing long-lived was live.
+    pub fn current(&self) -> &[ParticipantRecord] {
+        &self.current
+    }
+
+    /// See [`GenerationUpdate::ensure_can_record`].
+    pub fn ensure_can_record(&self) -> Result<(), OrbitError> {
+        self.update.ensure_can_record()
+    }
+
+    /// Pin the installed generation through convergence, as
+    /// [`GenerationUpdate::pin`] does, once the generation is held
+    /// exclusively.
+    ///
+    /// With participants in [`Self::current`], this first waits up to
+    /// [`quiesce_bound`] for each to hand over in place, which releases its
+    /// hold. Admission stays exclusive meanwhile, so they queue behind it and
+    /// join what it pinned. A hold that outlasts them belongs to a process
+    /// that never registered (or one that joined some other way), so the pin
+    /// refuses as admission would have refused it alone; nothing is pinned
+    /// and admission is released.
+    pub fn pin(
+        mut self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        if digest != self.digest {
+            return Err(refusal(
+                "the generation to pin is not the one admission was taken for",
+            ));
+        }
+        if !self.current.is_empty() {
+            self.update.await_refresh(&self.current)?;
+        }
+        // The participants that handed over wait on admission, not on the
+        // request; clearing it first leaves nothing pending once it opens.
+        drop(self.refresh.take());
+        self.update.pin(digest, identity)
+    }
+}
+
 /// How one live participant stands toward an updater.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Standing {
@@ -92,6 +186,8 @@ pub(super) enum Standing {
     Finishes,
     /// It hands over to the candidate after the rename.
     HandsOver,
+    /// It already runs the generation an updater that renames nothing pins.
+    Current,
     /// Only its owner can end it.
     Blocks,
 }
@@ -120,9 +216,53 @@ impl GenerationUpdate {
     /// process is live or a generation switch is pending. Short-lived
     /// participants are waited for, up to [`quiesce_bound`].
     pub fn acquire(root: &Path) -> Result<Self, OrbitError> {
-        let (update, handover) = Self::admit(root, None)?;
+        let (update, handover) = Self::admit(root, None, None)?;
         debug_assert!(handover.is_empty(), "no candidate, so nothing hands over");
         Ok(update)
+    }
+
+    /// Admit an updater that renames nothing and re-pins `installed`: as
+    /// [`Self::acquire`], except that a long-lived participant already
+    /// running exactly that digest and compatibility identity, with a resume
+    /// capability, is admitted beside and named in
+    /// [`CurrentAdmission::current`]. Any other long-lived participant, one
+    /// that never registered, or a pending switch still refuses.
+    ///
+    /// When any is admitted beside, a pending refresh is recorded under the
+    /// exclusive admission: those participants hand over to the installed
+    /// executable at their next idle boundary, and every other newcomer of
+    /// another identity is refused while it stands.
+    pub fn acquire_current(
+        root: &Path,
+        installed: &InstalledGeneration<'_>,
+    ) -> Result<CurrentAdmission, OrbitError> {
+        let (update, current) = Self::admit(root, None, Some(installed))?;
+        let refresh = match (current.is_empty(), installed.identity) {
+            (false, Some(identity)) => {
+                let bound = quiesce_bound();
+                let requested_at = chrono::Utc::now();
+                let switch = PendingSwitch {
+                    pid: std::process::id(),
+                    role: ParticipantRole::Command,
+                    digest: installed.digest.to_string(),
+                    target: identity.clone(),
+                    requested_at,
+                    deadline: chrono::Duration::from_std(bound)
+                        .ok()
+                        .and_then(|bound| requested_at.checked_add_signed(bound))
+                        .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                    refresh: true,
+                };
+                Some(registry::claim_pending(&update.root, &switch)?)
+            }
+            _ => None,
+        };
+        Ok(CurrentAdmission {
+            update,
+            digest: installed.digest.to_string(),
+            current,
+            refresh,
+        })
     }
 
     /// Admit an installer that will rename `candidate` over the executable:
@@ -133,17 +273,18 @@ impl GenerationUpdate {
         root: &Path,
         candidate: &HandoverCandidate,
     ) -> Result<CandidateAdmission, OrbitError> {
-        let (update, handover) = Self::admit(root, Some(candidate))?;
+        let (update, handover) = Self::admit(root, Some(candidate), None)?;
         Ok(CandidateAdmission { update, handover })
     }
 
     /// Take exclusive admission and then the generation lock, unless every
-    /// live participant will hand over to `candidate`. Returns the
-    /// participants that will; when it is empty, the generation is held
-    /// exclusively.
+    /// live participant will hand over to `candidate`, or already runs
+    /// `installed`. Returns those participants; when it is empty, the
+    /// generation is held exclusively.
     fn admit(
         root: &Path,
         candidate: Option<&HandoverCandidate>,
+        installed: Option<&InstalledGeneration<'_>>,
     ) -> Result<(Self, Vec<ParticipantRecord>), OrbitError> {
         let bound = quiesce_bound();
         // New joiners queue behind this from here on, so the participants
@@ -187,7 +328,10 @@ impl GenerationUpdate {
             unregistered_since = None;
             let standings = live
                 .iter()
-                .map(|holder| standing(holder, candidate))
+                .map(|holder| match installed {
+                    Some(installed) if installed.runs(holder) => Standing::Current,
+                    _ => standing(holder, candidate),
+                })
                 .collect::<Vec<_>>();
             if standings.contains(&Standing::Blocks) {
                 return Err(holders_refused(&live, candidate));
@@ -224,6 +368,36 @@ impl GenerationUpdate {
             if Instant::now() >= deadline {
                 let live = registry::live_participants(&self.root, None, false);
                 return Err(handover_outlasted(bound, &live));
+            }
+            std::thread::sleep(SETTLE_POLL);
+        }
+    }
+
+    /// Take the generation exclusively once every participant admitted beside
+    /// an updater that renames nothing has handed over in place. Nobody joins
+    /// meanwhile, so the live set only shrinks; once it is empty and no
+    /// record is releasing, a hold that outlasts a joiner's probe belongs to
+    /// a process that never registered, and refuses at once.
+    fn await_refresh(&self, current: &[ParticipantRecord]) -> Result<(), OrbitError> {
+        let bound = quiesce_bound();
+        let deadline = Instant::now() + bound;
+        let mut unregistered_since = None;
+        loop {
+            if FileExt::try_lock_exclusive(&self.generation.file).is_ok() {
+                return Ok(());
+            }
+            let live = registry::live_participants(&self.root, None, false);
+            if live.is_empty() && !registry::releasing(&self.root) {
+                let since = *unregistered_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= PROBE_SETTLE {
+                    return Err(holders_refused(&[], None));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            unregistered_since = None;
+            if Instant::now() >= deadline {
+                return Err(refresh_outlasted(bound, current, &live));
             }
             std::thread::sleep(SETTLE_POLL);
         }

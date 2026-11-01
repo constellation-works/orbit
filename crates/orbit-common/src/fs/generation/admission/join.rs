@@ -260,6 +260,7 @@ impl GenerationGuard {
                 .ok()
                 .and_then(|bound| requested_at.checked_add_signed(bound))
                 .unwrap_or(DateTime::<Utc>::MAX_UTC),
+            refresh: false,
         };
         let claim: PendingClaim = registry::claim_pending(root, &switch)?;
         FileExt::unlock(&generation.file).map_err(refusal)?;

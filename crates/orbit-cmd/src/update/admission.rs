@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
-    CandidateAdmission, CompatibilityIdentity, GENERATION_CONTRACT, GenerationGuard,
-    GenerationUpdate, HandoverCandidate, ParticipantRecord,
+    CandidateAdmission, CompatibilityIdentity, CurrentAdmission, GENERATION_CONTRACT,
+    GenerationGuard, GenerationUpdate, HandoverCandidate, InstalledGeneration, ParticipantRecord,
+    authority_root,
 };
 
 /// Every generation authority that can hold a live pin on the host binary.
@@ -73,6 +74,38 @@ pub fn acquire_admissions(roots: &[PathBuf]) -> Result<Vec<GenerationUpdate>, Or
     })
 }
 
+/// Take admission on every authority for an update that renames nothing and
+/// re-pins the installed executable `digest`, as re-running an update to
+/// finish convergence does: as [`acquire_admissions`], except that a
+/// long-lived process already running exactly that digest and the installed
+/// `identity`, with a resume capability, is admitted beside (see
+/// [`current_of`]) and asked to hand over in place. Pinning waits for the
+/// exclusive generation lock, which proves no unregistered holder stands
+/// behind it, as a candidate handover does.
+pub(super) fn acquire_current_admissions(
+    roots: &[PathBuf],
+    digest: &str,
+    identity: Option<&CompatibilityIdentity>,
+) -> Result<Vec<CurrentAdmission>, OrbitError> {
+    let installed = InstalledGeneration { digest, identity };
+    admit_each(roots, |root| {
+        let admission = GenerationUpdate::acquire_current(root, &installed)?;
+        admission.ensure_can_record()?;
+        Ok(admission)
+    })
+}
+
+/// Each live process the admissions kept beside because it already runs the
+/// installed generation, once, oldest first.
+pub(super) fn current_of(admissions: &[CurrentAdmission]) -> Vec<ParticipantRecord> {
+    once_each(
+        admissions
+            .iter()
+            .flat_map(|admission| admission.current().iter().cloned())
+            .collect(),
+    )
+}
+
 /// Take admission on every authority for an update that renames a
 /// candidate reporting `candidate` over the executable: as
 /// [`acquire_admissions`], except that a live process that will hand over to
@@ -91,16 +124,21 @@ pub(super) fn acquire_candidate_admissions(
 
 /// Each live process the admissions let hand over, once, oldest first.
 pub(super) fn handover_of(admissions: &[CandidateAdmission]) -> Vec<ParticipantRecord> {
-    let mut handover = admissions
-        .iter()
-        .flat_map(|admission| admission.handover().iter().cloned())
-        .collect::<Vec<_>>();
+    once_each(
+        admissions
+            .iter()
+            .flat_map(|admission| admission.handover().iter().cloned())
+            .collect(),
+    )
+}
+
+fn once_each(mut holders: Vec<ParticipantRecord>) -> Vec<ParticipantRecord> {
     // A process registers once per authority it joined, and may join one
     // authority more than once.
-    handover.sort_by_key(|holder| (holder.pid, holder.started_at));
-    handover.dedup_by_key(|holder| holder.pid);
-    handover.sort_by_key(|holder| (holder.started_at, holder.pid));
-    handover
+    holders.sort_by_key(|holder| (holder.pid, holder.started_at));
+    holders.dedup_by_key(|holder| holder.pid);
+    holders.sort_by_key(|holder| (holder.started_at, holder.pid));
+    holders
 }
 
 /// Observe admission for an installer that renames the executable at
@@ -157,6 +195,16 @@ impl Pinnable for GenerationUpdate {
     }
 }
 
+impl Pinnable for CurrentAdmission {
+    fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        CurrentAdmission::pin(self, digest, identity)
+    }
+}
+
 impl Pinnable for CandidateAdmission {
     fn pin(
         self,
@@ -178,16 +226,85 @@ pub(super) fn pin_candidate(
     admissions: Vec<impl Pinnable>,
     digest: &str,
     identity: Option<&CompatibilityIdentity>,
-) -> Result<Vec<GenerationGuard>, OrbitError> {
-    roots
+) -> Result<CandidatePins, OrbitError> {
+    let pins = roots
         .iter()
         .zip(admissions)
         .map(|(root, admission)| {
             admission
                 .pin(digest, identity)
+                .map(|guard| (root.clone(), Some(guard)))
                 .map_err(|error| naming_authority(root, &error))
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    Ok(CandidatePins {
+        pins,
+        layout_target: identity.map(|identity| identity.workspace_layout.version),
+    })
+}
+
+/// The candidate generation pinned in each admitted authority, held through
+/// convergence so no older executable enters between the updater and the
+/// candidate's convergence children.
+pub(super) struct CandidatePins {
+    pins: Vec<(PathBuf, Option<GenerationGuard>)>,
+    /// The workspace layout version the candidate migrates to, when it
+    /// reported a compatibility identity.
+    layout_target: Option<u32>,
+}
+
+impl CandidatePins {
+    /// Hand to a `migrate --confirm` child, run under the generation
+    /// authority `child_root` resolves to, every pinned authority its layout
+    /// migration of `shared_root` will fence: release the pin there.
+    ///
+    /// The migration holds admission exclusively on every other authority
+    /// that has used the workspace while it rewrites the layout, so no client
+    /// of theirs is live meanwhile. An updater's pin is a shared hold that
+    /// registers no participant, which that fence cannot tell from an
+    /// unknown client, so keeping it would refuse the migration against the
+    /// update that started it. The fence then takes over the protection the
+    /// pin gave, and stronger: a client of any generation that joins in
+    /// between is live when the fence looks, so the migration refuses rather
+    /// than proceed under it. The pin on the child's own authority, which it
+    /// joins rather than fences, stays, as does every pin when no layout
+    /// migration is pending. Returns the released authorities.
+    pub(super) fn yield_to_layout_migration(
+        &mut self,
+        child_root: &std::path::Path,
+        shared_root: &std::path::Path,
+    ) -> Vec<PathBuf> {
+        let Some(layout_target) = self.layout_target else {
+            return Vec::new();
+        };
+        // Unknowable here means the migration's own fence refuses on the same
+        // fault; keeping every pin is the side that cannot weaken it.
+        let fenced = match orbit_core::composition::layout_migration_fenced_authorities(
+            child_root,
+            shared_root,
+            layout_target,
+        ) {
+            Ok(fenced) => fenced,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.update",
+                    root = %shared_root.display(),
+                    error = %error,
+                    "kept every generation pin: the layout migration's fence is unknown"
+                );
+                return Vec::new();
+            }
+        };
+        let mut released = Vec::new();
+        for (root, pin) in &mut self.pins {
+            if pin.is_none() || !authority_root(root).is_ok_and(|root| fenced.contains(&root)) {
+                continue;
+            }
+            *pin = None;
+            released.push(root.clone());
+        }
+        released
+    }
 }
 
 /// Say which authority an admission failure came from.

@@ -504,6 +504,60 @@ fn persistent_client_hands_over_to_a_local_candidate_update() {
     );
     assert_eq!(after["title"], "After the update");
     assert_eq!(audit_count(&workspace, "orbit.task.add"), 2);
+
+    // Re-running the same update renames nothing [ORB-20980]. The session
+    // already runs the installed bytes, so it is asked to hand over to them in
+    // place: the update re-pins only once it holds the generation exclusively,
+    // and the session keeps serving.
+    let rerun = local_candidate_update(&workspace, &candidate, &manifest, &old);
+    assert!(rerun.status.success(), "{rerun:?}");
+    let report: Value = serde_json::from_slice(&rerun.stdout).expect("re-run report");
+    assert_eq!(report["outcome"], "already_current", "{report}");
+    assert_eq!(report["replaced"], false, "{report}");
+    let current = report["same_generation"]
+        .as_array()
+        .expect("same-generation list");
+    assert_eq!(current.len(), 1, "{report}");
+    assert_eq!(current[0]["pid"], pid, "{report}");
+    server_stderr.wait_until(
+        &mut client.child,
+        "the refreshed MCP server to join the re-pinned generation",
+        || running_digest(&workspace, pid).as_deref() == Some(new_digest.as_str()),
+    );
+    let refreshed = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"After the re-run", "description":"Same session, same image", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(refreshed["title"], "After the re-run");
+    assert_eq!(audit_count(&workspace, "orbit.task.add"), 3);
+
+    // A holder that never registered, on the same authority as that session,
+    // cannot hide behind it: the re-run still refuses it, and the session
+    // continues once the refusal releases admission.
+    let record = std::fs::read(authority_root(&workspace).join(".generation.lock"))
+        .expect("generation record");
+    let unregistered = GenerationGuard::acquire(&authority_root(&workspace), &new_digest)
+        .expect("an unregistered holder joins beside the session");
+    let refused = local_candidate_update(&workspace, &candidate, &manifest, &old);
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("did not register"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        std::fs::read(authority_root(&workspace).join(".generation.lock"))
+            .expect("generation record"),
+        record,
+        "a refused re-run rewrote the generation record"
+    );
+    assert!(orbit_common::fs::generation::pending_switch(&authority_root(&workspace)).is_none());
+    drop(unregistered);
+    let resumed = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title":"After the refusal", "description":"Same session", "complexity":"low", "model":"codex"}),
+    );
+    assert_eq!(resumed["title"], "After the refusal");
+    assert_eq!(audit_count(&workspace, "orbit.task.add"), 4);
     drop(client);
     let ready = preflight(&workspace);
     assert!(ready.status.success(), "{ready:?}");

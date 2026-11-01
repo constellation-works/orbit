@@ -102,6 +102,15 @@
 //! [`CandidateAdmission::pin`] waits, still holding admission, for those
 //! participants to release the generation by exec'ing into the candidate,
 //! then records the candidate; they queue behind it and join what it pinned.
+//! [`GenerationUpdate::acquire_current`] is the admission for an updater
+//! that renames nothing and re-pins the installed executable: a long-lived
+//! participant already running exactly its digest and identity, with a resume
+//! capability, is admitted beside and asked, through a pending switch marked
+//! [`PendingSwitch::refresh`], to hand over to that same executable in place
+//! at its next idle boundary ([`handover_target`] answers it). Its
+//! [`CurrentAdmission::pin`] then waits for the exclusive generation lock as
+//! a candidate pin does, since only that proves no unregistered holder stands
+//! behind the registered ones.
 //!
 //! # Coexistence with `executable-generation-v1`
 //!
@@ -156,7 +165,7 @@ pub use installed::{
 };
 pub use paths::authority_root;
 pub use registry::{ParticipantRecord, ParticipantRole, PendingSwitch, pending_switch};
-pub use update::{CandidateAdmission, GenerationUpdate};
+pub use update::{CandidateAdmission, CurrentAdmission, GenerationUpdate, InstalledGeneration};
 
 /// Admission protocol this binary implements.
 pub const GENERATION_CONTRACT: &str = "compatibility-generation-v2";

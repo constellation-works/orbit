@@ -352,6 +352,13 @@ pub struct PendingSwitch {
     pub requested_at: DateTime<Utc>,
     /// When the waiter gives up and refuses.
     pub deadline: DateTime<Utc>,
+    /// Set by an updater that renames nothing: it asks the long-lived
+    /// participants already running `digest` as `target` to hand over to
+    /// their own installed executable, so the generation is proven free of
+    /// every other holder before it is re-pinned. Builds that predate it read
+    /// the record without the field, as a switch to their own identity.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh: bool,
 }
 
 /// The waiter's hold on the pending record. Dropping it clears the switch.
