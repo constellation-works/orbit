@@ -37,6 +37,11 @@
 //!   without deliveries never leaves the forecast without history.
 //!   `history_tasks` instead selects the newest N completions, whatever
 //!   their age.
+//! - Each attempt's hours, tokens and USD are then shifted by a
+//!   per-metric, per-complexity correction learned from scored residuals
+//!   of the current model version (`correction.rs`). A cohort with too few
+//!   residuals is left unchanged. Earlier versions keep their own scoring
+//!   rules.
 //!
 //! The canonical forecast (default lookback, the live ceiling, no arrivals)
 //! is stored at most once per workspace per [`persistence::STORE_INTERVAL_MINUTES`], and
@@ -58,6 +63,7 @@ mod simulation;
 mod assembly;
 mod calculate;
 mod cohorts;
+mod correction;
 mod history;
 mod options;
 mod persistence;

@@ -1,5 +1,6 @@
 //! Monte Carlo scenario aggregation, including synthetic follow-up work.
 
+use super::correction::{self, Correction};
 use super::dependencies::DependencyPlan;
 use super::model::Delivery;
 use super::model::{self, Draw, FORECAST_SEED, ITERATIONS, Item, Resolved, Rng, Script};
@@ -161,6 +162,7 @@ impl Outcome {
         reasons: &[Option<&'static str>],
         rework: &RegressionRework,
         arrivals_supported: bool,
+        bases: &[Value],
     ) -> Value {
         let included: Vec<usize> = members
             .iter()
@@ -277,6 +279,9 @@ impl Outcome {
                     "work_hours": model::forecast_quantiles(hours),
                     "tokens": model::forecast_quantiles(tokens),
                     "usd": model::forecast_quantiles(usd),
+                    // Uncorrected full-script spend, recorded before the
+                    // residual correction. Scoring keeps the quantiles above.
+                    "base": bases[index].clone(),
                 })
             })
             .collect();
@@ -386,6 +391,7 @@ pub(super) fn simulate_backlog_forecast(
     slots: usize,
     rework: &RegressionRework,
     arrivals: Option<&BTreeMap<&'static str, f64>>,
+    correction: &Correction,
 ) -> Forecast {
     let frozen = admission;
     let initial_admission =
@@ -419,6 +425,8 @@ pub(super) fn simulate_backlog_forecast(
     let mut state = ScheduleState::new(admission);
     let mut hours = vec![None; items.len()];
     let mut scripts: Vec<Script> = (0..items.len()).map(|_| Script::default()).collect();
+    let mut base_usage: Vec<[Vec<Option<f64>>; 3]> =
+        (0..items.len()).map(|_| Default::default()).collect();
     for _ in 0..ITERATIONS {
         // Both scenarios replay the same attempts.
         for (index, item) in items.iter().enumerate() {
@@ -432,6 +440,11 @@ pub(super) fn simulate_backlog_forecast(
                 delivery,
                 &mut scripts[index],
             );
+            let base = correction::script_spend(&scripts[index]);
+            base_usage[index][0].push(base.hours);
+            base_usage[index][1].push(base.tokens);
+            base_usage[index][2].push(base.usd);
+            correction::apply_script(correction, &item.complexity, &mut scripts[index]);
         }
         let scenarios = [Some(&backlog_scenario), approved_scenario.as_ref()];
         for (scenario, outcome) in scenarios.into_iter().zip(outcomes.iter_mut()) {
@@ -446,6 +459,7 @@ pub(super) fn simulate_backlog_forecast(
                     &scenario.included,
                     episodes,
                     &mut rng,
+                    correction,
                 )
             } else {
                 (Vec::new(), false)
@@ -457,6 +471,7 @@ pub(super) fn simulate_backlog_forecast(
                     rates,
                     episodes,
                     &mut rng,
+                    correction,
                     &mut generated,
                 );
             }
@@ -539,6 +554,16 @@ pub(super) fn simulate_backlog_forecast(
             }
         }
     }
+    let bases: Vec<Value> = base_usage
+        .iter_mut()
+        .map(|metrics| {
+            json!({
+                "work_hours": model::forecast_quantiles(&mut metrics[0]),
+                "tokens": model::forecast_quantiles(&mut metrics[1]),
+                "usd": model::forecast_quantiles(&mut metrics[2]),
+            })
+        })
+        .collect();
     let [backlog_outcome, approved_outcome] = outcomes;
     let backlog = backlog_outcome.into_json(
         items,
@@ -549,6 +574,7 @@ pub(super) fn simulate_backlog_forecast(
         rework,
         arrivals
             .is_none_or(|rates| rates.values().sum::<f64>() <= 0.0 || !rework.donors.is_empty()),
+        &bases,
     );
     let if_approved = approved_scenario.as_ref().map(|scenario| {
         approved_outcome.into_json(
@@ -561,6 +587,7 @@ pub(super) fn simulate_backlog_forecast(
             arrivals.is_none_or(|rates| {
                 rates.values().sum::<f64>() <= 0.0 || !rework.donors.is_empty()
             }),
+            &bases,
         )
     });
     Forecast {

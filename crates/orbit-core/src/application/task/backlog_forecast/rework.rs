@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 
 use crate::application::task::paths::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
 
+use super::correction::{self, Correction};
 use super::model::{self, Delivery, Draw, Item, Rng, Script};
 use super::outcomes::{AwayWait, Episode};
 use super::schedule::HORIZON_HOURS;
@@ -408,6 +409,7 @@ pub(super) fn draw_regression_bundles(
     included: &[bool],
     episodes: &[Episode],
     rng: &mut Rng,
+    correction: &Correction,
 ) -> (Vec<ForecastGeneratedNode>, bool) {
     let mut nodes = Vec::new();
     let mut seen = BTreeSet::new();
@@ -457,6 +459,7 @@ pub(super) fn draw_regression_bundles(
                 fix.lag,
                 episodes,
                 rng,
+                correction,
             ));
         }
     }
@@ -470,6 +473,7 @@ fn generated_node(
     lag: f64,
     episodes: &[Episode],
     rng: &mut Rng,
+    correction: &Correction,
 ) -> ForecastGeneratedNode {
     let mut script = Script::default();
     model::draw_forecast_attempts(
@@ -484,6 +488,7 @@ fn generated_node(
         },
         &mut script,
     );
+    correction::apply_script(correction, &donor.item.complexity, &mut script);
     ForecastGeneratedNode {
         template,
         origin,
@@ -554,6 +559,7 @@ pub(super) fn draw_forecast_arrivals(
     rates: &BTreeMap<&'static str, f64>,
     episodes: &[Episode],
     rng: &mut Rng,
+    correction: &Correction,
     nodes: &mut Vec<ForecastGeneratedNode>,
 ) -> bool {
     let total: f64 = rates.values().sum();
@@ -594,6 +600,7 @@ pub(super) fn draw_forecast_arrivals(
             at,
             episodes,
             rng,
+            correction,
         ));
         at -= rng.unit().ln() / (total / 24.0);
     }
