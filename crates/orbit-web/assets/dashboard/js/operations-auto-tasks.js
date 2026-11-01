@@ -1,6 +1,6 @@
 // Auto-task operations [ORB-10876].
 
-import { el, fetchJson, getWorkspace, postJson, requestPanel, statusPill, relativeTime } from './common.js';
+import { el, fetchJson, getHost, getWorkspace, postJson, requestPanel, statusPill, relativeTime } from './common.js';
 import { conditionStateLabel, renderAutomation, renderCondition } from './automation.js';
 import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, editorObserved, isOpen, openEditor, scheduleEditButton } from './schedule-editor.js';
 
@@ -50,10 +50,14 @@ const UNCONDITIONAL_MINT_WARNING = "Manual mint ignores this definition's schedu
 const AUTO_TASK_GROUP_LIMIT = 8;
 let autoTaskFilterQuery = "";
 const autoTaskRevealedGroups = new Set();
+const autoTaskDeleteOpen = new Set();
+const autoTaskDeleteReason = new Map();
 registerOperationsReset(() => {
   closeEditors("auto-task");
   autoTaskFilterQuery = "";
   autoTaskRevealedGroups.clear();
+  autoTaskDeleteOpen.clear();
+  autoTaskDeleteReason.clear();
 });
 
 function autoTaskMatchesFilter(definition, query) {
@@ -288,6 +292,157 @@ function autoTaskEditor(definition) {
   });
 }
 
+function autoTaskDeleteKey(definition) {
+  return `auto-task-delete:${getWorkspace()}:${definition.name}`;
+}
+
+function autoTaskDeleteButton(payload, definition) {
+  const selection = selectionSnapshot();
+  const key = autoTaskDeleteKey(definition);
+  const reason = actionReason(payload, "auto_task_delete");
+  const pending = pendingOperations.has(key);
+  const button = el("button", {
+    class: "operation-button danger",
+    text: pending ? "Pending…" : "Delete",
+    title: reason || `Delete ${definition.name}`,
+    "aria-label": `Delete auto-task ${definition.name}`,
+  });
+  button.type = "button";
+  button.disabled = Boolean(reason) || pending;
+  button.addEventListener("click", () => {
+    if (reason || !selection.current() || pendingOperations.has(key)) return;
+    autoTaskDeleteOpen.clear();
+    autoTaskDeleteOpen.add(key);
+    renderAutoTasks(operationsState.lastAutoTasks || payload, { force: true });
+  });
+  return explainUnavailable(button, reason);
+}
+
+function autoTaskDeletePlace() {
+  const workspace = selectedWorkspace();
+  const workspaceLabel = workspace?.name || workspace?.id || getWorkspace();
+  const host = getHost();
+  const parts = [workspaceLabel, host ? `on ${host}` : ""].filter(Boolean);
+  return parts.length ? ` in ${parts.join(" ")}` : "";
+}
+
+function autoTaskDeleteConfirm(definition) {
+  const key = autoTaskDeleteKey(definition);
+  if (!autoTaskDeleteOpen.has(key)) return null;
+  const selection = selectionSnapshot();
+  const panel = el("div", {
+    class: "auto-task-delete-confirm",
+    role: "group",
+    "aria-label": `Delete ${definition.name}`,
+  });
+  const reasonInput = el("textarea", { class: "schedule-input", "aria-label": "Reason (optional)" });
+  reasonInput.rows = 2;
+  reasonInput.placeholder = "Why this definition is being deleted";
+  reasonInput.value = autoTaskDeleteReason.get(key) || "";
+  reasonInput.addEventListener("input", () => {
+    autoTaskDeleteReason.set(key, reasonInput.value);
+  });
+  const error = el("p", { class: "schedule-error", role: "alert" });
+  error.hidden = true;
+  const refusal = el("div", { class: "auto-task-delete-refusal" });
+  refusal.hidden = true;
+  const confirm = el("button", { class: "operation-button danger", text: "Delete" });
+  confirm.type = "button";
+  const cancel = el("button", { class: "operation-button secondary", text: "Cancel" });
+  cancel.type = "button";
+
+  const setBusy = (busy) => {
+    for (const control of panel.querySelectorAll("button")) control.disabled = busy;
+  };
+  const showError = (message) => {
+    refusal.hidden = true;
+    error.hidden = false;
+    error.textContent = message || "Delete failed";
+    feedback("auto-task-operation-feedback", "error", error.textContent);
+  };
+  const submit = async (force) => {
+    if (!selection.current() || pendingOperations.has(key)) return;
+    const reason = reasonInput.value.trim();
+    pendingOperations.add(key);
+    setBusy(true);
+    error.hidden = true;
+    refusal.hidden = true;
+    refusal.textContent = "";
+    feedback("auto-task-operation-feedback", "pending", `Deleting ${definition.name}…`);
+    try {
+      const result = await postJson("/api/auto-tasks/delete", {
+        name: definition.name,
+        reason: reason || null,
+        force,
+      });
+      if (!selection.current()) return;
+      autoTaskDeleteOpen.delete(key);
+      autoTaskDeleteReason.delete(key);
+      pendingOperations.delete(key);
+      feedback("auto-task-operation-feedback", "success", result.message || `Deleted ${definition.name}.`);
+      try {
+        await fetchAndRenderAutoTasks();
+      } catch (refreshError) {
+        feedback("auto-task-operation-feedback", "error", `${result.message || "Deleted."} Refresh failed: ${refreshError.message}`);
+        if (operationsState.lastAutoTasks) renderAutoTasks(operationsState.lastAutoTasks, { force: true });
+      }
+    } catch (failure) {
+      pendingOperations.delete(key);
+      setBusy(false);
+      if (!selection.current()) return;
+      const openTasks = failure.code === "open_minted_tasks" && Array.isArray(failure.body?.open_tasks)
+        ? failure.body.open_tasks.filter(Boolean)
+        : null;
+      if (openTasks && openTasks.length) {
+        error.hidden = true;
+        refusal.hidden = false;
+        refusal.textContent = "";
+        refusal.setAttribute("role", "alert");
+        refusal.append(el("p", {
+          text: `${definition.name} still has open minted tasks. Delete removes the definition while those tasks stay open.`,
+        }));
+        const list = el("ul", { class: "auto-task-delete-open-tasks" });
+        for (const id of openTasks) list.append(el("li", {}, [taskLink(String(id), selection.workspace)]));
+        refusal.append(list);
+        const anyway = el("button", { class: "operation-button danger", text: "Delete anyway" });
+        anyway.type = "button";
+        anyway.addEventListener("click", () => submit(true));
+        refusal.append(anyway);
+        feedback("auto-task-operation-feedback", "error", failure.message || "Delete refused while a minted task is open");
+        return;
+      }
+      showError(failure.message);
+    } finally {
+      pendingOperations.delete(key);
+    }
+  };
+  confirm.addEventListener("click", () => submit(false));
+  cancel.addEventListener("click", () => {
+    autoTaskDeleteOpen.delete(key);
+    autoTaskDeleteReason.delete(key);
+    if (operationsState.lastAutoTasks) renderAutoTasks(operationsState.lastAutoTasks, { force: true });
+  });
+  panel.append(
+    el("p", { class: "schedule-editor-head" }, [
+      el("span", { text: "Delete " }),
+      el("strong", { text: definition.name }),
+      el("span", { text: `${autoTaskDeletePlace()}?` }),
+    ]),
+    el("p", {
+      class: "schedule-note",
+      text: "Deletion removes this definition and its schedule state. A shipped default will not be reseeded.",
+    }),
+    el("label", { class: "schedule-field" }, [
+      el("span", { class: "schedule-field-label", text: "Reason (optional)" }),
+      reasonInput,
+    ]),
+    error,
+    refusal,
+    el("div", { class: "schedule-editor-controls" }, [confirm, cancel]),
+  );
+  return panel;
+}
+
 function autoTaskRow(payload, definition, workspaceId) {
   const on = autoTaskOn(definition);
   const state = on ? "enabled" : "disabled";
@@ -347,7 +502,12 @@ function autoTaskRow(payload, definition, workspaceId) {
       ]),
       nextCell,
       operationCell("Last minted", lastMinted),
-      operationCell("", [autoTaskMintButton(payload, definition)], "operation-cell-action"),
+      operationCell("", [
+        el("div", { class: "auto-task-actions" }, [
+          autoTaskMintButton(payload, definition),
+          autoTaskDeleteButton(payload, definition),
+        ]),
+      ], "operation-cell-action"),
     ]),
     operationDetails(detailsKey, [
       el("div", { class: "operation-target mono", text: definition.template_summary || template.title || "" }),
@@ -371,6 +531,12 @@ function autoTaskRow(payload, definition, workspaceId) {
   );
   const editor = autoTaskEditor(definition);
   if (editor) card.insertBefore(editor, card.lastChild);
+  const confirm = autoTaskDeleteConfirm(definition);
+  if (confirm) {
+    card.insertBefore(confirm, card.lastChild);
+    const field = confirm.querySelector("textarea");
+    if (field && document.activeElement !== field) field.focus({ preventScroll: true });
+  }
   return card;
 }
 
@@ -416,8 +582,12 @@ export function renderAutoTasks(payload, { force = false } = {}) {
   operationsState.lastAutoTasks = payload;
   const body = $("auto-tasks-body");
   if (!body) return;
-  // An open schedule editor holds a draft: leave the rows alone until it closes.
-  if (!force && editingIn("auto-task") && body.querySelector(".schedule-editor")) return;
+  // An open schedule editor or delete confirmation holds a draft: leave the
+  // rows alone until it closes. Success clears the confirmation first, so the
+  // refresh that follows still repaints.
+  const scheduleDraft = editingIn("auto-task") && body.querySelector(".schedule-editor");
+  const deleteDraft = autoTaskDeleteOpen.size > 0 && body.querySelector(".auto-task-delete-confirm");
+  if (!force && (scheduleDraft || deleteDraft)) return;
   const currentFilter = $("auto-tasks-filter-input");
   const preserveFilterFocus = currentFilter && document.activeElement === currentFilter;
   let filterSelection = null;
