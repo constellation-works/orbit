@@ -8,9 +8,8 @@ pub struct WorkspaceInitArgs {
     #[arg(long)]
     pub name: Option<String>,
     /// Base branch for this workspace (default: the checked-out branch, or main)
-    ///
-    /// Kept optional so re-initializing an existing workspace can distinguish
-    /// an omitted value from an explicit request to reset it to `main`.
+    // Kept optional so re-initializing an existing workspace can distinguish
+    // an omitted value from an explicit request to reset it to `main`.
     #[arg(long)]
     pub base_branch: Option<String>,
     /// Ship-pipeline mode for this workspace: `pr` or `local`. When omitted, the
