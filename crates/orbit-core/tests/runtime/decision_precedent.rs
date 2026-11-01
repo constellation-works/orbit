@@ -416,6 +416,128 @@ fn replayed_answers_do_not_refresh_authority_but_fresh_ones_do() {
 }
 
 #[test]
+fn partial_history_replay_preserves_a_newer_curated_answer_and_authority() {
+    let old = corpus_content_digest(b"old\n");
+    let current = corpus_content_digest(b"current\n");
+    let cited_t2 = |review_by: &str| {
+        rule_doc("2", "current", review_by, true, &old)
+            .replace("task: \"T-1\"", "task: \"T-2\"")
+            .replace("date: \"2026-01-01\"", "date: \"2026-10-05\"")
+    };
+    let history = [
+        answer("T-1", "1", "2026-10-01"),
+        answer("T-2", "2", "2026-10-05"),
+    ];
+
+    let healthy = cited_t2(FUTURE);
+    let healthy_docs = [document(&healthy)];
+    let unchanged = consolidate_decision_corpus(
+        &healthy_docs,
+        &history,
+        &[digest_of("src/lib.rs", &old)],
+        TODAY,
+    );
+    let healthy_rules = resulting_rules(&healthy, &unchanged);
+    let rule = healthy_rules
+        .iter()
+        .find(|rule| rule.id == "sign-off")
+        .unwrap();
+    assert_eq!(rule.answer, "2");
+    assert_eq!(rule.status, CorpusRuleStatus::Current);
+    assert_eq!(rule.review_by, FUTURE);
+    assert_eq!(rule.depends_on[0].digest, old);
+    assert!(rule.auto);
+    assert_eq!(rule.auto_set_by.as_deref(), Some("operator"));
+    assert!(rule.citations.iter().any(|citation| {
+        citation.task == "T-2" && citation.date == "2026-10-05" && citation.option == "2"
+    }));
+    assert!(unchanged.is_empty(), "replaying partial history is a no-op");
+
+    let current_without_t2 = cited_t2(FUTURE)
+        .replace("task: \"T-2\"", "task: \"T-0\"")
+        .replace("date: \"2026-10-05\"", "date: \"2026-09-30\"");
+    let superseded_t2 = cited_t2(FUTURE)
+        .split_once("## Rules\n\n")
+        .unwrap()
+        .1
+        .replace(
+            "id: \"sign-off\"",
+            "id: \"sign-off--superseded-2026-10-05\"",
+        )
+        .replace("status: \"current\"", "status: \"superseded\"")
+        .replace("auto: true\nauto_set_by: \"operator\"", "auto: false");
+    let with_superseded_t2 = format!("{current_without_t2}{superseded_t2}");
+    let replay_with_superseded_t2 = consolidate_decision_corpus(
+        &[document(&with_superseded_t2)],
+        &history,
+        &[digest_of("src/lib.rs", &old)],
+        TODAY,
+    );
+    assert!(
+        replay_with_superseded_t2.is_empty(),
+        "a later citation in superseded history protects the current choice"
+    );
+    let rules = resulting_rules(&with_superseded_t2, &replay_with_superseded_t2);
+    assert_eq!(
+        rules
+            .iter()
+            .find(|rule| rule.id == "sign-off")
+            .unwrap()
+            .answer,
+        "2"
+    );
+    let superseded = rules
+        .iter()
+        .find(|rule| rule.status == CorpusRuleStatus::Superseded)
+        .unwrap();
+    assert!(superseded.id.starts_with("sign-off--superseded-"));
+    assert!(superseded.citations.iter().any(|citation| {
+        citation.task == "T-2" && citation.date == "2026-10-05" && citation.option == "2"
+    }));
+
+    for (label, review_by, digests) in [
+        ("drifted", FUTURE, vec![digest_of("src/lib.rs", &current)]),
+        ("expired", "2020-01-01", vec![digest_of("src/lib.rs", &old)]),
+    ] {
+        let source = cited_t2(review_by);
+        let proposals =
+            consolidate_decision_corpus(&[document(&source)], &history, &digests, TODAY);
+        assert_eq!(proposals.len(), 1, "the {label} rule remains stale");
+        let rules = resulting_rules(&source, &proposals);
+        let rule = rules.iter().find(|rule| rule.id == "sign-off").unwrap();
+        assert_eq!(rule.answer, "2", "the {label} rule keeps its choice");
+        assert_eq!(rule.status, CorpusRuleStatus::Stale);
+        assert_eq!(
+            rule.review_by, review_by,
+            "the {label} review date is unchanged"
+        );
+        assert_eq!(
+            rule.depends_on[0].digest, old,
+            "the {label} digest is unchanged"
+        );
+        assert!(rule.auto, "the {label} operator setting is preserved");
+        assert_eq!(rule.auto_set_by.as_deref(), Some("operator"));
+        assert!(rule.citations.iter().any(|citation| {
+            citation.task == "T-2" && citation.date == "2026-10-05" && citation.option == "2"
+        }));
+        assert!(
+            citable_decision_rules(&proposals[0].markdown, TODAY, &digests).is_empty(),
+            "the {label} rule cannot be cited"
+        );
+        let replay = consolidate_decision_corpus(
+            &[document(&proposals[0].markdown)],
+            &history,
+            &digests,
+            TODAY,
+        );
+        assert!(
+            replay.is_empty(),
+            "replaying the {label} rule is idempotent"
+        );
+    }
+}
+
+#[test]
 fn a_bare_unique_rule_id_updates_its_existing_topic_file() {
     let digest = corpus_content_digest(b"pub fn price() {}\n");
     let doc = rule_doc("1", "current", FUTURE, false, &digest);
