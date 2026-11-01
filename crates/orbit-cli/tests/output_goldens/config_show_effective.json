@@ -385,6 +385,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.application_consent_max_days": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.auto_concurrency.admit_cpu_percent": {
       "scope": "built-in",
       "state": "default",

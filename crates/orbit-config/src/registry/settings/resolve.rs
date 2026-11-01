@@ -660,6 +660,11 @@ pub(super) fn resolve_bounded_count(
     resolve_bounded_range(raw, default, 1, max, key)
 }
 
+/// Default `machine.application_consent_max_days`: the longest lifetime of a
+/// constrained application consent, so a stolen credential has a bounded
+/// window and the operator re-reviews the profile at least monthly.
+pub(super) const DEFAULT_APPLICATION_CONSENT_MAX_DAYS: u32 = 30;
+
 /// A bounded setting whose representation or behavior requires a minimum.
 pub(super) fn resolve_bounded_range(
     raw: Option<u32>,

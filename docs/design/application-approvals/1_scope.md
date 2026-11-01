@@ -124,13 +124,16 @@ administration.
 
 ### Configuration
 
-Consent is host state, not workspace config. Nothing is added to `config.toml`.
+Consent is host state, not workspace config. The one setting is the expiry cap, read
+only from the global `config.toml` (a `machine.*` key, which a workspace file cannot
+supply), so a checkout cannot lengthen the authority it is granted.
 
 | Limit | Value | Meaning |
 |---|---|---|
-| Consent request size | 8 KiB (was 4 KiB) | A constrained profile for one app is about 3-5 KiB |
+| Consented operation size | 8 KiB per operation in a v2 consent; a v1 (exact-only) request keeps its 4 KiB total | A constrained profile for one app is about 3-5 KiB |
 | Plugin callback session record | 16 KiB (was 8 KiB) | Holds the invocation, now including its bindings |
-| Constrained-scope consent expiry | at most 30 days | Renewed with `orbit application rotate` |
+| Constrained-scope consent expiry | `machine.application_consent_max_days`, default 30 days (1-365) | Renewed with `orbit application rotate` |
+| Scope rate limit | optional `rate_limit`, default none | `admissions` (1-10000) per `window_seconds` (1-86400) |
 | `text` / `token` maxima | 4096 chars / 128 bytes | Per field |
 
 ### Surfaces
@@ -193,13 +196,24 @@ Consent is host state, not workspace config. Nothing is added to `config.toml`.
 
 ## Open questions
 
+None open. Daniel answered all three on 2026-11-01; his words are quoted verbatim.
+
 1. **Is a 30-day expiry cap right for constrained consents?** A shorter cap limits a
    stolen credential. A longer one avoids monthly operator renewal on a one-user host.
+   **Resolved:** "30 can be default but configurable". The cap on a constrained
+   consent's `expires_at` defaults to 30 days and is read from the host-only
+   `machine.application_consent_max_days` setting. Consent validation enforces the
+   configured value.
 2. **Should a constrained scope carry a rate limit?** For example, at most N admissions
    per hour per scope. It would blunt bulk misuse of a stolen credential, but accept-all
    is legitimately bulk.
+   **Resolved:** "configurable, default off". A scope may carry an optional
+   `rate_limit` (admissions per window), validated at consent time. A scope without one
+   has no limit. Enforcement lands with constrained admission (slice 2).
 3. **Should Orbit bind the gateway draft digest?** Today only the gateway plugin checks
    it, because the draft lives in plugin state.
+   **Resolved:** "No, plugin checks it". Orbit does not bind it; the gateway plugin
+   keeps the check.
 
 ## Acceptance (feature level)
 

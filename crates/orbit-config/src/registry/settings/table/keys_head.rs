@@ -75,6 +75,13 @@ macro_rules! assemble_config_settings {
         section: ConfigSection::Machine, order: 10,
         resolve: |raw: Option<String>| resolve_machine_id(raw),
     },
+    machine_application_consent_max_days: u32 => u32 {
+        key: "machine.application_consent_max_days", value_type: "integer",
+        description: "Longest lifetime, in days, of an application consent with constrained or named scopes.",
+        section: ConfigSection::Machine, order: 90,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, DEFAULT_APPLICATION_CONSENT_MAX_DAYS, 1, 365, "machine.application_consent_max_days"),
+    },
     machine_auto_concurrency_admit_cpu_percent: u8 => u8 {
         key: "machine.auto_concurrency.admit_cpu_percent", value_type: "integer",
         description: "Maximum forecast CPU utilization as a percentage of host cores.",

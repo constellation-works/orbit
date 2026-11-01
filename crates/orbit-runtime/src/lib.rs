@@ -40,6 +40,7 @@ orbit_common::isolate_test_process!();
 
 mod activity_catalog;
 pub mod application_authority;
+mod application_consent;
 mod application_port;
 pub mod assets;
 pub mod audit;
