@@ -484,7 +484,7 @@ assert.deepEqual(dialogRows().map(row => row.split(' gate')[0]), [
   'pro gemini · weekly 5%', 'flash gemini · weekly 5%', 'argon gemini · wtu · weekly 0%', 'claude 3p · weekly 0%', 'gpt 3p · weekly 0%',
 ], 'scope-named rows with the window as sublabel, most used first');
 assert.doesNotMatch(dialogText(), /gemini-argon-wtu-weekly/, 'no raw scoped window id');
-assert.match(dialogText(), /Weekly pressure ×1 Above ×1 this provider's weekly allowance would expire unused, so its crews are pulled sooner among otherwise equal work; below ×1 they are pulled later; at ×1 nothing changes\. It only orders work and never holds any back\. No live weekly usage, so this reads neutral\./);
+assert.match(dialogText(), /Weekly pressure ×1 Above ×1 this provider's weekly allowance would expire unused sooner; below ×1 later; at ×1 or with no weekly reading it is neutral\. The value is shown for information\. It affects scheduling only when workflow\.crew_selection is "usage_pressure" with a positive usage_pressure_strength: .* Under the default static policy, or with strength 0, scheduling ignores it\. It never holds any work back\. No live weekly usage, so this reads neutral\./);
 outsideClick();
 
 // The weekly pressure shows its basis.

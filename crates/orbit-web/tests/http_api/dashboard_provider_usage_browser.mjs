@@ -170,7 +170,8 @@ try {
   const claudeText = await dialog.innerText();
   assert.match(claudeText, /^claude\s+within limits\s+observed /i);
   assert.match(claudeText, /Weekly pressure\s+×25\.\d+/i);
-  assert.match(claudeText, /Above ×1 .* below ×1 .* at ×1 .* never holds any back/s);
+  assert.match(claudeText, /Above ×1 .* below ×1 .* neutral\. The value is shown for information\. It affects scheduling only when workflow\.crew_selection is "usage_pressure" with a positive usage_pressure_strength: then crew pool draws weight higher-pressure crews more, and pull offers .* Under the default static policy, or with strength 0, scheduling ignores it\. It never holds any work back\./s);
+  assert.doesNotMatch(claudeText, /pulled sooner|only orders work/, 'the explanation does not promise static-policy scheduling effects');
   assert.match(claudeText, /7-day · 10% used · resets /);
   assert.deepEqual((await dialogRows()).map(row => row.split(' ')[0]), ['7-day', '5-hour'], 'one row per window, most used first');
   assert.match((await dialogRows())[0], /^7-day 10% resets .* UTC · in \d+h gate at 90%$/i);

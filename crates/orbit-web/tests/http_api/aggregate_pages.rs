@@ -624,6 +624,103 @@ fn aggregate_task_page_opens_only_the_returned_bundles() {
         },
     );
 }
+/// Human-crew identity is stamped from each task's own workspace: the same crew
+/// name is a human crew in `alpha` and an agent crew in `bravo`, and every read
+/// and write the dashboard consumes (aggregate list, detail, write response)
+/// answers for the workspace that owns the row.
+#[test]
+fn aggregate_rows_classify_human_crews_per_owning_workspace() {
+    isolated(
+        "aggregate_pages::aggregate_rows_classify_human_crews_per_owning_workspace",
+        || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            let (alpha_orbit, alpha_repo) = seed_workspace(&global, tmp.path(), "alpha");
+            let (bravo_orbit, bravo_repo) = seed_workspace(&global, tmp.path(), "bravo");
+            std::fs::write(
+                alpha_orbit.join("config.toml"),
+                "[crews.ops]\nkind = \"human\"\ndescription = \"Operator work\"\n",
+            )
+            .unwrap();
+            std::fs::write(
+                bravo_orbit.join("config.toml"),
+                "[workflow]\ndefault_crew = \"ops\"\n[crews.ops]\nprovider = \"codex\"\nmodel = \"fixture\"\n",
+            )
+            .unwrap();
+            let mut ids = Vec::new();
+            for orbit_dir in [&alpha_orbit, &bravo_orbit] {
+                let runtime = OrbitRuntime::from_roots(&global, orbit_dir)
+                    .expect("runtime")
+                    .with_actor(ActorIdentity::human("human"));
+                let task = runtime
+                    .add_task(TaskAddParams {
+                        title: "ops backlog".into(),
+                        description: "assigned to ops".into(),
+                        status: Some(TaskStatus::Backlog),
+                        crew: Some("ops".into()),
+                        ..Default::default()
+                    })
+                    .expect("add ops task");
+                ids.push(task.id);
+            }
+            write_registry(&global, &[("alpha", &alpha_repo), ("bravo", &bravo_repo)]);
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let all = json_ok(server.get("/api/tasks/all"));
+            let row = |workspace: &str| {
+                all["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| {
+                        item["workspace_id"] == workspace && item["title"] == "ops backlog"
+                    })
+                    .unwrap_or_else(|| panic!("{workspace} ops row in {all}"))
+                    .clone()
+            };
+            let alpha_row = row("alpha");
+            assert_eq!(alpha_row["crew"], "ops");
+            assert_eq!(
+                alpha_row["human_crew"],
+                serde_json::json!({"name": "ops", "description": "Operator work"}),
+                "the aggregate row keeps the human crew of its own workspace"
+            );
+            let bravo_row = row("bravo");
+            assert_eq!(bravo_row["crew"], "ops");
+            assert!(
+                bravo_row.get("human_crew").is_none(),
+                "the same name is an agent crew in bravo: {bravo_row}"
+            );
+
+            let detail = json_ok(server.get(&format!("/api/tasks/{}?workspace=alpha", ids[0])));
+            assert_eq!(detail["human_crew"]["name"], "ops", "the detail carries it");
+            let detail = json_ok(server.get(&format!("/api/tasks/{}?workspace=bravo", ids[1])));
+            assert!(
+                detail.get("human_crew").is_none(),
+                "the agent task detail does not"
+            );
+
+            let written = json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{}?workspace=alpha", ids[0]),
+                serde_json::json!({"title": "ops backlog"}),
+            ));
+            assert_eq!(
+                written["human_crew"]["name"], "ops",
+                "a write response keeps it"
+            );
+        },
+    );
+}
+
 fn seed_run(runtime: &OrbitRuntime, run_id: &str, job_id: &str, state: JobRunState) -> JobRun {
     let now = Utc::now();
     let run = JobRun {

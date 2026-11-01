@@ -39,7 +39,10 @@ let waitingFetchPending = false;
 // an answered decision), so a read that began before it is dropped and redone.
 let waitingGeneration = 0;
 export function waitingOnYouFilter() { return waitingOnly; }
-function isOpenTask(t) { return t.status !== "done" && t.status !== "cancelled" && t.status !== "canceled"; }
+// Terminal statuses mirror TaskStatus::is_terminal (done, archived, rejected)
+// plus both spellings of cancelled; "All" lists them, but nothing waits on them.
+const TERMINAL_TASK_STATUSES = new Set(["done", "archived", "rejected", "cancelled", "canceled"]);
+function isOpenTask(t) { return !TERMINAL_TASK_STATUSES.has(t.status); }
 export function taskWaitsOnYou(t) {
   if (!isOpenTask(t)) return false;
   if (Array.isArray(t.open_decisions) && t.open_decisions.length) return true;

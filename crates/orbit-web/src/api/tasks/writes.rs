@@ -51,12 +51,18 @@ where
 {
     let rendered = tokio::task::spawn_blocking(move || {
         let written = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
-        screened_task_write_response_json(
+        let mut value = screened_task_write_response_json(
             &runtime,
             &written,
             &TaskWriteResponsePolicy::DashboardFullRecord,
         )
-        .map_err(TaskMutationFailure::Render)
+        .map_err(TaskMutationFailure::Render)?;
+        // The client reads human-crew identity off the task itself, so a
+        // write response keeps it as the list and detail reads do.
+        if let Some(object) = value.as_object_mut() {
+            crate::projections::stamp_human_crew_from_runtime(&runtime, object);
+        }
+        Ok(value)
     })
     .await;
     match rendered {
