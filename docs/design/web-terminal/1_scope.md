@@ -1,8 +1,8 @@
 ---
 title: "Scope: a terminal in the dashboard"
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 stage: building
 next: "Phase 2: ORB-18489 PTY sessions and local terminal routes; phase 1 landed"
@@ -17,7 +17,7 @@ related_features: [remote-access, user-interface, policy-sandbox]
 
 # Scope: a terminal in the dashboard
 
-Status: proposed; phases 1–5 filed as ORB-18488, ORB-18489, ORB-18491, ORB-18492 and ORB-18493.
+Status: proposed; phase 1 landed (ORB-18488); phases 2–5 filed as ORB-18489, ORB-18491, ORB-18492 and ORB-18493.
 Bearing: the dashboard already reaches every registered host. `/api/on/<host>/…` forwards a
 request to that host's own `orbit web serve` over an SSH local forward the serving dashboard
 opens on demand, and unsafe methods need the serving dashboard's operator session through
@@ -75,8 +75,8 @@ check, so it gets one, scoped to the terminal routes:
    [`credential_paths.rs`](../../../crates/orbit-exec/src/credential_paths.rs), so bubblewrap,
    the macOS profile and the plugin broker all hide it from confined children. A plan that
    cannot mask it is refused, as for every other entry.
-3. `orbit web serve` (and `orbit web connect`) opens the browser at a one-time URL carrying the
-   secret in the fragment, which never reaches the server or its logs. The page exchanges it
+3. `orbit web serve` (and `orbit web connect`) opens the browser at a one-time URL carrying a
+   single-use ticket derived from the secret in the fragment, which never reaches the server or its logs. The page exchanges it
    once at `POST /api/session` for a session cookie (`HttpOnly`, `SameSite=Strict`, `Path=/api`,
    no `Secure` since the origin is loopback HTTP), and strips the fragment from history.
    A new `orbit web open` prints or opens a fresh one-time URL for an already running dashboard.
@@ -166,7 +166,7 @@ host.
 | `machine.web_terminal.idle_timeout` | `30m` | End a session with no input or output for this long. |
 | `machine.web_terminal.detach_grace` | `10m` | Keep a detached session alive for reattach. |
 | `machine.web_terminal.scrollback_bytes` | `262144` | Scrollback replayed on reattach. |
-| `machine.web_session.ttl` | `12h` | Lifetime of a browser session cookie. |
+| `machine.web_session.ttl` | `43200` | Lifetime of a browser session cookie, in seconds. |
 
 ### Surfaces
 
