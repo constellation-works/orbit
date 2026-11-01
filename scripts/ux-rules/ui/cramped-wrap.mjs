@@ -47,20 +47,24 @@ export async function check(ctx) {
       range.selectNodeContents(el);
       let rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0)
         .map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom }));
+      let scrollX = false;
+      let scrollY = false;
       for (let node = el; node && rects.length; node = node.parentElement) {
         const style = getComputedStyle(node);
         if (Number(style.opacity) === 0 || style.visibility !== "visible" || style.display === "none") return false;
         const box = node.getBoundingClientRect();
         // Scroll containers reveal their contents when scrolled; they do not
         // make an otherwise measurable label intentionally hidden.
-        const clipX = box.width === 0 && ["hidden", "clip"].includes(style.overflowX);
-        const clipY = box.height === 0 && ["hidden", "clip"].includes(style.overflowY);
+        const clipX = !scrollX && ["hidden", "clip"].includes(style.overflowX);
+        const clipY = !scrollY && ["hidden", "clip"].includes(style.overflowY);
         if (clipX || clipY) rects = rects.map((r) => ({
           left: clipX ? Math.max(r.left, box.left) : r.left,
           right: clipX ? Math.min(r.right, box.right) : r.right,
           top: clipY ? Math.max(r.top, box.top) : r.top,
           bottom: clipY ? Math.min(r.bottom, box.bottom) : r.bottom,
         })).filter((r) => r.right > r.left && r.bottom > r.top);
+        scrollX ||= ["auto", "scroll"].includes(style.overflowX);
+        scrollY ||= ["auto", "scroll"].includes(style.overflowY);
       }
       return rects.length > 0;
     };

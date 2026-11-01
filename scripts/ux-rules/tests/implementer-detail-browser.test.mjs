@@ -37,6 +37,13 @@ test("implementer detail collapsed labels are detected and readable labels pass"
         node.style.cssText = style;
         parent.append(node);
       }
+      const clip = document.createElement("div");
+      clip.style.cssText = "width:100px;height:40px;overflow:hidden;position:relative";
+      const offclip = document.createElement("span");
+      offclip.style.cssText = "display:block;width:0;position:relative;left:200px";
+      offclip.textContent = "Offscreen clipped zero width label";
+      clip.append(offclip);
+      parent.append(clip);
     });
     const before = await check(ctx);
     const failures = before.measurements.failures || [];
@@ -44,7 +51,7 @@ test("implementer detail collapsed labels are detected and readable labels pass"
     for (const label of ["Cost coverage (counted attempts)", "Cost per landed task (USD)", "Cost missing-run attempts"]) {
       assert.ok(failures.some((f) => f.selector === "dt" && f.text === label), JSON.stringify(before));
     }
-    assert.ok(!failures.some((f) => /Invisible zero width|Clipped zero width/.test(f.text)), JSON.stringify(before));
+    assert.ok(!failures.some((f) => /Invisible zero width|Clipped zero width|Offscreen clipped zero width/.test(f.text)), JSON.stringify(before));
     await stats.scrollIntoViewIfNeeded();
     await ctx.screenshotFor(rule, target);
     // Give the same dashboard data a readable, bounded two-column layout.
