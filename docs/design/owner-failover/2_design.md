@@ -239,19 +239,43 @@ The decision
 [Publication does not participate in task-write acknowledgement](../task-publication/4_decisions.md#publication-does-not-participate-in-task-write-acknowledgement)
 stands. When nothing has changed, nothing is published. Byte-identical reruns already create
 no commit ([task-publication §4](../task-publication/2_design.md#4-snapshot-construction)).
-At most 96 commits a day are published at the 15-minute ceiling, and fewer in quiet periods.
+Publication rate depends on the write pattern, so no single figure bounds it:
+
+- Continuous writes (each within `quiet` of the last) never leave the head quiet, so the
+  max-lag trigger publishes once per `max_lag`: 96 a day at the 15-minute default
+  (86,400 s ÷ 900 s). That is the rate for this write pattern, not a ceiling.
+- Sparse writes let the quiet trigger fire after each burst. A publication needs unpublished
+  rows, and those were written after the previous publication. So a quiet-triggered publication
+  comes more than `quiet` after the one before it, and a max-lag one more than `max_lag`. At the
+  defaults, that caps publications at about 720 a day (86,400 s ÷ 120 s). Writes every 181
+  seconds (at 0, 181, 362 seconds and so on), with a publisher that checks every second, publish
+  at 120, 301, 482, 663 seconds and so on: about 477 a day, above 96.
+
+The cap holds for any check interval. Getting close to it needs a check about every second, so
+a publication fires as soon as the quiet window closes; a coarser interval publishes less often.
+These counts cover change-triggered publications only. Checkpoint compaction (§3.2) and other
+owner commits are extra. They are estimates from the trigger rules, not measurements.
+
 The weekly routine is retired in favour of this job.
 
 ### 3.2 Bounding repository growth
 
 **Growth estimate for ws_orbit.** Core bundles average about 17 KiB (167 MiB over 9,752
-tasks). 2,642 tasks had history appended in the 7 days before 2026-10-31, about 380 a day.
-Every published change writes a new blob for each changed file of each changed task, and a
-JSONL append rewrites the whole file blob. The upper bound is therefore about 380 × 17 KiB ≈
-6.3 MiB of new blobs a day before compression. Git's zlib and delta packing typically shrink
-text like this several times over, which gives an estimated 1–2 MiB a day, or roughly
-0.4–0.7 GiB a year packed. This is an estimate, not a measurement: no on-change lineage
-exists yet. Debouncing coalesces repeated edits to one task within a window.
+tasks). 2,642 distinct tasks had history appended in the 7 days before 2026-10-31, about 380 a
+day on average. Every published change writes a new blob for each changed file of each changed
+task, and a JSONL append rewrites the whole file blob. A task therefore gets one new blob per
+publication that changes it, so growth depends on how many publications touch each task, not
+only on how many tasks change. Estimated new blob bytes per day are 380 × v × 17 KiB ≈
+6.3 MiB × v, where v is the assumed average number of published versions per changed task per
+day. v = 1 gives the 6.3 MiB figure and holds only when each changed task is published once that
+day. v is an assumption, not a measurement: v = 3, for example, gives about 19 MiB a day before
+compression. The rules bound versions only loosely, at most one version per changed task per
+publication. At the sparse-write cap in §3.1 (about 720 publications a day) and 380 tasks, that
+bound is about 4.4 GiB a day, too loose to size compaction against. Git's zlib and delta packing
+typically shrink text like this several times over. With v = 1 that gives an estimated 1–2 MiB a
+day, or roughly 0.4–0.7 GiB a year packed; packed size scales roughly with v at the same ratio.
+This is an estimate, not a measurement: no on-change lineage exists yet. Debouncing coalesces
+repeated edits to one task within a window, which keeps v down.
 
 **Checkpoint compaction.** When packed history exceeds
 `authority.publication.compact_ratio` (default 4) times the packed size of the live tree,
