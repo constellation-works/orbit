@@ -11,6 +11,7 @@ use orbit_types::tool::{
 pub const ID_ROUTED_TASK_TOOLS: &[&str] = &[
     "orbit.task.show",
     "orbit.task.update",
+    "orbit.task.repilot",
     "orbit.task.reject",
     "orbit.task.delete",
     "orbit.task.artifact.get",
