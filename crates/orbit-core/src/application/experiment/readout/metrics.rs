@@ -75,7 +75,7 @@ fn line_numerator(metric: &str) -> Option<&'static str> {
     }
 }
 
-fn included_pair(task: &TaskOutcome, metric: &str) -> Option<stats::WeightedPair> {
+pub(super) fn included_pair(task: &TaskOutcome, metric: &str) -> Option<stats::WeightedPair> {
     let numerator = line_numerator(metric)?;
     let ReviewableDenominator::Measured(lines) = task.reviewable else {
         return None;

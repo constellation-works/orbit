@@ -39,7 +39,15 @@ pub struct ExperimentReadout {
 pub struct PrimaryObservation {
     pub arm: String,
     pub assigned_at: DateTime<Utc>,
+    /// The per-task value for a mean or rate primary. For a per-line
+    /// (ratio) primary this is the task's numerator (`cost_usd` or
+    /// `lead_time`), not a per-task ratio: an arm's value is the sum of
+    /// numerators over the sum of `lines`, never a mean of ratios.
     pub value: f64,
+    /// The task's measured reviewable lines for a per-line primary;
+    /// `None` for a mean or rate primary. Zero-line and
+    /// unavailable-denominator tasks have no observation at all.
+    pub lines: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
