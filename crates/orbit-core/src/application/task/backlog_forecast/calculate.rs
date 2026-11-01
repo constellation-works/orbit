@@ -4,8 +4,9 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
+use super::correction::CorrectionInputs;
 use super::options::Options;
-use super::{assembly, cohorts, history, persistence, projection, simulation};
+use super::{assembly, cohorts, correction, history, persistence, projection, simulation};
 
 pub(super) fn calculate_backlog_forecast(
     runtime: &OrbitRuntime,
@@ -18,6 +19,15 @@ pub(super) fn calculate_backlog_forecast(
     let prepared =
         assembly::assemble_forecast_simulation(runtime, options, &loaded, &cohorts, now)?;
     let preparation_ms = preparation_started.elapsed().as_secs_f64() * 1000.0;
+    let correction = correction::fit_correction(&CorrectionInputs {
+        stored: &loaded.stored,
+        tasks: &loaded.tasks,
+        done_at: &loaded.done_at,
+        runs: &cohorts.runs,
+        episodes: &loaded.task_episodes,
+        items: &prepared.items,
+        now,
+    });
     let simulation_started = std::time::Instant::now();
     let mut forecast = simulation::simulate_backlog_forecast(
         &prepared.items,
@@ -29,6 +39,7 @@ pub(super) fn calculate_backlog_forecast(
         prepared.slots,
         &prepared.rework,
         options.arrivals.then_some(&prepared.arrival_rates),
+        &correction,
     );
     let simulation_ms = simulation_started.elapsed().as_secs_f64() * 1000.0;
     let items = &prepared.items;
@@ -58,6 +69,7 @@ pub(super) fn calculate_backlog_forecast(
         cohorts: &cohorts,
         prepared: &prepared,
         forecast: &forecast,
+        correction: &correction,
         now,
     };
     let inputs = projection::forecast_inputs(&context);

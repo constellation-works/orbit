@@ -18,7 +18,7 @@ use super::outcomes::RETURN_HORIZON_HOURS;
 use super::persistence::STORE_INTERVAL_MINUTES;
 use super::review_modes::ReviewMode;
 use super::usage::GAP_BRIDGE_HOURS;
-use super::{assembly, model, outcomes, schedule, simulation};
+use super::{assembly, correction, model, outcomes, schedule, simulation};
 
 pub(super) struct ForecastProjection<'a> {
     pub(super) runtime: &'a OrbitRuntime,
@@ -27,6 +27,7 @@ pub(super) struct ForecastProjection<'a> {
     pub(super) cohorts: &'a ForecastCohorts,
     pub(super) prepared: &'a ForecastSimulationInputs,
     pub(super) forecast: &'a simulation::Forecast,
+    pub(super) correction: &'a correction::Correction,
     pub(super) now: DateTime<Utc>,
 }
 
@@ -208,6 +209,7 @@ pub(super) fn forecast_inputs(context: &ForecastProjection) -> Value {
             .map(|(factor, revision)| (factor.to_string(), json!(revision)))
             .collect::<serde_json::Map<String, Value>>(),
         "min_cell_samples": model::MIN_CELL_SAMPLES,
+        "correction": context.correction.to_json(),
         "gap_bridge_hours": GAP_BRIDGE_HOURS,
         "history_deliveries": history.len(),
         "history_without_invocations": without_invocations,
@@ -263,7 +265,11 @@ pub(super) fn forecast_result(
         "generated_at": now.to_rfc3339(),
         // `stored` when a default read serves the newest stored snapshot.
         "served_from": "live",
-        "timing": {"preparation_ms": preparation_ms, "simulation_ms": simulation_ms},
+        "timing": {
+            "preparation_ms": preparation_ms,
+            "simulation_ms": simulation_ms,
+            "correction_ms": context.correction.fit_ms,
+        },
         "inputs": inputs,
         "assumptions": {
             "arrivals": if options.arrivals { "recent_rate" } else { "none" },
@@ -285,6 +291,7 @@ pub(super) fn forecast_result(
             "resource_fit": "enforce_mode_gap_fit",
             "arrival_resources": "donor_profile",
             "static_eligibility": "not_modelled",
+            "residual_correction": "per_metric_complexity_log_affine",
         },
         "backlog": {
             "backlog": status_count(TaskStatus::Backlog),

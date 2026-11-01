@@ -803,6 +803,41 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
     );
 }
 
+/// A completed delivery of `hours` with provider cost equal to those hours.
+pub(super) fn completed_work(
+    fixture: &Fixture,
+    at: DateTime<Utc>,
+    complexity: TaskComplexity,
+    hours: u64,
+) -> String {
+    completed_delivery(
+        fixture,
+        at,
+        complexity,
+        "gpt-6.1-sol",
+        Some(hours as f64),
+        hours,
+    )
+}
+
+/// Move a [`completed_delivery`] invocation's end to `at`. Duration is unchanged.
+pub(super) fn retimestamp_invocation(fixture: &Fixture, id: &str, at: DateTime<Utc>) {
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
+                    (at.to_rfc3339(), format!("delivery-{id}")),
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
 /// Five identical one-hour medium deliveries, so every draw is one hour.
 pub(super) fn one_hour_history(fixture: &Fixture) {
     for _ in 0..5 {

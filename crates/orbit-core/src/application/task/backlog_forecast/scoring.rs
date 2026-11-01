@@ -97,7 +97,7 @@ fn task_hours_measure(version: u32) -> &'static str {
 /// (or `after`) to settlement, and the delivery counts its invocation hours
 /// since the last such settlement. Without readable status history every
 /// post-forecast invocation counts as the delivery.
-fn attempt_work_hours(
+pub(super) fn attempt_work_hours(
     runs: &[ForecastRun],
     episodes: Option<&TaskEpisodes>,
     after: DateTime<Utc>,

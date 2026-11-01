@@ -137,6 +137,10 @@ pub(super) fn persist_forecast(
                         "work_hours": field("work_hours"),
                         "tokens": field("tokens"),
                         "usd": field("usd"),
+                        // Uncorrected full-script quantiles. The next fit
+                        // reads these so a corrected quantile is not treated
+                        // as the raw prediction.
+                        "base": field("base"),
                     },
                     "dependencies": plan.edges[index]
                         .iter()

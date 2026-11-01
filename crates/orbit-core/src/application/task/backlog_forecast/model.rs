@@ -32,8 +32,10 @@ use super::review_modes::ReviewMode;
 /// [ORB-19376]. 14: a legacy fix's footprint is recovered from durable
 /// history, links to absent or never-completed origins are not samples,
 /// and remaining fix-history gaps withhold only the pools their origins
-/// join [ORB-19961].
-pub(super) const MODEL_VERSION: u32 = 14;
+/// join [ORB-19961]. 15: a per-metric, per-complexity log correction from
+/// scored residuals of this version only [ORB-20673]. A bump starts
+/// uncorrected; earlier versions keep their own scoring rules.
+pub(super) const MODEL_VERSION: u32 = 15;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [

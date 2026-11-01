@@ -24,6 +24,8 @@ mod audit_contracts;
 mod auto_tasks;
 #[path = "http_api/automation.rs"]
 mod automation;
+#[path = "http_api/backlog_correction.rs"]
+mod backlog_correction;
 #[path = "http_api/backlog_forecast.rs"]
 mod backlog_forecast;
 #[path = "http_api/backlog_outcomes.rs"]

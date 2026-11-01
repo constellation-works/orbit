@@ -610,7 +610,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             let server = fixture.server(false);
             let live = json_ok(server.get(ENDPOINT));
             assert_eq!(live["served_from"], "live");
-            assert_eq!(live["model_version"], 14);
+            assert_eq!(live["model_version"], 15);
             assert_eq!(live["stored"]["recorded"], true);
             let rows = fixture.runtime.backlog_forecasts(10).unwrap();
             assert_eq!(rows.len(), 2);
@@ -631,7 +631,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             forecast_tick(&fixture, Utc::now() - Duration::minutes(5), false);
             let rows = fixture.runtime.backlog_forecasts(10).unwrap();
             assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].model_version, 14);
+            assert_eq!(rows[0].model_version, 15);
             let server = fixture.server(false);
             let stored = json_ok(server.get(ENDPOINT));
             assert_eq!(stored["served_from"], "stored");
@@ -654,7 +654,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             // keeps the hourly write rule.
             let refreshed = json_ok(server.get(&format!("{ENDPOINT}&refresh=1")));
             assert_eq!(refreshed["served_from"], "live");
-            assert_eq!(refreshed["model_version"], 14);
+            assert_eq!(refreshed["model_version"], 15);
             let support = &refreshed["inputs"]["regression_rework"];
             assert_eq!(support["recovered_footprints"], 1, "{support}");
             assert_eq!(support["missing_fix_history"], 0);
