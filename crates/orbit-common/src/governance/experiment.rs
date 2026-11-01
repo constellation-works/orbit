@@ -103,7 +103,7 @@ const POPULATION_DESCRIPTION: &str = "Which tasks the experiment enrolls, as a J
 
 const GUARDRAILS_DESCRIPTION: &str = "Guardrail metrics as a JSON object from metric name to the threshold its difference from control may not pass, such as {\"delivery_done_rate\": \"-5pt\", \"escaped_regressions\": \"+0\"}.";
 
-const METRIC_DESCRIPTION: &str = "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.";
+const METRIC_DESCRIPTION: &str = "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate. Step-local metrics are exploratory and may be used as guardrails.";
 
 /// The definition fields `create` and `update` share, after the name.
 const DEFINITION: &[ParamSpec] = &[

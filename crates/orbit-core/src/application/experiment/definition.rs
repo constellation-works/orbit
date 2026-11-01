@@ -34,6 +34,19 @@ pub const EXPERIMENT_METRICS: &[&str] = &[
     "visual_verified_finding_rate",
 ];
 
+/// Metrics confined to an implementation step; these are exploratory.
+pub const STEP_LOCAL_METRICS: &[&str] = &[
+    "implement_tokens",
+    "implement_duration",
+    "turns_before_first_edit",
+    "result_bytes_before_first_edit",
+];
+
+/// Whether a registered metric measures only part of a task.
+pub fn experiment_metric_is_step_local(metric: &str) -> bool {
+    STEP_LOCAL_METRICS.contains(&metric)
+}
+
 /// Complexities a population filter may name.
 pub const EXPERIMENT_COMPLEXITIES: &[&str] = &["low", "medium", "hard", "xhard"];
 

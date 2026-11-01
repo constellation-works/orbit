@@ -69,7 +69,7 @@ orbit experiment create brief-v2 \
      "overlay": {"instructions": {"implement": "docs/brief-v2.md"}}}
   ]' \
   --population '{"complexity": ["medium", "hard"], "task_type": ["feature", "bug"]}' \
-  --primary-metric implement_tokens \
+  --primary-metric total_tokens \
   --guardrails '{"delivery_done_rate": "-5pt", "escaped_regressions": "+0"}' \
   --min-sample 20 \
   --max-days 28 \
@@ -145,18 +145,20 @@ key is refused.
 
 ### Metrics, guardrails, and sample rules
 
-`--primary-metric` is the one metric the verdict is read on. The metrics
-an experiment may name, for the primary metric, guardrails, and
-`readout --metric`, are: `implement_tokens`, `total_tokens`, `cost_usd`,
-`lead_time`, `implement_duration`, `turns_before_first_edit`,
-`result_bytes_before_first_edit`, `first_pass_acceptance`,
+`--primary-metric` is the whole-task metric the verdict is read on. Choose
+`total_tokens`, `cost_usd`, `lead_time`, `first_pass_acceptance`,
 `review_repairs`, `step_recoveries`, `final_recoveries`, `failed_checks`,
 `merge_conflicts`, `delivery_done_rate`, `escaped_regressions`,
-`lines_changed`, `visual_landed_mismatches`, `visual_review_repairs`, and
-`visual_verified_finding_rate`. Lower is better for all of them except
-`first_pass_acceptance`, `delivery_done_rate` and
-`visual_verified_finding_rate`, which are rates where higher is better.
-Naming any other metric is refused.
+`lines_changed`, `visual_landed_mismatches`, `visual_review_repairs`, or
+`visual_verified_finding_rate`. Lower is better except for
+`first_pass_acceptance`, `delivery_done_rate`, and `visual_verified_finding_rate`.
+
+The step-local metrics `implement_tokens`, `implement_duration`,
+`turns_before_first_edit`, and `result_bytes_before_first_edit` are
+exploratory: a treatment can move work between steps without improving the
+whole task. They cannot be primary, but remain available for guardrails and
+`readout --metric`. Existing experiments with a step-local primary retain
+all their data; their verdict is withheld. Unknown metrics are refused.
 
 The three visual metrics read a `verify-mock-ui` task's visual review
 records. `visual_landed_mismatches` is the severity-weighted count of
@@ -400,7 +402,7 @@ so compare the crew mix before you credit the treatment alone.
 ## Conclude or abandon
 
 ```bash
-orbit experiment conclude brief-v2 --arm brief-v2 --reason "Winner on implement_tokens, guardrails ok"
+orbit experiment conclude brief-v2 --arm brief-v2 --reason "Winner on total_tokens, guardrails ok"
 orbit experiment abandon brief-v2 --reason "Population was wrong; superseded by brief-v3"
 ```
 

@@ -206,7 +206,7 @@ fn an_experiment_arm_cannot_draw_a_human_crew() {
                     { "name": "control", "control": true },
                     { "name": "treatment", "overlay": overlay }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),

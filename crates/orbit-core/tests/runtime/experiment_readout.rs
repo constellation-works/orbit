@@ -46,7 +46,7 @@ fn large_valid_arm_weights_produce_the_expected_sample_ratio() {
                     { "name": "control", "control": true, "weight": 3_000_000_000_u64 },
                     { "name": "treatment", "weight": 3_000_000_000_u64 }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),
@@ -202,7 +202,7 @@ fn expired_readout_requires_a_primary_comparison_interval() {
                         { "name": "control", "control": true },
                         { "name": "treatment" }
                     ])),
-                    primary_metric: Some("implement_tokens".into()),
+                    primary_metric: Some("total_tokens".into()),
                     min_sample: Some(100),
                     max_days: Some(1),
                     ..ExperimentDefinitionInput::default()
@@ -273,7 +273,7 @@ fn expired_readout_requires_a_primary_comparison_interval() {
         let primary = readout
             .metrics
             .iter()
-            .find(|m| m.metric == "implement_tokens")
+            .find(|m| m.metric == "total_tokens")
             .unwrap();
         assert!(primary.measured);
         let difference = &primary.differences[0].overall;
@@ -288,7 +288,7 @@ fn expired_readout_requires_a_primary_comparison_interval() {
                     .iter()
                     .any(|reason| reason.contains("treatment")
                         && reason.contains("no interval")
-                        && reason.contains("implement_tokens")),
+                        && reason.contains("total_tokens")),
                 "{}: {:?}",
                 case.name,
                 readout.verdict.reasons
@@ -655,7 +655,7 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
                         { "name": "control", "control": true },
                         { "name": "treatment" }
                     ])),
-                    primary_metric: Some("turns_before_first_edit".into()),
+                    primary_metric: Some("total_tokens".into()),
                     ..ExperimentDefinitionInput::default()
                 },
                 actor.clone(),
@@ -663,6 +663,17 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             .unwrap();
         runtime
             .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+            .unwrap();
+        runtime
+            .sqlite_store()
+            .unwrap()
+            .connection()
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE experiments SET primary_metric = 'turns_before_first_edit' WHERE id = ?1",
+                [&experiment.id],
+            )
             .unwrap();
         enroll_first_edit_sample(
             &runtime,
@@ -713,6 +724,14 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             "{}: primary observations",
             case.name
         );
+        assert_eq!(readout.verdict.state, "withheld");
+        assert!(
+            readout
+                .verdict
+                .reasons
+                .iter()
+                .any(|r| r == "primary metric `turns_before_first_edit` is step-local")
+        );
     }
 }
 
@@ -749,7 +768,7 @@ fn readout_counts_tasks_with_a_recorded_explorer_call() {
                     { "name": "control", "control": true },
                     { "name": "treatment" }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),
@@ -934,7 +953,7 @@ fn readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace() {
                     { "name": "control", "control": true },
                     { "name": "treatment" }
                 ])),
-                primary_metric: Some("turns_before_first_edit".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),
@@ -1032,7 +1051,7 @@ fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
                     { "name": "control", "control": true },
                     { "name": "treatment" }
                 ])),
-                primary_metric: Some("turns_before_first_edit".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),
@@ -1165,7 +1184,7 @@ fn readout_counts_explorer_call_beyond_workspace_invocation_scan_limit() {
                     { "name": "control", "control": true },
                     { "name": "treatment" }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),
@@ -1316,7 +1335,7 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
                     { "name": "control", "control": true },
                     { "name": "treatment" }
                 ])),
-                primary_metric: Some("turns_before_first_edit".into()),
+                primary_metric: Some("total_tokens".into()),
                 guardrails: Some(json!({ "result_bytes_before_first_edit": "+0" })),
                 min_sample: Some(1),
                 ..ExperimentDefinitionInput::default()
@@ -1326,6 +1345,17 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
         .unwrap();
     runtime
         .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE experiments SET primary_metric = 'turns_before_first_edit' WHERE id = ?1",
+            [&experiment.id],
+        )
         .unwrap();
     enroll_first_edit_sample(
         &runtime,
@@ -1439,7 +1469,7 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
         }
     }
     assert!(incomplete.primary_observations.is_empty());
-    assert_eq!(incomplete.verdict.state, "collecting");
+    assert_eq!(incomplete.verdict.state, "withheld");
     assert!(!incomplete.verdict.horizon_reached);
     assert!(incomplete.verdict.arm.is_none());
     assert_eq!(incomplete.guardrails[0].arms[0].status, "unknown");

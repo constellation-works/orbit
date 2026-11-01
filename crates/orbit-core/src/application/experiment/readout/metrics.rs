@@ -109,6 +109,7 @@ pub(super) fn metric_readout(
         .unwrap_or_default();
     ReadoutMetric {
         metric: spec.name.to_string(),
+        exploratory: super::super::definition::experiment_metric_is_step_local(spec.name),
         kind: match spec.kind {
             Kind::Mean => "mean",
             Kind::Rate => "rate",

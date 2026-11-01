@@ -19,7 +19,7 @@ use orbit_common::governance::authorization::{
 use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
     EXPERIMENT_COMPLEXITIES, EXPERIMENT_METRICS, ExperimentActor, ExperimentChange,
-    ExperimentDefinitionInput, ExperimentView,
+    ExperimentDefinitionInput, ExperimentView, STEP_LOCAL_METRICS,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -53,6 +53,7 @@ pub(super) fn experiment_authoring(runtime: &OrbitRuntime, operator_session: boo
         "max_running": settings.max_running,
         "config_keys": settings.config_keys,
         "metrics": EXPERIMENT_METRICS,
+        "step_local_metrics": STEP_LOCAL_METRICS,
         "complexities": EXPERIMENT_COMPLEXITIES,
         "crews": crews,
     })

@@ -1254,7 +1254,7 @@
       },
       {
         "name": "primary_metric",
-        "description": "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
+        "description": "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate. Step-local metrics are exploratory and may be used as guardrails.",
         "param_type": "string",
         "required": false
       },
@@ -1540,7 +1540,7 @@
       },
       {
         "name": "primary_metric",
-        "description": "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
+        "description": "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate. Step-local metrics are exploratory and may be used as guardrails.",
         "param_type": "string",
         "required": false
       },

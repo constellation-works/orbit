@@ -67,7 +67,7 @@ fn expired_instruction_experiment(root: &std::path::Path, step_outcome: &str) ->
                         "overlay": { "instructions": { "implement": "docs/agents/treatment.md" } }
                     }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 min_sample: Some(100),
                 max_days: Some(1),
                 ..ExperimentDefinitionInput::default()

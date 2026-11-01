@@ -200,6 +200,7 @@ impl Fixture {
             .current_dir(&self.work)
             .env("HOME", &self.home)
             .env("USERPROFILE", &self.home)
+            .env("ORBIT_OPERATOR", "1")
             .env_remove("ORBIT_FORMAT")
             .env_remove("NO_COLOR")
             .env_remove("CLICOLOR_FORCE")
@@ -214,4 +215,87 @@ fn line_containing(text: &str, needle: &str) -> String {
         .find(|line| line.contains(needle))
         .unwrap_or_else(|| panic!("missing {needle}:\n{text}"))
         .to_string()
+}
+
+#[test]
+fn step_local_primary_is_refused_and_legacy_readout_is_exploratory() {
+    if crate::isolated_test::run_in_child(
+        "experiment_readout::step_local_primary_is_refused_and_legacy_readout_is_exploratory",
+    ) {
+        return;
+    }
+    let fixture = Fixture::workspace();
+    for args in [
+        vec![
+            "experiment",
+            "create",
+            "bad-cli",
+            "--primary-metric",
+            "implement_duration",
+        ],
+        vec![
+            "tool",
+            "run",
+            "orbit.experiment.create",
+            "--input",
+            r#"{"name":"bad-tool","primary_metric":"implement_duration"}"#,
+        ],
+    ] {
+        let output = fixture.run(&args);
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("step-local")
+                && error.contains("cost_usd")
+                && error.contains("lead_time"),
+            "{error}"
+        );
+    }
+    for metric in ["cost_usd", "lead_time"] {
+        let output = fixture.run(&["experiment", "create", metric, "--primary-metric", metric]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let db = rusqlite::Connection::open(fixture.home.join(".orbit/orbit.db")).unwrap();
+    db.execute(
+        "UPDATE experiments SET primary_metric = 'implement_duration' WHERE name = 'caption-check'",
+        [],
+    )
+    .unwrap();
+    drop(db);
+    let output = fixture.run(&["experiment", "readout", "caption-check", "--format", "json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let readout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(readout["verdict"]["state"], "withheld");
+    assert!(
+        readout["verdict"]["reasons"]
+            .to_string()
+            .contains("primary metric `implement_duration` is step-local")
+    );
+    let metrics = readout["metrics"].as_array().unwrap();
+    for name in [
+        "implement_tokens",
+        "implement_duration",
+        "turns_before_first_edit",
+        "result_bytes_before_first_edit",
+    ] {
+        let metric = metrics
+            .iter()
+            .find(|metric| metric["metric"] == name)
+            .unwrap();
+        assert_eq!(metric["exploratory"], true);
+        assert!(!metric["arms"].as_array().unwrap().is_empty());
+    }
+    assert!(
+        fixture
+            .plain_readout()
+            .contains("implement_duration (exploratory)")
+    );
 }

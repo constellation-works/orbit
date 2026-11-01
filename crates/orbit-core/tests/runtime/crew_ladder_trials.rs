@@ -109,7 +109,7 @@ fn stale_mode_off_runtime_keeps_the_current_ladder_trial() -> Result<(), OrbitEr
                 { "name": "treatment" }
             ])),
             population: Some(json!({ "tags_include": ["operator-study"] })),
-            primary_metric: Some("implement_tokens".into()),
+            primary_metric: Some("total_tokens".into()),
             ..ExperimentDefinitionInput::default()
         },
         operator.clone(),

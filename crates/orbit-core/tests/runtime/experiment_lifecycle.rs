@@ -69,7 +69,7 @@ fn disabled_and_stale_admissions_enroll_once_experiments_run() {
                     { "name": "control", "control": true },
                     { "name": "treatment" }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),
@@ -137,7 +137,7 @@ fn enabled_population_miss_stays_final_across_retries() {
                         { "name": "treatment", "overlay": overlay }
                     ])),
                     population: Some(json!({ "tags_include": [tag] })),
-                    primary_metric: Some("implement_tokens".into()),
+                    primary_metric: Some("total_tokens".into()),
                     ..ExperimentDefinitionInput::default()
                 },
                 actor.clone(),
@@ -248,7 +248,7 @@ fn disabled_setting_stops_new_enrollment_but_keeps_sticky_rows() {
                     { "name": "control", "control": true },
                     { "name": "treatment" }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor.clone(),
@@ -524,7 +524,7 @@ fn draft_experiment(runtime: &OrbitRuntime, name: &str, actor: ExperimentActor) 
                     { "name": "treatment-a", "weight": 1 },
                     { "name": "treatment-b", "weight": 1 }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
             actor,
