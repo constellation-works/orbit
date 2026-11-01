@@ -400,6 +400,11 @@ any path the work requires. Delivery commits every changed path except
 `.orbit/tmp/` scratch and gitignored output, and widens the selectors with an
 exact `file:` entry for each uncovered path, recording which step introduced
 it. Declaring a path yourself is optional, but keeps the scope readable.
+A source-repair run (an operator-admitted repair of an already published PR)
+cannot declare: its publication authority is bound to the admitted scope, so
+`orbit.task.update` refuses a changed `context_files` from that run and writes
+nothing. Resend the summary or comment without `context_files` and keep the
+change; delivery widens the selectors over it.
 
 In claimed mode, use the injected list and report additions in
 `context_files_added`; they are recorded for the owner without changing the

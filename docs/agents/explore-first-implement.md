@@ -13,7 +13,9 @@
   rely on yourself before you change or cite it.
 - Compare the explorer's answer with the task's `context_files`. When the
   change needs paths outside it, widen the selectors with
-  `orbit.task.update`.
+  `orbit.task.update`, except in a source-repair run: its admitted scope is
+  fixed and the update is refused, so make the change and let the delivery
+  commit widen the selectors over the paths you changed.
 - Use `orbit.agent.invoke` as the explorer route for this trial, not your
   provider's own subagents: the trial measures `orbit.agent.invoke` runs.
 - When a call is refused (budget, or delegation unavailable on this host),
