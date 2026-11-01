@@ -3278,6 +3278,57 @@ fn handoff_landing_contracts_2() {
 }
 
 #[test]
+fn landing_poll_uses_the_completion_clock_for_elapsed_provider_time() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "landing_poll_uses_the_completion_clock_for_elapsed_provider_time",
+        || {
+            let sandbox = tempdir().unwrap();
+            let host = pending_forge(sandbox.path(), vec![blocked_aggregate()], vec![]);
+            let head = host.forge.context.candidate.candidate.commit.clone();
+            *host.policies.lock().unwrap() = vec![pending_policy(&head, "QUEUED", true)].into();
+            let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
+            let now = clock.clone();
+            let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let recorded = waits.clone();
+            let waited = clock.clone();
+            let result = orbit_engine::test_support::with_prerequisite_clock(
+                move || {
+                    let current = now.get();
+                    // Provider work takes six logical seconds after the budget starts.
+                    if current == 1_000 {
+                        now.set(7_000);
+                    }
+                    current
+                },
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            recorded.borrow_mut().push(duration.as_secs());
+                            waited.set(waited.get() + duration.as_secs() * 1_000);
+                        },
+                        || {
+                            land_with(
+                                &host,
+                                json!({"max_wait_seconds":10,"poll_interval_seconds":5}),
+                            )
+                        },
+                    )
+                },
+            );
+            assert!(result.is_err(), "a pending check must stop at the deadline");
+            assert_eq!(
+                *waits.borrow(),
+                [4],
+                "provider time consumes the same budget as waits"
+            );
+            assert_sent_len(&host.forge, "pr.merge", 0, "pending check");
+        },
+    );
+}
+
+#[test]
 fn handoff_landing_contracts_3() {
     crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_3", || {
         crate::git_fixture::run_scenarios(&[
