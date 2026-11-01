@@ -87,10 +87,10 @@ Write responses without a projection omit the append-heavy `comments` and
 use the same field catalogue above.
 
 A write response may also carry optional `warnings` metadata. It is not a task
-field: `warnings` is absent when empty, appears only on an unprojected object
-response, and is refused as a `fields` selector. A single-field projection such
-as `fields: ["id"]` returns the bare value and cannot carry it, so omit `fields`
-on the write when warnings matter.
+field: `warnings` is absent when empty, is attached to every object response
+(including a projection of more than one field), and is refused as a `fields`
+selector. A single-field projection such as `fields: ["id"]` returns the bare
+value and cannot carry it, so omit `fields` on the write when warnings matter.
 
 `crew` selects execution; work only a human can do (credentials, approvals,
 physical access, operator-only decisions) sets it to the human-kind crew
