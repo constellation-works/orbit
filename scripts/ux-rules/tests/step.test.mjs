@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -97,5 +97,26 @@ test("step keeps inherited loader and font settings and leaves system-library ki
     const untouched = runStepProbe(dir, plain);
     assert.equal(untouched.ld, "");
     assert.equal(untouched.fonts, "");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("step exports evidence before deleting surface scratch", () => {
+  const scratch = process.env.ORBIT_SCRATCH_DIR || path.resolve(".orbit/tmp");
+  mkdirSync(scratch, { recursive: true });
+  const dir = mkdtempSync(path.join(scratch, "ux-step-evidence-"));
+  try {
+    const out = path.join(dir, "declared");
+    mkdirSync(out);
+    const runner = path.join(dir, "runner.mjs");
+    writeFileSync(runner, `import {writeFileSync} from 'node:fs'; import path from 'node:path';
+const out=process.argv[process.argv.indexOf('--out')+1];
+writeFileSync(path.join(out,'capture.png'), Buffer.from('screenshot'));
+writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({results:[{rule:'ui.x',status:'fail',fingerprint:'x',evidence:['capture.png']}]}));`);
+    const report = JSON.parse(execFileSync(process.execPath, ["scripts/ux-rules/step.mjs"], {
+      input: JSON.stringify({ surfaces: ["ui"], runner, orbit: process.execPath }),
+      env: { ...process.env, TMPDIR: dir, ORBIT_SCRIPT_OUT: out }, encoding: "utf8",
+    }));
+    const evidence = report.results[0].evidence[0];
+    assert.equal(readFileSync(path.join(out, evidence), "utf8"), "screenshot");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
