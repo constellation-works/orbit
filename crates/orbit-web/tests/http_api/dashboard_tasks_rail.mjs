@@ -1505,6 +1505,7 @@ const waitingContext = {
 };
 const waitingCount = () => waitingBox.querySelector('.waiting-filter .chip-count').textContent;
 const waitingRows = () => taskRows().map(row => row.dataset.key);
+common.setMultiWorkspace(true);
 common.setWorkspace('ws_waiting_a');
 tasksModule.namespace.buildChips(waitingContext);
 renderTasks(waitingTasks, waitingContext);
@@ -1544,3 +1545,67 @@ assert.deepEqual(waitingRows(), [], 'the filter drops the previous workspace\'s 
 await settleReads();
 assert.ok(waitingReads.at(-1).includes('workspace=ws_waiting_b'), 'the next workspace reads its own decisions');
 waitingBox.querySelector('.waiting-filter').dispatch('click');
+
+// Run the shipped app in a browser when a prepared Playwright module is given.
+// Hold workspace discovery so startup cannot accidentally rely on a default.
+if (process.argv.includes('--browser')) {
+  const http = await import('node:http');
+  const path = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const { dashboardFile } = await import('../../src/tests/dashboard_static.mjs');
+  const { chromium } = await import(pathToFileURL(path.resolve(process.env.PLAYWRIGHT_MODULE)).href);
+  const server = http.createServer((req, res) => {
+    const served = dashboardFile(new URL(req.url, 'http://fixture').pathname);
+    if (!served) { res.writeHead(404); res.end(); return; }
+    res.setHeader('content-type', served.type);
+    res.end(served.data);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    for (const width of [1440, 375]) {
+      const page = await browser.newPage({ viewport: { width, height: width === 375 ? 812 : 900 } });
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+      await page.addInitScript(() => {
+        globalThis.EventSource = class { close() {} };
+        globalThis.fixtureRequests = [];
+        globalThis.workspaceRequested = false;
+        const discovery = new Promise(resolve => { globalThis.releaseWorkspace = resolve; });
+        globalThis.fetch = async input => {
+          const url = new URL(input, location.href);
+          const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+          if (url.pathname === '/api/workspaces') {
+            globalThis.workspaceRequested = true;
+            await discovery;
+            return json([{ id: 'ws_fixture', name: 'fixture', status: 'active' }]);
+          }
+          if (url.pathname === '/api/decisions') {
+            globalThis.fixtureRequests.push(url.search);
+            return url.searchParams.get('workspace') === 'ws_fixture'
+              ? json({ items: [{ task_id: 'ORB-401' }] }) : json({ error: 'no workspace selected and no default configured' }, 400);
+          }
+          if (url.pathname === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner', local: true }] });
+          if (url.pathname === '/api/crews') return json({ crews: [] });
+          if (url.pathname === '/api/tasks') return json({ items: [], total: 0, limit: 50 });
+          return json({ items: [], total: 0 });
+        };
+      });
+      await page.goto(`http://127.0.0.1:${server.address().port}/#tasks`, { waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => globalThis.workspaceRequested);
+      assert.deepEqual(await page.evaluate(() => globalThis.fixtureRequests), [], 'no unscoped decisions read while discovery is pending');
+      await page.evaluate(() => globalThis.releaseWorkspace());
+      await page.waitForFunction(() => document.querySelector('.waiting-filter .chip-count')?.textContent === '1');
+      assert.deepEqual(await page.evaluate(() => globalThis.fixtureRequests), ['?workspace=ws_fixture'], 'discovery triggers one scoped decision read');
+      assert.deepEqual(errors, [], 'startup has no browser or console errors');
+      await page.waitForFunction(() => document.getAnimations().every(animation => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity));
+      await page.screenshot({ path: `.orbit/tmp/waiting-dark-${width}.png` });
+      await page.close();
+    }
+  } finally {
+    await browser?.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
