@@ -743,14 +743,20 @@ This continuation is limited to a failed observation before any merge, automatic
 merge, post-publication rebase or repair mutation. A `delivery_preparation`
 checkpoint from a `pr_prepare` step before the first push does not exclude reuse:
 the published head and validation receipts must still match the completion
-binding. Enabling automatic source repair does not exclude an
-otherwise unchanged original publication. The host checks the existing
+binding. A `delivery_preparation_refresh` checkpoint at `sync_base_preparation`
+does not exclude reuse either when the host issued it in this run as a refresh
+of the initial `prepare_branch` preparation: it names that preparation as its
+source, matches its task IDs, workspace path and head, and leaves the candidate
+head unchanged. The same receipt and binding checks apply to it. Enabling
+automatic source repair does not exclude an otherwise unchanged original
+publication. The host checks the existing
 repair admissions/publications, source-repair, infrastructure and base-update
 reservations, including pending or unreadable records. Any such task history
 refuses this narrow continuation, even if the tree or head is unchanged. Merge,
 auto-merge and local rebase attempts record write-ahead mutation provenance;
-unknown replies keep it. Retry descendants, other rebase recovery checkpoints,
-reviewer fixes and a `failure_activity_checkpoint` require governed recovery.
+unknown replies keep it. Retry descendants, other rebase recovery checkpoints
+(including a refresh that does not meet those conditions), reviewer fixes and a
+`failure_activity_checkpoint` require governed recovery.
 Refusals identify mutation provenance, the checkpoint step, the failure-activity
 checkpoint or the reviewer repair that prevented reuse. Native policy captures
 from before this provenance contract cannot authorize reuse.
