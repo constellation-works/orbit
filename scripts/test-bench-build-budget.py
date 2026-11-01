@@ -392,13 +392,22 @@ def pidfd_is_alive(fd):
     return not readable
 
 
-def pin_arm_pid(pid, pgid):
-    """Open a pidfd only when `pid` is stably the arm group member it was."""
+def pin_arm_pid(pid, pgid, expected_start=None):
+    """Open a pidfd only when `pid` is stably the owned arm incarnation.
+
+    `expected_start` is the start time published while the handshake still
+    held that incarnation. Two agreeing reads of whichever process currently
+    owns the number are not ownership: a replacement is stable on its own.
+    Spawn-window capture omits it; that hook has not returned, and
+    cancellation has not run.
+    """
     try:
         pgrp, start = read_arm_proc_identity(pid)
     except (OSError, ValueError, IndexError):
         return None
     if pgrp != pgid:
+        return None
+    if expected_start is not None and start != expected_start:
         return None
     try:
         fd = os.pidfd_open(pid)
@@ -410,13 +419,50 @@ def pin_arm_pid(pid, pgid):
         except (OSError, ValueError, IndexError):
             os.close(fd)
             return None
-        if again != (pgrp, start) or not pidfd_is_alive(fd):
+        wanted = (pgrp, start if expected_start is None else expected_start)
+        if again != wanted or not pidfd_is_alive(fd):
             os.close(fd)
             return None
         return fd
     except BaseException:
         os.close(fd)
         raise
+
+
+def read_published_arm_ownership(path):
+    """Return `(pgid, {pid: starttime})` from the hook's ownership proof.
+
+    The first line is the group leader. Every line is `pid starttime`,
+    captured while the hook still held that incarnation.
+    """
+    parsed = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        fields = raw.split()
+        if len(fields) != 2:
+            raise ValueError("arm ownership proof is incomplete")
+        pid = int(fields[0])
+        start = int(fields[1])
+        if pid <= 0 or start < 0:
+            raise ValueError("arm ownership proof is incomplete")
+        parsed.append((pid, start))
+    if not parsed:
+        raise ValueError("arm ownership proof is incomplete")
+    starts = {}
+    for pid, start in parsed:
+        if pid in starts:
+            raise ValueError("arm ownership proof is incomplete")
+        starts[pid] = start
+    return parsed[0][0], starts
+
+
+def ownership_still_published(path, pgid, starts):
+    try:
+        current_pgid, current = read_published_arm_ownership(path)
+    except (OSError, ValueError):
+        return False
+    return current_pgid == pgid and current == starts
 
 
 class OwnedArmIdentity:
@@ -433,15 +479,31 @@ class OwnedArmIdentity:
         self.fds = []
         self.retired = False
 
-    def pin(self, pgid, extra_pids):
+    def pin(self, pgid, extra_pids, expected_starts=None):
+        """Reserve the arm. A proof limits capture to its published pids."""
         seen = []
         for pid in (pgid, *extra_pids, *arm_group_members(pgid)):
-            if pid in seen or not isinstance(pid, int) or pid <= 0:
+            if pid in seen or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
                 continue
             seen.append(pid)
-            fd = pin_arm_pid(pid, pgid)
+            expected_start = None
+            if expected_starts is not None:
+                if pid not in expected_starts:
+                    continue
+                expected_start = expected_starts[pid]
+            fd = pin_arm_pid(pid, pgid, expected_start)
             if fd is not None:
                 self.fds.append(fd)
+
+    def release_unsignaled(self):
+        """Close captured pidfds without signalling them."""
+        fds = self.fds
+        self.fds = []
+        for fd in fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     def signal_and_retire(self):
         if self.retired:
@@ -612,39 +674,89 @@ def scenario_cancellation_flag_clear(root, script):
     env["BENCH_BLOCK"] = str(block)
     env["RACE_ROOT"] = str(block)
     hook = case / "bash-env"
-    hook.write_text(
-        "set -T\n"
-        "flag_hold() {\n"
-        "  if [[ \"${ARM_SPAWNING:-0}\" == 1 && \"$BASHPID\" == \"$$\" ]]; then\n"
-        "    trap - DEBUG\n"
-        "    printf 'held\\n' > \"$RACE_ROOT/flag-held\"\n"
-        "    exec 9<> \"$RACE_ROOT/parent-release\"\n"
-        "    IFS= read -r -t 5 unused <&9 || true\n"
-        "    trap record_arm DEBUG\n"
-        "  fi\n"
-        "}\n"
-        "record_arm() {\n"
-        "  if [[ \"$BASH_COMMAND\" == 'ARM_PGID=\"$group_pid\"' && \"$BASHPID\" == \"$$\" ]]; then\n"
-        "    trap - DEBUG\n"
-        "    printf '%s\\n' \"$group_pid\" > \"$RACE_ROOT/arm-pgid\"\n"
-        "    local waited\n"
-        "    for waited in $(seq 1 250); do\n"
-        "      if [[ -s \"$RACE_ROOT/ready.json\" ]]; then\n"
-        "        break\n"
-        "      fi\n"
-        "      sleep 0.02\n"
-        "    done\n"
-        "    for waited in $(seq 1 250); do\n"
-        "      if [[ -f \"$RACE_ROOT/identity-pinned\" ]]; then\n"
-        "        break\n"
-        "      fi\n"
-        "      sleep 0.02\n"
-        "    done\n"
-        "  fi\n"
-        "}\n"
-        "trap flag_hold DEBUG\n",
-        encoding="utf-8",
-    )
+    # The hook publishes arm-owned only while it still holds the arm. Pending
+    # cancel runs stop_arm as soon as record_arm returns, so an expired wait
+    # withdraws that proof before the numeric group can be reused.
+    hook.write_text("\n".join([
+        "set -T",
+        "flag_hold() {",
+        "  if [[ \"${ARM_SPAWNING:-0}\" == 1 && \"$BASHPID\" == \"$$\" ]]; then",
+        "    trap - DEBUG",
+        "    printf '%s\\n' held > \"$RACE_ROOT/flag-held\"",
+        "    exec 9<> \"$RACE_ROOT/parent-release\"",
+        "    IFS= read -r -t 5 unused <&9 || true",
+        "    trap record_arm DEBUG",
+        "  fi",
+        "}",
+        "proc_pgrp_start() {",
+        "  local pid=\"$1\" stat rest prefix",
+        "  [[ \"$pid\" =~ ^[0-9]+$ ]] || return 1",
+        "  IFS= read -r stat <\"/proc/${pid}/stat\" || return 1",
+        "  prefix=\"${stat%)*}\"",
+        "  rest=\"${stat#\"$prefix\"}\"",
+        "  rest=\"${rest#)}\"",
+        "  local IFS=$' \\t\\n'",
+        "  set -- $rest",
+        "  [[ $# -ge 20 ]] || return 1",
+        "  printf '%s %s\\n' \"${3}\" \"${20}\"",
+        "}",
+        "publish_owned_arm() {",
+        "  local pgid=\"$1\" json inner pid line pgrp start tmp=\"$RACE_ROOT/arm-owned.tmp\" pattern",
+        "  json=\"$(<\"$RACE_ROOT/ready.json\")\" || return 1",
+        "  inner=\"${json#*[}\"",
+        "  inner=\"${inner%%]*}\"",
+        "  inner=\"${inner//[[:space:]]/}\"",
+        "  pattern='^[0-9]+(,[0-9]+)*$'",
+        "  [[ \"$inner\" =~ $pattern ]] || return 1",
+        "  line=\"$(proc_pgrp_start \"$pgid\")\" || return 1",
+        "  pgrp=\"${line%% *}\"",
+        "  start=\"${line#* }\"",
+        "  [[ \"$pgrp\" == \"$pgid\" && \"$start\" =~ ^[0-9]+$ ]] || return 1",
+        "  printf '%s %s\\n' \"$pgid\" \"$start\" >\"$tmp\" || return 1",
+        "  local IFS=','",
+        "  for pid in $inner; do",
+        "    [[ \"$pid\" == \"$pgid\" ]] && continue",
+        "    line=\"$(proc_pgrp_start \"$pid\")\" || return 1",
+        "    pgrp=\"${line%% *}\"",
+        "    start=\"${line#* }\"",
+        "    [[ \"$pgrp\" == \"$pgid\" && \"$start\" =~ ^[0-9]+$ ]] || return 1",
+        "    printf '%s %s\\n' \"$pid\" \"$start\" >>\"$tmp\" || return 1",
+        "  done",
+        "  mv -f -- \"$tmp\" \"$RACE_ROOT/arm-owned\"",
+        "}",
+        "abandon_flag_clear_handshake() {",
+        "  # PATH's rm is the fixture shim and refuses paths outside the workdir.",
+        "  # A refusal here aborts the benchmark under set -e before stop_arm runs.",
+        "  \"${REAL_RM:-/bin/rm}\" -f -- \"$RACE_ROOT/arm-owned\" \"$RACE_ROOT/arm-owned.tmp\"",
+        "  printf '%s\\n' expired > \"$RACE_ROOT/handshake-expired\"",
+        "}",
+        "record_arm() {",
+        "  if [[ \"$BASH_COMMAND\" == 'ARM_PGID=\"$group_pid\"' && \"$BASHPID\" == \"$$\" ]]; then",
+        "    trap - DEBUG",
+        "    printf '%s\\n' \"$group_pid\" > \"$RACE_ROOT/arm-pgid\"",
+        "    local waited",
+        "    for waited in $(seq 1 250); do",
+        "      if [[ -s \"$RACE_ROOT/ready.json\" ]]; then",
+        "        break",
+        "      fi",
+        "      sleep 0.02",
+        "    done",
+        "    if [[ ! -s \"$RACE_ROOT/ready.json\" ]] || ! publish_owned_arm \"$group_pid\"; then",
+        "      abandon_flag_clear_handshake",
+        "      return 0",
+        "    fi",
+        "    for waited in $(seq 1 250); do",
+        "      if [[ -f \"$RACE_ROOT/identity-pinned\" ]]; then",
+        "        return 0",
+        "      fi",
+        "      sleep 0.02",
+        "    done",
+        "    abandon_flag_clear_handshake",
+        "  fi",
+        "}",
+        "trap flag_hold DEBUG",
+        "",
+    ]), encoding="utf-8")
     env["BASH_ENV"] = str(hook)
     process = subprocess.Popen(
         ["bash", str(script)], env=env, text=True,
@@ -661,21 +773,64 @@ def scenario_cancellation_flag_clear(root, script):
                 return errors
             time.sleep(0.02)
         process.send_signal(signal.SIGTERM)
-        # stop_arm runs as soon as record_arm returns. Hold that hook until
-        # the live group has been pinned, then let the benchmark cancel.
+        # Parent liveness is not ownership. Pin only the incarnation the hook
+        # still publishes. After the handshake expires, stop_arm can join the
+        # original arm while this parent is alive and the numeric group can
+        # be reused.
+        def reserve_published_arm():
+            if (block / "handshake-expired").is_file():
+                errors.append("flag-clear handshake expired before the arm was reserved")
+                return True
+            owned_path = block / "arm-owned"
+            if not (
+                (block / "arm-pgid").is_file()
+                and (block / "ready.json").is_file()
+                and owned_path.is_file()
+            ):
+                return False
+            try:
+                pgid = int((block / "arm-pgid").read_text(encoding="utf-8").strip())
+                ready_pids = json.loads((block / "ready.json").read_text(encoding="utf-8"))["pids"]
+                owned_pgid, starts = read_published_arm_ownership(owned_path)
+            except (OSError, ValueError, KeyError, TypeError):
+                errors.append("flag-clear arm identity was not recorded")
+                return True
+            if (
+                (block / "handshake-expired").is_file()
+                or not ownership_still_published(owned_path, owned_pgid, starts)
+            ):
+                errors.append("flag-clear handshake expired before the arm was reserved")
+                return True
+            if (
+                owned_pgid != pgid
+                or not isinstance(ready_pids, list)
+                or any(
+                    not isinstance(pid, int) or isinstance(pid, bool) or pid not in starts
+                    for pid in ready_pids
+                )
+            ):
+                errors.append("flag-clear arm identity was not recorded")
+                return True
+            if process.poll() is not None:
+                return True
+            reservation.pin(pgid, ready_pids, starts)
+            proof_held = (
+                process.poll() is None
+                and not (block / "handshake-expired").is_file()
+                and ownership_still_published(owned_path, owned_pgid, starts)
+            )
+            if not proof_held:
+                reservation.release_unsignaled()
+                errors.append("flag-clear handshake expired before the arm was reserved")
+                return True
+            if not reservation.fds:
+                errors.append("flag-clear arm identity was not reserved")
+                return True
+            (block / "identity-pinned").write_text("pinned\n", encoding="utf-8")
+            return True
+
         while process.poll() is None and time.monotonic() < deadline:
-            if (block / "arm-pgid").exists() and (block / "ready.json").exists():
-                try:
-                    pgid = int((block / "arm-pgid").read_text(encoding="utf-8").strip())
-                    pids = json.loads((block / "ready.json").read_text(encoding="utf-8"))["pids"]
-                except (OSError, ValueError, KeyError):
-                    errors.append("flag-clear arm identity was not recorded")
-                else:
-                    if process.poll() is None:
-                        reservation.pin(pgid, pids)
-                        if process.poll() is None and not reservation.fds:
-                            errors.append("flag-clear arm identity was not reserved")
-                (block / "identity-pinned").write_text("pinned\n", encoding="utf-8")
+            if reserve_published_arm():
                 break
             time.sleep(0.02)
         remaining = max(0.1, deadline - time.monotonic())
@@ -707,12 +862,64 @@ def scenario_cancellation_flag_clear(root, script):
     return errors
 
 
+def probe_expired_flag_clear_hook(hook_text, root):
+    """Exhaust the generated record_arm once and require the proof to be withdrawn.
+
+    seq and sleep are stubs, so the ack wait ends without elapsed time. The
+    publish helper is stubbed to advertise an arm, and no acknowledgement
+    appears. Returning from the hook must not leave that advertisement behind.
+    """
+    start = hook_text.find("abandon_flag_clear_handshake() {")
+    end = hook_text.find("\ntrap flag_hold DEBUG")
+    if start < 0 or end <= start:
+        return "could not isolate the flag-clear handshake"
+    probe_root = root / "hook-expiry"
+    probe_root.mkdir()
+    (probe_root / "ready.json").write_text(
+        json.dumps({"pids": [424243, 424244]}), encoding="utf-8")
+    script = probe_root / "probe.sh"
+    script.write_text("\n".join([
+        "seq() { printf '1\\n'; }",
+        "sleep() { :; }",
+        "publish_owned_arm() {",
+        "  printf '%s\\n' '424242 100' '424243 101' '424244 102' > \"$RACE_ROOT/arm-owned\"",
+        "}",
+        hook_text[start:end].rstrip("\n"),
+        "trap record_arm DEBUG",
+        "group_pid=424242",
+        "ARM_PGID=\"$group_pid\"",
+        "printf '%s\\n' returned_without_ack=1",
+        "",
+    ]), encoding="utf-8")
+    env = dict(os.environ)
+    env["RACE_ROOT"] = str(probe_root)
+    completed = subprocess.run(
+        ["bash", str(script)], env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5,
+    )
+    if completed.returncode != 0:
+        return f"probe exit {completed.returncode}: {completed.stderr}"
+    if "returned_without_ack=1" not in completed.stdout:
+        return f"probe did not return: {completed.stdout!r} {completed.stderr!r}"
+    if not (probe_root / "handshake-expired").is_file():
+        return "handshake expiry was not recorded"
+    if (probe_root / "arm-owned").exists() or (probe_root / "arm-owned.tmp").exists():
+        return "ownership proof survived the expired handshake"
+    if (probe_root / "identity-pinned").exists():
+        return "expired handshake wrote an acknowledgement"
+    return None
+
+
 def scenario_cancellation_identity(root, script):
     """Run both real cancellation teardowns against intercepted identities.
 
     Reaping retires the arm group and permits a replacement in this model.
     A signal is unsafe when it targets a numeric PID/PGID or a pidfd whose
     incarnation is already gone or was opened after that reuse.
+
+    Flag-clear also runs retired-live: the benchmark parent is still alive,
+    the original arm retired before capture, and replacement pidfds are live.
+    Parent liveness alone must not adopt that group.
     """
     import errno
     from unittest import mock
@@ -725,27 +932,32 @@ def scenario_cancellation_identity(root, script):
         (scenario_cancellation_spawn_window, "spawn-window"),
         (scenario_cancellation_flag_clear, "flag-clear"),
     )
-    modes = ("success", "timeout", "assertion", "early-exit")
     failures = []
     for scenario, label in cases:
+        modes = ("success", "timeout", "assertion", "early-exit")
+        if label == "flag-clear":
+            modes = (*modes, "retired-live")
         for mode in modes:
             case_root = root / f"identity-{label}-{mode}"
             case_root.mkdir()
+            retired_before_capture = mode in ("early-exit", "retired-live")
             model = {
                 "next_fd": 10_000_000,
                 "fds": {},
                 "events": [],
                 "unsafe": [],
                 "retired": mode == "early-exit",
+                "replacement_pidfd_live": mode == "retired-live",
+                "hook": "",
                 "procs": {},
             }
             for pid in members:
                 model["procs"][pid] = {
                     "pgrp": leader,
-                    "start": 1000 + pid,
-                    "generation": 2 if mode == "early-exit" else 1,
+                    "start": (2000 if mode == "retired-live" else 1000) + pid,
+                    "generation": 2 if retired_before_capture else 1,
                     "alive": True,
-                    "replacement": mode == "early-exit",
+                    "replacement": retired_before_capture,
                 }
 
             class FakeBenchmark:
@@ -753,6 +965,9 @@ def scenario_cancellation_identity(root, script):
                     self.returncode = None
                     self.env = env or {}
                     block = Path(self.env["BENCH_BLOCK"])
+                    hook_path = self.env.get("BASH_ENV")
+                    if hook_path:
+                        model["hook"] = Path(hook_path).read_text(encoding="utf-8")
                     if mode == "early-exit":
                         self.returncode = 1
                         (block / "arm-pgid").write_text(f"{leader}\n", encoding="utf-8")
@@ -761,6 +976,14 @@ def scenario_cancellation_identity(root, script):
                     (block / "arm-pgid").write_text(f"{leader}\n", encoding="utf-8")
                     (block / "ready.json").write_text(
                         json.dumps({"pids": [shim, child]}), encoding="utf-8")
+                    if mode == "retired-live":
+                        (block / "handshake-expired").write_text("expired\n", encoding="utf-8")
+                        return
+                    owned = "\n".join(
+                        f"{pid} {model['procs'][pid]['start']}"
+                        for pid in (leader, shim, child)
+                    )
+                    (block / "arm-owned").write_text(owned + "\n", encoding="utf-8")
 
                 def poll(self):
                     return self.returncode
@@ -824,13 +1047,16 @@ def scenario_cancellation_identity(root, script):
                     "pid": pid,
                     "generation": proc["generation"],
                     "original_alive": proc["alive"] and not proc["replacement"],
+                    "replacement_live": bool(
+                        model["replacement_pidfd_live"] and proc["replacement"] and proc["alive"]
+                    ),
                 }
                 model["events"].append(("pidfd_open", pid, proc["generation"]))
                 return fd
 
             def fake_select(rlist, wlist, xlist, timeout=None):
                 info = model["fds"][rlist[0]]
-                if info["original_alive"]:
+                if info["original_alive"] or info.get("replacement_live"):
                     return [], [], []
                 return [rlist[0]], [], []
 
@@ -919,6 +1145,26 @@ def scenario_cancellation_identity(root, script):
                     problems.append(("signals", opened, signaled))
                 if len(owned_kills) != 1:
                     problems.append(("benchmark_kill", owned_kills))
+            elif mode == "retired-live":
+                if scenario_errors != [
+                    "flag-clear handshake expired before the arm was reserved"
+                ]:
+                    problems.append(("scenario", scenario_errors))
+                if opened or signaled or owned_kills:
+                    problems.append(("adopted_replacement", opened, signaled, owned_kills))
+                if ("benchmark_signal", int(signal.SIGTERM)) not in model["events"]:
+                    problems.append(("parent_signal", model["events"]))
+                if not model["replacement_pidfd_live"] or not all(
+                    proc["alive"] and proc["replacement"] for proc in model["procs"].values()
+                ):
+                    problems.append(("retired_arm", "replacement arm was not live"))
+                model["fds"][-1] = {"original_alive": False, "replacement_live": True}
+                readable, _, _ = fake_select([-1], [], [], 0)
+                if readable:
+                    problems.append(("replacement_pidfd", "select reported the replacement dead"))
+                probe_error = probe_expired_flag_clear_hook(model.get("hook", ""), case_root)
+                if probe_error:
+                    problems.append(("hook", probe_error))
             else:
                 if not any("survived" in item for item in scenario_errors):
                     problems.append(("scenario", scenario_errors))
