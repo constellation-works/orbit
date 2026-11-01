@@ -6,11 +6,11 @@
 //! writes the schema can feed it. One open task owns one fingerprint,
 //! recorded in the task's `rule_fingerprint` field at filing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use super::rule_evidence;
@@ -275,7 +275,7 @@ struct FilingCandidate {
     rank: u8,
     severity: String,
     params: TaskAddParams,
-    artifacts: Vec<TaskArtifact>,
+    evidence_names: BTreeSet<String>,
     error_task: bool,
 }
 
@@ -459,9 +459,9 @@ pub(crate) fn file_rule_findings(
                 context_files: declared_context_files(runtime, &group[0]),
                 ..TaskAddParams::default()
             },
-            artifacts: group
+            evidence_names: group
                 .iter()
-                .flat_map(|result| rule_evidence::artifacts_for_result(&evidence, result))
+                .flat_map(|result| string_list(result.get("evidence")))
                 .collect(),
             fingerprint,
             rule: rule.clone(),
@@ -571,7 +571,7 @@ pub(crate) fn file_rule_findings(
                 context_files: declared_context_files(runtime, result),
                 ..TaskAddParams::default()
             },
-            artifacts: rule_evidence::artifacts_for_result(&evidence, result),
+            evidence_names: evidence_names.into_iter().collect(),
             fingerprint,
             rule,
             rank,
@@ -630,11 +630,21 @@ pub(crate) fn file_rule_findings(
         }
         let fingerprint = candidate.fingerprint.clone();
         let task = runtime.add_task(candidate.params)?;
-        if !candidate.artifacts.is_empty() {
+        let unique_artifacts: BTreeMap<_, _> = candidate
+            .evidence_names
+            .iter()
+            .filter_map(|name| evidence.get(name))
+            .map(|artifact| (&artifact.path, artifact))
+            .collect();
+        let artifacts: Vec<_> = unique_artifacts
+            .values()
+            .map(|artifact| (*artifact).clone())
+            .collect();
+        if !artifacts.is_empty() {
             runtime.update_task(
                 &task.id,
                 TaskUpdateParams {
-                    upsert_artifacts: candidate.artifacts,
+                    upsert_artifacts: artifacts,
                     ..Default::default()
                 },
             )?;
