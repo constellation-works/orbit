@@ -320,7 +320,7 @@ assert.match(strip.textContent, /20 problems in 30d/);
 const legend = strip.querySelectorAll('li');
 assert.deepEqual(legend.map(item => item.dataset.owner), [...ROLES, 'not_scored']);
 assert.ok(legend[0].classList.contains('is-current'), 'the current role is highlighted');
-assert.equal(legend[1].querySelector('a').href, '#analytics/agents/implementers?window=30d', 'a legend entry links to its role');
+assert.equal(legend[1].querySelector('a').href, '#analytics/agents/implementers?window=30d&span=30d', 'a legend entry links to its role');
 assert.equal(legend[4].querySelector('a'), null, 'Not scored is no role to open');
 assert.match(strip.textContent, /2 rework caused by infrastructure · 1 no orchestrator attribution/);
 const segments = strip.querySelectorAll('span.agents-strip-seg');
@@ -358,7 +358,7 @@ assert.match(part('detail').textContent, /Active hours30\.3/, 'shown-not-scored 
 const panel = part('panel');
 assert.equal(panel.querySelector('h3').textContent, 'Rework by cause');
 assert.deepEqual(panel.querySelectorAll('li.agents-cause-row').map(item => item.querySelector('span.agents-cause-total').textContent), ['8 rework', '4 rework', 'no rework']);
-assert.equal(panel.querySelector('a.agents-cause-note').href, '#analytics/agents/implementers?window=30d', 'crew rework points at Implementers');
+assert.equal(panel.querySelector('a.agents-cause-note').href, '#analytics/agents/implementers?window=30d&span=30d', 'crew rework points at Implementers');
 
 // Selecting another row moves the detail column to it.
 click(selectButton('sonnet'));
@@ -564,7 +564,7 @@ window.location.hash = '#analytics/orchestrators?window=7d';
 router.setActiveTab('analytics/orchestrators?window=7d');
 assert.equal(tab, 'analytics', 'the legacy route opens Analytics');
 assert.equal(analyticsSubtab, 'agents', 'the legacy route opens Analytics > Agents');
-assert.equal(replaced.at(-1).split('#')[1], 'analytics/agents/orchestrators?window=7d', 'the legacy hash is rewritten in place');
+assert.equal(replaced.at(-1).split('#')[1], 'analytics/agents/orchestrators?window=7d&span=7d', 'the legacy hash is rewritten in place');
 assert.equal(common.getWindow(), '7d', 'the redirect keeps the window');
 assert.ok(panes.analytics.classList.contains('active'));
 assert.ok(roleTabs.children[0].classList.contains('active'));
@@ -572,15 +572,32 @@ assert.equal(fetches, 1, 'opening a role reads it at once');
 router.setActiveTab('agents/pilots');
 assert.equal(tab, 'analytics', 'the old Agents route opens Analytics');
 assert.equal(agents.getAgentsRole(), 'pilots', 'the old Agents route keeps its role');
-assert.equal(replaced.at(-1).split('#')[1], 'analytics/agents/pilots?window=7d', 'the old Agents hash is rewritten in place');
+assert.equal(replaced.at(-1).split('#')[1], 'analytics/agents/pilots?window=7d&span=7d', 'the old Agents hash is rewritten in place');
 router.setActiveTab('analytics/agents/reviewers');
 assert.equal(agents.getAgentsRole(), 'reviewers');
 assert.ok(roleTabs.children[2].classList.contains('active'));
 assert.equal(roleTabs.children[0].classList.contains('active'), false);
-assert.equal(window.location.hash, '#analytics/agents/reviewers?window=7d');
+assert.equal(window.location.hash, '#analytics/agents/reviewers?window=7d&span=7d');
 router.setActiveTab('analytics/agents/nobody');
 assert.equal(agents.getAgentsRole(), 'reviewers', 'an unknown role keeps the role on screen');
-assert.equal(window.location.hash, '#analytics/agents/reviewers?window=7d', 'and names it in the hash');
+assert.equal(window.location.hash, '#analytics/agents/reviewers?window=7d&span=7d', 'and names it in the hash');
+// ORB-20748: a link's `span` names the Agents window, count or calendar, and
+// is adopted before the scorecard is read; a link without one keeps it.
+const selectedWindow = () => windows.children.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.window;
+fetches = 0;
+router.setActiveTab('analytics/agents/implementers?window=7d&span=last1000');
+assert.equal(windows.dataset.panelWindow, 'last1000', 'a count span becomes the panel window');
+assert.equal(selectedWindow(), 'last1000');
+assert.equal(window.location.hash, '#analytics/agents/implementers?window=7d&span=last1000', 'a count span round-trips');
+router.setActiveTab('analytics/agents/implementers?window=7d&span=30d');
+assert.equal(windows.dataset.panelWindow, '', 'a calendar span leaves the count window');
+assert.equal(common.getWindow(), '30d', 'a calendar span becomes the shared window');
+assert.equal(selectedWindow(), '30d', 'a calendar span selects its tab');
+assert.equal(window.location.hash, '#analytics/agents/implementers?window=30d&span=30d', 'a calendar span round-trips');
+router.setActiveTab('analytics/agents/pilots');
+assert.equal(selectedWindow(), '30d', 'a role link without a span keeps the selected window');
+assert.equal(window.location.hash, '#analytics/agents/pilots?window=30d&span=30d');
+assert.equal(fetches, 3, 'each route reads its role once, after adopting the span');
 takeAll();
 console.log('dashboard agents ok');
 

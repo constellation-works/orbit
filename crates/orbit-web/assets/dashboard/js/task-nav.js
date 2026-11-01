@@ -4,7 +4,7 @@ import { captureWorkspaceVisit, panelCanRender, raiseMessageSlot, el, fetchJson,
 import { $, taskState, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, STATUS_LABELS } from './task-shared.js';
 import { forgetTaskDetailLoad } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
-import { myWorkCrewNames } from './task-crew.js';
+import { humanCrewFor, myWorkCrewNames } from './task-crew.js';
 
 let settleMergedInFlight = false;
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
@@ -29,6 +29,40 @@ export function taskPilotWarningsFilter() { return pilotWarningsOnly; }
 // when the server could not tell whose browser this is): operator work no
 // drain picks up. The chip shows only when the workspace has a human crew.
 let myWorkOnly = false;
+// "Waiting on you": open human-crew tasks plus tasks with open decisions.
+let waitingOnly = false;
+let waitingDecisionTaskIds = null;
+let waitingCountValue = null;
+let waitingFetchAt = 0;
+let waitingFetchPending = false;
+export function waitingOnYouFilter() { return waitingOnly; }
+function isOpenTask(t) { return t.status !== "done" && t.status !== "cancelled" && t.status !== "canceled"; }
+export function taskWaitsOnYou(t) {
+  if (!isOpenTask(t)) return false;
+  if (Array.isArray(t.open_decisions) && t.open_decisions.length) return true;
+  if (waitingDecisionTaskIds && waitingDecisionTaskIds.has(t.id)) return true;
+  return Boolean(humanCrewFor(t));
+}
+function waitingCountFromTasks(context) {
+  return taskList(context).filter(taskWaitsOnYou).length;
+}
+async function refreshWaitingCount(context) {
+  if (waitingFetchPending || Date.now() - waitingFetchAt < 15000) return;
+  // Federated/aggregate: loaded tasks already carry open_decisions and crew,
+  // so count locally — a workspace-spanning /api/decisions read has no scope.
+  if (isAggregateView()) { waitingCountValue = waitingCountFromTasks(context); waitingFetchAt = Date.now(); refreshChips(context); return; }
+  waitingFetchPending = true;
+  try {
+    const visit = captureWorkspaceVisit();
+    const payload = await fetchJson(visit.path("/api/decisions"));
+    if (!visit.isCurrent()) return;
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    waitingDecisionTaskIds = new Set(items.map((r) => r && r.task_id).filter(Boolean));
+    waitingCountValue = new Set([...waitingDecisionTaskIds, ...taskList(context).filter(taskWaitsOnYou).map((t) => t.id)]).size;
+    waitingFetchAt = Date.now();
+  } catch { waitingCountValue = waitingCountFromTasks(context); waitingFetchAt = Date.now(); }
+  finally { waitingFetchPending = false; refreshChips(context); }
+}
 
 export function filterTasks(tasks, context) {
   const q = searchQueryValue(context);
@@ -38,6 +72,7 @@ export function filterTasks(tasks, context) {
     if (notReadyOnly && !taskReadiness.isNotReady(t)) return false;
     if (pilotWarningsOnly && !taskReadiness.pilotWarnings(t).length) return false;
     if (myWorkOnly && !myWorkCrewNames().includes(t.crew)) return false;
+    if (waitingOnly && !taskWaitsOnYou(t)) return false;
     if (!q) return true;
     return (
       (t.id && t.id.toLowerCase().includes(q)) ||
@@ -350,9 +385,14 @@ export function refreshChips(context) {
     const on = chip.dataset.role === "not-ready"
       ? notReadyOnly
       : chip.dataset.role === "pilot-warnings" ? pilotWarningsOnly
+      : chip.dataset.role === "waiting" ? waitingOnly
       : chip.dataset.role === "my-work" ? myWorkOnly
       : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
+    if (chip.dataset.role === "waiting") {
+      const c = chip.querySelector(".chip-count");
+      if (c) c.textContent = waitingCountValue != null ? String(waitingCountValue) : String(waitingCountFromTasks(context));
+    }
     if (chip.dataset.role === "my-work") chip.hidden = myWorkCrewNames().length === 0 && !myWorkOnly;
     // ORB-10874: chip state must not rely on the active/inactive color
     // difference alone — aria-pressed exposes it to assistive tech too.
@@ -394,6 +434,7 @@ function buildTasksListHash(context) {
   if (notReadyOnly) sp.set("ready", "not");
   if (pilotWarningsOnly) sp.set("pilot", "warnings");
   if (myWorkOnly) sp.set("crew", "mine");
+  if (waitingOnly) sp.set("waiting", "you");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
   if (taskState.openTaskId) sp.set("open", taskState.openTaskId);
@@ -440,7 +481,7 @@ export function applyTasksHashQuery(query, context, page = null) {
   // A link that only names a task (`#tasks?open=ID`) opens it under whatever
   // filter the operator already has; reading it as "no filter" would reset
   // the chips and search to their defaults.
-  if (open && !["status", "q", "ready", "pilot"].some((key) => query.has(key))) return;
+  if (open && !["status", "q", "ready", "pilot", "crew", "waiting"].some((key) => query.has(key))) return;
   // A replay names the list already shown. Back fires popstate and then
   // hashchange for the address the router just normalized; the second must
   // not send the list to its first page and top.
@@ -462,6 +503,7 @@ export function applyTasksHashQuery(query, context, page = null) {
   notReadyOnly = query.get("ready") === "not";
   pilotWarningsOnly = query.get("pilot") === "warnings";
   myWorkOnly = query.get("crew") === "mine";
+  waitingOnly = query.get("waiting") === "you";
   setSearchQuery(context, (query.get("q") || "").trim().toLowerCase());
 }
 
@@ -570,7 +612,7 @@ export function buildChips(context) {
   const chip = (text, attrs, quiet, title) => {
     const node = el("button", { class: `chip${quiet ? " chip-quiet" : ""}`, type: "button", title }, [
       el("span", { class: "chip-label", text }),
-      ...(attrs.status ? [el("span", { class: "chip-count" })] : []),
+      ...((attrs.status || attrs.role === "waiting") ? [el("span", { class: "chip-count" })] : []),
     ]);
     Object.assign(node.dataset, attrs);
     return node;
@@ -602,6 +644,11 @@ export function buildChips(context) {
     navigateTasksHash(context);
   });
   primary.appendChild(myWork);
+  const waiting = chip("Waiting on you", { role: "waiting" }, false, "Open human-crew tasks and tasks with an open decision");
+  waiting.classList.add("waiting-filter");
+  waiting.addEventListener("click", () => { waitingOnly = !waitingOnly; navigateTasksHash(context); });
+  primary.appendChild(waiting);
+  refreshWaitingCount(context);
   const allChip = chip("All", { role: "all" }, true);
   allChip.addEventListener("click", () => {
     setActiveStatuses(context, new Set(statusOrder(context)));
@@ -677,6 +724,7 @@ export function renderFilterSummary(context) {
   if (notReadyOnly) parts.push("not ready");
   if (pilotWarningsOnly) parts.push("pilot warnings");
   if (myWorkOnly) parts.push(`my work (${myWorkCrewNames().join(", ") || "no human crew"})`);
+  if (waitingOnly) parts.push("waiting on you");
   const q = searchQueryValue(context);
   if (q) parts.push(`search: "${q}"`);
   node.textContent = parts.length > 0 ? `Filtering by ${parts.join(" · ")}` : "Showing all statuses";

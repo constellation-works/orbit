@@ -16,6 +16,7 @@
 pub const SYSTEM_AUDIT_IDENTITY: &str = "system";
 
 pub(crate) mod admission;
+pub(crate) mod agent_corpus;
 pub mod agents;
 mod application_authority;
 pub mod assistance;

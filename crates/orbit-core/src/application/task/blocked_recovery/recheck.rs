@@ -6,9 +6,10 @@
 //! - **external merge**: its delivery pull request merged outside Orbit, so
 //!   the task follows the merge to `done` (the settlement `orbit task
 //!   settle-merged` makes);
-//! - **checks green**: the failing required checks were recorded as
-//!   inherited from the base (`pr_auto_fix_base_red`, `ci_base_suspect`) and
-//!   the pull request's required checks all pass now, so the task returns to
+//! - **checks green**: the run that blocked the task recorded the failing
+//!   required checks of the pull request's current head as inherited from the
+//!   base (`pr_auto_fix_base_red`, `ci_base_suspect`) and the pull request's
+//!   required checks all pass now, so the task returns to
 //!   `backlog` and its next run continues the publication. Counted in the
 //!   shared requeue bound; an operator-only task is left alone;
 //! - **infrastructure cleared**: the block was a missing provider launcher or
@@ -27,7 +28,7 @@ use serde::Serialize;
 
 use super::super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::super::final_recovery::{
-    FINAL_RECOVERY_REQUEUED_EVENT, operator_only_requeue, records_base_red,
+    FINAL_RECOVERY_REQUEUED_EVENT, base_red_block_episode, base_red_owner, operator_only_requeue,
 };
 use super::super::helpers::SYSTEM_ACTOR_LABEL;
 use crate::OrbitRuntime;
@@ -159,8 +160,13 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
+        // Cheap gate before any forge read: a run failure that recorded a
+        // base-red failure must have blocked this episode.
         let history = self.get_task_history(task_id)?;
-        if !records_base_red(&history) || operator_only_requeue(self, &task).is_some() {
+        let Some(episode) = base_red_block_episode(&history) else {
+            return Ok(None);
+        };
+        if operator_only_requeue(self, &task).is_some() {
             return Ok(None);
         }
         if self.mechanical_bound(&task, "recheck").is_err() {
@@ -175,6 +181,12 @@ impl OrbitRuntime {
             || !blockers.pending_required_checks.is_empty()
             || blockers.passed_required_checks.is_empty()
         {
+            return Ok(None);
+        }
+        // Only a block this very failure caused: base-red evidence for the
+        // pull request's current head, recorded by the run that blocked the
+        // task. Any other block is final recovery's or an operator's to clear.
+        if base_red_owner(episode, &blockers.head_sha).is_none() {
             return Ok(None);
         }
         let why = format!(

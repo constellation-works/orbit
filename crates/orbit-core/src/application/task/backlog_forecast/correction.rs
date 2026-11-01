@@ -15,12 +15,15 @@
 //! stored as an incremental baseline that would keep stale crew and effort
 //! mix.
 //!
-//! A model version only learns from its own scored tasks. Bumping the
-//! version starts the correction over. Rows written by this version store
-//! each task's uncorrected quantiles under `forecast.base`; the fit reads
-//! those, so a later forecast does not treat an already-corrected quantile
-//! as the raw prediction. A row with no `base` object is an uncorrected
-//! prediction, and its stored quantiles are the base.
+//! A model version only learns from its own scored tasks. Each distinct
+//! task contributes one residual per metric: the latest eligible stored
+//! forecast before it was done. `n` is that task count, so hourly snapshots
+//! of one task cannot meet the minimum on their own. Bumping the version
+//! starts the correction over. Rows written by this version store each
+//! task's uncorrected quantiles under `forecast.base`; the fit reads those,
+//! so a later forecast does not treat an already-corrected quantile as the
+//! raw prediction. A row with no `base` object is an uncorrected prediction,
+//! and its stored quantiles are the base.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -41,7 +44,7 @@ pub(super) const HALF_LIFE_DAYS: f64 = 14.0;
 /// per-forecast scoring cutoff: a task done more than 90 days after its
 /// forecast is not a settled score.
 pub(super) const WINDOW_DAYS: f64 = 90.0;
-/// Below this many eligible residuals a cohort is not corrected.
+/// Below this many distinct tasks a cohort is not corrected.
 pub(super) const MIN_COHORT_N: usize = 8;
 /// Largest absolute log adjustment applied to a draw, `ln(10)`.
 const MAX_LOG_ADJUST: f64 = std::f64::consts::LN_10;
@@ -177,7 +180,9 @@ pub(super) fn fit_correction(inputs: &CorrectionInputs<'_>) -> Correction {
         .iter()
         .map(|item| item.complexity.clone())
         .collect();
-    let mut samples: BTreeMap<(usize, String), Vec<Sample>> = BTreeMap::new();
+    // One residual per (metric, complexity, task). A later eligible forecast
+    // replaces an earlier one; the same timestamp keeps the first residual.
+    let mut kept: BTreeMap<(usize, String, String), (DateTime<Utc>, Sample)> = BTreeMap::new();
     for forecast in inputs.stored {
         if forecast.model_version != model::MODEL_VERSION || forecast.forecast_at >= inputs.now {
             continue;
@@ -215,19 +220,40 @@ pub(super) fn fit_correction(inputs: &CorrectionInputs<'_>) -> Correction {
                 let ratio = base_p90
                     .filter(|p90| *p90 > base_p50)
                     .map(|p90| p90 / base_p50);
-                complexities.insert(stored_task.complexity.clone());
-                samples
-                    .entry((metric, stored_task.complexity.clone()))
-                    .or_default()
-                    .push(Sample {
-                        e50,
-                        e90,
-                        base_p50,
-                        ratio,
-                        weight,
-                    });
+                let key = (
+                    metric,
+                    stored_task.complexity.clone(),
+                    stored_task.id.clone(),
+                );
+                if kept
+                    .get(&key)
+                    .is_some_and(|(forecast_at, _)| *forecast_at >= forecast.forecast_at)
+                {
+                    continue;
+                }
+                complexities.insert(key.1.clone());
+                kept.insert(
+                    key,
+                    (
+                        forecast.forecast_at,
+                        Sample {
+                            e50,
+                            e90,
+                            base_p50,
+                            ratio,
+                            weight,
+                        },
+                    ),
+                );
             }
         }
+    }
+    let mut samples: BTreeMap<(usize, String), Vec<Sample>> = BTreeMap::new();
+    for ((metric, complexity, _), (_, sample)) in kept {
+        samples
+            .entry((metric, complexity))
+            .or_default()
+            .push(sample);
     }
     let mut by_complexity: BTreeMap<String, [Term; 3]> = complexities
         .iter()
@@ -255,23 +281,69 @@ pub(super) fn script_spend(script: &Script) -> Draw {
     total
 }
 
-/// Apply the cohort correction to every attempt the script will charge.
+/// Apply the cohort correction to the script as a whole.
+///
+/// The fit's residuals are per full task: `base_p50`, `center` and the
+/// actual are all full-script totals (see [`script_spend`]). Applying the
+/// log-affine map to each step instead would correct a different unit
+/// whenever `spread != 0`: the sum of corrected steps would not be the
+/// correction of the summed script the residuals were trained on. So the
+/// map is applied once per metric to the script's uncorrected total, and
+/// the steps are scaled by `corrected_total / total` so their corrected
+/// sum equals that corrected total (within floating-point rounding).
+/// A single-step script therefore keeps its previous behaviour, and a
+/// step with a missing metric stays missing: the total for a metric is
+/// the sum of the steps that carry it.
 pub(super) fn apply_script(correction: &Correction, complexity: &str, script: &mut Script) {
+    if script.steps.is_empty() {
+        return;
+    }
+    let present_total = |metric: usize| -> Option<f64> {
+        let mut total = 0.0;
+        let mut present = false;
+        for step in &script.steps {
+            let value = match metric {
+                0 => step.spend.hours,
+                1 => step.spend.tokens,
+                _ => step.spend.usd,
+            };
+            if let Some(value) = value {
+                present = true;
+                total += value;
+            }
+        }
+        present.then_some(total)
+    };
+    let factor = |metric: usize| -> f64 {
+        let Some(total) = present_total(metric) else {
+            return 1.0;
+        };
+        if !total.is_finite() || total <= 0.0 {
+            return 1.0;
+        }
+        let corrected = correction.apply_metric(metric, complexity, total);
+        if !corrected.is_finite() {
+            return 1.0;
+        }
+        corrected / total
+    };
+    let factors = [factor(0), factor(1), factor(2)];
     for step in &mut script.steps {
         if let Some(hours) = step.spend.hours {
-            let corrected = correction.apply_metric(0, complexity, hours);
-            step.spend.hours = Some(corrected);
-            step.hours = corrected;
+            step.spend.hours = Some(hours * factors[0]);
+            step.hours *= factors[0];
         }
         if let Some(tokens) = step.spend.tokens {
-            step.spend.tokens = Some(correction.apply_metric(1, complexity, tokens));
+            step.spend.tokens = Some(tokens * factors[1]);
         }
         if let Some(usd) = step.spend.usd {
-            step.spend.usd = Some(correction.apply_metric(2, complexity, usd));
+            step.spend.usd = Some(usd * factors[2]);
         }
     }
 }
 
+/// Fit one cohort. `samples` holds one residual per distinct task, so `n`
+/// is that count and the cohort applies only at [`MIN_COHORT_N`] tasks.
 fn fit_term(samples: &[Sample]) -> Term {
     let weight: f64 = samples.iter().map(|sample| sample.weight).sum();
     if samples.is_empty() || weight <= 0.0 {

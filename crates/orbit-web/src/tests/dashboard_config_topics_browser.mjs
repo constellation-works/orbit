@@ -17,6 +17,8 @@
 //     toggles) offers "Seed from global" and "Start empty" in place of Save,
 //     each PUT carrying its init value; Close or a refused write leaves the
 //     file uncreated, and global or existing-file writes keep a plain Save.
+// (h) a key deep link (?key=) or an open drawer lands on its All keys page
+//     once; Next, Previous and closing the drawer do not snap the page back.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -225,6 +227,22 @@ try {
             options: ['off', 'before_pr'],
           },
         ],
+      },
+      {
+        token: 'housekeeping',
+        title: 'Later keys',
+        keys: Array.from({ length: 60 }, (_, i) => ({
+          key: `housekeeping.later_${String(i).padStart(2, '0')}`,
+          label: `Later key ${i}`,
+          description: 'A later key in a long inventory.',
+          value_type: 'string',
+          value: `later-value-${i}-with-a-long-wrapped-token-${'x'.repeat(24)}`,
+          state: 'set',
+          settable: true,
+          source: { layer: 'workspace' },
+          built_in: { value: '' },
+          shadowed_by: [],
+        })),
       },
     ],
   };
@@ -650,6 +668,106 @@ try {
   delete effectiveConfig.layers;
 
   // -------------------------------------------------------------------------
+  // Case (h2): a key deep link (?key=) lands on that key's page, and Next and
+  // Previous then page on from it instead of snapping back. An open drawer
+  // names its key the same way: paging with it open, and closing it, keep the
+  // page the user paged to. Each visit loads the page afresh, as a link does.
+  // -------------------------------------------------------------------------
+  const allKeysSection = page.locator('section.config-section', { has: page.locator('.config-section-title', { hasText: 'All keys' }) });
+  const pagerRange = () => page.locator('.all-keys-range').textContent();
+  const pagerButton = (label) => page.locator(`.all-keys-pager button.config-action:has-text("${label}")`);
+  const waitForPage = (n) => page.waitForFunction(
+    (t) => document.querySelector('.all-keys-range')?.textContent.includes(t),
+    `Page ${n} of 3`,
+    { timeout: 5000 },
+  );
+  await page.goto('about:blank');
+  await page.goto(`http://127.0.0.1:${port}/#config/all-keys?key=housekeeping.later_20`);
+  await allKeysSection.waitFor({ state: 'visible' });
+  assert.match(await pagerRange(), /Showing 26–50 of 65 keys · Page 2 of 3/, 'a key deep link opens the page holding that key');
+  await pagerButton('Previous').click();
+  await waitForPage(1);
+  assert.match(await pagerRange(), /Showing 1–25 of 65 keys · Page 1 of 3/, 'Previous pages back from a deep-linked page');
+  await pagerButton('Next').click();
+  await waitForPage(2);
+  await pagerButton('Next').click();
+  await waitForPage(3);
+  assert.match(await pagerRange(), /Showing 51–65 of 65 keys · Page 3 of 3/, 'Next pages on from a deep-linked page');
+  await page.locator('.all-keys-pager').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'all-keys-deep-link-page-3-dark-1440.png') });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.locator('.all-keys-pager').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'all-keys-deep-link-page-3-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Editing a row on page 3 and closing its drawer keeps page 3.
+  await page.locator('.topic-row[data-key="housekeeping.later_50"] button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+  await drawer.locator('button.config-action:has-text("Close")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  assert.match(await pagerRange(), /Showing 51–65 of 65 keys · Page 3 of 3/, 'closing a drawer keeps the page the user paged to');
+  await page.goto('about:blank');
+
+  // A deep link to a key that is not listed leaves the first page, and paging still works.
+  await page.goto('about:blank');
+  await page.goto(`http://127.0.0.1:${port}/#config/all-keys?key=housekeeping.not_a_key`);
+  await allKeysSection.waitFor({ state: 'visible' });
+  assert.match(await pagerRange(), /Showing 1–25 of 65 keys · Page 1 of 3/, 'an unlisted deep-link key leaves the first page');
+  await pagerButton('Next').click();
+  await waitForPage(2);
+  await page.goto('about:blank');
+
+  // An open drawer names its key: paging with it open does not snap back to it.
+  await page.goto(`http://127.0.0.1:${port}/#config/all-keys`);
+  await allKeysSection.waitFor({ state: 'visible' });
+  await page.locator('.topic-row[data-key="workflow.usage_pressure_cap"] button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+  await pagerButton('Next').click();
+  await waitForPage(2);
+  await pagerButton('Next').click();
+  await waitForPage(3);
+  await pagerButton('Previous').click();
+  await waitForPage(2);
+  assert.equal(await drawer.count(), 1, 'paging leaves the drawer open');
+  await drawer.locator('button.config-action:has-text("Close")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  await page.goto('about:blank');
+
+  // -------------------------------------------------------------------------
+  // Case (h): All keys is bounded, searchable, pageable, and Raw TOML is
+  // reachable without traversing the inventory; a later key still edits.
+  // -------------------------------------------------------------------------
+  await page.goto(`http://127.0.0.1:${port}/#config/all-keys`);
+  await allKeysSection.waitFor({ state: 'visible' });
+  assert.equal(await allKeysSection.locator('.topic-row').count(), 25, 'initial All keys view shows one bounded page');
+  assert.match(await page.locator('.all-keys-range').textContent(), /Showing 1–25 of 65 keys · Page 1 of 3/);
+  const searchBox = page.locator('input.all-keys-search');
+  await searchBox.click();
+  await searchBox.pressSequentially('later_57');
+  await page.waitForFunction(() => document.querySelectorAll('section.config-section .topic-row[data-key="housekeeping.later_57"]').length === 1
+    && [...document.querySelectorAll('.topic-row')].filter((n) => n.dataset.key?.startsWith('housekeeping.later_')).length === 1);
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Search keys', 'typing in search keeps keyboard focus');
+  const laterRow = page.locator('.topic-row[data-key="housekeeping.later_57"]');
+  await laterRow.locator('button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+  assert.match(await drawer.locator('.config-key').first().textContent(), /housekeeping\.later_57/);
+  await drawer.locator('button.config-action:has-text("Close")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  await searchBox.fill('');
+  await page.waitForFunction(() => document.querySelector('.all-keys-range')?.textContent.includes('Page 1 of 3'));
+  await page.locator('.all-keys-pager button.config-action:has-text("Next")').click();
+  await page.waitForFunction(() => document.querySelector('.topic-row[data-key="housekeeping.later_20"]'));
+  await page.locator('select[aria-label="Topic filter"]').selectOption('housekeeping');
+  await page.waitForFunction(() => document.querySelector('.all-keys-range')?.textContent.includes('of 60 keys'));
+  assert.ok(await allKeysSection.locator('.topic-row').count() <= 25, 'Topic filter keeps the bounded page');
+  await page.locator('button.all-keys-jump-raw').click();
+  await page.waitForFunction(() => {
+    const raw = document.getElementById('config-raw-toml');
+    const rect = raw?.getBoundingClientRect();
+    return rect && rect.top < window.innerHeight && rect.bottom > 0;
+  });
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent.trim()), 'Show workspace file', 'Jump to Raw TOML moves focus to its read controls');
+
+  // -------------------------------------------------------------------------
   // Case (d): Raw TOML block follows the latest Show click and names its file
   // -------------------------------------------------------------------------
   await page.goto(`http://127.0.0.1:${port}/#config/all-keys`);
@@ -811,6 +929,10 @@ try {
       'boolean-invalid-draft-refused-before-put',
       'boolean-false-round-trips',
       'enum-selection-refreshes-cli-preview-to-save-value',
+      'all-keys-bounded-searchable-pageable-with-raw-toml-jump',
+      'key-deep-link-lands-once-then-pages-without-snapping-back',
+      'closing-a-drawer-keeps-the-page-the-user-paged-to',
+      'open-drawer-paging-does-not-snap-back',
     ],
   }, null, 2));
 

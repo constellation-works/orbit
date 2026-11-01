@@ -386,6 +386,35 @@ td .rel-rate { font-size: 12px; }
 }
 .diagnostics-errors-main .error-message-note { margin: 4px 0 0; color: var(--fg-mute); font: 12px/1.5 var(--font-sans); }
 .diagnostics-load-more { color: var(--accent-hover); white-space: nowrap; }
+.diagnostics-errors-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 16px 12px;
+  max-width: calc(100% - 32px);
+}
+.diagnostics-errors-page-status {
+  min-width: 0;
+  color: var(--fg-dim);
+  font: 12.5px/1.4 var(--font-sans);
+}
+.diagnostics-errors-pager button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+}
+.diagnostics-errors-pager button:disabled { color: var(--fg-dim); opacity: 0.55; }
+.diagnostics-errors-pager button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .diagnostics-errors-page-status { flex: 1 1 100%; order: -1; }
+  .diagnostics-errors-pager button { min-height: 36px; }
+}
 
 /* Narrow viewports: the Audit tool-health cards keep their labels readable. */
 @media (max-width: 720px) {

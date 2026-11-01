@@ -7,12 +7,18 @@ let drawer = null; // {row, scope, text, error, pending, visit, lockGlobal}
 let bulkRemoval = null;
 let layerFilter = 'all';
 let topicFilter = 'all';
+let allKeysQuery = '';
+let allKeysPage = 0;
+// The deep key each source (the ?key= link, the open drawer) last landed the
+// All keys pager on, so later renders leave the pager where the user moved it.
+let allKeysLanded = { link: null, drawer: null };
+const ALL_KEYS_PAGE_SIZE = 25;
 let rawScope = null;
 let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
 let notice = null;
 
-export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; rawScope = null; rawText = null; notice = null; }
+export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; allKeysQuery = ''; allKeysPage = 0; allKeysLanded = { link: null, drawer: null }; rawScope = null; rawText = null; notice = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -386,6 +392,17 @@ function isFallbackPreserving(row) {
   if (row.fallback == null) return false;
   return valuesEqual(row.value, row.fallback.value);
 }
+// Pages to the page holding `key` the first time `source` names it. Once it has
+// landed, later renders with the same key leave the pager where the user moved
+// it; a render with no key re-arms the landing for the next time it is named.
+function landAllKeysPage(source, key, filtered) {
+  if (!key) { allKeysLanded[source] = null; return; }
+  if (key === allKeysLanded[source]) return;
+  const at = filtered.findIndex((r) => r.key === key);
+  if (at < 0) return;
+  allKeysPage = Math.floor(at / ALL_KEYS_PAGE_SIZE);
+  allKeysLanded[source] = key;
+}
 export function renderAllKeys(body, payload, context) {
   const rows = flatten(payload);
   const nodes = [];
@@ -395,8 +412,27 @@ export function renderAllKeys(body, payload, context) {
     for (const o of options) { const opt = el('option', { text: o }); opt.value = o; if (o === value) opt.selected = true; s.appendChild(opt); }
     s.addEventListener('change', () => onChange(s.value)); return s;
   };
-  controls.append(el('span', { text: 'Layer' }), mkSelect('Layer filter', layerFilter, ['all','built-in','global','workspace'], (v) => { layerFilter = v; context.rerender?.(); }),
-    el('span', { text: 'Topic' }), mkSelect('Topic filter', topicFilter, ['all','workflow','execution','review','machine','crews','housekeeping'], (v) => { topicFilter = v; context.rerender?.(); }));
+  controls.append(el('span', { text: 'Layer' }), mkSelect('Layer filter', layerFilter, ['all','built-in','global','workspace'], (v) => { layerFilter = v; allKeysPage = 0; context.rerender?.(); }),
+    el('span', { text: 'Topic' }), mkSelect('Topic filter', topicFilter, ['all','workflow','execution','review','machine','crews','housekeeping'], (v) => { topicFilter = v; allKeysPage = 0; context.rerender?.(); }));
+  const search = el('input', { class: 'config-filter all-keys-search' });
+  search.type = 'search'; search.placeholder = 'Search key, label or value…'; search.value = allKeysQuery;
+  search.setAttribute('aria-label', 'Search keys');
+  search.addEventListener('input', () => {
+    allKeysQuery = search.value; allKeysPage = 0; context.rerender?.();
+    // The rerender rebuilt this input; put the caret back at its end so the
+    // next keystroke lands in the new field instead of the detached one.
+    const rebuilt = document.querySelector('input.all-keys-search');
+    if (rebuilt) { rebuilt.focus({ preventScroll: true }); rebuilt.setSelectionRange(rebuilt.value.length, rebuilt.value.length); }
+  });
+  controls.append(el('span', { text: 'Search' }), search);
+  const jumpRaw = el('button', { class: 'config-action ghost all-keys-jump-raw', text: 'Jump to Raw TOML' }); jumpRaw.type = 'button';
+  jumpRaw.addEventListener('click', () => {
+    const target = document.getElementById('config-raw-toml');
+    if (!target) return;
+    target.scrollIntoView({ block: 'start' });
+    target.querySelector('button')?.focus({ preventScroll: true });
+  });
+  controls.appendChild(jumpRaw);
   nodes.push(controls);
   const restates = rows.filter(isFallbackPreserving);
   if (restates.length) {
@@ -431,9 +467,29 @@ export function renderAllKeys(body, payload, context) {
     });
     sec.appendChild(bulk); nodes.push(sec);
   }
-  const filtered = rows.filter((r) => (layerFilter === 'all' || (r.source?.layer || r.state) === layerFilter || (layerFilter === 'built-in' && r.state !== 'set')) && (topicFilter === 'all' || topicOf(r.key) === topicFilter));
-  nodes.push(section('All keys', filtered, context));
+  const query = allKeysQuery.trim().toLowerCase();
+  const filtered = rows.filter((r) => (layerFilter === 'all' || (r.source?.layer || r.state) === layerFilter || (layerFilter === 'built-in' && r.state !== 'set')) && (topicFilter === 'all' || topicOf(r.key) === topicFilter)
+    && (!query || `${r.key} ${r.label || ''} ${display(r.value)}`.toLowerCase().includes(query)));
+  // A deep link (?key=…) or an open drawer names an intended key: land on the
+  // page holding it, once per key, so Next and Previous are not snapped back.
+  landAllKeysPage('link', new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key'), filtered);
+  landAllKeysPage('drawer', drawer?.row?.key || null, filtered);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / ALL_KEYS_PAGE_SIZE));
+  allKeysPage = Math.min(Math.max(0, allKeysPage), pageCount - 1);
+  const pageStart = allKeysPage * ALL_KEYS_PAGE_SIZE;
+  const pageRows = filtered.slice(pageStart, pageStart + ALL_KEYS_PAGE_SIZE);
+  nodes.push(section('All keys', pageRows, context));
+  const pager = el('div', { class: 'all-keys-pager' });
+  const prev = el('button', { class: 'config-action ghost', text: 'Previous' }); prev.type = 'button'; prev.disabled = allKeysPage === 0;
+  prev.addEventListener('click', () => { allKeysPage = Math.max(0, allKeysPage - 1); context.rerender?.(); });
+  const next = el('button', { class: 'config-action ghost', text: 'Next' }); next.type = 'button'; next.disabled = allKeysPage >= pageCount - 1;
+  next.addEventListener('click', () => { allKeysPage = Math.min(pageCount - 1, allKeysPage + 1); context.rerender?.(); });
+  const range = filtered.length ? `Showing ${pageStart + 1}–${pageStart + pageRows.length} of ${filtered.length} keys · Page ${allKeysPage + 1} of ${pageCount}` : 'No keys match';
+  const rangeNode = el('span', { class: 'all-keys-range', text: range }); rangeNode.setAttribute('aria-live', 'polite');
+  pager.append(prev, rangeNode, next);
+  nodes.push(pager);
   const raw = el('section', { class: 'panel config-section' });
+  raw.id = 'config-raw-toml';
   raw.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: 'Raw TOML' })]));
   const rb = el('div', { class: 'config-section-body topic-actions' });
   for (const scope of ['workspace', 'global']) {

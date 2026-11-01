@@ -166,11 +166,12 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         super::super::super::landing::checks::CiRerunStep::NotEligible => {
             Ok(CiRerunRecovery::NotEligible)
         }
-        super::super::super::landing::checks::CiRerunStep::Wait(_) => {
-            // The shared bounded journal retains this observation.
-            Ok(CiRerunRecovery::Waiting)
+        super::super::super::landing::checks::CiRerunStep::Wait(reason) => {
+            // The shared bounded journal retains this observation; the caller
+            // records the hold on the task and bounds it.
+            Ok(CiRerunRecovery::Waiting(reason))
         }
-        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(CiRerunRecovery::Waiting),
+        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(CiRerunRecovery::Retried),
         super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
             Ok(CiRerunRecovery::Stopped(reason))
         }
@@ -179,8 +180,11 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
 
 /// What the shared CI retry decided for this poll.
 pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
-    /// A rerun was sent or is being observed. Do not admit a repair.
-    Waiting,
+    /// The planner holds for the named reason. The caller bounds the hold:
+    /// past its deadline the failure goes to the repair path.
+    Waiting(String),
+    /// A rerun was reserved and sent on this poll. Do not admit a repair.
+    Retried,
     /// The failure is not a CI retry. The caller may repair it.
     NotEligible,
     /// The retry budget is spent on jobs that are still cancelled or timed

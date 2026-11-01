@@ -183,6 +183,68 @@ projections_test!(
         }
     }
 );
+
+projections_test!(
+    unreadable_active_run_state_leaves_task_reads_unmarked,
+    fixture,
+    Fixture::new(),
+    {
+        // ORB-20745: triage is decoration. An active run whose persisted
+        // pipeline state cannot be parsed leaves the task unmarked; it must not
+        // fail the list, the detail or a dashboard task write.
+        let server = fixture.server(true);
+        let id = send_ok(
+            &server,
+            "POST",
+            "/api/tasks?workspace=ws_http_fixture",
+            json!({
+                "title": "Unreadable triage", "description": "The active run state is corrupt",
+                "acceptance_criteria": ["Keep the task readable"], "complexity": "low"
+            }),
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let rt = &fixture.runtime;
+        let run_id = "jrun-active-triage-unreadable";
+        let job = "escalation_triage_pipeline";
+        let mut run = fixture.seed_run(run_id, job, JobRunState::Running);
+        run.input = Some(json!({"task_id": id, "task_ids": [id]}));
+        fixture.save_run(&run);
+        let state = PipelineState::new(run_id.into(), job.into(), run.input.clone().unwrap());
+        rt.write_run_state(run_id, &state).unwrap();
+        let workspace = rt.workspace_id().unwrap();
+        rt.sqlite_store()
+            .unwrap()
+            .with_transaction(|tx| {
+                let changed = tx
+                    .connection()
+                    .execute(
+                        "UPDATE job_run_states SET pipeline_state_json = '{' \
+                         WHERE workspace_id = ?1 AND run_id = ?2",
+                        [workspace.as_str(), run_id],
+                    )
+                    .unwrap();
+                assert_eq!(changed, 1);
+                Ok(())
+            })
+            .unwrap();
+
+        let listed = task_page(&server);
+        check_eq!(row_of(&listed, &id)["active_triage"] => Value::Null; "list row: {listed}");
+        let detail = task_detail(&server, &id);
+        check_eq!(detail["active_triage"] => Value::Null; "task detail: {detail}");
+        let title = "Edited while triage is unreadable";
+        let written = send_ok(
+            &server,
+            "PATCH",
+            &format!("/api/tasks/{id}?workspace=ws_http_fixture"),
+            json!({ "title": title }),
+        );
+        check_eq!(written["title"] => json!(title); "write response title: {written}");
+        check_eq!(written["active_triage"] => Value::Null; "write response: {written}");
+    }
+);
 fn rows_of(page: &Value) -> &Vec<Value> {
     page["items"]
         .as_array()
@@ -1033,7 +1095,7 @@ projections_test!(
         let server = fixture.server(true);
         let listed = get_ok(&server, "/api/auto-tasks?workspace=ws_http_fixture");
         assert_fields!(listed, "controls_authorized": json!(false));
-        for action in ["auto_task_toggle", "auto_task_mint"] {
+        for action in ["auto_task_toggle", "auto_task_mint", "auto_task_delete"] {
             let capability = &listed["capabilities"][action];
             assert_fields!(capability, "authorized": json!(false));
             assert_contains(capability, "reason", "hm_fixture_remote");
@@ -1058,6 +1120,16 @@ projections_test!(
             "capability_refused",
         );
         assert_contains(&refused_mint, "error", "hm_fixture_remote");
+        let refused_delete = error_code(
+            server.send(
+                "POST",
+                "/api/auto-tasks/delete?workspace=ws_http_fixture",
+                json!({"name":"qa-sweep","reason":"replica"}),
+            ),
+            403,
+            "capability_refused",
+        );
+        assert_contains(&refused_delete, "error", "hm_fixture_remote");
         check_eq!(fs::read(&definition_path).unwrap() => definition_before; "replica mutations wrote definition");
         check!(fixture.runtime.list_tasks_by_tags(&["auto-task:qa-sweep".into()]).unwrap().is_empty(); "replica mint created a task");
     }

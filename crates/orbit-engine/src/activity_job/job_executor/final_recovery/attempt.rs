@@ -201,10 +201,25 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     // (`orbit task recheck-blocked --confirm` and the owner's clock tick).
     // A claimed leaf is left to its agent: its task is the owner's, which
     // settles the claim through its own recovery and never sees this class.
-    if let DispatchError::DeterministicActionFailed { action, message } = error
-        && ctx.input.get("claimed").and_then(Value::as_bool) != Some(true)
-        && let Some(class) =
+    let infra_failure = match error {
+        DispatchError::DeterministicActionFailed { action, message } => {
             orbit_types::workflow::TransientInfrastructure::of_action_failure(action, message)
+                .map(|class| (class, message.clone()))
+        }
+        // A tag-instructions load surfaces an owner's host-config refusal as
+        // a CLI invocation failure, not a delivery action; it still judged
+        // nothing about the candidate.
+        DispatchError::CliInvocationFailed(message) => {
+            orbit_types::workflow::TransientInfrastructure::of_action_failure(&step.id, message)
+                .filter(|class| {
+                    *class == orbit_types::workflow::TransientInfrastructure::HostConfiguration
+                })
+                .map(|class| (class, message.clone()))
+        }
+        _ => None,
+    };
+    if let Some((class, _infra_message)) = infra_failure
+        && ctx.input.get("claimed").and_then(Value::as_bool) != Some(true)
     {
         let application = FinalRecoveryApplication {
             task_id,

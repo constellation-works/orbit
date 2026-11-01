@@ -615,6 +615,12 @@ impl OrbitRuntime {
         // backlog. Its event must guard cleanup and count toward the bound.
         let record_status = !plan.readmitted
             && (transition || matches!(plan.outcome, FinalRecoveryOutcome::Requeued));
+        let corpus_appends = plan
+            .infra
+            .as_ref()
+            .map(|infra| self.recovery_corpus_appends(&task.id, infra, "escalated"))
+            .transpose()?
+            .unwrap_or_default();
         self.with_mutation(|| {
             let updated = self.stores().task_records().update(
                 &task.id,
@@ -630,6 +636,7 @@ impl OrbitRuntime {
                         .into_iter()
                         .chain(published.clone())
                         .chain(infra.clone())
+                        .chain(corpus_appends.clone())
                         .chain(plan.history.clone())
                         .chain(if transition && plan.status == TaskStatus::Done {
                             pending_resolves_history(task)

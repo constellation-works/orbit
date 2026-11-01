@@ -133,6 +133,15 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::FrictionNotLocal(details) => {
             OrbitError::FrictionNotLocal(redact_friction_not_local(*details, redact))
         }
+        OrbitError::HostConfiguration {
+            host,
+            path,
+            message,
+        } => OrbitError::HostConfiguration {
+            host: redact(&host),
+            path: redact(&path),
+            message: redact(&message),
+        },
         OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact(&m)),
         OrbitError::DecisionRefused { code, message } => OrbitError::DecisionRefused {
             code,

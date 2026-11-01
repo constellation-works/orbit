@@ -559,7 +559,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 ParamType::Enum(TASK_UPDATE_STATUS_VALUES),
                 "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits.",
                 CliArgKind::flag("status"),
-                "New status",
+                "New status. A task assigned to a human crew takes any status from you directly, with no plan, evidence or review and no `--force`; the change is recorded in task history as a human-crew bypass",
             ),
             free_text(both(
                 "note",
@@ -735,7 +735,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 "force",
                 ParamType::Switch,
                 CliArgKind::flag("force"),
-                "Apply `--status` even when the task lifecycle refuses the transition (for example reopening a done task). Human-operator override: the change is recorded in task history as `forced`",
+                "Apply `--status` even when the task lifecycle refuses the transition (for example reopening a done task). Human-operator override: the change is recorded in task history as `forced`. A human-crew task needs no `--force` except to leave `done` or `archived`",
             ),
             CLI_OPTIONS_PARAM,
         ],

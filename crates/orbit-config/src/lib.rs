@@ -70,7 +70,7 @@
 //!   projection in sibling named modules.
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
-//! - `tag_instructions` — the `[workflow.tag_instructions.<tag>]` file mapping.
+//! - `tag_instructions` — trusted tag instructions and activity corpus mappings.
 //! - `experiment_keys` — typed workflow keys admitted for task-local experiments.
 //! - `review_skip_tags` — the `[workflow.review_skip_tags.<tag>]` review-skip mapping.
 //! - `store` — comment-preserving [`ConfigStore`] edits and an atomic save that
@@ -156,7 +156,9 @@ pub use operation::{
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{
-    load_workspace_plugin_enablement, plugin_enablement_key, workspace_config_sets_policy,
+    MisplacedGlobalPluginEnablement, global_plugin_enablement_fix,
+    load_workspace_plugin_enablement, misplaced_global_plugin_enablement, plugin_enablement_key,
+    workspace_config_sets_policy,
 };
 pub use plugins::{
     PluginConfigSchema, plugin_config_schema_generation, register_plugin_config_schemas,
@@ -190,7 +192,9 @@ pub use seeding::{
     WorkspaceSeedingPolicies, load_workspace_seeding_policies,
 };
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
-pub use tag_instructions::{TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings};
+pub use tag_instructions::{
+    AGENT_CORPUS_KEY, TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings,
+};
 pub use visual_review::{
     DEFAULT_VISUAL_REVIEW_WIDTH, VISUAL_REVIEW_KEY, VisualReviewSettings, visual_review_layer,
 };

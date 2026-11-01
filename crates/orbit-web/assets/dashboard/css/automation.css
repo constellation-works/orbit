@@ -352,6 +352,23 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
   border-left: 2px solid var(--state-failed); padding-left: 8px;
 }
 .schedule-editor-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.auto-task-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.operation-button.danger {
+  color: var(--danger-fg); border-color: var(--danger-line); background: transparent;
+}
+.operation-button.danger:hover:not(:disabled) {
+  color: #ffd0ca; border-color: var(--state-failed); background: var(--danger-wash);
+}
+.auto-task-delete-confirm {
+  display: flex; flex-direction: column; gap: 10px; margin-top: 8px; padding: 10px 12px;
+  border: 1px solid var(--danger-line); border-radius: 8px; background: var(--bg-elev);
+}
+.auto-task-delete-confirm textarea.schedule-input { width: 100%; resize: vertical; }
+.auto-task-delete-refusal {
+  display: flex; flex-direction: column; gap: 8px;
+  color: var(--state-failed); font: 12px/1.4 var(--font-sans);
+}
+.auto-task-delete-open-tasks { margin: 0; padding-left: 18px; }
 
 @media (max-width: 900px) {
   .operations-layout { grid-template-columns: 1fr; }
@@ -364,6 +381,7 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
     text-transform: uppercase; letter-spacing: .08em;
   }
   .operation-cell-control, .operation-cell-action { justify-self: start; }
+  .auto-task-actions { justify-content: flex-start; }
   .operation-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .operation-timeline-legend { margin-left: 0; }
   .operation-clock-bar .operation-clock-actions { margin-left: 0; }

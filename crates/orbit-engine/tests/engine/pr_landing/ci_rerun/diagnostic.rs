@@ -178,7 +178,11 @@ fn planner_refusal_journal_deduplicates_bounds_transitions_and_clears_on_recover
                             );
                             assert!(kept["current"]["reason"].as_str().unwrap().len() <= 1024);
                             assert!(polls.get() >= 3);
-                            assert_eq!(clock.get(), 1_020_000);
+                            // [ORB-20771] The hold expires on the last poll
+                            // (15s of 20s) into the repair path's own stop.
+                            assert_eq!(clock.get(), 1_015_000);
+                            let message = result.as_ref().unwrap_err().to_string();
+                            assert!(!message.contains("timed out after"), "{message}");
                         }
                         "transitions" => {
                             assert!(result.is_err());

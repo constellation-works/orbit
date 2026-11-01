@@ -264,6 +264,19 @@
   },
   {
     "surface": "dashboard",
+    "operation": "auto_task.delete",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
     "operation": "auto_task.mint",
     "required_any": [
       "operator"
@@ -956,6 +969,17 @@
   {
     "surface": "tool",
     "operation": "orbit.decision.list",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.decision.raise",
     "required_any": [],
     "verdicts": {
       "operator_terminal": "allow",

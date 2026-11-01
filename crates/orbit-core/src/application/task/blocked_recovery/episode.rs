@@ -35,7 +35,7 @@ impl BlockSource {
         }
     }
 
-    fn of(entry: &TaskHistoryEntry) -> Option<Self> {
+    pub(in crate::application::task) fn of(entry: &TaskHistoryEntry) -> Option<Self> {
         match entry.event.as_str() {
             WORKFLOW_RUN_FAILED_EVENT => {
                 let job = entry

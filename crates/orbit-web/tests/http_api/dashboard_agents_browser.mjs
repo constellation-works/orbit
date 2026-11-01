@@ -109,6 +109,7 @@ let computedAt = '2026-10-19T08:00:00.000Z';
 const requests = [];
 let matrixUnavailable = false;
 const scorecardWindows = [];
+const sizeCurveWindows = [];
 
 function header(role, url) {
   const requested = url.searchParams.get('window') || '30d';
@@ -161,7 +162,10 @@ function sizeCurves(url) {
 }
 
 function payloadFor(url) {
-  if (url.pathname === '/api/agents/implementers/size-curves') return sizeCurves(url);
+  if (url.pathname === '/api/agents/implementers/size-curves') {
+    sizeCurveWindows.push(url.searchParams.get('window'));
+    return sizeCurves(url);
+  }
   if (url.pathname === '/api/agents/implementers/by-type') return { ...implementerMatrix(), requested_window: url.searchParams.get('window') };
   const agents = url.pathname.match(/^\/api\/agents\/(\w+)\/(scorecard|detail)$/);
   if (agents) {
@@ -370,7 +374,7 @@ try {
   await page.locator('#agents-window-selector [data-window="30d"]').click();
   await page.waitForFunction(() => /in 30d/.test(document.getElementById('agents-meta').textContent));
   await page.evaluate(async () => { await document.fonts.ready; });
-  assert.equal(new URL(page.url()).hash, '#analytics/agents/orchestrators?window=30d');
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/orchestrators?window=30d&span=30d');
   assert.equal(await page.locator('.tab-pane.active').getAttribute('data-tab'), 'analytics');
   assert.equal(await page.locator('.rail .tab.active').getAttribute('data-tab'), 'analytics', 'Analytics is the active rail destination');
   assert.equal(await page.locator('.rail [data-tab="agents"]').count(), 0, 'the rail has no standalone Agents destination');
@@ -424,7 +428,7 @@ try {
   // reviewer's verdict outcomes.
   await page.locator('#agents-roles [data-view="reviewers"]').click();
   await body.locator('.agents-banner').waitFor();
-  assert.equal(new URL(page.url()).hash, '#analytics/agents/reviewers?window=30d');
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/reviewers?window=30d&span=30d');
   assert.match(await body.locator('.agents-banner').textContent(), /Provisional\. 150 of 191 reviews in this window are younger than the 30-day miss lookback/);
   assert.deepEqual(await body.locator('.agents-row .agents-crew').allTextContents(), ['codex-review', 'claude-review', 'gemini-review', 'sol-review'], 'the unjudged row is listed after every other row');
   assert.deepEqual(await body.locator('.agents-row .agents-tag').allTextContents(), ['accepts often', 'unjudged']);
@@ -672,7 +676,7 @@ try {
   assert.equal(await body.locator('.agents-penalty').count(), 0);
   assert.equal(await page.locator('#agents-count-pilots').textContent(), '2 ranked');
   assert.equal(await page.locator('#agents-count').textContent(), '3 rows · 2 ranked');
-  assert.equal(new URL(page.url()).hash, '#analytics/agents/pilots?window=30d');
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/pilots?window=30d&span=30d');
   assert.equal(await body.locator('.agents-row').count(), 3);
   assert.equal(await body.locator('#agents-detail h3').textContent(), 'luna');
   assert.doesNotMatch(await body.locator('.agents-stats').textContent(), /object Object/, 'the matrix is not a detail stat');
@@ -826,6 +830,60 @@ try {
   );
   assert.deepEqual(roleOverflow, [], `all four Agents role views contain their detail radar at desktop and phone widths: ${JSON.stringify(roleOverflow)}`);
   await page.setViewportSize({ width: 1440, height: 1100 });
+
+  // ORB-20748: a selected window round-trips through the link. 30D, picked on
+  // Implementers, survives a reload and a copied link, and is read before the
+  // rankings settle; Last 1000 does too; a link naming no window opens Last 500.
+  const selectedAgentWindow = () => page.locator('#agents-window-selector .scoreboard-window-seg.on').getAttribute('data-window');
+  const settled = async pattern => {
+    await body.locator('.agents-row').first().waitFor();
+    await page.waitForFunction(source => new RegExp(source).test(document.getElementById('agents-meta').textContent), pattern.source);
+  };
+  const roundTrip = [];
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('about:blank');
+    await page.goto(`${origin}#analytics/agents/implementers?window=30d`);
+    await settled(/in last500/);
+    assert.equal(await selectedAgentWindow(), 'last500', 'a link without a span opens on the Last 500 default');
+    await page.locator('#agents-window-selector [data-window="30d"]').click();
+    await settled(/in 30d/);
+    const copied = page.url();
+    assert.equal(new URL(copied).hash, '#analytics/agents/implementers?window=30d&span=30d', 'selecting 30D names it in the link');
+    await shot(`agents-30d-selection-dark-${width}`);
+    for (const [step, open] of [['reload', () => page.reload()], ['direct', async () => { await page.goto('about:blank'); await page.goto(copied); }]]) {
+      const scorecardsBefore = scorecardWindows.length;
+      const curvesBefore = sizeCurveWindows.length;
+      await open();
+      await settled(/in 30d/);
+      assert.equal(await selectedAgentWindow(), '30d', `${step} keeps 30D selected`);
+      assert.equal(page.url(), copied, `${step} keeps the link`);
+      const scorecards = scorecardWindows.slice(scorecardsBefore).filter(entry => entry.role === 'implementers').map(entry => entry.window);
+      const curves = sizeCurveWindows.slice(curvesBefore);
+      assert.ok(scorecards.length && scorecards.every(each => each === '30d'), `${step} reads only 30d scorecards: ${scorecards}`);
+      assert.ok(curves.length && curves.every(each => each === '30d'), `${step} reads only 30d size curves: ${curves}`);
+      const layout = await rankingVisibility();
+      assert.equal(layout.pageOverflow, false, `${step} at ${width}px keeps the page from scrolling sideways`);
+      const contained = await viewportMetrics();
+      assert.ok(contained.paneContained, `${step} at ${width}px keeps the active pane contained: ${JSON.stringify(contained)}`);
+      roundTrip.push({ width, step, url: page.url(), selected: '30d', meta: await page.locator('#agents-meta').textContent(), scorecards, curves, layout });
+      await shot(`agents-30d-${step}-dark-${width}`);
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  // Another role keeps the calendar window; a count window round-trips too.
+  await page.locator('#agents-roles [data-view="reviewers"]').click();
+  await settled(/in 30d/);
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/reviewers?window=30d&span=30d', 'a role tab keeps the selected window');
+  await page.locator('#agents-window-selector [data-window="last1000"]').click();
+  await settled(/in last1000/);
+  assert.equal(new URL(page.url()).hash, '#analytics/agents/reviewers?window=30d&span=last1000', 'a count window is named in the link');
+  await page.reload();
+  await settled(/in last1000/);
+  assert.equal(await selectedAgentWindow(), 'last1000', 'a reload keeps the count window');
+  assert.equal(scorecardWindows.filter(entry => entry.role === 'reviewers').at(-1).window, 'last1000');
+  fs.writeFileSync(path.join(evidence, 'agents-window-round-trip.json'), JSON.stringify(roundTrip, null, 2));
+  pass('selected Agents window round-trips through reload and copied links', { roundTrip });
   assert.deepEqual(errors, []);
   assert.equal(requests.some(entry => entry.includes('/detail')), false, 'the dashboard never requests agent detail');
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ ok: true, results }, null, 2));

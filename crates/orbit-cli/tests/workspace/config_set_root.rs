@@ -34,7 +34,7 @@ impl Fixture {
     fn initialized(override_root: bool) -> Self {
         let temp = tempdir().expect("tempdir");
         let root = if override_root {
-            temp.path().join("scratch-root")
+            temp.path().join("repo/scratch-root")
         } else {
             temp.path().join("home/.orbit")
         };
@@ -434,5 +434,73 @@ fn config_set_refusals_match_shared_admission_without_writes() {
                 "main",
             ])
             .failure();
+    }
+}
+
+#[test]
+fn selected_workspace_shared_root_is_one_config_layer() {
+    let fixture = Fixture::initialized_with_workspace();
+    let absolute = fixture.root.to_string_lossy().into_owned();
+    for root in ["scratch-root", absolute.as_str()] {
+        for scope in [false, true] {
+            let mut args = vec!["--root", root, "--workspace", "repo", "config", "show"];
+            if scope {
+                args.extend(["--scope", "global"]);
+            }
+            let output = fixture.orbit(&args).success();
+            let text = String::from_utf8_lossy(&output.get_output().stdout);
+            assert!(
+                text.contains("config-root-host"),
+                "identity missing: {text}"
+            );
+            if !scope {
+                assert!(!text.contains("→ workspace"), "duplicate layer: {text}");
+                assert!(
+                    !text.contains("do not inherit from global"),
+                    "false warning: {text}"
+                );
+            }
+            let mut args = vec![
+                "--root",
+                root,
+                "--workspace",
+                "repo",
+                "config",
+                "get",
+                "machine.name",
+            ];
+            if scope {
+                args.extend(["--scope", "global"]);
+            }
+            let output = fixture.orbit(&args).success();
+            assert!(
+                String::from_utf8_lossy(&output.get_output().stdout).contains("config-root-host")
+            );
+        }
+        for global in [false, true] {
+            let mut args = vec!["--root", root, "--workspace", "repo", "config", "path"];
+            if global {
+                args.push("--global");
+            }
+            fixture.orbit(&args).success();
+        }
+        let output = fixture
+            .orbit(&[
+                "--root",
+                root,
+                "--workspace",
+                "repo",
+                "config",
+                "set",
+                "execution.env.pass",
+                "true",
+            ])
+            .failure();
+        let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+        assert!(
+            stderr.contains("--global") && stderr.contains("workspace") && stderr.contains("layer"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("remove it"), "{stderr}");
     }
 }

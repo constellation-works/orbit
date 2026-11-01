@@ -13,7 +13,9 @@ mod revision;
 mod verify;
 
 pub use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
-pub(in crate::application::task) use mechanical::{operator_only_requeue, records_base_red};
+pub(in crate::application::task) use mechanical::{
+    base_red_block_episode, base_red_owner, operator_only_requeue,
+};
 pub(crate) use request::TERMINAL_REFUSAL_MARK;
 
 /// History event a `resume_run` step appends; the requeue bound counts it

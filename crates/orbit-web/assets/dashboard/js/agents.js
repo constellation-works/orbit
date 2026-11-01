@@ -11,7 +11,7 @@
 // A role whose scorecard is not computed yet shows an empty state with its
 // terms. Pure vanilla JS, no build step; HTML uses `el()`, charts use inline SVG.
 
-import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
@@ -143,6 +143,27 @@ function agentWindow() {
   if (countWindow) return countWindow;
   const selected = getWindow();
   return AGENT_SHARED_WINDOWS.includes(selected) ? selected : "last500";
+}
+
+/// The Agents window on screen, as its `span` link parameter names it.
+export function agentsSpan() {
+  return agentWindow();
+}
+
+/// Adopt the Agents window a link names in its `span` parameter: a count
+/// window is the panel's own, a calendar one becomes the shared window. A link
+/// without a valid `span` keeps the current selection, so a fresh visit opens
+/// on the count default.
+export function adoptAgentsSpan(raw) {
+  if (AGENT_COUNT_WINDOWS.includes(raw)) {
+    if (setCountWindow(raw)) syncWindowSelectors();
+    return;
+  }
+  if (!AGENT_SHARED_WINDOWS.includes(raw)) return;
+  const leftCount = setCountWindow(null);
+  const changed = setWindow(raw);
+  if (changed) persistScopeToUrl();
+  if (leftCount || changed) syncWindowSelectors();
 }
 
 function setCountWindow(next) {
@@ -381,7 +402,7 @@ function windowLabel() {
 }
 
 function roleHref(forRole) {
-  return `#analytics/agents/${forRole}?window=${encodeURIComponent(getWindow())}`;
+  return `#analytics/agents/${forRole}?window=${encodeURIComponent(getWindow())}&span=${encodeURIComponent(agentWindow())}`;
 }
 
 // A term rated per 100 of its own unit (the pilots' warning terms, per 100

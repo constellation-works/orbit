@@ -28,6 +28,7 @@ use super::super::delivery::{
 };
 use super::super::head_lag::HeadLag;
 use super::super::merge::PermittedMerge;
+use super::ci_rerun_hold::CiRerunHold;
 use super::conflict::{
     admit_conflict_repair, completion_conflict_error, has_completion_recovery_checkpoint,
     is_blocked_merge_state, re_review_on_conflict, rebase_conflicting_pr_branch,
@@ -179,6 +180,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     // Polls of a BLOCKED head that showed no failed and no running check.
     let mut unsettled_polls = 0_u32;
     let mut unreported = UnreportedChecks::new();
+    let mut ci_rerun_hold = CiRerunHold::default();
     if let Some(auto_fix) = auto_fix {
         // An earlier round of this run may have published a repaired head,
         // and the executor may have committed a check repair since.
@@ -449,8 +451,21 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
                     completion_deadline_ms,
                     diagnostic,
                 );
+                if !matches!(retry, Ok(CiRerunRecovery::Waiting(_))) {
+                    ci_rerun_hold.clear();
+                }
                 infrastructure_wait |= match retry {
-                    Ok(CiRerunRecovery::Waiting) => true,
+                    // [ORB-20771] A planner hold is recorded and bounded; once
+                    // it expires the failure takes the repair path below.
+                    Ok(CiRerunRecovery::Waiting(reason)) => ci_rerun_hold.still_holds(
+                        host,
+                        auto_fix,
+                        status.head_sha.as_deref(),
+                        &reason,
+                        waited_seconds,
+                        waited_seconds.saturating_add(poll_interval_seconds) >= max_wait_seconds,
+                    )?,
+                    Ok(CiRerunRecovery::Retried) => true,
                     Ok(CiRerunRecovery::NotEligible) => false,
                     Ok(CiRerunRecovery::Stopped(reason)) => {
                         return Err(stopped(pr_number, &reason));

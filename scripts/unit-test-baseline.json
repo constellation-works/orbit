@@ -47,6 +47,8 @@
         "browser_kit/tests/libraries.rs::resolved_libraries_without_a_font_gap_stay_resolved",
         "doctor/tests/permissions.rs::disappearing_entries_are_skipped_at_metadata_and_read_dir_boundaries",
         "doctor/tests/permissions.rs::repair_refuses_final_and_parent_symlink_swaps_after_scanning",
+        "doctor/tests/plugin_enablement.rs::absent_or_clean_host_config_is_ok",
+        "doctor/tests/plugin_enablement.rs::misplaced_global_plugin_enablement_is_an_error_with_the_exact_fix",
         "doctor/tests/task.rs::stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers",
         "doctor/tests/worker_token.rs::absent_empty_refused_and_mismatched_clock_files_stay_distinct",
         "doctor/tests/worker_token.rs::clock_file_is_ready_only_when_it_holds_a_credential_the_workspace_admits",

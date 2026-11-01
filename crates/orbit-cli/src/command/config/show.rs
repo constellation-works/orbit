@@ -169,8 +169,9 @@ fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigValue]) -> Js
     let global_path = global_config_path(runtime);
     let workspace_path = runtime.shared_root().join("config.toml");
     let global_exists = global_path.exists();
-    let workspace_exists = workspace_path.exists();
-    let config_path = if workspace_exists && runtime.shared_root() != runtime.global_root() {
+    let workspace_exists =
+        workspace_path.exists() && runtime_config_roots(runtime).has_workspace_layer();
+    let config_path = if workspace_exists {
         &workspace_path
     } else {
         &global_path

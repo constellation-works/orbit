@@ -55,6 +55,12 @@ class Node {
     this.children.push(child);
   }
   appendChild(child) { this.append(child); return child; }
+  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
+  closest(selector) {
+    const name = selector.replace(/^\./, '');
+    for (let node = this; node; node = node.parentNode) if (classesOf(node).includes(name)) return node;
+    return null;
+  }
   prepend(child) { this.insertBefore(child, this.children[0] || null); }
   dispatch(type, extra = {}) {
     const event = { type, target: this, stopPropagation() {}, preventDefault() {}, ...extra };
@@ -1346,7 +1352,7 @@ context.fetch = (path, options = {}) => {
     decisionPosts.push({ path: url.pathname, workspace: url.searchParams.get('workspace'), body: JSON.parse(options.body) });
     return new Promise(() => {});
   }
-  decisionReads.push(url.pathname);
+  decisionReads.push(url.pathname + (url.searchParams.get('include_closed') ? '?include_closed' : ''));
   return Promise.resolve(readinessResponse({ tasks: [] }));
 };
 const decisionContext = { ...taskContext, getActiveStatuses: () => new Set(['blocked', 'proposed']), statusOrder: ['blocked', 'proposed'] };
@@ -1358,18 +1364,18 @@ const paintDecision = item => {
 paintDecision(decisionTask);
 clickTitle(byId['tasks-body'].querySelector('.row button.title'));
 await settleReads();
-assert.ok(!decisionReads.includes('/api/decisions'), 'the card needs no read of the decisions API');
+assert.ok(!decisionReads.includes('/api/decisions'), 'the card needs no read of open decisions; only the decision history reads closed ones');
 const blockCard = paneBody.querySelector('.task-block-callout');
 assert.equal(blockCard.querySelector('.decision-summary').textContent, decisionRequest.summary, 'the card leads with the short summary');
 const decisionButtons = blockCard.querySelectorAll('.decision-answer');
-assert.deepEqual(decisionButtons.map(node => node.textContent), ['Drop criterion 2', 'Restore the v1 API'], 'one button per option, by label');
+assert.deepEqual(decisionButtons.map(node => node.textContent), ['Restore the v1 API', 'Drop criterion 2'], 'one button per option, by label, recommended first');
 assert.deepEqual(
   blockCard.querySelectorAll('.decision-option').map(node => node.querySelector('.decision-consequence').textContent),
-  decisionRequest.options.map(option => option.consequence),
+  [...decisionRequest.options].sort((a, b) => Number(Boolean(b.recommended)) - Number(Boolean(a.recommended))).map(option => option.consequence),
   'each consequence sits beside its own option',
 );
 assert.equal(blockCard.querySelectorAll('.decision-recommended').length, 1, 'exactly one option is marked recommended');
-assert.ok(blockCard.querySelectorAll('.decision-option')[1].classList.contains('recommended'), 'the recommended option is the second');
+assert.ok(blockCard.querySelectorAll('.decision-option')[0].classList.contains('recommended'), 'the recommended option is listed first');
 const blockDetails = blockCard.querySelector('details.task-block-details');
 assert.ok(blockDetails && !blockDetails.getAttribute('open'), 'Details stays collapsed');
 assert.ok(blockDetails.textContent.includes('raw diagnosis: cargo test failed'), 'the raw diagnosis lives under Details');
@@ -1377,7 +1383,7 @@ assert.ok(blockDetails.textContent.includes('View run'), 'View run lives under D
 assert.ok(!blockCard.querySelector('.decision-summary').textContent.includes('raw diagnosis'), 'the raw diagnosis is not the summary');
 assert.equal(paneBody.querySelectorAll('.decision-requests').length, 0, 'a card-rendered request is not repeated under Decision needed');
 blockCard.querySelector('.decision-note').value = 'checked the compat shim';
-decisionButtons[1].dispatch('click');
+decisionButtons[0].dispatch('click');
 assert.deepEqual(
   decisionPosts.map(post => [post.path, post.workspace, post.body]),
   [['/api/decisions/DR-1/answer', 'ws_orbit', { answer: '2', note: 'checked the compat shim' }]],
