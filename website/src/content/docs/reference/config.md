@@ -481,7 +481,13 @@ The purposes are `task_pilot`, `failure_recovery`, `auto_fix`,
 `baseline_red_repair` and `sweep_tasks` (every task the CI failure,
 Dependabot, code-scanning and merged-head repair sweeps file), `explorer`
 (the read-only explorers an implementing agent delegates, which have no
-earlier route: with no eligible member, delegation is not offered), plus
+earlier route: with no eligible member, delegation is not offered),
+`pilot_warning_triage` (the triager of each held task-pilot assessment:
+drawn from its pool when set and inspection-capable, else from
+`workflow.hard_complexity_crews` as before, recorded as
+`purpose:pilot_warning_triage`) and `visual_review` (the mock comparison
+reviewer and its in-line verifier: drawn from its pool when set and
+vision-capable, else from the task's complexity pool), plus
 `final_recovery` and `review`, which keep their own rules: final recovery
 draws only from its pool, and `[]` turns it off; automatic review needs its
 pool set and avoids the crew that implemented the reviewed work. For the
