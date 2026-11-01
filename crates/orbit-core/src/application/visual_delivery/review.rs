@@ -522,7 +522,7 @@ fn design_rule_excerpts(contract: Option<&VisualReviewContract>, workspace: &Pat
     let mut excerpts = Vec::new();
     let mut total = 0usize;
     for manifest in &contract.manifests {
-        let Ok(document) = manifest.content.parse::<toml::Value>() else {
+        let Ok(document) = toml::from_str::<toml::Value>(&manifest.content) else {
             continue;
         };
         let mut paths: Vec<&str> = Vec::new();
@@ -542,9 +542,13 @@ fn design_rule_excerpts(contract: Option<&VisualReviewContract>, workspace: &Pat
             let Ok(bytes) = read_blob_at(workspace, &manifest.reference.revision, path) else {
                 continue;
             };
+            let excerpt_limit = (8 * 1024).min(16 * 1024 - total);
+            if excerpt_limit == 0 {
+                break;
+            }
             let mut content = String::from_utf8_lossy(&bytes).into_owned();
-            if content.len() > 8 * 1024 {
-                let mut end = 8 * 1024;
+            if content.len() > excerpt_limit {
+                let mut end = excerpt_limit;
                 while !content.is_char_boundary(end) {
                     end -= 1;
                 }
