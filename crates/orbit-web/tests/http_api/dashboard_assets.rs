@@ -360,3 +360,31 @@ fn context_selector_basenames_keep_contention_colors_and_return_to_normal_on_ref
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// Analytics › Forecast residual charts: the p50 baseline (`.fc-res-zero`
+/// inside `.fc-res-bars`) spans the visible plot at the scroll end (newest
+/// sample), middle and start of a long scrolling series at 375 and 1440 px,
+/// stays at the p50 offset without page overflow, metric switching retains
+/// both charts, and short and empty series render.
+#[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_FORECAST_RESIDUALS_BROWSER_EVIDENCE_DIR"]
+fn forecast_residual_baseline_geometry_stays_across_scrolling() {
+    let output = std::process::Command::new("node")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/http_api/dashboard_forecast_residuals_browser.mjs"),
+        )
+        .arg(std::env::var_os("ORBIT_PLAYWRIGHT_MODULE").expect("prepared Playwright module"))
+        .arg(
+            std::env::var_os("ORBIT_FORECAST_RESIDUALS_BROWSER_EVIDENCE_DIR")
+                .expect("browser evidence directory"),
+        )
+        .output()
+        .expect("node is required to execute the forecast residuals browser fixture");
+    assert!(
+        output.status.success(),
+        "forecast residual baseline geometry failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
