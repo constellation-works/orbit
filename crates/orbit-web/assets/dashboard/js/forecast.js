@@ -1197,8 +1197,9 @@ function residualChart(label, rows, current) {
   const newest = rows[rows.length - 1];
   const summary = `${label}: ${rows.length} scored forecast${rows.length === 1 ? "" : "s"}, newest ${residualRatio(newest.value)}. Range ${lower} to ${higher} of p50.`;
   const plot = el("div", { class: "fc-res-plot", role: "img", "aria-label": summary }, [
-    el("div", { class: "fc-res-zero", "aria-hidden": "true" }),
-    el("div", { class: "fc-res-bars", style: { gridTemplateColumns: `repeat(${rows.length}, minmax(3px, 14px))` } }, [...bars, ...labels]),
+    el("div", { class: "fc-res-bars", style: { gridTemplateColumns: `repeat(${rows.length}, minmax(3px, 14px))` } }, [
+      el("div", { class: "fc-res-zero", "aria-hidden": "true" }), ...bars, ...labels,
+    ]),
   ]);
   // A long series scrolls inside the plot; start at the newest forecast.
   requestAnimationFrame(() => { plot.scrollLeft = plot.scrollWidth; });
