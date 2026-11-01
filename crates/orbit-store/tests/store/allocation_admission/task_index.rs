@@ -512,6 +512,154 @@ fn older_envelope_proofs_are_reparsed_before_parent_selection() {
     assert_eq!(proofs[&child.id].fingerprint, rows[&child.id].fingerprint());
 }
 
+/// ORB-20861: a host crash can lose a commit lease's unsynced name while
+/// its committed journal decision survives and its history is unapplied.
+/// Observation must never expose the old sidecars as settled: a read-only
+/// composition refuses recovery-required state, a writable observation
+/// replays the decision, and a normal coordinated reopen is the control.
+#[test]
+fn observation_fences_a_committed_decision_whose_lease_was_lost() {
+    if !allocation_admission_isolated(
+        "task_index::observation_fences_a_committed_decision_whose_lease_was_lost",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let created = owner.create_task("Lost lease observation");
+    let task_id = created.id.clone();
+    let bundle = owner.bundle_path(&task_id);
+    let events_path = bundle.join(TASK_EVENTS_FILE_NAME);
+    let events_before = std::fs::read(&events_path).unwrap();
+    let history_before = owner
+        .backends
+        .task
+        .history
+        .get_task_history(&task_id)
+        .unwrap()
+        .unwrap()
+        .len();
+
+    // A real coordinated transition, fully applied.
+    owner
+        .backends
+        .commit_boundary
+        .commit_task_transition(&orbit_store::contracts::TaskCoordinationCommitParams {
+            task_id: task_id.clone(),
+            actor: "test".into(),
+            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                at: Utc::now(),
+                by: "test".into(),
+                event: "lost_lease_observation_probe".into(),
+                note: Some("committed before its apply was lost".into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    let expected = owner
+        .backends
+        .task
+        .history
+        .get_task_history(&task_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(expected.len(), history_before + 1);
+
+    // Reconstruct exactly the persisted post-Decide/pre-Apply state: the
+    // original events, the real intent marked committed again, no lease.
+    std::fs::write(&events_path, &events_before).unwrap();
+    let sql = rusqlite::Connection::open(root.path().join("state.sqlite")).unwrap();
+    assert_eq!(
+        sql.execute(
+            "UPDATE task_commit_journal SET state = 'committed', applied_at = NULL \
+             WHERE task_id = ?1 AND state = 'applied'",
+            [&task_id],
+        )
+        .unwrap(),
+        1,
+        "the applied decision is marked committed again"
+    );
+    let lease_dir = bundle.parent().unwrap().join(".task-commit-applying");
+    if lease_dir.exists() {
+        assert_eq!(
+            std::fs::read_dir(&lease_dir).unwrap().count(),
+            0,
+            "no lease name survives"
+        );
+    }
+    drop(sql);
+    drop(owner);
+
+    // A genuinely read-only observer refuses, and leaves the state untouched.
+    let refused = workspace_observational_backends(
+        TaskRegistryStore::open_read_only(&task_registry_path(root.path())).unwrap(),
+        PARTITION_ID.into(),
+        Store::open_read_only(&root.path().join("state.sqlite")).unwrap(),
+    );
+    let error = match refused {
+        Ok(_) => panic!("read-only observation must refuse recovery-required state"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("awaiting recovery"),
+        "the refusal names the owed recovery: {error}"
+    );
+    assert_eq!(
+        std::fs::read(&events_path).unwrap(),
+        events_before,
+        "the refusal does not apply the decision itself"
+    );
+
+    // A writable observation replays the decision before exposing history.
+    let writable = workspace_observational_backends(
+        registry_at(root.path()),
+        PARTITION_ID.into(),
+        Store::open(&root.path().join("state.sqlite")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        writable
+            .task
+            .history
+            .get_task_history(&task_id)
+            .unwrap()
+            .unwrap(),
+        expected,
+        "writable observation exposes the replayed history, not the old sidecar"
+    );
+    drop(writable);
+
+    // Positive control: a normal writable reopen sees the same history and
+    // the journal is settled.
+    let reopened = Coordinated::open(root.path());
+    assert_eq!(
+        reopened
+            .backends
+            .task
+            .history
+            .get_task_history(&task_id)
+            .unwrap()
+            .unwrap(),
+        expected
+    );
+    let sql = rusqlite::Connection::open(root.path().join("state.sqlite")).unwrap();
+    assert_eq!(
+        sql.query_row(
+            "SELECT COUNT(*) FROM task_commit_journal \
+             WHERE task_id = ?1 AND state IN ('prepared', 'committed')",
+            [&task_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0,
+        "the replay settles the journal"
+    );
+}
+
 #[test]
 fn residual_continuation_counts_before_cursor_on_index_and_scan() {
     if !allocation_admission_isolated(
