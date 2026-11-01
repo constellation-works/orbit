@@ -235,7 +235,11 @@ if [[ -n "$archive" ]]; then
     fi
   fi
   run_phase workflow-test-list-build "$repo_root/scripts/check-ci-macos.sh" --workspace-build ${macos_selection[@]+"${macos_selection[@]}"}
-  run_phase workspace-test-archive "$lint" cargo nextest archive --locked \
+  # The archive reuses the list build's artifacts. Cargo's fingerprint log
+  # prints nothing for a fresh unit and the dirty reason for each rebuilt one,
+  # so a lost reuse names its cause in the step log (ORB-20805).
+  run_phase workspace-test-archive env CARGO_LOG=cargo::core::compiler::fingerprint=info \
+    "$lint" cargo nextest archive --locked \
     "${targets[@]}" --archive-file "$archive"
   exit 0
 fi

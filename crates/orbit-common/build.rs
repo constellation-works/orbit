@@ -46,6 +46,12 @@ fn git_output(args: &[&str]) -> Option<String> {
     }
 }
 
+fn watch_existing(path: &std::path::Path) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
 fn main() {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source_checkout = match (
@@ -58,10 +64,14 @@ fn main() {
     };
     // Watch both worktree HEAD and the shared branch ref (including packed
     // refs), so a rebuild after checkout or commit cannot reuse stale identity.
+    // Cargo treats a missing watched path as always stale, so a path git has
+    // not created is never watched: a CI checkout (`git init`, then a fetch
+    // by commit) has no packed-refs, and watching it reran this script and
+    // recompiled every workspace crate on each later Cargo command.
     for name in ["HEAD", "index", "packed-refs"] {
         if let Some(path) = git_output(&["rev-parse", "--path-format=absolute", "--git-path", name])
         {
-            println!("cargo:rerun-if-changed={path}");
+            watch_existing(std::path::Path::new(&path));
         }
     }
     if let Some(reference) = git_output(&["symbolic-ref", "-q", "HEAD"])
@@ -72,7 +82,17 @@ fn main() {
             &reference,
         ])
     {
-        println!("cargo:rerun-if-changed={path}");
+        // A packed branch has no loose ref file. Watch the closest existing
+        // directory under `refs/` instead, which gains the file on the next
+        // commit; packed-refs above covers the packed value.
+        let mut path = std::path::Path::new(&path);
+        while !path.exists()
+            && let Some(parent) = path.parent()
+            && parent.components().any(|part| part.as_os_str() == "refs")
+        {
+            path = parent;
+        }
+        watch_existing(path);
     }
     // Track source edits too: a dirty build must never prove fix ancestry.
     for path in [
