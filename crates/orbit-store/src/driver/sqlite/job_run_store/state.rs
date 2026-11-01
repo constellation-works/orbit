@@ -35,10 +35,34 @@ impl Store {
     ///
     /// Unreadable JSON is `None` for that run rather than failing the page:
     /// list projection already treats a per-run read error as empty lineage.
+    /// A caller that must keep [`Self::read_job_run_state_for_workspace`]'s
+    /// error uses [`Self::read_job_run_states_exact_for_workspace`].
     pub fn read_job_run_states_for_workspace(
         &self,
         workspace_id: &str,
         run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        self.read_job_run_state_page(workspace_id, run_ids, false)
+    }
+
+    /// Pipeline state for many runs in one query per chunk.
+    ///
+    /// Unreadable JSON fails the call with `invalid pipeline_state_json`, the
+    /// same error as [`Self::read_job_run_state_for_workspace`]. A run with no
+    /// state row is `None`.
+    pub fn read_job_run_states_exact_for_workspace(
+        &self,
+        workspace_id: &str,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
+        self.read_job_run_state_page(workspace_id, run_ids, true)
+    }
+
+    fn read_job_run_state_page(
+        &self,
+        workspace_id: &str,
+        run_ids: &[String],
+        exact: bool,
     ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
         let mut states: HashMap<String, Option<PipelineState>> = HashMap::new();
         if run_ids.is_empty() {
@@ -76,7 +100,18 @@ impl Store {
                 .map_err(sqlite_store_error)?;
             for row in rows {
                 let (run_id, raw) = row.map_err(sqlite_store_error)?;
-                let state = raw.and_then(|raw| serde_json::from_str(&raw).ok());
+                let state = match raw {
+                    None => None,
+                    Some(raw) => match serde_json::from_str(&raw) {
+                        Ok(state) => Some(state),
+                        Err(error) if exact => {
+                            return Err(OrbitError::Store(format!(
+                                "invalid pipeline_state_json: {error}"
+                            )));
+                        }
+                        Err(_) => None,
+                    },
+                };
                 states.insert(run_id, state);
             }
         }
