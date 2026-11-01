@@ -207,3 +207,154 @@ fn doctor_reports_a_misplaced_host_plugin_enablement_table_that_blocks_startup()
         "a repair must not report a degraded health check"
     );
 }
+
+#[test]
+fn doctor_reports_misplaced_table_under_orbit_root_not_home() {
+    let fixture = Fixture::new();
+    let scratch = fixture
+        .home
+        .parent()
+        .expect("temp root")
+        .join("scratch-orbit");
+    fs::create_dir_all(&scratch).expect("create scratch root");
+    let scratch_config = scratch.join("config.toml");
+    fs::write(&scratch_config, "[plugin_enablement]\ngraph = false\n")
+        .expect("write scratch config");
+    let home_config = fixture.home.join(".orbit/config.toml");
+    let home_contents = fs::read_to_string(&home_config).unwrap_or_default();
+    assert!(
+        !home_contents.contains("[plugin_enablement]"),
+        "home config must stay clean in this scenario"
+    );
+
+    let output = fixture
+        .orbit()
+        .env("ORBIT_ROOT", &scratch)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("spawn orbit doctor");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let rows: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "doctor JSON parse error: {err}; stdout:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    let row = rows
+        .iter()
+        .find(|row| row["check"] == "plugin-enablement")
+        .unwrap_or_else(|| panic!("plugin-enablement row missing: {rows:?}"));
+    assert_eq!(row["status"], "error");
+    let message = row["message"].as_str().expect("message");
+    assert!(
+        message.contains(&scratch_config.display().to_string()),
+        "row must name the ORBIT_ROOT config, got: {message}"
+    );
+    assert!(
+        !message.contains(&home_config.display().to_string()),
+        "row must not name the home config, got: {message}"
+    );
+}
+
+#[test]
+fn doctor_reports_misplaced_table_under_root_checkout_orbit_child() {
+    let fixture = Fixture::new();
+    let checkout = fixture.home.parent().expect("temp root").join("checkout2");
+    crate::git_repo::init(&checkout);
+    let mut init = fixture.orbit();
+    init.current_dir(&checkout);
+    init.args(["workspace", "init", "--name", "doctor-root-checkout"])
+        .assert()
+        .success();
+    let orbit_config = checkout.join(".orbit/config.toml");
+    let mut contents = fs::read_to_string(&orbit_config).unwrap_or_default();
+    contents.push_str("\n[plugin_enablement]\ngraph = false\n");
+    fs::write(&orbit_config, contents).expect("write checkout orbit config");
+    assert!(
+        !checkout.join("config.toml").exists(),
+        "checkout root must have no config.toml in this scenario"
+    );
+
+    let output = fixture
+        .orbit()
+        .args([
+            "--root",
+            &checkout.display().to_string(),
+            "doctor",
+            "--json",
+        ])
+        .output()
+        .expect("spawn orbit doctor --root checkout");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let rows: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
+        panic!(
+            "doctor JSON parse error: {err}; stdout:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        )
+    });
+    let row = rows
+        .iter()
+        .find(|row| row["check"] == "plugin-enablement")
+        .unwrap_or_else(|| panic!("plugin-enablement row missing: {rows:?}"));
+    assert_eq!(row["status"], "error");
+    let message = row["message"].as_str().expect("message");
+    assert!(
+        message.contains(&orbit_config.display().to_string()),
+        "row must name the .orbit child config, got: {message}"
+    );
+    let bare_checkout_config = format!("'{}'", checkout.join("config.toml").display());
+    assert!(
+        !message.contains(&bare_checkout_config),
+        "row must not name <checkout>/config.toml, got: {message}"
+    );
+}
+
+#[test]
+fn doctor_keeps_bare_error_when_admission_config_is_clean_but_home_is_dirty() {
+    let fixture = Fixture::new();
+    // Dirty the home global config; admission under ORBIT_ROOT never loads it.
+    let home_config = fixture.home.join(".orbit/config.toml");
+    let mut host_config = fs::read_to_string(&home_config).unwrap_or_default();
+    host_config.push_str("\n[plugin_enablement]\ngraph = false\n");
+    fs::create_dir_all(home_config.parent().expect("config parent")).expect("create host root");
+    fs::write(&home_config, host_config).expect("write host config");
+
+    // Clean of [plugin_enablement], but invalid so startup still fails.
+    let scratch = fixture
+        .home
+        .parent()
+        .expect("temp root")
+        .join("scratch-orbit-clean");
+    fs::create_dir_all(&scratch).expect("create scratch root");
+    fs::write(
+        scratch.join("config.toml"),
+        "this is = = not valid toml [\n",
+    )
+    .expect("write scratch config");
+
+    let output = fixture
+        .orbit()
+        .env("ORBIT_ROOT", &scratch)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("spawn orbit doctor");
+    assert!(!output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("plugin-enablement"),
+        "doctor must not report the home table it never loaded, stdout: {stdout}"
+    );
+    assert!(
+        serde_json::from_slice::<Vec<Value>>(&output.stdout).is_err()
+            || serde_json::from_slice::<Vec<Value>>(&output.stdout)
+                .expect("rows")
+                .iter()
+                .all(|row| row["check"] != "plugin-enablement"),
+        "bare bootstrap error must stand, stdout: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.is_empty(),
+        "bare bootstrap error must be printed to stderr"
+    );
+}
