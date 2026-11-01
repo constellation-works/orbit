@@ -405,6 +405,8 @@ fn federated(
     follower_machine: &str,
     path: &std::ffi::OsStr,
 ) -> FederatedMcpHost {
+    // SAFETY: nextest runs this test in its own process (.config/nextest.toml), so no
+    // other test thread reads PATH while it is set. The probe's `ssh` child inherits it.
     unsafe {
         std::env::set_var("PATH", path);
     }

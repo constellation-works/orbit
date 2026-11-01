@@ -504,6 +504,8 @@ fn linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority() 
             .iter()
             .find(|pin| pin.path == path)
             .unwrap_or_else(|| panic!("missing runtime pin {}", path.display()));
+        // SAFETY: `pin` borrows from `resolved`, which outlives this read, so the pinned
+        // descriptor is still open for F_GETFL.
         let flags = unsafe { libc::fcntl(pin.handle.as_raw_fd(), libc::F_GETFL) };
         assert!(
             flags >= 0 && flags & libc::O_PATH != 0,

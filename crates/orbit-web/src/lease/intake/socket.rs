@@ -69,6 +69,8 @@ fn lookup_user(name: &str) -> Result<Option<(libc::uid_t, libc::gid_t)>, OrbitEr
         // dropped, and only after a success with a non-null `result`.
         let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
         let mut result: *mut libc::passwd = std::ptr::null_mut();
+        // SAFETY: c_name is NUL-terminated (CString); pwd, buf and result are live out-params,
+        // and buf.len() is the buffer length passed to getpwnam_r.
         let rc = unsafe {
             libc::getpwnam_r(
                 c_name.as_ptr(),

@@ -102,6 +102,8 @@ impl ApplicationCredential {
             // Do not pass the service's raw credential to a plugin backend.
             // SAFETY: fcntl inspects/updates flags of this borrowed descriptor.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            // SAFETY: `file` keeps this inherited descriptor borrowed (ManuallyDrop, never
+            // closed); F_SETFD only adds FD_CLOEXEC to it.
             if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0
             {
                 return Err(refused());

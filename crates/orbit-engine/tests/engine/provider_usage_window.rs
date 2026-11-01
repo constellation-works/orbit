@@ -147,14 +147,19 @@ fn with_capture_limit<T>(limit: usize, operation: impl FnOnce() -> T) -> T {
     struct RestoreCaptureLimit(Option<OsString>);
     impl Drop for RestoreCaptureLimit {
         fn drop(&mut self) {
-            match self.0.take() {
-                Some(previous) => unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, previous) },
-                None => unsafe { std::env::remove_var(CAPTURE_LIMIT_ENV) },
+            // SAFETY: this test runs alone in its own nextest process (.config/nextest.toml),
+            // so no other thread reads CAPTURE_LIMIT_ENV while it is restored here.
+            unsafe {
+                match self.0.take() {
+                    Some(previous) => std::env::set_var(CAPTURE_LIMIT_ENV, previous),
+                    None => std::env::remove_var(CAPTURE_LIMIT_ENV),
+                }
             }
         }
     }
 
     let previous = std::env::var_os(CAPTURE_LIMIT_ENV);
+    // SAFETY: same single-test process as the Drop above; `_restore` puts the prior value back.
     unsafe { std::env::set_var(CAPTURE_LIMIT_ENV, limit.to_string()) };
     let _restore = RestoreCaptureLimit(previous);
     operation()

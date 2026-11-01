@@ -28,23 +28,28 @@ fn record_evidence_allocation(size: usize) {
 // SAFETY: All operations delegate unchanged to System. The thread-local
 // counter is allocation-free and never reads or modifies allocated memory.
 unsafe impl GlobalAlloc for EvidenceCountingAllocator {
+    // SAFETY: upholds GlobalAlloc::alloc's contract; the caller's layout reaches System unchanged.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record_evidence_allocation(layout.size());
         // SAFETY: System receives the caller's layout unchanged.
         unsafe { System.alloc(layout) }
     }
 
+    // SAFETY: upholds GlobalAlloc::alloc_zeroed's contract; the caller's layout reaches
+    // System unchanged.
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         record_evidence_allocation(layout.size());
         // SAFETY: System receives the caller's layout unchanged.
         unsafe { System.alloc_zeroed(layout) }
     }
 
+    // SAFETY: upholds GlobalAlloc::dealloc's contract; ptr and layout reach System unchanged.
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // SAFETY: System receives its original pointer and layout.
         unsafe { System.dealloc(ptr, layout) }
     }
 
+    // SAFETY: upholds GlobalAlloc::realloc's contract; ptr, layout and size reach System unchanged.
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         record_evidence_allocation(size);
         // SAFETY: System receives the pointer, original layout and requested size unchanged.
