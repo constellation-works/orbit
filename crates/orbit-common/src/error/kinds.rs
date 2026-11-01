@@ -299,6 +299,8 @@ pub enum RemoteToolCode {
     PluginBrokerUnavailable,
     /// The remote rejected the request's input; nothing was decided.
     InvalidInput,
+    /// The remote host's own configuration is invalid; the request was not judged.
+    HostConfiguration,
     /// The remote's catalog role refused the call, before any capability
     /// grant was consulted.
     CapabilityRefused,
@@ -311,12 +313,13 @@ pub enum RemoteToolCode {
 }
 
 impl RemoteToolCode {
-    const NAMED: [Self; 8] = [
+    const NAMED: [Self; 9] = [
         Self::LockBusy,
         Self::NotFound,
         Self::ProtocolSkew,
         Self::PluginBrokerUnavailable,
         Self::InvalidInput,
+        Self::HostConfiguration,
         Self::CapabilityRefused,
         Self::CapabilityDenied,
         Self::PolicyDenied,
@@ -330,6 +333,7 @@ impl RemoteToolCode {
             Self::ProtocolSkew => "protocol_skew",
             Self::PluginBrokerUnavailable => "plugin_broker_unavailable",
             Self::InvalidInput => "invalid_input",
+            Self::HostConfiguration => "host_configuration",
             Self::CapabilityRefused => "capability_refused",
             Self::CapabilityDenied => "capability_denied",
             Self::PolicyDenied => "policy_denied",

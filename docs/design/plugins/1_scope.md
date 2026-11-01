@@ -256,8 +256,10 @@ still prevents the write.
   and writes nothing: a toggle can never switch on what the host has not consented to.
 - The toggle is outside the grants witness. It can only narrow, so a tampered toggle can take
   a plugin off but never widen its grants or switch on a host-disabled plugin.
-- `[plugin_enablement]` in the global `config.toml` is refused at load; host enablement is
-  the plugin store row. A workspace file holding only the toggle table does not count as a
+- `[plugin_enablement]` in the global `config.toml` is refused at load with a typed
+  `host_configuration` error naming the host and file (not the caller's `invalid_input`);
+  host enablement is the plugin store row. Final recovery treats that error as transient
+  infrastructure, and `orbit doctor` reports the misplaced table with its exact fix. A workspace file holding only the toggle table does not count as a
   workspace config layer, so the replace-only execution keys keep inheriting from global.
 - Skill links are host-level and stay while the host row is enabled.
 - `list`, `show` and `doctor` report the host state beside the effective one and why it

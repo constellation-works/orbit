@@ -50,7 +50,52 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         host_workspace_convergence_row(runtime)
     }),
     DoctorProbe::one("host-labels", |runtime, _| host_labels_row(runtime)),
+    DoctorProbe::one("plugin-enablement", |runtime, _| {
+        plugin_enablement_row(runtime)
+    }),
 ];
+
+/// A `[plugin_enablement]` table in the global (host) config: refused at
+/// load, so every owner-served call fails until it is removed. Reported
+/// here directly from the file, so the row shows even though the layered
+/// config itself will not load.
+fn plugin_enablement_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    plugin_enablement_row_for(&runtime.global_root())
+}
+
+/// The `plugin-enablement` row for the host config under `global_root`.
+pub(super) fn plugin_enablement_row_for(global_root: &std::path::Path) -> WorkspaceDoctorResult {
+    let path = global_root.join("config.toml");
+    match orbit_config::misplaced_global_plugin_enablement(&path) {
+        Ok(Some(misplaced)) => WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "plugin-enablement".into(),
+            status: WorkspaceDoctorStatus::Error,
+            message: format!(
+                "[plugin_enablement] is misplaced in host config '{}' on host '{}': it is a workspace setting and its presence fails every config load on this host",
+                misplaced.path.display(),
+                misplaced.host
+            ),
+            remediation: Some(orbit_config::global_plugin_enablement_fix(&misplaced.path)),
+        },
+        Ok(None) => WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "plugin-enablement".into(),
+            status: WorkspaceDoctorStatus::Ok,
+            message: "no [plugin_enablement] table in the host config".into(),
+            remediation: None,
+        },
+        Err(error) => WorkspaceDoctorResult {
+            duration_ms: 0,
+            check_name: "plugin-enablement".into(),
+            status: WorkspaceDoctorStatus::Warning,
+            message: format!("cannot inspect host config '{}': {error}", path.display()),
+            remediation: Some(
+                "Fix the host config file named above, then rerun `orbit doctor`.".into(),
+            ),
+        },
+    }
+}
 
 /// The capability labels this host carries for tasks' `requires_labels`:
 /// its `machine.labels` plus its OS as an implicit label.
