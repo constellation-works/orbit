@@ -127,7 +127,9 @@ impl OrbitRuntime {
                 let expected = match gate {
                     DecisionGate::ProposedApproval => TaskStatus::Proposed,
                     DecisionGate::ReviewApproval => TaskStatus::Review,
-                    DecisionGate::BlockTriage | DecisionGate::PilotAdmission => {
+                    DecisionGate::BlockTriage
+                    | DecisionGate::PilotAdmission
+                    | DecisionGate::AgentRequest => {
                         return Ok(());
                     }
                 };

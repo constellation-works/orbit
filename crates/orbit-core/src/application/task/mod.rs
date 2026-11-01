@@ -15,6 +15,7 @@ mod context_repair;
 mod context_widening;
 mod decision;
 mod decision_channel;
+mod decision_raise;
 mod desktop;
 mod distributed_port;
 pub(crate) mod escalation_triage_steps;
@@ -100,6 +101,7 @@ pub use decision_channel::{
     DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionDigest, DecisionSubmitCaller,
     DecisionSubmitParams, MAX_DECISION_RAW_MESSAGE_BYTES,
 };
+pub use decision_raise::{AgentDecisionRaise, AgentDecisionRaised};
 pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub(crate) use distributed_port::execution_claim_phase_label;
 pub use escalation_triage_steps::{

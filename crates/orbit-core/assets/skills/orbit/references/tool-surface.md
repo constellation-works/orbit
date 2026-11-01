@@ -489,6 +489,38 @@ reuse requests for unchanged task bindings, while newly eligible tasks can add
 requests. With the decision channel disabled in this workspace, the call raises
 nothing, writes nothing and returns no requests.
 
+### Raising a decision
+
+`orbit_decision_raise` (`orbit.decision.raise`) is the one decision tool an agent
+session writes with. It raises a multiple-choice request on a task assigned to a
+human crew that is not `done`, `archived` or `rejected`. Inputs:
+
+- `task_id` and `question`: the decision needed, in one or two plain sentences.
+- `options`: two to four `{label, consequence, recommended}` objects. `label` and
+  `consequence` are one line each, and exactly one option has
+  `recommended: true`; it is listed first as answer `1`, the rest follow as `2`
+  to `4`.
+- `topic` (optional): a structured token of 1-64 characters (letters, digits and
+  `. _ : / -`), or a corpus rule id. `orbit_decision_list` filters by exact
+  `topic`.
+- `model`: your agent family. It names the filer the per-filer cap counts.
+
+The request has gate `agent_request` and `raised_by` `agent_request`. It is
+bounded: the same open question (same text ignoring case and spacing, same
+topic) returns the existing request with `deduplicated: true` and writes nothing;
+a task holds one open request; and open agent-raised requests are capped at 20
+per workspace and 5 per filer. Past a cap, or on a task that is not a human
+crew's, the call is refused with the reason and nothing is written; answering a
+request frees its slot.
+
+Answering stays the operator's (`orbit decision answer`, the dashboard or a
+registered channel); an agent label is refused. The answer is recorded in the
+task's history (who, when, which option, with the option's consequence in a
+comment), the task moves to `done`, and `blocked_by` dependents become eligible.
+A decision is a record of one task: do not treat a past answer as precedent. An
+answer that changes lasting behaviour or policy is carried by the task it
+unblocks into the doc, config or code that owns it, in that task's PR.
+
 ### Agent scorecards
 
 `orbit_agents_scorecard` ranks one agent role's crews and models over the window. Over

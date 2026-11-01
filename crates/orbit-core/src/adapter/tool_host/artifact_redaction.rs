@@ -238,6 +238,22 @@ const NO_REDACTION: ActionPolicy = ActionPolicy {
     nested_objects: &[],
 };
 
+/// The free text of each option an agent raises on a decision request.
+const DECISION_RAISE_OPTIONS: &[NestedArrayPolicy] = &[
+    NestedArrayPolicy {
+        array_key: "options",
+        field_key: "label",
+        field_alias: None,
+        mode: TextMode::Free,
+    },
+    NestedArrayPolicy {
+        array_key: "options",
+        field_key: "consequence",
+        field_alias: None,
+        mode: TextMode::Free,
+    },
+];
+
 /// The free text among `orbit task add`'s CLI options.
 const TASK_ADD_CLI_OPTIONS: &[NestedObjectPolicy] = &[NestedObjectPolicy {
     object_key: TASK_CLI_OPTIONS_PARAM,
@@ -384,6 +400,13 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         // List and show persist nothing; the answer verb never reaches
         // dispatch as a tool, and its note redacts per its declared class.
         OrbitBuiltinAction::Decision(verb) => match verb {
+            // A raised option's label and consequence persist in task history,
+            // so they redact beside the declared question.
+            DecisionVerb::Raise => ActionPolicy {
+                declared: verb.spec().params,
+                nested_arrays: DECISION_RAISE_OPTIONS,
+                ..NO_REDACTION
+            },
             DecisionVerb::List
             | DecisionVerb::Show
             | DecisionVerb::Answer

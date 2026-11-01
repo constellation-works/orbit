@@ -166,12 +166,17 @@ impl OrbitRuntime {
             .map(|(parent, _)| parent)
             .unwrap_or("");
         let task = self.get_task(&request.task_id)?;
+        let mut entry = json!({"date": resolution.answered_at, "task": request.task_id, "run": task.job_run_id, "request": request.id, "question": request.summary, "human_action": request.human_action, "gate": request.gate, "options": request.answers, "chosen": resolution.answer_id, "human": resolution.answered_by, "note": resolution.note, "binding": request.binding});
+        // A request's structured topic lets a curator match it exactly.
+        if let Some(topic) = &request.topic {
+            entry["topic"] = json!(topic);
+        }
         let append = AgentCorpusAppend {
             schema_version: 1,
             id: format!("decision:{}", request.id),
             path: format!("{parent}/decisions/orbit-requests.md"),
             section: "Entries".into(),
-            entry: json!({"date": resolution.answered_at, "task": request.task_id, "run": task.job_run_id, "request": request.id, "question": request.summary, "human_action": request.human_action, "gate": request.gate, "options": request.answers, "chosen": resolution.answer_id, "human": resolution.answered_by, "note": resolution.note, "binding": request.binding}),
+            entry,
         };
         corpus_history_entry(&append).map(Some)
     }
