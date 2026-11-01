@@ -67,6 +67,27 @@ pub(super) fn publication_number(
     number: &str,
     discarded: bool,
 ) -> PathBuf {
+    publication_at(
+        f,
+        validated,
+        auto_fix,
+        successful,
+        number,
+        discarded,
+        "owner/repository",
+    )
+}
+
+/// Publish as `slug`, the `owner/repository` path the forge reports.
+pub(super) fn publication_at(
+    f: &mut Fixture,
+    validated: bool,
+    auto_fix: bool,
+    successful: bool,
+    number: &str,
+    discarded: bool,
+    slug: &str,
+) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let gh = f._root.path().join("bin/gh");
     let created = f._root.path().join(format!("created-{number}"));
@@ -84,13 +105,13 @@ case "$1 $2" in
    while [ "$#" -gt 0 ]; do
      case "$1" in --body) printf '%s' "$2" > '{body}'; shift 2;; --draft) shift;; *) shift 2;; esac
    done
-   touch '{created}'; echo https://github.com/owner/repository/pull/{number};;
+   touch '{created}'; echo https://github.com/{slug}/pull/{number};;
  'pr edit') [ "$3 $4" = "{number} --body" ] || exit 99; printf '%s' "$5" > '{body}';;
  'pr ready') [ "$3" = '{number}' ] || exit 99;;
  'pr view')
    if [ -f '{denied}' ]; then echo 'TLS handshake timeout' >&2; exit 1; fi
    case "$3" in
-     {number}|https://github.com/owner/repository/pull/{number}) cat '{answer}';;
+     {number}|https://github.com/{slug}/pull/{number}) cat '{answer}';;
      17) [ -f '{historical}' ] || exit 99; cat '{historical}';;
      *) exit 99;;
    esac;;
@@ -217,7 +238,7 @@ esac
     checkpoint(f, &run.run_id, if validated { 6 } else { 4 }, "push", push);
     let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
     answer["number"] = json!(number.parse::<u64>().unwrap());
-    answer["url"] = json!(format!("https://github.com/owner/repository/pull/{number}"));
+    answer["url"] = json!(format!("https://github.com/{slug}/pull/{number}"));
     answer["headRefName"] = json!(f.branch);
     answer["headRefOid"] = json!(f.head);
     std::fs::write(&f.answer, answer.to_string()).unwrap();
@@ -237,13 +258,13 @@ esac
     );
     if validated {
         checkpoint(f, &run.run_id, 8, "resume_candidate", Value::Null);
-        let promoted = f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":f.base,"pr_number":number,"pr_url":format!("https://github.com/owner/repository/pull/{number}")}));
+        let promoted = f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":f.base,"pr_number":number,"pr_url":format!("https://github.com/{slug}/pull/{number}")}));
         checkpoint(f, &run.run_id, 9, "promote", promoted);
     }
     if successful {
         // As in the review-mode pipeline, promotion finishes the delivery
         // without asking for a merge or running the done-only completion step.
-        f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"],"pr_number":number,"pr_url":format!("https://github.com/owner/repository/pull/{number}")}));
+        f.action("pr_promote", json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"],"pr_number":number,"pr_url":format!("https://github.com/{slug}/pull/{number}")}));
         run.state = JobRunState::Success;
         run.pid = None;
         run.finished_at = Some(Utc::now());
