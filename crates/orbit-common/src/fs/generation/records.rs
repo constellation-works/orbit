@@ -23,10 +23,17 @@ use crate::OrbitError;
 pub(super) struct Record {
     pub(super) file: File,
     pub(super) writable: bool,
+    /// A descriptor of a lock another process owns and lent to this one
+    /// (see [`super::fence_loan`]): dropping it closes the descriptor without
+    /// unlocking, since the lock belongs to the shared open description.
+    pub(super) borrowed: bool,
 }
 
 impl Drop for Record {
     fn drop(&mut self) {
+        if self.borrowed {
+            return;
+        }
         // A child forked before exec can inherit this open description. Unlock
         // explicitly so it cannot extend admission or an abandoned update's
         // generation lock after the owner drops its record. Independent
@@ -55,11 +62,13 @@ pub(super) fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
         Ok(file) => Ok(Record {
             file,
             writable: true,
+            borrowed: false,
         }),
         Err(error) => File::open(&path)
             .map(|file| Record {
                 file,
                 writable: false,
+                borrowed: false,
             })
             // The read-only retry only explains its own failure. Report why
             // the participating open was refused — and since not even an

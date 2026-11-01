@@ -107,6 +107,47 @@ pub fn pending_switch_for_this_process() -> Option<PendingSwitch> {
     })
 }
 
+/// Whether an updater that renames nothing asked this process to hand over
+/// to its own installed executable: a refresh is pending on an authority this
+/// process joined, for exactly the digest and identity it runs, and it
+/// registered a resume capability (`capability`, when the caller names one).
+/// Exec'ing releases every generation hold it
+/// has, which is how the updater proves that nothing else holds the
+/// generation before re-pinning it; the new image queues behind the updater
+/// and joins what it pinned.
+pub(in super::super) fn refresh_requested_for_this_process(capability: Option<&str>) -> bool {
+    let Some(participation) = PARTICIPATION.get() else {
+        return false;
+    };
+    let resumes = participation
+        .handover
+        .as_deref()
+        .is_some_and(|handover| capability.is_none_or(|capability| capability == handover));
+    if !resumes {
+        return false;
+    }
+    let Ok(digest) = process_digest(None, false) else {
+        return false;
+    };
+    let mut joined = vec![(participation.root.clone(), participation.identity.clone())];
+    joined.extend(
+        PROCESS_JOINS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|join| join.hold.strong_count() > 0)
+            .map(|join| (join.root.clone(), join.identity.clone())),
+    );
+    joined.iter().any(|(root, identity)| {
+        pending_switch(root).is_some_and(|switch| {
+            switch.refresh
+                && switch.pid != std::process::id()
+                && switch.digest == digest
+                && switch.target == *identity
+        })
+    })
+}
+
 impl Hold {
     /// Release the generation lock, then withdraw the registration.
     ///
