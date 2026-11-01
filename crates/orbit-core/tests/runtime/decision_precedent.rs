@@ -127,6 +127,15 @@ impl Fixture {
         self.commit_all("rules");
     }
 
+    /// Write another decision file and commit it, so the pinned base revision
+    /// reads it alongside the rules already committed.
+    fn write_decision_file_committed(&self, name: &str, markdown: &str) {
+        let dir = self.repo.join("docs/agents/corpus/decisions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.md")), markdown).unwrap();
+        self.commit_all("decision file");
+    }
+
     fn rule_bytes(&self) -> Vec<u8> {
         std::fs::read(self.repo.join("docs/agents/corpus/decisions/pricing.md")).unwrap()
     }
@@ -713,6 +722,95 @@ fn uncommitted_auto_rule_and_dependency_do_not_answer() {
     let raised = fx
         .raise(raise_input(
             &drifted,
+            "Which price do we ship?",
+            Some("pricing/sign-off"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "answered", "{raised}");
+    assert_eq!(raised["resolution"]["answered_by"], "precedent");
+}
+
+#[test]
+fn bare_file_stem_topic_does_not_auto_answer() {
+    // `pricing` is the stem of decisions/pricing.md, not a rule id. It must not
+    // borrow that file's only auto rule, even when the question is different.
+    let fx = Fixture::new();
+    let digest = corpus_content_digest(b"pub fn price() {}\n");
+    fx.write_rules_committed(&rule_doc("1", "current", FUTURE, true, &digest));
+
+    let by_stem = fx.task("Stem topic");
+    let raised = fx
+        .raise(raise_input(
+            &by_stem,
+            "Which shipping carrier do we use?",
+            Some("pricing"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "open", "{raised}");
+    assert!(raised.get("resolution").is_none(), "{raised}");
+    assert_eq!(
+        fx.runtime.get_task(&by_stem).unwrap().status,
+        TaskStatus::Backlog
+    );
+
+    // The same rule still answers by its unique id and by its file/rule form.
+    let by_id = fx.task("Rule id topic");
+    let raised = fx
+        .raise(raise_input(
+            &by_id,
+            "Which price do we ship?",
+            Some("sign-off"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "answered", "{raised}");
+    assert_eq!(raised["resolution"]["answered_by"], "precedent");
+}
+
+#[test]
+fn bare_rule_id_in_two_files_does_not_auto_answer() {
+    // A rule id that appears in exactly one topic file answers. The same id in
+    // a second file is ambiguous, whatever that second rule's auto flag.
+    let fx = Fixture::new();
+    let digest = corpus_content_digest(b"pub fn price() {}\n");
+    fx.write_rules_committed(&rule_doc("1", "current", FUTURE, true, &digest));
+    fx.write_decision_file_committed("shipping", &rule_doc("1", "current", FUTURE, true, &digest));
+    let both_auto = fx.task("Two auto rules");
+    let raised = fx
+        .raise(raise_input(
+            &both_auto,
+            "Which price do we ship?",
+            Some("sign-off"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "open", "{raised}");
+    assert_eq!(
+        fx.runtime.get_task(&both_auto).unwrap().status,
+        TaskStatus::Backlog
+    );
+
+    fx.write_decision_file_committed(
+        "shipping",
+        &rule_doc("1", "current", FUTURE, false, &digest),
+    );
+    let auto_and_manual = fx.task("Auto and non-auto rule");
+    let raised = fx
+        .raise(raise_input(
+            &auto_and_manual,
+            "Which price do we ship?",
+            Some("sign-off"),
+        ))
+        .unwrap();
+    assert_eq!(raised["state"], "open", "{raised}");
+    assert_eq!(
+        fx.runtime.get_task(&auto_and_manual).unwrap().status,
+        TaskStatus::Backlog
+    );
+
+    // The file/rule form names exactly one rule, so it still answers.
+    let by_path = fx.task("File and rule topic");
+    let raised = fx
+        .raise(raise_input(
+            &by_path,
             "Which price do we ship?",
             Some("pricing/sign-off"),
         ))

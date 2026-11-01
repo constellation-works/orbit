@@ -514,17 +514,17 @@ crew's, the call is refused with the reason and nothing is written; answering a
 request frees its slot.
 
 Answering stays the operator's (`orbit decision answer`, the dashboard or a
-registered channel), except when the request's `topic` matches exactly one
-current corpus rule the operator marked `auto` and that rule's option is one
-of the options you offered. That match answers immediately. The history actor
-is `precedent`, the record names the rule id and the rule's citations, and it
+registered channel), except when the request's `topic` names a `file/rule`, or a
+rule id that appears in exactly one decision file, and that rule is a current
+corpus rule the operator marked `auto` with an option you offered. That match
+answers immediately. The history actor is `precedent`, the record names the rule id and the rule's citations, and it
 states that the operator approved the rule. A comment tells the operator how
 to reverse it with `orbit decision reverse`. Reversal re-opens the request and
 restores the task status. An agent label cannot answer, cannot reverse, and
 cannot set `auto` (`orbit decision rule-auto` is operator-only). A non-auto,
 stale, superseded, or ambiguous rule does not answer; neither does a topic
-that is missing or only similar. The answer is recorded in the task's history
-(who, when, which option, with the option's consequence in a comment), the
+that is missing, only similar, or just a decision file's name. The answer is
+recorded in the task's history (who, when, which option, with the option's consequence in a comment), the
 task moves to `done`, and `blocked_by` dependents become eligible. Raw
 decision history is not authority. Only a merged `current` rule whose review
 date has not passed and whose `depends_on` digests still match may be cited.

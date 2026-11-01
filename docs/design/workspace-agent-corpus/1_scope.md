@@ -168,10 +168,11 @@ whose digests still match is injected or cited.
 
 `auto: true` is operator-only (`orbit decision rule-auto`). An agent cannot
 set it, and neither can the precedent actor. When `orbit.decision.raise`
-names a topic or rule id that matches exactly one such current rule, and the
-rule's answer is one of the request's options, Orbit answers immediately with
-that option. Matching a topic equal to a topic file's stem is not this
-contract [ORB-20823]. The history actor is `precedent`, not a human. The record carries
+names a `file/rule` topic, or a rule id that appears in exactly one decision
+file, and that rule is one such current rule whose answer is one of the
+request's options, Orbit answers immediately with that option. Matching a topic
+equal to a topic file's stem is not this contract [ORB-20823]. The history
+actor is `precedent`, not a human. The record carries
 the rule id, the rule's citations, and that the operator approved the rule. A
 comment tells the operator how to reverse it. A non-auto, stale, superseded,
 ambiguous, or non-option match leaves the request open. Reversal is
@@ -195,6 +196,6 @@ text or select an arbitrary revision for injection.
 - [ORB-20747] — adds weekly decision-rule consolidation, staleness checks and opt-in auto-answer.
 - [ORB-20650] — backfills the corpus from the past month of blocked and escalated tasks.
 - [ORB-20822] — records that precedent auto-answer reads the live working tree instead of a merged revision.
-- [ORB-20823] — records that precedent auto-answer also matches a topic equal to a topic file stem.
+- [ORB-20823] — removes the topic-file-stem match from precedent auto-answer; a bare rule id must appear in exactly one decision file.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
