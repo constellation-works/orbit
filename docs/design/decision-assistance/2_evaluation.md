@@ -1,8 +1,8 @@
 ---
 title: "Evaluation protocol: bounded decision assistance"
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 feature: decision-assistance
 doc_role: design
@@ -13,8 +13,8 @@ tags: [decision-assistance]
 
 # Evaluation protocol: bounded decision assistance
 
-Status: proposed; offline only. Nothing here enables a runtime service, live
-calls, or advisory display. Implementation:
+Status: the offline evaluator is implemented ([ORB-19720]); nothing here enables a
+runtime service, live calls, or advisory display. Implementation:
 `scripts/evaluate-decision-assistance.py` (contract + scoring),
 `scripts/test-evaluate-decision-assistance.py` (public CLI verification).
 
@@ -147,7 +147,8 @@ names the baseline (`baseline.name`: the existing workflow/report without model
 assistance) and holds one target entry per question with `min_precision`,
 `min_recall` and a positive integer `min_samples`.
 
-`check-targets` enforces that every question has an entry, that `min_samples`
+`check-targets` ([ORB-19760] scopes which of these checks the command enforces)
+enforces that every question has an entry, that `min_samples`
 is a positive integer, that `min_precision`/`min_recall` lie in `[0,1]` when
 present, and that `baseline.name` is non-empty. A target file that is unreadable,
 is not valid JSON, or has the wrong shape (a non-object document or `baseline`, or
@@ -190,7 +191,8 @@ target file. A well-formed answer is not evidence of correctness.
 
 ## Delivery-quality offline contract (`decision-assistance-eval/3`)
 
-This additive offline family implements the [delivery-quality proposal](specs/delivery-quality.md).
+This additive offline family ([ORB-20004]) implements the [delivery-quality proposal](specs/delivery-quality.md)
+([ORB-20000]).
 It remains **proposed for adoption**. It does not extend the native service's numeric
 answer types, change a runtime consumer, activate paid calls, or authorize a ladder
 routing action. `/1` and `/2` retain their original consumers, validation and scoring;
@@ -506,9 +508,9 @@ operator-coordinated evidence, not prerequisites for this offline delivery.
 
 ## Task References
 
-- ORB-20000 — propose separate delivery-quality questions and evaluation; no evaluator changes.
-- ORB-19720 — implement these evaluation contracts, seed set and scoring.
-- ORB-19760 — scope of the `check-targets` checks; the remaining target
-  registration rules are manual steps.
+- [ORB-20004] — adds the offline ordinal evaluation contract for delivery-quality grades.
+- [ORB-20000] — proposes separate delivery-quality questions and evaluation; no evaluator changes in that task.
+- [ORB-19760] — scopes which `check-targets` checks the command enforces; the remaining target registration rules are manual steps.
+- [ORB-19720] — implements these evaluation contracts, seed set and scoring.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

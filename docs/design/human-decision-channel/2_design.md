@@ -2,7 +2,7 @@
 title: "Human decision channel — Design"
 owner: claude
 last_updated: 2026-11-01
-last_validated: 2026-10-27
+last_validated: 2026-11-01
 status: Draft
 feature: human-decision-channel
 doc_role: design
@@ -16,12 +16,13 @@ related_artifacts: [ORB-17979]
 
 # Human decision channel — Design
 
-This doc specifies the mechanisms behind [1_scope.md](./1_scope.md): the
+[ORB-17979] authored this design. This doc specifies the mechanisms behind [1_scope.md](./1_scope.md): the
 decision-request record, the delegated-human channel that lets a transport submit a
 human's answer without becoming the human, reply authentication, the stale guard,
 the reply grammar, triggers, the digest, noise control, and compatibility. It ends
-with the ordered implementation slices. Code anchors were verified at `1985068c2`
-(2026-10-25); line numbers are orientation, symbols are the anchor. §9 (Concerns &
+with the ordered implementation slices. Code anchors were re-checked at `b32997c50`
+(2026-11-01); symbols are the anchor, and line numbers that no longer sit on the
+symbol were dropped. §9 (Concerns &
 Honest Limitations) precedes §10 only because the slice list must close the doc;
 CONVENTIONS.md §3 otherwise puts Concerns last.
 
@@ -104,9 +105,9 @@ per request:
   refused before the request is consumed. The answer records the same
   `TaskDecision::PilotAdmission` history entry a verdict comment records, against
   the hold's `operation_id`, so `operator_resolution`
-  (`crates/orbit-core/src/application/task/pilot/admission.rs:377`) accepts it
+  (`crates/orbit-core/src/application/task/pilot/admission.rs`) accepts it
   unchanged.
-- **Agent request** (`orbit.decision.raise`): an agent puts a multiple-choice question
+- **Agent request** ([ORB-20736], `orbit.decision.raise`): an agent puts a multiple-choice question
   on a task assigned to a human crew. It carries two to four plain answers `1`..`4` (one-line
   label and consequence), the one the agent recommends first as `1`, and no rewrite or action.
   It is task-scoped: no store, table or precedent lookup; the record is the task's history.
@@ -189,7 +190,7 @@ still fail the operation.
 ### 3.1 The gap, precisely
 
 A decision counts as human today through one funnel: `update_task_as_human`
-(`crates/orbit-core/src/application/task/update/entry.rs:165`) sets
+(`crates/orbit-core/src/application/task/update/entry.rs`) sets
 `operator_decision_authority: true` and an explicit human `actor_label`; the bare
 CLI and the dashboard are its only callers. Everything downstream keys off the
 persisted writer label: `operator_resolution` drops a resolution whose writer
@@ -244,7 +245,7 @@ unchanged; a confined child itself still cannot read the store.
 ### 3.3 The submission tool and the apply step
 
 One new governed operation, `orbit.decision.submit`, joins `GOVERNED_OPERATIONS`
-(`crates/orbit-common/src/governance/authorization/catalog.rs:324`) with a narrow
+(`crates/orbit-common/src/governance/authorization/catalog.rs`) with a narrow
 row: callable by the registered plugin's callback session and by the operator CLI
 (for testing a channel), never by an agent session. Authorization alone grants
 nothing decision-shaped; the tool then checks, in order:
@@ -263,7 +264,7 @@ entry and audit row both carry: `via decision-channel email (request dr-…, tok
 sha256:…)`. The writer label stays a human label — `is_automation_actor` is false
 for it, which is the point — while provenance keeps the channel distinguishable
 from a dashboard click forever. `CallerProvenance`
-(`crates/orbit-common/src/governance/authorization/caller.rs:16`) gains no variant:
+(`crates/orbit-common/src/governance/authorization/caller.rs`) gains no variant:
 the *caller* is still a plugin callback session (`Session` provenance, plugin
 capabilities); what is new is that this one operation, after its own checks,
 performs a human-attributed write. Keeping provenance untouched avoids re-opening
@@ -576,44 +577,43 @@ batching, quiet hours and multi-answer parsing stay the plugin's (§6, §8).
 ## 10. Implementation slices
 
 Ordered; each slice is independently deliverable and leaves the tree shippable.
-"Owner" names the crate(s) or plugin that change; filing these as tasks is the
-operator's step after review.
+"Owner" names the crate(s) or plugin that change. Every slice below is done.
 
-1. **Decision-request record and raising.** Owner: `orbit-types`
+1. **Decision-request record and raising — done** ([ORB-18175]). Owner: `orbit-types`
    (`DecisionRequest`), `orbit-core` (raise from final recovery and pilot
    admission, derived state, `[decision_channel] enabled`). Depends on: nothing.
    Acceptance sketch: with the channel enabled, a final-recovery `decide` and a pilot
    hold each raise exactly one open request with the right answers and binding;
    disabled, nothing is written.
-2. **Listing and local answering surfaces.** Owner: `orbit-tools`
+2. **Listing and local answering surfaces — done** ([ORB-18176]). Owner: `orbit-tools`
    (`orbit.decision.list/show`), `orbit-core` (`orbit.task.show` open decisions,
    the core apply step reused by §3), `orbit-web` (dashboard request list and
    answer buttons), CLI (`orbit decision …`). Depends on: 1. Acceptance sketch:
    an operator answers a raised request from CLI and dashboard; the answer lands
    through `update_task_as_human`/`approve_task` and the request reads
    `answered`; goldens updated via `make goldens`.
-3. **Delegated-human channel and governed submission.** Owner: `orbit-common`
+3. **Delegated-human channel and governed submission — done** ([ORB-18177]). Owner: `orbit-common`
    (`GOVERNED_OPERATIONS` row), `orbit-core` (registration store,
    `orbit.decision.submit`, token mint/verify, §3.3 checks, §5 refusals).
    Depends on: 1, 2. Acceptance sketch: a registered test channel applies an
    allowed answer as the human with provenance; agent-envelope and unregistered
    callers are refused and the pilot hold stays held (the §3.3 guard test).
-4. **`DecisionRequested` state trigger.** Owner: `orbit-types`
+4. **`DecisionRequested` state trigger — done** ([ORB-18178]). Owner: `orbit-types`
    (`StateTriggerKind`), `orbit-core` (observation over slice 2's listing,
    settlement on notify/answer). Depends on: 1. Acceptance sketch: a state
    routine fires once per open request per binding, settles on answer or
    supersession, and persisted member state from before the variant still loads.
-5. **Email transport plugin (`decision-mail`).** Owner: new plugin (SMTP send,
+5. **Email transport plugin (`decision-mail`) — done** ([ORB-18304]). Owner: new plugin (SMTP send,
    IMAP poll job + cron routine, §6 rendering/parsing, §4 layers 4–5, secrets).
    Depends on: 3, 4. Acceptance sketch: end-to-end on dk-server-2 against the
    real mailbox — raise → mail → reply `2` → applied + confirmed; each §5
    refusal case demonstrated once; plugin conformance tests for the grammar.
-6. **Digest and approval gates by email.** Owner: `orbit-core` (proposed/review
+6. **Digest and approval gates by email — done** ([ORB-18305] core, [ORB-18307] plugin). Owner: `orbit-core` (proposed/review
    request raising, digest query), `decision-mail` plugin (digest routine,
    batched answers, quiet hours, batching mode). Depends on: 5. Acceptance
    sketch: daily digest lists proposed tasks and expiring requests; `approve
    1,3` promotes through task-pilot only; unqualified digest `approve` refused.
-7. **Hardening and operations (optional, schedulable any time after 5).**
+7. **Hardening and operations — done** ([ORB-18308] core, [ORB-18309] plugin).
    Owner: `orbit-core`/`decision-mail` (core-side DKIM verification of the raw
    message, drop/refusal metrics on the status panel, runbook for registration,
    rotation, and revocation). Depends on: 5. Acceptance sketch: a forged-header
@@ -622,6 +622,17 @@ operator's step after review.
 
 ## Task References
 
-- [ORB-17979] — designed the email channel for human decisions on held Orbit work (this folder)
+- [ORB-20736] — adds agent-raised multiple-choice questions on human-crew tasks.
+- [ORB-20629] — makes final recovery the one decider for a blocked task, with a self-contained `decide` request.
+- [ORB-18309] — shows decision-mail drops and refusals and writes the channel runbook.
+- [ORB-18308] — verifies DKIM in core for email submissions.
+- [ORB-18307] — sends the daily digest and accepts batched email answers.
+- [ORB-18305] — raises proposed and review approval requests for the digest.
+- [ORB-18304] — mails decision requests and applies authenticated email replies.
+- [ORB-18178] — adds the `DecisionRequested` state trigger.
+- [ORB-18177] — registers delegated-human channels and governs `orbit.decision.submit`.
+- [ORB-18176] — lists and answers decision requests from CLI, MCP and the dashboard.
+- [ORB-18175] — records decision requests and raises them from holds.
+- [ORB-17979] — designed the email channel for human decisions on held Orbit work (this folder).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,8 +1,8 @@
 ---
 title: "Task quality: private shadow consumer"
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 feature: decision-assistance
 doc_role: spec
@@ -13,7 +13,9 @@ tags: [decision-assistance]
 
 # Task quality: private shadow consumer
 
-The consumer is implemented and defaults off. It has no task-show, CLI, MCP or
+The consumer is implemented ([ORB-19723]) on the generic assistance service
+([ORB-19721]) and defaults off. The question and rubric contract is the offline
+evaluator ([ORB-19720]). It has no task-show, CLI, MCP or
 dashboard advisory projection. No live effectiveness or cost claim is made;
 independent labels, evaluation and any operator enablement remain separate work.
 The operator's separate invented-case development screen failed every question
@@ -140,7 +142,7 @@ shared outcome, observable evidence specified, compatible requirements or false
 positive. A stale/unknown identity is refused; an exact dismissal replay keeps
 its original timestamp. Reasons persist privately and never become adjudicated
 ground truth or modify the task. Human-facing feedback transport and advisory
-wording belong to the later projection task.
+wording belong to the later projection task ([ORB-19724]).
 
 ## Reproducible offline verification
 
@@ -168,7 +170,9 @@ fixture under the workspace test-admission policy.
 
 ## Task References
 
-- ORB-19723 — task-quality shadow consumer and private feedback.
-- ORB-19720 — canonical offline evaluator question/rubric contract.
-- ORB-19721 — generic assistance service, bounded durable work and adapter.
-- ORB-19724 — later human-facing projections.
+- [ORB-19724] — later human-facing projections, archived/deferred after the development screens.
+- [ORB-19723] — implements the task-quality shadow consumer and private feedback.
+- [ORB-19721] — implements the generic assistance service, bounded durable work and adapter.
+- [ORB-19720] — defines the canonical offline evaluator question and rubric contract.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

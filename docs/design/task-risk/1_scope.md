@@ -1,7 +1,7 @@
 ---
 title: "Scope: Task risk relative to model capability"
 owner: codex
-last_updated: 2026-10-30
+last_updated: 2026-11-01
 last_validated: 2026-10-30
 status: Draft
 stage: designing
@@ -59,7 +59,11 @@ size-response figures to this document. The [dated evidence report](references/2
 records the input hash, cohort, joins, cutoffs, exclusions, uncertainty and
 provenance limits. These are descriptive seven-day observations and exploratory
 temporal comparisons, not the proposed primary 30-day validation or a causal
-capability study.
+capability study. A separate display-only panel ([ORB-20380]) plots the same
+kind of seven-day escaped-regression rate against landed size on Analytics ›
+Agents › Implementers (`application::agents::roles::implementers::size_curves`).
+It does not install the proposed `task_risk` payload, change `riskiness`, or
+authorize scoring, routing or admission.
 
 The task's 06:29 UTC evidence update identifies source-policy changes, confirmed
 against their git diffs: `09e60b0757811368879fd0885f36950f586c0aa0`
@@ -483,6 +487,7 @@ backlog dispatch. Core contracts remain generic and provider names remain data.
 
 ## Task References
 
+- [ORB-20380] — shows display-only escaped-regression size curves on the Implementers panel; it does not install the proposed estimator.
 - [ORB-20107] — adds the exploratory backtest, within-tier curves and evidence report.
 - [ORB-20095] — requests this model-relative task-risk Draft and generated index.
 - [ORB-20094] — authorized the authoring-session backtest and owns its receipts.
