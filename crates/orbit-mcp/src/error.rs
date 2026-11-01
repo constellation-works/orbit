@@ -21,6 +21,12 @@ fn error_payload(err: &OrbitError) -> Value {
         "code": error_code(err),
         "message": err.to_string(),
     });
+    if let Some((host, path, _)) = err.host_configuration_details()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("host".to_string(), json!(host));
+        object.insert("path".to_string(), json!(path));
+    }
     if let Some(did_you_mean) = err.did_you_mean()
         && let Some(object) = payload.as_object_mut()
     {
@@ -99,6 +105,9 @@ fn error_code(err: &OrbitError) -> &str {
         OrbitError::PluginBuildConsentRequired(_) => "build_consent_required",
         OrbitError::PluginBuildConsentUnavailable(_) => "build_consent_unavailable",
         OrbitError::PluginBuildFetchUnsupported(_) => "build_fetch_unsupported_on_macos",
+        OrbitError::HostConfiguration { .. } => {
+            const { RemoteToolCode::HostConfiguration.as_str() }
+        }
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
         | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },

@@ -156,7 +156,7 @@ impl OrbitRuntime {
             pull_request,
             requeues,
             exhausted: requeues >= MAX_TRANSIENT_INFRA_REQUEUES,
-            cleared: self.transient_infrastructure_clear(),
+            cleared: self.transient_infrastructure_clear_for(block.class),
             held,
         }))
     }
@@ -215,14 +215,31 @@ impl OrbitRuntime {
         Ok(human.map(|by| format!("{by} acted on the task after the block; their call stands")))
     }
 
-    /// The probe: the task store takes an immediate write transaction now.
-    /// A requeue then also has to take the task's write lock.
-    fn transient_infrastructure_clear(&self) -> bool {
-        self.sqlite_store()
+    /// The probe for `class`: the task store takes an immediate write
+    /// transaction now, and for a host-configuration block the misplaced
+    /// table is also gone. A requeue then also has to take the task's
+    /// write lock.
+    fn transient_infrastructure_clear_for(&self, class: TransientInfrastructure) -> bool {
+        if !self
+            .sqlite_store()
             .and_then(|store| {
                 store.with_transaction_behavior(TransactionBehavior::Immediate, |_| Ok(()))
             })
             .is_ok()
+        {
+            return false;
+        }
+        // A host-configuration block clears only when the misplaced table is
+        // gone from this host's global config; a writable store alone would
+        // requeue onto the same refusal.
+        if class == TransientInfrastructure::HostConfiguration {
+            let path = self.global_root().join("config.toml");
+            return matches!(
+                orbit_config::misplaced_global_plugin_enablement(&path),
+                Ok(None)
+            );
+        }
+        true
     }
 
     /// Return every transient-infra blocked task whose probe passes, whose

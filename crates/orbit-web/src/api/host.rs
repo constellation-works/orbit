@@ -222,6 +222,7 @@ pub(super) async fn remove_host(
 pub(crate) fn host_error_code(error: &OrbitError) -> &str {
     match error {
         OrbitError::HostRegistry { code, .. } => code.as_str(),
+        OrbitError::HostConfiguration { .. } => "host_configuration",
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
         | OrbitError::ClaimRefused { .. } => "invalid_input",

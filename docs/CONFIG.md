@@ -40,7 +40,7 @@ Both config files must be regular files. Runtime loads and workspace plugin-togg
 - **Tables** layer down to individual settings; **scalars and arrays** replace the global value.
 - **Named crews** layer by crew name and field: a workspace `[crews.sol]` holding only `model = "gpt-6-astra"` overrides that one field of the global `sol` crew.
 - **Security keys** (`execution.codex.sandbox`, `execution.codex.approval_policy`, `execution.env.pass`) never inherit from global once a workspace file exists; an omitted one takes its built-in default. A workspace file holding only `[plugin_enablement]` does not count, so those keys keep inheriting.
-- `[machine]` and each crew's [`env`](#per-crew-credentials-env) are global-only and `[plugin_enablement]` workspace-only; any of them in the wrong file is refused at load, naming the file.
+- `[machine]` and each crew's [`env`](#per-crew-credentials-env) are global-only and `[plugin_enablement]` workspace-only; any of them in the wrong file is refused at load, naming the file. A `[plugin_enablement]` table in the global file is a typed `host_configuration` error naming the host and file (not the caller's `invalid_input`), so a follower whose remote call the owner serves is classified by final recovery as transient infrastructure and requeues once the table is removed. `orbit doctor` (and the dashboard's Doctor panel, which runs the same probes) reports it as the `plugin-enablement` check with the exact fix: remove the table from the global file; host enablement is `orbit plugin enable|disable <plugin>` and a per-workspace toggle adds `--scope workspace`.
 
 `.orbit/config.yaml` (it stores `workspace_id`) is the workspace identity file, not runtime config.
 

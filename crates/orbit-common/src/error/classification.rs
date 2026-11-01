@@ -60,6 +60,44 @@ impl OrbitError {
         }
     }
 
+    /// Construct a typed host-configuration error naming the host and file.
+    pub fn host_configuration(
+        host: impl Into<String>,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::HostConfiguration {
+            host: host.into(),
+            path: path.into(),
+            message: message.into(),
+        }
+    }
+
+    /// The `(host, path, message)` of a host-configuration error, if it is one.
+    pub fn host_configuration_details(&self) -> Option<(&str, &str, &str)> {
+        match self {
+            Self::HostConfiguration {
+                host,
+                path,
+                message,
+            } => Some((host, path, message)),
+            _ => None,
+        }
+    }
+
+    /// Whether this is a typed host-configuration error, including one a
+    /// remote owner reported as `host_configuration`.
+    pub fn is_host_configuration(&self) -> bool {
+        matches!(
+            self,
+            Self::HostConfiguration { .. }
+                | Self::RemoteTool {
+                    code: RemoteToolCode::HostConfiguration,
+                    ..
+                }
+        )
+    }
+
     pub fn invalid_input_with_suggestions(
         message: impl Into<String>,
         did_you_mean: Vec<String>,
