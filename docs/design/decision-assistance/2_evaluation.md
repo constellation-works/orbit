@@ -495,6 +495,20 @@ A separate fresh working directory is for an independent fixture run, never a wo
 for an opened human holdout. Fixture targets intentionally exceed fixture sample size;
 the opening reports unmet sizes and no accuracy eligibility.
 
+## Precedent-decision contract (`decision-assistance-eval/4`, proposed)
+
+Not implemented. The [precedent-decision proposal](specs/precedent-decisions.md#evaluator-contract-decision-assistance-eval4)
+([ORB-21089]) defines an additive `/4` contract for consumer `precedent_decision`,
+to be built by [ORB-21096]. It adds `recorded_human_decision` label provenance
+(the answer a human writer recorded on a decision request, never a `precedent` or
+`model` actor answer), prospective time-window holdouts with predictions sealed
+before the human answer, and per-category targets registered before the window
+opens: operating threshold, `min_samples`, `min_accuracy` (Wilson lower bound),
+`min_coverage` and `max_ece`. Scoring adds coverage, accuracy with its interval,
+calibration (ECE over 10 bins and Brier) and citation agreement. The rules
+above still hold: no tuning after the readout, and any change needs a new
+registration and window. `/1`–`/3` are unchanged.
+
 ## Live activation and budget handoff (not authorized here)
 
 Live evaluation or advisory activation requires a separate operator decision
@@ -508,6 +522,8 @@ operator-coordinated evidence, not prerequisites for this offline delivery.
 
 ## Task References
 
+- [ORB-21096] — proposes the `/4` precedent-decision evaluator contract.
+- [ORB-21089] — designs the precedent-decision consumer and its `/4` contract.
 - [ORB-20004] — adds the offline ordinal evaluation contract for delivery-quality grades.
 - [ORB-20000] — proposes separate delivery-quality questions and evaluation; no evaluator changes in that task.
 - [ORB-19760] — scopes which `check-targets` checks the command enforces; the remaining target registration rules are manual steps.

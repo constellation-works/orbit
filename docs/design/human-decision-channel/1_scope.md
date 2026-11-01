@@ -5,7 +5,7 @@ last_updated: 2026-11-01
 last_validated: 2026-11-01
 status: Draft
 stage: shipped
-next: "—"
+next: "Review §11 precedent-answer changes; slices ORB-21091, ORB-21092, ORB-21097 proposed"
 feature: human-decision-channel
 doc_role: scope
 type: design
@@ -214,6 +214,15 @@ Slice 7 hardening is done in core ([ORB-18308]) and in the plugin ([ORB-18309]).
 Later extensions of the same record, also done: final-recovery `decide`
 ([ORB-20629]) and agent-raised questions on human-crew tasks ([ORB-20736]).
 
+Proposed, not built: precedent-answered decisions ([ORB-21089]). Requests gain a
+per-answer risk tier and a stored category, a model answer is recorded as
+`answered_by: model` with a veto digest, and the channel consults the
+decision-assistance consumer before notifying. Only `routine` and `reversible`
+requests in operator-enabled categories can be answered without the human.
+[2_design.md](./2_design.md) §11 holds the channel changes; the
+[consumer spec](../decision-assistance/specs/precedent-decisions.md) holds the
+rest. Slices [ORB-21091], [ORB-21092] and [ORB-21097] are proposed.
+
 ## Open questions
 
 1. **Token placement: subject, body, or reply-to address?** A `Reply-To` of
@@ -248,6 +257,10 @@ Later extensions of the same record, also done: final-recovery `decide`
 
 ## Task References
 
+- [ORB-21097] — proposes category enablement, self-answer and the notification wait for precedent decisions.
+- [ORB-21092] — proposes model-answer provenance, the `model_answer_review` gate and veto.
+- [ORB-21091] — proposes per-answer risk tier and a stored category on decision requests.
+- [ORB-21089] — designs precedent-answered decisions (2_design.md §11).
 - [ORB-20736] — adds agent-raised multiple-choice questions on human-crew tasks.
 - [ORB-20629] — makes final recovery the one decider for a blocked task, with a self-contained `decide` request.
 - [ORB-18309] — shows decision-mail drops and refusals and writes the channel runbook.
