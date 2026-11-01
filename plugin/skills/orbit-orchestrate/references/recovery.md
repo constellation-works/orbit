@@ -276,17 +276,18 @@ resuming its failed attempt:
 orbit tool run orbit.workflow.run.resume --input '{"id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
 ```
 
-Supported order is: author a valid execution plan on the task first,
-freshly inspect the exact immutable source binding/policy, then submit the
-unchanged binding with the required acceptance evidence and a fresh request
-key.
+Supported order is: make sure a valid execution plan is present when the
+task's status requires one, freshly inspect the exact immutable source
+binding/policy, then submit the unchanged binding with the required acceptance
+evidence and a fresh request key.
 
 Submit the returned `binding` unchanged with `action: "submit"`, the same
 `task_id`, a new bounded `request_key`, and a `diagnosis` naming the observed
-failure and remaining source work. The task must already carry a valid
-non-empty execution plan before submission: submit refuses a missing or
-placeholder plan and creates no reservation. When the only correction is an
-empty or placeholder plan on an existing reservation with no admitted run,
+failure and remaining source work. Submit refuses a missing or placeholder
+plan before creating a reservation when the task's status requires a plan
+before transitioning to `in-progress`. `backlog` and `in-progress` are exempt;
+their managed run authors the plan at start time. When the only correction is
+an empty or placeholder plan on an existing reservation with no admitted run,
 use `action: "reconcile"` with the original key, its inspected
 `reservation_digest`, a fresh binding and otherwise unchanged
 evidence/policy. This is an explicit source decision. It creates a new
