@@ -334,8 +334,11 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
     let per_protocol = &value["per_protocol"];
     if per_protocol.is_object() {
         let metric = &per_protocol["metric"];
+        // The table that follows is the per-protocol primary metric (delivered
+        // runs only). Intention-to-treat metrics are emitted later, each under
+        // its own heading, so this sentence must not describe them.
         blocks.push(Block::text(format!(
-            "\nPrimary metric {}, {}; the tables below are intention-to-treat (every assigned run):",
+            "\nPrimary metric {}, {}:",
             text(&metric["metric"]),
             text(&per_protocol["label"]),
         )));
