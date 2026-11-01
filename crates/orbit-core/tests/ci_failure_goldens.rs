@@ -2214,6 +2214,60 @@ fn commit_chain(repo: &Path, count: usize) -> Vec<String> {
         })
         .collect()
 }
+/// Record the owner's verified landing of a pull follower's delivery.
+///
+/// The follower's run stays on the follower. The owner writes
+/// `landing_completed` with `delivery.merge_commit` and no local delivery run.
+fn record_owner_landing(runtime: &OrbitRuntime, task_id: &str, landed: &str) {
+    use orbit_types::task::TaskHistoryEntry;
+    runtime
+        .apply_task_automation_update(
+            task_id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                append_history: vec![TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "owner-landing".into(),
+                    event: "landing_completed".into(),
+                    note: Some(
+                        json!({
+                            "delivery": {
+                                "pr_number": 7392,
+                                "merged_at": "2026-11-01T01:20:00Z",
+                                "head_sha": "a".repeat(40),
+                                "merge_commit": landed,
+                            },
+                            "pull_request": 7392,
+                            "candidate": "b".repeat(40),
+                        })
+                        .to_string(),
+                    ),
+                    from_status: None,
+                    to_status: Some(TaskStatus::Done),
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let history = runtime.get_task_history(task_id).unwrap();
+    assert!(
+        history.iter().any(|entry| {
+            entry.event == "landing_completed"
+                && entry.by == "owner-landing"
+                && entry
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains(landed))
+        }),
+        "owner landing note recorded: {history:?}"
+    );
+    assert!(
+        runtime.observe_task_delivery(task_id, None).is_err(),
+        "a follower delivery has no run in the owner store"
+    );
+}
 /// Record a successful delivery run that committed and merged `task_id` at
 /// `landed`, the way the host pipeline checkpoints it.
 fn record_landing(runtime: &OrbitRuntime, task_id: &str, base: &str, landed: &str) {
@@ -2267,6 +2321,108 @@ fn record_landing(runtime: &OrbitRuntime, task_id: &str, base: &str, landed: &st
         state.record_pipeline_output(step_id, output);
     }
     runtime.write_run_state(&run.run_id, &state).unwrap();
+}
+/// A done sweep repair that a pull follower delivered has no delivery run in
+/// the owner's store. The owner's `landing_completed` note still names the
+/// merge commit, so a later failure with the same compiler cause, a different
+/// failure key, and an older tested commit is held [ORB-20664]. A checkout
+/// that already contains the landing is still filed.
+#[test]
+fn ci_failure_predating_a_follower_delivered_landing_is_held_not_refiled() {
+    if !isolated("ci_failure_predating_a_follower_delivered_landing_is_held_not_refiled") {
+        return;
+    }
+    use orbit_types::task::TaskStatus;
+    // The compiler failure key includes the tested commit, so a late red run
+    // on an older commit than the one the repair was filed for has a different
+    // key and matches only through the compiler cause digest.
+    let (_root, runtime, commits) = operator_commits("", 4);
+    let (filed_at, tested, landed, after) = (&commits[0], &commits[1], &commits[2], &commits[3]);
+    let log = compiler_log(
+        "E0425",
+        "cannot find value `probe_timeout` in this scope",
+        "crates/orbit-cli/tests/workspace/init_human_crew.rs",
+        207,
+        9,
+    );
+    let original = file(&runtime, vec![failure(&log, 0, filed_at)]);
+    assert_eq!(original["filed_count"], 1, "{original}");
+    let repair = original["filed"][0]["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let repair_key = original["filed"][0]["failure_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let repair_task = runtime.get_task(&repair).unwrap();
+    assert!(
+        repair_task
+            .description
+            .contains("- Compiler cause identity: `"),
+        "{}",
+        repair_task.description
+    );
+    assert_eq!(repair_task.status, TaskStatus::Proposed);
+    record_owner_landing(&runtime, &repair, landed);
+    assert_eq!(runtime.get_task(&repair).unwrap().status, TaskStatus::Done);
+    let mut stale = failure(&log, 1, tested);
+    stale["failed_jobs"][0]["name"] = json!("macOS Platform");
+    let held = file(&runtime, vec![stale]);
+    assert_eq!(held["filed_count"], 0, "{held}");
+    assert_eq!(held["skipped_existing"], json!([]), "{held}");
+    assert_eq!(held["withheld"], json!([]), "{held}");
+    let pending = &held["pending_supersession"][0];
+    assert_eq!(
+        pending["reason"], "repaired_by_descendant_landing",
+        "{held}"
+    );
+    assert_eq!(pending["task_id"], repair.as_str());
+    assert_eq!(pending["landed_commit"], landed.as_str());
+    assert_eq!(pending["tested_commit"], tested.as_str());
+    assert_ne!(pending["failure_key"], repair_key.as_str(), "{held}");
+    let mut reproduced = failure(&log, 2, after);
+    reproduced["failed_jobs"][0]["name"] = json!("macOS Platform");
+    let filed = file(&runtime, vec![reproduced]);
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    assert_eq!(filed["pending_supersession"], json!([]), "{filed}");
+}
+/// An operator cover completed by the same owner landing, with no local
+/// delivery run, holds until the failing checkout contains that commit.
+#[test]
+fn ci_operator_cover_resolves_a_follower_delivered_landing() {
+    if !isolated("ci_operator_cover_resolves_a_follower_delivered_landing") {
+        return;
+    }
+    use orbit_types::task::TaskStatus;
+    let (_root, runtime, commits) = operator_fixture("");
+    let log = "error: store GC invariant broken";
+    let original = file(&runtime, vec![failure(log, 0, &commits[0])]);
+    let owner = original["filed"][0]["task_id"].as_str().unwrap();
+    let cover = add_titled(&runtime, "Follower hand fix");
+    archive_owner(&runtime, owner, TaskStatus::Archived, Some(&cover.id));
+    record_owner_landing(&runtime, &cover.id, &commits[1]);
+    let held = file(&runtime, vec![failure(log, 1, &commits[0])]);
+    assert_eq!(held["filed_count"], 0, "{held}");
+    assert_eq!(held["withheld"][0]["outcome"], "covered", "{held}");
+    assert_eq!(held["withheld"][0]["reason"], "awaiting_cover_commit");
+    assert_eq!(held["withheld"][0]["owner"], owner);
+    assert_eq!(held["withheld"][0]["cover"], cover.id);
+    assert_eq!(held["withheld"][0]["landed_commit"], commits[1]);
+    let reproduced = file(&runtime, vec![failure(log, 2, &commits[2])]);
+    assert_eq!(reproduced["filed_count"], 1, "{reproduced}");
+    assert_eq!(
+        reproduced["filed"][0]["failed_covers"][0]["cover"],
+        cover.id
+    );
+    assert_eq!(
+        reproduced["filed"][0]["failed_covers"][0]["reason"],
+        "cover_did_not_hold"
+    );
+    assert_eq!(
+        reproduced["filed"][0]["failed_covers"][0]["landed_commit"],
+        commits[1]
+    );
 }
 /// A red run that completes after its repair landed is not filed again
 /// [ORB-14422]: the done repair with the same normalized signature landed at a

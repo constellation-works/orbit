@@ -14,7 +14,7 @@ mod task_port;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::lower_hex;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::LandingObservationStatus;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -82,13 +82,65 @@ pub(crate) fn full_revision(value: &str) -> bool {
     value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Prefix of the run-store error when this workspace has no delivery run for
+/// the task. `latest_delivery_run_id` in the delivery observation builds it.
+const ABSENT_DELIVERY_RUN_PREFIX: &str =
+    "no task delivery run in this workspace was submitted with task ";
+
 /// Read the merged landed commit for `task_id`, if delivery evidence is valid.
+///
+/// An owner-run delivery is read from this workspace's run store. A pull
+/// follower's run is not in that store, so a missing run falls back to the
+/// owner's `landing_completed` note. A present run, merged or not, stays on
+/// the run-store result.
 pub(crate) fn landed_task_commit(runtime: &OrbitRuntime, task_id: &str) -> Option<String> {
-    let observation = runtime.observe_task_delivery(task_id, None).ok()?;
-    (observation.landing.status == LandingObservationStatus::Merged)
-        .then_some(observation.landing.landed_commit)
-        .flatten()
-        .filter(|commit| full_revision(commit))
+    match runtime.observe_task_delivery(task_id, None) {
+        Ok(observation) => {
+            return (observation.landing.status == LandingObservationStatus::Merged)
+                .then_some(observation.landing.landed_commit)
+                .flatten()
+                .filter(|commit| full_revision(commit));
+        }
+        Err(error) if absent_delivery_run(&error) => {}
+        Err(_) => return None,
+    }
+    let history = runtime.get_task_history(task_id).ok()?;
+    owner_landing_commit(&history).filter(|commit| full_revision(commit))
+}
+
+/// Whether `error` is the run store reporting that no delivery run for the
+/// task exists in this workspace.
+fn absent_delivery_run(error: &OrbitError) -> bool {
+    matches!(
+        error,
+        OrbitError::InvalidInput(message) if message.starts_with(ABSENT_DELIVERY_RUN_PREFIX)
+    )
+}
+
+/// Merge commit on the latest owner `landing_completed` note.
+///
+/// Pull-request evidence is `delivery.merge_commit`. A local landing records
+/// `delivery` as `local_candidate`, or `reconciled` as
+/// `local_target_contains_candidate`, and the commit in `candidate`. The
+/// codebase landing receipt reads the same note; the sweep only needs the
+/// commit.
+fn owner_landing_commit(history: &[TaskHistoryEntry]) -> Option<String> {
+    history.iter().rev().find_map(|entry| {
+        if entry.event != "landing_completed" {
+            return None;
+        }
+        let note: Value = serde_json::from_str(entry.note.as_deref()?).ok()?;
+        let commit = note
+            .pointer("/delivery/merge_commit")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                (note["delivery"] == "local_candidate"
+                    || note["reconciled"] == "local_target_contains_candidate")
+                    .then(|| note["candidate"].as_str())
+                    .flatten()
+            })?;
+        Some(commit.to_string())
+    })
 }
 
 /// Whether a task status can still own an open CI-failure sweep finding.
