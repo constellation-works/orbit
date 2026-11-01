@@ -254,6 +254,12 @@ pub struct ClaimEvidence {
     /// [`Self::crew`]. An owner that predates the field ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_model: Option<String>,
+    /// [ORB-20906] The leaf run's job, build and failing step as its run
+    /// record held them when the follower recorded this settlement. The owner
+    /// keeps them in a separate immutable row, as evidence only. An owner
+    /// that predates the field ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_run: Option<super::LeafRunReport>,
 }
 
 /// Review ledgers a claimed leaf carried home [ORB-16699].

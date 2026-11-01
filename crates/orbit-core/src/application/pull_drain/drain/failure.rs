@@ -6,8 +6,8 @@ use std::path::Path;
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{
     ClaimAttribution, ClaimCandidateRef, ClaimEvidence, ClaimFailure, ClaimFinalRecovery,
-    ClaimMutation, ClaimPullRequest, ClaimedReviewCarry, LocalPullAdmission, LocalPullPhase,
-    ProviderUnavailable,
+    ClaimMutation, ClaimPullRequest, ClaimedReviewCarry, LeafRootCause, LeafRunReport,
+    LocalPullAdmission, LocalPullPhase, ProviderUnavailable,
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, CandidateCarry, CandidateCarryOutput, ClaimFailureClass,
@@ -92,24 +92,52 @@ pub(crate) fn leaf_attribution(run: &orbit_types::workflow::JobRun) -> ClaimAttr
     }
 }
 
-/// Copy the leaf `run`'s crew and model onto a failure or release that names
-/// neither. Attribution only: the owner keeps them on the claim's settlement
-/// record. A typed handoff carries no evidence, so its delivery reports them
-/// beside it instead. Like [`attach_claimed_review`], every writer stamps
-/// before the first recorded settlement, which is the one the owner receives.
+/// The job, build and failing step `run`'s own record holds [ORB-20906]: its
+/// recorded fields only, never the executing process's current build or text
+/// read out of a diagnostic. A build or step the record never held is absent.
+pub(crate) fn leaf_run_report(run: &orbit_types::workflow::JobRun) -> LeafRunReport {
+    let root_cause = crate::application::job::run_error_step(run)
+        .map(|step| LeafRootCause {
+            step: Some(step.target_id.to_string()),
+            code: step.error_code.clone(),
+            message: step.error_message.clone(),
+        })
+        .map(LeafRootCause::bounded)
+        .filter(|cause| cause.code.is_some() || cause.message.is_some());
+    LeafRunReport {
+        run_id: run.run_id.to_string(),
+        job_id: run.job_id.to_string(),
+        build: run.build.clone(),
+        root_cause,
+    }
+}
+
+/// Copy the leaf `run`'s crew and model, and its run record's job, build and
+/// failing step, onto a failure or release that does not already carry them.
+/// Attribution and evidence only: the owner keeps them on the claim's
+/// settlement record and in its separate evidence row. A typed handoff
+/// carries no evidence, so its delivery reports crew and model beside it
+/// instead. Like [`attach_claimed_review`], every writer stamps before the
+/// first recorded settlement, which is the one the owner receives; that is
+/// also what keeps the evidence the leaf's own, taken before any later
+/// executable can resend it.
 pub(crate) fn attach_leaf_attribution(
     mut settlement: ClaimMutation,
     run: Option<&orbit_types::workflow::JobRun>,
 ) -> ClaimMutation {
-    let Some(attribution) = run.map(leaf_attribution) else {
+    let Some(run) = run else {
         return settlement;
     };
+    let attribution = leaf_attribution(run);
     match &mut settlement {
-        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence)
-            if evidence.crew.is_none() && evidence.crew_model.is_none() =>
-        {
-            evidence.crew = attribution.crew;
-            evidence.crew_model = attribution.crew_model;
+        ClaimMutation::Fail(evidence) | ClaimMutation::Release(evidence) => {
+            if evidence.crew.is_none() && evidence.crew_model.is_none() {
+                evidence.crew = attribution.crew;
+                evidence.crew_model = attribution.crew_model;
+            }
+            if evidence.leaf_run.is_none() {
+                evidence.leaf_run = Some(leaf_run_report(run));
+            }
         }
         _ => {}
     }

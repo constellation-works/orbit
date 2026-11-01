@@ -1438,6 +1438,49 @@ orbit run settlements --since 7d --no-reconcile --json
 Claims settled before the owner kept settlements read `unrecorded` unless
 their release kept a typed class; the task's history note carries the reason.
 
+Each settlement also carries `run_evidence`, the leaf's own run record that the
+owner's run history never holds: its `job_id`, `build` and failing step
+(`root_cause`: `step`, `code`, bounded `message`). A follower sends them with the
+settlement, captured from the run record before its first settlement is
+recorded, never from a later executable, and the owner keeps them in an
+immutable row beside the claim. `provenance` is `settlement` for that, `hydrated`
+for evidence an operator read afterwards (below), or null when the claim holds
+none. `build_state` and `root_cause_state` are `recorded` or `unrecorded`; an
+`unrecorded` field means the run record held none (or the claim predates the
+evidence), and the owner never fills it from its own or any current build or by
+reading the settlement's text. An older follower sends none, and a report whose
+run or job does not match the run the claim bound is dropped without refusing the
+settlement. The managed scan reads all of this from the owner's store with
+`--no-reconcile` and needs no operator capability.
+
+A claim settled before a follower sent its run record stays `unrecorded` until
+an operator on the owner hydrates it from the follower:
+
+```bash
+orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--machine <id|name>] [--since 7d] [--limit 25] [--recheck] [--json]
+```
+
+This is operator-only (an agent, a managed scan or a worker bound to a claim is
+refused), bounded (default 25 claims, at most 100; `remaining` counts the rest)
+and runs from the owner. It reads each claim's leaf run, and once per drain the
+admitting drain, from the claim's follower through this machine's registered,
+authenticated route to that host (`orbit.workflow.run.show`), and keeps the answer
+as `hydrated` evidence only if the whole tuple matches: the run is the claim's
+bound run, executed on the claim's machine, is a terminal claimed-leaf job
+delivering exactly the claim's task, and its admitting drain ran on that machine
+and pulls from this owner's workspace and machine. It changes no claim, task or
+run, and starts, cancels and retries nothing. Each claim reports one outcome:
+`hydrated`; `replayed` (the same fact is already held, shown with `--recheck`);
+`conflict` (different evidence is held and stands, nothing is overwritten);
+`mismatch` (the record is not this claim's leaf); `absent` (the follower answered
+that it holds no such run, so the evidence is genuinely not available, which for a
+claim that predates the evidence stays `unrecorded`); `unreachable` (the follower
+could not be asked, so the question stays open and a later run can answer it); or
+`no_leaf_run` (the claim never bound one). A claim that already holds evidence is
+skipped without `--recheck`. The follower's `orbit.workflow.run.show` may
+reconcile a run that has not ended, so hydration accepts only a terminal run and
+reports a live one as `mismatch`; run it after the leaf has ended.
+
 The owner's dashboard shows the same state, plus the accepted handoff, inside
 the task detail it belongs to — there is no distributed tab, and the panel
 appears only for a task this workspace holds a claim for:

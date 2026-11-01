@@ -5,7 +5,9 @@
 use orbit_core::application::job::JobRunCancelOutcome;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use orbit_core::application::distributed::PullCrewWindow;
+use orbit_core::application::distributed::{
+    FollowerRunObserver, LeafHydrationOutcome, LeafHydrationRequest, PullCrewWindow,
+};
 use orbit_store::contracts::ClaimSettlementKind;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
@@ -453,6 +455,33 @@ fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
             .is_some_and(|reason| reason.contains("HTTP 401")),
         "{settlement:?}"
     );
+    // [ORB-20906] The leaf's job, build and failing step reach the owner with
+    // the settlement, from the leaf's own run record, though the owner's run
+    // history never holds that run.
+    let run = pair.follower_jobs.get_job_run(&leaf).unwrap().unwrap();
+    assert!(
+        pair.wire
+            .owner
+            .run_tool("orbit.workflow.run.show", json!({"id": leaf}))
+            .is_err(),
+        "the owner holds no record of the follower's leaf"
+    );
+    let evidence = &settlement.run_evidence;
+    assert_eq!(evidence.provenance, Some("settlement"), "{evidence:?}");
+    assert_eq!(evidence.job_id.as_deref(), Some(run.job_id.as_str()));
+    assert_eq!(evidence.build, run.build, "the build the run recorded");
+    assert_eq!(evidence.build_state, "recorded");
+    let cause = evidence.root_cause.as_ref().expect("the failing step");
+    assert_eq!(cause.step.as_deref(), Some("implement_one"), "{cause:?}");
+    assert!(
+        cause
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("HTTP 401")),
+        "{cause:?}"
+    );
+    assert_eq!(evidence.root_cause_state, "recorded");
+
     let later = chrono::Utc::now() + chrono::Duration::minutes(1);
     assert!(
         pair.wire
@@ -462,6 +491,371 @@ fn the_owner_lists_a_follower_leaf_release_with_its_evidence_class() {
             .is_empty(),
         "`since` bounds the scan window"
     );
+}
+
+/// An operator's read of one follower run record, through the follower's own
+/// `orbit.workflow.run.show`; `alter` stands in for a follower that answers
+/// otherwise.
+type Alter<'a> = Box<dyn Fn(&str, Value) -> Result<Value, OrbitError> + 'a>;
+
+struct FollowerShow<'a> {
+    pair: &'a Pair,
+    alter: Alter<'a>,
+    asked: std::cell::RefCell<Vec<(String, String)>>,
+}
+
+impl<'a> FollowerShow<'a> {
+    fn new(pair: &'a Pair) -> Self {
+        Self::altered(pair, |_, answer| Ok(answer))
+    }
+
+    fn altered(
+        pair: &'a Pair,
+        alter: impl Fn(&str, Value) -> Result<Value, OrbitError> + 'a,
+    ) -> Self {
+        Self {
+            pair,
+            alter: Box::new(alter),
+            asked: Default::default(),
+        }
+    }
+}
+
+impl FollowerRunObserver for FollowerShow<'_> {
+    fn observe_run(&self, machine_id: &str, run_id: &str) -> Result<Value, OrbitError> {
+        self.asked
+            .borrow_mut()
+            .push((machine_id.to_string(), run_id.to_string()));
+        let mut answer = self.pair.follower.run_tool_with_context_and_role(
+            "orbit.workflow.run.show",
+            json!({"id": run_id}),
+            Role::Admin,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                    ..ToolSessionContext::default()
+                },
+                ..ToolContext::default()
+            },
+        )?;
+        // The fixture's drain run is created without its input and host; a
+        // real one records the destination it pulls from and where it ran.
+        if answer["job_id"] == "workspace_pull_pipeline" {
+            answer["input"] = json!({"destination": self.pair.destination});
+            answer["executed_on"] = json!({"machine_id": self.pair.wire.caller});
+        }
+        (self.alter)(run_id, answer)
+    }
+}
+
+/// The settled claim's evidence as the owner lists it.
+fn run_evidence_of(pair: &Pair) -> orbit_core::application::distributed::LeafRunEvidenceView {
+    let [settlement] = &pair.wire.owner.leaf_settlements(None, false).unwrap()[..] else {
+        panic!("one settled claim");
+    };
+    settlement.run_evidence.clone()
+}
+
+/// Settle one claim as a build that predates the evidence: the owner holds
+/// the settlement and none of the leaf's run record.
+fn forget_leaf_evidence(pair: &Pair) {
+    let connection = pair.wire.owner.sqlite_store().unwrap().connection();
+    let removed = connection
+        .lock()
+        .unwrap()
+        .execute(
+            "DELETE FROM task_coordination_rows WHERE kind = 'distributed-leaf-run-evidence-v1'",
+            (),
+        )
+        .unwrap();
+    assert_eq!(removed, 1, "the settlement recorded the evidence");
+}
+
+fn hydrate(
+    pair: &Pair,
+    observer: &FollowerShow<'_>,
+    recheck: bool,
+) -> Vec<(LeafHydrationOutcome, Option<String>)> {
+    let report = pair
+        .wire
+        .owner
+        .hydrate_leaf_run_evidence(
+            &LeafHydrationRequest {
+                recheck,
+                ..LeafHydrationRequest::default()
+            },
+            observer,
+        )
+        .unwrap();
+    assert_eq!(report.remaining, 0);
+    report
+        .rows
+        .into_iter()
+        .map(|row| (row.outcome, row.detail))
+        .collect()
+}
+
+/// [ORB-20906] A claim settled before the follower sent its leaf's run
+/// record has none of it: the owner does not guess it, from its own build or
+/// from the settlement's text. An operator keeps what the follower's run
+/// record says, once, as evidence distinct from the settlement; a replay
+/// confirms it, a different observation never overwrites it, and a record
+/// that is not this claim's leaf is refused.
+fn the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once() {
+    let (pair, _, _) = a_released_failure(
+        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
+        "provider",
+    );
+    let leaf = pair.leaf_runs()[0].clone();
+    let sent = run_evidence_of(&pair);
+    assert_eq!(sent.provenance, Some("settlement"));
+    let claim = pair.owner_claim_for_leaf(&leaf);
+    let task = pair.owner_task(&pair.tasks[0]);
+
+    // The reproduced gap: nothing on the owner says what the leaf ran.
+    forget_leaf_evidence(&pair);
+    let legacy = run_evidence_of(&pair);
+    assert_eq!(legacy.provenance, None);
+    assert_eq!(
+        (legacy.build_state, legacy.root_cause_state),
+        ("unrecorded", "unrecorded")
+    );
+    assert!(legacy.job_id.is_none() && legacy.build.is_none() && legacy.root_cause.is_none());
+    assert!(
+        pair.wire
+            .owner
+            .leaf_settlements(None, false)
+            .unwrap()
+            .iter()
+            .all(|settlement| settlement.run_evidence.build.is_none()),
+        "no current build is substituted"
+    );
+
+    // Refusals leave the claim without evidence.
+    let machine = pair.wire.caller.clone();
+    let cases: Vec<(&str, LeafHydrationOutcome, FollowerShow<'_>)> = vec![
+        (
+            "another machine's run",
+            LeafHydrationOutcome::Mismatch,
+            FollowerShow::altered(&pair, |_, mut answer| {
+                if answer["job_id"] != "workspace_pull_pipeline" {
+                    answer["executed_on"]["machine_id"] = json!("hm_other");
+                }
+                Ok(answer)
+            }),
+        ),
+        (
+            "another task's run",
+            LeafHydrationOutcome::Mismatch,
+            FollowerShow::altered(&pair, |_, mut answer| {
+                if answer["job_id"] != "workspace_pull_pipeline" {
+                    answer["task_ids"] = json!(["ORB-9"]);
+                }
+                Ok(answer)
+            }),
+        ),
+        (
+            "not a claimed leaf job",
+            LeafHydrationOutcome::Mismatch,
+            FollowerShow::altered(&pair, |_, mut answer| {
+                if answer["job_id"] != "workspace_pull_pipeline" {
+                    answer["job_id"] = json!("some_other_job");
+                }
+                Ok(answer)
+            }),
+        ),
+        (
+            "a run still going",
+            LeafHydrationOutcome::Mismatch,
+            FollowerShow::altered(&pair, |_, mut answer| {
+                if answer["job_id"] != "workspace_pull_pipeline" {
+                    answer["state"] = json!("running");
+                }
+                Ok(answer)
+            }),
+        ),
+        (
+            "a drain that pulls from another owner",
+            LeafHydrationOutcome::Mismatch,
+            FollowerShow::altered(&pair, |_, mut answer| {
+                if answer["job_id"] == "workspace_pull_pipeline" {
+                    answer["input"]["destination"]["owner_workspace_id"] = json!("ws_other");
+                }
+                Ok(answer)
+            }),
+        ),
+        (
+            "a drain of another machine",
+            LeafHydrationOutcome::Mismatch,
+            FollowerShow::altered(&pair, |_, mut answer| {
+                if answer["job_id"] == "workspace_pull_pipeline" {
+                    answer["executed_on"]["machine_id"] = json!("hm_other");
+                }
+                Ok(answer)
+            }),
+        ),
+        (
+            "a follower that holds no such run",
+            LeafHydrationOutcome::Absent,
+            FollowerShow::altered(&pair, |run, _| {
+                Err(OrbitError::NotFound {
+                    kind: orbit_common::NotFoundKind::JobRun,
+                    id: run.to_string(),
+                    guidance: None,
+                })
+            }),
+        ),
+        (
+            "a follower that cannot be reached",
+            LeafHydrationOutcome::Unreachable,
+            FollowerShow::altered(&pair, |_, _| {
+                Err(OrbitError::UnreachableDestination(
+                    "connection refused".into(),
+                ))
+            }),
+        ),
+    ];
+    for (name, expected, observer) in cases {
+        let rows = hydrate(&pair, &observer, false);
+        assert_eq!(rows.len(), 1, "{name}: {rows:?}");
+        assert_eq!(rows[0].0, expected, "{name}: {rows:?}");
+        assert!(rows[0].1.is_some(), "{name}: says why");
+        assert_eq!(
+            run_evidence_of(&pair).provenance,
+            None,
+            "{name}: nothing was recorded"
+        );
+        assert!(
+            observer
+                .asked
+                .borrow()
+                .iter()
+                .all(|(host, _)| *host == machine),
+            "{name}: only the claim's own follower is asked"
+        );
+    }
+
+    // The follower's record is kept, as hydrated evidence.
+    let observer = FollowerShow::new(&pair);
+    assert_eq!(
+        hydrate(&pair, &observer, false),
+        vec![(LeafHydrationOutcome::Hydrated, None)]
+    );
+    let hydrated = run_evidence_of(&pair);
+    assert_eq!(hydrated.provenance, Some("hydrated"));
+    assert_eq!(hydrated.job_id, sent.job_id);
+    assert_eq!(hydrated.build, sent.build);
+    assert_eq!(hydrated.build_state, sent.build_state);
+    assert_eq!(hydrated.root_cause, sent.root_cause);
+    assert_eq!(hydrated.root_cause_state, "recorded");
+
+    // Hydration changed no claim, task or run.
+    assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"], claim["claim"]);
+    assert_eq!(pair.owner_task(&pair.tasks[0])["status"], task["status"]);
+    assert_eq!(pair.leaf_runs(), vec![leaf.clone()]);
+
+    // A claim holding evidence is not observed again unless asked.
+    assert!(
+        pair.wire
+            .owner
+            .hydrate_leaf_run_evidence(&LeafHydrationRequest::default(), &observer)
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+    assert_eq!(
+        hydrate(&pair, &observer, true),
+        vec![(LeafHydrationOutcome::Replayed, None)],
+        "an identical replay is confirmed"
+    );
+    let changed = FollowerShow::altered(&pair, |_, mut answer| {
+        if answer["job_id"] != "workspace_pull_pipeline" {
+            answer["error_message"] = json!("a different failure");
+        }
+        Ok(answer)
+    });
+    let rows = hydrate(&pair, &changed, true);
+    assert_eq!(rows[0].0, LeafHydrationOutcome::Conflict, "{rows:?}");
+    assert_eq!(
+        run_evidence_of(&pair),
+        hydrated,
+        "a conflicting observation never overwrites the held evidence"
+    );
+}
+
+/// [ORB-20906] A settlement whose leaf run report is not the claim's own
+/// (another run, another job's identity, nothing to name) settles the claim
+/// as always and records no evidence: the owner never binds a report it
+/// cannot tie to the run the claim bound.
+fn a_settlement_naming_another_leaf_run_records_no_evidence() {
+    for report in [
+        json!({"run_id": "someone-elses-leaf", "job_id": "task_claimed_pr_pipeline"}),
+        json!({"run_id": "{leaf}", "job_id": "  "}),
+    ] {
+        let pair = Pair::with_crews(&[Some("sol")]);
+        let drain = pair.run_drain();
+        let leaf = pair.running_leaf(&drain, 1);
+        let mut report = report;
+        if report["run_id"] == "{leaf}" {
+            report["run_id"] = json!(leaf);
+        }
+        *pair.wire.leaf_run_override.lock().unwrap() = Some(report.clone());
+        pair.leaf_fails_with(
+            &leaf,
+            "[provider_unavailable] claude provider outage (HTTP 401)",
+        );
+        settle_only(&pair, &drain);
+        assert_eq!(pair.owner_status(&pair.tasks[0]), "backlog");
+        assert_eq!(
+            pair.owner_claim_for_leaf(&leaf)["claim"]["phase"],
+            "revoked",
+            "{report}: the claim settles"
+        );
+        let evidence = run_evidence_of(&pair);
+        assert_eq!(evidence.provenance, None, "{report}: {evidence:?}");
+        assert_eq!(evidence.build_state, "unrecorded");
+        assert_eq!(evidence.job_id, None);
+    }
+}
+
+/// [ORB-20906] Hydration reads a follower's run records with an operator's
+/// own route, so a worker bound to a claim is refused.
+fn a_bound_worker_cannot_hydrate_leaf_evidence() {
+    let (pair, _, _) = a_released_failure(
+        "[provider_unavailable] claude provider authentication failure (HTTP 401)",
+        "provider",
+    );
+    forget_leaf_evidence(&pair);
+    let leaf = pair.leaf_runs()[0].clone();
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.clone().unwrap();
+    let worker = pair
+        .wire
+        .owner
+        .clone()
+        .with_worker_invocation(
+            orbit_types::tool::WorkerInvocation {
+                owner_machine_id: OWNER.into(),
+                owner_workspace_id: record.destination.owner_workspace_id.clone(),
+                owner_destination: record.destination.selector.clone(),
+                task_id: claim.task_id.clone(),
+                claim_id: claim.claim_id.clone(),
+                execution: claim.executed_on.clone(),
+                bound_run_id: leaf,
+            },
+            Arc::new(NoWorkerRoute),
+        )
+        .unwrap();
+    let observer = FollowerShow::new(&pair);
+    let error = worker
+        .hydrate_leaf_run_evidence(&LeafHydrationRequest::default(), &observer)
+        .unwrap_err();
+    assert!(
+        matches!(error, OrbitError::CapabilityRefused(_)),
+        "{error:?}"
+    );
+    assert!(observer.asked.borrow().is_empty());
+    assert_eq!(run_evidence_of(&pair).provenance, None);
 }
 
 /// A failure of the host itself — its validation environment, or its route
@@ -1636,6 +2030,9 @@ crate::scenario_table!(
     crew_failures_release_the_claim_and_exclude_the_crew_for_the_window,
     an_upgrade_refused_agent_releases_the_claim_and_the_next_claim_resumes_it,
     the_owner_lists_a_follower_leaf_release_with_its_evidence_class,
+    the_owner_hydrates_a_legacy_leaf_settlement_from_its_follower_once,
+    a_settlement_naming_another_leaf_run_records_no_evidence,
+    a_bound_worker_cannot_hydrate_leaf_evidence,
     host_failures_release_the_claim_and_suppress_the_host_for_the_window,
     a_baseline_red_failure_releases_the_claim_without_excluding_the_crew
 );

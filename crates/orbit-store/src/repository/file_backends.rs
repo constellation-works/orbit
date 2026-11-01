@@ -156,6 +156,14 @@ impl TaskStoreBackend for TaskV2Store {
             boundary.execution_claim_state(claim_id)
         })
     }
+    fn record_hydrated_leaf_evidence(
+        &self,
+        claim_id: &str,
+        report: crate::contracts::LeafRunReport,
+    ) -> Result<crate::contracts::LeafEvidenceWrite, OrbitError> {
+        self.claim_boundary()?
+            .record_hydrated_leaf_evidence(claim_id, report)
+    }
     fn record_deferred_branch_observation(
         &self,
         observation: &crate::contracts::DeferredBranchObservation,

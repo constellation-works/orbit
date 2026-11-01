@@ -10,6 +10,7 @@ use super::concurrency::RunConcurrencyArgs;
 use super::events::RunEventsArgs;
 use super::extend::RunExtendArgs;
 use super::history::RunHistoryArgs;
+use super::hydrate_settlements::RunHydrateSettlementsArgs;
 use super::job::JobRunArgs;
 use super::logs::RunLogsArgs;
 use super::profiles::RunProfilesArgs;
@@ -37,6 +38,7 @@ Run history:
   orbit run events [run_id] [-s step_id] [--type event_type] [--json]
   orbit run trace [run_id] [--json]
   orbit run settlements [--since 7d] [--json]
+  orbit run settlements-hydrate --follower-workspace <workspace> [--limit N] [--json]
 
 Maintenance:
   orbit run cancel <run_id> --confirm
@@ -126,6 +128,9 @@ pub enum RunSubcommand {
     Trace(RunTraceArgs),
     /// Show failure and release settlements claimed leaves sent this owner
     Settlements(RunSettlementsArgs),
+    /// Keep a settled claim's leaf run evidence, read from its follower (operator)
+    #[command(name = "settlements-hydrate")]
+    SettlementsHydrate(RunHydrateSettlementsArgs),
     /// Cancel a pending or running job run
     Cancel(RunCancelArgs),
     /// Retune a running drain's admission ceiling
@@ -152,6 +157,7 @@ impl Execute for RunSubcommand {
             RunSubcommand::Events(command) => command.execute(runtime),
             RunSubcommand::Trace(command) => command.execute(runtime),
             RunSubcommand::Settlements(command) => command.execute(runtime),
+            RunSubcommand::SettlementsHydrate(command) => command.execute(runtime),
             RunSubcommand::Cancel(command) => command.execute(runtime),
             RunSubcommand::Concurrency(command) => command.execute(runtime),
             RunSubcommand::Extend(command) => command.execute(runtime),

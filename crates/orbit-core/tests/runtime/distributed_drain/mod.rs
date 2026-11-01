@@ -215,6 +215,9 @@ struct Wire {
     /// while it keeps the claim, as an owner whose configuration cannot
     /// accept a handoff does.
     refuse_settle: Mutex<Option<String>>,
+    /// When set, a settlement reaches the owner naming this leaf run report
+    /// in place of the one its follower sent [ORB-20906].
+    leaf_run_override: Mutex<Option<Value>>,
     /// Send handoffs to the real owner observation path.
     observe_handoffs: Mutex<bool>,
     /// When set, the owner accepts a handoff into its claim journal, with
@@ -329,7 +332,15 @@ impl Wire {
 }
 
 impl DrainOwnerTransport for Wire {
-    fn call(&self, _selector: &str, name: &str, input: Value) -> Result<Value, OrbitError> {
+    fn call(&self, _selector: &str, name: &str, mut input: Value) -> Result<Value, OrbitError> {
+        if name == "orbit.drain.claim.settle"
+            && let Some(report) = self.leaf_run_override.lock().unwrap().clone()
+            && let Some(evidence) = input["settlement"]
+                .as_object_mut()
+                .and_then(|settlement| settlement.values_mut().next())
+        {
+            evidence["leaf_run"] = report;
+        }
         self.calls
             .lock()
             .unwrap()
@@ -735,6 +746,7 @@ impl Pair {
             fingerprint: Mutex::default(),
             gateless: Mutex::default(),
             refuse_settle: Mutex::default(),
+            leaf_run_override: Mutex::default(),
             observe_handoffs: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::default(),
