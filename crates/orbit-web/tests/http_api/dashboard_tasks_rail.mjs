@@ -1546,6 +1546,58 @@ await settleReads();
 assert.ok(waitingReads.at(-1).includes('workspace=ws_waiting_b'), 'the next workspace reads its own decisions');
 waitingBox.querySelector('.waiting-filter').dispatch('click');
 
+// Human-crew work is classified by the server from the task's own workspace
+// (`human_crew` on the row), so it survives the aggregate view, which has no
+// crew registry, and a crew name that is human in one workspace and an agent
+// crew in another. "Waiting on you" never lists a settled task, even with every
+// status enabled.
+const humanName = { name: 'ops', description: 'Operator work' };
+const humanBacklog = task(501, { status: 'backlog', crew: 'ops', human_crew: humanName, workspace_id: 'ws_a', workspace_name: 'a' });
+const agentBacklog = task(502, { status: 'backlog', crew: 'ops', workspace_id: 'ws_b', workspace_name: 'b' });
+const humanDecision = task(503, { status: 'blocked', crew: 'ops', human_crew: humanName, workspace_id: 'ws_a', workspace_name: 'a' });
+const settledHuman = ['done', 'archived', 'rejected'].map((status, index) => task(510 + index, { status, crew: 'ops', human_crew: humanName, workspace_id: 'ws_a', workspace_name: 'a' }));
+const openDecisionOnly = task(520, { status: 'proposed', open_decisions: [{ id: 'dec-9', gate: 'block', options: [{ id: 'yes', label: 'Yes' }] }], workspace_id: 'ws_b', workspace_name: 'b' });
+const humanStatuses = ['proposed', 'backlog', 'blocked', 'done', 'archived', 'rejected'];
+let humanTasks = [humanBacklog, agentBacklog, humanDecision, ...settledHuman, openDecisionOnly];
+const humanContext = {
+  ...taskContext,
+  getTasks: () => humanTasks,
+  getTasksMeta: () => ({ total: humanTasks.length, limit: 50, offset: 0, next_cursor: null }),
+  getActiveStatuses: () => new Set(humanStatuses),
+  statusOrder: humanStatuses,
+};
+decisionsServed = [];
+common.setWorkspace('ws_waiting_c');
+// The aggregate view clears the crew registry; a stale registry from another
+// workspace that lists `ops` as a human crew must not reclassify agent work.
+const crewModule = modules.get('task-crew.js').namespace;
+const sharedModule = modules.get('task-shared.js').namespace;
+crewModule.cacheCrewPayload({ crews: [] });
+renderTasks(humanTasks, humanContext);
+tasksModule.namespace.buildChips(humanContext);
+await settleReads();
+assert.ok(crewModule.humanCrewFor(humanBacklog), 'a backlog human task is human with no crew registry');
+assert.equal(crewModule.humanCrewFor(agentBacklog), null, 'a same-named crew in a workspace where it is an agent crew is not human');
+assert.equal(sharedModule.usesHumanCrewBypass(humanBacklog), true, 'a human task keeps the operator status behavior with no registry');
+assert.equal(sharedModule.usesHumanCrewBypass(agentBacklog), false, 'an agent task keeps the governed status behavior');
+assert.equal(sharedModule.usesHumanCrewBypass(settledHuman[0]), false, 'a done human task keeps the governed list');
+assert.ok(rowFor('ORB-501').querySelector('.human-crew-badge'), 'the human task keeps its badge in an aggregate view');
+assert.equal(rowFor('ORB-501').querySelector('.human-crew-badge').textContent, 'for ops');
+assert.equal(rowFor('ORB-501').querySelector('.task-quick.ship'), null, 'the human task never offers Ship');
+assert.equal(rowFor('ORB-502').querySelector('.human-crew-badge'), null, 'the agent task carries no human badge');
+assert.ok(rowFor('ORB-502').querySelector('.task-quick.ship'), 'the same-named agent crew task still offers Ship');
+assert.equal(waitingCount(), '3', 'waiting counts the open human tasks and the open decision, not the settled ones');
+waitingBox.querySelector('.waiting-filter').dispatch('click');
+renderTasks(humanTasks, humanContext);
+assert.deepEqual(waitingRows().sort(), ['task-ORB-501', 'task-ORB-503', 'task-ORB-520'], 'waiting lists open human work and decisions with every status enabled');
+// A stale registry from a concrete workspace never turns the other workspace's agent task human.
+crewModule.cacheCrewPayload({ crews: [], human_crews: [{ name: 'ops' }] });
+renderTasks(humanTasks, humanContext);
+assert.equal(crewModule.humanCrewFor(agentBacklog), null, 'a cached registry does not classify a task by its crew name');
+assert.deepEqual(waitingRows().sort(), ['task-ORB-501', 'task-ORB-503', 'task-ORB-520'], 'a cached registry does not change the waiting rows');
+crewModule.cacheCrewPayload({ crews: [] });
+waitingBox.querySelector('.waiting-filter').dispatch('click');
+
 // Run the shipped app in a browser when a prepared Playwright module is given.
 // Hold workspace discovery so startup cannot accidentally rely on a default.
 if (process.argv.includes('--browser')) {

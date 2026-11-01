@@ -23,6 +23,7 @@ use orbit_core::application::task::{
 };
 use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus};
+use orbit_types::identity::HumanCrew;
 use orbit_types::task::task_base_json;
 use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Map, Value, json};
@@ -54,6 +55,32 @@ pub(crate) fn task_to_json(
     let mut object = task_base_json(task, status_by_id);
     link_pull_requests(&mut object, task, links);
     object
+}
+
+/// Stamp `human_crew` (`{name, description}`) on a task object whose `crew`
+/// names a human crew, and leave it off otherwise. The owning workspace's
+/// registry classifies the task here, so a client never has to guess from a
+/// crew name: the aggregate view mixes workspaces that configure the same
+/// name as an agent crew in one and a human crew in another, and carries no
+/// crew registry of its own.
+pub(crate) fn stamp_human_crew(object: &mut Map<String, Value>, human: Option<&HumanCrew>) {
+    object.remove("human_crew");
+    if let Some(human) = human {
+        object.insert(
+            "human_crew".to_string(),
+            json!({ "name": human.name, "description": human.description }),
+        );
+    }
+}
+
+/// [`stamp_human_crew`] for a task object built outside the list projection,
+/// classified by `runtime`'s registry from the object's own `crew` value.
+pub(crate) fn stamp_human_crew_from_runtime(
+    runtime: &OrbitRuntime,
+    object: &mut Map<String, Value>,
+) {
+    let human = runtime.human_crew(object.get("crew").and_then(Value::as_str));
+    stamp_human_crew(object, human);
 }
 
 /// The riskiness model cached for `runtime`. The first read for a runtime
@@ -114,7 +141,9 @@ pub(crate) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Tas
 /// that was piloted, reviewed or recovered carries `handled_by`: those hands
 /// in time order, each derived from a durable record. Every task carries
 /// `riskiness`, as its list row does, and an active triage/recovery binding
-/// carries `active_triage` on both surfaces.
+/// carries `active_triage` on both surfaces. A task assigned to a human crew
+/// carries `human_crew` (`{name, description}`) on both surfaces and on every
+/// dashboard write response.
 pub(crate) fn task_detail_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
@@ -127,6 +156,7 @@ pub(crate) fn task_detail_json(
             "riskiness".to_string(),
             task_riskiness_json(riskiness, &row.task),
         );
+        stamp_human_crew_from_runtime(runtime, object);
         if let Some(triage) = runtime.escalation_triage_eligibility_json(row)? {
             object.insert("escalation_triage".to_string(), triage);
         }
@@ -263,6 +293,13 @@ impl TaskListProjection {
             object.insert("resolved_crew".to_string(), Value::String(projection.name));
             object.insert("crew_model".to_string(), Value::String(projection.model));
         }
+        let human = explicit_task_crew(task).and_then(|name| {
+            self.registry
+                .human_crews
+                .iter()
+                .find(|human| human.name == name)
+        });
+        stamp_human_crew(&mut object, human);
         // Same decision as the detail projection. The list used to omit the
         // flag, and the dashboard treats a missing value as permission to
         // link `#runs?run_id=` on this host.

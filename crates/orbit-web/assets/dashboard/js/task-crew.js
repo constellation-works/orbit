@@ -68,10 +68,13 @@ export function normalizeCrewPayload(payload) {
 }
 
 // The human crew a task is assigned to, or null for an agent crew or none.
+// The server classifies each task by its own workspace's crew registry and
+// stamps `human_crew` on it, so the answer holds in the aggregate view (which
+// has no registry) and for a crew name that is an agent crew in one workspace
+// and a human crew in another. Never guess from the name or a cached registry.
 export function humanCrewFor(task) {
-  const name = explicitCrewValue(task);
-  const humans = taskState.lastCrewPayload.human_crews || [];
-  return (name && humans.find((crew) => crew.name === name)) || null;
+  const human = task && task.human_crew;
+  return human && human.name ? human : null;
 }
 
 // The human crews the "My work" filter keeps: the viewer's own when the

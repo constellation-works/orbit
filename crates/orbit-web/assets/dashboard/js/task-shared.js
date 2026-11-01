@@ -138,9 +138,8 @@ export function statusTransitions(task) {
 // gates, and the server applies it as a plain PATCH. A task already `done` or
 // `archived` keeps the governed list and the forced override.
 export function usesHumanCrewBypass(task) {
-  if (!task || !task.crew || task.status === "done" || task.status === "archived") return false;
-  const humanCrews = taskState.lastCrewPayload.human_crews || [];
-  return humanCrews.some((crew) => crew.name === task.crew);
+  if (!task || !task.human_crew || task.status === "done" || task.status === "archived") return false;
+  return Boolean(task.human_crew.name);
 }
 
 export function statusTransition(task, targetStatus) {
