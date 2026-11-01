@@ -64,6 +64,7 @@ pub(crate) use delivery::CodebaseDeliveryScan;
 pub use display_steps::{RunDisplayStep, RunDisplaySteps, RunStepSource, run_display_steps};
 pub use failure_streak::JobFailureStreak;
 pub(crate) use owner::running_run_has_verified_owner;
+pub(crate) use owner::running_run_owner_is_stale;
 pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
     ActivityInvocationEvidence, JobRunListStates, job_run_task_ids, job_run_to_json,

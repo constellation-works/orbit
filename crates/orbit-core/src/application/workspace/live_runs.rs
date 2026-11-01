@@ -9,10 +9,15 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_types::workflow::JobRunState;
 
+use crate::application::job::running_run_owner_is_stale;
+
 /// Run IDs of the workflow runs of one workspace that have not finished:
 /// `pending`, `running` and `retrying` (a retrying run sleeps between
 /// attempts and then executes again). A drain is one such run, so a live
-/// drain is included.
+/// drain is included. A `running` run whose owner is conclusively gone
+/// (`Missing` or `Mismatch` after the startup grace, per
+/// `running_run_owner_is_stale`) no longer holds the workspace and is
+/// excluded; inconclusive or live owners still hold it.
 ///
 /// This opens the host store `<global_root>/orbit.db` read-only, without
 /// creating it, migrating it or opening a runtime, so a caller that must not
@@ -41,7 +46,11 @@ pub fn workspace_live_run_ids(
             include_steps: false,
             ..JobRunQuery::default()
         })?;
-    let mut run_ids: Vec<String> = runs.into_iter().map(|run| run.run_id).collect();
+    let mut run_ids: Vec<String> = runs
+        .into_iter()
+        .filter(|run| !running_run_owner_is_stale(run))
+        .map(|run| run.run_id)
+        .collect();
     run_ids.sort();
     Ok(run_ids)
 }

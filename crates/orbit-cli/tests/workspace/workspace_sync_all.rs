@@ -90,6 +90,18 @@ impl Host {
             .expect("insert fixture run");
     }
 
+    /// Record a run of `state` with an explicit owner pid and an old
+    /// `started_at`, so the running-owner startup grace has passed.
+    fn insert_run_with_owner(&self, repo: &Path, run_id: &str, state: &str, pid: u32) {
+        Connection::open(self.home.join(".orbit/orbit.db"))
+            .expect("open host store")
+            .execute(
+                "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'fixture',1,?3,'{}','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z','2020-01-01T00:00:00Z',?4)",
+                params![run_id, self.workspace_id(repo), state, pid],
+            )
+            .expect("insert fixture run with owner");
+    }
+
     fn set_run_state(&self, run_id: &str, state: &str) {
         Connection::open(self.home.join(".orbit/orbit.db"))
             .expect("open host store")
@@ -333,4 +345,41 @@ fn sync_all_skips_a_workspace_a_live_run_holds_until_the_run_ends() {
     let by_name = records(&host.sync_all(&[]));
     assert_eq!(by_name["busy"]["status"], "synced", "{by_name:?}");
     assert!(busy.join(".orbit").join(SHIPPED_AUTO_TASK).is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_all_converges_a_workspace_whose_running_run_owner_is_gone() {
+    let host = Host::new();
+    let alpha = host.register_stale_workspace("alpha");
+    let orphan = host.register_stale_workspace("orphan");
+    // Opening a runtime creates the host store's tables.
+    host.orbit(&orphan)
+        .args(["workspace", "list"])
+        .assert()
+        .success();
+    // A pid no OS assigns, with no start-time token and an old start:
+    // the owner is conclusively missing past the startup grace.
+    host.insert_run_with_owner(
+        &orphan,
+        "jrun-sync-all-dead-owner",
+        "running",
+        i32::MAX as u32,
+    );
+
+    let output = host.sync_all(&[]);
+    let by_name = records(&output);
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(by_name["alpha"]["status"], "synced", "{by_name:?}");
+    assert_eq!(by_name["orphan"]["status"], "synced", "{by_name:?}");
+    assert!(
+        by_name["orphan"].get("reason").is_none_or(Value::is_null),
+        "dead-owner run reported as holding the workspace: {by_name:?}"
+    );
+    assert!(alpha.join(".orbit").join(SHIPPED_AUTO_TASK).is_file());
+    assert!(
+        orphan.join(".orbit").join(SHIPPED_AUTO_TASK).is_file(),
+        "workspace held by a dead-owner run was not converged"
+    );
 }

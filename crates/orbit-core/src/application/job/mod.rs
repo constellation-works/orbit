@@ -95,6 +95,9 @@ pub use run::{
     job_run_task_ids, job_run_to_json, job_run_to_json_with_activity_provenance, run_display_steps,
     run_error_step,
 };
-pub(crate) use run::{RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness};
+pub(crate) use run::{
+    RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness,
+    running_run_owner_is_stale,
+};
 pub(crate) use run::{kept_candidate, kept_clause};
 pub use triage_submit::{EscalationTriageRefusal, EscalationTriageSubmitError};
