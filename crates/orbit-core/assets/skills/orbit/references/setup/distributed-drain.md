@@ -356,6 +356,29 @@ claims needs no operator capability:
 orbit run settlements --since 7d --no-reconcile --json
 ```
 
+Each settlement's `run_evidence` is the leaf's own run record: `job_id`, `build`
+and failing step (`root_cause`), sent with the settlement and kept in an
+immutable row beside the claim. `provenance` is `settlement`, `hydrated` or null
+(none held); `build_state` and `root_cause_state` are `recorded` or `unrecorded`,
+and `unrecorded` is never filled from the owner's or a current build or from the
+settlement's text. For a claim settled before a follower sent it, an operator on
+the owner reads it from the follower:
+
+```bash
+orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--limit 25] [--recheck] [--json]
+```
+
+Operator-only and bounded (default 25, at most 100); an agent, managed scan or
+claimed worker is refused, and the scan above stays read-only with no operator
+capability. The follower's run must be the claim's bound run, on its machine,
+terminal, a claimed-leaf job for exactly its task, and its admitting drain must
+pull from this owner. The result is immutable `hydrated` evidence; no claim, task
+or run changes. Per claim the outcome is `hydrated`, `replayed` (same fact held),
+`conflict` (different evidence held, which stands), `mismatch`, `absent` (the
+follower holds no such run; legacy evidence stays `unrecorded`), `unreachable`
+(ask again later) or `no_leaf_run`. A live run is a `mismatch`: hydrate after the
+leaf has ended.
+
 The owner's dashboard reads the same claim state, plus the accepted handoff,
 inside the task detail (`orbit web serve --operator`, then
 `GET /api/distributed/claims?task=<task-id>`). The endpoint accepts

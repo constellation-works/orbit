@@ -9,8 +9,10 @@
 //! handoffs from it, for the crew and model each pulled attempt ran as.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ClaimInspection, ClaimSettlementKind, ExecutionClaimPhase};
-use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, ClaimFailureClass};
+use orbit_store::contracts::{
+    ClaimInspection, ClaimSettlementKind, ExecutionClaimPhase, LeafRootCause, LeafRunEvidence,
+};
+use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, ClaimFailureClass, OrbitBuild};
 use serde::Serialize;
 
 /// Events a failure or release settlement leaves as the claim's last event
@@ -56,10 +58,64 @@ pub struct LeafSettlement {
     pub failed_step_id: Option<String>,
     /// Bounded, and as the leaf reported it: unredacted.
     pub reason: Option<String>,
+    /// The leaf's own run record: job, build and failing step.
+    pub run_evidence: LeafRunEvidenceView,
+}
+
+/// What the owner holds of a settled leaf's own run record [ORB-20906]: its
+/// job, build and failing step, from the evidence row the claim kept beside
+/// its settlement. A claim with no such row has none of them, and each state
+/// says so: `unrecorded` is never a guess from the owner's or any current
+/// build, and never read out of the settlement's text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LeafRunEvidenceView {
+    /// `settlement` when the follower sent it with the settlement,
+    /// `hydrated` when an operator observed it afterwards, or `None` when the
+    /// claim holds no leaf-run evidence: it settled before the evidence
+    /// existed, or its follower sent none, and no operator hydrated it.
+    pub provenance: Option<&'static str>,
+    /// When the owner recorded the evidence.
+    pub recorded_at: Option<String>,
+    pub job_id: Option<String>,
+    /// The build the leaf's run record held.
+    pub build: Option<OrbitBuild>,
+    /// `recorded`, or `unrecorded` when the evidence holds no build or the
+    /// claim holds no evidence at all.
+    pub build_state: &'static str,
+    /// The failing step the leaf's run record held.
+    pub root_cause: Option<LeafRootCause>,
+    /// `recorded`, or `unrecorded` like [`Self::build_state`].
+    pub root_cause_state: &'static str,
+}
+
+impl LeafRunEvidenceView {
+    fn of(evidence: Option<LeafRunEvidence>) -> Self {
+        let Some(evidence) = evidence else {
+            return Self {
+                provenance: None,
+                recorded_at: None,
+                job_id: None,
+                build: None,
+                build_state: "unrecorded",
+                root_cause: None,
+                root_cause_state: "unrecorded",
+            };
+        };
+        let state = |recorded: bool| if recorded { "recorded" } else { "unrecorded" };
+        Self {
+            provenance: Some(evidence.provenance.as_str()),
+            recorded_at: Some(evidence.recorded_at),
+            job_id: Some(evidence.report.job_id),
+            build_state: state(evidence.report.build.is_some()),
+            build: evidence.report.build,
+            root_cause_state: state(evidence.report.root_cause.is_some()),
+            root_cause: evidence.report.root_cause,
+        }
+    }
 }
 
 impl LeafSettlement {
-    fn of(inspection: ClaimInspection) -> Option<Self> {
+    fn of(mut inspection: ClaimInspection) -> Option<Self> {
         let claim = &inspection.claim;
         let mut settlement = Self {
             task_id: claim.task_id.clone(),
@@ -79,6 +135,7 @@ impl LeafSettlement {
             crew_model: None,
             failed_step_id: None,
             reason: None,
+            run_evidence: LeafRunEvidenceView::of(inspection.leaf_run_evidence.take()),
         };
         if let Some(record) = inspection.settlement {
             settlement.settled_at = record.settled_at;

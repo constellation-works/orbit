@@ -7,8 +7,8 @@ use orbit_types::workflow::{ClaimFailureClass, ReviewGateHistoryNote};
 use super::super::super::TaskCommitBoundary;
 use super::super::super::landing::LandingStop;
 use super::super::codec::{
-    CLAIM, HANDOFF_SETTLEMENT, OWNER_BUSY_RELEASE_ALLOWANCE, RECEIPT, RELEASE_BUDGET,
-    RELEASE_BUDGET_WINDOW_HOURS, STATE,
+    CLAIM, HANDOFF_SETTLEMENT, LEAF_RUN_EVIDENCE, OWNER_BUSY_RELEASE_ALLOWANCE, RECEIPT,
+    RELEASE_BUDGET, RELEASE_BUDGET_WINDOW_HOURS, STATE,
 };
 use super::super::releases::release_budget_comment;
 use super::super::{ClaimAuthority, MutationReceipt, decode_state, encode, invalid, row};
@@ -137,6 +137,11 @@ impl TaskCommitBoundary {
                                 &auth.attribution,
                                 Utc::now().to_rfc3339(),
                             ));
+                            params.rows.extend(leaf_run_evidence_row(
+                                &claim,
+                                &state,
+                                value.evidence.leaf_run.as_ref(),
+                            )?);
                             params.status = Some(status);
                             release = true;
                         } else if status != expected_status {
@@ -313,6 +318,11 @@ impl TaskCommitBoundary {
                             .text(),
                         );
                         state.settlement = Some(settlement);
+                        params.rows.extend(leaf_run_evidence_row(
+                            &claim,
+                            &state,
+                            value.leaf_run.as_ref(),
+                        )?);
                         state.preserved_candidate =
                             self.preserve_candidate(&claim.task_id, value)?;
                         params.append_history.extend(Self::kept_candidate_entry(
@@ -385,6 +395,11 @@ impl TaskCommitBoundary {
                     )
                     .text();
                     state.settlement = Some(settlement);
+                    params.rows.extend(leaf_run_evidence_row(
+                        &claim,
+                        &state,
+                        value.leaf_run.as_ref(),
+                    )?);
                     state.preserved_candidate = self.preserve_candidate(&claim.task_id, value)?;
                     params.append_history.extend(Self::kept_candidate_entry(
                         &claim,
@@ -835,4 +850,54 @@ impl TaskCommitBoundary {
             _ => Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim)),
         }
     }
+}
+
+/// [ORB-20906] The immutable evidence row a failure or release settlement
+/// publishes with its commit, when the follower captured its leaf's run
+/// record. The owner binds the report to the claim it holds: a report for any
+/// run but the claim's bound one is dropped, since a follower's report is
+/// evidence and never changes how the settlement applies.
+fn leaf_run_evidence_row(
+    claim: &ExecutionClaim,
+    state: &ClaimInspection,
+    report: Option<&LeafRunReport>,
+) -> Result<Option<TaskCoordinationRow>, OrbitError> {
+    let Some(report) = report else {
+        return Ok(None);
+    };
+    let Some(bound) = state.bound_run.as_ref() else {
+        return Ok(None);
+    };
+    if bound.run_id != report.run_id
+        || bound.machine_id != claim.executed_on.machine_id
+        || report.job_id.trim().is_empty()
+    {
+        orbit_common::tracing::warn!(
+            target: "orbit.store.claim_evidence",
+            claim_id = %claim.claim_id,
+            "a settlement's leaf run report names another run than the claim's bound leaf; it is not recorded",
+        );
+        return Ok(None);
+    }
+    let report = LeafRunReport {
+        root_cause: report
+            .root_cause
+            .clone()
+            .map(LeafRootCause::bounded)
+            .filter(|cause| !cause.is_empty()),
+        ..report.clone()
+    };
+    Ok(Some(row(
+        LEAF_RUN_EVIDENCE,
+        &claim.claim_id,
+        &LeafRunEvidence {
+            provenance: LeafEvidenceProvenance::Settlement,
+            recorded_at: Utc::now().to_rfc3339(),
+            claim_id: claim.claim_id.clone(),
+            task_id: claim.task_id.clone(),
+            machine_id: claim.executed_on.machine_id.clone(),
+            drain_run_id: claim.run_context.run_id.clone(),
+            report,
+        },
+    )?))
 }

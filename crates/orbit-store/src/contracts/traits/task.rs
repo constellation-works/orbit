@@ -171,6 +171,18 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<Option<crate::contracts::ClaimInspection>, OrbitError> {
         Ok(None)
     }
+    /// [ORB-20906] Record operator-observed leaf-run evidence for a settled
+    /// claim in its own immutable row. Changes no claim, task or run. A store
+    /// without a claim journal holds no claim.
+    fn record_hydrated_leaf_evidence(
+        &self,
+        _claim_id: &str,
+        _report: crate::contracts::LeafRunReport,
+    ) -> Result<crate::contracts::LeafEvidenceWrite, OrbitError> {
+        Err(OrbitError::Store(
+            "leaf run evidence requires a claim journal".into(),
+        ))
+    }
     /// Retain one task-branch CI receipt, or queue it for a current protecting
     /// claim. The claim check and decision share the commit boundary.
     fn record_deferred_branch_observation(

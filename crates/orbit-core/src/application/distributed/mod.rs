@@ -50,6 +50,7 @@ mod final_recovery;
 mod follower;
 mod host_provider_hold;
 mod job_port;
+mod leaf_hydration;
 mod leaf_settlements;
 mod owner_repair;
 mod probe;
@@ -68,7 +69,11 @@ pub use contract::{
 pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
 pub use entry::{DrainEntryAdmission, DrainEntryRefusal, RESOURCE_THROTTLED};
 pub use follower::WorkspacePullRequest;
-pub use leaf_settlements::LeafSettlement;
+pub use leaf_hydration::{
+    DEFAULT_LEAF_HYDRATION_LIMIT, FollowerRunObserver, LeafHydrationOutcome, LeafHydrationReport,
+    LeafHydrationRequest, LeafHydrationRow, MAX_LEAF_HYDRATION_LIMIT,
+};
+pub use leaf_settlements::{LeafRunEvidenceView, LeafSettlement};
 pub(crate) use owner_repair::OwnerRepairDrain;
 pub use probe::{
     AdmissionReceiptLookup, AdmissionReceiptLookupOutcome, DrainProbeReport, DrainProbeSession,

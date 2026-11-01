@@ -241,6 +241,12 @@ impl Commands {
                         None,
                         observation_runtime_need(args.no_reconcile),
                     ),
+                    RunSubcommand::SettlementsHydrate(_) => (
+                        "settlements-hydrate",
+                        Some("execution_claim"),
+                        None,
+                        RuntimeNeed::ReadOnly,
+                    ),
                     RunSubcommand::Cancel(args) => (
                         "cancel",
                         Some("job_run"),

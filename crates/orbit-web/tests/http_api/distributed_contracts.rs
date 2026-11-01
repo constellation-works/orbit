@@ -52,6 +52,7 @@ fn owner_state_with_claims(
             preserved_candidate: None,
             settlement: None,
             steering: None,
+            leaf_run_evidence: None,
         };
         let claim_json = serde_json::to_string(&claim).expect("serialize claim fixture");
         let inspection_json =

@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AdmissionShipContract, ClaimAttribution, ClaimEvidence, ClaimRun, ExecutionClaim,
-    ExecutionClaimPhase, ExecutionLocation, PreservedClaimCandidate, TaskCoordinationRow,
+    ExecutionClaimPhase, ExecutionLocation, LeafRunEvidence, PreservedClaimCandidate,
+    TaskCoordinationRow,
 };
 
 /// A typed release the owner applied, kept on the claim's lifecycle state so
@@ -514,6 +515,11 @@ pub struct ClaimInspection {
     /// starts from it rather than delivering the same comments again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering: Option<orbit_types::workflow::SteeringWatermark>,
+    /// [ORB-20906] The leaf run's job, build and failing step, projected from
+    /// the claim's separate immutable evidence row. Never part of the
+    /// lifecycle state a mutation rewrites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_run_evidence: Option<LeafRunEvidence>,
 }
 
 /// What a claimed leaf's task-context prompt carried, as the leaf records it

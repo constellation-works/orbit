@@ -19,7 +19,13 @@ the claim still fails and blocks the task, but failure scans count it separately
 without the flag read as false.\n\
 JSON shape: {\"settlements\":[{\"task_id\",\"claim_id\",\"machine_id\",\"machine_name\",\
 \"drain_run_id\",\"leaf_run_id\",\"phase\",\"last_event\",\"settled_at\",\"kind\",\"evidence\",\
-\"failure_class\",\"review_decision_pending\",\"crew\",\"crew_model\",\"failed_step_id\",\"reason\"}]}\n\
+\"failure_class\",\"review_decision_pending\",\"crew\",\"crew_model\",\"failed_step_id\",\"reason\",\
+\"run_evidence\"}]}\n\
+run_evidence is the leaf's own run record: {\"provenance\",\"recorded_at\",\"job_id\",\"build\",\
+\"build_state\",\"root_cause\",\"root_cause_state\"}. provenance is settlement (the follower sent it \
+with the settlement), hydrated (an operator read it from the follower with `orbit run \
+settlements-hydrate`) or null (the claim holds none). build_state and root_cause_state read \
+recorded or unrecorded; unrecorded is never filled from this owner's or any current build.\n\
 Examples:\n  orbit run settlements\n  orbit run settlements --since 7d\n  \
 orbit run settlements --since 2026-10-01T00:00:00Z --no-reconcile --json"
 )]
