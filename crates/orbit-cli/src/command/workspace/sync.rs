@@ -10,8 +10,10 @@ use orbit_core::{
 };
 use orbit_registry::workspace_registry;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
+use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 
 use super::support::ensure_orbit_gitignore_entry;
+use super::sync_all;
 use crate::command::{CommandOut, Payload};
 
 #[derive(Args)]
@@ -19,10 +21,27 @@ pub struct WorkspaceSyncArgs {
     /// Inspect and report pending convergence without writing anything
     #[arg(long)]
     pub check: bool,
+
+    /// Converge every workspace registered on this host, skipping any that a
+    /// live run holds, and report one result per workspace
+    #[arg(long)]
+    pub all: bool,
 }
 
 impl WorkspaceSyncArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> CommandOut {
+        if self.all {
+            if workspace_selector.is_some() {
+                return Err(OrbitError::InvalidInput(
+                    "`--all` syncs every registered workspace and cannot be combined with `--workspace`; drop one of them".to_string(),
+                ));
+            }
+            return sync_all::execute_sync_all(self.check, root_override);
+        }
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
         let roots = RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?
             .ok_or_else(workspace_init_required)?;
@@ -42,33 +61,8 @@ impl WorkspaceSyncArgs {
             .ok_or_else(workspace_init_required)?;
         let workspace = workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id)
             .ok_or_else(workspace_init_required)?;
-        let machine_id = match inspect_machine_identity(&global_root)? {
-            MachineIdentityState::Present(identity) => identity.id,
-            MachineIdentityState::Absent => {
-                return Err(OrbitError::WorkspaceError(
-                    "cannot sync workspace managed artifacts without an initialized host identity; run `orbit init`, then `orbit workspace init`".to_string(),
-                ));
-            }
-        };
-        // Routine names carry the registered workspace name, not the checkout
-        // directory basename, so convergence renders the same binding that
-        // `orbit workspace init` recorded [ORB-12107]; a state trigger seeded
-        // here is owned by this host and observes the registered base branch.
-        let routine_identity =
-            RoutineSeedIdentity::new(&workspace.name, &machine_id, &workspace.base_branch)?;
-        if !self.check {
-            // Rewrite the managed `.gitignore` block in place. Sync never
-            // runs git on the operator's behalf; doctor names the
-            // `git rm -r --cached .orbit` step when files are still tracked.
-            ensure_orbit_gitignore_entry(&checkout.repo_root, &checkout.orbit_dir)?;
-        }
-        let report = reconcile_workspace_managed_artifacts(
-            &global_root,
-            &checkout.orbit_dir,
-            Some(&routine_identity),
-            &workspace.base_branch,
-            self.check,
-        )?;
+        let machine_id = host_machine_id(&global_root)?;
+        let report = converge_checkout(&global_root, &machine_id, workspace, checkout, self.check)?;
         let exit_code = if self.check && report.has_pending_changes() {
             3
         } else {
@@ -80,6 +74,47 @@ impl WorkspaceSyncArgs {
             .with_exit_code(exit_code)
             .into())
     }
+}
+
+/// The host identity workspace convergence binds routines to; convergence
+/// never mints one.
+pub(super) fn host_machine_id(global_root: &Path) -> Result<String, OrbitError> {
+    match inspect_machine_identity(global_root)? {
+        MachineIdentityState::Present(identity) => Ok(identity.id),
+        MachineIdentityState::Absent => Err(OrbitError::WorkspaceError(
+            "cannot sync workspace managed artifacts without an initialized host identity; run `orbit init`, then `orbit workspace init`".to_string(),
+        )),
+    }
+}
+
+/// Converge one registered checkout, or with `check` only report what is
+/// pending.
+pub(super) fn converge_checkout(
+    global_root: &Path,
+    machine_id: &str,
+    workspace: &Workspace,
+    checkout: &WorkspaceCheckout,
+    check: bool,
+) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    // Routine names carry the registered workspace name, not the checkout
+    // directory basename, so convergence renders the same binding that
+    // `orbit workspace init` recorded [ORB-12107]; a state trigger seeded
+    // here is owned by this host and observes the registered base branch.
+    let routine_identity =
+        RoutineSeedIdentity::new(&workspace.name, machine_id, &workspace.base_branch)?;
+    if !check {
+        // Rewrite the managed `.gitignore` block in place. Sync never
+        // runs git on the operator's behalf; doctor names the
+        // `git rm -r --cached .orbit` step when files are still tracked.
+        ensure_orbit_gitignore_entry(&checkout.repo_root, &checkout.orbit_dir)?;
+    }
+    reconcile_workspace_managed_artifacts(
+        global_root,
+        &checkout.orbit_dir,
+        Some(&routine_identity),
+        &workspace.base_branch,
+        check,
+    )
 }
 
 fn workspace_init_required() -> OrbitError {

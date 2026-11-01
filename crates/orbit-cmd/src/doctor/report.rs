@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use super::browser_kit::browser_kit_rows;
 use super::git_protection::git_protection_row;
+use super::host_workspaces::host_workspace_convergence_row;
 use super::permissions::state_directory_permissions_row;
 use super::script_grants::script_grant_rows;
 use super::worker_containment::worker_containment_row;
@@ -45,6 +46,9 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         crate::hosts::doctor_hosts_row(&runtime.global_root())
     }),
     DoctorProbe::many("browser-kit", |runtime, _| browser_kit_rows(runtime)),
+    DoctorProbe::one("workspace-convergence", |runtime, _| {
+        host_workspace_convergence_row(runtime)
+    }),
     DoctorProbe::one("host-labels", |runtime, _| host_labels_row(runtime)),
 ];
 

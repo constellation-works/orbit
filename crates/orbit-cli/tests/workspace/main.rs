@@ -71,4 +71,5 @@ mod workspace_selector;
 mod workspace_ship_mode;
 mod workspace_source_remote;
 mod workspace_sync;
+mod workspace_sync_all;
 mod worktree_gc_routing;

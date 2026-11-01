@@ -48,6 +48,7 @@ mod automation;
 mod browser_kit;
 mod commands;
 mod git_protection;
+mod host_workspaces;
 mod permissions;
 mod report;
 mod retired_config;

@@ -224,12 +224,20 @@ for a reservation blocking a run is in
 ```bash
 orbit workspace sync --check --json   # no writes; exit 3 means pending changes
 orbit workspace sync --json           # converge managed defaults
+orbit workspace sync --all --json     # every workspace registered on this host
+orbit workspace sync --check --all    # preview all; writes nothing, exit 3 = pending
 orbit skill list
 orbit skill doctor
 orbit skill link                      # repair supported user skill symlinks
 ```
 
-Run sync from an initialized, registered checkout after upgrading the binary.
+Run sync from an initialized, registered checkout after upgrading the binary,
+or run `orbit workspace sync --all` once per host from any directory to converge
+every registered workspace. `--all` reports `synced`, `already current`,
+`skipped` or `failed` per workspace, keeps going past a failure (exit 1), and
+skips, never rewrites, a workspace a live drain or run holds; rerun it when the
+drain ends. It never reaches across hosts and cannot be combined with
+`--workspace`.
 It reconciles both host-global and workspace-local managed assets, including
 skill references, jobs, activities, routines, and auto-task definitions.
 Provenance distinguishes untouched shipped content from local edits. Read
