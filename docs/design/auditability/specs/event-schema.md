@@ -36,12 +36,13 @@ Required invariants:
 - Error messages are redacted before insertion.
 - Command rows do not embed full provider request/response bodies.
 - Legacy `host`, `session_id`, and `job_run_id` retain their meanings: executing-process hostname, legacy session correlation, and canonical run correlation respectively.
-- MCP rows may add `workspace_id`, caller/process machine and display-host IDs, transport, the complete effective capability set, `origin_session_id`, `mcp_call_id`, and `lease_id`.
+- MCP rows may add `workspace_id`, caller/process machine and display-host IDs, transport, the complete effective capability set, `origin_session_id`, per-call `trace_id`, best-effort `caller_ip`, the untrusted `self_reported_actor`, and, on federated routed calls only, the compatibility `mcp_call_id`. V1 MCP sessions carry no execution leases, so `lease_id` stays null on their rows.
 - Host-authorized application calls add an optional `application` object containing the non-secret consent record and the active scope index/callback flag; the credential secret is not included.
-- `mcp_call_id` is generated once before preflight and is shared by the call's denial or dispatch outcome. Two calls in one origin session have distinct call IDs.
+- `trace_id` is minted once per `tools/call` by the accepting MCP server and is shared by that call's denial or dispatch outcome. Two calls in one origin session have distinct trace IDs. A federated routed call may also carry the compatibility `mcp_call_id`; it is not required on every MCP row and is not the direct per-call correlation key.
 - MCP capability authorization and filters use set membership. There is no authorizing member, ordinal, ceiling, or max-capability field.
 - External MCP JSON may populate only the legacy workspace address selector. Trusted audit identity and correlation come from the adapter/runtime and authenticated managed envelope; standalone MCP role is `unverified`.
-- A trusted leased-run ID fills an empty `job_run_id` or must match it; audit adds `lease_id`, not another run column.
+- A trusted managed-run ID fills an empty `job_run_id` or must match it. Managed-run correlation adds no lease column for v1 MCP sessions, which carry no execution leases.
+- MCP `initialize` may supply `self_reported_actor`: an unverified client claim kept in its own column. It never changes `role`, the canonical `actor_*` projection, or any authorization decision.
 
 Failure modes:
 
@@ -50,7 +51,7 @@ Failure modes:
   would otherwise bypass destructors. Closed stdout during rendering unwinds
   to the rendering boundary so the success row can be persisted first.
 - If audit insertion fails during `Drop`, the CLI prints a warning and does not mask the command result.
-- If a tool implementation succeeds but its runtime audit insertion fails, the call fails closed and does not surface a successful result. The non-fatal `Drop` rule applies only to guard-side RAII persistence.
+- If a successful tool call's runtime audit insertion is lock-busy, it is retried once. If the insertion still fails, a read-only call returns its result unchanged with a warning, and a mutating call returns success with `audit_warning` (`code: audit_row_unpersisted`, naming the committed `tool` and `id`), because the mutation is already committed. A failed tool call keeps its own error. The non-fatal `Drop` rule applies only to guard-side RAII persistence.
 - If runtime initialization fails before the guard exists, no command audit row is written.
 
 ### V2 Activity/Job Audit Event
@@ -69,7 +70,7 @@ Required invariants:
 
 Failure modes:
 
-- If v2 audit-store persistence fails, in-memory event capture remains the load-bearing smoke-verification path.
+- If v2 audit-store persistence fails, the writer counts and logs the failure and the run continues. No in-memory copy of the event is kept, so sink-backed snapshots omit it and the durable trail is incomplete for that event.
 - If a worker thread emits events, it must install the parent stack snapshot before emission.
 - If an activity/job run fails before writer construction, no v2 audit event is expected.
 

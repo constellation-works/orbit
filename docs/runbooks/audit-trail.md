@@ -83,8 +83,9 @@ and an absent `peer_pid` or `self_reported_actor` is an empty cell. The
 
 Compatibility matters when interpreting those fields: legacy `host` is always the hostname of
 the executing process, not the caller; `session_id` is unchanged; and `job_run_id` remains the
-canonical run correlation. `origin_session_id` groups MCP calls while `mcp_call_id` identifies
-one call. Ordinary standalone agent MCP rows have role `unverified` and local transport. By
+canonical run correlation. `origin_session_id` groups MCP calls while the per-call `trace_id`
+identifies one call; `mcp_call_id` is the compatibility identifier federated routed calls may
+carry. Ordinary standalone agent MCP rows have role `unverified` and local transport. By
 default, the session has only the `agent` capability; a server started with `--operator` also
 grants `operator`. Trusted managed-envelope identity may replace `unverified`; client JSON may
 not.

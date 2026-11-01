@@ -43,7 +43,7 @@
 //! the owner clock records it even without reads. A stored row carries the
 //! whole response as a snapshot, which a canonical read serves while it is
 //! fresh, calibration included; every live request scores the newest stored
-//! forecasts.
+//! forecasts plus the mature snapshots of each model version from 9 on.
 
 mod dependencies;
 mod model;
