@@ -232,7 +232,7 @@ export async function createUiContext(options) {
   };
   ctx.openTarget = (target, baseUrl, placeholders) =>
     openTarget(ctx, browser, target, baseUrl, placeholders);
-  ctx.screenshotFor = (rule, target) => screenshotFor(ctx, rule, target);
+  ctx.screenshotFor = (rule, target, result) => screenshotFor(ctx, rule, target, result);
   ctx.writeEvidence = (ruleId, targetId, label, text) =>
     writeEvidence(ctx, ruleId, targetId, label, text);
   ctx.fetchJson = async (urlPath) => {
@@ -376,13 +376,173 @@ export async function closeTarget(ctx) {
   }
 }
 
-async function screenshotFor(ctx, rule, target) {
+// Failing-element handles a result can carry, in preference order: an
+// explicit unique `evidence_selector` a rule stamped on the measured node,
+// then the failure rows `verdict` records (`selector` plus the measured
+// `text`/`width_px`, which together disambiguate a non-unique selector),
+// then a lone measurements selector.
+export function failureEvidenceCandidates(result) {
+  const candidates = [];
+  const measurements = result?.measurements ?? {};
+  if (typeof measurements.evidence_selector === "string" && measurements.evidence_selector) {
+    candidates.push({ evidence_selector: measurements.evidence_selector });
+  }
+  if (Array.isArray(measurements.failures)) {
+    for (const failure of measurements.failures) {
+      if (!failure || typeof failure !== "object") continue;
+      if (typeof failure.evidence_selector === "string" && failure.evidence_selector) {
+        candidates.push({ evidence_selector: failure.evidence_selector });
+      } else if (typeof failure.selector === "string" && failure.selector) {
+        candidates.push({
+          selector: failure.selector,
+          text: typeof failure.text === "string" ? failure.text : "",
+          width_px: typeof failure.width_px === "number" ? failure.width_px : null,
+        });
+      }
+    }
+  }
+  if (candidates.length === 0 && typeof measurements.selector === "string" && measurements.selector) {
+    candidates.push({ selector: measurements.selector, text: "", width_px: null });
+  }
+  return candidates;
+}
+
+async function resolveFailureLocator(ctx, candidate) {
+  if (candidate.evidence_selector) {
+    const locator = ctx.page.locator(candidate.evidence_selector);
+    return (await locator.count().catch(() => 0)) === 1 ? locator : null;
+  }
+  const locator = ctx.page.locator(candidate.selector);
+  const count = await locator.count().catch(() => 0);
+  if (count === 0) return null;
+  if (count === 1) return locator.first();
+  if (!candidate.text && candidate.width_px == null) return null;
+  const wantedText = candidate.text.replace(/\s+/g, " ").trim().slice(0, 80);
+  const matches = [];
+  for (let index = 0; index < count; index += 1) {
+    const item = locator.nth(index);
+    const facts = await item
+      .evaluate((element) => ({
+        text: (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 80),
+        width: Math.round(element.getBoundingClientRect().width),
+      }))
+      .catch(() => null);
+    if (!facts) continue;
+    if (wantedText && facts.text !== wantedText) continue;
+    if (candidate.width_px != null && Math.abs(facts.width - candidate.width_px) > 1) continue;
+    matches.push(item);
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+async function captureScrollState(page) {
+  return page.evaluate(() => {
+    const entries = [];
+    const elements = [...document.querySelectorAll("*")];
+    elements.forEach((element, index) => {
+      if (element.scrollTop !== 0 || element.scrollLeft !== 0) {
+        entries.push({ index, top: element.scrollTop, left: element.scrollLeft });
+      }
+    });
+    return {
+      x: window.scrollX,
+      y: window.scrollY,
+      scrollingTop: document.scrollingElement?.scrollTop ?? 0,
+      scrollingLeft: document.scrollingElement?.scrollLeft ?? 0,
+      entries,
+    };
+  });
+}
+
+async function restoreScrollState(page, saved) {
+  await page
+    .evaluate((state) => {
+      const elements = [...document.querySelectorAll("*")];
+      for (const entry of state.entries) {
+        const element = elements[entry.index];
+        if (element) {
+          element.scrollTop = entry.top;
+          element.scrollLeft = entry.left;
+        }
+      }
+      if (document.scrollingElement) {
+        document.scrollingElement.scrollTop = state.scrollingTop;
+        document.scrollingElement.scrollLeft = state.scrollingLeft;
+      }
+      window.scrollTo(state.x, state.y);
+    }, saved)
+    .catch(() => {});
+}
+
+// Scroll the measured element so its start sits below the top of its
+// scroll container, leaving the rows and headings above it in frame, then
+// capture the viewport. A viewport capture of a very tall element shows
+// its beginning and its neighbours; an element capture of it is an
+// unreadable strip divorced from the card that contains it.
+async function frameFailureInViewport(page, locator) {
+  await locator.evaluate((element) => {
+    const contextTopPx = 160;
+    element.scrollIntoView({ block: "start", inline: "nearest" });
+    let rect = element.getBoundingClientRect();
+    if (Math.abs(rect.top - contextTopPx) > 1) {
+      let scroller = null;
+      for (let node = element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (node.scrollHeight > node.clientHeight + 1 && /(auto|scroll|overlay)/.test(style.overflowY)) {
+          scroller = node;
+          break;
+        }
+      }
+      const target = scroller ?? document.scrollingElement;
+      if (target) target.scrollTop += rect.top - contextTopPx;
+      rect = element.getBoundingClientRect();
+      if (Math.abs(rect.top - contextTopPx) > 1 && document.scrollingElement && target !== document.scrollingElement) {
+        document.scrollingElement.scrollTop += rect.top - contextTopPx;
+      }
+    }
+  });
+  await Promise.race([
+    page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        }),
+    ),
+    new Promise((resolve) => setTimeout(resolve, 500)),
+  ]);
+}
+
+async function screenshotFor(ctx, rule, target, result) {
   if (!ctx.page) return "";
   const directory = path.join(ctx.outDir, "evidence", rule.id);
   await mkdir(directory, { recursive: true });
   const name = `${safeName(target.view)}-${target.theme}-${target.width}-${target.state}.png`;
   const destination = path.join(directory, name);
   const view = target.viewDef;
+  // When the result identifies the measured element, frame that element
+  // with its surrounding context instead of the manifest clip, which is
+  // chosen for whole-view captures and can omit or stretch the defect.
+  // Any scroll changed for framing is restored before returning, so later
+  // rules measuring the same page see the state the load left.
+  for (const candidate of failureEvidenceCandidates(result)) {
+    const locator = await resolveFailureLocator(ctx, candidate).catch(() => null);
+    if (!locator) continue;
+    const saved = await captureScrollState(ctx.page).catch(() => null);
+    try {
+      await frameFailureInViewport(ctx.page, locator);
+      await ctx.page.screenshot({ path: destination });
+      return path.posix.join("evidence", rule.id, name);
+    } catch {
+      // Fall through to the clip/viewport capture below.
+    } finally {
+      if (saved) await restoreScrollState(ctx.page, saved);
+      if (candidate.evidence_selector?.startsWith("[data-ux-evidence-target=")) {
+        await locator
+          .evaluate((element) => element.removeAttribute("data-ux-evidence-target"))
+          .catch(() => {});
+      }
+    }
+  }
   if (view?.clip) {
     await ctx.page.locator(view.clip).first().screenshot({ path: destination }).catch(async () => {
       await ctx.page.screenshot({ path: destination });

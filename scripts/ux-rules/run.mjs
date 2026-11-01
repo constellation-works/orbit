@@ -305,7 +305,7 @@ async function runUiModules(modules, args) {
         }
         for (const result of list) {
           if (result.status === "fail") {
-            const shot = await ctx.screenshotFor(rule, target).catch(() => "");
+            const shot = await ctx.screenshotFor(rule, target, result).catch(() => "");
             if (shot && !result.evidence.includes(shot)) result.evidence.push(shot);
           }
           results.push(result);

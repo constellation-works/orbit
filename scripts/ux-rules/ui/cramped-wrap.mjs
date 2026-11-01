@@ -39,6 +39,7 @@ export async function check(ctx) {
     };
     const seen = new Set();
     const rows = [];
+    const rowElements = [];
     // A grid track can collapse to zero while its text still paints outside
     // the box. The shared visibility helper excludes zero-width boxes, so
     // include those whose parent remains visible and whose style is visible.
@@ -111,6 +112,7 @@ export async function check(ctx) {
         collapsed: H.rect(el).width === 0,
         text: own.slice(0, 80),
       });
+      rowElements.push(el);
     }
     // A single wrap to two lines is normal responsive behavior; three or
     // more lines at about one word per line means the column is narrower
@@ -118,7 +120,15 @@ export async function check(ctx) {
     const failures = rows.filter(
       (row) => row.collapsed || (row.short && row.lines >= 3 && row.words / row.lines <= 1.5) ||
         (!row.short && row.lines >= 9 && row.chars / row.lines < 25),
-    );
+    ).map((row, index) => {
+      // `selector` alone is not unique (it is a tag plus two classes), so
+      // stamp the measured node with a handle the evidence capture can
+      // resolve to exactly this element. screenshotFor removes it after
+      // framing; the fingerprint never carries it.
+      const handle = `ui.cramped-wrap-${index}`;
+      rowElements[rows.indexOf(row)]?.setAttribute("data-ux-evidence-target", handle);
+      return { ...row, evidence_selector: `[data-ux-evidence-target="${handle}"]` };
+    });
     return { matched: rows.length, failures: failures.slice(0, 20) };
   });
   return verdict(ctx, rule, found.matched, found.failures);
