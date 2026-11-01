@@ -1448,9 +1448,13 @@ for evidence an operator read afterwards (below), or null when the claim holds
 none. `build_state` and `root_cause_state` are `recorded` or `unrecorded`; an
 `unrecorded` field means the run record held none (or the claim predates the
 evidence), and the owner never fills it from its own or any current build or by
-reading the settlement's text. An older follower sends none, and a report whose
-run or job does not match the run the claim bound is dropped without refusing the
-settlement. The managed scan reads all of this from the owner's store with
+reading the settlement's text. An older follower sends none. The owner records a
+report only when its `run_id` is the run the claim bound, the bound run's machine
+is the machine the claim executed on, and its `job_id` is nonblank; any other
+report is dropped without refusing the settlement. The owner does not compare the
+job with an expected job, because a claim binds a machine and a run, not a job.
+Hydration checks more: it accepts only a terminal claimed-leaf job (below). The
+managed scan reads all of this from the owner's store with
 `--no-reconcile` and needs no operator capability.
 
 A claim settled before a follower sent its run record stays `unrecorded` until
