@@ -370,7 +370,7 @@ pub(super) fn dispatch_workspace(command: Commands, context: DispatchContext<'_>
         }) => args.execute_without_runtime(context.root_override),
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Sync(args),
-        }) => args.execute_without_runtime(context.root_override),
+        }) => args.execute_without_runtime(context.root_override, context.workspace_selector),
         Commands::Workspace(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Workspace"),
     }

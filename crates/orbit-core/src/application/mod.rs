@@ -57,7 +57,9 @@ pub(crate) mod visual_delivery;
 pub(crate) mod workflow;
 mod workspace;
 pub(crate) mod workspace_auto;
-pub use workspace::{preset as workspace_preset, sync as workspace_sync};
+pub use workspace::{
+    live_runs as workspace_live_runs, preset as workspace_preset, sync as workspace_sync,
+};
 
 #[cfg(test)]
 mod tests;

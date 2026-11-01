@@ -72,6 +72,32 @@ orbit workspace sync --check
 
 `--check` reports pending updates and exits with status `0` if the workspace is up to date, or status `3` if convergence changes are pending. This status code makes `--check` suitable for pre-flight scripts and CI checks.
 
+### Synchronize every workspace on the host
+
+After upgrading the binary, run sync once per host instead of once per workspace:
+
+```bash
+orbit workspace sync --all
+orbit workspace sync --check --all   # preview; writes nothing
+```
+
+`--all` works from any directory and converges every workspace registered on this host (the checkouts `orbit workspace list --all` shows, replicas included). It never reaches across hosts, so run it on each host. Each workspace is synced under its normal lock, and the output has one line per workspace:
+
+| Status | Meaning |
+|---|---|
+| `synced` | Changes were applied; the line lists what changed. |
+| `already current` | Nothing to apply. |
+| `skipped` | Left untouched, with a reason: the checkout path or its `.orbit/` directory is missing, the path is not a Git checkout, it shares a data root with an earlier workspace, or a live drain or run holds it. |
+| `failed` | Convergence raised an error; the line carries it. |
+
+One workspace failing does not stop the rest. The command exits `1` if any workspace failed; skipped workspaces are reported but do not fail it. With `--check`, `--all` exits `3` when any workspace has pending changes and none failed. `--json` prints the same records under `workspaces`, plus a `summary` of counts.
+
+A workspace with a live drain or a pending, running or retrying run is skipped rather than rewritten mid-run. There is no override flag: once the drain or run ends, rerun `orbit workspace sync --all`, or sync that workspace from its own checkout. `--check` never skips for a live run, because it reads only. `--all` cannot be combined with `--workspace`.
+
+Host-global assets (skills, jobs, activities) are shared by every workspace, so each synced workspace's report includes them; only the first changes anything.
+
+`orbit doctor` reports a `workspace-convergence` warning naming any registered workspace that is behind the installed binary's defaults, and points at `orbit workspace sync --all`.
+
 ## Inspect and apply migrations
 
 Orbit manages two versioned migration ledgers: the SQLite store schema (inside `orbit.db` and task stores) and the workspace layout in `.orbit/`.
