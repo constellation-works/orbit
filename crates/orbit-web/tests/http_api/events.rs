@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRun, JobRunState, TaskStatus};
+use orbit_types::workflow::{ActivityCrewDraw, FINAL_RECOVERY_CREWS_KEY, PipelineState};
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
 
-use super::support::{Fixture, Server, isolated};
+use super::support::{Fixture, Server, isolated, json_ok};
 
 const WS: &str = "?workspace=ws_http_fixture";
 /// Bounds every stream read: a notice is due within one scan interval.
@@ -280,6 +281,130 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
             }
         },
     );
+}
+
+/// The list page and each change-stream scan call `active_task_triage_map`.
+/// ORB-20709 read every active run's pipeline state on that path (no test
+/// covered the cost). One page must be one exact batch read, and a checkpoint
+/// the single-run read would reject must still fail the page rather than bind
+/// the run from its submitted input.
+#[test]
+fn active_triage_scan_reads_run_state_once_and_rejects_a_bad_checkpoint() {
+    isolated(
+        "events::active_triage_scan_reads_run_state_once_and_rejects_a_bad_checkpoint",
+        || {
+            let fixture = Fixture::new();
+            let task = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Watched task".into(),
+                    description: "Triage reads are batched.".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..TaskAddParams::default()
+                })
+                .unwrap();
+            let mut expected = Vec::new();
+            for index in 0..3 {
+                let run_id = format!("jrun-triage-batch-{index}");
+                let mut run = fixture.seed_run(
+                    &run_id,
+                    "blocked_task_recovery_pipeline",
+                    JobRunState::Running,
+                );
+                run.input = Some(json!({"task_id": task.id}));
+                fixture.save_run(&run);
+                let mut state = PipelineState::new(
+                    run_id.clone(),
+                    run.job_id.clone(),
+                    run.input.clone().unwrap(),
+                );
+                state.activity_crew_draws.insert(
+                    FINAL_RECOVERY_CREWS_KEY.into(),
+                    ActivityCrewDraw {
+                        crew: "recoverer".into(),
+                        source: "fixture".into(),
+                        eligible_pool: vec![],
+                    },
+                );
+                state.step_states.insert(0, JobRunState::Success);
+                state.step_outputs.insert(
+                    0,
+                    json!({"proceed": true, "recovery": {"task_id": task.id}}),
+                );
+                fixture.runtime.write_run_state(&run_id, &state).unwrap();
+                expected.push(json!({"run_id": run_id, "crew": "recoverer"}));
+            }
+            let server = fixture.counted_run_state_server();
+            let list_path = "/api/tasks?workspace=ws_http_fixture";
+            let detail_path = format!("/api/tasks/{}?workspace=ws_http_fixture", task.id);
+
+            let before = fixture.run_state_trace().len();
+            let page = json_ok(server.get(list_path));
+            let list_reads = &fixture.run_state_trace()[before..];
+            assert_eq!(
+                list_reads.len(),
+                1,
+                "ORB-20709 read each active run's pipeline state; one list page must be one batch read: {list_reads:?}"
+            );
+            assert_eq!(list_reads[0]["span"]["name"], "read_job_run_states_exact");
+            assert_eq!(
+                span_run_count(&list_reads[0]),
+                3,
+                "the batch covers every active run, not one query per run: {list_reads:?}"
+            );
+            let row = page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == task.id.as_str())
+                .unwrap();
+            assert_eq!(row["active_triage"], json!(expected), "list bindings");
+
+            let before = fixture.run_state_trace().len();
+            let detail = json_ok(server.get(&detail_path));
+            let detail_reads = &fixture.run_state_trace()[before..];
+            assert_eq!(
+                detail_reads.len(),
+                1,
+                "one detail read is one batch read: {detail_reads:?}"
+            );
+            assert_eq!(span_run_count(&detail_reads[0]), 3);
+            assert_eq!(detail["active_triage"], json!(expected), "detail bindings");
+
+            let connection = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            assert_eq!(
+                connection
+                    .execute(
+                        "UPDATE job_run_states SET pipeline_state_json = '{' \
+                         WHERE run_id = 'jrun-triage-batch-0'",
+                        [],
+                    )
+                    .unwrap(),
+                1
+            );
+            for (label, path) in [("list", list_path), ("detail", detail_path.as_str())] {
+                let response = server.get(path);
+                let status = response.status();
+                let body: Value = response.json().unwrap();
+                assert_eq!(
+                    status, 500,
+                    "{label} must fail a bad checkpoint instead of binding submitted input: {body}"
+                );
+                let message = body["error"].as_str().unwrap_or("");
+                assert!(
+                    message.contains("invalid pipeline_state_json"),
+                    "{label} error must be the single-run store error: {body}"
+                );
+            }
+        },
+    );
+}
+
+fn span_run_count(event: &Value) -> u64 {
+    event["fields"]["run_count"]
+        .as_u64()
+        .or_else(|| event["span"]["run_count"].as_u64())
+        .unwrap_or_else(|| panic!("run_count missing from {event}"))
 }
 
 #[test]
