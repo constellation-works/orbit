@@ -243,9 +243,19 @@ pub enum V2AuditEventKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         omitted_requirement_notes: Vec<String>,
     },
-    /// The tag instructions a CLI backend invocation's prompt carried, emitted
-    /// once per invocation before the subprocess starts, and only when there
-    /// were some. Text is not recorded: the hash and source identify it.
+    /// Generated workspace corpus rows delivered to one provider invocation.
+    /// The digest and pinned source identify the text; content stays out of audit.
+    AgentCorpusApplied {
+        step_id: String,
+        activity_name: String,
+        index: String,
+        revision: String,
+        paths: Vec<String>,
+        sha256: String,
+        bytes: usize,
+        truncated: bool,
+    },
+    /// Trusted per-tag guidance delivered to one invocation.
     TagInstructionsApplied {
         /// The pipeline step that dispatched the activity.
         step_id: String,
@@ -490,6 +500,7 @@ impl V2AuditEventKind {
             V2AuditEventKind::TrustedHostExecutionAdmitted { .. } => {
                 "trusted_host.execution_admitted"
             }
+            V2AuditEventKind::AgentCorpusApplied { .. } => "activity.agent_corpus_applied",
             V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
             V2AuditEventKind::ExploreBriefApplied { .. } => "activity.explore_brief_applied",
             V2AuditEventKind::ImageCanaryChecked { .. } => "activity.image_canary_checked",
@@ -553,6 +564,7 @@ pub const V2_AUDIT_BODY_KIND_EVENT_TYPES: &[(&str, &str)] = &[
         "tag_instructions_applied",
         "activity.tag_instructions_applied",
     ),
+    ("agent_corpus_applied", "activity.agent_corpus_applied"),
     ("explore_brief_applied", "activity.explore_brief_applied"),
     ("image_canary_checked", "activity.image_canary_checked"),
     (

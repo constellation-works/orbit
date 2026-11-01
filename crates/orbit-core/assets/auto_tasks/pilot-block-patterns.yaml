@@ -11,8 +11,8 @@ template:
     after final recovery, then make sure each recurring cause has a fix in flight where the
     cause starts. Success is the same cause recurring less pass over pass, not the number of
     tasks filed. The durable outputs are the `pilot-block-report.json` artifact, the
-    `pilot-block-cursor.json` artifact, and filed or commented fix tasks. Narrative-only
-    output does not count.
+    `pilot-block-cursor.json` artifact, filed or commented fix tasks, and a reviewed
+    corpus change containing every observed group. Narrative-only output does not count.
 
     This pass studies causes, not individual tasks. Resolving one blocked or held task is
     `escalation_triage_pipeline`'s job: never edit, requeue, comment on or triage a blocked
@@ -55,7 +55,7 @@ template:
     ## 1. Windows
 
     - **Cursor.** Find the newest completed prior pass with `orbit.task.list`
-      `{"status":["done"],"tag":["pilot-block-patterns","no-diff-expected"],"limit":1}` and
+      `{"status":["done"],"tag":["pilot-block-patterns"],"limit":1}` and
       read its `pilot-block-cursor.json` and `pilot-block-report.json` with
       `orbit.task.artifact.get` only after `artifacts` from `orbit.task.show` lists those
       paths. Record the new scan start, the moment this scan starts, before reading any
@@ -195,7 +195,31 @@ template:
     in `relations`. Compare every group with the prior pass too, and say whether it grew,
     shrank, held or is new.
 
-    ## 6. Report and cursor
+    ## 6. Corpus proposal, report and cursor
+
+    Before handoff, propose every group observed in this pass in `docs/agents/corpus/`.
+    This includes filed and commented groups, groups deferred by the five-fix-task cap,
+    and groups below the recurrence threshold. The cap limits fix tasks, never corpus
+    records. Follow `docs/design/workspace-agent-corpus/1_scope.md`: one issue document per
+    mechanism, with Signature, Mechanism, Resolution, Fix task and Occurrences sections,
+    and frontmatter `type`, `applies_to`, `status` and `links`. Link durable source
+    evidence and record date, task, run, matched signature and outcome for each occurrence.
+    Append evidence-backed occurrences to an existing mechanism instead of duplicating it.
+    Never invent unknown causes or resolutions: mark the uncertainty explicitly.
+
+    These worktree changes are a reviewed corpus proposal delivered by this pass's PR,
+    not automatic appends from your narrative. This pass is intentionally not tagged
+    `no-diff-expected`: a corpus delta follows ordinary validation and review. With no
+    new occurrence or mechanism, retain the existing corpus and explain the clean result.
+    Where task histories contain system `agent_corpus_append` entries, export those
+    histories under `.orbit/tmp/` and run `python3 scripts/agent-corpus.py --records
+    <export.json>` to materialize them deterministically. Create a missing topic document
+    in this same proposal before materializing its appends. Never fabricate system outbox
+    records. Regenerate the index with `python3 scripts/agent-corpus.py`; include all
+    corpus changes in the delivery. No group may live only in the report artifact.
+
+    The writes limit above governs other task records; it permits these corpus worktree
+    changes on your own managed branch. It does not authorize commits or merges.
 
     Write `.orbit/tmp/pilot-block-report.json` (`$ORBIT_SCRATCH_DIR`) and attach it as
     `pilot-block-report.json` with `orbit.task.artifact.put`:
@@ -244,10 +268,13 @@ template:
   - No blocked or pilot-held task was edited, requeued, commented on or triaged; the only writes on other tasks were comments on open fix tasks covering a group.
   - Every group carries its change against the prior pass, and every fix this auto-task filed that reached done in the last 30 days has an effectiveness verdict, with a regression task filed for each `not effective` fix.
   - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` when `partial` is true. When this pass resumed, the attached cursor's `cursor` is the prior cursor's `cursor` (not this scan start) and the report's `window_start` is the window start read from the prior report's `window_start`. Or the pass stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
+  - Every observed group, including deferred and below-threshold groups, is proposed as a mechanism document or appended occurrences in the corpus worktree changes, with a fresh generated index; no group lives only in the report.
+  context_files:
+  - dir:docs/agents/corpus
+  - file:docs/design/workspace-agent-corpus/1_scope.md
   task_type: chore
   tags:
   - pilot-block-patterns
-  - no-diff-expected
   required_tools:
   - orbit.friction.add
   - orbit.search

@@ -97,6 +97,7 @@ impl OrbitRuntime {
             revision: None,
             instructions: Vec::new(),
             refusals: Vec::new(),
+            agent_corpus: Default::default(),
         };
         let mut bytes = 0;
         for (tag, role) in pairs {
@@ -124,6 +125,12 @@ impl OrbitRuntime {
                     error: error.to_string(),
                 }),
             }
+        }
+        for (activity, index) in self.tag_instruction_settings().agent_corpus() {
+            let injection = revision
+                .get()
+                .and_then(|revision| self.read_agent_corpus_at(activity, index, &revision));
+            captured.agent_corpus.insert(activity.clone(), injection);
         }
         captured.revision = revision.resolved();
         captured
@@ -181,7 +188,7 @@ impl OrbitRuntime {
     /// The receipt's capture when this process executes a claimed leaf. A
     /// leaf whose admission is unreadable, or whose older owner captured
     /// nothing, resolves on this replica instead and says so.
-    fn claimed_tag_instructions(&self) -> Option<CapturedTagInstructions> {
+    pub(crate) fn claimed_tag_instructions(&self) -> Option<CapturedTagInstructions> {
         self.worker_invocation()?;
         let captured = self.current_claimed_leaf().map(|leaf| {
             leaf.admission

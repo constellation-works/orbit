@@ -55,6 +55,14 @@ the probe: a run's first or last minute row, and an insert, delete, re-key or
 only when the counter moved since its cached answer. The triggers fire on
 older binaries' writes too.
 
+The workspace agent corpus keeps its versioned row and append contracts in
+`orbit-types`, its mapping in `orbit-config`, and pinned reads and deterministic
+append production in core. Append proposals reuse task history as a durable
+sidecar outbox, in the same update as the human answer or recovery decision.
+A deterministic script materializes reviewed repository batches; injection
+never reads unreviewed outbox data. No new store or internal crate edge is
+introduced. See the [corpus design](docs/design/workspace-agent-corpus/1_scope.md).
+
 ## Crates
 
 | Crate | Tier | Depends on (internal) |

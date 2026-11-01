@@ -20,6 +20,7 @@ mod image_input;
 pub use explore_brief::{
     ExploreBriefAdmission, ExploreBriefDropReason, ExploreBriefOutcome, ExploreBriefRecord,
 };
+mod agent_corpus;
 mod final_recovery;
 pub mod handoff;
 mod host_evidence;
@@ -33,6 +34,9 @@ mod run;
 mod ship;
 mod skill;
 mod tag_instructions;
+pub use agent_corpus::{
+    AgentCorpusAppend, AgentCorpusInjection, AgentCorpusRow, MAX_AGENT_CORPUS_BYTES,
+};
 pub use delivery_conventions::{
     BRANCH_HASH_LEN, COMMIT_SUBJECT_BUDGET, ConventionTemplate, DEFAULT_BRANCH_PREFIX,
     DEFAULT_BRANCH_TEMPLATE, DeliveryConventions, EVIDENCE_REF_PREFIX, MissingSectionPolicy,
