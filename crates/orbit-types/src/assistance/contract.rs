@@ -11,6 +11,10 @@ use sha2::{Digest, Sha256};
 
 pub const ASSISTANCE_FORMAT: &str = "decision-assistance-eval/1";
 pub const ASSISTANCE_RESULT_SCHEMA: &str = "decision-assistance-result/1";
+/// Most option ids a packet-bound choice may copy from one packet field.
+pub const ASSISTANCE_PACKET_BOUND_MAX_IDS: u8 = 8;
+/// Most bytes in one id a packet-bound choice may copy.
+pub const ASSISTANCE_PACKET_BOUND_MAX_ID_BYTES: u8 = 64;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +30,20 @@ pub enum AssistanceMode {
 pub struct AssistanceCriterionRef {
     pub index: u32,
     pub text_digest: String,
+}
+
+/// Where a granted template copies a choice question's per-request option ids.
+/// The template digest covers this binding. It does not cover the ids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssistancePacketBoundChoice {
+    /// Evidence-packet field holding a JSON array of option id strings.
+    pub field: String,
+    /// Maximum number of option ids. At most [`ASSISTANCE_PACKET_BOUND_MAX_IDS`].
+    pub max_ids: u8,
+    /// Maximum byte length of one option id. At most
+    /// [`ASSISTANCE_PACKET_BOUND_MAX_ID_BYTES`].
+    pub max_id_bytes: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +64,12 @@ pub enum AssistanceQuestion {
         min_confidence: Option<f64>,
         #[serde(default)]
         criterion_refs: Vec<AssistanceCriterionRef>,
+        /// Granted template only. Absent on every fixed choice, and omitted
+        /// from serialization when unset so existing contract digests stay put.
+        /// Admission copies the packet field, appends the abstention, then
+        /// clears this binding on the stored question.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        packet_bound: Option<AssistancePacketBoundChoice>,
     },
 }
 
@@ -116,12 +140,10 @@ impl AssistanceContract {
             if let AssistanceQuestion::Choice {
                 allowed,
                 abstain_values,
+                packet_bound,
                 ..
             } = q
-                && (!(2..=255).contains(&allowed.len())
-                    || allowed.iter().any(|s| !assistance_identifier(s))
-                    || allowed.iter().collect::<BTreeSet<_>>().len() != allowed.len()
-                    || abstain_values.iter().any(|s| !allowed.contains(s)))
+                && !choice_values_are_admissible(allowed, abstain_values, packet_bound.as_ref())
             {
                 return Err(AssistanceReason::InvalidRequest);
             }
@@ -263,6 +285,49 @@ impl AssistanceRequest {
         }
         Ok(())
     }
+}
+
+/// A fixed choice lists its own allowed values. A packet-bound choice, on the
+/// granted template only, lists just its one abstention until admission copies
+/// the packet field.
+fn choice_values_are_admissible(
+    allowed: &[String],
+    abstain_values: &[String],
+    packet_bound: Option<&AssistancePacketBoundChoice>,
+) -> bool {
+    if let Some(bound) = packet_bound {
+        return packet_bound_template_is_admissible(allowed, abstain_values, bound);
+    }
+    (2..=255).contains(&allowed.len())
+        && allowed.iter().all(|value| assistance_identifier(value))
+        && allowed.iter().collect::<BTreeSet<_>>().len() == allowed.len()
+        && abstain_values.iter().all(|value| allowed.contains(value))
+}
+
+fn packet_bound_template_is_admissible(
+    allowed: &[String],
+    abstain_values: &[String],
+    bound: &AssistancePacketBoundChoice,
+) -> bool {
+    packet_field_name_is_bindable(&bound.field)
+        && (1..=ASSISTANCE_PACKET_BOUND_MAX_IDS).contains(&bound.max_ids)
+        && (1..=ASSISTANCE_PACKET_BOUND_MAX_ID_BYTES).contains(&bound.max_id_bytes)
+        && abstain_values.len() == 1
+        && assistance_identifier(&abstain_values[0])
+        && allowed == abstain_values
+}
+
+fn packet_field_name_is_bindable(name: &str) -> bool {
+    assistance_identifier(name)
+        && !matches!(
+            name,
+            "packet_id"
+                | "subject_id"
+                | "collected_at"
+                | "evidence_refs"
+                | "omissions"
+                | "truncated"
+        )
 }
 
 pub fn assistance_probability(p: f64) -> bool {

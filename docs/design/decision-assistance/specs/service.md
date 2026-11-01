@@ -42,6 +42,27 @@ checked against the immutable evidence packet. Contract versions must match.
 This admits per-criterion/pair assessments without requiring a host grant per
 task or placing consumer taxonomies in the generic service.
 
+A choice question may instead be packet-bound. On the granted template the
+question names one evidence-packet field, an id-count bound of at most 8, an
+id byte bound of at most 64, and exactly one abstention value. That abstention
+is the question's only `allowed` entry and its only `abstain_values` entry.
+The template digest covers the field name, those bounds and that abstention.
+It does not cover the per-request ids. `enqueue_expanded_assistance` copies
+the field's JSON strings, in order, and appends the abstention. The field must
+be one of the grant's evidence fields. Each id is a distinct identifier, at
+most the declared byte length, different from the abstention; the list holds
+at least one id and at most the declared count. A missing field, a value that
+is not an array of strings, a duplicate, or an id past either bound refuses
+enqueue. The stored question then drops the binding and is an ordinary choice
+over that copied set, so answer checks apply to the copied ids plus the
+abstention: the distribution lists exactly those values and sums to one within
+0.001, and the chosen value is the most probable. An answer outside that set
+is a malformed result. `enqueue_assistance` has no template and refuses a
+packet-bound question. A question without the binding, including every
+existing expanded template, keeps its fixed allowed values, its contract
+digest and its admission behavior. With no packet-bound question, an existing
+request is admitted as before.
+
 The generic core contains no failure or task-quality taxonomy. The offline
 evaluator remains the owner of the two initial versioned question sets. The
 manual fixture consumes its `schema` export directly. Extra generic metadata
@@ -205,6 +226,8 @@ scripts/build-budget.py -- cargo run -p orbit-core --example assistance_fixture 
 It covers off with no credential/queue/call, value redaction and scope, strict
 answer translation, missing/extra/invalid/refused answers, probability bounds,
 choice abstention and choice confidence/distribution consistency,
+packet-bound choice admission (copied ids, answer refusal, id-count and byte
+bounds) and unchanged legacy choice serialization,
 unavailable budgets/pricing, overflow/queue expiry, completed results
 outliving queue age until retention or real supersession, and expired queued
 and retry-pending work reading the same before and after maintenance,
