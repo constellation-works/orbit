@@ -8,6 +8,7 @@
 pub(crate) mod ci_failure;
 pub(crate) mod dependabot;
 mod duplicate_tasks;
+mod rule_evidence;
 pub(crate) mod rule_findings;
 mod task_port;
 

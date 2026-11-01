@@ -140,7 +140,11 @@ The fingerprint is `rule id`, the target id, and the target argv (or the target 
 
 The deterministic `file_rule_findings` activity turns one results document into tasks: one proposed bug task per new failing fingerprint (the fingerprint is stored in the task's `rule_fingerprint` field, with the measurements, the evidence and a reproduce command naming `--rule` and the target), a comment on the open owner when measurements change, exactly one comment when the fingerprint passes again (never a status change), and one task per rule for `error` results, tagged `ux-rules-error`. New tasks per run are capped by `ux_rules.max_new_tasks` (default 10, highest severity first); results below `ux_rules.file_at` (default `low`) or for rules in `ux_rules.disabled` are recorded in the run output only. The filer is generic: any script that writes this schema can feed it.
 
-`ux_rules_pipeline` runs the shipped `step.mjs` adapter, then the filer. It uses `--fixture` for UI; `ui_base_url` is ignored because a network-none script cannot reach the host dashboard. The merged results retain each result's surface for filing. Surface startup failures become `error` results with the runner's diagnostic. The temporary evidence files are removed after the merge; their paths in the results are diagnostic references, not retained artifacts.
+`ux_rules_pipeline` runs the shipped `step.mjs` adapter, then the filer. It uses `--fixture` for UI; `ui_base_url` is ignored because a network-none script cannot reach the host dashboard. The merged results retain each result's surface for filing. Surface startup failures become `error` results with the runner's diagnostic. Before scratch cleanup the adapter exports evidence into `ORBIT_SCRIPT_OUT`, rebases each reference to a SHA-256 file name, and deduplicates equal content across results and surfaces. It accepts at most 64 unique regular files, each at most 1 MiB. Missing, malformed, escaped, symlinked or oversized evidence fails the step explicitly; no successful report claims missing attachments. Reduce captures or split the run when this finite budget is exhausted. Fingerprints remain unchanged. The adapter pins each surface directory before launching the runner and opens evidence through pinned directory handles with no-follow and bounded reads. This requires the Linux script profile’s existing `/proc/self/fd`; other hosts refuse explicitly. Names use a lowercase ASCII extension of at most 10 characters (`.jpeg` normalizes to `.jpg`); identical bytes with conflicting extensions refuse rather than acquire a type from result order.
+
+The job binds `evidence_step: run` and `evidence_files: "{{ steps.run.files }}"`. The generic filer selects only that unique direct preceding script step in its executing definition and consumer checkpoint, requires a successful matching results document, and verifies the output set against the producer record, workspace, current/resumed run lineage and digests. It attaches only named members to newly filed findings after script scratch is gone. Missing checkpoints and substituted descriptors refuse filing. Loop/parallel evidence producers are unsupported and refuse explicitly. Standalone `results_file`/`evidence_dir` filing confines evidence reads to the workspace and also reports invalid evidence rather than silently dropping it.
+
+Existing installations must update the manifest output limits below and explicitly regrant `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576` before running the pipeline. The changed manifest invalidates the previous grant; no sandbox or network roots need widening.
 
 To set up the workspace, copy the following template to `.orbit/resources/scripts/ux_rules_runner.yaml`. Replace the absolute paths with the host's actual Node interpreter, Orbit binary, and browser kit root, keeping each path identical in `interpreter`/`args` and in `requests.read_roots`. The kit root is the root `orbit browser-kit` installs (it holds `kit/node_modules/playwright/index.mjs` and `browsers/`). The Orbit binary and Node must be executable in the sandbox, including their shared libraries. Do not request `env_pass`: this build's script profile refuses any granted step that requests environment passthrough, and it clears the environment instead. Granted read roots are bound at their host paths inside the sandbox, so the adapter finds the Orbit binary and the browser kit from the manifest `args` below (a step input `orbit` or `browser_kit` overrides them) and passes `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH` to its own runner child. From the same kit root it also initializes the child's `LD_LIBRARY_PATH` (the kit's unpacked `root/usr/lib/*-linux-gnu` and `root/lib/*-linux-gnu` directories, ahead of any inherited value) and `FONTCONFIG_FILE` (`<kit>/fonts.conf`, unless one is already set), mirroring what the kit's `env.sh` exports without evaluating it. A kit with no unpacked `root/` or `fonts.conf` (system libraries, macOS) sets neither, and an explicit `--playwright-module` / `--playwright-browsers-path` still wins. Scratch uses its provided `TMPDIR`; no extra write root is needed.
 
@@ -172,6 +176,10 @@ spec:
       schema_version: {type: integer}
       surface: {type: string}
       results: {type: array}
+  files:
+    outputs:
+      max_files: 64
+      max_file_bytes: 1048576
   requests:
     network: none
     read_roots: [/opt/orbit/bin/orbit, /opt/browser-kit]
@@ -181,9 +189,32 @@ spec:
 
 1. Copy and adapt the manifest as above.
 2. Set surfaces with `orbit config set ux_rules.surfaces '["cli", "ui"]'`.
-3. An operator runs `orbit script grant ux_rules_runner`, then `orbit run job ux_rules_pipeline`. Check `orbit run show` for counts and filed tasks before enabling the disabled daily routine.
+3. An operator runs `orbit script grant ux_rules_runner --output-max-files 64 --output-max-file-bytes 1048576`, then `orbit run job ux_rules_pipeline`. Check `orbit run show` for counts and filed tasks before enabling the disabled daily routine.
 
 The fixture server starts inside the script network namespace and needs a working loopback interface, the browser kit, and the Orbit binary. A direct Linux fixture run works with those host prerequisites, but it does not prove the Bubblewrap profile: an unprivileged-namespace denial prevented a sandbox run on the implementation host. Verify the script step on a host where Bubblewrap is available; if its isolated loopback is down, the fixture server cannot bind and UI results report errors. `faketime` is optional: without it server-relative ages can drift, as described above.
+
+## Isolated evidence replay
+
+`node --test scripts/ux-rules/tests/step.test.mjs` reproduces adapter evidence loss on
+the old adapter and verifies retention, deduplication and explicit invalid/budget failures.
+On Linux, the public engine/filer regression runs the real adapter and output publisher
+with a fixture launcher, disposable user state, and a valid PNG:
+
+```sh
+ORBIT_UX_EVIDENCE_REPORT_DIR="$PWD/.orbit/tmp/ux-evidence-replay" \
+  scripts/build-budget.py -- cargo test -p orbit-core --lib \
+  ux_evidence_survives_script_job_filer_cleanup_and_checkpoint_reuse -- --nocapture
+```
+
+The report directory receives `attached.png` read back from the finding task after script
+scratch cleanup, and a digest/producer receipt. The same test proves identical-run dedup,
+child checkpoint reuse, unrelated-run and descriptor substitution refusal, missing
+checkpoints, invalid names, size limits and changed producer bytes. To perform the private
+real-script replay on an owner where the unchanged Bubblewrap profile can start, add
+`ORBIT_UX_EVIDENCE_CONTAINED=1` to that command. This selects Core’s real script launcher;
+it changes no sandbox, network, program or path grants. Keep its receipt distinct from
+the fixture-launcher receipt. The parent operator owns that contained proof and the real
+dashboard replay before merge; fixture-launcher evidence makes neither claim.
 
 ## Handoff: ux-review auto-tasks after the routine (phase 3)
 

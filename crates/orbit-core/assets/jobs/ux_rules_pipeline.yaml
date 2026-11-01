@@ -37,6 +37,8 @@ spec:
       target: activity:file_rule_findings
       default_input:
         results: "{{ steps.run.output }}"
+        evidence_step: run
+        evidence_files: "{{ steps.run.files }}"
         # Optional run overrides; otherwise filing resolves ux_rules.* config.
         max_new_tasks: "{{ input.max_new_tasks }}"
         file_at: "{{ input.file_at }}"

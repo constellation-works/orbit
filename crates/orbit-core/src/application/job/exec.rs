@@ -397,6 +397,10 @@ impl OrbitRuntime {
             )
         });
 
+        // Preserve the exact executing definition for consumers of checkpointed
+        // script evidence, including foreground runs without submission snapshots.
+        self.write_run_definition_snapshot(&run_id, &yaml)?;
+
         let audit_root = self.paths().audit_dir.clone();
         let workspace_path = self.paths().repo_root.clone();
         let writer = V2AuditWriter::with_disk_sinks(

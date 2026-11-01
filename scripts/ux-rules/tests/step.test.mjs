@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -97,5 +98,75 @@ test("step keeps inherited loader and font settings and leaves system-library ki
     const untouched = runStepProbe(dir, plain);
     assert.equal(untouched.ld, "");
     assert.equal(untouched.fonts, "");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("step exports evidence before deleting surface scratch", () => {
+  const scratch = process.env.ORBIT_SCRATCH_DIR || path.resolve(".orbit/tmp");
+  mkdirSync(scratch, { recursive: true });
+  const dir = mkdtempSync(path.join(scratch, "ux-step-evidence-"));
+  try {
+    const out = path.join(dir, "declared");
+    mkdirSync(out);
+    const runner = path.join(dir, "runner.mjs");
+    writeFileSync(runner, `import {writeFileSync,mkdirSync} from 'node:fs'; import path from 'node:path';
+const out=process.argv[process.argv.indexOf('--out')+1];
+mkdirSync(path.join(out,'nested'));
+writeFileSync(path.join(out,'nested/capture.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMwmPDgPwAFNAKg4ubHmAAAAABJRU5ErkJggg==', 'base64'));
+writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({results:[{rule:'ui.x',status:'fail',fingerprint:'x',evidence:['nested/capture.png']}]}));`);
+    const report = JSON.parse(execFileSync(process.execPath, ["scripts/ux-rules/step.mjs"], {
+      input: JSON.stringify({ surfaces: ["ui", "ui"], runner, orbit: process.execPath }),
+      env: { ...process.env, TMPDIR: dir, ORBIT_SCRIPT_OUT: out }, encoding: "utf8",
+    }));
+    const evidence = report.results[0].evidence[0];
+    const bytes = readFileSync(path.join(out, evidence));
+    assert.equal(bytes.toString("hex", 0, 8), "89504e470d0a1a0a");
+    assert.equal(evidence, `${createHash("sha256").update(bytes).digest("hex")}.png`);
+    assert.equal(report.results[0].fingerprint, "x");
+    assert.deepEqual(report.results[0].evidence, report.results[1].evidence);
+    assert.equal(readdirSync(out).length, 1, "equal captures across surfaces share one output");
+    assert.equal(report.results[0].status, "fail");
+    assert.ok(!readdirSync(dir).some((name) => name.startsWith("ux-rules-")), "surface scratch must be removed");
+    assert.ok(!existsSync(path.join(dir, "capture.png")));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("step refuses evidence loss and unsafe or exhausted exports explicitly", () => {
+  const scratch = process.env.ORBIT_SCRATCH_DIR || path.resolve(".orbit/tmp");
+  mkdirSync(scratch, { recursive: true });
+  const dir = mkdtempSync(path.join(scratch, "ux-evidence-rejected-"));
+  try {
+    const runner = path.join(dir, "runner.mjs");
+    writeFileSync(runner, `import {writeFileSync,symlinkSync} from 'node:fs'; import path from 'node:path';
+const out=process.argv[process.argv.indexOf('--out')+1];
+const mode=process.argv[process.argv.indexOf('--surface')+1];
+let evidence=['capture.png'];
+if(mode==='missing'){} else if(mode==='malformed')evidence=[42];
+else if(mode==='escaped')evidence=['../capture.png'];
+else if(mode==='symlink')symlinkSync('/etc/passwd',path.join(out,'capture.png'));
+else if(mode==='parent-symlink'){evidence=['nested/passwd'];symlinkSync('/etc',path.join(out,'nested'));}
+else if(mode==='extension'){evidence=['capture.abcdefghijkl'];writeFileSync(path.join(out,evidence[0]),'x');}
+else if(mode==='conflict'){evidence=['capture.png','capture.txt'];for(const name of evidence)writeFileSync(path.join(out,name),'x');}
+else if(mode==='large')writeFileSync(path.join(out,'capture.png'),Buffer.alloc(1048577));
+else if(mode==='count'){evidence=Array.from({length:65},(_,i)=>i+'.png');for(const [i,name] of evidence.entries())writeFileSync(path.join(out,name),String(i));}
+writeFileSync(path.join(out,'ux-rules.json'),JSON.stringify({results:[{rule:'x',status:'fail',fingerprint:'x',evidence}]}));`);
+    for (const [mode, diagnostic] of [
+      ["missing", /ENOENT/], ["malformed", /invalid evidence path/],
+      ["escaped", /invalid evidence path/], ["symlink", /symlink/], ["parent-symlink", /symlinks are refused/],
+      ["large", /1048576 bytes/], ["count", /64 unique/],
+      ["extension", /ASCII file extension/], ["conflict", /conflicting file types/],
+    ]) {
+      const out = path.join(dir, mode);
+      mkdirSync(out);
+      assert.throws(() => execFileSync(process.execPath, ["scripts/ux-rules/step.mjs"], {
+        input: JSON.stringify({ surfaces: [mode], runner, orbit: process.execPath }),
+        env: { ...process.env, TMPDIR: dir, ORBIT_SCRIPT_OUT: out }, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+      }), (error) => {
+        assert.match(error.stderr, diagnostic, mode);
+        assert.equal(error.stdout, "", "no successful report may claim unavailable evidence");
+        return true;
+      });
+      assert.ok(!readdirSync(dir).some((name) => name.startsWith("ux-rules-")), mode);
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

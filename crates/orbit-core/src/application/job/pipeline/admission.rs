@@ -584,7 +584,11 @@ impl OrbitRuntime {
         }
     }
 
-    fn write_run_definition_snapshot(&self, run_id: &str, yaml: &str) -> Result<(), OrbitError> {
+    pub(crate) fn write_run_definition_snapshot(
+        &self,
+        run_id: &str,
+        yaml: &str,
+    ) -> Result<(), OrbitError> {
         let dir = self.paths().job_runs_dir.clone();
         let path = run_definition_snapshot_path(&dir, run_id)?;
         atomic_write_text(&path, yaml).map_err(|error| {

@@ -260,6 +260,7 @@
         "application/job/tests/pipeline/admission.rs::repeated_automation_admission_preserves_pending_running_and_terminal_state",
         "application/job/tests/pipeline/admission.rs::trigger_recording_preserves_a_competing_checkpoint_and_drain_controls",
         "application/job/tests/script_step.rs::script_launcher_env_carries_user_bus_locators_but_script_env_does_not",
+        "application/job/tests/script_step.rs::ux_evidence_survives_script_job_filer_cleanup_and_checkpoint_reuse",
         "application/plugin/tests/lifecycle/remove.rs::a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it",
         "application/plugin/tests/skills.rs::disabling_preserves_links_that_resolve_outside_the_namespace",
         "application/pull_drain/drain/tests/breaker.rs::a_half_open_breaker_admits_one_probe_and_only_once_nothing_is_unsettled",

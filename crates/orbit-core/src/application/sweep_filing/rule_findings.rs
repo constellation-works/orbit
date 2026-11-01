@@ -10,12 +10,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_types::task::{
-    Task, TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType,
-    media_type_for_artifact_path,
-};
+use orbit_types::task::{Task, TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
+use super::rule_evidence;
 use crate::OrbitRuntime;
 use crate::application::sweep_filing::{bounded_u64, is_open_ci_owner_status, truncate_chars};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
@@ -24,8 +22,6 @@ const SUPPORTED_SCHEMA_VERSION: u64 = 1;
 const DEFAULT_MAX_NEW_TASKS: u64 = 10;
 const MAX_NEW_TASKS: u64 = 50;
 const DEFAULT_RUNNER: &str = "scripts/ux-rules/run.mjs";
-/// Evidence larger than this is named in the task, not attached.
-const MAX_EVIDENCE_BYTES: u64 = 1024 * 1024;
 
 fn severity_rank(severity: &str) -> u8 {
     match severity.to_ascii_lowercase().as_str() {
@@ -273,29 +269,6 @@ fn last_marker_kind(
     None
 }
 
-fn evidence_artifacts(evidence_dir: Option<&Path>, result: &Value) -> Vec<TaskArtifact> {
-    let Some(dir) = evidence_dir else {
-        return Vec::new();
-    };
-    string_list(result.get("evidence"))
-        .into_iter()
-        .filter_map(|relative| {
-            let path = dir.join(&relative);
-            let metadata = std::fs::metadata(&path).ok()?;
-            if !metadata.is_file() || metadata.len() > MAX_EVIDENCE_BYTES {
-                return None;
-            }
-            let content = std::fs::read(&path).ok()?;
-            Some(TaskArtifact {
-                media_type: media_type_for_artifact_path(&relative).to_string(),
-                path: relative,
-                content,
-                created_by: Some("system".to_string()),
-            })
-        })
-        .collect()
-}
-
 struct FilingCandidate {
     fingerprint: String,
     rule: String,
@@ -309,6 +282,7 @@ struct FilingCandidate {
 pub(crate) fn file_rule_findings(
     runtime: &OrbitRuntime,
     input: &Value,
+    consumer_run_id: Option<&str>,
 ) -> Result<Value, OrbitError> {
     let (document, evidence_dir) = load_results(runtime, input)?;
     let version = document
@@ -320,6 +294,13 @@ pub(crate) fn file_rule_findings(
             "rule results schema version {version} is newer than supported version {SUPPORTED_SCHEMA_VERSION}"
         )));
     }
+    let evidence = rule_evidence::load_rule_evidence(
+        runtime,
+        input,
+        &document,
+        evidence_dir.as_deref(),
+        consumer_run_id,
+    )?;
     let settings = filer_settings(runtime, input)?;
     let surface = field(&document, "surface").to_string();
     let commit = field(&document, "commit").to_string();
@@ -480,7 +461,7 @@ pub(crate) fn file_rule_findings(
             },
             artifacts: group
                 .iter()
-                .flat_map(|result| evidence_artifacts(evidence_dir.as_deref(), result))
+                .flat_map(|result| rule_evidence::artifacts_for_result(&evidence, result))
                 .collect(),
             fingerprint,
             rule: rule.clone(),
@@ -563,17 +544,17 @@ pub(crate) fn file_rule_findings(
                 declared.to_string()
             }
         };
-        let evidence = string_list(result.get("evidence"));
+        let evidence_names = string_list(result.get("evidence"));
         candidates.push(FilingCandidate {
             params: TaskAddParams {
                 title,
                 description: format!(
                     "Rule `{rule}` failed.\n\n- Target: `{}`\n- Severity: `{severity}`\n- Fingerprint: `{fingerprint}`\n\nMeasurements:\n\n```json\n{measurements}\n```\n\nEvidence: {}\n\nReproduce:\n\n```sh\n{}\n```",
                     target_label(&target),
-                    if evidence.is_empty() {
+                    if evidence_names.is_empty() {
                         "none recorded".to_string()
                     } else {
-                        evidence.join(", ")
+                        evidence_names.join(", ")
                     },
                     reproduce_command(&settings.runner, result_surface(result, &surface), &rule, &target),
                 ),
@@ -590,7 +571,7 @@ pub(crate) fn file_rule_findings(
                 context_files: declared_context_files(runtime, result),
                 ..TaskAddParams::default()
             },
-            artifacts: evidence_artifacts(evidence_dir.as_deref(), result),
+            artifacts: rule_evidence::artifacts_for_result(&evidence, result),
             fingerprint,
             rule,
             rank,

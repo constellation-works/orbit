@@ -262,6 +262,14 @@ fn default_ux_rules_pipeline_file_step_binds_optional_inputs() {
         serde_yaml::from_str(include_str!("../../assets/jobs/ux_rules_pipeline.yaml")).unwrap();
     let steps = pipeline["spec"]["steps"].as_sequence().unwrap();
     let mut file_step = steps[1].clone();
+    file_step["default_input"]
+        .as_mapping_mut()
+        .unwrap()
+        .remove(serde_yaml::Value::from("evidence_step"));
+    file_step["default_input"]
+        .as_mapping_mut()
+        .unwrap()
+        .remove(serde_yaml::Value::from("evidence_files"));
     file_step["default_input"]["results"] = serde_yaml::to_value(document(Vec::new())).unwrap();
     pipeline["spec"]["steps"] = serde_yaml::Value::Sequence(vec![file_step]);
 
@@ -519,7 +527,11 @@ fn documented_ux_rules_runner_template_is_not_refused_for_env_pass() {
     let grant = runtime
         .grant_script(
             "ux_rules_runner",
-            &orbit_core::runtime::scripts::ScriptGrantOptions::default(),
+            &orbit_core::runtime::scripts::ScriptGrantOptions {
+                output_max_files: Some(64),
+                output_max_file_bytes: Some(1048576),
+                ..Default::default()
+            },
         )
         .expect("the documented template grants");
     assert!(

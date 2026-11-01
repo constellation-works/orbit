@@ -1,6 +1,8 @@
 // Script-step adapter: run each surface independently and return one document.
 import { execFile } from "node:child_process";
-import { access, mkdtemp, mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { createHash } from "node:crypto";
+import { access, mkdtemp, mkdir, readdir, open, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -100,6 +102,72 @@ async function unpackedKitRuntime(root) {
   return { libraryDirs, fontsConf };
 }
 
+
+// Directory-relative opens use pinned handles, including each intermediate
+// directory. O_NOFOLLOW on only the final file would still race a directory
+// swapped for a symlink. The Linux script profile already mounts /proc.
+async function readSurfaceFile(root, relative, limit) {
+  if (typeof relative !== "string" || !relative || path.isAbsolute(relative) || relative.includes("\\") || relative.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw new Error(`invalid evidence path: ${JSON.stringify(relative)}`);
+  }
+  if (process.platform !== "linux" || constants.O_NOFOLLOW === undefined || constants.O_DIRECTORY === undefined) {
+    throw new Error("safe evidence reads require the Linux script profile with /proc/self/fd; run this adapter there");
+  }
+  const handles = [];
+  let directory = root;
+  try {
+    const parts = relative.split("/");
+    for (const part of parts.slice(0, -1)) {
+      directory = await open(`/proc/self/fd/${directory.fd}/${part}`, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      handles.push(directory);
+    }
+    const file = await open(`/proc/self/fd/${directory.fd}/${parts.at(-1)}`, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    handles.push(file);
+    const info = await file.stat();
+    if (!info.isFile() || info.nlink !== 1 || info.size > limit) throw new Error(`evidence must be a single-link regular file no larger than ${limit} bytes: ${relative}`);
+    const bytes = Buffer.alloc(limit + 1);
+    let total = 0;
+    while (total < bytes.length) {
+      const { bytesRead } = await file.read(bytes, total, bytes.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > limit) throw new Error(`evidence exceeds ${limit} bytes: ${relative}`);
+    return bytes.subarray(0, total);
+  } catch (error) {
+    throw new Error(`cannot safely read evidence ${relative}: ${error.message}; symlinks are refused; regenerate the evidence and rerun`);
+  } finally {
+    for (const handle of handles.reverse()) await handle.close();
+  }
+}
+
+// Content names deduplicate repeated captures across surfaces and results.
+async function exportEvidence(results, root, exported) {
+  for (const result of results) {
+    if (result.evidence === undefined) continue;
+    if (!Array.isArray(result.evidence)) throw new Error("evidence must be an array of relative paths");
+    const names = [];
+    for (const relative of result.evidence) {
+      const bytes = await readSurfaceFile(root, relative, 1024 * 1024);
+      let suffix = path.extname(relative).toLowerCase();
+      if (!/^\.[a-z0-9]{1,10}$/.test(suffix)) throw new Error(`evidence needs a simple ASCII file extension of at most 10 characters: ${relative}`);
+      if (suffix === ".jpeg") suffix = ".jpg";
+      const digest = createHash("sha256").update(bytes).digest("hex");
+      let name = exported.get(digest);
+      if (name && path.extname(name) !== suffix) throw new Error(`identical evidence has conflicting file types: ${name} and ${relative}; use one consistent evidence type`);
+      if (!name) {
+        name = `${digest}${suffix}`;
+        if (exported.size >= 64) throw new Error("evidence exceeds 64 unique output files; reduce captures or split the run; the adapter limit is 64");
+        if (!process.env.ORBIT_SCRIPT_OUT) throw new Error("evidence requires declared ORBIT_SCRIPT_OUT outputs");
+        await writeFile(path.join(process.env.ORBIT_SCRIPT_OUT, name), bytes, { flag: "wx" });
+        exported.set(digest, name);
+      }
+      names.push(name);
+    }
+    result.evidence = names;
+  }
+}
+
 async function main() {
   let inputText = "";
   for await (const chunk of process.stdin) inputText += chunk;
@@ -112,10 +180,12 @@ async function main() {
   const scratch = await mkdtemp(path.join(os.tmpdir(), "ux-rules-"));
   const results = [];
   let commit = "";
+  const exported = new Map();
   try {
     for (const [index, surface] of input.surfaces.entries()) {
       const out = path.join(scratch, String(index));
       await mkdir(out);
+      const root = await open(out, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       const args = [input.runner || "scripts/ux-rules/run.mjs", "--surface", surface, "--out", out];
       try {
         const orbit = await orbitBinary(locations);
@@ -131,14 +201,17 @@ async function main() {
         }
         if (kit.fontsConf && !process.env.FONTCONFIG_FILE) env.FONTCONFIG_FILE = kit.fontsConf;
         await exec(process.execPath, args, { env, maxBuffer: 4 * 1024 * 1024 });
-        const report = JSON.parse(await readFile(path.join(out, "ux-rules.json"), "utf8"));
+        const reportBytes = await readSurfaceFile(root, "ux-rules.json", 4 * 1024 * 1024).catch((error) => { error.evidenceFailure = true; throw error; });
+        const report = JSON.parse(reportBytes.toString("utf8"));
         if (!Array.isArray(report.results)) throw new Error("runner report has no results array");
         commit ||= report.commit || "";
+        await exportEvidence(report.results, root, exported).catch((error) => { error.evidenceFailure = true; throw error; });
         results.push(...report.results.map((result) => ({ ...result, surface })));
       } catch (error) {
+        if (error.evidenceFailure) throw error;
         const detail = (error.stderr || error.message || String(error)).trim();
         results.push({ surface, rule: `${surface}.runner`, target: { id: surface, argv: [] }, status: "error", severity: "medium", measurements: { reason: detail }, evidence: [], fingerprint: `${surface}.runner|${surface}` });
-      }
+      } finally { await root.close(); }
     }
     const summary = { pass: 0, fail: 0, error: 0, skipped: 0 };
     for (const result of results) if (Object.hasOwn(summary, result.status)) summary[result.status]++;
