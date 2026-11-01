@@ -225,8 +225,10 @@ spec:
        - Confirm no conflict path still has conflict markers.
        - Run the workspace's focused tests for the code that owns the resolved
          paths.
-       - When the task envelope has `task.final_validation_commands`, do not run
-         those commands; the host runs them after continuing the rebase. Record
+       - `task.final_validation_commands` comes only from the injected execution
+         envelope. It is absent when empty and is not an `orbit.task.show` field.
+         When the task envelope has it, do not run those commands; the host runs
+         them after continuing the rebase. Record
          each as `not_run` (host final validation) in `gates`. A required
          command missing from that list is still yours.
        - Without that list (including an empty capture, a standalone or unknown

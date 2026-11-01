@@ -298,8 +298,10 @@ spec:
       handoff; never defer a required check to review. Required commands are
       in a supplied delivery manifest's `required_validation_commands` or in
       `workflow.required_validation_commands`.
-    - When `task.final_validation_commands` is present, the pipeline runs
-      each listed command itself, outside the agent sandbox, on the final
+    - `task.final_validation_commands` comes only from the injected execution
+      envelope. It is absent when empty and is not an `orbit.task.show` field.
+      When it is present, the pipeline runs each listed command itself,
+      outside the agent sandbox, on the final
       committed candidate. For a diff, do not run a listed command whole or
       defer it: run focused checks (tests, formatter, linter for what you
       changed) that show each criterion, plus every workspace-required check

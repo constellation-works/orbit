@@ -144,7 +144,17 @@ pub fn is_task_show_projection_field(name: &str) -> bool {
 
 /// Actionable error for a name that is not in the vocabulary.
 pub fn unknown_task_show_field_message(name: &str) -> String {
-    format!("unknown field selector `{name}`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}")
+    let message =
+        format!("unknown field selector `{name}`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}");
+    match name {
+        "final_validation_commands" => format!(
+            "{message}. Read `final_validation_commands` only from the injected execution envelope as `task.final_validation_commands`; it is absent when empty and is not an `orbit.task.show` field."
+        ),
+        "blocked_by" => format!(
+            "{message}. Use `dependencies`, `resolved_dependencies` or `relations` instead."
+        ),
+        _ => message,
+    }
 }
 
 /// Whether the task status refuses the writes an implementer must make.
