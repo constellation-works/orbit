@@ -75,9 +75,16 @@ use orbit_types::workflow::SourceRepairBinding;
 /// Status event of an operator's requeue of a blocked task.
 pub(crate) const OPERATOR_REQUEUED_EVENT: &str = "operator_requeued";
 
-/// How a refused requeue offers to start over instead.
-const DISCARD_HINT: &str = "requeue with --discard-candidate (MCP: discard_candidate=true) to \
-                            close it and let the next run implement fresh";
+/// How a refused requeue offers to start over instead: the supported operator
+/// CLI discard route. `orbit.task.update` MCP does not accept
+/// `discard_candidate`, which is CLI-only.
+fn operator_discard_hint(id: &str) -> String {
+    format!(
+        "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
+         on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`) to \
+         close it and let the next run implement fresh"
+    )
+}
 
 /// The publication a failure handoff recorded, read from its receipt without
 /// authenticating it. It names what a requeue would resume; the requeue
@@ -613,8 +620,10 @@ impl OrbitRuntime {
             Some(CandidateFreshReason::SpecChanged) => Err(OrbitError::InvalidInput(format!(
                 "the task specification changed after its claim kept candidate {} on {}, so \
                  that candidate no longer implements this task and cannot be resumed. Nothing \
-                 was changed. To {DISCARD_HINT}.",
-                kept.candidate.head_sha, kept.candidate.branch
+                 was changed. To {}.",
+                kept.candidate.head_sha,
+                kept.candidate.branch,
+                operator_discard_hint(&task.id)
             ))),
         }
     }
@@ -700,7 +709,7 @@ impl OrbitRuntime {
         task: &Task,
         receipt: Option<&HandoffReceipt>,
     ) -> Result<Option<(Option<TaskHistoryEntry>, SourceRepairBinding)>, OrbitError> {
-        let discard_hint = DISCARD_HINT;
+        let discard_hint = operator_discard_hint(&task.id);
         if let Some(receipt) = receipt {
             if !task.spec_digest_matches(&receipt.task_spec_digest) {
                 return Err(OrbitError::InvalidInput(format!(
