@@ -2,7 +2,7 @@
 title: "Exploratory task-risk evidence: October 29, 2026"
 owner: codex
 last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_validated: 2026-11-01
 type: reference
 summary: "Seven-day regression observations, within-tier comparisons and model-specific size curves."
 ---

@@ -2,7 +2,7 @@
 title: "Scope: UX rules"
 owner: claude
 last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_validated: 2026-11-01
 status: Draft
 stage: designing
 next: "Phases 1-3 built (ORB-19974..19976); enabling the routine needs an operator-granted ux_rules_runner script, and a live UI surface waits for script steps' network phase"
@@ -15,7 +15,7 @@ tags: [ux-rules, ui, cli, mcp, routines, auto-tasks, browser-kit, visual-review]
 
 # Scope: UX rules
 
-Status: phases 1-3 built (runner, CLI and UI rule sets, `file_rule_findings`, the `rule_fingerprint` field, `ux_rules_pipeline` and the seeded daily `ux-rules` routine, disabled until an operator grants the runner script and enables it). Open question 1 is answered: a network-`none` script step cannot reach host loopback, so a live-dashboard UI surface waits for script steps' network phase; CLI and fixture-mode UI runs work. Daniel, 2026-10-29: "run a routine on periodic UI checks
+Status: phases 1-3 built (runner, CLI and UI rule sets, `file_rule_findings`, the `rule_fingerprint` field, `ux_rules_pipeline` and the seeded daily `ux-rules` routine, disabled until an operator grants the runner script and enables it). The two auto-tasks' prompts still carry their own measurement sections; moving them onto the rules is not done. Open question 1 is answered: a network-`none` script step cannot reach host loopback, so a live-dashboard UI surface waits for script steps' network phase; CLI and fixture-mode UI runs work. Daniel, 2026-10-29: "run a routine on periodic UI checks
 on a list of rules ... break it down into rules, and automate the validation", and the same
 for the CLI. This is the first slice of the shared visual infrastructure: the view manifest
 and capture driver it introduces are the ones [visual review](../visual-review/1_scope.md)
@@ -41,8 +41,8 @@ browser kit pins one Playwright build per Orbit release
 ([browser checks](../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)). Jobs already
 pair a collecting step with a deterministic filing step (`dependabot_alert_sweep_pipeline`:
 `collect_dependabot_alerts` → `file_dependabot_alert_tasks`). [Script steps](../script-steps/1_scope.md)
-(designed, not built) would let a job run a granted workspace script and read its JSON
-stdout.
+(phases 1-2 landed: a granted workspace script runs on Linux with no network) let a job run
+a granted workspace script and read its JSON stdout.
 
 ## Problem
 
@@ -153,6 +153,9 @@ Seeded from the two prompts. Each line is one rule.
 | cli | `mcp-description-length` | MCP tool and field descriptions within a byte budget. |
 | cli | `mcp-cli-parity` | A CLI command and its MCP tool agree on required inputs and defaults. |
 
+Later rules extend this seed set, and thresholds are tuned as rules are built; the built
+rules and their current measurements are listed in [scripts/ux-rules/README.md](../../../scripts/ux-rules/README.md).
+
 Rules that need the live data shape (the backlog-forecast unavailable reasons) are written
 against API-shaped fixtures rendered in the browser, like the existing dashboard browser
 tests, so they do not depend on what the live store happens to hold.
@@ -198,15 +201,16 @@ node scripts/ux-rules/run.mjs --surface cli --orbit "$(command -v orbit)" \
     "measurements": {"selector": ".lifecycle-diagnostics .tile-body", "padding_left_px": 0,
                      "sibling_padding_left_px": 16},
     "evidence": ["evidence/ui.panel-body-padding/audit-diagnostics-dark-375.png"],
-    "fingerprint": "ui.panel-body-padding|audit-diagnostics|dark|375|default|.lifecycle-diagnostics .tile-body"
+    "fingerprint": "ui.panel-body-padding|audit-diagnostics|dark|375|default"
   }],
   "summary": {"pass": 412, "fail": 3, "error": 0, "skipped": 6}
 }
 ```
 
-The fingerprint is the rule id, the target and the failing element's selector (or the argv
-for CLI), never a measurement, so the same defect keeps one fingerprint while its numbers
-change.
+The fingerprint is the rule id and the target (view, theme, width and state for UI; target
+id and argv for CLI), never a measurement or the failing element's selector, so the same
+defect keeps one fingerprint while its numbers or its first failing element change. The
+selector stays in `measurements`.
 
 ### Filing
 
@@ -230,15 +234,19 @@ schema above can use it.
 ### The routine
 
 ```yaml
-# .orbit/routines/ux-rules.yaml
-trigger: {cron: "0 6 * * *"}
-job: ux_rules_pipeline
+# .orbit/routines/ux-rules.yaml (seeded disabled)
+enabled: false
+trigger: {cron: "40 6 * * *", missed_run: skip}
+target: job:ux_rules_pipeline
+policy: {timeout_minutes: 60, overlap: forbid}
 ```
 
-`ux_rules_pipeline` has two steps: a [script step](../script-steps/1_scope.md) that runs the
-runner for each configured surface, and `file_rule_findings` on its output. It needs script
-steps' Linux execution phase. Until then, phase 1 below delivers the rules to the two
-auto-tasks, which run the runner themselves.
+`ux_rules_pipeline` has two steps: a [script step](../script-steps/1_scope.md)
+(`script:ux_rules_runner`, a workspace script an operator creates and grants) that runs the
+runner for each configured surface, and `file_rule_findings` on its output. It uses script
+steps' Linux execution phase, which has landed; that phase has no network, so a live
+dashboard on host loopback is out of reach until a network phase exists (open question 1).
+Phase 1 below also lets the two auto-tasks run the runner themselves.
 
 ### What the auto-tasks keep
 
@@ -297,8 +305,9 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
 - **Selectors couple rules to markup.** A refactor that renames classes can turn rules into
   `skipped` (the target selector matches nothing). The runner reports a rule that matched no
   element on any target as `error`, so silent coverage loss is visible.
-- **Script steps are not built.** The routine waits for their Linux execution phase. Phase 1
-  gets most of the value without it.
+- **Script steps have no network phase.** Their Linux execution phase has landed, so the
+  routine can run, but only on the CLI surface and fixture-mode UI targets. Phase 1 gets
+  most of the value without it.
 - **Loopback access.** UI rules reach the live dashboard on loopback. Script steps' Linux
   phase runs without network; whether loopback counts is an open question for that design.
 
@@ -313,7 +322,7 @@ Once the rules exist, `ux-review-ui` and `ux-review-cli` change:
    forecast fixture rule. `ux-review-ui` runs it first and drops its measurement and
    regression sections.
 3. **Routine and filing.** `file_rule_findings`, the `rule_fingerprint` field, the
-   `ux_rules_pipeline` job and the routine. Needs script steps' Linux execution phase.
+   `ux_rules_pipeline` job and the routine. Uses script steps' Linux execution phase.
 4. **Later.** Each filed only when needed: rules for other workspaces' UIs, fixture mode for
    flapping rules, and a dashboard view of rule results over time.
 
