@@ -95,6 +95,8 @@ fn closed_without_reply(stream: &mut UnixStream) -> bool {
 /// even if the assertion fails. All bytes belong to a valid request frame.
 fn assert_trickle_expires(prefix_sent: bool, interval: Duration) {
     let running = with_request_timeout(REQUEST_TIMEOUT, || start(own_anchor()));
+    // The worker can start its deadline as soon as the connection is accepted.
+    let started = Instant::now();
     let mut stream = connect(&running);
     stream
         .set_read_timeout(Some(REQUEST_TIMEOUT + Duration::from_secs(3)))
@@ -107,7 +109,6 @@ fn assert_trickle_expires(prefix_sent: bool, interval: Duration) {
         wire.drain(..4);
     }
     let mut writer = stream.try_clone().expect("clone peer");
-    let started = Instant::now();
     let closed = std::thread::scope(|scope| {
         let (stop, stopped) = std::sync::mpsc::sync_channel::<()>(1);
         scope.spawn(move || {
