@@ -37,7 +37,12 @@ def source(path, revision):
     # Missing commits in a shallow clone must not erase previously shipped bodies.
     if not commit_available(revision):
         return None
-    return git("show", f"{revision}:{path}")
+    # A revision that deleted the asset has no body; the earlier ones do.
+    shown = subprocess.run(
+        ["git", "show", f"{revision}:{path}"], cwd=ROOT, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    return shown.stdout if shown.returncode == 0 else ""
 
 
 def record(raw, revision):
@@ -128,6 +133,8 @@ def main():
         ] + revisions
         for revision in candidates:
             raw = source(path, revision)
+            if raw == "":
+                continue
             if raw is None:
                 raw = originals.get(revision)
             if raw is None:
