@@ -851,12 +851,13 @@ later moves between `backlog` and `someday` do not close. Its `[BLOCKED]` title
 is not rewritten.
 
 A refusal changes nothing. A specification edited since the publication is
-reported with its exit: `--discard-candidate` (MCP `discard_candidate: true`)
-records the discard and returns the task to `backlog`. It then closes the
-task's undelivered Orbit-authored pull requests, the same closure as
-`orbit task update <task-id> --status backlog --discard-candidate`, which is
-the equivalent route without a recorded requeue decision. The next run
-implements fresh. A closure the forge refuses is reported in the answer
+reported with its exit: `orbit task update <task-id> --status backlog
+--discard-candidate` on the operator CLI, since `orbit.task.update` does not
+accept `discard_candidate`. That command records the discard, returns the task
+to `backlog` and closes the task's undelivered Orbit-authored pull requests. It
+is the equivalent route to a requeue's discard, without a recorded requeue
+decision. The next run implements fresh. A closure the forge refuses is
+reported in the answer
 (`discard_closure: incomplete`), and the requeue stands. With
 `pr.close_on_terminal = false` nothing is closed (`discard_closure:
 disabled`); close the discarded pull request by hand. Any other refusal of the
