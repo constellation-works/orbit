@@ -239,22 +239,22 @@ pub fn match_auto_decision_rule(
             .into_iter()
             .find_map(|(file, rule)| (file == stem && rule.id == rule_id).then_some(rule))
     } else {
-        let by_id: Vec<_> = candidates
+        // A bare topic is a rule id. It answers only when that id appears in
+        // exactly one rule across every decision file, whatever its status or
+        // auto flag, so a collision anywhere keeps the request open. A file
+        // stem is not a topic.
+        let id_count = documents
             .iter()
+            .flat_map(|document| parse_decision_rules(&document.markdown))
+            .filter(|rule| rule.id == topic)
+            .count();
+        let by_id: Vec<_> = candidates
+            .into_iter()
             .filter(|(_, rule)| rule.id == topic)
-            .map(|(_, rule)| rule.clone())
+            .map(|(_, rule)| rule)
             .collect();
-        if by_id.len() == 1 {
+        if id_count == 1 {
             by_id.into_iter().next()
-        } else if by_id.is_empty() {
-            let in_file: Vec<_> = candidates
-                .iter()
-                .filter(|(stem, _)| stem == topic)
-                .map(|(_, rule)| rule.clone())
-                .collect();
-            (in_file.len() == 1)
-                .then(|| in_file.into_iter().next())
-                .flatten()
         } else {
             None
         }
