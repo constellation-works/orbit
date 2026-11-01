@@ -733,8 +733,10 @@ function forestCard(readout, color) {
   ], { className: "mx-wide" });
 }
 
-// The primary metric's per-arm cumulative mean at each bucket end of the
-// shared trend ladder, over settled tasks assigned by then.
+// The primary metric's per-arm cumulative series at each bucket end of the
+// shared trend ladder, over settled tasks assigned by then: the cumulative
+// mean (a rate for a 0/1 metric), or for a per-line primary the ratio of
+// accumulated numerators over accumulated reviewable lines.
 
 // Axis text follows the dashboard clock at the bucket's own precision. An
 // hour or 6 hours can fall on the same clock time on a later day, so those
