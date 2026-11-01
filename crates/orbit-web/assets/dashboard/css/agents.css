@@ -238,9 +238,9 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-term-weight { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; }
 .agents-bar-centered { width: 100%; }
 .agents-term-value { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); }
-.agents-stats { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; font-size: 12px; }
-.agents-stats dt { color: var(--fg-dim); }
-.agents-stats dd { margin: 0; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; }
+.agents-stats { margin: 0; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
+.agents-stats dt { min-width: 0; color: var(--fg-dim); overflow-wrap: anywhere; }
+.agents-stats dd { min-width: 0; margin: 0; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 .agents-how { border: 1px solid var(--border); border-radius: 3px; background: var(--bg-elev); padding: 0 12px; }
 .agents-how > summary {

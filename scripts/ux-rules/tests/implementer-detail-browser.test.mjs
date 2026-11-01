@@ -9,75 +9,94 @@ import { loadManifest } from "../lib/manifest.mjs";
 import { attachFailureScreenshot, createUiContext, expandTargets, startFixtureServer, closeTarget } from "../lib/ui-context.mjs";
 import { check, rule } from "../ui/cramped-wrap.mjs";
 
-test("implementer detail collapsed labels are detected and readable labels pass", {
+test("implementer detail stats stay readable at desktop and phone widths", {
   timeout: 180000,
   skip: !process.env.PLAYWRIGHT_MODULE || !process.env.ORBIT_VISUAL_ORBIT,
 }, async () => {
   const root = process.cwd();
   const manifest = await loadManifest(path.join(root, "crates/orbit-web/visual/views.toml"));
-  const target = expandTargets(rule, [manifest]).find((t) => t.view === "analytics-implementer-detail" && t.width === 1440);
-  assert.ok(target);
-  const server = await startFixtureServer(target.appDef, target.viewDef.fixture, root);
-  const ctx = await createUiContext({ repoRoot: root, outDir: process.env.ORBIT_UX_EVIDENCE || path.join(os.tmpdir(), "orbit-ux-implementer-detail") });
+  const targets = expandTargets(rule, [manifest]).filter((t) => t.view === "analytics-implementer-detail");
+  const target1440 = targets.find((target) => target.width === 1440);
+  const target375 = targets.find((target) => target.width === 375);
+  assert.ok(target1440 && target375);
+  const server = await startFixtureServer(target1440.appDef, target1440.viewDef.fixture, root);
+  const outDir = process.env.ORBIT_UX_EVIDENCE || path.join(root, ".orbit/tmp/ux-implementer-detail");
+  const ctx = await createUiContext({ repoRoot: root, outDir });
   try {
-    await ctx.openTarget(target, server.baseUrl, server.placeholders);
-    const stats = ctx.page.locator("#agents-detail .agents-stats");
-    assert.match(await stats.textContent(), /Cost coverage \(counted attempts\)/);
-    assert.match(await stats.textContent(), /Cost per landed task \(USD\)/);
-    assert.match(await stats.textContent(), /Cost missing-run attempts/);
-    assert.match(await stats.textContent(), /18 measured · 4 unpriced · 2 missing run/);
-    const collapsedLabels = await stats.locator("dt").evaluateAll((nodes) => nodes.filter((node) => node.getBoundingClientRect().width === 0).map((node) => node.textContent));
-    assert.ok(collapsedLabels.includes("Cost coverage (counted attempts)"));
-    assert.ok(collapsedLabels.includes("Cost per landed task (USD)"));
-    assert.ok(collapsedLabels.includes("Cost missing-run attempts"));
-    await ctx.page.evaluate(() => {
-      const parent = document.querySelector("#agents-detail .agents-stats");
-      for (const [text, style] of [["Invisible zero width label", "width:0;opacity:0"], ["Clipped zero width label", "width:0;overflow:hidden"]]) {
-        const node = document.createElement("dt");
-        node.textContent = text;
-        node.style.cssText = style;
-        parent.append(node);
-      }
-      const clip = document.createElement("div");
-      clip.style.cssText = "width:100px;height:40px;overflow:hidden;position:relative";
-      const offclip = document.createElement("span");
-      offclip.style.cssText = "display:block;width:0;position:relative;left:200px";
-      offclip.textContent = "Offscreen clipped zero width label";
-      clip.append(offclip);
-      parent.append(clip);
-    });
-    const before = await check(ctx);
-    const failures = before.measurements.failures || [];
-    assert.equal(before.status, "fail", JSON.stringify(before));
-    assert.equal(before.fingerprint, "ui.cramped-wrap|analytics-implementer-detail|dark|1440|default", JSON.stringify(before));
-    for (const label of ["Cost coverage (counted attempts)", "Cost per landed task (USD)", "Cost missing-run attempts"]) {
-      assert.ok(failures.some((f) => f.selector === "dt" && f.text === label), JSON.stringify(before));
+    const results = [];
+    for (const target of [target1440, target375]) {
+      await closeTarget(ctx);
+      await ctx.openTarget(target, server.baseUrl, server.placeholders);
+      const stats = ctx.page.locator("#agents-detail .agents-stats");
+      const text = await stats.textContent();
+      assert.match(text, /Cost coverage \(counted attempts\)/);
+      assert.match(text, /Cost per landed task \(USD\)/);
+      assert.match(text, /Cost missing-run attempts/);
+      assert.match(text, /18 measured · 4 unpriced · 2 missing run of 24 counted attempts/);
+      assert.match(text, /Tasks by tiermedium: 24/);
+
+      // Reapply the original production declaration to capture and verify the
+      // broken layout on the same candidate, view, data and viewport.
+      const baselineStyle = await ctx.page.addStyleTag({ content: `
+        .agents-stats { grid-template-columns: minmax(0, 1fr) auto !important; }
+        .agents-stats dt, .agents-stats dd { min-width: auto !important; overflow-wrap: normal !important; }
+      ` });
+      const before = await check(ctx);
+      const beforeFingerprint = `ui.cramped-wrap|analytics-implementer-detail|dark|${target.width}|default`;
+      assert.equal(before.status, "fail", JSON.stringify(before));
+      assert.equal(before.fingerprint, beforeFingerprint, JSON.stringify(before));
+      assert.ok((before.measurements.failures || []).some((failure) => failure.collapsed), JSON.stringify(before));
+      await ctx.page.locator("[data-ux-evidence-target]").evaluateAll((nodes) => nodes.forEach((node) => node.removeAttribute("data-ux-evidence-target")));
+      await stats.scrollIntoViewIfNeeded();
+      const beforePath = path.join(outDir, `analytics-implementer-detail-dark-${target.width}-before.png`);
+      await ctx.page.screenshot({ path: beforePath });
+      await baselineStyle.evaluate((style) => style.remove());
+
+      const after = await check(ctx);
+      assert.equal(after.status, "pass", JSON.stringify(after));
+      assert.equal(after.fingerprint, beforeFingerprint, JSON.stringify({ before, after }));
+      const geometry = await stats.evaluate((list) => {
+        const children = [...list.children];
+        const columns = getComputedStyle(list).gridTemplateColumns.split(" ").map(Number.parseFloat);
+        const pairs = [];
+        for (let index = 0; index < children.length; index += 2) {
+          const label = children[index].getBoundingClientRect();
+          const value = children[index + 1].getBoundingClientRect();
+          pairs.push({ labelWidth: label.width, valueWidth: value.width, separated: label.right <= value.left });
+        }
+        return { columns, pairs };
+      });
+      assert.equal(geometry.columns.length, 2, JSON.stringify(geometry));
+      assert.ok(geometry.columns.every((width) => width > 0), JSON.stringify(geometry));
+      assert.ok(geometry.pairs.every((pair) => pair.labelWidth > 0 && pair.valueWidth > 0 && pair.separated), JSON.stringify(geometry));
+
+      const afterPath = path.join(outDir, `analytics-implementer-detail-dark-${target.width}-after.png`);
+      await stats.scrollIntoViewIfNeeded();
+      await ctx.page.screenshot({ path: afterPath });
+      assert.deepEqual(pngSize(beforePath), { width: target.width, height: target.width === 1440 ? 900 : 812 });
+      assert.deepEqual(pngSize(afterPath), { width: target.width, height: target.width === 1440 ? 900 : 812 });
+
+      // An ordinary label that wraps to two lines remains acceptable.
+      await stats.evaluate((list) => {
+        const label = document.createElement("dt");
+        label.textContent = "Ordinary two line label";
+        label.style.maxWidth = "95px";
+        const value = document.createElement("dd");
+        value.textContent = "normal value";
+        list.append(label, value);
+      });
+      const ordinary = stats.locator("dt").last();
+      const lineCount = await ordinary.evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+      });
+      assert.equal(lineCount, 2, "negative control really wraps to two lines");
+      const ordinaryResult = await check(ctx);
+      assert.ok(!(ordinaryResult.measurements.failures || []).some((failure) => failure.text === "Ordinary two line label"), JSON.stringify(ordinaryResult));
+      results.push({ before, after, geometry, ordinary: ordinaryResult, captures: [beforePath, afterPath] });
     }
-    assert.ok(!failures.some((f) => /Invisible zero width|Clipped zero width|Offscreen clipped zero width/.test(f.text)), JSON.stringify(before));
-    await stats.scrollIntoViewIfNeeded();
-    await ctx.screenshotFor(rule, target);
-    // Give the same dashboard data a readable, bounded two-column layout.
-    await ctx.page.addStyleTag({ content: "#agents-detail .agents-stats { grid-template-columns: minmax(160px, 1fr) minmax(0, 1fr) !important; } #agents-detail .agents-stats dd { overflow-wrap: anywhere; }" });
-    const after = await check(ctx);
-    assert.equal(after.fingerprint, before.fingerprint, JSON.stringify({ before, after }));
-    assert.ok(!(after.measurements.failures || []).some((f) => /Cost/.test(f.text)), JSON.stringify(after));
-    await stats.scrollIntoViewIfNeeded();
-    await stats.screenshot({ path: path.join(ctx.outDir, "implementer-readable.png") });
-    // A regular two-line label is not treated as cramped.
-    await ctx.page.evaluate(() => {
-      const dt = document.querySelector("#agents-detail .agents-stats dt");
-      dt.textContent = "Ordinary two line label";
-      dt.style.width = "95px";
-    });
-    const lineCount = await ctx.page.locator("#agents-detail .agents-stats dt").first().evaluate((el) => {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
-    });
-    assert.equal(lineCount, 2, "negative control really wraps to two lines");
-    const normal = await check(ctx);
-    assert.ok(!(normal.measurements.failures || []).some((f) => f.text === "Ordinary two line label"));
-    console.log(JSON.stringify({ before, after, normal }));
+    console.log(JSON.stringify(results));
   } finally {
     await closeTarget(ctx);
     await ctx.close();
