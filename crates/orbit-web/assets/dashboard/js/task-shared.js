@@ -83,6 +83,19 @@ export function setRenderer(fn) {
   taskRenderer = fn;
 }
 
+// An answered decision changes what waits on the operator. The task list reads
+// that from a cache task-nav.js owns, so it subscribes here instead of being
+// imported by the modules that answer decisions.
+const decisionAnsweredListeners = new Set();
+
+export function onDecisionAnswered(listener) {
+  decisionAnsweredListeners.add(listener);
+}
+
+export function notifyDecisionAnswered() {
+  for (const listener of decisionAnsweredListeners) listener();
+}
+
 export function rerender(context) {
   taskRenderer(taskList(context), context);
 }
