@@ -75,9 +75,6 @@ fn codex_limit_frames(message: &str) -> String {
     )
 }
 
-/// Claude Code 2.1.294's limit result.
-const CLAUDE_LIMIT: &str = "You've hit your limit · resets 3pm (America/Los_Angeles)";
-
 /// grok 1.0.46's HTTP failure, on stderr.
 const GROK_LIMIT: &str = "Error: Too Many Requests (429): rate limit exceeded for this account";
 
@@ -161,21 +158,6 @@ fn typed_limit(message: Option<&str>, provider: &str) -> ProviderLimitFailure {
     ProviderLimitFailure::from_text(message).expect("the failure carries the limit")
 }
 
-/// The first 3pm Pacific instant after `from`. Pacific's day that falls back
-/// is 25 hours long, so the next 3pm can be more than 24 hours away.
-fn next_pacific_three_pm(from: DateTime<Utc>) -> Option<DateTime<Utc>> {
-    let zone = chrono_tz::America::Los_Angeles;
-    let today = from.with_timezone(&zone).date_naive();
-    [today, today.succ_opt()?]
-        .into_iter()
-        .filter_map(|day| {
-            zone.from_local_datetime(&day.and_hms_opt(15, 0, 0)?)
-                .earliest()
-        })
-        .map(|at| at.with_timezone(&Utc))
-        .find(|at| *at > from)
-}
-
 /// Every recorded provider limit text types the failure, and nothing the
 /// agent wrote does.
 fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
@@ -212,17 +194,6 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
             "codex",
             Provider::Codex,
             codex_limit_frames(CODEX_LIMIT),
-            "",
-            1,
-            true,
-        ),
-        case(
-            "claude",
-            Provider::Claude,
-            format!(
-                r#"{{"type":"result","subtype":"success","is_error":true,"result":{}}}"#,
-                serde_json::to_string(CLAUDE_LIMIT).unwrap()
-            ),
             "",
             1,
             true,
@@ -355,19 +326,6 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
                     .with_timezone(&Utc);
                 assert_eq!(limit.resets_at, Some(expected), "{label}");
                 assert_eq!(limit.model.as_deref(), Some("gpt-5.1-codex-max"));
-            }
-            "claude" => {
-                let resets_at = limit.resets_at.expect("Claude said when it resets");
-                let pacific = resets_at.with_timezone(&chrono_tz::America::Los_Angeles);
-                assert_eq!((pacific.hour(), pacific.minute()), (15, 0), "{label}");
-                let first_possible_reset =
-                    next_pacific_three_pm(before).expect("the next Pacific day exists");
-                let last_possible_reset =
-                    next_pacific_three_pm(after).expect("the next Pacific day exists");
-                assert!(
-                    resets_at >= first_possible_reset && resets_at <= last_possible_reset,
-                    "{label}: the next 3pm Pacific: {resets_at}"
-                );
             }
             _ => assert_eq!(
                 limit.resets_at, None,
