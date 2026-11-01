@@ -227,6 +227,13 @@ impl RuntimeKernel {
         self.context.settings().diff_non_code_paths()
     }
 
+    /// `workflow.non_reviewable_paths` as a compiled filter: paths left out
+    /// of the reviewable-lines denominator. Docs and config stay reviewable
+    /// until a workspace lists them.
+    pub fn diff_non_reviewable_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
+        self.context.settings().diff_non_reviewable_paths()
+    }
+
     /// `[workflow.regression_risk]` as admitted: whether implement and
     /// review prompts mark regression-prone context files.
     pub fn regression_risk_settings(&self) -> orbit_config::RegressionRiskSettings {

@@ -527,6 +527,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0083".to_string(),
                 "invocation_tool_calls_incomplete".to_string()
             ),
+            (
+                "migration.v0084".to_string(),
+                "landed_diff_reviewable_lines".to_string()
+            ),
         ]
     );
 }

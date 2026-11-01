@@ -29,6 +29,8 @@ pub const EXPERIMENT_METRICS: &[&str] = &[
     "delivery_done_rate",
     "escaped_regressions",
     "lines_changed",
+    "cost_per_line",
+    "lead_time_per_line",
     "visual_landed_mismatches",
     "visual_review_repairs",
     "visual_verified_finding_rate",
@@ -45,6 +47,34 @@ pub const STEP_LOCAL_METRICS: &[&str] = &[
 /// Whether a registered metric measures only part of a task.
 pub fn experiment_metric_is_step_local(metric: &str) -> bool {
     STEP_LOCAL_METRICS.contains(&metric)
+}
+
+/// Whole-task metrics that divide a total by reviewable lines.
+pub const PER_LINE_METRICS: &[&str] = &["cost_per_line", "lead_time_per_line"];
+
+/// Whether a registered metric is a ratio over reviewable lines.
+pub fn experiment_metric_is_per_line(metric: &str) -> bool {
+    PER_LINE_METRICS.contains(&metric)
+}
+
+/// A per-line primary needs a `lines_changed` guardrail so an arm cannot
+/// win by shrinking the denominator. The operator chooses the threshold.
+pub(crate) fn require_lines_changed_guardrail(
+    primary: Option<&str>,
+    guardrails_json: &str,
+) -> Result<(), OrbitError> {
+    let Some(primary) = primary.filter(|metric| experiment_metric_is_per_line(metric)) else {
+        return Ok(());
+    };
+    let present = serde_json::from_str::<BTreeMap<String, String>>(guardrails_json)
+        .ok()
+        .is_some_and(|guardrails| guardrails.contains_key("lines_changed"));
+    if present {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "primary metric `{primary}` is per line and requires a lines_changed guardrail, for example {{\"lines_changed\": \"+0\"}}"
+    )))
 }
 
 /// Complexities a population filter may name.

@@ -1492,6 +1492,11 @@ Unset keys use language-neutral naming conventions:
 - `workflow.non_code_paths`: `docs/**`, and prose, data, configuration, lock,
   golden, image and `LICENSE*` files at any depth (for example `*.md`, `*.rst`,
   `*.json`, `*.toml`, `*.lock`, `*.png`).
+- `workflow.non_reviewable_paths`: empty. Paths here are left out of the
+  reviewable-lines denominator. Docs and config stay reviewable, so this is
+  not the non-code class and it is not a built-in list of one toolchain's
+  generated files. Set lockfiles, goldens, snapshots and generated paths
+  when those lines should not count.
 
 Most projects need no change. Set a key only when the repository's layout
 differs. An array replaces the inherited value wholesale, so a workspace list
@@ -1530,11 +1535,22 @@ do not edit recorded rows to test it.
 deliveries recorded after it. Rows already recorded keep their classes, even
 when the new lists would classify their files differently.
 
+**Reviewable lines are recorded forward only.** A landed row also stores the
+reviewable lines of that task's own commits: added and deleted lines, minus
+pure renames and minus `workflow.non_reviewable_paths`. A row written before
+that denominator existed stays unavailable. So does a row whose commits
+cannot be isolated to the one task. Nothing recomputes those rows by
+re-diffing a shared landing range. `cost_per_line` and `lead_time_per_line`
+leave both kinds out and count them separately per arm. A change to
+`workflow.non_reviewable_paths` applies only to deliveries recorded after it.
+
 **Backfill is not a policy change.** `orbit migrate --backfill-diff-stats
 [--limit N]` applies pending migrations, then records rows only for done tasks
 that landed before diff stats were recorded and have no row yet. It classifies
 those rows with the lists in effect when it runs, so set the lists first if the
-backfilled history should follow them. It does not rewrite existing rows. Run
+backfilled history should follow them. It records reviewable lines only when
+the landing's commits can be isolated to that task; otherwise the new row's
+denominator is unavailable. It does not rewrite existing rows. Run
 `orbit migrate` without flags to see pending migrations before applying.
 
 ## Path-lease policy

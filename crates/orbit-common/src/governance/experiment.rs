@@ -103,7 +103,7 @@ const POPULATION_DESCRIPTION: &str = "Which tasks the experiment enrolls, as a J
 
 const GUARDRAILS_DESCRIPTION: &str = "Guardrail metrics as a JSON object from metric name to the threshold its difference from control may not pass, such as {\"delivery_done_rate\": \"-5pt\", \"escaped_regressions\": \"+0\"}.";
 
-const METRIC_DESCRIPTION: &str = "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate. Step-local metrics are exploratory and may be used as guardrails.";
+const METRIC_DESCRIPTION: &str = "The whole-task metric the verdict is read on: total_tokens, cost_usd, lead_time, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line, lead_time_per_line, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate. cost_per_line and lead_time_per_line divide arm totals by reviewable lines and require a lines_changed guardrail. Step-local metrics are exploratory and may be used as guardrails.";
 
 /// The definition fields `create` and `update` share, after the name.
 const DEFINITION: &[ParamSpec] = &[
@@ -472,7 +472,7 @@ const ASSIGN: OperationSpec<ExperimentVerb> = OperationSpec {
 const READOUT_PARAMS: &[ParamSpec] = &[both(
     "metric",
     ParamType::String,
-    "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
+    "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions, lines_changed, cost_per_line, lead_time_per_line, visual_landed_mismatches, visual_review_repairs or visual_verified_finding_rate.",
     CliArgKind::flag("metric"),
     "Report only this metric",
 )];
@@ -481,7 +481,7 @@ const READOUT: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Readout,
     cli_path: &["readout"],
     tool_name: "orbit.experiment.readout",
-    tool_description: "Read an experiment's outcomes per arm, computed now from its assignments and the records Orbit already keeps. Intention-to-treat by task; forced assignments are left out and counted. Per arm and segment: n, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes and crew mix; each arm's difference from control overall (post-stratified by complexity) and per complexity; guardrail status; a sample-ratio chi-square against the weights; overlay-digest drift. The verdict is collecting until every arm reaches min_sample or max_days pass, withheld on a sample-ratio mismatch, then winner <arm>, no difference or inconclusive. The shape carries schema_version. Read-only.",
+    tool_description: "Read an experiment's outcomes per arm, computed now from its assignments and the records Orbit already keeps. Intention-to-treat by task; forced assignments are left out and counted. Per arm and segment: n and a 95% interval (bootstrap mean and median for a mean, Wilson for a rate, paired task bootstrap of a ratio of sums for cost_per_line and lead_time_per_line), open (lagging) outcomes and crew mix. A per-line arm value is the arm's total cost or lead time divided by its total reviewable lines; zero-line runs and rows with an unavailable denominator are excluded and counted separately per arm. Each arm's difference from control is overall (post-stratified by complexity, or a paired difference of those ratios) and per complexity. Also guardrail status, a sample-ratio chi-square against the weights, and overlay-digest drift. The verdict is collecting until every arm reaches min_sample or max_days pass, withheld on a sample-ratio mismatch, then winner <arm>, no difference or inconclusive. A per-line primary that breaches its lines_changed guardrail is not a winner. The shape carries schema_version. Read-only.",
     cli_about: "Show an experiment's per-arm outcomes, intervals and verdict",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

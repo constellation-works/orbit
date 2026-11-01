@@ -91,7 +91,29 @@ Whole-task primary metrics are `total_tokens`, `cost_usd`, `lead_time`,
 `first_pass_acceptance`, `review_repairs`, `step_recoveries`,
 `final_recoveries`, `failed_checks`, `merge_conflicts`, `delivery_done_rate`,
 `escaped_regressions`, `lines_changed`, `visual_landed_mismatches`,
-`visual_review_repairs`, and `visual_verified_finding_rate`. The step-local
+`visual_review_repairs`, and `visual_verified_finding_rate`. `cost_per_line`
+and `lead_time_per_line` are whole-task too (lower is better) and may be
+the primary. Each is a ratio of sums: the arm's total cost, or its total
+lead time in hours, divided by the arm's total reviewable lines. The
+interval is a paired bootstrap that resamples tasks. It is never the mean
+of per-task ratios. Duration is `lead_time`, not `implement_duration`.
+
+Reviewable lines are the added and deleted lines of that task's own
+commits, excluding paths in `workflow.non_reviewable_paths` and pure
+renames. That exclusion is workspace configuration, distinct from
+`workflow.non_code_paths`, and empty unless the workspace lists lockfiles,
+goldens, snapshots or generated files; docs and config stay reviewable.
+Rows that landed before the denominator was recorded, or whose commits
+cannot be isolated to the task, have an unavailable denominator. They are
+not recomputed from a shared landing range. A readout drops them, and
+drops runs whose reviewable total is zero, and reports each count per arm
+separately.
+
+An experiment whose primary metric is per-line must carry a
+`lines_changed` guardrail. An arm that improves the per-line metric while
+breaching that guardrail is not a winner.
+
+The step-local
 metrics `implement_tokens`, `implement_duration`, `turns_before_first_edit`,
 and `result_bytes_before_first_edit` are exploratory. A treatment can move
 work between steps without improving the task, so these cannot be primary;

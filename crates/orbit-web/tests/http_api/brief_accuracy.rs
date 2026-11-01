@@ -94,6 +94,7 @@ fn landing(fixture: &Fixture, task_id: &str, base: &str, head: &str) {
             code: DiffClassCounts::default(),
             tests: DiffClassCounts::default(),
             other: DiffClassCounts::default(),
+            reviewable: None,
         })
         .unwrap();
 }

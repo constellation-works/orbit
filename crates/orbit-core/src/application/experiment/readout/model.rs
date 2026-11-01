@@ -185,7 +185,8 @@ pub struct ReadoutMetric {
     pub metric: String,
     /// Step-local metrics are exploratory and cannot determine a verdict.
     pub exploratory: bool,
-    /// `mean` of per-task values, or `rate` of per-task 0/1 outcomes.
+    /// `mean` of per-task values, `rate` of per-task 0/1 outcomes, or
+    /// `ratio` of summed numerators over summed reviewable lines.
     pub kind: &'static str,
     /// `lower` or `higher` is better.
     pub better: &'static str,
@@ -208,6 +209,14 @@ pub struct ArmEstimate {
     /// Settled-task cost provenance, present only for `cost_usd`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_coverage: Option<CostCoverage>,
+    /// Done tasks whose reviewable-line total is zero. Present only for a
+    /// per-line metric, including when the count is zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_lines_excluded: Option<usize>,
+    /// Done tasks whose reviewable lines were not recorded. Present only for
+    /// a per-line metric, and counted apart from [`Self::zero_lines_excluded`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_lines_excluded: Option<usize>,
     pub segments: Vec<SegmentEstimate>,
 }
 
@@ -229,7 +238,8 @@ pub struct SegmentEstimate {
 }
 
 /// n, mean and median with 95% intervals: bootstrap for a mean metric,
-/// Wilson for a rate (whose `mean` is the rate).
+/// Wilson for a rate (whose `mean` is the rate), or a ratio of sums whose
+/// `mean` is that ratio and whose interval resamples tasks in pairs.
 #[derive(Debug, Clone, Serialize)]
 pub struct Estimate {
     pub n: usize,

@@ -1135,6 +1135,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.non_reviewable_paths": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.provider_limit_budgets": {
       "scope": "built-in",
       "state": "default",

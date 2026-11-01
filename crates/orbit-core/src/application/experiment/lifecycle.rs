@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 
 use super::definition::{
     ArmDefinition, EXPERIMENT_METRICS, ExperimentOverlay, experiment_metric_is_step_local,
-    parse_arms, parse_guardrails, parse_population, validate_handle, validate_metric,
+    parse_arms, parse_guardrails, parse_population, require_lines_changed_guardrail,
+    validate_handle, validate_metric,
 };
 use super::view::ExperimentView;
 use crate::OrbitRuntime;
@@ -545,6 +546,10 @@ fn apply_definition(
         }
         experiment.mode = mode;
     }
+    require_lines_changed_guardrail(
+        experiment.primary_metric.as_deref(),
+        &experiment.guardrails_json,
+    )?;
     Ok(())
 }
 
@@ -599,6 +604,11 @@ fn validate_startable(
     if record.experiment.primary_metric.is_none() {
         return Err(refuse("it has no primary metric".into()));
     }
+    require_lines_changed_guardrail(
+        record.experiment.primary_metric.as_deref(),
+        &record.experiment.guardrails_json,
+    )
+    .map_err(|error| refuse(error.to_string()))?;
     let mut overlays = Vec::with_capacity(record.arms.len());
     for arm in &record.arms {
         validate_handle("arm name", &arm.name).map_err(|error| refuse(error.to_string()))?;

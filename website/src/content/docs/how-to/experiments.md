@@ -149,9 +149,28 @@ key is refused.
 `total_tokens`, `cost_usd`, `lead_time`, `first_pass_acceptance`,
 `review_repairs`, `step_recoveries`, `final_recoveries`, `failed_checks`,
 `merge_conflicts`, `delivery_done_rate`, `escaped_regressions`,
-`lines_changed`, `visual_landed_mismatches`, `visual_review_repairs`, or
+`lines_changed`, `cost_per_line`, `lead_time_per_line`,
+`visual_landed_mismatches`, `visual_review_repairs`, or
 `visual_verified_finding_rate`. Lower is better except for
 `first_pass_acceptance`, `delivery_done_rate`, and `visual_verified_finding_rate`.
+
+`cost_per_line` and `lead_time_per_line` divide an arm's total cost, or its
+total lead time in hours, by that arm's total reviewable lines. Lead time
+is the whole task, not the implement step. The interval resamples tasks and
+recomputes that ratio; it is not an average of each task's own ratio. A run
+with zero reviewable lines is left out, and so is a landed row whose
+denominator was never recorded or could not be attributed to that task
+alone. The readout counts those two exclusions separately on each arm.
+Reviewable lines are the lines that task's own commits added and deleted,
+minus pure renames and minus paths in `workflow.non_reviewable_paths`.
+That list is empty unless you set it. It is not `workflow.non_code_paths`:
+docs and config stay reviewable, and Orbit does not ship a toolchain's
+generated-file list. History is forward-only: a row landed before the
+denominator existed is not recomputed from a shared landing range.
+
+A per-line primary requires a `lines_changed` guardrail, for example
+`{"lines_changed": "+0"}`. You choose the threshold. An arm that improves
+the per-line metric while breaching that guardrail is not named the winner.
 
 The step-local metrics `implement_tokens`, `implement_duration`,
 `turns_before_first_edit`, and `result_bytes_before_first_edit` are

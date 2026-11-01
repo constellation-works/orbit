@@ -1,5 +1,8 @@
-//! Lines added and deleted per landed delivery [ORB-18383], split into code,
-//! tests and other by `workflow.test_paths` and `workflow.non_code_paths`.
+//! Lines added and deleted per landed delivery, split into code, tests and
+//! other by `workflow.test_paths` and `workflow.non_code_paths`. Reviewable
+//! lines, the per-line metric denominator, also skip
+//! `workflow.non_reviewable_paths` and pure renames, and are taken from each
+//! task's own commits.
 //!
 //! The owner writes one row when a delivery lands, from one of two points:
 //!
@@ -28,6 +31,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::path_filter::PathFilter;
 use orbit_store::contracts::{
     DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend as _,
+    ReviewableLines,
 };
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::DirectLandingRequest;
@@ -67,16 +71,25 @@ struct Landing<'a> {
     source: LandedDiffSource,
 }
 
-/// The class counts of one diff.
+/// The class counts of one diff, plus the reviewable lines of that same diff.
 #[derive(Default)]
 struct Counts {
     code: DiffClassCounts,
     tests: DiffClassCounts,
     other: DiffClassCounts,
+    reviewable_added: u64,
+    reviewable_deleted: u64,
+}
+
+/// Class counts for one task, and reviewable lines when at least one of its
+/// commits could be attributed without naming another task.
+struct Attributed {
+    counts: Counts,
+    reviewable: Option<ReviewableLines>,
 }
 
 impl Counts {
-    fn add(&mut self, other: &Self) {
+    fn add_classes(&mut self, other: &Self) {
         for (into, from) in [
             (&mut self.code, &other.code),
             (&mut self.tests, &other.tests),
@@ -85,6 +98,33 @@ impl Counts {
             into.added += from.added;
             into.deleted += from.deleted;
             into.files += from.files;
+        }
+    }
+
+    fn reviewable_lines(&self) -> ReviewableLines {
+        ReviewableLines {
+            added: self.reviewable_added,
+            deleted: self.reviewable_deleted,
+        }
+    }
+}
+
+impl Attributed {
+    fn from_range(counts: Counts) -> Self {
+        let reviewable = Some(counts.reviewable_lines());
+        Self { counts, reviewable }
+    }
+
+    fn add_commit(&mut self, counts: &Counts, reviewable: bool) {
+        self.counts.add_classes(counts);
+        if reviewable {
+            let lines = counts.reviewable_lines();
+            let slot = self.reviewable.get_or_insert(ReviewableLines {
+                added: 0,
+                deleted: 0,
+            });
+            slot.added += lines.added;
+            slot.deleted += lines.deleted;
         }
     }
 }
@@ -131,7 +171,7 @@ impl OrbitRuntime {
             .map_err(|error| OrbitError::Execution(format!("open repository: {error}")))?;
         let classes = self.diff_classes();
         let now = Utc::now();
-        let per_task: BTreeMap<String, Counts> = match task_ids.as_slice() {
+        let per_task: BTreeMap<String, Attributed> = match task_ids.as_slice() {
             [] => return Ok(()),
             [only] => {
                 let counts = diff_counts(
@@ -147,11 +187,12 @@ impl OrbitRuntime {
                     ))
                 })?
                 .1;
-                BTreeMap::from([(only.clone(), counts)])
+                // One task owns the whole range, including a measured zero.
+                BTreeMap::from([(only.clone(), Attributed::from_range(counts))])
             }
             many => split_by_commit_message(&repo, request, many, &classes)?,
         };
-        for (task_id, counts) in per_task {
+        for (task_id, attributed) in per_task {
             let task = self.get_task(&task_id)?;
             self.write_row(
                 &task,
@@ -164,7 +205,8 @@ impl OrbitRuntime {
                     source: LandedDiffSource::Landing,
                 },
                 &request.before_commit,
-                counts,
+                attributed.counts,
+                attributed.reviewable,
             )?;
         }
         Ok(())
@@ -296,15 +338,23 @@ impl OrbitRuntime {
         task: &Task,
         landing: &Landing<'_>,
     ) -> Result<bool, OrbitError> {
-        let Some((base, counts)) = diff_counts(
-            repo,
-            landing.base_commit,
-            landing.landed_commit,
-            &self.diff_classes(),
-        ) else {
+        let classes = self.diff_classes();
+        let Some((base, counts)) =
+            diff_counts(repo, landing.base_commit, landing.landed_commit, &classes)
+        else {
             return Ok(false);
         };
-        self.write_row(task, landing, &base, counts)?;
+        // Class counts stay the first-parent range. Reviewable lines are
+        // unavailable when that range cannot be isolated to this task.
+        let reviewable = attributed_reviewable(
+            repo,
+            &base,
+            landing.landed_commit,
+            landing.task_id,
+            &classes,
+            counts.reviewable_lines(),
+        );
+        self.write_row(task, landing, &base, counts, reviewable)?;
         Ok(true)
     }
 
@@ -314,6 +364,7 @@ impl OrbitRuntime {
         landing: &Landing<'_>,
         base_commit: &str,
         counts: Counts,
+        reviewable: Option<ReviewableLines>,
     ) -> Result<(), OrbitError> {
         // The implementing crew and model as the delivery run resolved them;
         // the task's own crew when that run is not on this host.
@@ -344,6 +395,7 @@ impl OrbitRuntime {
                 code: counts.code,
                 tests: counts.tests,
                 other: counts.other,
+                reviewable,
             })?;
         Ok(())
     }
@@ -369,14 +421,17 @@ impl OrbitRuntime {
         DiffClasses {
             tests: self.diff_test_paths(),
             non_code: self.diff_non_code_paths(),
+            non_reviewable: self.diff_non_reviewable_paths(),
         }
     }
 }
 
 /// How a changed path is classed: tests first, then other, else code.
+/// Reviewable lines are independent of that class.
 struct DiffClasses<'a> {
     tests: &'a PathFilter,
     non_code: &'a PathFilter,
+    non_reviewable: &'a PathFilter,
 }
 
 /// Split a multi-task landing by the first-parent commits in its range whose
@@ -387,7 +442,7 @@ fn split_by_commit_message(
     request: &DirectLandingRequest,
     task_ids: &[String],
     classes: &DiffClasses<'_>,
-) -> Result<BTreeMap<String, Counts>, OrbitError> {
+) -> Result<BTreeMap<String, Attributed>, OrbitError> {
     let git = |error: git2::Error| OrbitError::Execution(format!("walk landed range: {error}"));
     let mut walk = repo.revwalk().map_err(git)?;
     walk.simplify_first_parent().map_err(git)?;
@@ -395,7 +450,7 @@ fn split_by_commit_message(
         .map_err(git)?;
     walk.hide(git2::Oid::from_str(&request.before_commit).map_err(git)?)
         .map_err(git)?;
-    let mut per_task: BTreeMap<String, Counts> = BTreeMap::new();
+    let mut per_task: BTreeMap<String, Attributed> = BTreeMap::new();
     for oid in walk {
         let oid = oid.map_err(git)?;
         let commit = repo.find_commit(oid).map_err(git)?;
@@ -406,7 +461,17 @@ fn split_by_commit_message(
             continue;
         };
         if let Some((_, counts)) = diff_counts(repo, None, &oid.to_string(), classes) {
-            per_task.entry(task_id.clone()).or_default().add(&counts);
+            // Class counts follow the batch split. Reviewable lines also drop
+            // a commit that names any other task id, so a shared range is
+            // never re-diffed into the denominator.
+            let reviewable = !names_other_task(message, task_id);
+            per_task
+                .entry(task_id.clone())
+                .or_insert_with(|| Attributed {
+                    counts: Counts::default(),
+                    reviewable: None,
+                })
+                .add_commit(&counts, reviewable);
         }
     }
     Ok(per_task)
@@ -415,9 +480,89 @@ fn split_by_commit_message(
 /// Whether `message` names `id` as a whole token, so `ORB-1` does not match
 /// `ORB-12`.
 fn names_task(message: &str, id: &str) -> bool {
-    message
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
-        .any(|token| token == id)
+    message_tokens(message).any(|token| token == id)
+}
+
+/// Whether `message` names a task id other than `id`. A task id is a 2–5
+/// letter prefix, a hyphen and digits, the shape a workspace allocates.
+fn names_other_task(message: &str, id: &str) -> bool {
+    message_tokens(message).any(|token| token != id && looks_like_task_id(token))
+}
+
+fn message_tokens(message: &str) -> impl Iterator<Item = &str> {
+    message.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+}
+
+fn looks_like_task_id(token: &str) -> bool {
+    let Some((prefix, number)) = token.split_once('-') else {
+        return false;
+    };
+    (2..=5).contains(&prefix.len())
+        && prefix.chars().all(|ch| ch.is_ascii_uppercase())
+        && !number.is_empty()
+        && number.chars().all(|ch| ch.is_ascii_digit())
+}
+
+/// Reviewable lines of `base..landed` that belong to `task_id`.
+///
+/// One commit that names no other task keeps that commit's lines, including
+/// a message that names nobody. Several commits keep only those that name
+/// `task_id` and no other task. None of those, or a walk that cannot be
+/// read, is an unavailable denominator. `range_reviewable` is the lines of
+/// the same range, reused when the range is that one commit.
+fn attributed_reviewable(
+    repo: &git2::Repository,
+    base: &str,
+    landed: &str,
+    task_id: &str,
+    classes: &DiffClasses<'_>,
+    range_reviewable: ReviewableLines,
+) -> Option<ReviewableLines> {
+    let mut walk = repo.revwalk().ok()?;
+    walk.simplify_first_parent().ok()?;
+    walk.push(git2::Oid::from_str(landed).ok()?).ok()?;
+    walk.hide(git2::Oid::from_str(base).ok()?).ok()?;
+    let mut commits = Vec::new();
+    for oid in walk {
+        let oid = oid.ok()?;
+        let commit = repo.find_commit(oid).ok()?;
+        commits.push((
+            oid.to_string(),
+            commit.message().unwrap_or_default().to_string(),
+        ));
+    }
+    match commits.as_slice() {
+        [] => None,
+        [only] => {
+            if names_other_task(&only.1, task_id) {
+                None
+            } else if only.0 == landed {
+                Some(range_reviewable)
+            } else {
+                diff_counts(repo, None, &only.0, classes)
+                    .map(|(_, counts)| counts.reviewable_lines())
+            }
+        }
+        many => {
+            let mut total = ReviewableLines {
+                added: 0,
+                deleted: 0,
+            };
+            let mut any = false;
+            for (oid, message) in many {
+                if names_task(message, task_id)
+                    && !names_other_task(message, task_id)
+                    && let Some((_, counts)) = diff_counts(repo, None, oid, classes)
+                {
+                    let lines = counts.reviewable_lines();
+                    total.added += lines.added;
+                    total.deleted += lines.deleted;
+                    any = true;
+                }
+            }
+            any.then_some(total)
+        }
+    }
 }
 
 /// The base and the class counts of `base..landed`, or of `landed` against
@@ -466,6 +611,13 @@ fn diff_counts(
         class.added += added;
         class.deleted += deleted;
         class.files += 1;
+        // A pure rename moves a path and changes no line. Docs and config
+        // stay reviewable; only the exclusion class and that rename are left out.
+        let pure_rename = delta.status() == git2::Delta::Renamed && added == 0 && deleted == 0;
+        if !pure_rename && !classes.non_reviewable.matches(&path) {
+            counts.reviewable_added += added;
+            counts.reviewable_deleted += deleted;
+        }
     }
     Some((base.id().to_string(), counts))
 }

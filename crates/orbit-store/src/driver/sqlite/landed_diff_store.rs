@@ -12,7 +12,7 @@ use rusqlite::{Row, TransactionBehavior, params};
 
 use crate::Store;
 use crate::contracts::{
-    DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend,
+    DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend, ReviewableLines,
 };
 
 use super::codec::stamp;
@@ -20,7 +20,7 @@ use super::codec::stamp;
 const COLUMNS: &str = "workspace_id, task_id, landed_commit, base_commit, job_run_id, \
      landed_at, recorded_at, source, crew, model, complexity, task_type, \
      code_added, code_deleted, code_files, tests_added, tests_deleted, tests_files, \
-     other_added, other_deleted, other_files";
+     other_added, other_deleted, other_files, reviewable_added, reviewable_deleted";
 
 impl LandedDiffStoreBackend for Store {
     fn record_landed_diff_stats(&self, row: &LandedDiffStats) -> Result<bool, OrbitError> {
@@ -31,7 +31,7 @@ impl LandedDiffStoreBackend for Store {
                     &format!(
                         "INSERT OR IGNORE INTO landed_diff_stats ({COLUMNS}) VALUES \
                      (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, \
-                      ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)"
+                      ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)"
                     ),
                     params![
                         row.workspace_id,
@@ -55,6 +55,8 @@ impl LandedDiffStoreBackend for Store {
                         row.other.added,
                         row.other.deleted,
                         row.other.files,
+                        row.reviewable.map(|lines| lines.added),
+                        row.reviewable.map(|lines| lines.deleted),
                     ],
                 )
                 .map_err(sqlite_store_error)?;
@@ -120,5 +122,20 @@ fn hydrate(row: &Row<'_>) -> rusqlite::Result<LandedDiffStats> {
         code: counts(12)?,
         tests: counts(15)?,
         other: counts(18)?,
+        reviewable: reviewable_lines(row)?,
+    })
+}
+
+/// Both columns null, or either unreadable as a count, is an unavailable
+/// denominator. A measured zero is `Some` with both counts present.
+fn reviewable_lines(row: &Row<'_>) -> rusqlite::Result<Option<ReviewableLines>> {
+    let added: Option<i64> = row.get(21)?;
+    let deleted: Option<i64> = row.get(22)?;
+    Ok(match (added, deleted) {
+        (Some(added), Some(deleted)) if added >= 0 && deleted >= 0 => Some(ReviewableLines {
+            added: added as u64,
+            deleted: deleted as u64,
+        }),
+        _ => None,
     })
 }

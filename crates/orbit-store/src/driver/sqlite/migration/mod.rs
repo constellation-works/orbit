@@ -80,7 +80,7 @@ use job_runs::{
     apply_job_runs_created_index, apply_job_runs_job_created_and_retry_indexes,
     apply_job_runs_recency_index,
 };
-use landed_diff_stats::apply_landed_diff_stats;
+use landed_diff_stats::{apply_landed_diff_reviewable_lines, apply_landed_diff_stats};
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
 use operation_mode::apply_remove_operation_mode;
 use plugins::{
