@@ -21,6 +21,7 @@ mod output;
 mod browser_kit;
 mod doctor;
 mod error_output;
+mod experiment_readout;
 mod global_json;
 mod help_examples;
 mod help_goldens;
