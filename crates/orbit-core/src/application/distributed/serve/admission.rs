@@ -16,8 +16,6 @@ use crate::application::host_labels;
 use crate::application::task::PilotAdmissionHold;
 use crate::runtime::run_input::recorded_task_ids;
 
-/// A grant pins execution to the owner, intersected with its required labels.
-/// Ungranted tasks keep the claimed implementer's existing restrictions.
 /// The pull hold for a task assigned to a human crew: operator work no
 /// follower or owner pull claims, matching the local `human_crew` exclusion.
 fn human_crew_pull_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
@@ -28,6 +26,8 @@ fn human_crew_pull_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<St
     ))
 }
 
+/// A grant pins execution to the owner, intersected with its required labels.
+/// Ungranted tasks keep the claimed implementer's existing restrictions.
 fn claimed_tool_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
     if let Some(grant) = host_labels::granted_tools_owner_hold(task) {
         return Some(runtime.task_host_labels_wait(task).unwrap_or(grant));
