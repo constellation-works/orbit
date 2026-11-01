@@ -350,6 +350,121 @@ fn consolidation_supersedes_contradictions_and_marks_stale_rules() {
 }
 
 #[test]
+fn replayed_answers_do_not_refresh_authority_but_fresh_ones_do() {
+    let old = corpus_content_digest(b"old\n");
+    let new = corpus_content_digest(b"new\n");
+    let mut doc = rule_doc("1", "current", FUTURE, true, &old);
+    doc = doc
+        .replace("task: \"T-1\"", "task: \"TEST-1\"")
+        .replace("2026-01-01", "2026-10-01");
+    let documents = [document(&doc)];
+    let digests = [digest_of("src/lib.rs", &new)];
+    let today = "2026-11-01";
+
+    // The default history replay includes the already cited answer.
+    let replay = consolidate_decision_corpus(
+        &documents,
+        &[answer("TEST-1", "1", "2026-10-01")],
+        &digests,
+        today,
+    );
+    let rules = resulting_rules(&doc, &replay);
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].status, CorpusRuleStatus::Stale);
+    assert_eq!(rules[0].citations.len(), 1);
+    assert_eq!(rules[0].depends_on[0].digest, old);
+    assert!(citable_decision_rules(&replay[0].markdown, today, &digests).is_empty());
+
+    // A fresh human confirmation does refresh it.
+    let fresh = consolidate_decision_corpus(
+        &documents,
+        &[
+            answer("TEST-1", "1", "2026-10-01"),
+            answer("TEST-9", "1", "2026-10-31"),
+        ],
+        &digests,
+        today,
+    );
+    let rules = resulting_rules(&doc, &fresh);
+    assert_eq!(rules[0].status, CorpusRuleStatus::Current);
+    assert_eq!(rules[0].citations.len(), 2);
+    assert_eq!(rules[0].depends_on[0].digest, new);
+    assert!(rules[0].auto);
+    assert_eq!(
+        citable_decision_rules(&fresh[0].markdown, today, &digests).len(),
+        1
+    );
+
+    // Replaying an older answer after a later one superseded it changes nothing.
+    let contradicted = consolidate_decision_corpus(
+        &documents,
+        &[answer("TEST-2", "2", "2026-10-05")],
+        &[digest_of("src/lib.rs", &old)],
+        today,
+    );
+    let after = contradicted[0].markdown.clone();
+    let again = consolidate_decision_corpus(
+        &[document(&after)],
+        &[
+            answer("TEST-1", "1", "2026-10-01"),
+            answer("TEST-2", "2", "2026-10-05"),
+        ],
+        &[digest_of("src/lib.rs", &old)],
+        today,
+    );
+    assert!(again.is_empty(), "idempotent replay proposes nothing");
+}
+
+#[test]
+fn a_bare_unique_rule_id_updates_its_existing_topic_file() {
+    let digest = corpus_content_digest(b"pub fn price() {}\n");
+    let doc = rule_doc("1", "current", FUTURE, false, &digest);
+    let documents = [document(&doc)];
+    let digests = [digest_of("src/lib.rs", &digest)];
+    let mut bare = answer("T-2", "2", "2026-10-02");
+    bare.topic = "sign-off".into();
+
+    let proposals = consolidate_decision_corpus(&documents, &[bare.clone()], &digests, TODAY);
+    assert_eq!(proposals.len(), 1);
+    assert_eq!(proposals[0].path, "decisions/pricing.md");
+    let rules = parse_decision_rules(&proposals[0].markdown);
+    let current: Vec<_> = rules
+        .iter()
+        .filter(|rule| rule.status == CorpusRuleStatus::Current)
+        .collect();
+    assert_eq!(current.len(), 1);
+    assert_eq!(current[0].id, "sign-off");
+    assert_eq!(current[0].answer, "2");
+    assert!(
+        rules
+            .iter()
+            .any(|rule| rule.status == CorpusRuleStatus::Superseded && rule.answer == "1")
+    );
+
+    // A new bare topic still creates its own file.
+    let mut fresh = bare.clone();
+    fresh.topic = "brand-new".into();
+    let created = consolidate_decision_corpus(&documents, &[fresh], &digests, TODAY);
+    assert!(
+        created
+            .iter()
+            .any(|proposal| proposal.path == "decisions/brand-new.md")
+    );
+
+    // An id held by two files is ambiguous and keeps the `topic/topic` default.
+    let other = CorpusDecisionDocument {
+        path: "decisions/other.md".into(),
+        markdown: doc.clone(),
+    };
+    let ambiguous = consolidate_decision_corpus(&[document(&doc), other], &[bare], &digests, TODAY);
+    assert!(
+        ambiguous
+            .iter()
+            .any(|proposal| proposal.path == "decisions/sign-off.md")
+    );
+}
+
+#[test]
 fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
     let fx = Fixture::new();
     let digest = corpus_content_digest(b"pub fn price() {}\n");

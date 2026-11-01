@@ -336,7 +336,7 @@ fn apply_answer(
     answer: &ConsolidationAnswer,
     digests: &[CorpusDigest],
 ) {
-    let Some((stem, rule_id)) = topic_file_and_rule(&answer.topic) else {
+    let Some((stem, rule_id)) = answer_target(rules_by_path, &answer.topic) else {
         return;
     };
     let path = format!("decisions/{stem}.md");
@@ -356,19 +356,23 @@ fn apply_answer(
         .filter(|note| !note.is_empty())
         .unwrap_or("The operator chose this option.")
         .to_string();
+    // A replayed answer is history, not a new confirmation: it must not
+    // refresh digests or the review date, and an older answer must not
+    // supersede a rule a later answer already replaced.
+    let superseded_prefix = format!("{rule_id}--superseded-");
+    if rules.iter().any(|rule| {
+        (rule.id == rule_id || rule.id.starts_with(&superseded_prefix))
+            && rule.citations.contains(&citation)
+    }) {
+        return;
+    }
     if let Some(index) = rules.iter().position(|rule| rule.id == rule_id) {
         if rules[index].status == CorpusRuleStatus::Superseded {
             return;
         }
         if rules[index].answer == answer.answer_id {
             let rule = &mut rules[index];
-            if !rule.citations.iter().any(|existing| {
-                existing.task == citation.task
-                    && existing.date == citation.date
-                    && existing.option == citation.option
-            }) {
-                rule.citations.push(citation);
-            }
+            rule.citations.push(citation);
             rule.why = why;
             rule.status = CorpusRuleStatus::Current;
             rule.review_by = review_by_from(&answer.answered_on);
@@ -478,6 +482,31 @@ fn review_by_from(answered_on: &str) -> String {
         .and_then(|date| date.checked_add_signed(chrono::Duration::days(REVIEW_WINDOW_DAYS)))
         .map(|date| date.format("%Y-%m-%d").to_string())
         .unwrap_or_else(|| answered_on.to_string())
+}
+
+/// The `(file stem, rule id)` an answer's topic names. A qualified topic names
+/// both. A bare topic names the one existing rule with that id, in whichever
+/// file holds it; with no such rule, or several, it keeps the new-file default
+/// of `topic/topic`.
+fn answer_target(
+    rules_by_path: &BTreeMap<String, Vec<CorpusDecisionRule>>,
+    topic: &str,
+) -> Option<(String, String)> {
+    let default = topic_file_and_rule(topic)?;
+    if topic.trim().contains('/') {
+        return Some(default);
+    }
+    let mut holders = rules_by_path.iter().filter_map(|(path, rules)| {
+        let holds = rules.iter().any(|rule| rule.id == default.1);
+        let stem = path
+            .strip_prefix("decisions/")
+            .and_then(|rest| rest.strip_suffix(".md"))?;
+        holds.then(|| stem.to_string())
+    });
+    match (holders.next(), holders.next()) {
+        (Some(stem), None) => Some((stem, default.1)),
+        _ => Some(default),
+    }
 }
 
 fn topic_file_and_rule(topic: &str) -> Option<(String, String)> {

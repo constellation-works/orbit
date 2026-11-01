@@ -8,8 +8,8 @@
 //! clusters that can never block one another.
 //!
 //! Surfaces come from the same expansion conflict admission uses — declared
-//! selectors, pruned of paths that no longer exist. A contention picture
-//! admission does not share is not worth reading.
+//! selectors, including valid ones whose target no longer exists. A
+//! contention picture admission does not share is not worth reading.
 
 use std::collections::{BTreeMap, BTreeSet};
 
