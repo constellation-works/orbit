@@ -46,7 +46,7 @@ A UI `check(ctx)` reads `ctx.page` and `ctx.target`, and returns results built w
 | Id | Measures |
 |---|---|
 | `ui.no-horizontal-overflow` | Document and active pane `scrollWidth <= clientWidth + 1` at 1440, 1166 and 375px; bounded overflow wrappers exempt. |
-| `ui.panel-body-padding` | Each panel body's content starts with a non-zero inset (body padding, or the first content element's offset and padding — a summary table's first cell counts), and is not far closer than its sibling panels'. Catches the Lifecycle diagnostics card, whose counts sit in a zero-padding body while sibling cards start at 6–12px. |
+| `ui.panel-body-padding` | Each panel body's content starts with a non-zero inset (body padding, or the first painted content element's offset and padding — a summary table's first cell counts; an assistive live region clipped to zero area, such as `.panel-placeholder.quiet`, is skipped), and is not far closer than its sibling panels'. Catches the Lifecycle diagnostics card, whose counts sit in a zero-padding body while sibling cards start at 6–12px. |
 | `ui.sibling-spacing` | Siblings of one kind in one container share padding, font size and weight; selected/active items are exempt. |
 | `ui.control-size` | Buttons in one toolbar or row share height (within 2px) and font size. |
 | `ui.aligned-starts` | First content of neighbouring grid/flex-row columns starts within 8px of the same top. |
