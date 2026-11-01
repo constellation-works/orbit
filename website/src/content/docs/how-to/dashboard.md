@@ -1622,6 +1622,13 @@ layering and descriptions as `orbit config show`.
 | **System** | Live resource readings, throttle marks, resume thresholds, and the host's current admission verdict. |
 | **Hosts** | This serving machine's local identity and registered SSH hosts, independent of the workspace selection. |
 
+To browse **Keys**, search by key, label, or value. Filter by **Layer** (all,
+built-in, global, or workspace) or **Topic** (all, workflow, execution,
+review, machine, crews, or housekeeping). Changing the search or either filter
+returns to the first page. Results show 25 keys per page; use **Previous** and
+**Next** to move between pages. The range reads `Showing a–b of N keys · Page
+x of y`. When no keys match, the view reads `No keys match`.
+
 **Effective** opens with a strip naming both files, then one panel per section
 (Delivery, Crews, Execution, Review, Housekeeping) and a read-only **Paths**
 grid. Each row shows the value, where it came from, and the key's description.
