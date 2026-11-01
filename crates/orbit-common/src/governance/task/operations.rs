@@ -19,7 +19,7 @@ use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
 use orbit_types::tool::McpToolScope;
 
 use super::lifecycle_operations::{
-    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REQUEUE, RETRY_HANDOFF,
+    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REPILOT, REQUEUE, RETRY_HANDOFF,
     REVIEW_RESET, REVOKE_HANDOFF,
 };
 use super::nested_operations::{
@@ -74,6 +74,8 @@ operation_registry! {
         /// Requeue a blocked task onto its published candidate, as an
         /// operator decision.
         Requeue => REQUEUE,
+        /// Explicitly request one new task-pilot assessment.
+        Repilot => REPILOT,
         /// Read escalated blocks awaiting triage, or record one triage
         /// decision within the shared final-recovery requeue bound.
         BlockTriage => BLOCK_TRIAGE,

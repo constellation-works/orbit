@@ -127,6 +127,9 @@ Options:
       --allow-drop-system-tags
           Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`)
 
+      --repilot
+          Request one new pilot after updating (operator only)
+
   -h, --help
           Print help (see a summary with '-h')
 

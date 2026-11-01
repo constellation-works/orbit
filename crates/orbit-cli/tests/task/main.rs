@@ -22,6 +22,9 @@ mod isolated_cli_fixture;
 mod isolated_test;
 #[path = "../support/task_workspace.rs"]
 mod task_workspace;
+#[cfg(unix)]
+#[path = "../support/workflow_gate.rs"]
+mod workflow_gate;
 
 mod agents_cli;
 mod audit_cli;
@@ -47,6 +50,8 @@ mod live_run_status;
 mod local_read_projections_cli;
 mod pilot_comments;
 mod reconcile_review;
+#[cfg(unix)]
+mod repilot_cli;
 mod rescue_close_cli;
 mod review_after_landing_cli;
 mod review_crew_os_cli;

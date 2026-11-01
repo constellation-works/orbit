@@ -188,6 +188,7 @@ pub const INPUT_DEPENDENT_OPERATION_FLOORS: &[(&str, &str, &str)] = &[
         "granted_tools",
         TASK_GRANT_TOOLS_OPERATION_ID,
     ),
+    ("orbit.task.update", "repilot", "orbit.task.repilot"),
     ("orbit.auto_task.list", "view", "orbit.workflow.run.show"),
 ];
 
@@ -716,6 +717,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "reconciliation produces the owner-held review and validation evidence that lets a changed merged head complete",
+    },
+    GovernedOperation {
+        id: "orbit.task.repilot",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "only an explicit operator request may repeat a task pilot assessment",
     },
     GovernedOperation {
         id: "orbit.task.requeue",

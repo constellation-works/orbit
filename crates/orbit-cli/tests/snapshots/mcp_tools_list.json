@@ -1437,6 +1437,10 @@
     "inputSchema": {
       "type": "object",
       "properties": {
+        "repilot": {
+          "type": "boolean",
+          "description": "Explicitly request one new pilot after this update. Operator authority required; pending/live pilots and delivery are refused. Requirements edits alone never request a pilot."
+        },
         "id": {
           "type": "string",
           "description": "task ID"

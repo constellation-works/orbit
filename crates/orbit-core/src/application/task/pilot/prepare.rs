@@ -255,16 +255,8 @@ pub(crate) fn prepare(
                         .then_some("active_pilot_prepared")
                 })
                 .or_else(|| forge_refused(&envelope.tags).then_some(PR_FORGE_REMOTE_MISSING));
-            let reason = if reason.is_none()
-                && envelope.context_files.is_empty()
-                && fresh_no_target_assessment(
-                    runtime,
-                    action,
-                    &envelope.id,
-                    source.as_ref(),
-                    &policy,
-                )? {
-                Some("no_target_assessment_fresh")
+            let reason = if reason.is_none() && already_piloted(runtime, action, &envelope.id)? {
+                Some("assessment_already_applied")
             } else {
                 reason
             };
@@ -559,41 +551,30 @@ fn left_automatic_selection(selected: &Value, task: &Task) -> Option<Value> {
     ))
 }
 
-fn fresh_no_target_assessment(
+fn already_piloted(
     runtime: &OrbitRuntime,
     action: &str,
     task_id: &str,
-    source: Option<&SourceSnapshot>,
-    policy: &orbit_types::workflow::automation::members::PreparationPolicy,
 ) -> Result<bool, DispatchError> {
+    if runtime
+        .task_pilot_scheduling_assessment(task_id)
+        .map_err(|error| {
+            DispatchError::action_failed(action, format!("read task {task_id} assessment: {error}"))
+        })?
+        .is_some()
+    {
+        return Ok(true);
+    }
     let history = runtime.get_task_history(task_id).map_err(|error| {
         DispatchError::action_failed(action, format!("read task {task_id} history: {error}"))
     })?;
-    let marker = history
+    Ok(history
         .iter()
         .rev()
         .find(|entry| entry.event == "task_pilot_applied")
         .and_then(|entry| entry.note.as_deref())
-        .and_then(no_target_assessment_marker);
-    let Some((assessed_status, assessed_fingerprint)) = marker else {
-        return Ok(false);
-    };
-    let task = runtime.get_task(task_id).map_err(|error| {
-        DispatchError::action_failed(action, format!("read task {task_id}: {error}"))
-    })?;
-    if task.status != assessed_status {
-        return Ok(false);
-    }
-    let current = runtime
-        .task_pilot_fingerprint(
-            &task,
-            source.map(|source| source.source_revision.as_str()),
-            policy,
-        )
-        .map_err(|error| {
-            DispatchError::action_failed(action, format!("fingerprint task {task_id}: {error}"))
-        })?;
-    Ok(current == assessed_fingerprint)
+        .and_then(no_target_assessment_marker)
+        .is_some())
 }
 
 /// Bounded evidence for routine (non-explicit) discovery exclusions: every

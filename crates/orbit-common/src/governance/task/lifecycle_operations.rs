@@ -284,6 +284,32 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
 
+/// Explicit operator request for one task-pilot assessment.
+pub(super) const REPILOT: TaskOperation = TaskOperation {
+    verb: TaskVerb::Repilot,
+    cli_path: &["repilot"],
+    tool_name: "orbit.task.repilot",
+    tool_description: "Explicitly request one new pilot assessment for a proposed or backlog task. Only the first assessment is automatic; requirements edits do not request another pilot. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
+    cli_about: "Explicitly request one new pilot assessment",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        HOST_PARAM,
+        WORKSPACE_PARAM,
+        required(both(
+            "id",
+            ParamType::String,
+            "Task to assess again",
+            CliArgKind::Positional,
+            "Task to assess again",
+        )),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
 const BLOCK_TRIAGE_SUBJECT_VALUES: &[EnumValue] = &[EnumValue::plain("pilot_warning")];
 
 const BLOCK_TRIAGE_ACTION_VALUES: &[EnumValue] = &[

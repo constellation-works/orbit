@@ -111,6 +111,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.task.list",
             "orbit.task.reconcile_review",
             "orbit.task.recover_claim",
+            "orbit.task.repilot",
             "orbit.task.requeue",
             "orbit.task.retry_handoff",
             "orbit.task.review_reset",

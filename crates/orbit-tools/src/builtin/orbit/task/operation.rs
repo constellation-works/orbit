@@ -59,6 +59,9 @@ impl GuardedModes for TaskVerb {
                             .to_string(),
                     )));
                 }
+                if guarded::is_guarded(input) && input.get("repilot") == Some(&Value::Bool(true)) {
+                    return Some(Err(OrbitError::InvalidInput("repilot cannot accompany a guarded update; request orbit.task.repilot after the guarded write completes".into())));
+                }
                 if guarded::is_guarded(input) {
                     return Some(guarded::write(ctx, input.clone(), false));
                 }
@@ -86,6 +89,9 @@ impl GuardedModes for TaskVerb {
             TaskVerb::ReviewReset => {
                 managed_run_refusal(ctx, "managed runs cannot reset review budgets")
             }
+            TaskVerb::Repilot => {
+                managed_run_refusal(ctx, "managed runs cannot request another task pilot")
+            }
             TaskVerb::Requeue => {
                 managed_run_refusal(ctx, "managed runs cannot requeue blocked tasks")
             }
@@ -105,7 +111,7 @@ impl GuardedModes for TaskVerb {
     fn normalize_input(self, input: &mut Value) {
         let boolean_fields: &[&str] = match self {
             TaskVerb::Add => &["allow_missing_context"],
-            TaskVerb::Update => &["allow_missing_context", "allow_drop_system_tags"],
+            TaskVerb::Update => &["allow_missing_context", "allow_drop_system_tags", "repilot"],
             TaskVerb::Delete => &["force"],
             TaskVerb::Show
             | TaskVerb::List
@@ -117,6 +123,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -202,6 +209,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -242,6 +250,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -267,6 +276,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview

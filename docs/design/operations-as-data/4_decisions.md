@@ -237,6 +237,13 @@ advertisement grants no execution authority. The retry reserves a durable receip
 for the existing handoff and uses normal owner landing, as specified in
 [owner handoff retry](../distributed-drain/specs/task-pull.md#owner-retry-of-an-authorized-handoff).
 
+Current surface addition (2026-11-01): `orbit.task.repilot` is advertised for
+operator discovery and governed by the operator capability. The `repilot` field
+on `orbit.task.update` has the same operator floor. This explicitly authorizes
+one new pilot; ordinary edits never authorize another assessment. Managed workers
+cannot request it. Answering an already authorized decision option still uses
+the canonical decision-answer path and its existing binding and caller checks.
+
 Current surface addition (2026-10-16): `orbit.task.requeue` is advertised for
 operator discovery and governed by the operator capability, like
 `review_reset`. Managed agents are refused at the tool entry as well.

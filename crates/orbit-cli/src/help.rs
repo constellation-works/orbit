@@ -217,6 +217,7 @@ const TASK_TASKS: &[GroupedRow] = &[
         "update",
         "Update task fields; `--approve` takes the next approval step",
     ),
+    ("repilot", "Explicitly request one new pilot assessment"),
     ("archive", "Archive a task"),
     ("list", "List tasks with optional filters"),
     (

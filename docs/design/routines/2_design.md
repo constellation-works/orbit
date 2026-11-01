@@ -287,9 +287,10 @@ Optional `freshness` resolves each key from the routine, then
 `[workflow.task_pilot_freshness]` in `config.toml`, then built-in defaults:
 `material_fields: [title, description, criteria, plan, selectors]` and
 `source_sensitivity: ignore`. Thus an ordinary branch-head move or retagging
-does not by itself re-pilot an assessed task. `context_files` and `any` are the
-other source sensitivities. Predicate/freshness edits invalidate affected
-assessments; neither block configures finding verification. See
+does not change the default material fingerprint. `context_files` and `any` are
+the other source sensitivities. These fields guard preparation/apply drift;
+changing them never automatically re-pilots an already assessed task. Neither
+block configures finding verification. See
 [State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
 for all material fields, stale-source checks during apply, limits and rollback.
 
@@ -362,10 +363,11 @@ definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state rou
 `owner_machine` renders this host's registered machine id and its `branch` the workspace's
 registered base branch — the only host-dependent bytes a seed writes. `finding_verification.yaml`
 is a `finding_unverified` state routine rendered the same way [ORB-15662]. The two
-triage state routines render the same owner and branch placeholders. Which edits re-pilot an
-assessed task is `[workflow.task_pilot_freshness]` in `config.toml` (default: title,
-description, criteria, plan and selectors; head moves ignored), overridable by the routine's
-optional `trigger.state.freshness` block [ORB-13638]. Auto-task definitions
+triage state routines render the same owner and branch placeholders. The
+prepare/apply drift contract is `[workflow.task_pilot_freshness]` in `config.toml`
+(default: title, description, criteria, plan and selectors; head moves ignored),
+overridable by the routine's optional `trigger.state.freshness` block [ORB-13638].
+Only the first pilot is automatic; edits and policy changes never request a later one. Auto-task definitions
 are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's
 `enabled` field controls scheduled capability in the workspace; the performance
 refresh is the single seeded-enabled exception described above.
@@ -876,8 +878,12 @@ diagnostics without persisting state or dispatching work.
   settling for `debounce_minutes` or reaching `max_wait_minutes`. Admission rechecks
   eligibility and freezes member fingerprints/source, retry budget and deadline.
   Deterministic per-member apply evidence settles assessments, including fresh
-  unready results; wrapper success is not an assessment. An edit creates new debt,
-  and successful apply certifies its resulting fingerprint without a self-loop.
+  unready results; wrapper success is not an assessment. Only the first pilot is
+  automatic. Edits make evidence stale for dispatch but create no new automatic
+  pilot debt. Later pilots require `orbit task repilot <id>` (also available as
+  `orbit.task.repilot`, task update `repilot: true`, or decision action `re_pilot`).
+  Shared admission withholds edited requirements until an explicit assessment
+  completes; held warnings retain one pending decision across routine windows.
   Exhausted members remain withheld at that fingerprint; other members can proceed.
   Timing edits affect pending work while active budgets stay captured. Kind, owner,
   target or branch edits report `definition_changed`; restore the original

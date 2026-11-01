@@ -283,6 +283,7 @@ enum Render {
     ReviewReset,
     Requeue,
     Reconcile,
+    Pilot,
     ToolRun {
         full: bool,
         fields: Vec<String>,
@@ -411,6 +412,11 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                 name: invocation.spec.tool_name.into(),
                 input: without_host(&invocation.input),
                 render: Render::Reconcile,
+            },
+            TaskVerb::Repilot => RoutedCall {
+                name: invocation.spec.tool_name.into(),
+                input: without_host(&invocation.input),
+                render: Render::Pilot,
             },
             TaskVerb::Requeue => RoutedCall {
                 name: invocation.spec.tool_name.into(),
@@ -541,6 +547,7 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             let text = super::task::operation::requeue_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())
         }
+        Render::Pilot => Ok(Payload::document(with_host(value, holder)).into()),
         Render::Reconcile => {
             let text = super::task::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(with_host(value, holder), text).into())

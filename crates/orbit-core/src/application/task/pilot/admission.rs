@@ -29,6 +29,8 @@ const NATIVE_OS_RESOLVED: &str = "native_os_requirement_resolved";
 
 /// A finding in the latest applied assessment that requires an operator decision.
 pub(crate) enum PilotAdmissionHold {
+    /// Edited description/criteria need an explicitly requested new assessment.
+    StaleAssessment(String),
     Duplicate,
     AlreadyLanded,
     OperatorValidation(OperatorValidationHold),
@@ -510,6 +512,17 @@ impl OrbitRuntime {
             let assessment = audit.get("assessment").ok_or_else(|| {
                 OrbitError::Execution("pilot receipt is missing its assessment".into())
             })?;
+            if super::freshness::pilot_requirements_stale(
+                task,
+                &audit,
+                receipt.operation_id,
+                history,
+            )? {
+                return Ok(Some(PilotAdmissionHold::StaleAssessment(format!(
+                    "The task description or acceptance criteria changed after its latest pilot. Dispatch is held until a new explicit assessment completes. Run `orbit task repilot {}` on the owner.",
+                    task.id
+                ))));
+            }
             let operation_id = receipt.operation_id;
             if assessment["disposition"] == "host_operational" {
                 // New receipts seal the assessed material. Older receipts have

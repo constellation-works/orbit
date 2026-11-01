@@ -209,6 +209,64 @@ pub(super) fn update(
     input: &Value,
     operator: bool,
 ) -> Result<TaskWriteOutput, OrbitError> {
+    if !optional_bool_alias(input, &["repilot"])?.unwrap_or(false) {
+        return update_without_repilot(runtime, caller, input, operator);
+    }
+    runtime.admit_operator_operation("orbit.task.repilot", caller.session_context)?;
+    let id = required_string(input, &["id"], "id")?;
+    if optional_string(input, "status")?
+        .is_some_and(|status| !matches!(status.as_str(), "proposed" | "backlog"))
+    {
+        return Err(OrbitError::InvalidInput(
+            "repilot requires the updated task to remain proposed or backlog".into(),
+        ));
+    }
+    if let Some(crew) = optional_string(input, "crew")?
+        && runtime.is_human_crew(Some(&crew))
+    {
+        return Err(OrbitError::InvalidInput(
+            "repilot cannot assign the task to a human crew".into(),
+        ));
+    }
+    let trigger = if caller.session_context.transport.is_some() {
+        orbit_types::workflow::JobRunTrigger::mcp()
+    } else {
+        orbit_types::workflow::JobRunTrigger::cli()
+    };
+    let mut caller = Some(caller);
+    let mut output = None;
+    // Same reentrant task lock as decision answers and direct submission:
+    // another explicit request cannot slip between this edit and its run.
+    runtime
+        .stores()
+        .tasks()
+        .with_task_write_lock(&id, &mut || {
+            runtime
+                .check_explicit_task_pilot(&id)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            let caller = caller
+                .take()
+                .ok_or_else(|| OrbitError::Execution("repilot update repeated its write".into()))?;
+            let written = update_without_repilot(runtime, caller, input, operator)?;
+            runtime
+                .submit_explicit_task_pilot(&id, None, trigger.clone())
+                .map_err(|error| {
+                    OrbitError::Execution(format!(
+                        "Task edits were saved, but the pilot request failed: {error}"
+                    ))
+                })?;
+            output = Some(written);
+            Ok(())
+        })?;
+    output.ok_or_else(|| OrbitError::Execution("repilot update did not run".into()))
+}
+
+fn update_without_repilot(
+    runtime: &OrbitRuntime,
+    caller: ToolCaller<'_>,
+    input: &Value,
+    operator: bool,
+) -> Result<TaskWriteOutput, OrbitError> {
     if let Some(options) = cli_options(input, UPDATE_CLI_OPTIONS)? {
         return cli_update(runtime, caller, input, options);
     }

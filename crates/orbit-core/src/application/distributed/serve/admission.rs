@@ -142,6 +142,9 @@ impl OrbitRuntime {
             match self
                 .pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
             {
+                Some(PilotAdmissionHold::StaleAssessment(detail)) => {
+                    admission_holds.insert(task.id.clone(), detail);
+                }
                 Some(PilotAdmissionHold::HostOperational(hold)) => {
                     self.record_host_operational_hold(&task.id, &hold)?;
                     admission_holds.insert(task.id.clone(), hold.detail());
@@ -274,6 +277,7 @@ impl OrbitRuntime {
                     return Ok(Some(why));
                 }
                 match self.pilot_admission_hold_in(task, comments, &|| Ok(history.to_vec()))? {
+                    Some(PilotAdmissionHold::StaleAssessment(detail)) => Ok(Some(detail)),
                     Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
                     Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
                     Some(PilotAdmissionHold::UnverifiedFinding(hold)) => Ok(Some(hold.detail())),

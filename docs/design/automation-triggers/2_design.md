@@ -59,7 +59,7 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | `cron` / `interval` | One UTC slot identity; missed slots collapse or skip according to explicit policy. | Accepted action outcome; legacy definitions keep legacy semantics. |
 | `deliveries_landed` | Oldest uncovered verified deliveries reach `threshold`, or nonempty pending work reaches `max_wait_minutes`. | Validated coverage of the captured delivery/range obligations. |
 | `condition` | Due on a subject edge (true for `for_minutes`, held until `rearm`), owner only, under a durable fire identity. | Durable condition state per consumer; `orbit automation explain` shows arm state, holds, stalls and fires. |
-| `preparation_eligible` | Proposed/backlog task has no fresh assessment for its material fingerprint. | Per-task accepted assessment, including an unready verdict. |
+| `preparation_eligible` | Proposed/backlog task has never had an applied pilot assessment. | Per-task accepted assessment, including an unready verdict. |
 | `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
 | `finding_unverified` | Review-filed bug finding in proposed/someday/backlog has no CONFIRMED verdict for its current material ([finding-verification](../finding-verification/2_design.md)). | Per-task recorded verdict. |
 | `pilot_warnings_held` | Proposed task whose latest applied task-pilot assessment holds promotion on warning findings, with no trusted operator decision and no triage marker for that assessment ([§6.1](#61-pilot-warning-holds-pilot_warnings_held)). | Per-assessment `pilot_warning_triaged` marker. |
@@ -335,8 +335,8 @@ long enough to reject replay; missing state is a diagnostic, not a fresh baselin
 
 Observe proposed/backlog tasks authorized for preparation. No-diff tasks retain
 the current exclusion unless an explicitly supported preparation contract needs
-them. Missing selectors are one reason to prepare, not the general definition of
-staleness. Tasks in progress, review, terminal, withdrawn, or human-blocked are
+them. Missing selectors are one reason for a first assessment; material edits after
+an assessment never request another automatic pilot. Tasks in progress, review, terminal, withdrawn, or human-blocked are
 not automatic pilot candidates. Preparing proposed work does not approve it.
 
 A material fingerprint (`material_v2`) covers the pilot contract version, the
@@ -393,15 +393,23 @@ The prepare/apply domain boundary recomputes fingerprints and eligibility under
 task locks. Accepted selectors/assessment fields written by that same apply are
 part of the certified *post-apply* fingerprint, with the pre-apply fingerprint
 retained for audit. A preparation routine also reuses the latest atomic task
-receipt when its certified post-apply fingerprint matches that consumer's
-current fingerprint, including evidence from an explicit pilot. Matching
-evidence reports `fresh` or `fresh_unready` without another provider run,
-preparation hold or a new consumer-local receipt. The fingerprint must match
-under the consumer's resolved material fields, source sensitivity and
-eligibility policy; missing markers or a different contract require normal
-preparation. Active pilots still withhold their tasks before this reuse check,
-and explicit task selections can deliberately request another assessment. Accepted writes do not invalidate their own
-assessment; external material edits still do.
+receipt as evidence that the task has already been piloted, including an
+unready verdict and evidence from an explicit pilot. Routine windows report
+`fresh` or `fresh_unready` without another provider run or consumer-local
+receipt. This scheduling reuse is independent of dispatch freshness: edits
+never renew automatic pilot eligibility. Active pilots still withhold their
+tasks before reuse. Every later pilot needs an explicit operator request:
+`orbit task repilot <id>`, tool `orbit.task.repilot`, task update `repilot: true`,
+or a decision option action `re_pilot`. The explicit legacy command
+`orbit run task-pilot <id>` remains supported. Pending/live pilot and delivery
+holders and owner authority guard explicit submission.
+
+Description or acceptance-criteria edits invalidate the assessment for delivery.
+Shared admission fails closed (`pilot_assessment_stale`) with the actual remedy
+`orbit task repilot <id>`; it never silently dispatches using old requirements.
+The atomic receipt seals those requirements independently of configurable
+scheduling fingerprints. A subsequent accepted explicit assessment clears the
+stale hold. Administrative edits and promotion leave it current.
 Apply owns the prepared `context_files_before` snapshot and fills it
 into the persisted assessment; an agent need only return `context_files_after`.
 Legacy before echoes are ignored, so ordering, selector spelling, or an omitted
@@ -499,8 +507,9 @@ for someone to notice it. `pilot_warnings_held` targets
   prints) finds a holding warning in its latest applied task-pilot assessment.
   A task in any other status holds nothing, so backlog tasks are never members.
   The member key is the task ID; the freshness fingerprint is the assessment
-  receipt's `operation_id`. A material edit that re-pilots into a new holding
-  assessment is a new member; one that re-pilots clean retires it.
+  receipt's `operation_id`. An explicitly requested pilot that produces a new holding
+  assessment is a new member; one that assesses clean retires it. A material
+  edit alone starts no pilot and creates no new triage member or decision.
 - **Exit.** A member leaves when an operator who is not Orbit's automation
   records a task-pilot admission decision on that assessment, when it leaves
   `proposed` (an approval to backlog included), or when a

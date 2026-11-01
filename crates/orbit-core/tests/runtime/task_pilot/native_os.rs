@@ -317,6 +317,13 @@ fn a_native_os_wait_clears_on_a_decision_a_rescope_or_a_newer_assessment() {
                     .unwrap();
             }
         }
+        if clearing == "rescope" {
+            let (reason, _) = exclusion(&workspace, &task).unwrap();
+            assert_eq!(reason, "pilot_assessment_stale");
+            // The rescope releases the native finding, but changed criteria
+            // need an explicitly requested current assessment before dispatch.
+            assess(&workspace, &task, Some(json!([])));
+        }
         assert_eq!(exclusion(&workspace, &task), None, "{clearing}");
         assert_eq!(
             resolutions(&workspace, &task),

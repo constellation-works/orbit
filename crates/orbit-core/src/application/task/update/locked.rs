@@ -428,6 +428,9 @@ impl OrbitRuntime {
             None
         };
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
+        if let Some(edit) = self.pilot_requirement_edit_history(&task, &params, &effective_label)? {
+            append_history.push(edit);
+        }
         if let Some(preserved) = backlog_preservation {
             // The `requeued` decision is written only with its preservation
             // record, exactly as `write_candidate_requeue` writes it.

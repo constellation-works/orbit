@@ -2,6 +2,7 @@
   {"argv": ["task"], "golden": "task/root.txt"},
   {"argv": ["task", "add"], "golden": "task/add.txt"},
   {"argv": ["task", "update"], "golden": "task/update.txt"},
+  {"argv": ["task", "repilot"], "golden": "task/repilot.txt"},
   {"argv": ["task", "list"], "golden": "task/list.txt"},
   {"argv": ["task", "eligible"], "golden": "task/eligible.txt"},
   {"argv": ["task", "show"], "golden": "task/show.txt"},

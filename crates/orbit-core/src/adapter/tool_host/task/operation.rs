@@ -88,6 +88,23 @@ pub(in crate::adapter::tool_host) fn dispatch(
             runtime,
             input.as_value(),
         )),
+        TaskVerb::Repilot => {
+            runtime.admit_operator_operation("orbit.task.repilot", caller.session_context)?;
+            let id = input.required_string("id")?;
+            let trigger = if caller.session_context.transport.is_some() {
+                orbit_types::workflow::JobRunTrigger::mcp()
+            } else {
+                orbit_types::workflow::JobRunTrigger::cli()
+            };
+            let response = runtime
+                .submit_explicit_task_pilot(&id, caller.agent.as_deref(), trigger)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            Ok((
+                serde_json::to_value(response)
+                    .map_err(serialize_error("serialize pilot submission"))?,
+                Some(id),
+            ))
+        }
         TaskVerb::Requeue => {
             // The tool chokepoint admits only an operator; a managed agent is
             // refused here as well, including an accidentally elevated run.

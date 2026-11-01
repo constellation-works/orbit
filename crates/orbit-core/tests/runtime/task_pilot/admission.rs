@@ -270,6 +270,8 @@ fn host_operational_material_and_newer_dispositions_control_admission() {
                     "human:fixture".into(),
                 )
                 .unwrap();
+            assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
+            assess_disposition(&workspace, &task, None, "selectors");
         } else {
             assess_disposition(&workspace, &task, None, release);
         }
@@ -388,6 +390,8 @@ fn legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material() 
             "human:fixture".into(),
         )
         .unwrap();
+    assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
+    assess(&workspace, &task, None);
     assert_admission(&workspace, &task, None);
 }
 
@@ -461,7 +465,7 @@ fn latest_pilot_finding_holds_backlog_until_a_clear_assessment() {
                 "human:fixture".into(),
             )
             .unwrap();
-        assert_admission(&workspace, &task, Some(reason));
+        assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
         assess(&workspace, &task, None);
         assert_admission(&workspace, &task, None);
     }
@@ -791,6 +795,8 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
                 "human:fixture".into(),
             )
             .unwrap();
+        assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
+        assess(&workspace, &task, None);
         assert_admission(&workspace, &task, None);
         let admitted = orbit_engine::RuntimeHost::admit_task_for_workflow(
             &workspace.runtime,
@@ -861,7 +867,7 @@ fn changed_criteria_make_the_pilot_validation_assessment_stale() {
             "human:fixture".into(),
         )
         .unwrap();
-    assert_admission(&workspace, &task, None);
+    assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
     assess(&workspace, &task, None);
     assert_admission(&workspace, &task, Some("operator_validation_handoff"));
 }
@@ -931,17 +937,36 @@ fn legacy_operator_warning_is_backfilled_once_at_admission_and_stales_on_edit() 
         record["hold"]["requirements"][0]["tool"],
         "orbit.pipeline.invoke"
     );
+    let mut session = orbit_types::tool::ToolSessionContext::default();
+    session
+        .effective_capabilities
+        .insert(orbit_types::tool::McpCapability::Operator);
+    let revision = workspace
+        .runtime
+        .desktop_task_snapshot(&task.id, &session)
+        .unwrap()
+        .revision;
     workspace
         .runtime
-        .update_task_as_human(
-            &task.id,
-            TaskUpdateParams {
-                acceptance_criteria: Some(vec!["The fixture repair is observable.".into()]),
-                ..Default::default()
+        .desktop_task_write(
+            orbit_types::desktop::DesktopTaskRequest {
+                request_id: "legacy-requirements-rescope".into(),
+                operation: orbit_types::desktop::DesktopTaskOperation::Edit {
+                    id: task.id.clone(),
+                    expected_revision: revision,
+                    fields: orbit_types::desktop::DesktopTaskFields {
+                        acceptance_criteria: Some(vec!["The fixture repair is observable.".into()]),
+                        ..Default::default()
+                    },
+                },
             },
-            "human:fixture".into(),
+            None,
+            None,
+            &session,
         )
         .unwrap();
+    assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
+    assess(&workspace, &task, None);
     assert_admission(&workspace, &task, None);
 }
 

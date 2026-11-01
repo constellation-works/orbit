@@ -839,10 +839,13 @@ fingerprint, so changing it invalidates assessments accepted under the old
 one, while the default adds nothing and keeps the fingerprints accepted before
 the block existed. Explicit task-ID runs do not consult it.
 
-`freshness` [ORB-13638] decides which edits make an assessed task due again;
-eligibility only decides whether it is fingerprinted at all, so a task that
-newly becomes eligible is piloted while retagging an eligible, already-assessed
-one is not. Each key resolves routine block, then `config.toml`
+`freshness` [ORB-13638] selects the material checked for drift during pilot
+preparation and apply. Eligibility selects never-assessed tasks for their first
+automatic pilot. Once a task has an applied assessment, no material or policy
+edit makes it automatically due again. Request another pilot with
+`orbit task repilot <id>`, `orbit.task.repilot`, task update `repilot: true`, or a
+decision option action `re_pilot`. Description/criteria edits hold dispatch as
+`pilot_assessment_stale` until the explicitly requested assessment completes. Each key resolves routine block, then `config.toml`
 `[workflow.task_pilot_freshness]`, then the default: `material_fields`
 `[title, description, criteria, plan, selectors]` and `source_sensitivity:
 ignore`. The opt-in fields are `tags`, `crew` (with the resolved
@@ -859,19 +862,16 @@ readiness and `pilot_fingerprint` resolve the same value for a consumer, and
 a non-default one is folded into the fingerprint. Pilots still pin and record
 the source revision they assessed against, whichever mode applies.
 
-Assessments accepted under the earlier `material_v1` fingerprint, which
-hashed every field and the source revision, are carried forward rather than
-re-piloted: a scheduled member stays fresh while the `material_v1` hash
-recomputed at the revision its receipt pinned still matches, and becomes due
-at the first edit that hash covers. Settlement keeps the pin for a legacy result
-that still matches this hash; once its assessment is replaced, doctor cleanup
-can release the now-unreferenced pin. The pinned revision is read from that one
-attempt's owned ref, falling back to its exact legacy ref, never by listing a
-namespace, and a failure to recompute the
-hash is logged before the member is assessed again. Assessments accepted since
-the upgrade carry the current contract, so their attempt's pin is released at
-settlement; `orbit doctor --fix-automation-pins` keeps any legacy assessment
-pin still needed for carry-forward.
+An accepted atomic task receipt settles automatic preparation even when its
+material or consumer policy changes. Legacy member receipts can retain their
+`material_v1` source pin for carry-forward; replacing their assessment lets doctor
+cleanup release the unused pin. Scheduling reuse does not certify edited
+requirements for dispatch: new receipts seal description/criteria independently
+of configurable fingerprints, and older recorded component hashes are compared
+when available. Future requirement edits to older receipts that lack those hashes
+record a receipt-scoped stale marker in the same task mutation, including
+desktop edits. Unchanged legacy task receipts remain usable across upgrades;
+request a new assessment explicitly when their requirements need review.
 
 Cron, deliveries and state triggers are mutually exclusive; state kinds have
 fixed pipeline targets, require one owner and forbid overlap. Retry limits are

@@ -343,6 +343,7 @@ pub(super) fn task_operation(
         | TaskVerb::Eligible
         | TaskVerb::Show
         | TaskVerb::ReviewReset
+        | TaskVerb::Repilot
         | TaskVerb::Requeue
         | TaskVerb::BlockTriage
         | TaskVerb::ReconcileReview
