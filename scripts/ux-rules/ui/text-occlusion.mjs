@@ -3,6 +3,10 @@
 // A reader cannot read text that another element paints over, even when the
 // DOM order looks fine. The Analytics implementers detail squeezes its label
 // column to nothing, so the value ("42 measured ...") paints over its label.
+// A sticky or fixed bar can cover glyphs at the initial scroll position
+// while the text's own scrollport still moves those glyphs clear of it.
+// That text is readable, so it is not coverage. An overlay that stays over
+// the glyphs at every scroll offset still is.
 // Sample points inside each text run's own line boxes (a container's box can
 // extend past its glyphs). A sample is occluded only when an element painted
 // above it actually paints at that point: either its own glyphs' line boxes
@@ -90,6 +94,106 @@ export async function check(ctx) {
     };
     const containsPoint = (rect, x, y) =>
       x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    // The nearest sticky or fixed ancestor, including the element itself.
+    // In-flow and absolute overlaps travel with the text, so scrolling
+    // cannot separate them.
+    const stickingAncestor = (node) => {
+      for (let current = node; current; current = current.parentElement) {
+        const position = getComputedStyle(current).position;
+        if (position === "sticky" || position === "fixed") return current;
+      }
+      return null;
+    };
+    const scrollersOf = (node) => {
+      const foundScrollers = [];
+      for (let current = node.parentElement; current; current = current.parentElement) {
+        const style = getComputedStyle(current);
+        if (
+          current.scrollHeight > current.clientHeight + 1 &&
+          /(auto|scroll|overlay)/.test(style.overflowY)
+        ) {
+          foundScrollers.push(current);
+        }
+      }
+      const root = document.scrollingElement;
+      if (root && root.scrollHeight > root.clientHeight + 1 && !foundScrollers.includes(root)) {
+        foundScrollers.push(root);
+      }
+      return foundScrollers;
+    };
+    const sampleClear = (el, x, y) => {
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return false;
+      const stack =
+        typeof document.elementsFromPoint === "function"
+          ? document.elementsFromPoint(x, y)
+          : [document.elementFromPoint(x, y)].filter(Boolean);
+      const at = stack.indexOf(el);
+      if (at === -1) return false;
+      for (const above of stack.slice(0, at)) {
+        if (above === el || el.contains(above) || above.contains(el)) continue;
+        if (paintsAt(above, x, y)) return false;
+      }
+      return true;
+    };
+    // True when some offset of a scrollport that moves the text relative
+    // to the pinning bar places this sample inside that port and clear of
+    // every painted overlay. Scroll offsets are restored before returning.
+    const scrollReveals = (el, covered, x, y) => {
+      const pin = stickingAncestor(covered);
+      if (!pin) return false;
+      const scrollers = scrollersOf(el);
+      const saved = scrollers.map((node) => node.scrollTop);
+      try {
+        for (let index = 0; index < scrollers.length; index += 1) {
+          const scroller = scrollers[index];
+          if (!scroller.contains(el)) continue;
+          const max = scroller.scrollHeight - scroller.clientHeight;
+          if (max <= 1) continue;
+          const origin = saved[index];
+          const textBefore = el.getBoundingClientRect().top;
+          const pinBefore = pin.getBoundingClientRect().top;
+          const nudge = Math.min(48, max);
+          scroller.scrollTop = origin + nudge <= max ? origin + nudge : Math.max(0, origin - nudge);
+          const textDy = el.getBoundingClientRect().top - textBefore;
+          const pinDy = pin.getBoundingClientRect().top - pinBefore;
+          scroller.scrollTop = origin;
+          if (Math.abs(textDy - pinDy) <= 1) continue;
+          glyphRectsCache.clear();
+          const textAtOrigin = el.getBoundingClientRect().top;
+          const port = scroller.getBoundingClientRect();
+          const pinBox = pin.getBoundingClientRect();
+          const pointInContent = y - port.top + origin;
+          const clampScroll = (value) => Math.min(max, Math.max(0, value));
+          const candidates = [
+            clampScroll(pointInContent - (pinBox.top - 6 - port.top)),
+            clampScroll(pointInContent - (pinBox.bottom + 6 - port.top)),
+            clampScroll(pointInContent - port.height * 0.4),
+            0,
+            max,
+          ];
+          const seen = new Set();
+          for (const next of candidates) {
+            const key = Math.round(next);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            scroller.scrollTop = next;
+            glyphRectsCache.clear();
+            const ny = y + (el.getBoundingClientRect().top - textAtOrigin);
+            const livePort = scroller.getBoundingClientRect();
+            if (x < livePort.left + 1 || x > livePort.right - 1) continue;
+            if (ny < livePort.top + 1 || ny > livePort.bottom - 1) continue;
+            if (sampleClear(el, x, ny)) return true;
+          }
+          scroller.scrollTop = origin;
+        }
+        return false;
+      } finally {
+        for (let index = 0; index < scrollers.length; index += 1) {
+          scrollers[index].scrollTop = saved[index];
+        }
+        glyphRectsCache.clear();
+      }
+    };
     // Whether an element painted above a sample actually paints at it:
     // its glyphs are there, or an opaque fill / replaced content covers it.
     const paintsAt = (el, x, y) => {
@@ -150,7 +254,7 @@ export async function check(ctx) {
             covered = above;
             break;
           }
-          if (covered) {
+          if (covered && !scrollReveals(el, covered, x, y)) {
             failures.push({
               selector: H.selectorOf(el),
               covered_by: H.selectorOf(covered),

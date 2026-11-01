@@ -113,6 +113,32 @@ test("text-occlusion fails under an opaque pointer-events:none overlay", async (
   assert.equal(result.measurements.failures[0].covered_by, "#overlay");
 });
 
+test("text-occlusion passes when a sticky bar scrolls clear of the text", async (t) => {
+  const result = await checkInBrowser(
+    t,
+    `<div id="scroller" style="height:180px;overflow:auto">` +
+      `<div style="height:150px">Top matter for the column.</div>` +
+      `<p id="label">Description field text</p>` +
+      `<div style="height:240px">Later matter so this column can scroll.</div>` +
+      `<div id="bar" style="position:sticky;bottom:0;height:48px;background:#fff">Approve</div>` +
+      `</div>`,
+  );
+  if (result === null) return;
+  assert.equal(result.status, "pass");
+});
+
+test("text-occlusion fails when a fixed overlay cannot be scrolled clear", async (t) => {
+  const result = await checkInBrowser(
+    t,
+    `<p id="label">Permanent label</p>` +
+      `<div id="overlay" style="position:fixed;top:0;left:0;width:240px;height:36px;background:#fff"></div>`,
+  );
+  if (result === null) return;
+  assert.equal(result.status, "fail");
+  assert.equal(result.measurements.failures[0].selector, "#label");
+  assert.equal(result.measurements.failures[0].covered_by, "#overlay");
+});
+
 test("text-occlusion still fails when another text run paints over the label", async (t) => {
   const result = await checkInBrowser(
     t,
