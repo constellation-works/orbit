@@ -119,6 +119,9 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     let mut uncertain = false;
     let mut independent_candidate = false;
     let mut dependency_record = false;
+    // A failed job that is neither a dependency record nor a rerun root: its
+    // own class (candidate, base, inconclusive) has a route beside the records.
+    let mut other_failure = false;
     if let Some((run_id, pre_roots)) =
         try_conclusion_transient(host, workspace, &jobs, &runs, deadline_ms, diagnostic)?
     {
@@ -226,6 +229,10 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                 class = CheckFailureClass::Candidate;
                 independent_candidate = true;
             }
+            other_failure |= !matches!(
+                class,
+                CheckFailureClass::Flaky | CheckFailureClass::Transient
+            );
             match class {
                 CheckFailureClass::Flaky | CheckFailureClass::Transient => {
                     roots.entry(run).or_default().push(CiRerunRoot {
@@ -246,7 +253,11 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         }
     }
     if !conclusion_set {
-        if roots.is_empty() && dependency_record && !independent_candidate {
+        // [ORB-20771] Only records with no other failed sibling hold here. A
+        // sibling the logs cannot tie to a changed file (a guardrail such as a
+        // stale body-history check) is still a candidate failure, and it takes
+        // its own repair, base or stop route rather than waiting forever.
+        if roots.is_empty() && dependency_record && !other_failure {
             return Ok(CiRerunStep::Wait(
                 "dependency-only evidence has no independently eligible root; no candidate repair"
                     .into(),
