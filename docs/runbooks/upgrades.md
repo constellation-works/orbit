@@ -515,13 +515,14 @@ or the dashboard; let a run finish or cancel it — for example:
 upgrade admission refused: Orbit clients or commands are still running: pid 3772 (mcp serve,
 started 2026-10-07T06:14:52Z) — it hands over (mcp-stdio-v1) only to a candidate renamed over
 the executable, which `orbit update` (a newer release) and `orbit update --local-candidate`
-admit and then install; this bare preflight names no candidate, so close its MCP client
-before retrying; and any processes that did not register (…); leave the installation and
-stores unchanged. …
+admit and then install; nothing is renamed here, so close its MCP client to proceed without
+one; and any processes that did not register (…); leave the installation and stores
+unchanged. …
 ```
 
-This no-rename refusal example describes a bare `orbit update --preflight` without
-`--candidate`: it does not request refresh, and no executable is renamed. An update whose
+The quoted no-candidate clause applies when a handover-capable `mcp serve` is refused
+without a handover candidate. A bare `orbit update --preflight` without `--candidate` is
+one such path: it does not request refresh, and no executable is renamed. An update whose
 target is already installed takes a different path: it refreshes a holder already running
 the installed digest and compatibility identity when that holder supports the resume
 contract; incompatible or nonresumable holders are refused. The installing updates above
