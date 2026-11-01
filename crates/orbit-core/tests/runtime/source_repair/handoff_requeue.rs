@@ -827,9 +827,61 @@ fn plain_status_update_refuses_changed_publication_and_discard_closes_it() {
         )
         .unwrap();
     let error = plain_refused(&f, "changed specification");
+    // ORB-20955 (observed on ORB-20867): the refusal must name the supported
+    // operator CLI discard route with the task id, not a top-level MCP field.
+    let expected_route = format!(
+        "orbit task update {} --status backlog --discard-candidate",
+        f.task
+    );
     assert!(
-        error.contains("--discard-candidate"),
-        "the mismatch offers its exit: {error}"
+        error.contains(&expected_route),
+        "ORB-20955: the mismatch names the supported operator route: {error}"
+    );
+    assert!(
+        error.contains("orbit.task.update MCP does not accept"),
+        "ORB-20955: the mismatch explains the MCP boundary: {error}"
+    );
+    assert!(
+        !error.contains("MCP: discard_candidate"),
+        "ORB-20955: the mismatch must not advertise an MCP field: {error}"
+    );
+    assert!(
+        !error.contains("discard_candidate=true"),
+        "ORB-20955: the mismatch must not advertise an MCP field: {error}"
+    );
+    // The ordinary MCP update surface still refuses a top-level discard
+    // field; only the operator CLI carries it.
+    let task_before = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
+    let history_before =
+        serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
+    let mcp_discard_error = f
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": f.task, "workspace": f.repo, "status": "backlog",
+                "discard_candidate": true, "model": "claude"}),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("ORB-20955: MCP unexpectedly accepted discard_candidate"))
+        .to_string();
+    assert!(
+        mcp_discard_error.contains("discard_candidate"),
+        "ORB-20955: the MCP refusal names the field: {mcp_discard_error}"
+    );
+    assert!(
+        mcp_discard_error.contains("unknown field")
+            || mcp_discard_error.contains("does not accept"),
+        "ORB-20955: the MCP refusal keeps the CLI-only contract: {mcp_discard_error}"
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap(),
+        task_before,
+        "ORB-20955: refused MCP discard changed the task"
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap(),
+        history_before,
+        "ORB-20955: refused MCP discard wrote history"
     );
     let forge = delivery_forge(&f);
     f.runtime = f
