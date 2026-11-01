@@ -8,7 +8,7 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
     return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('button') === n;
   }), true, 'Focused controls remain visible and unobscured');
   for (const width of [1440, 375]) {
-    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900, url: '/?workspace=one&repairing#tasks' });
     await page.evaluate(() => {
       panelFixture.tasks.find(t => t.id === 'PANEL-6').description = 'Long overview content for scrolling. '.repeat(500);
       panelFixture.readiness = [
@@ -26,6 +26,18 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
     assert.match(await badge.getAttribute('title'), /complete_pr/);
     assert.match(await badge.getAttribute('title'), /attempt 1 of 3/);
     assert.equal(await row(page, 'PANEL-1').locator('.delivery-attention-badge').count(), 0, 'Unaffected rows have no delivery badge');
+    // A live auto-fix run reads as a repairing pill; its tooltip still names the blocker.
+    const repairing = row(page, 'PANEL-4').locator('.delivery-attention-badge');
+    assert.equal(await repairing.innerText(), 'review · repairing 1/3');
+    assert.match(await repairing.getAttribute('class'), /\brepairing\b/);
+    assert.match(await repairing.getAttribute('aria-label'), /^review · repairing CI failed: .*auto-fix attempt 1 of 3/);
+    assert.notEqual(await repairing.evaluate(n => getComputedStyle(n).color), await badge.evaluate(n => getComputedStyle(n).color), 'The repairing pill is not styled as a failure');
+    assert.notEqual(await repairing.evaluate(n => getComputedStyle(n, '::before').animationName), 'none', 'The repairing indicator animates by default');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await repairing.evaluate(n => getComputedStyle(n, '::before').animationName), 'none', 'Reduced motion stops the repairing indicator');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await repairing.scrollIntoViewIfNeeded();
+    await capture(page, `delivery-attention-list-dark-${width}.png`);
     await row(page, 'PANEL-3').locator('.title').click();
     await waitShown(page, 'PANEL-3');
     const banner = page.locator('#detail-PANEL-3 .delivery-attention');
@@ -37,6 +49,19 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
     assert.equal(await banner.getByRole('link', { name: 'View run' }).getAttribute('href') !== null, true);
     assert.equal(await banner.getByRole('link', { name: 'PR #42' }).getAttribute('href'), 'https://github.com/o/r/pull/42');
     await capture(page, `delivery-attention-dark-${width}.png`);
+    await page.getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await page.locator('#task-detail-pane').waitFor({ state: 'hidden' });
+
+    await row(page, 'PANEL-4').locator('.title').click();
+    await waitShown(page, 'PANEL-4');
+    const repairingBanner = page.locator('#detail-PANEL-4 .delivery-attention');
+    await repairingBanner.waitFor();
+    assert.equal(await repairingBanner.locator('.task-attention-title').innerText(), 'Delivery repairing · CI failed');
+    assert.match(await repairingBanner.innerText(), /Blocker: failed_checks/);
+    assert.match(await repairingBanner.innerText(), /Auto-fix attempt 1 of 3/);
+    assert.match(await repairingBanner.innerText(), /A live run is watching or repairing the pull request\./);
+    assert.equal(await repairingBanner.getByRole('link', { name: 'PR #43' }).getAttribute('href'), 'https://github.com/o/r/pull/43');
+    await capture(page, `delivery-repairing-dark-${width}.png`);
     await page.getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
     await page.locator('#task-detail-pane').waitFor({ state: 'hidden' });
 
@@ -166,5 +191,5 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
     assert.deepEqual(errors, []);
     await context.close();
   }
-  results.taskPresentation = { lockHolders: true, unknownAndLiveRun: true, dependenciesAndNavigation: true, panePageSheetScrolling: true, drainEntry: true, timestampFooterRemoved: true, rejectAndArchive: true };
+  results.taskPresentation = { lockHolders: true, unknownAndLiveRun: true, dependenciesAndNavigation: true, panePageSheetScrolling: true, drainEntry: true, timestampFooterRemoved: true, rejectAndArchive: true, repairingPill: true };
 }

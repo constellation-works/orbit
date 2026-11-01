@@ -1202,6 +1202,28 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
   font-size: 11px;
   white-space: nowrap;
 }
+/* A live repair is in progress, not stuck: the running accent, with a dot that
+   pulses until reduced motion stops it. */
+.delivery-attention-badge.repairing {
+  color: var(--state-running);
+  background: color-mix(in srgb, var(--state-running) 14%, transparent);
+  border-color: color-mix(in srgb, var(--state-running) 45%, transparent);
+}
+.delivery-attention-badge.repairing::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: delivery-repair-pulse 1.6s ease-in-out infinite;
+}
+@keyframes delivery-repair-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) {
+  .delivery-attention-badge.repairing::before { animation: none; }
+}
 
 .title-tags > .scheduled-chip {
   display: inline-flex;

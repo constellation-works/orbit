@@ -63,6 +63,12 @@ const tasks = statuses.map((status, index) => ({
   } : {}),
 }));
 if (new URLSearchParams(location.search).get('workspace') === 'all') tasks[2].external_refs = [];
+// A review task whose auto-fix run is live: the presentation check reads its pill as "review · repairing 1/3".
+if (new URLSearchParams(location.search).has('repairing')) Object.assign(tasks[3], {
+  status: 'review', job_run_id: null,
+  external_refs: [{ system: 'github-pr', id: '43', url: 'https://github.com/o/r/pull/43' }],
+  delivery_attention: { run_id: 'jrun-delivery-repairing', run_state: 'running', blocker: 'failed_checks', head_sha: 'def456', attempt: 1, budget: 3, repairing: true, pr_number: '43', as_of: '2026-10-18T12:05:00Z', observed_at: '2026-10-18T12:05:00Z' },
+});
 const sampleComments = [
   { at: '2026-10-18T11:00:00Z', by: 'operator', message: 'Please keep the list still while I read.' },
   { at: '2026-10-18T11:30:00Z', by: 'claude', message: 'Done: the detail now opens in a side panel.' },
