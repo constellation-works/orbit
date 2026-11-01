@@ -140,6 +140,15 @@ pub const DASHBOARD_AUTO_TASK_MINT: GovernedOperation = GovernedOperation {
     rationale: "manual mint ignores schedule, enabled state, and scheduler dedupe",
 };
 
+/// Delete an auto-task definition from the dashboard.
+pub const DASHBOARD_AUTO_TASK_DELETE: GovernedOperation = GovernedOperation {
+    id: "auto_task.delete",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "deleting an auto-task discards its scheduler cursor and delivery consumer \
+                state, and a deleted shipped default stays out of later reseeds",
+};
+
 /// Opt-in `CompletionPolicy::Done` for a dashboard-submitted bounded
 /// auto-drain window (the `--complete` equivalent of `orbit run auto`).
 pub const DASHBOARD_AUTO_DRAIN_COMPLETE: GovernedOperation = GovernedOperation {
@@ -937,6 +946,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_TASK_TOGGLE,
     DASHBOARD_AUTO_TASK_SCHEDULE,
     DASHBOARD_AUTO_TASK_MINT,
+    DASHBOARD_AUTO_TASK_DELETE,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
     DASHBOARD_AUTO_DRAIN_MODE,
     DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,

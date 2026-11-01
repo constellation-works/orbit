@@ -1033,7 +1033,7 @@ projections_test!(
         let server = fixture.server(true);
         let listed = get_ok(&server, "/api/auto-tasks?workspace=ws_http_fixture");
         assert_fields!(listed, "controls_authorized": json!(false));
-        for action in ["auto_task_toggle", "auto_task_mint"] {
+        for action in ["auto_task_toggle", "auto_task_mint", "auto_task_delete"] {
             let capability = &listed["capabilities"][action];
             assert_fields!(capability, "authorized": json!(false));
             assert_contains(capability, "reason", "hm_fixture_remote");
@@ -1058,6 +1058,16 @@ projections_test!(
             "capability_refused",
         );
         assert_contains(&refused_mint, "error", "hm_fixture_remote");
+        let refused_delete = error_code(
+            server.send(
+                "POST",
+                "/api/auto-tasks/delete?workspace=ws_http_fixture",
+                json!({"name":"qa-sweep","reason":"replica"}),
+            ),
+            403,
+            "capability_refused",
+        );
+        assert_contains(&refused_delete, "error", "hm_fixture_remote");
         check_eq!(fs::read(&definition_path).unwrap() => definition_before; "replica mutations wrote definition");
         check!(fixture.runtime.list_tasks_by_tags(&["auto-task:qa-sweep".into()]).unwrap().is_empty(); "replica mint created a task");
     }

@@ -1,4 +1,4 @@
-//! Auto-task inspection, toggle, and manual mint for the dashboard [ORB-10876].
+//! Auto-task inspection, toggle, manual mint, and delete for the dashboard [ORB-10876].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -9,11 +9,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE,
+    DASHBOARD_AUTO_TASK_TOGGLE,
 };
 use orbit_core::application::auto_tasks::scheduler::open_auto_task_instances_from_tasks;
 use orbit_core::application::auto_tasks::{
-    AutoTaskListingRow, AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile,
+    AutoTaskDeleteParams, AutoTaskListingRow, AutoTaskToggleError, AutoTaskToggleOutcome,
+    AutoTaskToggleProfile,
 };
 use orbit_core::{OrbitRuntime, Task};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
@@ -44,6 +46,15 @@ pub(super) struct AutoTaskMintRequest {
     name: String,
     #[serde(default)]
     acknowledge_unconditional: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct AutoTaskDeleteRequest {
+    name: String,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    force: bool,
 }
 
 /// `GET /api/auto-tasks` — workspace-scoped definition state.
@@ -307,6 +318,159 @@ pub(super) async fn mint_auto_task(
     .into_response()
 }
 
+/// `POST /api/auto-tasks/delete` — remove one definition, its scheduler cursor
+/// and its delivery-consumer state.
+///
+/// An open minted task is a conflict the caller resolves with `force`. The
+/// response names those tasks. A caller without operator authority is refused
+/// and the denial is audited, as are a successful delete and a core refusal.
+pub(super) async fn delete_auto_task(
+    State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
+    Json(body): Json<AutoTaskDeleteRequest>,
+) -> Response {
+    let workspace = match explicit_workspace(&query) {
+        Ok(workspace) => workspace.to_string(),
+        Err(rejection) => return rejection.into_response(),
+    };
+    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(runtime) => runtime,
+        Err(response) => return *response,
+    };
+    let reason = trimmed_delete_reason(body.reason.as_deref());
+    let arguments = json!({"reason": reason, "force": body.force});
+    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_DELETE, state.operator_session()) {
+        Ok(caller) => caller,
+        Err(denial) => {
+            record_operation_audit(
+                &runtime,
+                &workspace,
+                "auto_task.delete",
+                &body.name,
+                "",
+                &arguments,
+                None,
+                Some(&denial),
+                None,
+                Instant::now(),
+            )
+            .await;
+            return authorization_denied(denial);
+        }
+    };
+    let started = Instant::now();
+    let report = match blocking("auto-task delete", {
+        let runtime = runtime.clone();
+        let name = body.name.clone();
+        let reason = reason.clone();
+        let force = body.force;
+        move || {
+            Ok(runtime.auto_task_delete(AutoTaskDeleteParams {
+                name,
+                reason,
+                force,
+            }))
+        }
+    })
+    .await
+    {
+        Ok(Ok(report)) => report,
+        Ok(Err(error)) => {
+            let error_message = error.to_string();
+            record_operation_audit(
+                &runtime,
+                &workspace,
+                "auto_task.delete",
+                &body.name,
+                "",
+                &arguments,
+                Some(&caller),
+                None,
+                Some(&error_message),
+                started,
+            )
+            .await;
+            return delete_refusal(&body.name, error);
+        }
+        Err(response) => return *response,
+    };
+    record_operation_audit(
+        &runtime,
+        &workspace,
+        "auto_task.delete",
+        &report.name,
+        "",
+        &arguments,
+        Some(&caller),
+        None,
+        None,
+        started,
+    )
+    .await;
+    let mut message = format!("Deleted auto-task {}.", report.name);
+    if report.opted_out {
+        message.push_str(" The shipped default will not be reseeded.");
+    }
+    Json(json!({
+        "name": report.name,
+        "deleted": true,
+        "opted_out": report.opted_out,
+        "open_tasks": report.open_tasks,
+        "reason": report.reason,
+        "message": message,
+    }))
+    .into_response()
+}
+
+fn trimmed_delete_reason(reason: Option<&str>) -> Option<String> {
+    reason
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Task ids from core's open-minted-task refusal. The sentence is the contract
+/// `auto_task_delete` returns; the response carries the ids so the dashboard
+/// does not scrape it.
+fn open_minted_task_ids(message: &str) -> Option<Vec<String>> {
+    const MARKER: &str = "still has open minted tasks: ";
+    let start = message.find(MARKER)? + MARKER.len();
+    let list = message[start..].split(';').next()?.trim();
+    let ids = list
+        .split(',')
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    (!ids.is_empty()).then_some(ids)
+}
+
+fn delete_refusal(name: &str, error: orbit_core::OrbitError) -> Response {
+    match error {
+        orbit_core::OrbitError::InvalidInput(message) => {
+            if let Some(open_tasks) = open_minted_task_ids(&message) {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(json!({
+                        "error": message,
+                        "code": "open_minted_tasks",
+                        "open_tasks": open_tasks,
+                    })),
+                )
+                    .into_response();
+            }
+            if message == format!("no such auto-task '{name}'") {
+                return named_entity_not_found(
+                    "auto_task_not_found",
+                    format!("auto-task '{name}' was not found"),
+                );
+            }
+            auto_task_control_error(orbit_core::OrbitError::InvalidInput(message))
+        }
+        other => auto_task_control_error(other),
+    }
+}
+
 pub(super) fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
     match error {
         orbit_core::OrbitError::CapabilityRefused(message) => (
@@ -372,6 +536,7 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
             "auto_task_toggle": {"authorized": false, "reason": reason},
             "auto_task_mint": {"authorized": false, "reason": reason},
             "auto_task_schedule": {"authorized": false, "reason": reason},
+            "auto_task_delete": {"authorized": false, "reason": reason},
         },
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
@@ -446,6 +611,10 @@ fn list_json(
         || action_capability(&DASHBOARD_AUTO_TASK_SCHEDULE, operator_session),
         |reason| json!({"authorized": false, "reason": reason}),
     );
+    let delete_capability = role_refusal.as_deref().map_or_else(
+        || action_capability(&DASHBOARD_AUTO_TASK_DELETE, operator_session),
+        |reason| json!({"authorized": false, "reason": reason}),
+    );
     let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session)
         .is_ok()
         && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok()
@@ -459,6 +628,7 @@ fn list_json(
             "auto_task_toggle": toggle_capability,
             "auto_task_mint": mint_capability,
             "auto_task_schedule": schedule_capability,
+            "auto_task_delete": delete_capability,
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,

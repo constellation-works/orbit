@@ -73,6 +73,8 @@ const readinessHolds = new Set();
 let heldReadiness = [];
 let drainPosts = [];
 let drainReadinessOverride = null;
+let autoTaskDeletePosts = [];
+const removedAutoTasks = new Set();
 
 function readinessPayload(host) {
   if (typeof drainReadinessOverride === 'function') {
@@ -179,6 +181,29 @@ function hostApi(host, req, rest, url, res) {
       });
       return;
     }
+    if (rest === 'auto-tasks/delete') {
+      let raw = '';
+      req.on('data', (chunk) => { raw += chunk; });
+      req.on('end', () => {
+        let body = null;
+        try { body = raw ? JSON.parse(raw) : null; } catch { body = raw; }
+        autoTaskDeletePosts.push({ host, body, workspace });
+        if (body && body.force === true) {
+          removedAutoTasks.add(`${host}:${body.name}`);
+          json({
+            name: body.name, deleted: true, opted_out: false, open_tasks: ['ORB-9001'],
+            reason: body.reason, message: `Deleted auto-task ${body.name}.`,
+          });
+          return;
+        }
+        json({
+          error: `auto-task '${body?.name}' still has open minted tasks: ORB-9001; close them, or pass --force to delete anyway`,
+          code: 'open_minted_tasks',
+          open_tasks: ['ORB-9001'],
+        }, 409);
+      });
+      return;
+    }
     return json({ ok: true });
   }
   if (rest === 'workspaces') {
@@ -214,9 +239,12 @@ function hostApi(host, req, rest, url, res) {
     created_at: '2026-10-08T00:00:00Z', started_at: '2026-10-08T00:00:01Z', finished_at: null, duration_ms: null }], total: 1, limit: 100, truncated: false });
   if (rest === 'auto-tasks') {
     const allowed = { authorized: true, reason: null };
-    return json({ workspace, controls_authorized: true, capabilities: { auto_task_toggle: allowed, auto_task_mint: allowed, auto_task_schedule: allowed },
-      definitions: [{ name: `${host}-confirmed-definition`, enabled: true, template: { title: 'Confirmed chore' }, template_summary: 'Confirmed chore',
-        schedule_summary: 'every 15 minutes', description: 'A definition the read-only host still lists.', next_evaluation: { state: 'waiting' } }] });
+    const definitions = [{ name: `${host}-confirmed-definition`, enabled: true, template: { title: 'Confirmed chore' }, template_summary: 'Confirmed chore',
+      schedule_summary: 'every 15 minutes', description: 'A definition the read-only host still lists.', next_evaluation: { state: 'waiting' } }]
+      .filter((definition) => !removedAutoTasks.has(`${host}:${definition.name}`));
+    return json({ workspace, controls_authorized: true, capabilities: {
+      auto_task_toggle: allowed, auto_task_mint: allowed, auto_task_schedule: allowed, auto_task_delete: allowed,
+    }, definitions });
   }
   const run = rest.match(/^runs\/([^/]+)$/);
   if (run) return json({ run_id: decodeURIComponent(run[1]), job_name: 'auto', state: 'running', steps: [], workspace_id: workspace });
@@ -656,11 +684,60 @@ try {
   await page.evaluate(() => { window.location.hash = 'operations/auto-tasks'; });
   await page.locator('#auto-tasks-body', { hasText: 'hostb-confirmed-definition' }).waitFor({ state: 'visible' });
   assert(await page.locator('#auto-tasks-body').getByRole('button', { name: 'Mint now' }).isDisabled(), 'Mint stays refused on a read-only host');
+  assert(await page.locator('#auto-tasks-body').getByRole('button', { name: 'Delete auto-task hostb-confirmed-definition' }).isDisabled(), 'Delete stays refused on a read-only host');
   assert(await page.locator('#auto-tasks-body [role="switch"]').first().isDisabled(), 'the auto-task switch stays refused on a read-only host');
   await capture('host-read-only-auto-tasks-dark-1440');
   assert(logged(/^GET \/api\/on\/hostb\/job-runs\?/) && logged(/^GET \/api\/on\/hostb\/auto-tasks\?/), 'the reads went to hostb');
   assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   forwardWrites = { authorized: true, reason: null };
+  await page.close();
+
+  // A writable federated view deletes on the owning host. The first post is
+  // refused because a minted task is open; Delete anyway is the force.
+  autoTaskDeletePosts.length = 0;
+  removedAutoTasks.clear();
+  await openPage('/?host=hostb&workspace=ws_orbit', { fresh: true });
+  await page.evaluate(() => { window.location.hash = 'operations/auto-tasks'; });
+  await page.locator('#auto-tasks-body', { hasText: 'hostb-confirmed-definition' }).waitFor({ state: 'visible' });
+  const scratch = process.env.ORBIT_SCRATCH_DIR;
+  if (scratch) fs.mkdirSync(path.join(scratch, 'screenshots'), { recursive: true });
+  const shot = async (file, width, locator) => {
+    if (!scratch) return;
+    await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+    await locator.screenshot({ path: path.join(scratch, 'screenshots', file), animations: 'disabled' });
+  };
+  const card = page.locator('#auto-tasks-body .auto-task-card', { hasText: 'hostb-confirmed-definition' });
+  await shot('auto-task-delete-row-dark-1440-before.png', 1440, card);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole('button', { name: 'Delete auto-task hostb-confirmed-definition' }).click();
+  const confirm = page.locator('.auto-task-delete-confirm');
+  await confirm.waitFor({ state: 'visible' });
+  await confirm.getByLabel('Reason (optional)').fill('retired from the federated view');
+  const confirmText = await confirm.textContent();
+  assert(confirmText.includes('hostb-confirmed-definition'), `confirmation names the definition: ${confirmText}`);
+  assert(confirmText.includes('schedule state'), `confirmation says schedule state is removed: ${confirmText}`);
+  assert(confirmText.includes('will not be reseeded'), `confirmation says a shipped default is not reseeded: ${confirmText}`);
+  await shot('auto-task-delete-confirm-dark-1440.png', 1440, confirm);
+  await shot('auto-task-delete-confirm-dark-375.png', 375, confirm);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await confirm.getByRole('button', { name: 'Delete', exact: true }).click();
+  await until('the open-task refusal', () => autoTaskDeletePosts.length === 1);
+  const refusal = page.locator('.auto-task-delete-refusal');
+  await refusal.waitFor({ state: 'visible' });
+  const refusalText = await refusal.textContent();
+  assert(refusalText.includes('ORB-9001'), `the refusal names the open task: ${refusalText}`);
+  await shot('auto-task-delete-refusal-dark-1440.png', 1440, confirm);
+  await shot('auto-task-delete-refusal-dark-375.png', 375, confirm);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await refusal.getByRole('button', { name: 'Delete anyway' }).click();
+  await until('the forced delete', () => autoTaskDeletePosts.length === 2);
+  assert(autoTaskDeletePosts.every((post) => post.host === 'hostb'), `delete posts stay on hostb: ${JSON.stringify(autoTaskDeletePosts)}`);
+  assert(autoTaskDeletePosts[0].body.force === false && autoTaskDeletePosts[1].body.force === true, `force is explicit: ${JSON.stringify(autoTaskDeletePosts)}`);
+  assert(autoTaskDeletePosts.every((post) => post.body.name === 'hostb-confirmed-definition' && post.body.reason === 'retired from the federated view'), `posts keep the definition and reason: ${JSON.stringify(autoTaskDeletePosts)}`);
+  assert(autoTaskDeletePosts.every((post) => post.workspace === 'ws_orbit'), `posts name the selected workspace: ${JSON.stringify(autoTaskDeletePosts)}`);
+  const deletePaths = routeLog.filter((entry) => entry.method === 'POST' && entry.path.includes('auto-tasks/delete'));
+  assert(deletePaths.length === 2 && deletePaths.every((entry) => entry.path.startsWith('/api/on/hostb/auto-tasks/delete?')), `delete posts to the owning host: ${JSON.stringify(deletePaths)}`);
+  await page.locator('#auto-tasks-body', { hasText: 'hostb-confirmed-definition' }).waitFor({ state: 'hidden' });
   await page.close();
 
   // 8. Keyboard: Tab reaches the picker, with the 2px focus ring.
