@@ -63,6 +63,7 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "flaky-test-hunt",
     "friction-curation",
     "full-code-review",
+    "host-health",
     "path-risk-review",
     "pilot-block-patterns",
     "qa-full-sweep",
