@@ -165,7 +165,7 @@ own check does. The settings themselves are described in
 
 Two capture paths use the kit, and they are not interchangeable:
 
-- `orbit visual capture --task <task-id>` is the implementer's self-check.
+- `orbit visual capture --id <task-id>` is the implementer's self-check.
   It renders the current checkout beside the task's mocks and writes the
   capture, side-by-side and UI-rule results under its output directory. It
   attaches nothing and records nothing on the task, so it never counts as

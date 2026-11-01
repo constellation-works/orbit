@@ -613,8 +613,8 @@ An implementer can render the current checkout beside a task's mocks at any
 time, in any mode:
 
 ```bash
-orbit visual capture --task <task-id>
-orbit visual capture --task <task-id> --mock <mock-name> --out <directory>
+orbit visual capture --id <task-id>
+orbit visual capture --id <task-id> --mock <mock-name> --out <directory>
 ```
 
 The command reads the same `visual_review.manifests` from the working tree,

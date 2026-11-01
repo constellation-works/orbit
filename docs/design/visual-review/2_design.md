@@ -429,9 +429,9 @@ The implementer runs the same driver against its own working tree, as often as i
 while it builds:
 
 ```sh
-orbit visual capture --task ORB-12345                 # every mock
-orbit visual capture --task ORB-12345 --mock mocks/task-detail.375.png
-orbit visual capture --task ORB-12345 --out "$ORBIT_SCRATCH_DIR/visual"
+orbit visual capture --id ORB-12345                 # every mock
+orbit visual capture --id ORB-12345 --mock mocks/task-detail.375.png
+orbit visual capture --id ORB-12345 --out "$ORBIT_SCRATCH_DIR/visual"
 ```
 
 MCP: `orbit.visual.capture` with `id`, optional `mock` and `out`.
@@ -917,7 +917,7 @@ with this design unchanged.
 - Precedence: acceptance criteria, then the design rules, then the mock for structure,
   layout, component kinds and static copy. Data values and pixel-exact spacing in a mock are
   illustrative.
-- Run `orbit visual capture --task <ID>` before you start and after each change. Read every
+- Run `orbit visual capture --id <ID>` before you start and after each change. Read every
   `side-by-side.png` and answer the review's questions yourself: missing, extra,
   arrangement, hierarchy, component kind, static copy, state. Fix what differs.
 - Fix the UI rule failures in `rules.json` for the mocked views.
