@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Retired agent backend selection and its migration"
 tags: ["activity-job"]
-last_validated: 2026-10-30
+last_validated: 2026-11-01
 ---
 
 # Spec: Retired Agent Backend Selection

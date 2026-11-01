@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Overview"
 owner: codex
 last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_validated: 2026-11-01
 status: Draft
 stage: shipped
 next: "Review proposed auto-task targets and durable CEL waiting; no implementation authorized"
