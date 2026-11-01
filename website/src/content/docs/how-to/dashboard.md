@@ -1395,6 +1395,16 @@ does not count it as a scheduler hold.
   enabled flag, and dedupe, so it works on a disabled definition and creates
   another task even when one is open. The confirmation warns about this.
   `orbit auto-task mint <name>` does the same.
+- **Delete** on each row removes the definition after a confirmation. The
+  confirmation names the definition and where it will be deleted, asks for an
+  optional reason, and confirms with **Delete**. On success it reports that
+  the definition was deleted. If the definition still has open minted tasks,
+  the confirmation says the delete removes the definition while those tasks
+  stay open, and offers **Delete anyway**. A refused delete shows the error
+  and keeps the confirmation open. This is separate from disabling: a disabled
+  definition is skipped, not deleted, as above. The `orbit auto-task delete`
+  equivalent is documented in [Schedule Recurring
+  Work](../recurring-work/) and the [CLI reference](../../reference/cli/).
 
 ### Jobs
 
