@@ -900,7 +900,9 @@ checkpoints, including inline final recovery and the blocked-task backstop.
 The dashboard task payload exposes `active_triage`, an array of `{run_id, crew}`
 entries, only while such a binding is active. Finishing the run clears it;
 an inline recovery decision also clears it while delivery continues. The owner
-view uses the same projection in local and federated lists.
+view uses the same projection in local and federated lists. If an active run's
+pipeline state cannot be read, the service logs a warning and shows no triage
+for any task until it can be read; the task list, detail and writes still succeed.
 
 The pilot checks concrete contracts required by a task's description and
 criteria against pinned source: tools and their output fields, schemas, port
