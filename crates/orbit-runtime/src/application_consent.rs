@@ -270,7 +270,7 @@ fn validate_constraint_shape(
                 return Err("`artifact_json` is allowed only on a callback".into());
             };
             artifact_path(&artifact.path)?;
-            if !artifact.pointer.starts_with('/') {
+            if !is_rfc6901_pointer(&artifact.pointer) {
                 return Err("`artifact_json` pointer must be an RFC 6901 pointer".into());
             }
             let entry_binds_path = entry.fields.as_ref().is_some_and(|fields| {
@@ -444,6 +444,21 @@ fn artifact_path(path: &str) -> Result<(), String> {
         return Err("artifact paths are relative, normalized and at most 256 bytes".into());
     }
     Ok(())
+}
+
+/// RFC 6901 syntax: the empty root pointer, or `/`-separated reference tokens
+/// in which every `~` begins `~0` or `~1`. Only the syntax is checked; the
+/// pointer is never evaluated against artifact bytes here.
+fn is_rfc6901_pointer(pointer: &str) -> bool {
+    pointer.is_empty()
+        || pointer.strip_prefix('/').is_some_and(|tokens| {
+            tokens.split('/').all(|token| {
+                token
+                    .split('~')
+                    .skip(1)
+                    .all(|escape| escape.starts_with(['0', '1']))
+            })
+        })
 }
 
 fn in_range(len: usize, min: usize, max: usize, what: &str) -> Result<(), String> {
