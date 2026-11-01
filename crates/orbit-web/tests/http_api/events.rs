@@ -285,13 +285,13 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
 
 /// The list page and each change-stream scan call `active_task_triage_map`.
 /// ORB-20709 read every active run's pipeline state on that path (no test
-/// covered the cost). One page must be one exact batch read, and a checkpoint
-/// the single-run read would reject must still fail the page rather than bind
-/// the run from its submitted input.
+/// covered the cost). One page must be one exact batch read. A checkpoint the
+/// single-run read would reject must neither bind the run from its submitted
+/// input nor fail the page: triage is decoration (ORB-20745).
 #[test]
-fn active_triage_scan_reads_run_state_once_and_rejects_a_bad_checkpoint() {
+fn active_triage_scan_reads_run_state_once_and_skips_a_bad_checkpoint() {
     isolated(
-        "events::active_triage_scan_reads_run_state_once_and_rejects_a_bad_checkpoint",
+        "events::active_triage_scan_reads_run_state_once_and_skips_a_bad_checkpoint",
         || {
             let fixture = Fixture::new();
             let task = fixture
@@ -382,20 +382,24 @@ fn active_triage_scan_reads_run_state_once_and_rejects_a_bad_checkpoint() {
                     .unwrap(),
                 1
             );
-            for (label, path) in [("list", list_path), ("detail", detail_path.as_str())] {
-                let response = server.get(path);
-                let status = response.status();
-                let body: Value = response.json().unwrap();
-                assert_eq!(
-                    status, 500,
-                    "{label} must fail a bad checkpoint instead of binding submitted input: {body}"
-                );
-                let message = body["error"].as_str().unwrap_or("");
-                assert!(
-                    message.contains("invalid pipeline_state_json"),
-                    "{label} error must be the single-run store error: {body}"
-                );
-            }
+            // The unreadable checkpoint leaves the page and the detail readable
+            // and binds nothing: the run is not bound from its submitted input.
+            let page = json_ok(server.get(list_path));
+            let row = page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == task.id.as_str())
+                .unwrap();
+            assert!(
+                row["active_triage"].is_null(),
+                "list must not bind a bad checkpoint from submitted input: {row}"
+            );
+            let detail = json_ok(server.get(&detail_path));
+            assert!(
+                detail["active_triage"].is_null(),
+                "detail must not bind a bad checkpoint from submitted input: {detail}"
+            );
         },
     );
 }

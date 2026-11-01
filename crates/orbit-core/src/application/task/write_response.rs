@@ -361,6 +361,10 @@ pub fn tasks_in_pilot_preparation(runtime: &OrbitRuntime) -> BTreeSet<String> {
 /// output bind its separate run. Crew names come from those recorded choices,
 /// never from the task's implementer or current configuration. A pending run
 /// can name a task before drawing its crew, in which case `crew` is null.
+///
+/// The binding is decoration: when an active run's pipeline state cannot be
+/// read, this logs a warning and returns no bindings rather than failing the
+/// task read or the write that rendered it.
 pub fn active_task_triage_map(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, Value>, OrbitError> {
@@ -387,10 +391,17 @@ pub fn active_task_triage_map(
         .iter()
         .map(|run| run.run_id.clone())
         .collect::<Vec<_>>();
-    // One store call for every active run. Unreadable JSON fails the scan,
-    // matching the single-run read; the lenient page read would treat it as
-    // absent and fall back to submitted bindings.
-    let states = runtime.read_run_states_exact(&run_ids)?;
+    // One store call for every active run. The exact read stays exact: the
+    // lenient page read would treat unreadable JSON as absent and fall back to
+    // submitted bindings. An unreadable state fails only this decoration, so
+    // every task stays unmarked, the way `tasks_in_pilot_preparation` degrades.
+    let states = match runtime.read_run_states_exact(&run_ids) {
+        Ok(states) => states,
+        Err(error) => {
+            tracing::warn!(%error, "task triage: active run states unreadable");
+            return Ok(BTreeMap::new());
+        }
+    };
     for run in runs {
         let mut bind = |task_id: &str, crew: Option<&str>| {
             by_task.entry(task_id.to_string()).or_default().insert(
