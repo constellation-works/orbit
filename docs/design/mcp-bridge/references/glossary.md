@@ -2,7 +2,7 @@
 type: glossary
 summary: "Glossary — Orbit MCP"
 last_updated: 2026-10-20
-last_validated: 2026-10-28
+last_validated: 2026-11-01
 ---
 
 # Glossary — Orbit MCP
