@@ -330,6 +330,85 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
                 self.assertRegex(log, r"compiler_cache_setup_seconds=\d+")
                 self.assertEqual(exports["ORBIT_COMPILER_CACHE_BIN"], str(self.root / "home/.orbit/cache/bin/sccache"))
 
+    def _run_bubblewrap_step(self, fake_bwrap):
+        step = next(step for step in self.job["steps"]
+                    if step.get("name", "").startswith("Prepare and probe Bubblewrap"))
+        # The step hardcodes the trusted path; point the test copy at the
+        # fixture binary so the initial probe outcome is host-independent.
+        script = step["run"].replace("/usr/bin/bwrap", str(fake_bwrap))
+        return self_test_hang.run(
+            ["bash", "-e", "-o", "pipefail", "-c", script],
+            step="bubblewrap-probe", cwd=self.root, env=self.env,
+            text=True, capture_output=True)
+
+    def _bubblewrap_timings(self, output):
+        matches = re.findall(
+            r"bubblewrap_setup_seconds=(\d+) package_seconds=(\d+) probe_seconds=(\d+)",
+            output)
+        self.assertTrue(matches, f"setup timing line missing from:\n{output}")
+        return tuple(int(value) for value in matches[-1])
+
+    def test_bubblewrap_apt_failure_reports_elapsed_package_seconds(self):
+        self.write("bin/sudo", "#!/bin/sh\nexec \"$@\"\n", executable=True)
+        # A fetch failure is transient, so apt_phase retries once: two
+        # attempts sleeping 2s each consume about 4s of package time.
+        self.write("bin/apt-get",
+                   "#!/bin/sh\nsleep 2\necho 'Failed to fetch fixture archive' >&2\nexit 1\n",
+                   executable=True)
+        fake_bwrap = self.write("fake-bwrap", """#!/bin/sh
+case "$1" in
+  --help) echo 'usage: fake bwrap' ;;
+  --version) echo 'bubblewrap fixture' ;;
+  *) echo 'fake bwrap failure' >&2; exit 1 ;;
+esac
+exit 0
+""", executable=True)
+        result = self._run_bubblewrap_step(fake_bwrap)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("Bubblewrap unavailable", output)
+        self.assertIn("apt-get update", output)
+        setup_seconds, package_seconds, _ = self._bubblewrap_timings(output)
+        self.assertGreaterEqual(package_seconds, 3,
+                                f"apt failure must report elapsed package time, not 0:\n{output}")
+        self.assertGreaterEqual(setup_seconds, package_seconds)
+        # The same trap must cover a failure in the install phase: update
+        # succeeds instantly, install sleeps 2s per attempt and fails.
+        self.write("bin/apt-get", """#!/bin/sh
+case " $* " in
+  *" install "*) sleep 2; echo 'Failed to fetch fixture archive' >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+""", executable=True)
+        result = self._run_bubblewrap_step(fake_bwrap)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("Bubblewrap unavailable", output)
+        self.assertIn("apt-get install", output)
+        _, package_seconds, _ = self._bubblewrap_timings(output)
+        self.assertGreaterEqual(package_seconds, 3,
+                                f"apt install failure must report elapsed package time, not 0:\n{output}")
+
+    def test_bubblewrap_success_without_apt_keeps_package_seconds_zero(self):
+        self.write("bin/sudo", "#!/bin/sh\nexec \"$@\"\n", executable=True)
+        self.write("bin/apt-get",
+                   "#!/bin/sh\necho 'apt must not run when the probe passes' >&2\nexit 9\n",
+                   executable=True)
+        fake_bwrap = self.write("fake-bwrap", """#!/bin/sh
+case "$1" in
+  --help) echo 'usage: fake bwrap --bind-fd' ;;
+  --version) echo 'bubblewrap fixture' ;;
+  *) exit 0 ;;
+esac
+exit 0
+""", executable=True)
+        result = self._run_bubblewrap_step(fake_bwrap)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("package preparation unnecessary", output)
+        _, package_seconds, _ = self._bubblewrap_timings(output)
+        self.assertEqual(package_seconds, 0)
+
     def test_slow_step_past_the_removed_cap_completes(self):
         # Sleep stands in for a correct step that loses the CPU under idle
         # scheduling. 25s is past the removed 10s and 20s caps.

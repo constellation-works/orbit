@@ -624,12 +624,16 @@ jobs:
           started=$SECONDS
           step_budget=480
           package_seconds=0
+          package_started=""
           probe_seconds=0
           profile_src=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
           profile_dst=/etc/apparmor.d/bwrap-userns-restrict
           probe_err="$(mktemp)"
           phase_log="$(mktemp)"
           report_setup() {
+            if [ -n "$package_started" ]; then
+              package_seconds=$((SECONDS - package_started))
+            fi
             echo "bubblewrap_setup_seconds=$((SECONDS - started)) package_seconds=$package_seconds probe_seconds=$probe_seconds"
             rm -f "$probe_err" "$phase_log"
           }
@@ -776,6 +780,7 @@ jobs:
             apt_phase "apt-get install" 120 env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
               apt-get "${apt_options[@]}" install --yes --no-install-recommends bubblewrap apparmor-profiles
             package_seconds=$((SECONDS - package_started))
+            package_started=""
           else
             echo "Trusted Bubblewrap already supports --bind-fd and real namespaces; package preparation unnecessary"
           fi
