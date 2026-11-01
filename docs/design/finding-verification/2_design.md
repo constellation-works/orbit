@@ -1,8 +1,8 @@
 ---
 title: Finding Verification — Design
 owner: claude
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Accepted
 feature: finding-verification
 doc_role: design
@@ -27,7 +27,7 @@ Why each exists is in [4_decisions.md](4_decisions.md).
 
 `is_review_finding` is true for a task of type `bug` carrying one of
 `REVIEW_FINDING_TAGS`: `code-review`, `delivery-code-review`,
-`security-review`, `qa-sweep`. A finding is verified, and held, only in
+`security-review`, `qa-sweep`, `visual-review`. A finding is verified, and held, only in
 `proposed`, `someday` or `backlog` (`VERIFIABLE_STATUSES`). A finding needs
 verification there until its latest verification record is CONFIRMED and its
 `finding_fingerprint` matches the current task material (§7).
