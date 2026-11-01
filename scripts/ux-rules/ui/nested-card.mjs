@@ -46,7 +46,7 @@ export async function check(ctx) {
         const framed = sideOn(style, "Left") || sideOn(style, "Right") || radius || shadow || outline;
         const flow = style.position === "static" || style.position === "relative";
         const flush = near(rect.left - contentLeft) && near(rect.right - contentRight);
-        const stacked = margins.every((value) => value <= 1);
+        const stacked = margins.every((value) => near(value));
         result.push({
           panel: H.selectorOf(panel),
           selector: H.selectorOf(child),
