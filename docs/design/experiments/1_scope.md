@@ -85,6 +85,19 @@ task received.
 With no running experiment, Orbit behaves exactly as today. Tag instructions, crew pools and
 config keep their meaning; an experiment layers on top of them for the tasks it assigns.
 
+### Metric scope
+
+Whole-task primary metrics are `total_tokens`, `cost_usd`, `lead_time`,
+`first_pass_acceptance`, `review_repairs`, `step_recoveries`,
+`final_recoveries`, `failed_checks`, `merge_conflicts`, `delivery_done_rate`,
+`escaped_regressions`, `lines_changed`, `visual_landed_mismatches`,
+`visual_review_repairs`, and `visual_verified_finding_rate`. The step-local
+metrics `implement_tokens`, `implement_duration`, `turns_before_first_edit`,
+and `result_bytes_before_first_edit` are exploratory. A treatment can move
+work between steps without improving the task, so these cannot be primary;
+they remain readable and usable as guardrails. A legacy step-local primary
+keeps its data but its verdict is withheld.
+
 ## Shape
 
 ### Nouns

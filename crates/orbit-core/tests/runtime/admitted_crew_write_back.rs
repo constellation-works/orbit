@@ -74,7 +74,7 @@ fn started_crew_experiment(runtime: &OrbitRuntime) -> String {
                         "overlay": { "crew": { "pool": [{ "crew": "luna", "weight": 1 }] } }
                     }
                 ])),
-                primary_metric: Some("implement_tokens".into()),
+                primary_metric: Some("total_tokens".into()),
                 mode: Some("live".into()),
                 ..ExperimentDefinitionInput::default()
             },

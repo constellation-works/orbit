@@ -163,6 +163,14 @@ pub(super) fn verdict(
             horizon_reached,
             reasons,
         };
+    if let Some(primary) = primary.filter(|metric| metric.exploratory) {
+        return make(
+            "withheld",
+            None,
+            "no verdict".into(),
+            vec![format!("primary metric `{}` is step-local", primary.metric)],
+        );
+    }
     if mismatch {
         return make(
             "withheld",

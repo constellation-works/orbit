@@ -183,6 +183,8 @@ pub struct Lagging {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutMetric {
     pub metric: String,
+    /// Step-local metrics are exploratory and cannot determine a verdict.
+    pub exploratory: bool,
     /// `mean` of per-task values, or `rate` of per-task 0/1 outcomes.
     pub kind: &'static str,
     /// `lower` or `higher` is better.

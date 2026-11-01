@@ -15,8 +15,8 @@ use orbit_store::contracts::{
 use serde_json::{Value, json};
 
 use super::definition::{
-    ArmDefinition, ExperimentOverlay, parse_arms, parse_guardrails, parse_population,
-    validate_handle, validate_metric,
+    ArmDefinition, EXPERIMENT_METRICS, ExperimentOverlay, experiment_metric_is_step_local,
+    parse_arms, parse_guardrails, parse_population, validate_handle, validate_metric,
 };
 use super::view::ExperimentView;
 use crate::OrbitRuntime;
@@ -515,6 +515,17 @@ fn apply_definition(
     }
     if let Some(metric) = input.primary_metric {
         validate_metric("primary_metric", &metric)?;
+        if experiment_metric_is_step_local(&metric) {
+            let alternatives = EXPERIMENT_METRICS
+                .iter()
+                .copied()
+                .filter(|name| !experiment_metric_is_step_local(name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(OrbitError::InvalidInput(format!(
+                "primary metric `{metric}` is step-local; choose a whole-task metric: {alternatives}"
+            )));
+        }
         experiment.primary_metric = Some(metric);
     }
     if let Some(value) = input.guardrails {

@@ -405,13 +405,26 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
             .flatten()
             .any(|arm| arm["n"].as_u64().is_some_and(|n| n > 0));
         if !has_data {
-            empty.push(text(&metric["metric"]));
+            empty.push(format!(
+                "{}{}",
+                text(&metric["metric"]),
+                if metric["exploratory"] == true {
+                    " (exploratory)"
+                } else {
+                    ""
+                }
+            ));
             continue;
         }
         let rate = metric["kind"] == "rate";
         blocks.push(Block::text(format!(
-            "\n{} ({}, {} is better, {}):",
+            "\n{}{} ({}, {} is better, {}):",
             text(&metric["metric"]),
+            if metric["exploratory"] == true {
+                " (exploratory)"
+            } else {
+                ""
+            },
             text(&metric["kind"]),
             text(&metric["better"]),
             text(&metric["unit"]),

@@ -681,6 +681,7 @@ function formView(state) {
   root.setAttribute("aria-busy", String(state.pending));
   root.addEventListener("submit", (event) => { event.preventDefault(); submit(false); });
   const metrics = authoring?.metrics || [];
+  const stepLocal = new Set(authoring?.step_local_metrics || []);
   root.append(
     el("div", { class: "mx-card-head" }, [el("h2", { class: "mx-card-title", text: title })]),
     el("p", { class: "mx-blurb", text: state.mode === "create"
@@ -695,12 +696,12 @@ function formView(state) {
     populationView(state),
     armsView(state),
     el("div", { class: "exf-grid" }, [
-      field("Primary metric", select([["", "none yet"], ...metrics.map((metric) => [metric, metric])],
+      field("Primary metric", select([["", "none yet"], ...metrics.filter((metric) => !stepLocal.has(metric)).map((metric) => [metric, metric])],
         fields.primary_metric, (value) => { fields.primary_metric = value; }), errorSlot(state, "primary_metric")),
       field("Minimum sample per arm", input(fields.min_sample, (value) => { fields.min_sample = value; }, { type: "number", min: 1 }), errorSlot(state, "min_sample")),
       field("Maximum days", input(fields.max_days, (value) => { fields.max_days = value; }, { type: "number", min: 1 }), errorSlot(state, "max_days")),
     ]),
-    guardrailsView(state, metrics),
+    guardrailsView(state, metrics, stepLocal),
     field("Reason", input(fields.reason, (value) => { fields.reason = value; }, { multiline: true }), errorSlot(state, "reason"),
       "Recorded with the event."),
     actionsView(state),
@@ -890,9 +891,9 @@ function configBody(arm) {
   ];
 }
 
-function guardrailsView(state, metrics) {
+function guardrailsView(state, metrics, stepLocal) {
   const rows = state.guardrails.map((row, at) => el("div", { class: "exf-row" }, [
-    select([["", "choose a metric"], ...metrics.map((metric) => [metric, metric])], row.metric,
+    select([["", "choose a metric"], ...metrics.map((metric) => [metric, stepLocal.has(metric) ? `${metric} (exploratory)` : metric])], row.metric,
       (value) => { row.metric = value; }, "Guardrail metric"),
     input(row.threshold, (value) => { row.threshold = value; }, { label: "Guardrail threshold", placeholder: "-5pt" }),
     smallButton("Remove", () => { state.guardrails.splice(at, 1); rerender(); }, "exf-remove"),

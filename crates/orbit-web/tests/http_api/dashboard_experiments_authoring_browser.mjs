@@ -21,7 +21,8 @@ export async function checkExperimentAuthoringBrowser(readout) {
     enabled: true,
     max_running: 3,
     config_keys: ['workflow.explore.max_calls_per_run'],
-    metrics: ['cost_usd', 'first_pass_acceptance', 'lead_time'],
+    metrics: ['cost_usd', 'first_pass_acceptance', 'lead_time', 'implement_duration'],
+    step_local_metrics: ['implement_duration'],
     complexities: ['low', 'medium', 'hard', 'xhard'],
     crews: [{ name: 'opus', enabled: true }, { name: 'sonnet', enabled: true }],
   };
@@ -408,6 +409,11 @@ export async function checkExperimentAuthoringBrowser(readout) {
       await treatment.locator('.exf-surface-skills > summary').click();
       assert.match(await treatment.locator('.exf-surface-skills > summary').textContent(), /Claude on Unix only/);
       await form.locator('.exf-add-guardrail').click();
+      assert.equal(await labelled(form, 'Primary metric').locator('option[value="implement_duration"]').count(), 0);
+      assert.match(await form.locator('.exf-guardrails option[value="implement_duration"]').textContent(), /exploratory/);
+      await form.locator('.exf-guardrails select').selectOption('implement_duration');
+      await form.locator('.exf-guardrails').scrollIntoViewIfNeeded();
+      await shot('exploratory-form');
       await form.locator('.exf-guardrails select').selectOption('cost_usd');
       await form.locator('.exf-guardrails input').fill('5pt');
       await page.evaluate(() => document.getElementById('experiments-form').scrollIntoView({ block: 'start' }));

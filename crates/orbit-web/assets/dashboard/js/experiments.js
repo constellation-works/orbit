@@ -658,7 +658,7 @@ function forestCard(readout, color) {
   const guardNames = new Set((readout.guardrails || []).map((rail) => rail.metric));
   metrics.sort((a, b) => (b.metric === primaryName) - (a.metric === primaryName)
     || guardNames.has(b.metric) - guardNames.has(a.metric));
-  const unmeasured = (readout.metrics || []).filter((metric) => !metric.measured).map((metric) => metricLabel(metric.metric));
+  const unmeasured = (readout.metrics || []).filter((metric) => !metric.measured).map((metric) => `${metricLabel(metric.metric)}${metric.exploratory ? " (exploratory)" : ""}`);
   if (!metrics.length) {
     return card("Difference from control", [empty("No differences yet", "Every metric needs settled tasks in control and a treatment arm.")], { className: "mx-wide" });
   }
@@ -671,6 +671,7 @@ function forestCard(readout, color) {
     const direction = metric.better === "lower" ? "lower is better" : "higher is better";
     const tags = [
       metric.metric === primaryName ? "primary" : null,
+      metric.exploratory ? "exploratory" : null,
       guardNames.has(metric.metric) ? "guardrail" : null,
     ].filter(Boolean);
     const rows = metric.differences.map((diff) => {

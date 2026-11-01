@@ -569,6 +569,7 @@ async function checkCumulativeTooltipBounds() {
       for (const scenario of ['short', 'long', 'wider']) {
         currentExperiment = structuredClone(experiment);
         currentReadout = structuredClone(readout);
+        currentReadout.metrics.push({ metric: 'implement_duration', unit: 'minutes', kind: 'mean', better: 'lower', measured: true, exploratory: true, arms: [], differences: [{ arm: 'candidate', overall: { estimate: -1, interval: [-2, 0] } }] });
         if (scenario !== 'short') {
           const names = ['controlWithAnUnbrokenArmNameThatIsLong', 'candidateWithAnUnbrokenArmNameThatIsLong'];
           currentExperiment.arms.forEach((arm, index) => { arm.name = names[index]; });
@@ -587,6 +588,10 @@ async function checkCumulativeTooltipBounds() {
             ], 'the readout distinguishes reported, estimated and unmeasured cost');
           }
           await page.locator('.ex-arms').locator('..').screenshot({ path: path.join(evidence, `cost-coverage-dark-${width}${suffix}.png`) });
+          const forest = page.locator('.ex-forest');
+          assert.match(await forest.textContent(), /exploratory/);
+          await forest.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(evidence, `exploratory-readout-dark-${width}.png`) });
           const winner = page.locator('select.ex-conclude-control');
           const reason = page.locator('textarea.ex-conclude-control');
           await winner.selectOption('candidate');
