@@ -113,7 +113,13 @@ pub(super) fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup
     // queries terminal state (`check-terminal-state-guard.sh`); `main` still
     // resolves its own sink after parsing for rendering.
     let term_width = crate::output::sink::OutputSink::from_process(None, false).width();
-    let root = plugin_cli::augment(command::Cli::command(), groups);
+    // Clap's own help text (flag descriptions, about, command lists,
+    // after-help) wraps to the same width with its hanging indent. `0`, the
+    // piped width, tells Clap to keep source formatting rather than assume a
+    // terminal; it also overrides Clap's own 100-column ceiling, so a long
+    // line wraps at 120 as it does at 60.
+    let root =
+        plugin_cli::augment(command::Cli::command(), groups).term_width(usize::from(term_width));
     let mut root = root.help_template(crate::help::root_help_template(term_width));
     if !groups.is_empty() {
         // The hand-rolled top-level template lists commands by section, so a
@@ -130,7 +136,8 @@ pub(super) fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup
     root = root.mut_subcommand("task", |cmd| {
         cmd.help_template(crate::help::task_help_template(term_width))
     });
-    install_output_args(root, true)
+    // After `install_output_args`, which adds the global-options footer.
+    crate::help::hang_wrap_footers(install_output_args(root, true), usize::from(term_width))
 }
 
 /// Parse argv into the derived CLI, the two inputs to mode resolution, and
