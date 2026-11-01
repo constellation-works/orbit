@@ -78,17 +78,24 @@ impl OrbitRuntime {
         now: DateTime<Utc>,
     ) -> Result<Vec<ProviderAuthFailure>, OrbitError> {
         let since = now - WINDOW;
+        let observations = self.provider_invocation_observations(since)?;
         let failures = self.stores().jobs().list_job_runs_filtered(&bounded_query(
             JobRunState::Failed,
             since,
             true,
         ))?;
-        if !failures.iter().any(|run| {
-            run.steps.iter().any(|step| {
-                ProviderFailureClass::of(step.error_code.as_deref(), step.error_message.as_deref())
-                    == Some(ProviderFailureClass::Unavailable)
+        if !observations
+            .iter()
+            .any(|item| item.class == Some(ProviderFailureClass::Unavailable))
+            && !failures.iter().any(|run| {
+                run.steps.iter().any(|step| {
+                    ProviderFailureClass::of(
+                        step.error_code.as_deref(),
+                        step.error_message.as_deref(),
+                    ) == Some(ProviderFailureClass::Unavailable)
+                })
             })
-        }) {
+        {
             return Ok(Vec::new());
         }
         let successes = self.stores().jobs().list_job_runs_filtered(&bounded_query(
@@ -100,6 +107,16 @@ impl OrbitRuntime {
         let fallback_host = self.fallback_host();
         let mut cleared_at: BTreeMap<(String, String, Option<String>), DateTime<Utc>> =
             BTreeMap::new();
+        for item in observations.iter().filter(|item| item.success) {
+            cleared_at
+                .entry((
+                    item.host.clone(),
+                    item.provider.clone(),
+                    item.account.clone(),
+                ))
+                .and_modify(|at| *at = (*at).max(item.started_at))
+                .or_insert(item.started_at);
+        }
         for run in &successes {
             for crew in crews.crews(run, None) {
                 let Some(provider) = self.provider_of_crew(&crew) else {
@@ -126,6 +143,14 @@ impl OrbitRuntime {
             BTreeMap::new();
         for run in &failures {
             for (provider, account) in self.unavailable_providers(run, &crews) {
+                if observations.iter().any(|item| {
+                    item.run_id == run.run_id
+                        && item.provider == provider
+                        && item.account == account
+                        && item.class == Some(ProviderFailureClass::Unavailable)
+                }) {
+                    continue;
+                }
                 let at = run_at(run);
                 let key = (host_of(run, &fallback_host), provider, account);
                 if cleared_at.get(&key).is_some_and(|cleared| *cleared > at) {
@@ -134,6 +159,34 @@ impl OrbitRuntime {
                 open.entry(key).or_default().push(ProviderAuthFailureRun {
                     run_id: run.run_id.clone(),
                     at,
+                });
+            }
+        }
+
+        for item in observations
+            .iter()
+            .filter(|item| item.class == Some(ProviderFailureClass::Unavailable))
+        {
+            let key = (
+                item.host.clone(),
+                item.provider.clone(),
+                item.account.clone(),
+            );
+            if cleared_at
+                .get(&key)
+                .is_some_and(|cleared| *cleared > item.at)
+            {
+                continue;
+            }
+            let runs = open.entry(key).or_default();
+            // The invocation clock takes precedence over its containing run's
+            // finish time. A primary failure may also have an ordinary step.
+            if let Some(run) = runs.iter_mut().find(|run| run.run_id == item.run_id) {
+                run.at = run.at.max(item.at);
+            } else {
+                runs.push(ProviderAuthFailureRun {
+                    run_id: item.run_id.clone(),
+                    at: item.at,
                 });
             }
         }

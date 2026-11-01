@@ -446,6 +446,18 @@ pub enum V2AuditEventKind {
         harness_version: Option<String>,
         timed_out: bool,
     },
+    /// Trusted provider outcome, independent of the pipeline step or recovery
+    /// decision. Historical invocations without this event have unknown outcomes.
+    ProviderInvocationObserved {
+        provider: String,
+        crew: Option<String>,
+        account: Option<String>,
+        started_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        success: bool,
+        /// Set only by the provider protocol/stderr classifier, never agent text.
+        failure_class: Option<crate::workflow::ProviderFailureClass>,
+    },
     /// One attempt of a `target: script:<name>` step: what the grant
     /// authorized, what the script profile ran and how it ended, or the
     /// refusal that stopped it before anything was spawned. `orbit run
@@ -515,6 +527,7 @@ impl V2AuditEventKind {
             }
             V2AuditEventKind::CliInvocationFinished { .. } => "cli.invocation.finished",
             V2AuditEventKind::CliInvocationBuildBudget { .. } => "cli.invocation.build_budget",
+            V2AuditEventKind::ProviderInvocationObserved { .. } => "provider.invocation.observed",
             V2AuditEventKind::ScriptExecution { .. } => V2_EVENT_TYPE_SCRIPT_EXECUTION,
             V2AuditEventKind::TelemetryPersistFailed { .. } => "telemetry.persist_failed",
         }
@@ -528,6 +541,10 @@ impl V2AuditEventKind {
 /// table, or a row whose `event_type` is not one of these columns, still has
 /// to be matched from the payload.
 pub const V2_AUDIT_BODY_KIND_EVENT_TYPES: &[(&str, &str)] = &[
+    (
+        "provider_invocation_observed",
+        "provider.invocation.observed",
+    ),
     ("run_started", "run.started"),
     ("run_finished", "run.finished"),
     ("run_cancelled", "run.cancelled"),

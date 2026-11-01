@@ -17,6 +17,7 @@ use super::super::evidence::{
 use super::{CliDispatchContext, subprocess};
 
 pub(super) struct CliProviderCompletion<'a> {
+    pub(super) started_at: chrono::DateTime<chrono::Utc>,
     pub(super) context: CliDispatchContext<'a>,
     pub(super) provider: String,
     pub(super) model: Option<String>,
@@ -41,8 +42,10 @@ pub(super) struct CliProviderCompletion<'a> {
 pub(super) fn finish_cli_dispatch(
     completion: CliProviderCompletion<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
+    let finished_at = chrono::Utc::now();
     let CliProviderCompletion {
         context,
+        started_at,
         provider,
         model,
         agent_execution_id,
@@ -132,6 +135,9 @@ pub(super) fn finish_cli_dispatch(
 
     let canary_provider = staged_images.is_some().then(|| provider.clone());
     let mut completion = project_completion(ProviderExit {
+        audit,
+        started_at,
+        finished_at,
         host,
         spec,
         input,

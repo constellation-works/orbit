@@ -64,7 +64,15 @@ fn project_stdout(
     let host = IdleHost;
     let input = json!({});
     let redaction = PatternRedactor::http_default();
+    let audit = crate::activity_job::V2AuditWriter::new(
+        "run",
+        "fixture",
+        std::sync::Arc::new(orbit_agent::loop_engine::audit::NullSink),
+    );
     project_completion(ProviderExit {
+        audit: &audit,
+        started_at: chrono::Utc::now(),
+        finished_at: chrono::Utc::now(),
         agent_execution_id: None,
         host: &host,
         spec: &spec,

@@ -48,6 +48,9 @@ use super::limit::{
 /// Everything a provider subprocess left behind once it exited, plus the
 /// run state its completion projection reads.
 pub(super) struct ProviderExit<'a> {
+    pub(super) audit: &'a crate::activity_job::audit_writer::V2AuditWriter,
+    pub(super) started_at: chrono::DateTime<chrono::Utc>,
+    pub(super) finished_at: chrono::DateTime<chrono::Utc>,
     pub(super) host: &'a dyn RuntimeHost,
     pub(super) spec: &'a AgentLoopSpec,
     pub(super) input: &'a Value,
@@ -96,6 +99,9 @@ pub(super) fn print_budget_exhausted(
 /// run the post-provider worktree check, and project the step output.
 pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutcome, DispatchError> {
     let ProviderExit {
+        audit,
+        started_at,
+        finished_at,
         host,
         spec,
         input,
@@ -264,6 +270,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             task_ids,
         )?;
     }
+
     let trace = if trace_stdout.as_ref() == answer_stdout.as_ref() {
         parse_cli_invocation_trace_from(
             &answer_parsed,
@@ -307,6 +314,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
     });
     // [ORB-14695] The usage limit the failure reports, with the provider's
     // own words, for the host's provider-limit store.
+    let mut failure_class = None;
     let mut observed_limit: Option<(ProviderLimitFailure, String)> = None;
     let mut limit_failure = |text: &str, prefix: &str| {
         let reported = bounded_diagnostic(text, redaction);
@@ -346,12 +354,14 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             timeout_seconds
         ))
     } else if let Some(diagnostic) = provider_auth_error {
+        failure_class = Some(ProviderFailureClass::Unavailable);
         Some(provider_failure_text(
             ProviderFailureClass::Unavailable,
             &provider,
             &bounded_diagnostic(&diagnostic, redaction),
         ))
     } else if let Some(refusal) = provider_refusal {
+        failure_class = Some(ProviderFailureClass::Refusal);
         Some(provider_failure_text(
             ProviderFailureClass::Refusal,
             &provider,
@@ -467,6 +477,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
                 .as_deref()
                 .is_some_and(provider_authentication_failure)
         {
+            failure_class = Some(ProviderFailureClass::Unavailable);
             Some(provider_failure_text(
                 ProviderFailureClass::Unavailable,
                 &provider,
@@ -489,6 +500,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             terminal_error.as_deref(),
             provider_capacity_exhausted,
         ) {
+            failure_class = Some(ProviderFailureClass::Capacity);
             // [ORB-14149] Nor can a repair agent, or an immediate rerun of the
             // same model, change a provider's capacity. Read only from a
             // failed exit: a provider that reports capacity mid-turn and then
@@ -508,6 +520,7 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
             terminal_error.as_deref(),
             provider_content_refusal,
         ) {
+            failure_class = Some(ProviderFailureClass::Refusal);
             // [ORB-14266] Nor does either change the provider's content
             // policy: Codex's content filter ends the turn with its own
             // `error` and `turn.failed` frames and a failed exit.
@@ -598,6 +611,20 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
         None => message,
     };
 
+    if observed_limit.is_some() {
+        failure_class = Some(ProviderFailureClass::Limit);
+    }
+    audit.emit_lossy(
+        orbit_types::workflow::V2AuditEventKind::ProviderInvocationObserved {
+            provider: provider.clone(),
+            crew: spec.crew_name.clone(),
+            account: spec.crew_account.clone(),
+            started_at,
+            finished_at,
+            success,
+            failure_class,
+        },
+    );
     // [ORB-14696] The windows first, so a limit failure observed in the same
     // run is the newer observation of its window.
     let crew = input.get("crew").and_then(Value::as_str);

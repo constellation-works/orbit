@@ -54,6 +54,7 @@ mod leaf_hydration;
 mod leaf_settlements;
 mod owner_repair;
 mod probe;
+mod provider_observations;
 mod pull_waiting;
 mod review_port;
 mod serve;
