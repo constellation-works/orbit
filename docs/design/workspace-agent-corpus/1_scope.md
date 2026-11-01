@@ -1,8 +1,13 @@
 ---
+title: Workspace agent corpus
 type: design
-status: implemented
-stage: shipped
 owner: Orbit
+last_updated: 2026-11-01
+status: Draft
+stage: shipped
+next: "Repair precedent auto-answer (ORB-20822, ORB-20823)"
+feature: workspace-agent-corpus
+doc_role: scope
 summary: "Pinned activity-scoped corpus guidance and deterministic append proposals"
 ---
 
@@ -14,6 +19,8 @@ A workspace keeps reviewed operational knowledge in `docs/agents/corpus/`:
 entries on that document, not separate incident documents. Nothing is enabled
 by default. This is a repository corpus plus deterministic append outbox, not a
 revival of the retired native project-learnings inference subsystem.
+[ORB-20637] implements this corpus: the documents, pinned injection and the
+append outbox.
 
 ## Schema and generation
 
@@ -118,7 +125,8 @@ occurrences. Agent-authored synthesis is a reviewed proposal, not an automatic
 append. It also materializes pending deterministic appends when exported source
 histories are available. Counts and source links must agree with its report;
 its report artifact alone is not the corpus. Historical blocked-task backfill
-is separate and does not happen implicitly during injection.
+is separate and does not happen implicitly during injection. [ORB-20650]
+backfilled the past month of blocked and escalated tasks.
 
 ## Curated decision rules
 
@@ -141,12 +149,14 @@ rule has:
 - `auto`: defaults to false. Consolidation never sets it
 - `auto_set_by`: `operator` only when the operator set `auto`
 
-A weekly workspace-local auto-task proposes rule edits. It is not a shipped
+A weekly workspace-local auto-task proposes rule edits [ORB-20747]. It is not a shipped
 default. The template is `decision-precedent.auto-task.yaml` beside this
 document. An operator copies it into `.orbit/auto_tasks/` and enables it
 there. The run calls `orbit decision consolidate`, which prints proposed file
 text and writes nothing. The pull request is the only place a rule changes,
-and a human merge is the curation step.
+and a human merge is the curation step. Precedent auto-answer still reads the
+working tree, so an unmerged or uncommitted rule can answer a request
+[ORB-20822].
 
 Each run re-checks every rule. A later human answer that chooses a different
 option marks the old rule `superseded` (its id is renamed and `auto` is
@@ -160,7 +170,8 @@ whose digests still match is injected or cited.
 set it, and neither can the precedent actor. When `orbit.decision.raise`
 names a topic or rule id that matches exactly one such current rule, and the
 rule's answer is one of the request's options, Orbit answers immediately with
-that option. The history actor is `precedent`, not a human. The record carries
+that option. Matching a topic equal to a topic file's stem is not this
+contract [ORB-20823]. The history actor is `precedent`, not a human. The record carries
 the rule id, the rule's citations, and that the operator approved the rule. A
 comment tells the operator how to reverse it. A non-auto, stale, superseded,
 ambiguous, or non-option match leaves the request open. Reversal is
@@ -177,3 +188,13 @@ new request. A current rule the operator marked auto may answer a request
 that names it exactly; every other new decision still requires its own human
 answer. Task tags, comments and result messages cannot write trusted corpus
 text or select an arbitrary revision for injection.
+
+## Task References
+
+- [ORB-20637] — implements the activity-scoped corpus, pinned injection and the deterministic append outbox.
+- [ORB-20747] — adds weekly decision-rule consolidation, staleness checks and opt-in auto-answer.
+- [ORB-20650] — backfills the corpus from the past month of blocked and escalated tasks.
+- [ORB-20822] — records that precedent auto-answer reads the live working tree instead of a merged revision.
+- [ORB-20823] — records that precedent auto-answer also matches a topic equal to a topic file stem.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

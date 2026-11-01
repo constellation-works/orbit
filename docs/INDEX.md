@@ -169,7 +169,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | — | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | — | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | — | codex |
-| [Review Gate](./design/review-gate/1_overview.md) | ORB-20087 shipped selective before-landing risk/path rules (§3.3, default off) after ORB-20099 staged before-PR deprecation (§1.1); observe/enforce adoption is an operator decision; symbols deferred. | codex |
+| [Review Gate](./design/review-gate/1_overview.md) | Operator chooses observe or enforce; symbol triggers stay deferred | codex |
 | [Routines](./design/routines/1_overview.md) | — | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Consumer calendar and Schedule picker in orbit-office | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | — | claude |
@@ -179,7 +179,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | — | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
-| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | — | Orbit |
+| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Repair precedent auto-answer (ORB-20822, ORB-20823) | Orbit |
 
 ### Parked (2)
 
@@ -236,7 +236,7 @@ a conservative title/status fallback.
 | [Process Supervision](./design/process-supervision/1_overview.md) | Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed. | Draft | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions: why the native learning subsystem was removed and why leftover .orbit/learnings/ files stay ignored. | Accepted | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
-| [Review Gate](./design/review-gate/1_overview.md) | Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation and shipped selective before-landing risk/path rules (default off) preserve existing runs and evidence. | Accepted | codex |
+| [Review Gate](./design/review-gate/1_overview.md) | Independent automatic review with captured timing and exact-tree coverage; shipped staged before-PR deprecation and shipped selective before-landing risk/path rules (default off) preserve existing runs and evidence. | Implemented | codex |
 | [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Implemented | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Scope: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it | Draft | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Scope: a job step that runs a workspace script by name inside the executor sandbox, authorized by an operator grant bound to the script's content digest, with JSON stdin/stdout, declared files, audit and the job retry policy | Draft | claude |
@@ -252,7 +252,7 @@ a conservative title/status fallback.
 | [Ux Rules](./design/ux-rules/1_scope.md) | Scope: break the ux-review-ui and ux-review-cli prompts into named, executable rules (Playwright measurements for the dashboard and website, PTY captures for the CLI and MCP surface), run them on a routine, and file one task per failing rule and target, so the LLM reviews keep only the judgement work | Draft | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Scope: for tasks tagged verify-mock-ui, the implementer compares its build against the attached mocks while it works, then Orbit captures the mocked views on the final candidate, runs deterministic checks, and has a vision crew compare each capture with its mock, with findings verified by a different crew | Draft | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Draft | claude |
-| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Pinned activity-scoped corpus guidance and deterministic append proposals | implemented | Orbit |
+| [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | Pinned activity-scoped corpus guidance and deterministic append proposals | Draft | Orbit |
 
 ### Archived designs
 

@@ -1,13 +1,13 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-30
+last_updated: 2026-11-01
 last_validated: 2026-10-26
-status: Accepted
+status: Implemented
 feature: review-gate
 doc_role: design
 type: design
-summary: Shipped review contract (before_pr deprecated but honoured; off/before_landing recommended) and a proposed selective before-landing extension using configurable candidate-risk thresholds and path rules, with captured policy, exact-head enforcement, lineage budgets and delivery coverage.
+summary: Shipped review contract (before_pr deprecated but honoured; off/before_landing recommended) and shipped selective before-landing rules (default off) using configurable candidate-risk thresholds and path rules, with captured policy, exact-head enforcement, lineage budgets and delivery coverage.
 tags: [review-gate, review-policy, automation, delivery, operations]
 paths: ["crates/orbit-config/src/operation/**", "crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/automation/after_landing.rs", "crates/orbit-store/src/driver/sqlite/review/**", "crates/orbit-automation/src/review/**", "crates/orbit-engine/src/executor/automation/vcs/review_gate.rs", "crates/orbit-store/src/repository/task/v2/artifacts.rs", "crates/orbit-store/src/repository/task/coordination/lifecycle/**"]
 related_features: [automation-triggers, activity-job, auditability]
@@ -16,12 +16,11 @@ related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13890, ORB-13896, ORB-1
 
 # Review Gate — Design [ORB-11333]
 
-This file describes what shipped, except §3.3, which is a proposed extension
-and is not an available configuration surface yet. A preference edit grants
+This file describes what shipped. A preference edit grants
 no authority and changes no schedule; a verdict grants no merge permission.
 §1.1 records the shipped staged deprecation of before-PR review [ORB-20099];
-§3.3 stays proposed (tracked by ORB-20087) and is not implemented by that
-deprecation.
+§3.3 records the shipped selective before-landing rules [ORB-20087], default
+off, which that deprecation does not itself enable.
 
 ## 1. Preferences: three timings [ORB-13992] [ORB-14849]
 
@@ -123,7 +122,7 @@ For new use, recommend `review.timing = "before_landing"` or an explicit
 `--review before-landing`. The PR opens first and review overlaps hosted CI;
 the existing exact-reviewed-head merge rule and budgets still apply. Keep
 `off` as the default and after-landing review independent. Do not enable
-selective review in this stage; §3.3 stays proposed.
+selective review in this stage; selective rules are the separate shipped contract in §3.3 ([ORB-20087]), default off.
 
 #### Configuration, requests and diagnostics
 
@@ -527,9 +526,9 @@ settlement blocks the task on the owner.
 
 ### 3.3 Selective before-landing review [ORB-20087]
 
-**Shipped (default off).** ORB-20087 implements this section behind `review.selective_before_landing` (`off` by default); shipping enables no live policy — observe/enforce adoption is a later explicit operator decision. The text below is the shipped contract. Daniel's 2026-10-29 direction is to restore
+**Shipped (default off).** [ORB-20087] implements this section behind `review.selective_before_landing` (`off` by default); shipping enables no live policy — observe/enforce adoption is a later explicit operator decision. The text below is the shipped contract. Daniel's 2026-10-29 direction was to restore
 before-landing review selectively using configurable regression-risk and path
-rules; [ORB-20087] tracks implementation. Symbol-history triggers are
+rules; [ORB-20087] shipped that contract. Symbol-history triggers are
 deferred. This extends this gate; it does not add another reviewer, merge
 permission or a second review framework.
 The staged before-PR deprecation in §1.1 has shipped and is the prerequisite
@@ -800,8 +799,8 @@ deferred test as `host_sandbox_test` evidence instead. A result from a host
 that executed the path, such as owner fulfilment below, stands in for the
 record and clears its notices.
 
-A broader required run can defer the very tests the reviewer names
-[ORB-17043]: `cargo test -p <crate> --test <target> <module>` passes with a
+A broader required run can defer the very tests the reviewer names [ORB-17043].
+`cargo test -p <crate> --test <target> <module>` passes with a
 deferral notice for each of two tests, and each test is its own
 `host_sandbox_test` requirement with its own required `not_run` record. A
 requirement covers a notice only when its command is admitted as
@@ -1750,33 +1749,6 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
   phase. That is an operator-grade decision by the recovery crew, not a
   second review round the pipeline schedules.
 
-## Task References
-
-- [ORB-20099] — shipped staged before-PR deprecation (§1.1), preserving legacy input semantics, admitted runs and review evidence; prerequisite to [ORB-20087].
-- [ORB-20087] — proposed configurable risk/path before-landing selection (§3.3), including observation, exact-head receipts and owner/follower compatibility; symbol triggers deferred.
-- [ORB-11333] — implements independent review policy, the before-PR gate, lineage budgets, and delivery coverage.
-- [ORB-11528] — adds validation-record roles to the certificate contract.
-- [ORB-11545] — tightens what a superseded validation record may claim.
-- [ORB-12491] — retires epic assembly, the one caller that gated a combined candidate later.
-- [ORB-13890] — closes failed attempts, keys budgets per delivery run lineage, adds gate retry/recovery, tolerant report reading, and the completion re-review.
-- [ORB-13891] — added an implementer rework loop for `changes_required`; retired by [ORB-13989].
-- [ORB-13989] — the reviewer fixes its findings as a second commit, comments them, and owner validation reruns on that head; retires the rework loop and repair-cycle budget.
-- [ORB-13992] — splits review into the `review.before_pr` switch and the `delivery-code-review` auto-task flag, makes `review.minutes` the wall-clock limit of one review per candidate, and retires `operation.review_policy` and the reviewer-start budget.
-- [ORB-13990] — the reviewer may change any path the repair requires; settlement and revalidation widen selectors with review provenance instead of downgrading or failing.
-- [ORB-14370] — gives required validation records a stable `id` and `retired_validation`, compares retained obligations by id, and refuses a dropping revision at attach.
-- [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
-- [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
-- [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
-- [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
-- [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.
-- [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
-- [ORB-15328] — settlement attributes a failed check to the base by replaying only its failing tests there, or reading a full result cached for that base, and reserves a quarter of the review budget for that replay, naming a candidate rerun cut at the reserve.
-- [ORB-15350] — a base replay stopped at its deadline is inconclusive and is not cached, preventing a shortened review deadline from poisoning the baseline result cache.
-- [ORB-15546] — settlement applies required validation's known-red rule to a confirmed red-base claim: a candidate failing only tests the base fails too settles accept, its record still failed, with the certificate's `known_red` as the evidence coverage reads.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
-
 ### Selective contract compatibility and model capture
 
 Selective delivery authority is protected by breaking workspace layout migration
@@ -1811,3 +1783,52 @@ reviewer repairs. Only a passed host settlement can advance the completion pin
 to the certificate's final candidate; claimed acceptance verifies that the
 certificate's reviewed candidate is the original selection and its final
 candidate is the handed-off head. External pushes and rebases remain stale.
+
+## Task References
+
+- [ORB-20099] — shipped staged before-PR deprecation (§1.1), preserving legacy input semantics, admitted runs and review evidence; prerequisite to [ORB-20087].
+- [ORB-20087] — shipped configurable risk/path before-landing selection (§3.3), default off, including observation, exact-head receipts and owner/follower compatibility; symbol triggers deferred.
+- [ORB-11333] — implements independent review policy, the before-PR gate, lineage budgets, and delivery coverage.
+- [ORB-11528] — adds validation-record roles to the certificate contract.
+- [ORB-11545] — tightens what a superseded validation record may claim.
+- [ORB-12491] — retires epic assembly, the one caller that gated a combined candidate later.
+- [ORB-13890] — closes failed attempts, keys budgets per delivery run lineage, adds gate retry/recovery, tolerant report reading, and the completion re-review.
+- [ORB-13891] — added an implementer rework loop for `changes_required`; retired by [ORB-13989].
+- [ORB-13896] — carries after-landing review as the `delivery-code-review` auto-task, switched with `orbit auto-task toggle`.
+- [ORB-13989] — the reviewer fixes its findings as a second commit, comments them, and owner validation reruns on that head; retires the rework loop and repair-cycle budget.
+- [ORB-13992] — splits review into the `review.before_pr` switch and the `delivery-code-review` auto-task flag, makes `review.minutes` the wall-clock limit of one review per candidate, and retires `operation.review_policy` and the reviewer-start budget.
+- [ORB-13990] — the reviewer may change any path the repair requires; settlement and revalidation widen selectors with review provenance instead of downgrading or failing.
+- [ORB-14205] — retries the synchronous merge when GitHub reports the base branch was modified, after re-checking the pinned head.
+- [ORB-14312] — matches a superseded check to its replacement by effective identity in either report order.
+- [ORB-14322] — a required pass replaces a superseded attempt of the same effective identity regardless of record order.
+- [ORB-14332] — a base move during re-review gets another review round instead of leaving a recovered conflict blocked.
+- [ORB-14370] — gives required validation records a stable `id` and `retired_validation`, compares retained obligations by id, and refuses a dropping revision at attach.
+- [ORB-14393] — a completion step that has already followed a moving base twice fails as `base_chase_exhausted`.
+- [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
+- [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
+- [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
+- [ORB-14616] — a counterfactual names mutation targets apart from its sources, and one shape defect returns to the reviewer once.
+- [ORB-14632] — settlement compares each mutation target with rename detection off, so a modified, deleted or moved target fails.
+- [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
+- [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.
+- [ORB-15083] — treats a `not_run` diagnostic as a skipped check under the wrong role, and names whether a trusted command is required, excluded or owner-owed.
+- [ORB-15122] — when the host refutes a red-base claim, the host's run on the final candidate decides that check.
+- [ORB-15131] — a base run that executes no counted test, or tests another selection, is not comparable and settles `incomplete`.
+- [ORB-15193] — covers a landing whose base moved after review when that landing is a clean rebase of the reviewed head.
+- [ORB-15287] — lets the implementer hand off an affected-test gate whose only gap is nested-sandbox deferral notices.
+- [ORB-15328] — settlement attributes a failed check to the base by replaying only its failing tests there, or reading a full result cached for that base, and reserves a quarter of the review budget for that replay, naming a candidate rerun cut at the reserve.
+- [ORB-15350] — a base replay stopped at its deadline is inconclusive and is not cached, preventing a shortened review deadline from poisoning the baseline result cache.
+- [ORB-15375] — a candidate whose failing tests are a subset of the red base's proceeds and records `known_red` instead of holding.
+- [ORB-15409] — defers macOS Seatbelt `sandbox-exec cannot apply a profile` skips to a host replay.
+- [ORB-15516] — the implement step derives `deferred_sandbox_validation` from the gate summary instead of a hand-written record.
+- [ORB-15546] — settlement applies required validation's known-red rule to a confirmed red-base claim: a candidate failing only tests the base fails too settles accept, its record still failed, with the certificate's `known_red` as the evidence coverage reads.
+- [ORB-15587] — defers a macOS claimed leaf's `ps denied` skips to a host replay.
+- [ORB-15630] — a before-landing review on a non-Linux claim host does not hold for Linux CodeQL that the pull request's hosted CI runs.
+- [ORB-15677] — only a rule that names `hosted_check` makes that hosted check owner-owed.
+- [ORB-15692] — a gate that prints several deferral kinds qualifies for host replay only when every kind's probe is refused.
+- [ORB-16447] — a control on a file the reviewer's own repair changed is accepted only when the final candidate carries the declared repaired blob.
+- [ORB-17043] — a broader required run that only defers the named tests stays covered by per-test `host_sandbox_test` requirements.
+- [ORB-18351] — publishes UI screenshots to a permanent evidence ref and renders them in the pull request body.
+- [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,11 +1,11 @@
 ---
 title: Review Gate — Overview
 owner: codex
-last_updated: 2026-10-30
-last_validated: 2026-10-28
-status: Accepted
+last_updated: 2026-11-01
+last_validated: 2026-11-01
+status: Implemented
 stage: shipped
-next: "ORB-20087 shipped selective before-landing risk/path rules (§3.3, default off) after ORB-20099 staged before-PR deprecation (§1.1); observe/enforce adoption is an operator decision; symbols deferred."
+next: "Operator chooses observe or enforce; symbol triggers stay deferred"
 feature: review-gate
 doc_role: overview
 type: design
@@ -128,6 +128,7 @@ a second time.
 ## Task References
 
 - [ORB-11333] — implements independent review policy, the before-PR gate, lineage budgets, and delivery coverage.
+- [ORB-13992] — splits review into the config.toml timing and the delivery-code-review auto-task flag, and makes `review.minutes` the wall-clock limit of one review per candidate.
 - [ORB-11528] — adds validation-record roles to the certificate contract.
 - [ORB-11545] — tightens what a superseded validation record may claim.
 - [ORB-11331] — owns the delivery automation consumers that spend certificates.
