@@ -245,6 +245,9 @@ pub(super) fn pilot_finding_exclusion(
         .map_err(|error| PassError::store(action, "read pilot findings", error))?;
     Ok(hold.and_then(|hold| {
         let (reason, detail) = match hold {
+            PilotAdmissionHold::StaleAssessment(detail) => {
+                (BacklogTaskExclusionReason::PilotAssessmentStale, detail)
+            }
             PilotAdmissionHold::HostOperational(hold) => (
                 BacklogTaskExclusionReason::HostOperationalHandoff,
                 hold.detail(),

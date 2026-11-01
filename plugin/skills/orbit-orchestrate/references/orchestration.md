@@ -413,6 +413,21 @@ orbit run task-pilot <id> <id>                  # audit exactly these
 orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 ```
 
+The first pilot is automatic once. Every later assessment requires an explicit
+request: `orbit task repilot <id>`, `orbit.task.repilot` with `id` and the
+owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
+with `repilot: true`. These operator requests submit one pending pilot and
+refuse a second request while a pilot is pending or running, while delivery
+holds the task, or on a replica. A decision option with action `re_pilot`
+also explicitly requests one pilot; it needs no material rewrite. Existing
+`orbit run task-pilot <id>` remains an explicit assessment command.
+
+Description or acceptance-criteria edits make the assessment stale but never
+schedule another pilot. Dispatch fails closed as `pilot_assessment_stale` until
+`orbit task repilot <id>` completes against the edited requirements. A held
+warning keeps its one pending decision across routine windows; routine ticks
+create no additional pilot, triage, or decision for that same assessment.
+
 When explicit ids store different crews, `orbit run task-pilot` submits one
 homogeneous run per crew. Each run audits only its own task group.
 
@@ -423,8 +438,8 @@ the effective job and that pool before promising a provider; see
 [crew selection](loop.md#select-an-allowed-crew).
 
 Zero-input mode discovers only `proposed`/`backlog` tasks in the invoking
-workspace whose `context_files` is empty, and skips tasks tagged as needing no
-diff. It also excludes a task already named by the durable prepare checkpoint
+workspace needing its first assessment, and skips tasks tagged as needing no
+diff or carrying an already applied assessment (ready or held), even after edits. It also excludes a task already named by the durable prepare checkpoint
 of an active pilot run and reports the owning run ID, so a later discovery run
 can inspect new work without repeating the expensive assessment. Explicit
 `task_ids` audits exactly the named tasks, including ones that already have
@@ -468,9 +483,9 @@ partitions concurrently, and returns selector proposals plus duplicate,
 already-landed, dependency, and conflicting-decision warnings. The shipped
 workspace routine is disabled by default and uses a `preparation_eligible`
 state trigger, not a periodic cron: each tick fingerprints eligible tasks and
-queues those without a fresh assessment after the 2-minute debounce or the
-10-minute maximum wait. A material change can make a task due again; an
-unchanged backlog stays quiet. Inspect the workspace's actual `task_pilot.yaml`
+queues only tasks without an applied assessment after the 2-minute debounce or
+the 10-minute maximum wait. Once assessed, a task stays quiet across routine
+windows, including after material edits; request another pilot explicitly. Inspect the workspace's actual `task_pilot.yaml`
 before relying on that cadence, because a customized routine or preserved
 legacy cron definition can differ from the shipped seed.
 

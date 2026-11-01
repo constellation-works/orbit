@@ -57,11 +57,7 @@ impl Host<'_> {
                 // Pending members can be off the observation page when an
                 // explicit pilot settles. Recheck accepted evidence here too,
                 // after the active-holder guard, before creating any run.
-                if self
-                    .runtime
-                    .fresh_task_pilot_assessment(id, &member.fingerprint)?
-                    .is_some()
-                {
+                if self.runtime.task_pilot_scheduling_assessment(id)?.is_some() {
                     return Ok(MemberAdmission::Retire("assessment_fresh".into()));
                 }
             }

@@ -337,6 +337,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -544,6 +545,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | TaskVerb::Update
             | TaskVerb::ArtifactPut
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -863,6 +865,7 @@ fn artifact_target<'a>(
             | TaskVerb::Update
             | TaskVerb::ArtifactPut
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview

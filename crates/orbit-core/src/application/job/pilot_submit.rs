@@ -123,8 +123,60 @@ impl OrbitRuntime {
                 },
             ));
         }
+        let mut submitted = None;
+        self.stores()
+            .tasks()
+            .with_task_write_lock(task_id, &mut || {
+                submitted = Some(self.check_explicit_task_pilot(task_id).and_then(|()| {
+                    self.submit_catalog_job_run(
+                        PILOT_JOB,
+                        json!({"task_ids": [task_id]}),
+                        actor,
+                        trigger.clone(),
+                    )
+                    .map_err(TaskPilotSubmitError::from)
+                }));
+                Ok(())
+            })?;
+        submitted.ok_or_else(|| {
+            TaskPilotSubmitError::Runtime(OrbitError::Execution(
+                "pilot submission did not run".into(),
+            ))
+        })?
+    }
+
+    /// Check an explicit request before its accompanying task edit is written.
+    pub(crate) fn check_explicit_task_pilot(
+        &self,
+        task_id: &str,
+    ) -> Result<(), TaskPilotSubmitError> {
+        self.check_task_pilot_request(task_id, false)
+    }
+
+    /// Decision recovery may return a blocked task to backlog before submission.
+    pub(crate) fn check_decision_task_pilot(
+        &self,
+        task_id: &str,
+    ) -> Result<(), TaskPilotSubmitError> {
+        self.check_task_pilot_request(task_id, true)
+    }
+
+    fn check_task_pilot_request(
+        &self,
+        task_id: &str,
+        allow_blocked: bool,
+    ) -> Result<(), TaskPilotSubmitError> {
+        if let Some(owner) = self.replica_owner_machine() {
+            return Err(TaskPilotSubmitError::Refused(
+                TaskPilotRefusal::ReplicaCheckout {
+                    owner: owner.to_string(),
+                },
+            ));
+        }
         let task = self.get_task(task_id)?;
-        if !pilot_assessable_status(task.status) {
+        if !pilot_assessable_status(task.status)
+            && !(allow_blocked && task.status == TaskStatus::Blocked)
+        {
             return Err(TaskPilotSubmitError::Refused(
                 TaskPilotRefusal::UnsupportedStatus {
                     task_id: task.id,
@@ -153,12 +205,8 @@ impl OrbitRuntime {
                 TaskPilotRefusal::DeliveryRunning { task_id, run_id },
             ));
         }
-        Ok(self.submit_catalog_job_run(
-            PILOT_JOB,
-            json!({ "task_ids": [task.id] }),
-            actor,
-            trigger,
-        )?)
+        self.show_job_catalog_entry(PILOT_JOB)?;
+        Ok(())
     }
 
     /// The live pilot run holding `task_id`: one that names it in its input,

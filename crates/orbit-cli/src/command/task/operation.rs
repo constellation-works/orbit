@@ -179,7 +179,8 @@ fn prepare(
             }
             Ok(ListView::default())
         }
-        TaskVerb::ReviewReset
+        TaskVerb::Repilot
+        | TaskVerb::ReviewReset
         | TaskVerb::ReconcileReview
         | TaskVerb::Requeue
         | TaskVerb::RecoverClaim
@@ -411,7 +412,8 @@ fn render(
             let text = super::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(value, text).into())
         }
-        TaskVerb::RetryHandoff
+        TaskVerb::Repilot
+        | TaskVerb::RetryHandoff
         | TaskVerb::RecoverClaim
         | TaskVerb::RevokeHandoff
         | TaskVerb::BlockTriage

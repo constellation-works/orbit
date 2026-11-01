@@ -275,6 +275,9 @@ impl OrbitRuntime {
                     )?;
                     crew_source = validated.crew_source;
                     let v = validated.params;
+                    if let Some(edit) = self.pilot_requirement_edit_history(&task, &v, &actor)? {
+                        append_history.push(edit);
+                    }
                     fields = DesktopTaskFields {
                         status: None,
                         title: v.title,

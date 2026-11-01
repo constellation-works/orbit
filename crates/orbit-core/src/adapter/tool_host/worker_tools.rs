@@ -90,6 +90,7 @@ pub(crate) fn execute(
             | TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
@@ -326,6 +327,7 @@ pub(crate) fn execute(
             TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
             | TaskVerb::ReviewReset
+            | TaskVerb::Repilot
             | TaskVerb::Requeue
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview

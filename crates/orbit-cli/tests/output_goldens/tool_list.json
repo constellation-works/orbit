@@ -2973,6 +2973,29 @@
     "mcp_toolset": "default"
   },
   {
+    "name": "orbit.task.repilot",
+    "description": "Explicitly request one new pilot assessment for a proposed or backlog task. Only the first assessment is automatic; requirements edits do not request another pilot. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "id",
+        "description": "Task to assess again",
+        "param_type": "string",
+        "required": true
+      }
+    ],
+    "mcp_toolset": "default"
+  },
+  {
     "name": "orbit.task.requeue",
     "description": "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does, or the latest candidate a claim of the task kept. A later claim that ended without a candidate does not replace that one. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped, or whose claim is unsettled, is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
     "enabled": true,
@@ -3251,6 +3274,12 @@
     "status": "active",
     "builtin": true,
     "parameters": [
+      {
+        "name": "repilot",
+        "description": "Explicitly request one new pilot after this update. Operator authority required; pending/live pilots and delivery are refused. Requirements edits alone never request a pilot.",
+        "param_type": "boolean",
+        "required": false
+      },
       {
         "name": "id",
         "description": "task ID",

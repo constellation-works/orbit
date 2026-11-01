@@ -536,6 +536,10 @@ impl OrbitRuntime {
             )));
         }
 
+        if matches!(option.action, Some(DecisionAction::RePilot)) {
+            self.check_decision_task_pilot(task_id)
+                .map_err(|error| refuse(&error.to_string()))?;
+        }
         let mut params = TaskUpdateParams::default();
         let mut applied = Vec::new();
         if let Some(rewrite) = &option.rewrite {
@@ -556,11 +560,6 @@ impl OrbitRuntime {
         let action_kind = option.action.as_ref().map(DecisionAction::kind);
         if option.action.is_none() && !rewrites {
             return Err(refuse("its rewrite leaves the task as it is"));
-        }
-        if !blocked && matches!(option.action, Some(DecisionAction::RePilot)) && !rewrites {
-            return Err(refuse(
-                "a proposed task is only re-assessed after a material edit, and this option rewrites nothing",
-            ));
         }
         // A proposed task that the option approves must clear the same
         // screen an approval answer clears, before its rewrite lands.
@@ -649,6 +648,14 @@ impl OrbitRuntime {
             }
         }
         self.update_task_as_human(task_id, params, actor)?;
+        if matches!(option.action, Some(DecisionAction::RePilot)) {
+            self.submit_explicit_task_pilot(
+                task_id,
+                Some(actor_label),
+                orbit_types::workflow::JobRunTrigger::cli(),
+            )
+            .map_err(|error| OrbitError::Execution(format!("The decision option's task edits were saved, but its pilot request failed and the decision resolution was not recorded. Inspect the task and decision before requesting another pilot: {error}")))?;
+        }
         if approves {
             let (_, effects) = self.approve_task_guarded_deferring_effects(
                 task_id,
@@ -874,6 +881,7 @@ fn ensure_request_answerable(request: &DecisionRequest, answer_id: &str) -> Resu
 /// approval and admission already report.
 fn pilot_hold_classification(hold: &PilotAdmissionHold) -> &'static str {
     match hold {
+        PilotAdmissionHold::StaleAssessment(_) => "pilot_assessment_stale",
         PilotAdmissionHold::Duplicate => "pilot_duplicate",
         PilotAdmissionHold::AlreadyLanded => "pilot_already_landed",
         PilotAdmissionHold::OperatorValidation(_) => "operator_validation",

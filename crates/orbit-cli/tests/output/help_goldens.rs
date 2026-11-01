@@ -270,7 +270,7 @@ fn grouped_command_help_stays_aligned_without_stacked_rows() {
         (
             "Tasks",
             &[
-                "add", "update", "archive", "list", "eligible", "show", "artifact",
+                "add", "update", "repilot", "archive", "list", "eligible", "show", "artifact",
             ],
         ),
         (

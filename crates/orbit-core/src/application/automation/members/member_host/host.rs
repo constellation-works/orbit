@@ -200,7 +200,7 @@ impl MemberHost for Host<'_> {
             return Ok(None);
         };
         self.runtime
-            .fresh_task_pilot_assessment(task_id, &member.fingerprint)
+            .task_pilot_scheduling_assessment(task_id)
             .map_err(Into::into)
     }
 

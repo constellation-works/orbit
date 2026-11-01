@@ -456,11 +456,19 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             "discard_candidate",
             "force",
             "allow_drop_system_tags",
+            "repilot",
         ],
     },
     effect: Effect::Write,
     params: &[
         &[
+            both(
+                "repilot",
+                ParamType::Switch,
+                "Explicitly request one new pilot after this update. Operator authority required; pending/live pilots and delivery are refused. Requirements edits alone never request a pilot.",
+                CliArgKind::flag("repilot"),
+                "Request one new pilot after updating (operator only)",
+            ),
             required(both(
                 "id",
                 ParamType::String,

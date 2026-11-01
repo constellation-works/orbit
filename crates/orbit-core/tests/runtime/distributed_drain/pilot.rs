@@ -264,6 +264,34 @@ fn owner_pull_admits_selectors_and_verified_no_diff_dispositions() {
     }
 }
 
+fn owner_pull_holds_edited_requirements_until_an_explicit_new_assessment() {
+    let pair = Pair::new(1);
+    let task = &pair.tasks[0];
+    apply_assessment(&pair, "The original repair is observable.", json!({}));
+    pair.wire
+        .owner
+        .update_task_as_human(
+            task,
+            orbit_core::application::task::TaskUpdateParams {
+                acceptance_criteria: Some(vec!["The revised repair is observable.".into()]),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let drain = pair.start_drain();
+    let held = pair.pass(&drain);
+    assert!(held["error"].is_null(), "{held}");
+    assert!(!pair.owner_has_claim_for_task(task));
+    let (reason, detail) = recorded_wait(&pair, &drain, task);
+    assert_eq!(reason, "owner_hold");
+    assert!(detail.contains("orbit task repilot"), "{detail}");
+    apply_assessment(&pair, "The revised repair is observable.", json!({}));
+    let released = pair.pass(&drain);
+    assert!(launch_refused(&released), "{released}");
+    assert!(pair.owner_has_claim_for_task(task));
+}
+
 /// Re-scope the task to `criterion` and apply one assessment of it carrying
 /// the agent findings in `findings`.
 pub(super) fn apply_assessment(pair: &Pair, criterion: &str, findings: Value) {
@@ -410,6 +438,18 @@ fn owner_pull_holds_operator_validation_until_the_operator_resolves_it() {
             .owner
             .update_task_as_human(held_task, resolution, "human:fixture".into())
             .unwrap();
+        if decision == "rescope" {
+            let held = pair.pass(&drain);
+            assert!(held["error"].is_null(), "{held}");
+            assert!(!pair.owner_has_claim_for_task(held_task));
+            assert_eq!(recorded_wait(&pair, &drain, held_task).0, "owner_hold");
+            apply_assessment_for_task(
+                &pair,
+                held_task,
+                "Observe the repair through the runtime fixture.",
+                json!({}),
+            );
+        }
         let second = pair.pass(&drain);
         assert!(launch_refused(&second), "{second}");
         assert!(pair.owner_has_claim_for_task(held_task));
@@ -528,15 +568,23 @@ fn a_machine_finding_keeps_the_task_off_every_other_machine() {
             "human:fixture".into(),
         )
         .unwrap();
+    let held = pair.pass(&drain);
+    assert!(held["error"].is_null(), "{held}");
+    assert!(!pair.owner_has_claim_for_task(&pair.tasks[0]));
+    apply_assessment(
+        &pair,
+        "The freshness statement's query plan searches tags by task id.",
+        json!({}),
+    );
     pair.pass(&drain);
     assert!(pair.owner_has_claim_for_task(&pair.tasks[0]));
 }
 
 #[test]
-fn owner_pull_ignores_stale_validation_and_advisory_transport_findings() {
+fn owner_pull_requires_fresh_criteria_and_ignores_advisory_transport_findings() {
     if !isolated(
         module_path!(),
-        "owner_pull_ignores_stale_validation_and_advisory_transport_findings",
+        "owner_pull_requires_fresh_criteria_and_ignores_advisory_transport_findings",
     ) {
         return;
     }
@@ -555,13 +603,17 @@ fn owner_pull_ignores_stale_validation_and_advisory_transport_findings() {
                     &pair.tasks[0],
                     orbit_core::application::task::TaskUpdateParams {
                         acceptance_criteria: Some(vec![
-                            "Run a revised scenario with `orbit.pipeline.invoke`.".into(),
+                            "Observe the revised repair through the runtime fixture.".into(),
                         ]),
                         ..Default::default()
                     },
                     "human:fixture".into(),
                 )
                 .unwrap();
+            apply_validation_assessment(
+                &pair,
+                "Observe the revised repair through the runtime fixture.",
+            );
         }
         let drain = pair.start_drain();
         let pass = pair.pass(&drain);
@@ -578,6 +630,7 @@ crate::scenario_table!(
     follower_claim_supersedes_a_prepared_assessment_without_unscoped_writes,
     owner_pull_holds_host_operational_until_a_decision_or_newer_assessment,
     owner_pull_admits_selectors_and_verified_no_diff_dispositions,
+    owner_pull_holds_edited_requirements_until_an_explicit_new_assessment,
     owner_pull_holds_operator_validation_until_the_operator_resolves_it,
     a_native_os_finding_tags_the_task_so_a_follower_of_another_os_does_not_claim_it,
     a_machine_finding_keeps_the_task_off_every_other_machine

@@ -457,6 +457,7 @@ pub(in super::super) fn apply_task(
                     .collect(),
                 audit_note: serde_json::to_string(&json!({
                     "assessment": task.assessment,
+                    "assessed_requirements": super::super::freshness::pilot_requirements_material(&assessed),
                     "operator_validation_hold": operator_hold,
                     "host_operational_hold": host_operational_hold,
                     "native_os_hold": native_os_hold,

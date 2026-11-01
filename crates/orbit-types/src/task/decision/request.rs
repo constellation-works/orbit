@@ -177,7 +177,7 @@ impl DecisionRewrite {
 pub enum DecisionAction {
     /// Return the task to `backlog` for a fresh run (approve a proposed task).
     Requeue,
-    /// Return the task to `backlog` so task-pilot assesses it again.
+    /// Explicitly submit one new pilot (no rewrite required); a blocked task returns to backlog.
     RePilot,
     /// Assign `crew`, then return the task to `backlog`.
     ChangeCrew {

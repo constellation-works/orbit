@@ -29,6 +29,7 @@ const TASK_HELP_TEMPLATE: &str = "\
 Tasks:
   add               Create a new task
   update            Update task fields; `--approve` takes the next approval step
+  repilot           Explicitly request one new pilot assessment
   archive           Archive a task
   list              List tasks with optional filters
   eligible          List backlog/proposed tasks that collide with no in-flight work

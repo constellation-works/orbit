@@ -106,6 +106,8 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// The latest applied pilot assessment identifies duplicate work. Only a
     /// newer clear assessment or an explicit operator decision releases it.
     PilotDuplicate,
+    /// Description or acceptance criteria changed after the assessment.
+    PilotAssessmentStale,
     /// The latest applied pilot assessment identifies work already landed.
     PilotAlreadyLanded,
     /// Current validation needs an operator-reserved governed operation.
