@@ -1,8 +1,8 @@
 ---
 title: Visual Review — Design
 owner: claude
-last_updated: 2026-10-30
-last_validated: 2026-10-30
+last_updated: 2026-11-01
+last_validated: 2026-11-01
 status: Draft
 feature: visual-review
 doc_role: design
@@ -299,10 +299,28 @@ that the light colour preference changes nothing (§7). The website gets `themes
 
 **Fixtures for Orbit.** `busy-workspace` is a seeded, disposable registry and workspace (tasks
 in every status, runs with steps and failures, crews, routines), built the way the
-`orbit-web` HTTP fixtures build theirs, and served by the real dashboard server bound to port
-zero. Every stored timestamp is an offset from one fixed instant, and the server's notion of
-"now" is pinned to that instant by a test-only build of the fixture server, not by a shipped
-environment variable. Fixture seeds are data files (JSON) reviewed like code.
+`orbit-web` HTTP fixtures build theirs. The setup script binds a disposable API backend
+(`ORBIT_VISUAL_ORBIT`, otherwise `orbit` on `PATH`) to port zero and serves dashboard HTML,
+CSS, JS and fonts from the admitted checkout in front of that backend. A capture's pixels are
+those checkout bytes. The backend's embedded assets are not a fallback: a missing or
+unreadable declared asset refuses readiness, and any other `/` or `/static/` path is answered
+by the fixture, not forwarded. Every proxied request stays on that backend's validated
+loopback origin. A network-path or absolute-form request target is refused before any
+outbound request is dispatched. Experiment and scorecard overlays still apply to their API
+paths. Every stored timestamp is an offset from one fixed instant, and the API backend's
+notion of "now" is pinned to that instant by a test-only build of the fixture server, not by
+a shipped environment variable. Fixture seeds are data files (JSON) reviewed like code.
+
+The setup stdout keeps `ORBIT_VISUAL_URL` as the loopback readiness line (§3.1). It also
+prints separate provenance: source revision, renderer hash, served-asset hash, and backend
+file hash and version. Those identities are not compared, and nothing in the record attests
+that the static assets and the backend are the same build. A JSON file in the fixture scratch
+directory is the full record (`static_backend_identity_compared` is false). Before readiness,
+the fixture probes route presence with `OPTIONS`: concrete `/api` paths from the checkout dashboard, plus each checkout route that can serve a dashboard template. A trailing-slash prefix is not a request, and a query suffix is not a path segment.
+If that check is not established, readiness is refused. Payload compatibility is outside the
+check and is not attested. `visual/capture.json` remains system-written. Its `commit` is still
+the candidate revision (§4.4): the pixels come from that checkout's assets, not from a claim
+that the backend binary was built from the same commit.
 
 ## 4. Capture
 
