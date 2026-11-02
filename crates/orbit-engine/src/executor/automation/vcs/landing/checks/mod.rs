@@ -34,7 +34,13 @@
 //!   successful same-job run on the accepted base ancestry, even if it
 //!   predates the PR failure, only authorizes one unchanged-head PR rerun.
 //!   A passing rerun clears the failure; the same signature failing again
-//!   is **candidate**. Without that pass, the landing waits for base evidence
+//!   is **candidate**. [ORB-21586] When the rerun's own evidence (its plan
+//!   authentication or a log it reads) cannot be read for
+//!   `max_base_ci_cycles` consecutive polls, the base pass alone decides:
+//!   the failure is the candidate's and takes the repair path (or the
+//!   requeue once spent). Any other failure whose rerun evidence stays
+//!   unreadable stops in review naming the read failure; a provider
+//!   throttle keeps its paced hold. Without that pass, the landing waits for base evidence
 //!   until its configurable cycle limit or deadline; a same-signature base
 //!   failure remains **inherited**.
 //! - **candidate**: the failed step names a diagnostic, and the base's own

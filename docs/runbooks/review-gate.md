@@ -280,7 +280,10 @@ The owner enforces what it is owed in two places:
   `github.event.pull_request.head.sha`; they do not build a merge with the
   current base. A passing rerun clears the failure, while the same signature
   failing again with a successful same-check run on the accepted base ancestry
-  enters candidate recovery. If the evidence remains incomplete,
+  enters candidate recovery. When that rerun's evidence stays unreadable for
+  `max_base_ci_cycles` polls, the base pass alone enters candidate recovery,
+  and any other failure with unreadable rerun evidence stops naming the read
+  failure. If the evidence remains incomplete,
   `handoff_land` stops in review after `max_base_ci_cycles` observation cycles
   (default 3) or `max_wait_seconds` (default 3600 seconds), whichever comes
   first, and names the missing evidence. Branch protection may still treat a skipped or

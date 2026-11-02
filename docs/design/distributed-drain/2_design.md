@@ -1152,7 +1152,11 @@ not build a merge with the current base. The change-scope job uses the event mer
 GitHub API path classification and does not build candidate code. The lookup is bounded to 100
 recent base-branch push runs and retains the latest run per workflow and commit; evidence outside
 that window cannot authorize repair. A passing rerun clears the failure; the same signature
-failing again while the same-check base run passes makes the failure `candidate`. Without both
+failing again while the same-check base run passes makes the failure `candidate`. When the rerun's
+own evidence (plan authentication or a log it reads) stays unreadable for `max_base_ci_cycles`
+consecutive polls, the same-check base pass alone makes the failure `candidate` and sends it to the
+repair path (requeue once spent); any other failure whose rerun evidence stays unreadable stops in
+review naming the read failure. A provider throttle keeps its paced hold. Without both
 results, `handoff_land` stops in review after
 `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
 whichever comes first. Each observation cycle rechecks the failed job against the accepted base

@@ -55,6 +55,10 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
     /// The rerun's later completion must not demand yet another base pass.
     /// Repeated base-evidence observations keyed by unchanged head, check and signature.
     base_suspect_cycles: BTreeMap<(String, String, String), u64>,
+    /// [ORB-21586] Consecutive polls on one head whose CI retry evidence
+    /// could not be read or authenticated. Bounded by `max_base_ci_cycles`,
+    /// so an unreadable retry escalates within minutes, not at the deadline.
+    unreadable_rerun_cycles: BTreeMap<String, u64>,
     updated: bool,
     pub(in crate::executor::automation::vcs) max_base_ci_cycles: u64,
     pub(in crate::executor::automation::vcs) waiting_for_base: Option<String>,
@@ -359,12 +363,40 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             &mut recovery.rerun_diagnostic,
         )
     };
-    match planned.unwrap_or_else(|error| {
-        super::rerun::CiRerunStep::Wait(format!("CI retry evidence is unavailable: {error}"))
-    }) {
+    let planned = planned.unwrap_or_else(|error| {
+        let reason = format!("CI retry evidence is unavailable: {error}");
+        // A provider throttle names when the same read may repeat; it is a
+        // paced hold, not a failed read.
+        if error
+            .private_vcs_failure()
+            .is_some_and(|failure| failure.read_throttle.is_some())
+        {
+            super::rerun::CiRerunStep::Wait(reason)
+        } else {
+            super::rerun::CiRerunStep::Unreadable(reason)
+        }
+    });
+    let mut unreadable_retry = None;
+    if let super::rerun::CiRerunStep::Unreadable(reason) = &planned {
+        let cycles = recovery
+            .unreadable_rerun_cycles
+            .entry(head.to_owned())
+            .or_default();
+        *cycles = cycles.saturating_add(1);
+        if *cycles >= recovery.max_base_ci_cycles {
+            unreadable_retry = Some((*cycles, reason.clone()));
+        }
+    } else {
+        recovery.unreadable_rerun_cycles.remove(head);
+    }
+    match planned {
         super::rerun::CiRerunStep::Wait(reason) => {
             return Ok(CheckRecoveryStep::WaitForBase(reason));
         }
+        super::rerun::CiRerunStep::Unreadable(reason) if unreadable_retry.is_none() => {
+            return Ok(CheckRecoveryStep::WaitForBase(reason));
+        }
+        super::rerun::CiRerunStep::Unreadable(_) => {}
         super::rerun::CiRerunStep::Acted(plan) => {
             recovery.rerun = true;
             recovery
@@ -389,6 +421,33 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         .unwrap_or(CheckFailureClass::Candidate);
     let classified = describe(class, &jobs);
     let evidence = |outcome: &str| format!("{reason}; {classified}; {outcome}");
+
+    // [ORB-21586] The unchanged-head retry stayed unreadable for the cycle
+    // limit. A same-check pass on the base already shows the failure is the
+    // candidate's own, so it goes to the repair path; any other class that
+    // needed the retry's evidence stops naming the read failure. A candidate
+    // or inherited failure keeps its own route below.
+    if let Some((cycles, read_failure)) = unreadable_retry {
+        let limit = recovery.max_base_ci_cycles;
+        match class {
+            CheckFailureClass::Flaky if context.automatic_repair_spent => {
+                return Ok(CheckRecoveryStep::Requeue(evidence(&format!(
+                    "a successful same-check run on the base shows the failure is the candidate's own, and the unchanged-head retry could not be read after {cycles} observation cycles (limit {limit}): {read_failure}; {REQUEUE_OUTCOME}"
+                ))));
+            }
+            CheckFailureClass::Flaky => {
+                return Ok(CheckRecoveryStep::Repair(evidence(&format!(
+                    "a successful same-check run on the base shows the failure is the candidate's own, and the unchanged-head retry could not be read after {cycles} observation cycles (limit {limit}): {read_failure}; the candidate is handed to one automatic repair"
+                ))));
+            }
+            CheckFailureClass::Candidate | CheckFailureClass::Inherited => {}
+            _ => {
+                return Ok(CheckRecoveryStep::Stop(evidence(&format!(
+                    "its CI retry evidence could not be read after {cycles} observation cycles (limit {limit}): {read_failure}; nothing is rerun, updated or repaired and the candidate stays in review"
+                ))));
+            }
+        }
+    }
 
     match class {
         CheckFailureClass::BaseSuspect => {

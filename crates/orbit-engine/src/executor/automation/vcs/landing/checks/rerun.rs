@@ -19,6 +19,10 @@ use std::{
 pub(in crate::executor::automation::vcs) enum CiRerunStep {
     NotEligible,
     Wait(String),
+    /// [ORB-21586] The retry's evidence could not be read or authenticated,
+    /// for this reason. Unlike [`CiRerunStep::Wait`], nothing is in flight:
+    /// the landing bounds how often it repeats before it escalates.
+    Unreadable(String),
     Acted(Box<CiRerunPlan>),
     /// The one rerun is already spent and the jobs are still cancelled or
     /// timed out. The reason names those jobs; no repair agent runs.
@@ -60,7 +64,9 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
         &mut diagnostic,
     );
     *observation = match &result {
-        Ok(CiRerunStep::Wait(reason)) => Some(diagnostic.with_reason(reason)),
+        Ok(CiRerunStep::Wait(reason) | CiRerunStep::Unreadable(reason)) => {
+            Some(diagnostic.with_reason(reason))
+        }
         Err(error) => Some(diagnostic.with_error(error)),
         _ => None,
     };
@@ -302,7 +308,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                     )?;
                 }
             }
-            return Ok(CiRerunStep::Wait(format!(
+            return Ok(CiRerunStep::Unreadable(format!(
                 "CI retry holds: the complete failed-job set was not authenticated ({error})"
             )));
         }
