@@ -457,6 +457,30 @@ runtime opens, so most upgrades need nothing. The bare command and `--dry-run`
 are the only way to *see* what is pending without applying it, which is what you
 want before upgrading a machine that matters.
 
+In version 0.43.0, layout version 8 stores script output files and parallel
+script-branch checkpoints as durable run artifacts. An older Orbit binary
+refuses a workspace after it has been upgraded to that layout. For a workspace
+used from multiple hosts, update every host that can open it before any host
+opens or migrates it to version 8; do this as one coordinated rollout and keep
+old clients stopped. See [Upgrading a workspace together](multi-host.md#upgrading-a-workspace-together)
+for the host-by-host order. On each host, `orbit --version` confirms the
+installed binary, while `orbit update --check` only reports available releases
+and does not verify layout compatibility. Use `orbit migrate` to inspect pending
+changes, then apply them with `orbit migrate --confirm` when needed. After the
+upgrade, use `orbit doctor` on each host and `orbit migrate` to confirm no
+migration remains pending.
+
+When Orbit reports that safe SQLite permission repair is unavailable, it
+refuses to change database permissions in place. Stop every process using that
+database first, including workers, MCP servers, timers, dashboards, and other
+Orbit commands. Locate the database and its existing `-wal` and `-shm` sidecars
+in the configured state root. While all users are stopped, restrict the main
+file and each existing sidecar to owner-only access: use `chmod 600` for
+writable state, or retain `chmod 400` for a read-only publication. Do not
+create sidecars that are absent. Check the actual files and their permissions,
+then restart Orbit and retry the command. Run `orbit doctor` and `orbit migrate`
+afterward to verify the state opens cleanly and no migration is pending.
+
 ## Audit events
 
 ```bash

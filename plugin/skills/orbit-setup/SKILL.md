@@ -51,10 +51,10 @@ shared workspace. Preserve the user's installation method and existing config.
 | Register Grok's MCP server, understand its shared Claude config and compatibility cases, or verify which source Grok loaded | [First run — Grok MCP registration](references/first-run.md#grok-mcp-registration) |
 | Set up a host-local application that acts on an operator's consent for exact workspace-bound tool calls, including credentials, callbacks, rotation and revocation | [Scoped application authority](references/applications.md) |
 | Manage a legacy external tool (`orbit tool add`, `list`, `show`, `run`, `enable`, `disable`, `remove`, `doctor`) | [Plugins — Managing legacy external tools](references/plugins.md#managing-legacy-external-tools) |
-| Owner/replica roles and multiple machines | [Multi-host](references/multi-host.md) |
+| Owner/replica roles, multiple machines, or coordinating a breaking workspace-layout upgrade across hosts | [Multi-host](references/multi-host.md#upgrading-a-workspace-together) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |
-| Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding | [Maintenance](references/maintenance.md#removing-or-re-targeting-a-workspace) |
+| Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding; inspect layout migrations or repair SQLite permissions offline | [Maintenance](references/maintenance.md#database-and-layout-upgrades) |
 | Inspect or compact admission receipt storage on an owner checkout | [Maintenance — Admission receipt storage](references/maintenance.md#admission-receipt-storage) |
 | Scheduler/service logs and host incidents | [Operational logs](references/operational-logs.md) |
 | Inspect one CLI audit event by ID | [Operational logs — Audit Event Log](references/operational-logs.md#audit-event-log) |
