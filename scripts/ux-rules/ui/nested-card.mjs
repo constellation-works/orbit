@@ -6,7 +6,8 @@
 // side border, radius, shadow or outline. A top or bottom hairline is a
 // section divider. Inset, separated or framed boxes still fail, including a
 // full-width box that is actually a card. A floated box is out of normal flow
-// and still fails, even when it is flush with the content box.
+// and still fails, even when it is flush with the content box. A float does
+// not apply to a flex or grid item, so there it stays in flow.
 import { measureInPage, verdict } from "../lib/ui-context.mjs";
 
 export const rule = {
@@ -34,6 +35,8 @@ export async function check(ctx) {
       if (!bordered(panel)) continue;
       const panelStyle = getComputedStyle(panel);
       const panelRect = panel.getBoundingClientRect();
+      // CSS ignores float on flex and grid items, yet the computed value stays.
+      const floatInert = ["flex", "inline-flex", "grid", "inline-grid"].includes(panelStyle.display);
       const contentLeft = panelRect.left + H.px(panelStyle.borderLeftWidth) + H.px(panelStyle.paddingLeft);
       const contentRight = panelRect.right - H.px(panelStyle.borderRightWidth) - H.px(panelStyle.paddingRight);
       for (const child of [...panel.children]) {
@@ -46,8 +49,10 @@ export async function check(ctx) {
         const outline = Boolean(style.outlineStyle) && style.outlineStyle !== "none";
         const framed = sideOn(style, "Left") || sideOn(style, "Right") || radius || shadow || outline;
         // A float keeps position: static but is out of normal flow, so it never
-        // counts as a band.
-        const flow = (style.position === "static" || style.position === "relative") && style.float === "none";
+        // counts as a band, unless the panel is a flex or grid container, where
+        // the float does not apply and the child stays in flow.
+        const floated = style.float !== "none" && !floatInert;
+        const flow = (style.position === "static" || style.position === "relative") && !floated;
         const flush = near(rect.left - contentLeft) && near(rect.right - contentRight);
         const stacked = margins.every((value) => near(value));
         result.push({

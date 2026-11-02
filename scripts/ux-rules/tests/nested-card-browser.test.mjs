@@ -40,6 +40,21 @@ const POSITIVE_MARKUP = `
   <div id="ux-floated" style="float:left;width:100%;height:30px;margin:0;background:#243044">Floated full-width band</div>
 </section>`;
 
+// A float does not apply to a flex or grid item, so a flush zero-margin filled
+// child there is still an in-flow band; flow-root and block floats are real.
+const FLOAT_MARKUP = ["flex", "grid", "flow-root", "block"]
+  .map(
+    (display) => `
+<section class="panel" id="ux-float-${display}" style="display:${display};width:360px;margin:16px;border:1px solid #2c333b;background:#121519">
+  <div id="ux-float-${display}-band" style="float:left;width:100%;height:30px;margin:0;background:#243044">Floated band</div>
+</section>`,
+  )
+  .join("")
+  .concat(`
+<section class="panel" id="ux-float-none" style="display:flow-root;width:360px;margin:16px;border:1px solid #2c333b;background:#121519">
+  <div id="ux-float-none-band" style="float:none;width:100%;height:30px;margin:0;background:#243044">Unfloated band</div>
+</section>`);
+
 function failuresOf(result) {
   return result.measurements.failures ?? [];
 }
@@ -86,8 +101,8 @@ test("panel bands are not nested cards and real cards still are", { timeout: 240
         });
         const host = document.createElement("div");
         host.innerHTML = markup;
-        panes[panes.length - 1].appendChild(host.firstElementChild);
-      }, POSITIVE_MARKUP);
+        while (host.firstElementChild) panes[panes.length - 1].appendChild(host.firstElementChild);
+      }, POSITIVE_MARKUP + FLOAT_MARKUP);
       const result = await check(ctx);
       const failed = new Set(selectorsOf(result));
       assert.equal(failed.has("#doctor-controls"), false, JSON.stringify([...failed]));
@@ -96,6 +111,13 @@ test("panel bands are not nested cards and real cards still are", { timeout: 240
       for (const selector of ["#ux-filled", "#ux-bordered", "#ux-fullwidth", "#ux-separated", "#ux-negative", "#ux-floated"]) {
         assert.equal(failed.has(selector), true, JSON.stringify([...failed]));
       }
+      for (const display of ["flex", "grid"]) {
+        assert.equal(failed.has(`#ux-float-${display}-band`), false, `${display}: ${JSON.stringify([...failed])}`);
+      }
+      for (const display of ["flow-root", "block"]) {
+        assert.equal(failed.has(`#ux-float-${display}-band`), true, `${display}: ${JSON.stringify([...failed])}`);
+      }
+      assert.equal(failed.has("#ux-float-none-band"), false, JSON.stringify([...failed]));
       const floated = failuresOf(result).find((item) => item.selector === "#ux-floated");
       assert.equal(floated.band, false);
       assert.equal(floated.filled, true);
