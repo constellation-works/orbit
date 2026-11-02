@@ -575,3 +575,15 @@ impl OrbitRuntime {
         ))
     }
 }
+
+impl OrbitRuntime {
+    /// Join the shadow precedent-decision consumer to host-only policy and the assistance ledger.
+    pub(crate) fn precedent_decision_service(
+        &self,
+    ) -> Result<crate::application::assistance::AssistanceService, OrbitError> {
+        Ok(host_assistance_service(
+            &self.global_root(),
+            orbit_store::compose::assistance_store_from_store(self.sqlite_store()?),
+        ))
+    }
+}

@@ -39,6 +39,10 @@ files under the global root; the generic ledger owns inference claims and
 accounting. Task content and terminal state fence admission and result reads,
 and no task lock spans adapter I/O. See the
 [task-quality contract](docs/design/decision-assistance/specs/task-quality.md).
+The precedent-decision consumer follows that shape for human decision requests.
+It is default-off and shadow-only, keeps the seal time in a private receipt
+under the global root, and does not project predictions onto decision show, the
+digest, the dashboard, or mail. It adds no crate edge.
 
 The store's run-resource minute history feeds profile-cache freshness with a
 probe over every sampled run: the newest `finished_at` and the count of finished

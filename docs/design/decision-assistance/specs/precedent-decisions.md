@@ -13,7 +13,7 @@ tags: [decision-assistance, human-decision-channel]
 
 # Proposal: precedent-answered human decisions
 
-Status: **design only; nothing implemented, configured or activated** ([ORB-21089]).
+Status: **shadow consumer implemented and default-off** (packet, enqueue on raise, hidden seal, join export). Self-answer, notification wait, and the statistical readout are not implemented ([ORB-21089]).
 The [scope](../1_scope.md) keeps the older consumers parked. This consumer is a
 separate evaluation candidate. Its labels are real, structured human answers to
 [human decision channel](../../human-decision-channel/2_design.md) requests, not
@@ -508,9 +508,9 @@ by this design.
    provider, the plugin-provider route and deterministic merge.
 4. **Packet-bound choice questions in the assistance service** ([ORB-21094]).
    Allowed values copied from a packet field, bound by the template digest.
-5. **Shadow consumer** ([ORB-21095]). Packet builder, enqueue on raise, sealed
-   predictions hidden from every surface, the join to human answers and the
-   readout export. Depends on 1, 3, 4.
+5. **Shadow consumer** ([ORB-21095]). Implemented, default-off: packet builder,
+   enqueue on raise, sealed predictions hidden from every surface, and the join
+   export. The statistical readout remains slice 6. Depends on 1, 3, 4.
 6. **Evaluator contract `decision-assistance-eval/4`** ([ORB-21096]).
    `recorded_human_decision` provenance, prospective windows, per-category
    targets, coverage, accuracy and calibration scoring.

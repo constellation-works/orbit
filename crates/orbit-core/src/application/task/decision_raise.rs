@@ -286,10 +286,14 @@ impl OrbitRuntime {
                 Ok(())
             },
         )?;
-        outcome.ok_or_else(|| {
+        let raised = outcome.ok_or_else(|| {
             OrbitError::Execution(format!(
                 "decision request on task {task_id} was not recorded"
             ))
-        })
+        })?;
+        if !raised.deduplicated && raised.request.state == DecisionRequestState::Open {
+            self.note_open_precedent_decision(&raised.request);
+        }
+        Ok(raised)
     }
 }

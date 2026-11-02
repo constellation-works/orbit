@@ -40,6 +40,7 @@ pub mod landing;
 pub(crate) mod managed_assets;
 pub(crate) mod mock_admission;
 pub mod plugin;
+pub mod precedent_decision;
 pub(crate) mod pull_drain;
 pub mod review;
 pub mod routines;

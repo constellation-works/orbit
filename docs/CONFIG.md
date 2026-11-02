@@ -248,6 +248,23 @@ the next call. There are at most 128 workspace entries and eight plugin tools
 per entry; duplicate workspaces or tool names are refused. See the
 [provider API and bounds](design/decision-assistance/specs/service.md#precedent-provider-application-boundary).
 
+### Precedent-decision shadow consumer
+
+`use_case = "precedent_decision"` is the shadow consumer for an open human
+decision. It stays off until a host policy sets `mode = "shadow"`. `off` and
+`advisory` enqueue nothing and do not consult precedent providers. Shadow
+builds one packet after a request is raised and still open, enqueues it, and
+seals the settled prediction in a private ledger. Dashboard, mail,
+`orbit decision show`, the digest, and advisory reads do not show that
+prediction.
+
+The grant's `evidence_fields` must include `option_ids` (the packet-bound
+choice). Also grant `request`, `task_context`, `precedents`, and `provenance`
+when that evidence should leave the host, and allow `evidence_ref_prefixes`
+`task:` and `decision:`. The contract digest is the granted question template
+`precedent-decision/1`, not a per-request expansion. Retrieval uses at most
+eight precedents. This mode does not wait before notifying the human.
+
 ## `[machine]` — who this machine is
 
 Global-only. `orbit init` writes the identity keys once.
