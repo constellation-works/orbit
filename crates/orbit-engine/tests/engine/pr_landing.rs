@@ -1411,6 +1411,54 @@ fn pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch(sandbox
         );
     }
 }
+fn pr_open_judges_a_stacked_repair_by_its_own_marker_not_its_fixes_quote(sandbox: &Path) {
+    const ORIGINAL: &str = "feat: original [ORB-21284]";
+    const REPAIR: &str = "fix: first repair [ORB-21300]";
+    let repair_message =
+        format!("{REPAIR}\n\nFixes: 5cac195ba9ab (\"{ORIGINAL}\")\nRegression-From: ORB-21284");
+    for (case, repair_landed) in [("repair unmerged", false), ("repair landed", true)] {
+        let mut fx = Fixture::new(sandbox);
+        fx.git(&["branch", "main", &fx.base_sha]);
+        fx.git(&["checkout", "main"]);
+        fx.write_repo("original.txt", "original\n");
+        fx.git(&["add", "original.txt"]);
+        fx.git(&["commit", "-m", ORIGINAL]);
+        if repair_landed {
+            // A squash merge: the repair's subject survives, its sha does not.
+            fx.write_repo("repair.txt", "repaired\n");
+            fx.git(&["add", "repair.txt"]);
+            fx.git(&["commit", "-m", REPAIR]);
+        }
+        fx.git(&["push", "origin", "main"]);
+        fx.git(&["checkout", BASE]);
+        fx.write_repo("payload.txt", "repaired\n");
+        fx.git(&["add", "payload.txt"]);
+        fx.git(&["commit", "-m", &repair_message]);
+        fx.git(&["push", "origin", BASE]);
+        fx.git(&["checkout", BRANCH]);
+        fx.rebase_candidate();
+        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+        let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
+        input["landing_branch"] = json!("main");
+        if repair_landed {
+            let error = action_err(&host, "pr_open", &input);
+            assert!(
+                error.to_string().contains("already landed"),
+                "{case}: {error}"
+            );
+            assert!(error.to_string().contains("[ORB-21300]"), "{case}: {error}");
+            assert!(
+                !error.to_string().contains("[ORB-21284]"),
+                "{case}: {error}"
+            );
+            assert!(fx.forge_calls().is_empty(), "{case}");
+        } else {
+            let opened = action_ok(&host, "pr_open", &input);
+            assert_eq!(opened["pr_created"], true, "{case}: {opened}");
+            assert_eq!(fx.forge_state("pr-base").as_deref(), Some(BASE), "{case}");
+        }
+    }
+}
 fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate(sandbox: &Path) {
     for case in ["unreviewed commit on the head", "rebased onto another base"] {
         let (fx, host) = fx_host(sandbox);
@@ -6594,7 +6642,7 @@ container_groups! {
 test_groups! {
     pr_body_and_promotion_contracts => [pr_promote_records_the_pull_request_page_with_its_number, pr_open_appends_the_review_fixes_section_to_the_published_body],
     metadata_lag_pins_and_repair => [previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins, previous_published_head_metadata_lag_after_in_run_conflict_repair],
-    pr_open_branch_identity => [pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip, pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch, pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate],
+    pr_open_branch_identity => [pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip, pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch, pr_open_judges_a_stacked_repair_by_its_own_marker_not_its_fixes_quote, pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate],
     pr_create_retry_contracts => [pr_open_permanent_create_failures_never_retry_or_look_up_again, pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr, pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase],
     pr_lookup_retry_contracts => [pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling, pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens],
     pr_number_and_push_transports => [pr_open_preserves_provider_number_representations, fixture_push_guard_checks_all_effective_push_urls, fixture_push_refuses_non_file_transports_without_network],
