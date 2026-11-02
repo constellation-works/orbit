@@ -164,7 +164,7 @@ Each applied change appends a `resident_authority_changed` event to the assignme
 
 ## MCP roles and authority
 
-The `resident` MCP role and the `resident` toolset decide which tools an MCP session lists and dispatches. They grant no authority. The toolset carries `orbit.resident.grant`, `orbit.resident.show`, `orbit.resident.list` and `orbit.resident.checkpoint`. See [MCP integration](../../how-to/mcp-integration/) for roles and toolsets.
+The `resident` MCP role and the `resident` toolset decide which tools an MCP session lists and dispatches. They grant no authority. The toolset carries `orbit.resident.grant`, `orbit.resident.show`, `orbit.resident.list`, `orbit.resident.checkpoint` and `orbit.resident.metrics`. See [MCP integration](../../how-to/mcp-integration/) for roles and toolsets.
 
 A widening applies directly only when the caller is the operator, and the caller's role does not decide that. An MCP session is never the operator for this purpose, even one that holds operator capability, so its widening becomes a request. Its `orchestrator` and `model` arguments record attribution on that request and never grant anything.
 
