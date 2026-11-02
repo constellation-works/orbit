@@ -299,3 +299,110 @@ fn an_explicit_pilot_during_an_approve_proposed_drain_calls_the_provider_once() 
     assert_eq!(report.approved, vec![task.id.clone()]);
     assert_eq!(report.approved_total, 1);
 }
+
+#[test]
+fn certified_explicit_assessment_with_done_foreign_prerequisite_is_reused() {
+    if !crate::dispatch_admission::isolated(
+        "drain_approval::explicit_pilot_reuse::certified_explicit_assessment_with_done_foreign_prerequisite_is_reused",
+    ) {
+        return;
+    }
+    let workspace = Workspace::new();
+    let done_foreign = workspace.foreign_task("done foreign prerequisite", TaskStatus::Done);
+    let unfinished_foreign =
+        workspace.foreign_task("unfinished foreign prerequisite", TaskStatus::Backlog);
+    // The foreign tasks are registered, not local to this workspace.
+    assert!(workspace.runtime.get_task(&done_foreign.id).is_err());
+    assert!(workspace.runtime.get_task(&unfinished_foreign.id).is_err());
+
+    let done_task = workspace.task(
+        "done foreign dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let unfinished_task = workspace.task(
+        "unfinished foreign dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let missing_task = workspace.task(
+        "missing foreign dependent",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    // No stored dependency edges: the prerequisites exist only in pilot prose.
+    for task in [&done_task, &unfinished_task, &missing_task] {
+        assert!(
+            workspace
+                .runtime
+                .get_task(&task.id)
+                .unwrap()
+                .dependencies()
+                .is_empty(),
+            "{}",
+            task.id
+        );
+    }
+
+    let drain = workspace.running(
+        "workspace_auto_pipeline",
+        json!({"approve_proposed": true, "for_seconds": 3600}),
+    );
+
+    // A certified explicit pilot for each task, naming its prerequisite in
+    // `blocked_by` without a stored edge.
+    for (task, prerequisite) in [
+        (&done_task, done_foreign.id.as_str()),
+        (&unfinished_task, unfinished_foreign.id.as_str()),
+        (&missing_task, "ORB-999999999"),
+    ] {
+        let explicit = workspace.running("task_pilot_pipeline", json!({"task_ids": [task.id]}));
+        workspace.set_trigger(&explicit, JobRunTrigger::cli());
+        let prepared = workspace.prepare_named(&explicit, std::slice::from_ref(&task.id));
+        assert_eq!(prepared["task_count"], 1, "{prepared}");
+        let mut assessed = assessment(task);
+        assessed["blocked_by"] = json!([format!("Wait for {prerequisite} to land")]);
+        let applied = workspace.apply_unpromoted_assessment(&explicit, &prepared, assessed);
+        assert_eq!(applied["status"], "succeeded", "{applied}");
+        assert_eq!(applied["applied_count"], 1, "{applied}");
+        workspace.finish(&explicit, JobRunState::Success);
+        assert_eq!(workspace.status(task), TaskStatus::Proposed);
+        assert_eq!(workspace.pilot_applications(task), 1);
+    }
+
+    // Recording through the public boundary names only the done task as
+    // awaiting reuse; the others stay held as warnings.
+    let recorded = workspace.record(&drain);
+    assert_eq!(
+        recorded["awaiting_reuse"],
+        json!([done_task.id]),
+        "{recorded}"
+    );
+
+    // Selection promotes the done task's certified assessment without a
+    // second pilot; missing and unfinished prerequisites still hold, with
+    // their findings shown (not an empty findings array).
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["reused"], json!([done_task.id]), "{selection}");
+    assert_eq!(workspace.status(&done_task), TaskStatus::Backlog);
+    assert!(held_reason(&selection, &done_task).is_none(), "{selection}");
+    for task in [&unfinished_task, &missing_task] {
+        assert_eq!(workspace.status(task), TaskStatus::Proposed);
+        assert_eq!(
+            held_reason(&selection, task),
+            Some("warnings"),
+            "{selection}"
+        );
+        let held = selection["held"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|held| held["task_id"] == task.id.as_str())
+            .unwrap();
+        assert_eq!(held["findings"].as_array().unwrap().len(), 1, "{held}");
+    }
+    assert_eq!(workspace.pilot_applications(&done_task), 1);
+}

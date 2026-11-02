@@ -739,11 +739,7 @@ fn promotable_reuse(
         &task.id,
         assessment,
         &dependencies,
-        &|id| {
-            runtime
-                .get_task(id)
-                .is_ok_and(|found| found.status == TaskStatus::Done)
-        },
+        &|id| runtime.warning_prerequisite_is_done(id),
     ) {
         Ok(findings) => findings,
         Err(error) => return Ok(malformed(&error.to_string())),
