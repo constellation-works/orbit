@@ -4,8 +4,11 @@
 // every other request to the disposable API backend. Paths in the dashboard
 // static namespace are never proxied. A proxied request stays on the
 // validated loopback upstream origin: a network-path or absolute-form
-// target is refused before any outbound dispatch. Readiness is refused when a
-// declared asset is missing or unreadable, or when OPTIONS probes do not
+// target is refused before any outbound dispatch. A downstream client that
+// closes, aborts or errors before its response finishes destroys the owned
+// upstream request and response, including when no response headers exist
+// yet, so a capped backend stream cannot outlive the client. Readiness is
+// refused when a declared asset is missing or unreadable, or when OPTIONS probes do not
 // establish that the backend has each /api path the checkout dashboard can request.
 // Template segments are filled from the checkout route table. Payload
 // schemas are not compared. Provenance records the
@@ -497,15 +500,50 @@ function proxy(req, res, upstream, target) {
     sendPlain(res, 400, 'request target is not confined to the fixture upstream');
     return;
   }
+  // The native log stream holds its permit until the upstream response is
+  // dropped. res 'close' is also how a finished response ends, so only an
+  // unfinished response abandons the upstream. That includes a client that
+  // leaves before headers: the request is already in flight and must be
+  // destroyed or the permit stays taken.
+  let upstreamResponse = null;
+  let released = false;
+  const releaseOwnedUpstream = () => {
+    if (released) return;
+    released = true;
+    const response = upstreamResponse;
+    upstreamResponse = null;
+    if (response) response.destroy();
+    request.destroy();
+  };
+  const onDownstreamClosed = () => {
+    if (res.writableFinished) return;
+    releaseOwnedUpstream();
+  };
+  res.on('close', onDownstreamClosed);
+  res.on('error', onDownstreamClosed);
+  req.on('error', onDownstreamClosed);
+  const forwardUpstreamError = (error) => {
+    if (released || res.destroyed || res.writableEnded) return;
+    if (!res.headersSent) sendPlain(res, 502, String(error));
+    else res.end();
+  };
   request.on('response', (response) => {
+    response.on('error', forwardUpstreamError);
+    // A response that arrives after the client has already gone must still
+    // be destroyed. releaseOwnedUpstream no-ops once released, so this
+    // path cannot rely on it to drop a response it has not seen yet.
+    if (released || res.destroyed || res.writableEnded || res.closed) {
+      response.destroy();
+      request.destroy();
+      return;
+    }
+    upstreamResponse = response;
     res.writeHead(response.statusCode || 502, response.headers);
     response.pipe(res);
   });
-  request.on('error', (error) => {
-    if (!res.headersSent) sendPlain(res, 502, String(error));
-    else res.end();
-  });
+  request.on('error', forwardUpstreamError);
   req.pipe(request);
+  if (req.destroyed || res.destroyed || res.closed) onDownstreamClosed();
 }
 
 function backendIdentity(argv0) {

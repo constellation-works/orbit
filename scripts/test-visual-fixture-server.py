@@ -20,6 +20,13 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts/visual-fixture-server.sh"
 SEED = ROOT / "crates/orbit-web/visual/fixtures/busy-workspace.json"
 SCRATCH = ROOT / ".orbit/tmp"
+LOG_STREAM_PATH = "/api/log/stream"
+# Shipped native gate. One more established stream is refused; sequential
+# disconnects past this count must still be admitted. The permit drops on the
+# stream's next idle poll, at most one second after the upstream is destroyed.
+NATIVE_LOG_STREAM_CAP = 8
+PERMIT_RELEASE_DEADLINE_S = 3
+SEQUENTIAL_LOG_STREAMS = NATIVE_LOG_STREAM_CAP + 3
 
 
 class VisualFixtureServerTest(unittest.TestCase):
@@ -397,6 +404,46 @@ class VisualFixtureServerTest(unittest.TestCase):
             finally:
                 self._stop(server)
 
+    def test_log_stream_disconnect_releases_upstream_permit(self):
+        # The front used to leave the upstream /api/log/stream open after the
+        # downstream client closed, including before response headers. The
+        # native gate allows eight streams; the ninth then stayed 503. This
+        # runs the shipped front against the real isolated backend.
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        orbit = shutil.which("orbit")
+        self.assertIsNotNone(orbit, "orbit on PATH is the isolated native backend")
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            env = {**os.environ, "ORBIT_SCRATCH_DIR": tmp, "ORBIT_VISUAL_ORBIT": orbit}
+            env.pop("STALE_RECORD", None)
+            env.pop("STALE_MODE", None)
+            server, output, diagnostics = self._start(SCRIPT, ["busy-workspace"], ROOT, env)
+            holders = []
+            front_url = None
+            backend_url = None
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:", output, diagnostics)
+                protocol = self._protocol(output)
+                front_url = protocol["ORBIT_VISUAL_URL"]
+                backend_url = self._backend_url(tmp)
+                self.assertNotEqual(front_url, backend_url)
+                provenance = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                self.assertNotEqual(provenance["backend"]["version"], "stub-backend 0", provenance["backend"])
+                self.assertNotIn("stale-server", provenance["backend"].get("resolved_path") or "")
+                for url in (backend_url, front_url):
+                    status, _, body = self._fetch(url, "/healthz")
+                    self.assertEqual(status, 200, (url, body[:200]))
+                self._exercise_log_stream_lifecycle(backend_url, holders)
+                self._exercise_log_stream_lifecycle(front_url, holders)
+                status, _, body = self._fetch(front_url, "/healthz")
+                self.assertEqual(status, 200, body[:200])
+            finally:
+                for sock in holders:
+                    self._close_socket(sock)
+                holders.clear()
+                self._stop(server)
+            self._assert_port_closed(front_url)
+            self._assert_port_closed(backend_url)
+
     def _mini_checkout(self, repo, asset_case="present"):
         script_dir = repo / "scripts"
         helper_dir = repo / "crates/orbit-web/src/tests"
@@ -646,6 +693,152 @@ class VisualFixtureServerTest(unittest.TestCase):
         for name in ("dark-1440.jpg", "dark-375.jpg"):
             target = evidence / f"{stem}-{name}"
             shutil.copy(shot_dir / name, target)
+
+    def _exercise_log_stream_lifecycle(self, url, holders):
+        held = self._established_log_streams(url, NATIVE_LOG_STREAM_CAP)
+        holders.extend(held)
+        refused_status, refused = self._one_log_stream(url)
+        self.assertEqual(refused_status, 503, (url, refused[:400]))
+        self.assertIn(b"log stream concurrency limit reached", refused)
+        for sock in held:
+            self._close_socket(sock)
+            holders.remove(sock)
+        self._abandon_log_stream_before_headers(url)
+        for index in range(1, SEQUENTIAL_LOG_STREAMS):
+            status, detail = self._admit_log_stream(url)
+            self.assertEqual(status, 200, (url, index, status, detail[:400]))
+            self.assertIn(b"text/event-stream", detail.lower())
+
+    def _established_log_streams(self, url, count):
+        deadline = time.monotonic() + PERMIT_RELEASE_DEADLINE_S
+        while True:
+            holders = []
+            refusal = None
+            for _ in range(count):
+                status, detail, sock = self._take_log_stream(url)
+                if status != 200:
+                    refusal = (status, detail[:400])
+                    break
+                holders.append(sock)
+            if refusal is None:
+                return holders
+            for sock in holders:
+                self._close_socket(sock)
+            if time.monotonic() >= deadline:
+                self.fail(f"{url} admitted fewer than {count} log streams: {refusal!r}")
+            time.sleep(0.05)
+
+    def _admit_log_stream(self, url):
+        deadline = time.monotonic() + PERMIT_RELEASE_DEADLINE_S
+        status, detail = 0, b""
+        while True:
+            status, detail, sock = self._take_log_stream(url)
+            self._close_socket(sock)
+            if status == 200 or status != 503 or time.monotonic() >= deadline:
+                return status, detail
+            time.sleep(0.05)
+
+    def _one_log_stream(self, url):
+        status, detail, sock = self._take_log_stream(url)
+        self._close_socket(sock)
+        return status, detail
+
+    def _abandon_log_stream_before_headers(self, url):
+        parsed = urllib.parse.urlsplit(url)
+        sock = socket.create_connection((parsed.hostname, parsed.port), timeout=5)
+        try:
+            sock.settimeout(5)
+            host = f"{parsed.hostname}:{parsed.port}"
+            sock.sendall(
+                f"GET {LOG_STREAM_PATH} HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "Accept: text/event-stream\r\n"
+                "\r\n".encode("ascii")
+            )
+        finally:
+            # Close without reading so the response may not have been written
+            # yet. FIN follows the request bytes; a reset would drop them.
+            self._close_socket(sock)
+
+    def _take_log_stream(self, url):
+        parsed = urllib.parse.urlsplit(url)
+        sock = socket.create_connection((parsed.hostname, parsed.port), timeout=5)
+        sock.settimeout(5)
+        host = f"{parsed.hostname}:{parsed.port}"
+        try:
+            sock.sendall(
+                f"GET {LOG_STREAM_PATH} HTTP/1.1\r\n"
+                f"Host: {host}\r\n"
+                "Accept: text/event-stream\r\n"
+                "\r\n".encode("ascii")
+            )
+            data = self._recv_until(sock, b"\r\n\r\n")
+            status = self._http_status(data)
+            if status != 200:
+                data = self._read_remaining_body(sock, data)
+                self._close_socket(sock)
+                return status, data, None
+            return status, data, sock
+        except Exception:
+            self._close_socket(sock)
+            raise
+
+    def _recv_until(self, sock, marker):
+        data = b""
+        while marker not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+            if len(data) > 65536:
+                break
+        return data
+
+    def _http_status(self, data):
+        line = data.split(b"\r\n", 1)[0]
+        parts = line.split()
+        self.assertGreaterEqual(len(parts), 2, data[:300])
+        self.assertTrue(parts[0].startswith(b"HTTP/1."), data[:300])
+        return int(parts[1])
+
+    def _read_remaining_body(self, sock, data):
+        head, sep, body = data.partition(b"\r\n\r\n")
+        if not sep:
+            return data
+        length = None
+        for line in head.split(b"\r\n")[1:]:
+            if line.lower().startswith(b"content-length:"):
+                length = int(line.split(b":", 1)[1].strip())
+                break
+        if length is None:
+            return data
+        while len(body) < length:
+            chunk = sock.recv(length - len(body))
+            if not chunk:
+                break
+            body += chunk
+        return head + sep + body
+
+    def _close_socket(self, sock):
+        if sock is None:
+            return
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+    def _backend_url(self, scratch):
+        logs = sorted(Path(scratch).glob("visual-fixture-*/server.log"))
+        self.assertEqual(len(logs), 1, [str(path) for path in logs])
+        text = logs[0].read_text(errors="replace")
+        marker = "http://127.0.0.1:"
+        start = text.find(marker)
+        self.assertNotEqual(start, -1, text[-800:])
+        end = start + len(marker)
+        while end < len(text) and text[end].isdigit():
+            end += 1
+        self.assertGreater(end, start + len(marker), text[start:start + 80])
+        return text[start:end]
 
     def _assert_port_closed(self, url):
         deadline = time.monotonic() + 5
