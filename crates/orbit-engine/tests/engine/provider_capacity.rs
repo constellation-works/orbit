@@ -135,6 +135,7 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
         explore_instruction: None,
         explore_brief_instruction: None,
         notice_instruction: None,
+        notice_posting_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,

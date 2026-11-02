@@ -64,6 +64,7 @@ pub(super) fn dispatch_prepared_provider(
         regression_risk_instruction,
         explore_brief_instruction,
         notice_instruction,
+        notice_posting_instruction,
         tool_ctx,
         declared_worktree_pair,
         source_checkout,
@@ -144,6 +145,10 @@ pub(super) fn dispatch_prepared_provider(
         envelope_spec.instruction.push_str(instruction);
     }
     if let Some(instruction) = notice_instruction {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(instruction);
+    }
+    if let Some(instruction) = notice_posting_instruction {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
     }

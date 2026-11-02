@@ -46,6 +46,7 @@ pub(super) struct PreparedCliDispatch<'a> {
     pub(super) regression_risk_instruction: Option<&'a str>,
     pub(super) explore_brief_instruction: Option<&'a str>,
     pub(super) notice_instruction: Option<&'a str>,
+    pub(super) notice_posting_instruction: Option<&'a str>,
     pub(super) tool_ctx: ToolContext,
     pub(super) declared_worktree_pair: Option<DeclaredWorktreePair>,
     pub(super) source_checkout: SourceCheckout,
@@ -117,11 +118,24 @@ fn attach_explore_brief<'a>(
     delivered.then_some(instruction)
 }
 
+/// The notice instructions one dispatch carries: the untrusted-data
+/// handling, only when a brief rides in the prompt, and the posting
+/// guidance, only when this dispatch may call `orbit.notice.post`.
+pub(super) struct FleetNoticeInstructions<'a> {
+    pub(super) notice_instruction: Option<&'a str>,
+    pub(super) notice_posting_instruction: Option<&'a str>,
+}
+
 /// Ask the host for the workspace's open fleet notices when `spec` declares
 /// a `notice_instruction`, put the brief into the task context and record
 /// what was delivered. Notices are workspace-scoped, so a prompt with no
 /// task snapshot (a multi-task pilot) gains a task object holding only the
-/// block. Returns the instruction only when the prompt carries the block.
+/// block. The untrusted-data instruction rides only when the prompt
+/// carries the block; the posting instruction is independent of the brief
+/// and rides whenever the resolved callable set carries
+/// `orbit.notice.post` — the set the host already stripped when
+/// `notice.agent_posting` is off — so an empty board or disabled brief
+/// delivery never suppresses it.
 #[allow(
     clippy::too_many_arguments,
     reason = "notice delivery needs the step identity, the mutable task context and the audit writer together"
@@ -134,17 +148,43 @@ fn attach_fleet_notices<'a>(
     activity_name: &str,
     input: &Value,
     task_ctx: &mut Option<Value>,
+    effective_tools: &[String],
     audit: &V2AuditWriter,
-) -> Option<&'a str> {
-    let instruction = spec
+) -> FleetNoticeInstructions<'a> {
+    let notice_posting_instruction = spec
+        .notice_posting_instruction
+        .as_deref()
+        .filter(|instruction| !instruction.trim().is_empty())
+        .filter(|_| {
+            effective_tools
+                .iter()
+                .any(|tool| tool == "orbit.notice.post")
+        });
+    let Some(instruction) = spec
         .notice_instruction
         .as_deref()
-        .filter(|instruction| !instruction.trim().is_empty())?;
-    let brief = host.notices_for_agent_input(run_id, activity_name, input)?;
+        .filter(|instruction| !instruction.trim().is_empty())
+    else {
+        return FleetNoticeInstructions {
+            notice_instruction: None,
+            notice_posting_instruction,
+        };
+    };
+    let Some(brief) = host.notices_for_agent_input(run_id, activity_name, input) else {
+        return FleetNoticeInstructions {
+            notice_instruction: None,
+            notice_posting_instruction,
+        };
+    };
     if task_ctx.is_none() {
         *task_ctx = Some(Value::Object(serde_json::Map::new()));
     }
-    let context = task_ctx.as_mut()?.as_object_mut()?;
+    let Some(context) = task_ctx.as_mut().and_then(Value::as_object_mut) else {
+        return FleetNoticeInstructions {
+            notice_instruction: None,
+            notice_posting_instruction,
+        };
+    };
     context.insert("fleet_notices".to_string(), brief.block);
     audit.emit_lossy(V2AuditEventKind::NoticesDelivered {
         step_id: step_id.to_string(),
@@ -153,7 +193,10 @@ fn attach_fleet_notices<'a>(
         notices: brief.notices,
         omitted: brief.omitted,
     });
-    Some(instruction)
+    FleetNoticeInstructions {
+        notice_instruction: Some(instruction),
+        notice_posting_instruction,
+    }
 }
 
 /// Run a catalog activity on behalf of a pipeline step whose id differs from
@@ -247,7 +290,10 @@ pub(crate) fn run_cli_backend_for_step(
         task_ctx.as_mut(),
         &audit,
     );
-    let notice_instruction = attach_fleet_notices(
+    let FleetNoticeInstructions {
+        notice_instruction,
+        notice_posting_instruction,
+    } = attach_fleet_notices(
         host,
         spec,
         run_id,
@@ -255,6 +301,7 @@ pub(crate) fn run_cli_backend_for_step(
         activity_name,
         input,
         &mut task_ctx,
+        &activity_tools.effective_tools,
         &audit,
     );
     let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
@@ -302,6 +349,7 @@ pub(crate) fn run_cli_backend_for_step(
             regression_risk_instruction,
             explore_brief_instruction,
             notice_instruction,
+            notice_posting_instruction,
             tool_ctx,
             declared_worktree_pair,
             source_checkout,

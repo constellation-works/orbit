@@ -181,6 +181,7 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
         explore_instruction: None,
         explore_brief_instruction: None,
         notice_instruction: None,
+        notice_posting_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

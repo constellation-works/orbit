@@ -84,6 +84,14 @@ pub struct AgentLoopSpec {
     /// the prompt carries no block and no notice read happens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice_instruction: Option<String>,
+    /// How the agent posts a fleet notice, appended to the instruction only
+    /// when this dispatch may call `orbit.notice.post`. Unlike
+    /// [`Self::notice_instruction`], it does not depend on a delivered
+    /// `fleet_notices` brief: an empty board or disabled brief delivery
+    /// still leaves a posting agent with its guidance, while the
+    /// untrusted-data handling above stays conditional on a brief.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_posting_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the
