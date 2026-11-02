@@ -85,7 +85,7 @@ Because tools/list is answered per session, the injected selector documents the 
 
 For a plugin tool that does not declare `workspace` in its input schema, the MCP adapter moves that argument into the per-call routing context before dispatch. The plugin receives only its declared input. If the plugin itself declares `workspace`, the adapter preserves it in the plugin input.
 
-The host selects toolsets at startup with `--toolset` or `machine.mcp.toolsets`; the default exposes tasks, workflows, runs, automation and decision tools, while optional sets include leases, experiments, analytics, decision-channel and agent-invoke. A call outside the selected set is refused as disabled. The default omits `agent-invoke`; managed explorer runs can opt in when configured [ORB-20234] [ORB-20382] [ORB-20414].
+The host selects toolsets at startup with `--toolset` or `machine.mcp.toolsets`; the default exposes tasks, workflows, runs, automation and decision tools, while optional sets include leases, experiments, analytics, decision-channel, agent-invoke and notice. A call outside the selected set is refused as disabled. The default omits `agent-invoke`; managed explorer runs can opt in when configured [ORB-20234] [ORB-20382] [ORB-20414].
 
 ## 5. Core dispatch and audit
 

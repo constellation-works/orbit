@@ -537,6 +537,10 @@ impl Commands {
                 CommandOperation::new(RuntimeNeed::Required, None, None, runtime_dispatch!(Audit))
                     .governed_when(prunes, "audit", "prune")
             }
+            // Fleet notices are registry-driven like friction.
+            Commands::Notice(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Notice))
+            }
             // Experiments are registry-driven like friction.
             Commands::Experiment(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Experiment))

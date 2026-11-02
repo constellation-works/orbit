@@ -11,6 +11,7 @@ pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
 pub(crate) mod landed_diff_store;
 pub mod migration;
+pub(crate) mod notice_store;
 pub(crate) mod plugin_store;
 pub(crate) mod provider_limit_store;
 pub(crate) mod read_pool;

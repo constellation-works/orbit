@@ -312,6 +312,12 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
         },
+        // A notice's title, body and close reason are free text quoted into
+        // other agents' prompts; each parameter redacts per its declared class.
+        OrbitBuiltinAction::Notice(verb) => ActionPolicy {
+            declared: verb.spec().params,
+            ..NO_REDACTION
+        },
         OrbitBuiltinAction::Task(verb) => match verb {
             // Artifact bytes are stored as given; the store screens their path.
             TaskVerb::ArtifactPut => NO_REDACTION,

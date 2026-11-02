@@ -120,6 +120,10 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
         "orbit.workflow.run.resume",
         "a run id is host-local: a run executes where it was admitted",
     ),
+    (
+        "orbit.notice.show",
+        "a notice id is workspace-local and carries no host prefix",
+    ),
 ];
 
 /// Rules for a registered tool. Plugins keep the default transport contract.

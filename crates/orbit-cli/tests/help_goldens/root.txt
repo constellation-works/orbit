@@ -25,6 +25,7 @@ Operate:
   script       Grant and inspect workspace scripts a job step may run
   experiment   Define, run and conclude experiments over agent treatments
   lease        Coordinate path leases with the workspace owner
+  notice       Post, close and list fleet notices other agents and operators see
   tool         Manage and run Orbit tools, including external MCP plugins
   gc           Inspect and explicitly reap Orbit-managed garbage
 

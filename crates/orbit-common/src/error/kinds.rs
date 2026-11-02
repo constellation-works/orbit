@@ -543,6 +543,60 @@ impl std::fmt::Display for DecisionRefusalCode {
     }
 }
 
+/// Stable fleet-notice refusal codes shared by every transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeRefusalCode {
+    PosterUnidentified,
+    ScopeRefused,
+    KindRefused,
+    EvidenceRequired,
+    ExpiryExceedsCap,
+    ExpiryInvalid,
+    LimitExceeded,
+    CloseRefused,
+    NotFound,
+    InvalidField,
+}
+
+impl NoticeRefusalCode {
+    /// The protocol name exposed as the CLI and MCP structured error code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PosterUnidentified => "notice_poster_unidentified",
+            Self::ScopeRefused => "notice_scope_refused",
+            Self::KindRefused => "notice_kind_refused",
+            Self::EvidenceRequired => "notice_evidence_required",
+            Self::ExpiryExceedsCap => "notice_expiry_exceeds_cap",
+            Self::ExpiryInvalid => "notice_expiry_invalid",
+            Self::LimitExceeded => "notice_limit_exceeded",
+            Self::CloseRefused => "notice_close_refused",
+            Self::NotFound => "notice_not_found",
+            Self::InvalidField => "notice_invalid_field",
+        }
+    }
+
+    /// Whether the refusal is an authority decision rather than bad input.
+    pub fn is_policy_denial(self) -> bool {
+        matches!(
+            self,
+            Self::PosterUnidentified
+                | Self::ScopeRefused
+                | Self::KindRefused
+                | Self::EvidenceRequired
+                | Self::ExpiryExceedsCap
+                | Self::LimitExceeded
+                | Self::CloseRefused
+        )
+    }
+}
+
+impl std::fmt::Display for NoticeRefusalCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A named source-repair authority refusal, carried by
 /// [`crate::OrbitError::SourceRepairAuthorityRefused`].
 ///

@@ -724,6 +724,28 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         ],
         rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
     },
+    // Fleet notices: an identification floor like leases. Poster class,
+    // rights and limits are decided in core from the caller's session.
+    GovernedOperation {
+        id: "orbit.notice.post",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "posting a fleet notice writes into other agents' briefs, so the caller must be identified; core derives the poster class and its rights",
+    },
+    GovernedOperation {
+        id: "orbit.notice.close",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "closing a fleet notice changes what the fleet sees, so the caller must be identified; core decides which notices the poster class may close",
+    },
     GovernedOperation {
         id: "orbit.task.retry_handoff",
         surface: OperationSurface::Tool,

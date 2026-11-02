@@ -4,16 +4,16 @@ owner: claude
 last_updated: 2026-11-02
 last_validated: 2026-11-02
 status: Draft
-stage: designing
-next: "Approve and build slice 1, ORB-21211 (notice store, tools, CLI and the notice toolset)"
+stage: building
+next: "Slice 2, ORB-21212: brief delivery of open notices as untrusted data"
 feature: fleet-notices
 doc_role: overview
 type: design
 summary: "Fleet notices: short-lived, scoped, authored coordination notes (incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data"
 tags: [fleet-notices, federated-mcp, operator-attention]
-paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/notice/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs"]
+paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/driver/sqlite/notice_store.rs", "crates/orbit-core/src/adapter/tool_host/notice_tools.rs", "crates/orbit-cli/src/command/notice.rs", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs"]
 related_features: [operator-attention, federated-mcp, mid-run-steering, distributed-drain, path-leases, human-decision-channel]
-related_artifacts: [ORB-21207, ORB-21208, ORB-21164]
+related_artifacts: [ORB-21207, ORB-21208, ORB-21164, ORB-21211]
 ---
 
 # Fleet Notices — Overview
@@ -70,8 +70,9 @@ Terms are defined in [references/glossary.md](./references/glossary.md).
 
 ## 3. At a Glance
 
-Nothing is built yet. Locations below are placement proposals that the slices confirm
-([2_design.md §2](./2_design.md#2-placement-in-the-code)).
+Slice 1 ([ORB-21211]) is built: the notice store, the `orbit.notice.*` tools, `orbit notice` and the
+opt-in `notice` toolset. Brief delivery, managed-agent posting, federation and the dashboard are
+later slices ([2_design.md §8](./2_design.md#8-slices)); their locations are placement proposals.
 
 | Concern | File | Task |
 |---------|------|------|
@@ -82,6 +83,12 @@ Nothing is built yet. Locations below are placement proposals that the slices co
 | Owner holds, followers read, global aggregation | [specs/notice-federation.md](./specs/notice-federation.md) | [ORB-21207] |
 | Toolset enum the `notice` toolset joins | [mcp_toolset.rs](../../../crates/orbit-types/src/tool/mcp_toolset.rs) | [ORB-21207] |
 | Prompt task context the brief block joins | [task_context.rs](../../../crates/orbit-core/src/adapter/engine_host/actions/task_context.rs) | [ORB-21207] |
+| Notice record type | [record/notice.rs](../../../crates/orbit-types/src/record/notice.rs) | [ORB-21211] |
+| Store migration and SQLite queries | [notice_store.rs](../../../crates/orbit-store/src/driver/sqlite/notice_store.rs) | [ORB-21211] |
+| Operation noun and tool specs | [governance/notice.rs](../../../crates/orbit-common/src/governance/notice.rs) | [ORB-21211] |
+| Post, close, list, show and poster authority | [application/notice/](../../../crates/orbit-core/src/application/notice/mod.rs) | [ORB-21211] |
+| Tool adapter | [notice_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/notice_tools.rs) | [ORB-21211] |
+| `orbit notice` CLI | [notice.rs](../../../crates/orbit-cli/src/command/notice.rs) | [ORB-21211] |
 | Slices and dependencies | [2_design.md §8](./2_design.md#8-slices) | [ORB-21207] |
 | First client: orbit-office scribe `#board` routing | — (separate repository) | [ORB-21208] |
 
@@ -90,5 +97,6 @@ Nothing is built yet. Locations below are placement proposals that the slices co
 - [ORB-21207] — designed fleet notices and filed the implementation slices
 - [ORB-21208] — orbit-office scribe routes `#board` markers to the notice tools (client of the API)
 - [ORB-21164] — designed `orbit attention`, which lists open notices as a kind
+- [ORB-21211] — slice 1: notice store, tools, CLI and the `notice` toolset
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

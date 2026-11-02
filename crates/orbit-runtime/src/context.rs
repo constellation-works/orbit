@@ -501,6 +501,8 @@ pub struct OrbitRuntimeSettings {
     lease_policy: crate::task::locks::LeasePolicy,
     /// `experiments.*`: the workspace's experiment policy.
     experiments: orbit_config::ExperimentSettings,
+    /// `notice.*`: fleet notice expiry, limits and brief delivery.
+    notice: orbit_config::NoticeSettings,
     /// `workflow.crew_ladder.*`: the ordered crew ladder and its trials.
     crew_ladder: orbit_config::CrewLadderSettings,
     /// Admitted `machine.labels`: the capability labels this host carries,
@@ -568,6 +570,7 @@ impl OrbitRuntimeSettings {
         decision_channel_enabled: bool,
         lease_policy: crate::task::locks::LeasePolicy,
         experiments: orbit_config::ExperimentSettings,
+        notice: orbit_config::NoticeSettings,
         crew_ladder: orbit_config::CrewLadderSettings,
         machine_labels: Vec<String>,
         application_consent_max_days: u32,
@@ -625,6 +628,7 @@ impl OrbitRuntimeSettings {
             decision_channel_enabled,
             lease_policy,
             experiments,
+            notice,
             crew_ladder,
             machine_labels,
             application_consent_max_days,
@@ -653,6 +657,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn experiments(&self) -> &orbit_config::ExperimentSettings {
         &self.experiments
+    }
+
+    pub(crate) fn notice(&self) -> &orbit_config::NoticeSettings {
+        &self.notice
     }
 
     pub(crate) fn crew_ladder(&self) -> &orbit_config::CrewLadderSettings {

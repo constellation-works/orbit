@@ -3,9 +3,9 @@ use thiserror::Error;
 
 use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
-    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, PrivateVcsFailure,
-    RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal, SqliteContention,
-    StorageLayer, WorkspaceClaimHeld,
+    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, NoticeRefusalCode,
+    PrivateVcsFailure, RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
+    SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -58,6 +58,13 @@ pub enum OrbitError {
     #[error("{code}: {message}")]
     DecisionRefused {
         code: DecisionRefusalCode,
+        message: String,
+    },
+    /// A fleet-notice refusal with a stable code. Nothing was written; the
+    /// refusal itself is audited by the notice service.
+    #[error("{code}: {message}")]
+    NoticeRefused {
+        code: NoticeRefusalCode,
         message: String,
     },
     /// The owner's pull request contract differs from this executor's build.

@@ -575,6 +575,16 @@ run orbit.agent.invoke`, `orbit run agent`, or `--toolset agent-invoke`.
   explore-first experiment's verdict (due around 2026-11-18). Until then the
   tool stays registered for MCP.
 
+**Fleet notices ([ORB-21211]).** `orbit.notice.post` and `orbit.notice.close`
+are governed for the `agent`, `operator` and `runner` capabilities and
+`Advertised` in `GOVERNED_TOOL_PLACEMENT`, but registered in the opt-in
+`notice` toolset, so a default `orbit mcp serve` never lists them. The catalog
+row only requires an identified caller: core derives the poster class
+(operator, orchestrator or managed agent) from the session and enforces that
+class's rights and limits itself. The reads, `orbit.notice.list` and
+`orbit.notice.show`, are ungoverned like the other reads, because every caller
+that can reach the workspace may read notices.
+
 **Field-level rows ([ORB-18545]).** A governed `Tool` row may name an input
 rather than a tool: `orbit.task.grant_tools` is checked at the chokepoint, in
 `authorize_registered_tool`, beside `orbit.task.add`'s or `orbit.task.update`'s
@@ -1011,5 +1021,7 @@ different contracts; a future equivalent surface can use this shape.
 - [ORB-20383] — removes the operator path and decides the explorer route.
 - [ORB-20414] — moved `orbit.agent.invoke` into the opt-in `agent-invoke` MCP
   toolset, which managed runs offered explorer delegation enable.
+- [ORB-21211] — added the governed fleet notice writes in the opt-in `notice`
+  toolset.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

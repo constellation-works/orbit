@@ -135,7 +135,7 @@ always advertised. `leases` adds the lease tools; `experiments` the experiment t
 `analytics` the agent and orchestrator scorecards and the crew ladder; `decision-channel` a \
 decision channel's submit and digest, which only the bound channel plugin or the operator may \
 call; `agent-invoke` agent invocation, which a managed run offered explorer delegation enables \
-on its own server.\n\n\
+on its own server; `notice` the fleet notice tools (post, close, list and show).\n\n\
 `--toolset` replaces the `machine.mcp.toolsets` host config for this server. A toolset changes \
 only what this server lists and dispatches: a call to a tool outside it is refused with the \
 toolset to enable, and `orbit tool run`, activities and plugin callbacks reach every tool \
@@ -185,7 +185,7 @@ pub struct ServeArgs {
     /// Attribute tasks this session creates to a named orchestrator crew, unless the call names one itself.
     #[arg(long, value_name = "CREW")]
     pub orchestrator: Option<String>,
-    /// Advertise these opt-in toolsets beside the default one, as a comma-separated list: `leases`, `experiments`, `analytics`, `decision-channel`, `agent-invoke`, or `all`.
+    /// Advertise these opt-in toolsets beside the default one, as a comma-separated list: `leases`, `experiments`, `analytics`, `decision-channel`, `agent-invoke`, `notice`, or `all`.
     #[arg(long, value_name = "TOOLSETS")]
     pub toolset: Option<String>,
 }

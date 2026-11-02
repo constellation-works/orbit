@@ -34,7 +34,7 @@ fn submission_trigger(session_context: &ToolSessionContext) -> JobRunTrigger {
 
 pub(super) fn execute(
     runtime: &OrbitRuntime,
-    _task_scope: &OrbitTaskScope,
+    task_scope: &OrbitTaskScope,
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
@@ -162,6 +162,14 @@ pub(super) fn execute(
             agent,
             model,
             submission_trigger(session_context),
+        ),
+        OrbitBuiltinAction::Notice(verb) => super::notice_tools::dispatch(
+            runtime,
+            task_scope,
+            session_context,
+            verb,
+            input,
+            model.as_deref(),
         ),
         OrbitBuiltinAction::Lease(verb) => {
             super::lease_tools::dispatch(runtime, verb, input, agent, model)

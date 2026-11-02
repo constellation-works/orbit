@@ -117,6 +117,7 @@ Every tool schema a server lists costs context in each agent session, so
 | `analytics` | `orbit.agents.*`, `orbit.orchestrator.show`, `orbit.orchestrator.scorecard` and `orbit.crew.ladder` |
 | `decision-channel` | `orbit.decision.submit` and `orbit.decision.digest`, which only the bound channel plugin or the operator may call |
 | `agent-invoke` | `orbit.agent.invoke`. A managed implement or review-repair run that is offered explorer delegation enables it on its own server; the operator invocation is deprecated. |
+| `notice` | `orbit.notice.post`, `orbit.notice.close`, `orbit.notice.list` and `orbit.notice.show`: fleet notices, short expiring announcements every agent and operator in their scope should see |
 
 Enable groups per server with `--toolset`, or for every server on the host
 with the global `machine.mcp.toolsets` config key; the flag replaces the

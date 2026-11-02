@@ -138,6 +138,7 @@ migration are in [remote-access.md](../../orbit-setup/references/remote-access.m
 | Crew ladder | `orbit.crew.ladder` (read only) | `orbit crew ladder [--json]`: per complexity tier, the pool, floor, candidate rung and the `system:crew-ladder` shadow trial with its would-be count, or why the tier has none. Trials are created, started and concluded at delivery admission, never by this read. |
 | Condition explain | `orbit.automation.explain` (read only; `definition`, optional `subject`) | `orbit automation explain <definition> [--subject <key>] [--json]`: a routine's or auto-task's condition over live state with its scope, prefilter, ownership verdict, up to 20 matches (with arm state and remaining hold) and closest misses, one subject's clause tree with operand values, and its durable tracking: stall, last pass and skip, recent fires with their upstream chain, and `self`. Writes nothing. `job:<name>` shows a job's auto-task steps instead: outer bound, revision pin, each step's resolved target auto-task (digest, enabled, own condition guard) and its waits and step reads; it evaluates no wait. An enabled job's executions run detached and park while a step waits. |
 | Condition stall clear | `orbit.automation.clear_stall` is operator-only; agents report a stalled condition instead | `orbit automation clear-stall <definition> --reason <text>`: clears `match_storm`, `too_many_matches`, `loop_suspected` or `oscillating` on the workspace owner, audited. |
+| Fleet notices | `orbit.notice.post`, `.close`, `.list` and `.show` on a server that enables the opt-in `notice` toolset; always through `orbit tool run` | `orbit notice post\|close\|list\|show`. Short, expiring, attributed announcements (incident, maintenance, info) for the whole fleet; see [Fleet notices](#fleet-notices) |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | Deprecated; opt-in `agent-invoke` MCP toolset | `orbit run agent <prompt>` still works and warns; dispatch work through tasks and `orbit run ship`, or run your provider's CLI directly for a one-off question |
 | Distributed drain | Internal runtime protocol; no ordinary MCP tools | `orbit run auto --pull` uses a launch-selected owner route for probe, receipt lookup, task admission, bind and settle. These five operations have no public schemas, and public calls refuse both canonical and formerly advertised names; client names or initialize metadata cannot enable the route. Matching internal protocol support is required on both endpoints, with no public fallback. Use owner-side `orbit tool run orbit.drain.probe`, `orbit.drain.receipt.lookup` and `orbit.drain.claims` for supported diagnostics under the required identified/operator authority. Do not call pull, bind or settle by hand: admission and claim mutations retain machine/run fences. Handoff approval is an owner-dashboard action with no CLI verb or tool. Handoff revocation and claim recovery are operator-only: `orbit task revoke-handoff` and `orbit task recover-claim`, with the tools `orbit.task.revoke_handoff` and `orbit.task.recover_claim`, which managed runs cannot call. See [distributed-drain.md](setup/distributed-drain.md). |
@@ -269,7 +270,8 @@ subprocess, and external authentication checks.
 the opt-in toolsets the host enables: `leases` (path leases), `experiments`
 (experiment tools), `analytics` (agent scorecards, orchestrator scorecard and
 show, crew ladder), `decision-channel` (decision submit and digest; decision
-list and show stay default) and `agent-invoke` (`orbit.agent.invoke`). Enable them per server with
+list and show stay default), `agent-invoke` (`orbit.agent.invoke`) and `notice`
+(`orbit.notice.*`, fleet notices). Enable them per server with
 `--toolset leases,analytics` (or `all`), or for the host with
 `orbit config set --global machine.mcp.toolsets '["experiments"]'`; the flag
 replaces the config. A call to a tool outside the server's toolsets is refused
@@ -691,6 +693,61 @@ A refused or queued request, and a deadlock-refused expansion, exit 3. `orbit ta
 reservations with mode and principal; task/reservation counts retain their
 existing meaning, with `by_lease` and `total_leases` added separately; a queued request holds
 nothing and is not listed there. Preemption belongs to a later phase.
+
+## Fleet notices
+
+A fleet notice is a short note every agent and operator in its scope should see
+until it stops being true: an `incident` (something is broken now),
+`maintenance` (planned work to hold off or plan around) or `info`. It informs;
+it grants nothing and no gate reads it. The workspace owner holds it.
+
+`orbit.notice.post` takes `kind` and `title` (at most 120 characters), and
+optionally `body`, `scope` (`workspace`, the default, or `global`),
+`dedupe_key`, `linked_task`, `close_on_linked_done` (default true with a link),
+`evidence` (up to 8 `{type, value}`, type `task`, `run`, `friction`,
+`pull_request`, `url` or `commit`), `hosts` (maintenance only), and
+`expires_in_hours` or `expires_at`. It returns `{notice, outcome}`:
+
+- **created** when no open notice of the workspace holds the dedupe key. An
+  omitted key is `task:<linked task>`, else the kind and the slugged title.
+- **updated** when you may edit the open notice holding the key: its content
+  is replaced, `revision` rises only if something changed.
+- **corroborated** when you may not: only its report count rises. Post the
+  same subject again rather than a new notice when you hit a known problem.
+
+Who you post as comes from your session, never from input:
+
+| Class | Who | May post | Expiry cap |
+|---|---|---|---|
+| operator | operator capability | anything; closes anything | 720 h |
+| orchestrator | an agent session with orchestrator attribution naming a configured crew (`--orchestrator` or a per-call `orchestrator`) | any scope and kind; edits and closes orchestrator- and agent-authored notices, never the operator's | 168 h incident and info, 72 h maintenance |
+| agent | a managed run (worker binding or run-stamped `orbit tool run`) | `workspace` scope, `incident` or `info`, with `linked_task` or evidence; edits and closes only its own task's notices | 24 h (also the default) |
+
+Anyone else is refused `notice_poster_unidentified`. Defaults when no expiry is
+named: incident 72 h, maintenance 12 h, info 168 h. A request beyond the cap is
+refused (`notice_expiry_exceeds_cap`), never clamped; one less than five
+minutes ahead is `notice_expiry_invalid`. Limits refuse with
+`notice_limit_exceeded` naming the limit: 20 open per workspace, 10 open global
+per owner, 2 open per agent task, 5 posts per agent task per day (corroborations
+count) and 30 per orchestrator crew per hour. Other refusals:
+`notice_scope_refused`, `notice_kind_refused`, `notice_evidence_required`,
+`notice_close_refused`, `notice_not_found` and `notice_invalid_field`; a replica
+refuses writes with `capability_refused`. Every write and refusal leaves an
+audit row with target type `notice`. The limits and caps are `notice.*` config.
+
+`orbit.notice.close` takes `id` or `dedupe_key` and a `reason`; a notice that is
+already closed or expired comes back with `already_inactive: true`. A notice
+whose linked task reaches `done` closes itself. `orbit.notice.list` filters by
+`status` (`open` by default, `closed`, `expired` or `all`), `include_global`,
+`scope`, `kind`, `linked_task`, `author_class`, `host` and `limit` (1–200, default 50), and orders
+incident, maintenance, info, newest first; `orbit.notice.show` takes `id`, and
+for the operator includes the history. Status is computed when read: closed,
+then linked task done, then expired, else open.
+
+The CLI mirrors the tools: `orbit notice post --kind <k> --title <t> [--body <text> | --body-file <path>]
+[--scope global] [--link <task>] [--keep-after-done] [--evidence type=value]
+[--host <machine>] [--expires-in <hours> | --expires-at <time>]`, `close <id>
+--reason <why>` (or `--dedupe-key`), `list` and `show <id>`, all with `--json`.
 
 ## Missing operations
 

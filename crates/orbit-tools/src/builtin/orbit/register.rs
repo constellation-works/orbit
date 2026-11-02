@@ -8,6 +8,7 @@ use orbit_common::governance::drain::DRAIN;
 use orbit_common::governance::experiment::EXPERIMENT;
 use orbit_common::governance::friction::FRICTION;
 use orbit_common::governance::lease::LEASE;
+use orbit_common::governance::notice::NOTICE;
 use orbit_common::governance::orchestrator::ORCHESTRATOR;
 use orbit_common::governance::task::TASK;
 use orbit_common::governance::visual::VISUAL;
@@ -42,6 +43,8 @@ pub fn register(registry: &mut ToolRegistry) {
     // Leases, experiments and the analytics reads are opt-in `orbit mcp
     // serve` toolsets; `orbit tool run` and activities reach them regardless.
     operation::register_noun_in_toolset(registry, &LEASE, McpToolset::Leases);
+    // Fleet notices are the opt-in `notice` toolset, like leases.
+    operation::register_noun_in_toolset(registry, &NOTICE, McpToolset::Notice);
     // Agent invocation is workspace-scoped: the admission is made against the
     // checkout that owns it, and Core is where that decision lives. Its
     // toolset is opt-in: a managed run offered explorer delegation enables
