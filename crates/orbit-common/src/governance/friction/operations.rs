@@ -15,8 +15,8 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::McpToolScope;
 
+use super::friction_tags_literal;
 use super::title::FRICTION_TITLE_MAX_CHARS;
-use super::{friction_tag_aliases_literal, friction_tags_literal};
 
 operation_registry! {
     noun: FRICTION;
@@ -597,16 +597,14 @@ fn update_title_cli_help() -> String {
 
 fn add_tags_description() -> String {
     format!(
-        "Friction taxonomy tags as a string or array; valid tags: {}; aliases: {}; defaults to other",
-        friction_tags_literal(),
-        friction_tag_aliases_literal()
+        "Friction taxonomy tags as a string or array; valid tags: {}; defaults to other",
+        friction_tags_literal()
     )
 }
 
 fn update_tags_description() -> String {
     format!(
-        "Optional replacement taxonomy tags as a string or array; valid tags: {}; aliases: {}",
-        friction_tags_literal(),
-        friction_tag_aliases_literal()
+        "Optional replacement taxonomy tags as a string or array; valid tags: {}",
+        friction_tags_literal()
     )
 }

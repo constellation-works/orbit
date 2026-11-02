@@ -1652,7 +1652,7 @@
       },
       {
         "name": "tags",
-        "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance; defaults to other",
+        "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other",
         "param_type": "string_list",
         "required": false
       },
@@ -1693,7 +1693,7 @@
       },
       {
         "name": "tags",
-        "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance",
+        "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling",
         "param_type": "string_list",
         "required": false
       },
