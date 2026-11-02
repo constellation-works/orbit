@@ -4,8 +4,9 @@
 //! request under the run's retry lineage. A run is left alone when the drain
 //! lacks the authority it was started with (until a drain holding it passes),
 //! and for good when its pull request is no longer open, its task moved on or
-//! was deleted, it never opened one, or it is itself a resumed attempt. One
-//! run's store error, an unreachable forge (read once per pass) and an
+//! was deleted, it never opened one, or it is itself an interrupted resume.
+//! A typed base-chase hold is adopted even on a resumed attempt; other holds
+//! stay parked. One run's store error, an unreachable forge (read once per pass) and an
 //! unloadable activity catalog defer instead of deciding, and nothing is
 //! adopted under host resource pressure.
 //!
@@ -31,7 +32,9 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
 use orbit_tools::ToolContext;
 use orbit_types::task::ExternalRef;
-use orbit_types::workflow::{JobRunState, JobTargetType, PipelineState};
+use orbit_types::workflow::{
+    DeliveryRefusal, HeldFailure, JobRunState, JobTargetType, PipelineState,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -173,6 +176,15 @@ impl Fixture {
     /// pull request `number` (when given) and then lost its worker. Returns
     /// the task, the interrupted run and the pull request's head branch.
     fn dead_leaf(&self, number: Option<u64>) -> (String, String, String) {
+        self.adoptable_leaf(number, JobRunState::Interrupted, Some("worker_terminated"))
+    }
+
+    fn adoptable_leaf(
+        &self,
+        number: Option<u64>,
+        stop: JobRunState,
+        code: Option<&str>,
+    ) -> (String, String, String) {
         let task = self
             .runtime
             .add_task(TaskAddParams {
@@ -191,7 +203,7 @@ impl Fixture {
             .jobs
             .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input), None)
             .unwrap();
-        self.die(&run.run_id, &head, number);
+        self.stop_delivery(&run.run_id, &head, number, stop, code);
         self.runtime
             .apply_task_automation_update(
                 &task,
@@ -212,6 +224,23 @@ impl Fixture {
     /// `run` pushed `head`, opened pull request `number` (when given) and
     /// then lost its worker, as the orphan reconciler finds it.
     fn die(&self, run_id: &str, head: &str, number: Option<u64>) {
+        self.stop_delivery(
+            run_id,
+            head,
+            number,
+            JobRunState::Interrupted,
+            Some("worker_terminated"),
+        );
+    }
+
+    fn stop_delivery(
+        &self,
+        run_id: &str,
+        head: &str,
+        number: Option<u64>,
+        stop: JobRunState,
+        code: Option<&str>,
+    ) {
         let run = self.jobs.get_job_run(run_id).unwrap().unwrap();
         let mut state = PipelineState::new(
             run.run_id.clone(),
@@ -248,11 +277,15 @@ impl Fixture {
             run_id,
             steps.len(),
             "complete_pr",
-            JobRunState::Interrupted,
-            Some("worker_terminated"),
+            if stop == JobRunState::Held {
+                JobRunState::Failed
+            } else {
+                stop
+            },
+            code,
         );
         self.jobs
-            .finalize_job_run(run_id, JobRunState::Interrupted, Utc::now(), None)
+            .finalize_job_run(run_id, stop, Utc::now(), None)
             .unwrap();
     }
 
@@ -384,6 +417,62 @@ fn a_dead_leafs_open_pull_request_is_adopted_once_by_a_drain_holding_its_authori
         fx.retries(&run).len(),
         1,
         "a later pass adopts nothing more"
+    );
+}
+
+/// ORB-21441: exhaustion is a transient completion hold, including when
+/// another resumed attempt hits the bound. Other delivery holds stay parked.
+fn base_chase_holds_resume_on_the_next_authorized_drain_pass() {
+    let fx = Fixture::new();
+    let refusal = DeliveryRefusal::BaseChaseExhausted;
+    assert_eq!(
+        HeldFailure::of(Some(refusal.error_code()), None),
+        Some(HeldFailure::DeliveryRefused(refusal)),
+        "the persisted exhaustion code must hold the run and pass its parents"
+    );
+    let (task, run, head) =
+        fx.adoptable_leaf(Some(18), JobRunState::Held, Some(refusal.error_code()));
+    fx.forge.open(18, &head);
+    let drain = fx.drain();
+    let refused = fx.pass(&drain, "review", true);
+    assert!(fx.retries(&run).is_empty(), "{refused}");
+    let adopted = fx.pass(&drain, "done", true);
+    assert_eq!(adopted["adopted"].as_array().unwrap().len(), 1, "{adopted}");
+    let resumed = fx.retries(&run).pop().unwrap();
+    let state = fx.runtime.read_run_state(&resumed.run_id).unwrap().unwrap();
+    assert_eq!(state.next_step_index, 2, "resume starts at completion");
+    assert_eq!(state.pipeline["pr_open"]["head"], head);
+    assert_eq!(
+        fx.runtime.get_task(&task).unwrap().status,
+        TaskStatus::Review
+    );
+    assert!(
+        fx.pass(&drain, "done", true)["adopted"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // A resumed delivery may yield again; unlike a repeatedly dead worker,
+    // that typed stop must still have an automatic continuation.
+    fx.stop_delivery(
+        &resumed.run_id,
+        &head,
+        Some(18),
+        JobRunState::Held,
+        Some("base_chase_exhausted"),
+    );
+    let again = fx.pass(&drain, "done", true);
+    assert_eq!(again["adopted"].as_array().unwrap().len(), 1, "{again}");
+    assert_eq!(fx.retries(&resumed.run_id).len(), 1);
+
+    let (_, other, other_head) =
+        fx.adoptable_leaf(Some(19), JobRunState::Held, Some("delivery_head_changed"));
+    fx.forge.open(19, &other_head);
+    fx.pass(&drain, "done", true);
+    assert!(
+        fx.retries(&other).is_empty(),
+        "other holds require their own recovery"
     );
 }
 
@@ -571,6 +660,7 @@ fn host_resource_pressure_holds_adoption() {
 crate::scenario_table!(
     orphan_adoption_scenarios,
     a_dead_leafs_open_pull_request_is_adopted_once_by_a_drain_holding_its_authority,
+    base_chase_holds_resume_on_the_next_authorized_drain_pass,
     runs_that_no_longer_own_an_open_pull_request_are_left_alone,
     a_leaf_that_dies_again_after_its_adoption_is_left_to_an_operator,
     store_and_task_errors_skip_one_run_and_never_fail_the_pass,

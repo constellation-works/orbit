@@ -209,7 +209,16 @@ impl OrbitRuntime {
                 || self
                     .read_run_state(&source.run_id)?
                     .is_some_and(|state| state.pull_drain.forge_hold.is_some()));
+        // A moving-base yield is resumable through the same certified
+        // checkpoints; recovery attempts are scoped to the new run.
+        let base_chase_held = source.state == JobRunState::Held
+            && source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                == Some(DeliveryRefusal::BaseChaseExhausted.error_code());
         if !forge_held
+            && !base_chase_held
             && !matches!(
                 source.state,
                 JobRunState::Interrupted | JobRunState::Failed | JobRunState::Timeout
@@ -217,7 +226,7 @@ impl OrbitRuntime {
         {
             return Err(OrbitError::JobValidation(format!(
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
-                 or one held because the forge refused its push or could not be read",
+                 or one held because the forge refused its push, could not be read, or the base chase exhausted",
                 source_run_id, source.state
             )));
         }

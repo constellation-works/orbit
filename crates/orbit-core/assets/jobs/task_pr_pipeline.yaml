@@ -49,7 +49,8 @@
 #   repairing each stop), re-reviewed and republished, for at most two rounds;
 #   a conflict after the second keeps the PR and the task in review. A base
 #   that advances again after a completion step's recovery is followed a
-#   bounded number of times before failing as base_chase_exhausted.
+#   bounded number of times per run before holding as base_chase_exhausted
+#   for the next authorized owner drain adoption pass.
 # - `auto_fix: true` (`orbit run auto --auto-fix`) runs `complete_pr` even
 #   without `completion: done`, as a watcher that never merges and ends once
 #   the PR is mergeable. With it, a required check that fails on the PR's
@@ -776,7 +777,8 @@ spec:
       # fetches. A base that advanced past the certified recovery is chased:
       # a clean rebase of the recovered head is certified for the new base, a
       # conflicting one is redone from the published head for another bounded
-      # recovery, and a step that keeps chasing fails as base_chase_exhausted.
+      # recovery. After two chases per run, base_chase_exhausted holds for
+      # the next authorized owner drain adoption pass (ORB-21441).
       recovery_activity: pr_conflict_recovery
       target: activity:pr_complete
       default_input:
