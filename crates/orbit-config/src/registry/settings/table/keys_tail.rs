@@ -509,14 +509,14 @@ macro_rules! with_tail_keys {
     },
     workflow_task_pilot_freshness_material_fields: Vec<MaterialField> => Vec<MaterialField> {
         key: "workflow.task_pilot_freshness.material_fields", value_type: "array<string>",
-        description: "Task fields whose edit makes an accepted pilot assessment stale.",
+        description: "Task fields checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness.",
         section: ConfigSection::Delivery, order: 110,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<MaterialField>>| resolve_material_fields(raw),
     },
     workflow_task_pilot_freshness_source_sensitivity: SourceSensitivity => SourceSensitivity {
         key: "workflow.task_pilot_freshness.source_sensitivity", value_type: "string",
-        description: "Whether a branch-head move makes an accepted pilot assessment stale.",
+        description: "Whether branch-head changes are checked for drift between task-pilot preparation and apply, and by `orbit run auto --approve-proposed` when it checks assessment freshness.",
         section: ConfigSection::Delivery, order: 120,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<SourceSensitivity>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
