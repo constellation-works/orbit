@@ -80,7 +80,7 @@ needed, which the slice verifies before it merges.
 | Concern | Location (proposed) |
 |---|---|
 | `Item`, `Kind`, `Severity`, `Next`, `Envelope`, `CursorStatus` types | `crates/orbit-types/src/attention/` |
-| The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | `crates/orbit-common/src/governance/attention.rs`, in the shape of `governance/decision.rs` (operations-as-data; no clap or runtime types) |
+| The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | the planned `attention.rs` module under `crates/orbit-common/src/governance/`, in the shape of `governance/decision.rs` (operations-as-data; no clap or runtime types) |
 | Derivation, folding, severity, fingerprint, filters, cursor codec, local multi-workspace aggregation | `crates/orbit-core/src/application/attention/` (`sources/` per kind, `derive.rs`, `severity.rs`, `fingerprint.rs`, `filter.rs`, `cursor.rs`, `aggregate.rs`) |
 | Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `orbit-tools/src/mcp_annotations.rs` lists `orbit.attention` as `READ_ONLY` |
 | Authorization | a catalog entry allowing `Agent` and `Operator`; the runtime kinds check capability themselves and degrade ([attention-item](./specs/attention-item.md#kinds-and-sources-of-truth)) |
