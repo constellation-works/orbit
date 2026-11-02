@@ -554,6 +554,61 @@ test("a textarea scrolled by one whole line starts where an unscrolled one does"
   }
 });
 
+test("a scrolled textarea line clipped at the content bottom is unavailable", { skip: !ENABLED }, async () => {
+  const { page, result } = await measure(800, `
+    <style>
+      body { margin: 0; }
+      .row { display: flex; align-items: flex-start; gap: 12px; }
+      textarea {
+        box-sizing: content-box;
+        width: 120px;
+        height: 20px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        font: 16px/20px monospace;
+        resize: none;
+      }
+    </style>
+    <div class="row" id="clipped-line">
+      <textarea id="still" aria-label="still">Same\nSame\nSame\nSame</textarea>
+      <textarea id="scrolled" aria-label="scrolled">Same\nSame\nSame\nSame</textarea>
+    </div>`, {
+    prepare: async (page) => {
+      await page.evaluate(() => {
+        document.querySelector("#scrolled").scrollTop = 5;
+      });
+    },
+  });
+  try {
+    const geometry = await page.evaluate(() => {
+      const textarea = document.querySelector("#scrolled");
+      const style = getComputedStyle(textarea);
+      const rect = textarea.getBoundingClientRect();
+      const contentHeight = rect.height
+        - (parseFloat(style.borderTopWidth) || 0)
+        - (parseFloat(style.borderBottomWidth) || 0)
+        - (parseFloat(style.paddingTop) || 0)
+        - (parseFloat(style.paddingBottom) || 0);
+      const lineHeight = parseFloat(style.lineHeight);
+      const offset = (lineHeight - (textarea.scrollTop % lineHeight)) % lineHeight;
+      return { scrollTop: textarea.scrollTop, contentHeight, lineHeight, offset };
+    });
+    assert.deepEqual(geometry, { scrollTop: 5, contentHeight: 20, lineHeight: 20, offset: 15 });
+    assert.equal(result.status, "skipped", JSON.stringify(result.measurements));
+    assert.equal(result.measurements.matched, 0, JSON.stringify(result.measurements));
+    assert.equal(anchorsOf(result).some((anchor) => anchor.selector === "#scrolled"), false, JSON.stringify(anchorsOf(result)));
+    assert.ok(
+      result.measurements.incomparable.some(
+        (item) => item.selector === "#scrolled" && item.reason === "content geometry unavailable",
+      ),
+      JSON.stringify(result.measurements.incomparable),
+    );
+  } finally {
+    await page.close();
+  }
+});
+
 test("a displaced control start is still detected", { skip: !ENABLED }, async () => {
   const { page, result } = await measure(800, `
     <style>body { margin: 0; font: 16px/1.2 sans-serif; } .row { display: flex; align-items: flex-start; gap: 12px; }</style>
