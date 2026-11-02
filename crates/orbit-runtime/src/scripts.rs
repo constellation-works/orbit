@@ -436,14 +436,24 @@ impl RuntimeKernel {
     }
 
     /// The grant a script name currently holds, verified against its
-    /// witness. A row without a matching witness is refused, never
-    /// returned as authority.
+    /// witness and the supported timeout range. A row without a matching
+    /// witness or with an invalid timeout ceiling is refused, never
+    /// returned as authority, including grants stored by older versions.
     pub fn verified_script_grant(&self, name: &str) -> Result<Option<ScriptGrant>, OrbitError> {
         let workspace_id = self.workspace_id()?;
         let Some(grant) = self.sqlite_store()?.get_script_grant(&workspace_id, name)? else {
             return Ok(None);
         };
         verify_script_grant_witness(&self.global_root(), &grant).map_err(OrbitError::Execution)?;
+        let seconds = grant.limits.timeout_max_seconds;
+        if !(1..=SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS).contains(&seconds) {
+            return Err(OrbitError::Execution(format!(
+                "script `{name}` grant {} is refused: timeout ceiling {seconds} is outside \
+                 1..={SCRIPT_GRANT_TIMEOUT_HARD_MAX_SECONDS} seconds; review it and re-grant \
+                 with `orbit script grant {name}`",
+                grant.grant_id
+            )));
+        }
         Ok(Some(grant))
     }
 
