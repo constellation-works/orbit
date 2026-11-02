@@ -530,6 +530,42 @@ itself fails, see [Linux sandbox](linux-sandbox.md).
 | `orphaned` | A grant whose manifest no longer exists. |
 | `witness_refused` | The stored grant does not match the integrity record the grant command wrote, so it is not trusted. |
 
+### Grant requests
+
+When a script step is refused with `grant_missing`, `grant_stale` or
+`grant_insufficient`, Orbit also raises a `script_grant` decision request, and the
+refusal message names it. The request carries the script, the digest it would
+grant, the refused grant's digest, the diff against the last granted bytes, and
+the requested against granted capabilities. Another refusal at the same digest and
+capability set reuses the open request. After an edit, the next refusal raises a new
+request and supersedes the old one. Requests live on a `someday` task per script,
+titled ``Script grant requests: `<name>` ``, which agents never pick up. A witness
+failure, a missing sandbox or a changed interpreter raises no request, because a
+grant would not clear it.
+
+```bash
+orbit decision list --gate script_grant     # open grant requests
+orbit decision show <id>                     # script, digests, capabilities and the diff to review
+orbit decision answer <id> grant             # write the grant at that digest (operator only)
+orbit decision answer <id> reject            # leave the script ungranted
+```
+
+A `grant` answer writes the grant exactly as requested, with the answering human
+as grantor. It is refused, and writes nothing, when the script's bytes or requested
+capabilities have changed since the request was raised. The same answer also comes
+from a registered [decision channel](plugins.md#decision-channels) (provenance
+`decision-channel <name>`) or from the dashboard. An agent session or plugin
+callback can neither answer the request nor write a grant.
+
+The dashboard's **Automation › Scripts** view lists every script with its state
+(adding `revoked` for a script whose grant was withdrawn after it ran), digests,
+the commit that made it stale, requested against granted capabilities, its open
+request and the diff. An operator session can grant from there; the action is
+bound to the digest shown, so bytes that change after the page loaded are refused.
+A grant answer binds the catalog bytes in the workspace's primary checkout. A step
+that ran from a worktree with different bytes is refused as superseded until those
+bytes land.
+
 ### Verify a grant
 
 ```bash

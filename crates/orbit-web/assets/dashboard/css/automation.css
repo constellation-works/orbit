@@ -6,7 +6,7 @@
   grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
   align-items: start;
 }
-.operations-auto-tasks-layout { grid-template-columns: minmax(0, 1fr); }
+.operations-auto-tasks-layout, .operations-scripts-layout { grid-template-columns: minmax(0, 1fr); }
 body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
 .operations-layout .panel { min-width: 0; }
 .tab-pane[data-tab="operations"] .subtabs { border-bottom: 1px solid var(--border); }
@@ -19,7 +19,7 @@ body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
 .operation-feedback.pending { color: var(--priority-medium); }
 .operation-feedback.success { color: var(--state-success); }
 .operation-feedback.error { color: var(--state-failed); }
-#routines-body, #clock-body, #auto-tasks-body { padding: 12px; background: var(--bg); }
+#routines-body, #clock-body, #auto-tasks-body, #scripts-body { padding: 12px; background: var(--bg); }
 .operation-card {
   padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border);
   border-radius: 4px; background: var(--bg-elev);
@@ -407,3 +407,36 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .automation-diagnostic summary { cursor: pointer; font-weight: 600; }
 .automation-diagnostic pre { max-height: 18rem; overflow: auto; padding: .75rem; }
 .automation-diagnostic p, .automation-diagnostic .operation-field-value { overflow-wrap: anywhere; }
+
+/* Automation › Scripts: grant state, diff since the grant, open request. */
+.script-card {
+  padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--border);
+  border-radius: 4px; background: var(--bg-elev); min-width: 0;
+}
+.script-card:last-child { margin-bottom: 0; }
+.script-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.script-card-head .operation-button, .script-card-head .operation-action-unavailable { margin-left: auto; }
+.script-name { font: 600 13px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+.script-detail { margin: 6px 0 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
+.script-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin-top: 8px; }
+.script-fact, .script-request { display: contents; }
+.script-fact-label { color: var(--fg-dim); font-size: 11px; }
+.script-fact-value { font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+.script-card > .script-request {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px;
+  margin-top: 6px; padding: 6px 8px; border-left: 2px solid var(--priority-medium);
+}
+.script-diff { margin-top: 8px; }
+.script-diff summary { cursor: pointer; color: var(--fg-dim); font-size: 11px; }
+.script-diff pre {
+  margin: 6px 0 0; padding: 8px; max-height: 360px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  font: 11px/1.45 var(--font-mono); white-space: pre;
+}
+.script-diff-add { color: var(--state-success); }
+.script-diff-del { color: var(--state-failed); }
+.script-diff-hunk, .script-diff-head { color: var(--fg-dim); }
+@media (max-width: 600px) {
+  .script-facts, .script-card > .script-request { grid-template-columns: minmax(0, 1fr); gap: 1px; }
+  .script-card-head .operation-button, .script-card-head .operation-action-unavailable { margin-left: 0; }
+}

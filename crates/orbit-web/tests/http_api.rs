@@ -108,6 +108,8 @@ mod resource_profiles;
 mod runs;
 #[path = "http_api/schedule_edit_guards.rs"]
 mod schedule_edit_guards;
+#[path = "http_api/scripts.rs"]
+mod scripts;
 #[path = "http_api/support.rs"]
 mod support;
 #[path = "http_api/task_auto_fix.rs"]

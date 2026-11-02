@@ -25,7 +25,7 @@ pub(super) fn dispatch(
                 .map(|name| {
                     DecisionGate::from_name(&name).ok_or_else(|| {
                         OrbitError::InvalidInput(format!(
-                            "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority or review_approval"
+                            "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant"
                         ))
                     })
                 })

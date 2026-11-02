@@ -6,6 +6,7 @@ use crate::task::{
     ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, TASK_FIELDS_UPDATED_EVENT, Task,
     TaskHistoryEntry, TaskStatus, task_fields_updated_documents,
 };
+use crate::workflow::activity_job::ScriptGrantRequest;
 use crate::workflow::{
     HeldCandidate, ResidentGrantRequest, ReviewGateHistoryNote, resident_authority_revision,
 };
@@ -67,6 +68,11 @@ pub enum DecisionGate {
     /// requested addition, `reject` changes nothing. Only a human answers
     /// it; precedent and the decision model never do.
     ResidentAuthority,
+    /// Consent to run one workspace script at one content digest with one
+    /// capability set (script steps §2): `grant` writes exactly that grant
+    /// with the answering human as grantor, `reject` writes nothing. Anyone
+    /// may raise one; only a human answers it, never precedent or the model.
+    ScriptGrant,
 }
 
 impl DecisionGate {
@@ -80,6 +86,7 @@ impl DecisionGate {
             "agent_request" => Some(Self::AgentRequest),
             "model_answer_review" => Some(Self::ModelAnswerReview),
             "resident_authority" => Some(Self::ResidentAuthority),
+            "script_grant" => Some(Self::ScriptGrant),
             _ => None,
         }
     }
@@ -94,6 +101,7 @@ impl DecisionGate {
             Self::AgentRequest => "agent_request",
             Self::ModelAnswerReview => "model_answer_review",
             Self::ResidentAuthority => "resident_authority",
+            Self::ScriptGrant => "script_grant",
         }
     }
 
@@ -111,7 +119,8 @@ impl DecisionGate {
             | Self::PilotAdmission
             | Self::AgentRequest
             | Self::ModelAnswerReview
-            | Self::ResidentAuthority => return Vec::new(),
+            | Self::ResidentAuthority
+            | Self::ScriptGrant => return Vec::new(),
         };
         vec![
             DecisionAnswer::plain("approve", "Approve", approved),
@@ -154,7 +163,29 @@ impl DecisionGate {
             ),
         ]
     }
+
+    /// The two answers of a [`Self::ScriptGrant`] request, in presentation
+    /// order. [`DecisionRequest::new`] marks both as authority-tier.
+    pub fn script_grant_answers() -> Vec<DecisionAnswer> {
+        vec![
+            DecisionAnswer::plain(
+                SCRIPT_GRANT_GRANT,
+                "Grant",
+                "Grant the script at exactly this digest and capability set; its step runs on the next attempt.",
+            ),
+            DecisionAnswer::plain(
+                SCRIPT_GRANT_REJECT,
+                "Reject",
+                "Grant nothing; the step keeps refusing until the script changes or an operator grants it.",
+            ),
+        ]
+    }
 }
+
+/// Answer id that writes the grant a script grant request asks for.
+pub const SCRIPT_GRANT_GRANT: &str = "grant";
+/// Answer id that refuses a script grant request.
+pub const SCRIPT_GRANT_REJECT: &str = "reject";
 
 /// Answer id that applies a resident grant request.
 pub const RESIDENT_AUTHORITY_GRANT: &str = "grant";
@@ -584,6 +615,19 @@ pub enum DecisionBinding {
         /// The authority revision the request was raised against.
         revision: u64,
     },
+    /// A script grant request: one script at one content digest with one
+    /// requested capability set. A later script grant request on the same
+    /// holder task (a new digest or capability set) supersedes it, and the
+    /// answer path refuses it once the script's current digest differs.
+    ScriptGrant {
+        /// The script name.
+        script: String,
+        /// The content digest the answer grants.
+        digest: String,
+        /// [`crate::workflow::activity_job::ScriptGrantCapabilities::key`]
+        /// of the requested set.
+        capabilities: String,
+    },
 }
 
 impl DecisionBinding {
@@ -631,6 +675,11 @@ impl DecisionBinding {
                 answered_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
             ),
             Self::ResidentAuthority { revision } => format!("resident_authority:{revision}"),
+            Self::ScriptGrant {
+                script,
+                digest,
+                capabilities,
+            } => format!("script_grant:{script}:{digest}:{capabilities}"),
         }
     }
 }
@@ -928,6 +977,10 @@ pub struct DecisionRequest {
     /// for, with the relayed quote verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resident_grant: Option<ResidentGrantRequest>,
+    /// The script, digest, capability set and diff a
+    /// [`DecisionGate::ScriptGrant`] request asks consent for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_grant: Option<ScriptGrantRequest>,
 }
 
 impl DecisionRequest {
@@ -972,7 +1025,9 @@ impl DecisionRequest {
                     _ => DecisionRiskTier::Unknown,
                 },
                 // Either answer is the human's call on authority.
-                DecisionGate::ResidentAuthority => DecisionRiskTier::Authority,
+                DecisionGate::ResidentAuthority | DecisionGate::ScriptGrant => {
+                    DecisionRiskTier::Authority
+                }
             };
         }
         let risk_tier = answers
@@ -999,7 +1054,15 @@ impl DecisionRequest {
             state: DecisionRequestState::Open,
             resolution: None,
             resident_grant: None,
+            script_grant: None,
         }
+    }
+
+    /// Attach the script, digest, capabilities and diff a script grant
+    /// request asks consent for.
+    pub fn with_script_grant(mut self, grant: ScriptGrantRequest) -> Self {
+        self.script_grant = Some(grant);
+        self
     }
 
     /// Attach the exact addition a resident grant request asks for.
@@ -1249,6 +1312,13 @@ pub fn decision_requests_from_history(
                             TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
                         )
                 }
+                // Current while the holder task stays open; a newer script
+                // grant request on it supersedes this one (below), and the
+                // answer path checks the script's live digest.
+                DecisionBinding::ScriptGrant { .. } => !matches!(
+                    task.status,
+                    TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
+                ),
             }
     };
     let mut requests: Vec<DecisionRequest> = history
@@ -1262,9 +1332,17 @@ pub fn decision_requests_from_history(
     let rides_beside = |gate: DecisionGate| {
         matches!(
             gate,
-            DecisionGate::ModelAnswerReview | DecisionGate::ResidentAuthority
+            DecisionGate::ModelAnswerReview
+                | DecisionGate::ResidentAuthority
+                | DecisionGate::ScriptGrant
         )
     };
+    // A script grant request is superseded by any later script grant request
+    // on the same holder task: the script's bytes or requests moved on.
+    let script_grant_keys: Vec<Option<String>> = requests
+        .iter()
+        .map(|request| (request.gate == DecisionGate::ScriptGrant).then(|| request.binding.key()))
+        .collect();
     let task_ids: Vec<Option<String>> = requests
         .iter()
         .map(|request| (!rides_beside(request.gate)).then(|| request.task_id.clone()))
@@ -1290,6 +1368,12 @@ pub fn decision_requests_from_history(
                     .skip(index + 1)
                     .flatten()
                     .any(|task_id| task_id == &request.task_id))
+            || (request.gate == DecisionGate::ScriptGrant
+                && script_grant_keys
+                    .iter()
+                    .skip(index + 1)
+                    .flatten()
+                    .any(|key| *key != request.binding.key()))
         {
             request.state = DecisionRequestState::Superseded;
         } else if now >= request.expires_at {

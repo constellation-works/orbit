@@ -267,6 +267,17 @@ pub struct ScriptGrantOptions {
     pub output_max_files: Option<u32>,
     /// The largest output file one step may keep, in bytes.
     pub output_max_file_bytes: Option<u64>,
+    /// Who the grant records as grantor. Unset is this process's actor
+    /// label (the operator at the CLI).
+    pub grantor: Option<String>,
+    /// How consent arrived: `cli` when unset, `dashboard`, or
+    /// `decision-channel <name>` / `decision <request>` for an answered
+    /// script grant request.
+    pub provenance: Option<String>,
+    /// The digest the operator saw. When set, a script whose current bytes
+    /// digest to anything else is refused instead of granted, so consent
+    /// is never applied to bytes nobody reviewed.
+    pub expected_digest: Option<String>,
 }
 
 /// The output limits one grant records: the defaults, with each
@@ -412,6 +423,27 @@ impl RuntimeKernel {
         Ok(Some(grant))
     }
 
+    /// The manifest and entry bytes the current grant's witness recorded,
+    /// for the diff a re-grant shows. `None` when the script has no
+    /// verified grant.
+    pub fn granted_script_bytes(
+        &self,
+        name: &str,
+    ) -> Result<Option<GrantedScriptBytes>, OrbitError> {
+        let Some(grant) = self.verified_script_grant(name)? else {
+            return Ok(None);
+        };
+        let path = script_grant_witness_path(&self.global_root(), &grant.workspace_id, name);
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+        let witness: ScriptGrantWitness = serde_json::from_str(&raw)
+            .map_err(|error| OrbitError::Execution(format!("parse {}: {error}", path.display())))?;
+        Ok(Some(GrantedScriptBytes {
+            manifest: decode_hex(&witness.manifest_hex)?,
+            entry: decode_hex(&witness.entry_hex)?,
+        }))
+    }
+
     /// Grant one script at its current digest. The row is written first
     /// and the witness second: a failure between them leaves a row its
     /// witness does not authorize, which every reader refuses.
@@ -434,6 +466,14 @@ impl RuntimeKernel {
             OrbitError::Io(format!("read {}: {error}", asset.entry_path.display()))
         })?;
         let digest = script_content_digest(&manifest_bytes, &entry_bytes);
+        if let Some(expected) = options.expected_digest.as_deref()
+            && expected != digest
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` changed since it was reviewed (reviewed digest {expected}, current \
+                 digest {digest}); nothing was granted"
+            )));
+        }
         if digest != asset.digest {
             return Err(OrbitError::InvalidInput(format!(
                 "script `{name}` changed at {} while it was being granted; run the grant again",
@@ -479,9 +519,15 @@ impl RuntimeKernel {
             } else {
                 ScriptHostRole::Owner
             },
-            grantor: self.actor_label().to_string(),
+            grantor: options
+                .grantor
+                .clone()
+                .unwrap_or_else(|| self.actor_label().to_string()),
             granted_at: chrono::Utc::now().to_rfc3339(),
-            provenance: "cli".to_string(),
+            provenance: options
+                .provenance
+                .clone()
+                .unwrap_or_else(|| "cli".to_string()),
             expires_at: None,
         };
         self.sqlite_store()?.upsert_script_grant(&grant)?;
@@ -504,6 +550,29 @@ impl RuntimeKernel {
         forget_script_grant_witness(&self.global_root(), &workspace_id, name);
         Ok(deleted)
     }
+}
+
+/// The manifest and entry bytes a verified grant's witness recorded.
+#[derive(Debug, Clone)]
+pub struct GrantedScriptBytes {
+    pub manifest: Vec<u8>,
+    pub entry: Vec<u8>,
+}
+
+fn decode_hex(hex: &str) -> Result<Vec<u8>, OrbitError> {
+    if !hex.len().is_multiple_of(2) {
+        return Err(OrbitError::Execution(
+            "script grant witness bytes are not hex".to_string(),
+        ));
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&hex[index..index + 2], 16).map_err(|_| {
+                OrbitError::Execution("script grant witness bytes are not hex".to_string())
+            })
+        })
+        .collect()
 }
 
 /// The interpreter argv a grant records: the first element resolved to

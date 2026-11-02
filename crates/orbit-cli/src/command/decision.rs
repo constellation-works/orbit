@@ -392,6 +392,9 @@ fn show_blocks(value: &Value) -> Vec<Block> {
     if let Some(binding) = value.get("binding") {
         let _ = write!(out, "\nbinding: {binding}");
     }
+    if let Some(grant) = value.get("script_grant").filter(|value| value.is_object()) {
+        script_grant_section(&mut out, grant);
+    }
     if let Some(resolution) = value.get("resolution").filter(|value| !value.is_null()) {
         let _ = write!(
             out,
@@ -428,6 +431,34 @@ fn show_blocks(value: &Value) -> Vec<Block> {
         }
     }
     vec![Block::text(out)]
+}
+
+/// What a `script_grant` answer consents to: the script, both digests, the
+/// refusal, requested against granted capabilities and the diff to review.
+fn script_grant_section(out: &mut String, grant: &Value) {
+    let _ = write!(
+        out,
+        "\nscript: {} (entry {})\ndigest: {} (granted: {})\nrefusal: {} — {}\nrequested: {}\ngranted: {}",
+        text(&grant["name"]),
+        text(&grant["entry"]),
+        text(&grant["digest"]),
+        grant["granted_digest"].as_str().unwrap_or("none"),
+        text(&grant["refusal"]),
+        text(&grant["refusal_message"]),
+        grant["requested"],
+        if grant["granted"].is_null() {
+            "none".to_string()
+        } else {
+            grant["granted"].to_string()
+        },
+    );
+    let diff = text(&grant["diff"]);
+    if !diff.is_empty() {
+        let _ = write!(out, "\ndiff:\n{}", diff.trim_end());
+    }
+    if grant["diff_truncated"].as_bool() == Some(true) {
+        out.push_str("\n(diff truncated)");
+    }
 }
 
 fn text(value: &Value) -> String {

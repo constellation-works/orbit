@@ -208,6 +208,7 @@ impl ScriptGrantArgs {
                 follower: self.follower,
                 output_max_files: self.output_max_files,
                 output_max_file_bytes: self.output_max_file_bytes,
+                ..Default::default()
             },
         )?;
         let status = runtime.script_status(&self.name)?;

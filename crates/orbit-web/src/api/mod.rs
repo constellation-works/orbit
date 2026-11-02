@@ -36,6 +36,7 @@ mod routes;
 pub(crate) mod routines;
 mod runs;
 mod schedule_edits;
+mod scripts;
 mod search;
 pub(crate) mod session;
 mod tasks;

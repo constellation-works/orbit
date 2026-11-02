@@ -123,6 +123,7 @@ mod sandbox_off;
 mod scheduled_tasks;
 #[cfg(unix)]
 mod script_file_inputs;
+mod script_grant_request;
 mod search_hydration;
 mod security_alert_sweep;
 mod session_events;

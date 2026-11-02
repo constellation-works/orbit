@@ -41,12 +41,25 @@ const DEFAULT_SCRIPT_TIMEOUT_SECONDS: u64 = 600;
 struct Refusal {
     code: &'static str,
     message: String,
+    /// Whether an operator's grant would clear this refusal, so it raises a
+    /// `script_grant` decision request (a missing, expired, stale or
+    /// insufficient grant; never a witness failure or a sandbox gap).
+    grant_would_clear: bool,
 }
 
 fn refuse(code: &'static str, message: impl Into<String>) -> Refusal {
     Refusal {
         code,
         message: message.into(),
+        grant_would_clear: false,
+    }
+}
+
+/// A refusal a grant at the current digest and requests would clear.
+fn refuse_for_grant(code: &'static str, message: impl Into<String>) -> Refusal {
+    Refusal {
+        grant_would_clear: true,
+        ..refuse(code, message)
     }
 }
 
@@ -59,13 +72,67 @@ pub(crate) fn run_script_step(
         script: request.script.clone(),
         ..ScriptExecutionRecord::default()
     };
-    match prepare_and_run(runtime, request, &mut record) {
+    let mut snapshot = None;
+    match prepare_and_run(runtime, request, &mut record, &mut snapshot) {
         Ok(ran) => ScriptStepRun::Ran(Box::new(ran)),
-        Err(Refusal { code, message }) => ScriptStepRun::Refused {
+        Err(Refusal {
             code,
-            message,
-            record: Box::new(record),
-        },
+            mut message,
+            grant_would_clear,
+        }) => {
+            if grant_would_clear && let Some(snapshot) = snapshot.as_ref() {
+                message = with_grant_request(runtime, request, snapshot, code, message);
+            }
+            ScriptStepRun::Refused {
+                code,
+                message,
+                record: Box::new(record),
+            }
+        }
+    }
+}
+
+/// Raise or reuse the `script_grant` request for a refusal a grant would
+/// clear, and name it in the refusal message. Raising never grants, and a
+/// raise that cannot be recorded (a replica checkout, a store error) leaves
+/// the refusal exactly as it was.
+fn with_grant_request(
+    runtime: &OrbitRuntime,
+    request: &ScriptStepRequest,
+    snapshot: &ScriptSnapshot,
+    code: &'static str,
+    message: String,
+) -> String {
+    match runtime.raise_script_grant_request(
+        snapshot,
+        code,
+        &message,
+        Some(&request.run_id),
+        Some(&request.step_id),
+    ) {
+        Ok(raised) => format!(
+            "{message}. {} grant request {} on task {} asks the operator to approve these \
+             bytes (`orbit decision show {}`)",
+            if raised.deduplicated {
+                "The existing"
+            } else {
+                "A new"
+            },
+            raised.request.id,
+            raised.request.task_id,
+            raised.request.id
+        ),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.core.job_run",
+                run_id = %request.run_id,
+                step_id = %request.step_id,
+                script = %request.script,
+                error = %error,
+                "could not raise a script grant request for the refused step",
+            );
+            message
+        }
     }
 }
 
@@ -73,6 +140,7 @@ fn prepare_and_run(
     runtime: &OrbitRuntime,
     request: &ScriptStepRequest,
     record: &mut ScriptExecutionRecord,
+    loaded: &mut Option<ScriptSnapshot>,
 ) -> Result<ScriptStepRan, Refusal> {
     record.platform = Some(std::env::consts::OS.to_string());
     let (cwd, cwd_writable) = script_cwd(runtime, request.workspace_path.as_deref())?;
@@ -93,6 +161,7 @@ fn prepare_and_run(
         .join(format!("{}.yaml", request.script));
     let snapshot = load_script_snapshot(&manifest_path, &cwd)
         .map_err(|error| refuse(script_refusal::MANIFEST_INVALID, error.to_string()))?;
+    *loaded = Some(snapshot.clone());
     let asset = &snapshot.asset;
     record.entry = asset.spec.entry.clone();
     record.digest = asset.digest.clone();
@@ -100,7 +169,7 @@ fn prepare_and_run(
 
     let grant = admitted_grant(runtime, &request.script, record)?;
     if grant.digest != asset.digest {
-        return Err(refuse(
+        return Err(refuse_for_grant(
             script_refusal::GRANT_STALE,
             format!(
                 "script `{}` changed since it was granted (granted digest {}, current digest {}); \
@@ -309,7 +378,7 @@ fn admitted_grant(
             )
         })?
         .ok_or_else(|| {
-            refuse(
+            refuse_for_grant(
                 script_refusal::GRANT_MISSING,
                 format!(
                     "script `{script}` is not granted on this host; review it and run \
@@ -326,7 +395,7 @@ fn admitted_grant(
             .map(|at| at <= chrono::Utc::now())
             .unwrap_or(true);
         if expired {
-            return Err(refuse(
+            return Err(refuse_for_grant(
                 script_refusal::GRANT_MISSING,
                 format!(
                     "script `{script}` grant {} expired at {expires_at}",
@@ -409,7 +478,7 @@ fn check_requests_within_grant(
     let asset = &snapshot.asset;
     let requests = &asset.spec.requests;
     let beyond = |what: String| {
-        refuse(
+        refuse_for_grant(
             script_refusal::GRANT_INSUFFICIENT,
             format!(
                 "script `{}` requests {what} beyond its grant {}; re-grant it to widen the grant",

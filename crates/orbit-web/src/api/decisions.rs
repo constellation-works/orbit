@@ -8,16 +8,18 @@
 //! reading `answered`. A stale answer is refused by core and changes
 //! nothing.
 
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_common::governance::authorization::DASHBOARD_SCRIPT_GRANT;
 use orbit_core::OrbitError;
 use orbit_types::task::DecisionGate;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::routines::{authorization_denied, authorized_caller};
 use super::tasks::human_comment_author;
 use super::{bad_request, blocking, non_empty_string, server_error};
-use crate::state::Ws;
+use crate::state::{DashboardState, Ws};
 
 /// Query string for `GET /api/decisions`.
 #[derive(Debug, Default, Deserialize)]
@@ -58,7 +60,7 @@ pub(super) async fn list_decisions(
             Some(gate) => Some(gate),
             None => {
                 return bad_request(format!(
-                    "unknown decision gate `{name}`; expected agent_request, block_triage, pilot_admission, proposed_approval or review_approval"
+                    "unknown decision gate `{name}`; expected agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant"
                 ));
             }
         },
@@ -94,8 +96,10 @@ pub(super) async fn list_decisions(
 }
 
 /// `POST /api/decisions/:id/answer` — apply one allowed answer as the
-/// human operator.
+/// human operator. A `script_grant` answer writes a script grant, so it
+/// takes the same operator session as the Scripts view's grant action.
 pub(super) async fn answer_decision(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     Json(body): Json<DecisionAnswerBody>,
@@ -105,6 +109,23 @@ pub(super) async fn answer_decision(
     };
     let note = body.note.as_deref().and_then(non_empty_string);
     let author = human_comment_author(body.author.as_deref());
+    let reader = std::sync::Arc::clone(&runtime);
+    let lookup = id.clone();
+    let gate = match blocking("decision lookup", move || {
+        Ok(reader
+            .get_decision_request(&lookup)?
+            .map(|request| request.gate))
+    })
+    .await
+    {
+        Ok(gate) => gate,
+        Err(response) => return *response,
+    };
+    if gate == Some(DecisionGate::ScriptGrant)
+        && let Err(denial) = authorized_caller(&DASHBOARD_SCRIPT_GRANT, state.operator_session())
+    {
+        return authorization_denied(denial);
+    }
     match blocking("decision answer", move || {
         runtime.answer_decision_request_as_human(
             &id,

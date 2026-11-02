@@ -51,9 +51,10 @@ pub use decision::{
     PublicationProofContainer, PublicationProofValue, PublicationPushCheckpoint,
     PublicationPushDecision, PublicationPushPerformed, PublicationPushProof,
     PublicationSettlingDecision, PublicationSettlingObservation, RESIDENT_AUTHORITY_GRANT,
-    RESIDENT_AUTHORITY_REJECT, RecordedFinalRecovery, TaskDecision, agent_decision_answers,
-    current_candidate_identity, decision_option_answers, decision_requests_from_history,
-    is_precedent_bookkeeping, normalize_agent_decision_topic, open_decision_requests,
+    RESIDENT_AUTHORITY_REJECT, RecordedFinalRecovery, SCRIPT_GRANT_GRANT, SCRIPT_GRANT_REJECT,
+    TaskDecision, agent_decision_answers, current_candidate_identity, decision_option_answers,
+    decision_requests_from_history, is_precedent_bookkeeping, normalize_agent_decision_topic,
+    open_decision_requests,
 };
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 pub use fields_updated::{
