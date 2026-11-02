@@ -22,12 +22,20 @@
 //! `--baseline <task>` computes the same measures for an interactive
 //! orchestration task; a measure it cannot derive is the string
 //! `not_derivable`, never zero.
+//!
+//! A referenced task (watched, related, a checkpoint subject or request
+//! task) that is not in this workspace is read through its registered
+//! owner on this machine: its history and decision requests count, its
+//! comments do not (no cross-workspace comment read exists). A reference
+//! no registered workspace holds is listed as unreachable and skipped, so
+//! one foreign or dangling id never fails the whole report [ORB-21642].
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_common::OrbitError;
-use orbit_types::task::{DecisionRequestState, TaskStatus};
+use orbit_common::{NotFoundKind, OrbitError};
+use orbit_store::RegisteredTaskResolution;
+use orbit_types::task::{DecisionRequestState, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{RESIDENT_TAG, ResidentComment};
 use serde_json::{Value, json};
 
@@ -109,6 +117,21 @@ fn active_days(task_created: DateTime<Utc>, start: DateTime<Utc>, end: DateTime<
     (seconds / 86_400.0).ceil().max(1.0)
 }
 
+/// How one referenced task resolved for the metrics read.
+enum MetricsReference {
+    /// In this workspace: comments, history and decision requests count.
+    Local,
+    /// Held by another workspace registered on this machine: history and
+    /// decision requests count; comments are not readable across workspaces.
+    Foreign {
+        task: Box<Task>,
+        history: Vec<TaskHistoryEntry>,
+        workspace: Option<String>,
+    },
+    /// No registered workspace holds it (or the id is malformed).
+    Unreachable { reason: &'static str },
+}
+
 /// One mandate's (or one baseline task's) four measures over the window.
 struct MeasureInputs {
     interventions: Vec<Value>,
@@ -123,6 +146,10 @@ struct MeasureInputs {
     repeated_actions: usize,
     recovery_interventions: usize,
     has_checkpoints: bool,
+    /// References read through their registered owner workspace.
+    foreign_references: Vec<Value>,
+    /// References no registered workspace could supply.
+    unreachable_references: Vec<Value>,
 }
 
 impl OrbitRuntime {
@@ -170,6 +197,8 @@ impl OrbitRuntime {
             repeated_actions: 0,
             recovery_interventions: 0,
             has_checkpoints: false,
+            foreign_references: Vec::new(),
+            unreachable_references: Vec::new(),
         };
         let mut mandate_days = 0.0f64;
         for task_id in &mandate_ids {
@@ -189,6 +218,10 @@ impl OrbitRuntime {
             mandates.push(mandate_json(task_id, days, &inputs, false));
             totals.interventions.extend(inputs.interventions);
             totals.escalations.extend(inputs.escalations);
+            totals.foreign_references.extend(inputs.foreign_references);
+            totals
+                .unreachable_references
+                .extend(inputs.unreachable_references);
         }
 
         let mut value = json!({
@@ -208,6 +241,44 @@ impl OrbitRuntime {
             value["baseline"] = mandate_json(&task.id.to_string(), days, &inputs, true);
         }
         Ok(value)
+    }
+
+    /// Resolve a task the measures reference: this workspace first, then
+    /// the registered owner on this machine (read-only, the dependency
+    /// route), else unreachable. Only a not-found or malformed id degrades
+    /// to unreachable; any other read failure still fails the report.
+    fn metrics_reference(&self, id: &str) -> Result<MetricsReference, OrbitError> {
+        match self.get_task(id) {
+            Ok(_) => return Ok(MetricsReference::Local),
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Task,
+                ..
+            }) => {}
+            Err(OrbitError::InvalidInput(_)) => {
+                return Ok(MetricsReference::Unreachable {
+                    reason: "invalid_id",
+                });
+            }
+            Err(error) => return Err(error),
+        }
+        let task = match self.resolve_dependency_task(id)? {
+            RegisteredTaskResolution::Resolved(task) => task,
+            RegisteredTaskResolution::Missing => {
+                return Ok(MetricsReference::Unreachable { reason: "missing" });
+            }
+            RegisteredTaskResolution::ForeignAuthority => {
+                return Ok(MetricsReference::Unreachable {
+                    reason: "foreign_authority",
+                });
+            }
+        };
+        let history = self.get_dependency_history(id)?.unwrap_or_default();
+        let workspace = self.registered_task_workspace(id)?;
+        Ok(MetricsReference::Foreign {
+            task,
+            history,
+            workspace,
+        })
     }
 
     /// The four measures for one assignment task (resident or interactive).
@@ -288,12 +359,27 @@ impl OrbitRuntime {
                 }));
                 times.push(at);
             };
+        // Every referenced task, resolved once: watched tasks plus the
+        // escalation tasks gathered below.
+        let mut references: BTreeMap<String, MetricsReference> = BTreeMap::new();
+        for id in &watched {
+            if id != task_id {
+                references.insert(id.clone(), self.metrics_reference(id)?);
+            }
+        }
         for watched_id in &watched {
-            let Ok(watched_task) = self.get_task(watched_id) else {
-                continue;
+            let watched_history = match references.get(watched_id) {
+                None | Some(MetricsReference::Local) => None,
+                Some(MetricsReference::Foreign { history, .. }) => Some(history.clone()),
+                Some(MetricsReference::Unreachable { .. }) => continue,
             };
-            let _ = watched_task;
-            for comment in self.get_task_comments(watched_id)? {
+            let local = watched_history.is_none();
+            let comments_read = if local {
+                self.get_task_comments(watched_id)?
+            } else {
+                Vec::new()
+            };
+            for comment in comments_read {
                 match ResidentComment::parse(&comment.message) {
                     // An unprompted relay is an intervention whoever relayed
                     // it; an answer to a request is not.
@@ -324,7 +410,11 @@ impl OrbitRuntime {
                     }
                 }
             }
-            for entry in self.get_task_history(watched_id)? {
+            let history_read = match watched_history {
+                Some(history) => history,
+                None => self.get_task_history(watched_id)?,
+            };
+            for entry in history_read {
                 if !is_human_writer(&entry.by) {
                     continue;
                 }
@@ -391,10 +481,24 @@ impl OrbitRuntime {
                 escalation_task_ids.insert(request.task.clone());
             }
         }
+        for id in &escalation_task_ids {
+            if id != task_id && !references.contains_key(id) {
+                references.insert(id.clone(), self.metrics_reference(id)?);
+            }
+        }
         let mut escalations: Vec<orbit_types::task::DecisionRequest> = Vec::new();
         let mut seen_requests: BTreeSet<String> = BTreeSet::new();
         for id in &escalation_task_ids {
-            for request in self.get_task_decision_requests(id)? {
+            let requests = match references.get(id) {
+                None | Some(MetricsReference::Local) => self.get_task_decision_requests(id)?,
+                // A foreign task's requests come from its owner-read record
+                // and history; its comments are not readable here.
+                Some(MetricsReference::Foreign { task, history, .. }) => {
+                    self.task_decision_requests_in(task, history, &[], now)?
+                }
+                Some(MetricsReference::Unreachable { .. }) => continue,
+            };
+            for request in requests {
                 let resident_raised = resident_request_ids.contains(&request.id)
                     || request.gate == orbit_types::task::DecisionGate::AgentRequest
                         && escalation_task_ids.contains(&request.task_id)
@@ -427,7 +531,14 @@ impl OrbitRuntime {
                 if let std::collections::btree_map::Entry::Vacant(slot) =
                     subject_histories.entry(action.subject.clone())
                 {
-                    slot.insert(self.get_task_history(&action.subject).unwrap_or_default());
+                    let history = match references.get(&action.subject) {
+                        Some(MetricsReference::Foreign { history, .. }) => history.clone(),
+                        Some(MetricsReference::Unreachable { .. }) => Vec::new(),
+                        None | Some(MetricsReference::Local) => {
+                            self.get_task_history(&action.subject).unwrap_or_default()
+                        }
+                    };
+                    slot.insert(history);
                 }
             }
         }
@@ -543,6 +654,24 @@ impl OrbitRuntime {
             }
         }
 
+        let mut foreign_references = Vec::new();
+        let mut unreachable_references = Vec::new();
+        for (id, reference) in &references {
+            match reference {
+                MetricsReference::Local => {}
+                MetricsReference::Foreign { workspace, .. } => foreign_references.push(json!({
+                    "task_id": id,
+                    "workspace": workspace,
+                    "read": ["history", "decision_requests"],
+                    "not_read": ["comments"],
+                })),
+                MetricsReference::Unreachable { reason } => unreachable_references.push(json!({
+                    "task_id": id,
+                    "reason": reason,
+                })),
+            }
+        }
+
         Ok(MeasureInputs {
             interventions,
             intervention_times,
@@ -556,6 +685,8 @@ impl OrbitRuntime {
             repeated_actions,
             recovery_interventions,
             has_checkpoints: !parsed_checkpoints.is_empty(),
+            foreign_references,
+            unreachable_references,
         })
     }
 }
@@ -660,6 +791,10 @@ fn mandate_json(task_id: &str, active_days: f64, inputs: &MeasureInputs, baselin
         "items": inputs.interventions,
     });
     let escalations = escalation_json(&inputs.escalations, active_days);
+    let references = json!({
+        "foreign": inputs.foreign_references,
+        "unreachable": inputs.unreachable_references,
+    });
     if baseline && !inputs.has_checkpoints {
         // An interactive loop leaves no checkpoint decisions and no cycle
         // record: reversals and crash recovery cannot be derived.
@@ -675,6 +810,7 @@ fn mandate_json(task_id: &str, active_days: f64, inputs: &MeasureInputs, baselin
             "reversal_rate": "not_derivable",
             "recovery": "not_derivable",
             "recovery_cost": "not_derivable",
+            "references": references,
         });
     }
     let reversals = reversal_json(inputs);
@@ -690,6 +826,7 @@ fn mandate_json(task_id: &str, active_days: f64, inputs: &MeasureInputs, baselin
         "reversal_rate": reversals,
         "recovery": recovery.clone(),
         "recovery_cost": recovery,
+        "references": references,
     })
 }
 
