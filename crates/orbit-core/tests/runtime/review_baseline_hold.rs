@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 
 use super::review_before_landing::published;
 use super::review_gate_audit::Fixture;
+use crate::scenarios::Outcome;
 
 /// The check the workspace requires beyond the host-required commands. It
 /// fails `suite::broken` wherever `broken` is set, and `suite::regressed`
@@ -757,7 +758,7 @@ const CHECK_RUNS_LOG: &str = "check-runs.log";
 /// [ORB-15590] A genuine signal stops the host's candidate after it reports
 /// its selection and a shared failed test. The complete base could reproduce
 /// that test, but its replay cannot establish what the stopped run never did.
-fn a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay() {
+fn a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay() -> Outcome {
     // Exec keeps the signalled shell as the supervised child, so the signal
     // is recorded by the executor rather than converted to shell exit 143.
     let command = "exec sh check.sh";
@@ -822,6 +823,7 @@ fn a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay() {
             .all(|entry| entry.event != KNOWN_RED_VALIDATION_EVENT),
         "[ORB-15590] a stopped candidate never records known-red acceptance"
     );
+    Outcome::Passed
 }
 
 /// [ORB-15328] A failing gate whose failures the base shares settles with
@@ -829,7 +831,7 @@ fn a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay() {
 /// full selection runs once, on the candidate, and settlement records the
 /// replay path. [ORB-15546] The replayed tests all fail on the base, so they
 /// are known red and the review settles accept.
-fn a_shared_gate_failure_is_attributed_by_replaying_only_the_failing_tests() {
+fn a_shared_gate_failure_is_attributed_by_replaying_only_the_failing_tests() -> Outcome {
     let mut fixture = fixture(REPLAYING_GATE, "after\n");
     fixture.admit();
     fixture.put_report(&claim_report(&fixture, CHECK, &["check.sh"]));
@@ -867,13 +869,14 @@ fn a_shared_gate_failure_is_attributed_by_replaying_only_the_failing_tests() {
         json!({"packages": ["suite"], "failing_tests": ["suite::broken"]}),
         "{check}"
     );
+    Outcome::Passed
 }
 
 /// [ORB-15131] A hold confirmed for a diff-selecting check records the
 /// candidate's selection, and a moved base lifts it only when that selection
 /// passes there: a tip that tests nothing of its own keeps the task held. The
 /// check fails to build, so the failure is held rather than known red.
-fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() {
+fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() -> Outcome {
     let mut fixture = fixture(&affected_check(true, ".", FAILS_BUILD), "after\n");
     let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
     let hold = BaselineRedHold::from_text(&failure).expect("the claim is confirmed and held");
@@ -906,9 +909,10 @@ fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() {
         ),
         "a tip that passes the held selection lifts the hold"
     );
+    Outcome::Passed
 }
 
-fn a_deferred_host_pass_never_overrides_the_reviewers_failure() {
+fn a_deferred_host_pass_never_overrides_the_reviewers_failure() -> Outcome {
     let notice = orbit_exec::bwrap_deferral_notice(
         "runtime::sandbox_path",
         "the host cannot apply the sandbox",
@@ -972,6 +976,7 @@ fn a_deferred_host_pass_never_overrides_the_reviewers_failure() {
             .contains(&notice),
         "the notice falls in the omitted middle of the bounded output"
     );
+    Outcome::Passed
 }
 
 /// A gated task whose check is the real `scripts/ci-test-affected.py` over a
@@ -1037,18 +1042,26 @@ fn nextest_fixture(test_body: &str) -> Option<Fixture> {
     Some(fixture)
 }
 
+/// Report cargo-nextest as unavailable. `()` would become a pass and emit
+/// `qa-scenario-pass` for a row whose assertions never ran.
+fn unavailable_nextest() -> Outcome {
+    Outcome::Unavailable("cargo-nextest is unavailable or its version probe failed".into())
+}
+
 /// [ORB-15161] A test that passes under nextest after printing the canonical
 /// deferral notice is a self-skipped sandbox path. nextest captures a passing
 /// test's output, so the gate must transport it for the host to judge: the
 /// positive executed-test count never turns it into a host override.
-fn a_deferral_a_passing_nextest_test_printed_never_overrides_the_reviewers_failure() {
+/// Completion credit is earned only after those assertions. A missing
+/// cargo-nextest probe reports the capability and takes no pass credit.
+fn a_deferral_a_passing_nextest_test_printed_never_overrides_the_reviewers_failure() -> Outcome {
     let notice = orbit_exec::bwrap_deferral_notice(
         "runtime::sandbox_path",
         "the host cannot apply the sandbox",
     );
     let body = format!("#[test]\nfn sandboxed_path() {{ eprintln!({notice:?}); }}\n");
     let Some(mut fixture) = nextest_fixture(&body) else {
-        return;
+        return unavailable_nextest();
     };
     let failure = settle_claim(&mut fixture, CHECK, &["check.sh"]);
 
@@ -1081,15 +1094,18 @@ fn a_deferral_a_passing_nextest_test_printed_never_overrides_the_reviewers_failu
         "{evidence}"
     );
     assert_eq!(check["candidate"]["host_output_refusal"]["detail"], notice);
+    Outcome::Passed
 }
 
 /// [ORB-15161] The same gate over a test that ran its path to the end still
 /// lets the host's pass override the reviewer's failed outcome.
-fn a_fully_executed_passing_nextest_gate_still_permits_the_host_override() {
+/// Completion credit is earned only after those assertions. A missing
+/// cargo-nextest probe reports the capability and takes no pass credit.
+fn a_fully_executed_passing_nextest_gate_still_permits_the_host_override() -> Outcome {
     let Some(mut fixture) =
         nextest_fixture("#[test]\nfn sandboxed_path() { assert_eq!(1 + 1, 2); }\n")
     else {
-        return;
+        return unavailable_nextest();
     };
     fixture.admit();
     fixture.put_report(&claim_report(&fixture, CHECK, &["check.sh"]));
@@ -1107,6 +1123,7 @@ fn a_fully_executed_passing_nextest_gate_still_permits_the_host_override() {
         settled.host_overrides
     );
     assert_eq!(settled.host_overrides[0].tests_run, Some(1));
+    Outcome::Passed
 }
 
 /// [ORB-15122] The before-landing trial's incident shape: the reviewer found
@@ -1114,7 +1131,7 @@ fn a_fully_executed_passing_nextest_gate_still_permits_the_host_override() {
 /// claimed the base fails it too. The host passes the check on the final
 /// candidate, so the review settles accept on the host's run, and the
 /// certificate records that the reviewer's outcome was overridden.
-fn a_check_the_host_passes_on_the_candidate_settles_accept_on_the_host_run() {
+fn a_check_the_host_passes_on_the_candidate_settles_accept_on_the_host_run() -> Outcome {
     let mut fixture = fixture(&affected_check(true, "never", FAILS_TEST), "after\n");
     let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
     fixture.admit();
@@ -1160,6 +1177,7 @@ fn a_check_the_host_passes_on_the_candidate_settles_accept_on_the_host_run() {
     let check = &evidence["checks"][0];
     assert_eq!(check["decision"], "candidate_passed", "{evidence}");
     assert_eq!(check["candidate"]["passed"], true, "{evidence}");
+    Outcome::Passed
 }
 
 /// [ORB-15122] A host pass that executed no counted test shows nothing about
@@ -1568,6 +1586,9 @@ crate::scenario_table!(
     a_base_run_that_tests_nothing_neither_refutes_nor_confirms_a_claim
 );
 
+// Every row returns `Outcome`. A unit return becomes pass credit, so the two
+// nextest rows would be marked complete when their probe never reached an
+// assertion. `Passed` is reported only after the row function returns.
 crate::scenario_table!(
     a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay_scenarios,
     a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay,
@@ -1578,6 +1599,178 @@ crate::scenario_table!(
     a_fully_executed_passing_nextest_gate_still_permits_the_host_override,
     a_check_the_host_passes_on_the_candidate_settles_accept_on_the_host_run
 );
+
+/// Scenario-runner row selector (`scenarios::ROW`). One selected row reports
+/// its own outcome and does not run the rest of the table.
+const SCENARIO_ROW_ENV: &str = "ORBIT_RUNTIME_SCENARIO_ROW";
+
+const NEXTEST_ROWS: [&str; 2] = [
+    "a_deferral_a_passing_nextest_test_printed_never_overrides_the_reviewers_failure",
+    "a_fully_executed_passing_nextest_gate_still_permits_the_host_override",
+];
+
+const NEXTEST_TABLE: &str =
+    "a_supervisor_stopped_candidate_never_settles_accept_through_a_base_replay_scenarios";
+
+/// A host without cargo-nextest must not receive completion credit for either
+/// nextest row. The version probe fails closed to `Outcome::Unavailable`, the
+/// table prints `SKIP`, and the QA command boundary does not treat the rows
+/// as executed.
+#[test]
+fn unavailable_nextest_rows_report_the_capability_and_take_no_pass_credit() {
+    let shim = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("cargo shim directory");
+    let cargo_shim = shim.path().join("cargo");
+    std::fs::write(&cargo_shim, "#!/bin/sh\nexit 1\n").expect("write cargo shim");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cargo_shim, std::fs::Permissions::from_mode(0o755))
+            .expect("mark cargo shim executable");
+    }
+    let path = std::env::join_paths(std::iter::once(shim.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("prepend the cargo shim to PATH");
+    let module = module_path!().split_once("::").expect("test module").1;
+    let table = format!("{module}::{NEXTEST_TABLE}");
+    let mut combined_stdout = String::new();
+    let mut combined_stderr = String::new();
+    for row in NEXTEST_ROWS {
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args(["--exact", &table, "--nocapture", "--test-threads=1"])
+            .env(SCENARIO_ROW_ENV, row)
+            .env("PATH", &path)
+            .output()
+            .expect("run the nextest row without cargo-nextest");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "an unavailable nextest row still exits zero for {row}:\n{stdout}\n{stderr}"
+        );
+        let transcript = format!("{stdout}\n{stderr}");
+        assert!(
+            transcript.contains(&format!("SKIP: {row}:")) && transcript.contains("cargo-nextest"),
+            "the row reports cargo-nextest as unavailable for {row}:\n{transcript}"
+        );
+        assert!(
+            !transcript.contains(&format!("qa-scenario-pass: {row}")),
+            "an unavailable row takes no pass credit for {row}:\n{transcript}"
+        );
+        combined_stdout.push_str(&stdout);
+        combined_stdout.push('\n');
+        combined_stderr.push_str(&stderr);
+        combined_stderr.push('\n');
+    }
+    assert_qa_boundary_withholds_nextest_credit(&combined_stdout, &combined_stderr);
+}
+
+fn assert_qa_boundary_withholds_nextest_credit(stdout: &str, stderr: &str) {
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("qa boundary directory");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/test-qa-full-sweep.py");
+    std::fs::write(dir.path().join("stdout.txt"), stdout).expect("write captured stdout");
+    std::fs::write(dir.path().join("stderr.txt"), stderr).expect("write captured stderr");
+    std::fs::write(
+        dir.path().join("rows.json"),
+        serde_json::to_string(&NEXTEST_ROWS).expect("row names"),
+    )
+    .expect("write row names");
+    std::fs::write(dir.path().join("check.py"), QA_BOUNDARY_CHECK).expect("write qa check");
+    let output = std::process::Command::new("python3")
+        .arg(dir.path().join("check.py"))
+        .arg(&script)
+        .arg(dir.path())
+        .output()
+        .expect("run the qa command boundary");
+    let report_text = String::from_utf8_lossy(&output.stdout);
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "qa boundary check failed:\n{report_text}\n{errors}"
+    );
+    let report: Value = serde_json::from_str(&report_text).expect("qa boundary json");
+    assert_eq!(
+        report["credited"].as_array().map(Vec::len),
+        Some(0),
+        "passing rows must not include an unavailable nextest row: {report}"
+    );
+    assert_eq!(
+        report["outcome"], "NOT_RUN",
+        "a SKIP notice withholds command credit: {report}"
+    );
+    assert_eq!(
+        report["assertions"],
+        json!([]),
+        "withheld credit keeps no assertions: {report}"
+    );
+    let notices = report["notices"].to_string();
+    let refused = report["refused"].as_str().unwrap_or("");
+    assert!(
+        refused.contains("did not complete required behavioral rows"),
+        "required rows stay incomplete without a pass marker: {report}"
+    );
+    for row in NEXTEST_ROWS {
+        assert!(
+            notices.contains(row) && notices.contains("cargo-nextest"),
+            "the notice names the unavailable row {row}: {report}"
+        );
+        assert!(
+            refused.contains(row),
+            "the required-row gate names {row}: {report}"
+        );
+    }
+}
+
+const QA_BOUNDARY_CHECK: &str = r#"
+import importlib.util
+import json
+import re
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("qa_sweep", sys.argv[1])
+qa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qa)
+root = Path(sys.argv[2])
+stdout = (root / "stdout.txt").read_text(encoding="utf-8")
+stderr = (root / "stderr.txt").read_text(encoding="utf-8")
+rows = json.loads((root / "rows.json").read_text(encoding="utf-8"))
+text = stdout + "\n" + stderr
+completed = set(re.findall(r"(?m)^qa-scenario-pass: (\S+)$", text))
+credited = sorted(set(rows) & completed)
+evidence = {"stdout": stdout, "stderr": stderr, "exit_code": 0}
+notices = qa.execution_notices(dict(evidence))
+settled = qa.finalize_result(dict(evidence), ["executed"], "candidate")
+framed = {
+    "stdout": (
+        "running 1 test\n"
+        "test review_baseline_hold::nextest_rows ... ok\n"
+        "\n"
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n"
+    ),
+    "stderr": (
+        "     Running tests/runtime/main.rs (/workspace/target/debug/deps/runtime-unavailable)\n"
+        + "\n".join(notices)
+    ),
+    "exit_code": 0,
+}
+command = ["cargo", "test", "-p", "orbit-core", "--test", "runtime", "--", "--show-output"]
+try:
+    qa.validate_cargo_test_evidence(command, framed, (), rows)
+except ValueError as error:
+    refused = str(error)
+else:
+    refused = ""
+sys.stdout.write(json.dumps({
+    "credited": credited,
+    "notices": notices,
+    "outcome": settled["outcome"],
+    "assertions": settled["assertions"],
+    "refused": refused,
+}))
+"#;
 
 crate::scenario_table!(
     a_host_pass_without_tests_or_under_an_open_finding_never_accepts_scenarios,
