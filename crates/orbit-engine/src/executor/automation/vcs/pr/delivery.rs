@@ -313,6 +313,9 @@ enum UnreportedWait {
     /// Current branch policy names these checks, and the head has not
     /// reported them yet.
     Missing(Vec<String>),
+    /// Current branch policy names these checks, and the head has reported
+    /// them still running (never failed).
+    Pending(Vec<String>),
     /// Branch policy could not be read, so a bounded grace stands in for it.
     Unsettled(String),
 }
@@ -360,6 +363,9 @@ impl UnreportedChecks {
                 " (required checks the head has not reported: {})",
                 names.join(", ")
             ),
+            UnreportedWait::Pending(names) => {
+                format!(" (required checks still pending: {})", names.join(", "))
+            }
             UnreportedWait::Unsettled(why) => format!(
                 " (the head reported no pending required check and branch policy is \
                  unreadable: {why})"
@@ -590,14 +596,22 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     }
     let missing = unreported_required_checks(host, workspace, pr, status, deadline_ms);
     unreported.policy_observation = match &missing {
-        Ok(names) => json!({"state":"collected", "missing_checks":
-            super::diagnostics::collection(names, |name| super::diagnostics::text(name))}),
+        Ok(assessment) => json!({"state":"collected", "missing_checks":
+            super::diagnostics::collection(&assessment.missing, |name| super::diagnostics::text(name)),
+            "pending_checks":
+            super::diagnostics::collection(&assessment.pending, |name| super::diagnostics::text(name))}),
         Err(why) => json!({"state":"unreadable", "reason":super::diagnostics::text(why)}),
     };
     match missing {
-        Ok(missing) if missing.is_empty() => Ok(state),
-        Ok(missing) => {
-            unreported.last = UnreportedWait::Missing(missing);
+        Ok(assessment) if assessment.missing.is_empty() && assessment.pending.is_empty() => {
+            Ok(state)
+        }
+        Ok(assessment) => {
+            unreported.last = if assessment.missing.is_empty() {
+                UnreportedWait::Pending(assessment.pending)
+            } else {
+                UnreportedWait::Missing(assessment.missing)
+            };
             Ok(PrMergeState::Pending)
         }
         // Auto-fix applies the same grace in its own BLOCKED verdict.
@@ -612,16 +626,30 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     }
 }
 
+/// What current branch policy still owes on the observed head, from the
+/// same authenticated current-gates read a base update is held to.
+struct PolicyRequiredAssessment {
+    /// Policy-required checks the head has not reported at all.
+    missing: Vec<String>,
+    /// Policy-required checks the head reported still running, with no
+    /// failed report. The required-checks GraphQL read can settle before
+    /// such a check is reported as required (or name it differently), while
+    /// branch policy and the check-runs read already agree it is required
+    /// and running [ORB-21458]: that is a wait, not an unsatisfied refusal.
+    pending: Vec<String>,
+}
+
 /// The checks current branch policy requires that the observed head has not
-/// reported at all, from the same authenticated current-gates read a base
-/// update is held to. A check the head reported, in any state, is not here.
+/// reported at all, and those it reported still running, from the same
+/// authenticated current-gates read a base update is held to. A check the
+/// head reported, in any state, is not missing.
 fn unreported_required_checks<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     pr: &str,
     status: &PullRequestStatus,
     deadline_ms: Option<u64>,
-) -> Result<Vec<String>, String> {
+) -> Result<PolicyRequiredAssessment, String> {
     let deadline_ms =
         deadline_ms.ok_or("no completion wait budget remains for required-check policy")?;
     let (Some(head), Some(branch), Some(base)) = (
@@ -640,7 +668,7 @@ fn unreported_required_checks<H: RuntimeHost + ?Sized>(
             }),
         )
         .map_err(|error| error.to_string())?;
-    gates["missing"]
+    let missing: Vec<String> = gates["missing"]
         .as_array()
         .ok_or_else(|| "the current-gates answer named no missing checks".to_string())?
         .iter()
@@ -651,7 +679,83 @@ fn unreported_required_checks<H: RuntimeHost + ?Sized>(
                 .map(ToOwned::to_owned)
                 .ok_or_else(|| "the current-gates answer named an unreadable check".to_string())
         })
-        .collect()
+        .collect::<Result<_, _>>()?;
+    let pending = pending_policy_required_checks(&gates, &missing);
+    Ok(PolicyRequiredAssessment { missing, pending })
+}
+
+/// Policy-required gates the head reported still running in the same
+/// current-gates answer, excluding any that also reported a failure: a
+/// failed gate keeps its existing recovery or stop, never a wait.
+fn pending_policy_required_checks(gates: &Value, missing: &[String]) -> Vec<String> {
+    // The current-gates answer carries the provider's raw list objects:
+    // `checks` holds a `check_runs` list and `statuses` a `statuses` list.
+    let checks = gates["checks"]
+        .as_array()
+        .or_else(|| gates["checks"]["check_runs"].as_array());
+    let (Some(required), Some(checks)) = (gates["required"].as_array(), checks) else {
+        return Vec::new();
+    };
+    let statuses = gates["statuses"]
+        .as_array()
+        .or_else(|| gates["statuses"]["statuses"].as_array());
+    let mut pending = Vec::new();
+    for gate in required {
+        let Some(context) = gate["context"]
+            .as_str()
+            .filter(|context| !context.is_empty())
+        else {
+            continue;
+        };
+        if missing.iter().any(|name| name == context) || pending.iter().any(|name| name == context)
+        {
+            continue;
+        }
+        let app_id = gate["app_id"].as_u64();
+        let mut present = false;
+        let mut running = false;
+        let mut failed = false;
+        for check in checks {
+            if check["name"].as_str() != Some(context)
+                || app_id.is_some_and(|app| check["app"]["id"].as_u64() != Some(app))
+            {
+                continue;
+            }
+            present = true;
+            match check["status"].as_str() {
+                Some("completed") => {
+                    if let Some(
+                        "failure" | "cancelled" | "timed_out" | "action_required"
+                        | "startup_failure" | "stale",
+                    ) = check["conclusion"].as_str()
+                    {
+                        failed = true;
+                    }
+                }
+                Some(_) => running = true,
+                None => {}
+            }
+        }
+        if app_id.is_none()
+            && let Some(statuses) = statuses
+        {
+            for status in statuses {
+                if status["context"].as_str() != Some(context) {
+                    continue;
+                }
+                present = true;
+                match status["state"].as_str() {
+                    Some("pending" | "expected") => running = true,
+                    Some("failure" | "error") => failed = true,
+                    _ => {}
+                }
+            }
+        }
+        if present && running && !failed {
+            pending.push(context.to_string());
+        }
+    }
+    pending
 }
 
 /// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.

@@ -175,6 +175,64 @@ fn required_check_transport_preserves_retry_budget_and_merge_authority() {
     );
 }
 
+/// [ORB-21458] A follower hands off seconds after its PR's checks start:
+/// the rollup and the check-runs API already show the policy-required check
+/// running, but the required-checks GraphQL read has not reported it as
+/// required yet, so no read names a pending *required* check and the
+/// current-gates missing list is empty (the check is present, not absent).
+/// Landing must wait for that check, not stop the handoff; once it passes
+/// the handoff lands with no operator retry. A policy-required check that
+/// has failed instead still stops the handoff.
+#[test]
+fn owner_landing_waits_for_a_policy_required_check_the_required_read_has_not_reported() {
+    isolated(
+        "landing_transport::owner_landing_waits_for_a_policy_required_check_the_required_read_has_not_reported",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, mut host) = faulty_landing(row, "unused-fault", TLS, false);
+                // Branch-protection required checks only: no review-owed
+                // hosted check may name the pending check for this landing.
+                host.context.owed_hosted_checks.clear();
+                fs::write(fx.forge.join("required-pending-unreported"), "pending").unwrap();
+                let pending = fx.forge.join("required-pending-unreported");
+                let (outcome, waits) = land_with_wait(&host, 120, move |wait| {
+                    if wait == Duration::from_secs(30) {
+                        fs::remove_file(&pending).unwrap();
+                    }
+                });
+
+                assert_eq!(waits, [30], "one normal check poll, no stop: {outcome:?}");
+                assert_eq!(
+                    outcome.expect("pending policy-required check lands once it passes")["phase"],
+                    "landed"
+                );
+                assert_eq!(mutations(&fx), "merge\n");
+                assert_eq!(steps(&host), landed_steps());
+            });
+
+            in_fresh_row(sandbox, |row| {
+                let (fx, mut host) = faulty_landing(row, "unused-fault", TLS, false);
+                host.context.owed_hosted_checks.clear();
+                fs::write(fx.forge.join("required-failed-unreported"), "failed").unwrap();
+                let (outcome, waits) = land(&host);
+
+                outcome.expect_err("a failed policy-required check still stops the handoff");
+                assert!(
+                    waits.is_empty(),
+                    "a failed check is not waited on: {waits:?}"
+                );
+                assert!(mutations(&fx).is_empty());
+                assert_eq!(
+                    steps(&host),
+                    [HandoffLandingStep::Stop { repairable: false }]
+                );
+                let evidence = host.updates.lock().unwrap()[0].evidence.clone();
+                assert!(evidence.contains("cannot be merged"), "{evidence}");
+            });
+        },
+    );
+}
+
 fn steps(host: &AcceptedLanding) -> Vec<HandoffLandingStep> {
     host.updates
         .lock()
