@@ -67,6 +67,9 @@ pub enum TaskDecision {
     SourceRepairPublication(PublicationSettlingObservation),
     /// The reason a reused PR stayed draft or became ready for review.
     PrDraftRecovery(crate::workflow::PrDraftRecovery),
+    /// One bounded wait for a throttled pull-request log read, recorded on
+    /// `pr_auto_fix_read_deferred`.
+    PrAutoFixReadDeferred(crate::workflow::PrAutoFixReadDeferral),
     /// Code scanning alert evidence a per-alert sweep task was filed from,
     /// recorded on its `created` event.
     CodeScanningAlert(CodeScanningAlertEvidence),

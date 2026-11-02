@@ -15,13 +15,14 @@
 //! base-update or merge budget, and the poll after it re-reads the pull
 //! request's head and required checks before any evidence is used. Anything
 //! this policy refuses keeps the held stop an unreadable log always had,
-//! with the provider's original diagnostic.
+//! with the provider's original diagnostic. Each wait is a
+//! [`PrAutoFixReadDeferral`]: the producer builds that record, and every
+//! reader takes it from [`PrAutoFixReadDeferral::from_entry`].
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_common::text::floor_char_boundary;
-use orbit_types::workflow::DeliveryRefusal;
-use serde_json::{Value, json};
+use orbit_types::workflow::{DeliveryRefusal, PrAutoFixReadDeferral, PrAutoFixReadReset};
 
 use crate::context::RuntimeHost;
 
@@ -29,8 +30,6 @@ use super::super::super::completion_deadline::now_ms;
 use super::super::super::landing::checks::DeferredLogRead;
 use super::{admission, ledger, verdict};
 
-/// The history event recording one bound wait.
-const READ_DEFERRED_EVENT: &str = "pr_auto_fix_read_deferred";
 /// Waits one exact read may earn before completion stops holding.
 const MAX_THROTTLED_READ_WAITS: u64 = 3;
 /// The first wait when the provider named no reset, doubled per attempt.
@@ -70,7 +69,7 @@ pub(in crate::executor::automation::vcs::pr) fn defer_throttled_read<H: RuntimeH
     let attempt = recorded(host, auto_fix, pr_number, &deferred.head)?
         .iter()
         .filter(|record| same_read(record, deferred))
-        .filter_map(|record| record["attempt"].as_u64())
+        .map(|record| record.attempt)
         .max()
         .unwrap_or(0)
         + 1;
@@ -108,29 +107,34 @@ pub(in crate::executor::automation::vcs::pr) fn defer_throttled_read<H: RuntimeH
     }
     let mut diagnostic = redact_all(&deferred.reason);
     diagnostic.truncate(floor_char_boundary(&diagnostic, MAX_DIAGNOSTIC_BYTES));
-    let unavailable = |value: &Option<String>| value.clone().unwrap_or("unavailable".into());
-    let record = json!({
-        "execution": auto_fix.run_id,
-        "pr": pr_number,
-        "head_sha": deferred.head,
-        "repository": deferred.repository,
-        "run_id": deferred.run_id,
-        "job_id": deferred.job_id,
-        "run_attempt": deferred.run_attempt,
-        "attempt": attempt,
-        "observed_at_ms": now,
-        "not_before_ms": not_before,
-        "deadline_ms": deadline_ms,
-        "reset": if provider.is_some() { "provider" } else { "unknown" },
-        "retry_after_seconds": throttle.retry_after_seconds,
-        "reset_epoch_seconds": throttle.reset_epoch_seconds,
-        "resource": unavailable(&throttle.resource),
-        "principal": unavailable(&throttle.principal),
-        "request_id": unavailable(&throttle.request_id),
-        "diagnostic": diagnostic,
-    });
+    let unavailable =
+        |value: &Option<String>| value.clone().unwrap_or_else(|| "unavailable".to_owned());
+    let record = PrAutoFixReadDeferral {
+        execution: auto_fix.run_id.clone(),
+        pr: pr_number.to_owned(),
+        head_sha: deferred.head.clone(),
+        repository: deferred.repository.clone(),
+        run_id: deferred.run_id,
+        job_id: deferred.job_id,
+        run_attempt: deferred.run_attempt,
+        attempt,
+        observed_at_ms: now,
+        not_before_ms: Some(not_before),
+        deadline_ms,
+        reset: if provider.is_some() {
+            PrAutoFixReadReset::Provider
+        } else {
+            PrAutoFixReadReset::Unknown
+        },
+        retry_after_seconds: throttle.retry_after_seconds,
+        reset_epoch_seconds: throttle.reset_epoch_seconds,
+        resource: unavailable(&throttle.resource),
+        principal: unavailable(&throttle.principal),
+        request_id: unavailable(&throttle.request_id),
+        diagnostic: Some(diagnostic),
+    };
     // An unrecorded wait could not bind a resume, so it is not taken.
-    ledger::record_base_path(host, auto_fix, READ_DEFERRED_EVENT, &record)
+    ledger::record_read_deferral(host, auto_fix, &record)
         .map_err(|error| held(&format!("the read wait could not be recorded: {error}")))?;
     Ok(not_before - now)
 }
@@ -147,11 +151,11 @@ pub(in crate::executor::automation::vcs::pr) fn owed_read_wait<H: RuntimeHost + 
 ) -> Result<Option<u64>, OrbitError> {
     let Some(record) = recorded(host, auto_fix, pr_number, head)?
         .into_iter()
-        .max_by_key(|record| record["not_before_ms"].as_u64())
+        .max_by_key(|record| record.not_before_ms)
     else {
         return Ok(None);
     };
-    let not_before = record["not_before_ms"].as_u64().unwrap_or(u64::MAX);
+    let not_before = record.effective_not_before_ms();
     let now = now_ms()?;
     if not_before <= now {
         return Ok(None);
@@ -162,9 +166,7 @@ pub(in crate::executor::automation::vcs::pr) fn owed_read_wait<H: RuntimeHost + 
                 pr_number,
                 &format!(
                     "{}; the recorded read wait does not end before the completion deadline",
-                    record["diagnostic"]
-                        .as_str()
-                        .unwrap_or("a throttled log read")
+                    record.diagnostic_text()
                 ),
             ),
             DeliveryRefusal::CheckEvidenceInconclusive,
@@ -179,33 +181,26 @@ fn recorded<H: RuntimeHost + ?Sized>(
     auto_fix: &admission::AutoFix,
     pr_number: &str,
     head: &str,
-) -> Result<Vec<Value>, OrbitError> {
+) -> Result<Vec<PrAutoFixReadDeferral>, OrbitError> {
     let mut records = Vec::new();
     for task in &auto_fix.task_ids {
         for entry in host.get_task_history(task)? {
-            let Some(note) = entry
-                .note
-                .as_deref()
-                .filter(|_| entry.event == READ_DEFERRED_EVENT)
-                .and_then(|note| serde_json::from_str::<Value>(note).ok())
-            else {
+            let Some(record) = PrAutoFixReadDeferral::from_entry(&entry) else {
                 continue;
             };
-            if note["pr"] == pr_number
-                && note["head_sha"] == head
-                && note["execution"]
-                    .as_str()
-                    .is_some_and(|run| auto_fix.ledger_runs.contains(run))
+            if record.pr == pr_number
+                && record.head_sha == head
+                && auto_fix.ledger_runs.contains(&record.execution)
             {
-                records.push(note);
+                records.push(record);
             }
         }
     }
     Ok(records)
 }
 
-fn same_read(record: &Value, deferred: &DeferredLogRead) -> bool {
-    record["run_id"].as_u64() == Some(deferred.run_id)
-        && record["job_id"].as_u64() == Some(deferred.job_id)
-        && record["run_attempt"].as_u64() == deferred.run_attempt
+fn same_read(record: &PrAutoFixReadDeferral, deferred: &DeferredLogRead) -> bool {
+    record.run_id == deferred.run_id
+        && record.job_id == deferred.job_id
+        && record.run_attempt == deferred.run_attempt
 }

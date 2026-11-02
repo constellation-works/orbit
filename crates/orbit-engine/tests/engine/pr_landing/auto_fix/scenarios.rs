@@ -1,6 +1,7 @@
 //! Resumed auto-fix authority through the public job and PR boundaries.
 
 use super::*;
+use orbit_types::workflow::{PrAutoFixReadDeferral, PrAutoFixReadReset};
 use std::io::Write as _;
 
 type JobResult = Result<orbit_engine::JobOutcome, DispatchError>;
@@ -372,6 +373,15 @@ pub(super) fn seed_auto_fix_history(
     event: &str,
     note: &impl serde::Serialize,
 ) {
+    seed_auto_fix_history_decision(host, event, note, None);
+}
+
+fn seed_auto_fix_history_decision(
+    host: &DeliveryHost,
+    event: &str,
+    note: &impl serde::Serialize,
+    decision: Option<TaskDecision>,
+) {
     host.history
         .lock()
         .unwrap()
@@ -385,7 +395,7 @@ pub(super) fn seed_auto_fix_history(
             from_status: None,
             to_status: None,
             operation_id: None,
-            decision: None,
+            decision,
         });
 }
 
@@ -3443,8 +3453,8 @@ const RATE_LIMITED_LOG: &str = "failed to get run log: HTTP 403: API rate limit 
 fn auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline() {
     auto_fix_table(
         "auto_fix::auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline",
-        "retry_after unknown_reset resumed head_moved persistent beyond_deadline forbidden \
-         bad_credentials unauthenticated",
+        "retry_after unknown_reset resumed typed_resume unrelated_decision head_moved persistent \
+         beyond_deadline forbidden bad_credentials unauthenticated",
         throttled_log_case,
     );
 }
@@ -3513,6 +3523,46 @@ fn nested_base_log_throttle_defers_the_bound_prerequisite_read() {
     );
 }
 
+/// A wait this run recorded carries the typed decision, and its note is
+/// still the pre-decision JSON of that same record.
+fn assert_produced_deferral(entry: &TaskHistoryEntry) {
+    let Some(TaskDecision::PrAutoFixReadDeferred(typed)) = &entry.decision else {
+        panic!("a new read deferral is a typed decision: {entry:?}");
+    };
+    let legacy_shape = json!({
+        "execution": typed.execution,
+        "pr": typed.pr,
+        "head_sha": typed.head_sha,
+        "repository": typed.repository,
+        "run_id": typed.run_id,
+        "job_id": typed.job_id,
+        "run_attempt": typed.run_attempt,
+        "attempt": typed.attempt,
+        "observed_at_ms": typed.observed_at_ms,
+        "not_before_ms": typed.not_before_ms,
+        "deadline_ms": typed.deadline_ms,
+        "reset": match typed.reset {
+            PrAutoFixReadReset::Provider => "provider",
+            PrAutoFixReadReset::Unknown => "unknown",
+        },
+        "retry_after_seconds": typed.retry_after_seconds,
+        "reset_epoch_seconds": typed.reset_epoch_seconds,
+        "resource": typed.resource,
+        "principal": typed.principal,
+        "request_id": typed.request_id,
+        "diagnostic": typed.diagnostic,
+    });
+    assert_eq!(
+        entry.note.as_deref(),
+        Some(serde_json::to_string(&legacy_shape).unwrap().as_str()),
+        "the note stays the pre-decision JSON shape"
+    );
+    assert!(
+        typed.run_attempt.is_none(),
+        "this fixture names no run attempt"
+    );
+}
+
 fn throttled_log_case(case: &str, row: &std::path::Path) {
     const START_MS: u64 = 1_000_000;
     let (fx, host) = opened_review(row);
@@ -3549,8 +3599,10 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             format!("{RATE_LIMITED_LOG}\nRetry-After: 1"),
             Some(START_MS + 1_000),
         ),
-        "unknown_reset" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000)),
-        "resumed" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 200_000)),
+        "unknown_reset" | "unrelated_decision" => {
+            (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000))
+        }
+        "resumed" | "typed_resume" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 200_000)),
         "persistent" => (RATE_LIMITED_LOG.to_string(), None),
         "beyond_deadline" => (format!("{RATE_LIMITED_LOG}\nRetry-After: 900"), None),
         "forbidden" => (
@@ -3584,19 +3636,60 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
     if let Some(until) = until {
         fs::write(ci.join("log-fault-until"), until.to_string()).unwrap();
     }
-    if case == "resumed" {
+    if case == "resumed" || case == "typed_resume" || case == "unrelated_decision" {
         // An earlier process of this run recorded the wait and was
-        // interrupted before it ended.
-        seed_auto_fix_history(
-            &host,
-            "pr_auto_fix_read_deferred",
-            &json!({
-                "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
-                "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
-                "attempt": 1, "observed_at_ms": START_MS - 60_000,
-                "not_before_ms": START_MS + 200_000, "reset": "unknown",
-            }),
-        );
+        // interrupted before it ended. `resumed` is that note with no
+        // decision. `typed_resume` stores a contradictory note beside the
+        // decision that actually binds the wait. `unrelated_decision` puts
+        // another decision on the same note, which must not be read as one.
+        let legacy_note = json!({
+            "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+            "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+            "attempt": 1, "observed_at_ms": START_MS - 60_000,
+            "not_before_ms": START_MS + 200_000, "reset": "unknown",
+        });
+        let (note, decision) = if case == "typed_resume" {
+            let typed = PrAutoFixReadDeferral {
+                execution: RUN_ID.into(),
+                pr: PR_NUMBER.into(),
+                head_sha: fx.candidate.clone(),
+                repository: None,
+                run_id: 11,
+                job_id: 12,
+                run_attempt: None,
+                attempt: 1,
+                observed_at_ms: START_MS - 60_000,
+                not_before_ms: Some(START_MS + 200_000),
+                deadline_ms: START_MS + 600_000,
+                reset: PrAutoFixReadReset::Unknown,
+                retry_after_seconds: None,
+                reset_epoch_seconds: None,
+                resource: "unavailable".into(),
+                principal: "unavailable".into(),
+                request_id: "unavailable".into(),
+                diagnostic: Some("typed diagnostic".into()),
+            };
+            (
+                json!({
+                    "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+                    "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+                    "attempt": 9, "observed_at_ms": START_MS - 60_000,
+                    "not_before_ms": START_MS, "reset": "unknown",
+                    "diagnostic": "note diagnostic must not bind the wait",
+                }),
+                Some(TaskDecision::PrAutoFixReadDeferred(typed)),
+            )
+        } else if case == "unrelated_decision" {
+            (
+                legacy_note,
+                Some(TaskDecision::DrainApprovalHeld {
+                    classification: "other".into(),
+                }),
+            )
+        } else {
+            (legacy_note, None)
+        };
+        seed_auto_fix_history_decision(&host, "pr_auto_fix_read_deferred", &note, decision);
     }
     fx.script_checks(&["failure"]);
     let input = waited_auto_fix_input(&fx, if case == "nested_base" { 10 } else { 600 }, Some(5));
@@ -3668,12 +3761,15 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         .filter_map(|call| call.strip_prefix("wait "))
         .map(|millis| millis.parse::<u64>().unwrap())
         .collect::<Vec<_>>();
-    let deferrals = host
+    let deferral_entries: Vec<_> = host
         .history(TASK_ID)
         .into_iter()
         .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
-        .map(|entry| serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap())
-        .collect::<Vec<_>>();
+        .collect();
+    let deferrals: Vec<Value> = deferral_entries
+        .iter()
+        .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+        .collect();
     let polls = fx.status_reads() - reads_before;
     match case {
         "nested_base" => {
@@ -3686,6 +3782,13 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             assert_eq!(deferrals[0]["head_sha"], fx.candidate);
             assert_eq!(deferrals[0]["run_id"], 21);
             assert_eq!(deferrals[0]["job_id"], 22);
+            assert_produced_deferral(&deferral_entries[0]);
+            assert_eq!(
+                PrAutoFixReadDeferral::from_entry(&deferral_entries[0])
+                    .expect("typed base deferral")
+                    .run_id,
+                21
+            );
             assert!(
                 waits
                     .first()
@@ -3699,7 +3802,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             );
             assert!(repair_attempts(&host).is_empty());
         }
-        "retry_after" | "unknown_reset" | "resumed" => {
+        "retry_after" | "unknown_reset" | "resumed" | "typed_resume" | "unrelated_decision" => {
             let error = result.expect_err(case).to_string();
             assert!(is_check_repair(&error), "{case}: {error}");
             assert!(
@@ -3711,7 +3814,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             assert_eq!(attempts[0].head_sha, fx.candidate, "{case}");
             let expected_wait = match case {
                 "retry_after" => 120_000,
-                "unknown_reset" => 60_000,
+                "unknown_reset" | "unrelated_decision" => 60_000,
                 _ => 200_000,
             };
             let [wait] = waits.as_slice() else {
@@ -3734,15 +3837,69 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
                     .iter()
                     .filter(|call| *call == "run view")
                     .count()
-                    <= usize::from(case != "resumed"),
+                    <= usize::from(case != "resumed" && case != "typed_resume"),
                 "{case}: the first throttled answer ends the poll's log reads: {calls:?}"
             );
-            if case == "resumed" {
+            if case == "resumed" || case == "typed_resume" {
                 assert!(
                     !calls[..first_wait].iter().any(|call| call == "run view"),
                     "{case}: no log read before the recorded not-before: {calls:?}"
                 );
                 assert_eq!(deferrals.len(), 1, "{case}: no new deferral is recorded");
+                let entry = &deferral_entries[0];
+                let typed = PrAutoFixReadDeferral::from_entry(entry)
+                    .expect("the recorded wait is readable");
+                assert_eq!(typed.run_id, 11, "{case}");
+                assert_eq!(typed.job_id, 12, "{case}");
+                assert_eq!(typed.run_attempt, None, "{case}");
+                assert_eq!(typed.attempt, 1, "{case}");
+                assert_eq!(typed.reset, PrAutoFixReadReset::Unknown, "{case}");
+                assert_eq!(
+                    typed.effective_not_before_ms(),
+                    START_MS + 200_000,
+                    "{case}"
+                );
+                if case == "resumed" {
+                    assert!(
+                        entry.decision.is_none(),
+                        "{case}: the legacy note has no decision"
+                    );
+                    assert!(typed.diagnostic.is_none(), "{case}");
+                } else {
+                    assert_eq!(
+                        typed.diagnostic.as_deref(),
+                        Some("typed diagnostic"),
+                        "{case}"
+                    );
+                    let note = entry.note.as_deref().expect("note");
+                    assert!(
+                        note.contains("note diagnostic must not bind the wait"),
+                        "{case}: the note keeps the contradictory diagnostic"
+                    );
+                    assert_ne!(
+                        note,
+                        serde_json::to_string(&typed).unwrap(),
+                        "{case}: the decision, not the note, bound the wait"
+                    );
+                    assert!(
+                        !error.contains("note diagnostic must not bind the wait"),
+                        "{case}: diagnostic text did not become the outcome"
+                    );
+                }
+            } else if case == "unrelated_decision" {
+                assert_eq!(
+                    deferrals.len(),
+                    2,
+                    "{case}: the note was not a deferral: {deferrals:?}"
+                );
+                assert!(
+                    PrAutoFixReadDeferral::from_entry(&deferral_entries[0]).is_none(),
+                    "{case}: another decision is not read from the note"
+                );
+                assert_produced_deferral(&deferral_entries[1]);
+                assert_eq!(deferrals[1]["attempt"], 1, "{case}");
+                assert_eq!(deferrals[1]["run_id"], 11, "{case}");
+                assert_eq!(deferrals[1]["job_id"], 12, "{case}");
             } else {
                 let [deferral] = deferrals.as_slice() else {
                     panic!("{case}: one durable deferral: {deferrals:?}");
@@ -3776,6 +3933,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
                         .contains("API rate limit exceeded"),
                     "{case}: the original diagnostic is kept: {deferral}"
                 );
+                assert_produced_deferral(&deferral_entries[0]);
             }
         }
         _ => {
@@ -3803,6 +3961,8 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
                         !calls[wait..].iter().any(|call| call == "run view"),
                         "{case}: the replaced head's log is never read again: {calls:?}"
                     );
+                    assert_eq!(deferral_entries.len(), 1, "{case}");
+                    assert_produced_deferral(&deferral_entries[0]);
                 }
                 "persistent" => {
                     assert_eq!(
@@ -3811,6 +3971,9 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
                         "{case}: bounded conservative backoff with an unknown reset"
                     );
                     assert_eq!(deferrals.len(), 3, "{case}: each wait is recorded");
+                    for entry in &deferral_entries {
+                        assert_produced_deferral(entry);
+                    }
                     assert!(
                         error.contains("API rate limit exceeded")
                             && error.contains("could not be read"),
@@ -3912,12 +4075,15 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
                 },
             );
             assert!(result.is_err(), "the red base is never merged");
-            let deferrals = host
+            let deferral_entries: Vec<_> = host
                 .history(TASK_ID)
                 .into_iter()
                 .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
-                .map(|entry| serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap())
-                .collect::<Vec<_>>();
+                .collect();
+            let deferrals: Vec<Value> = deferral_entries
+                .iter()
+                .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+                .collect();
             if case == "deadline" {
                 assert!(
                     deferrals.is_empty(),
@@ -3936,9 +4102,20 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
                     1,
                     "one durable wait for the moved-base diagnosis"
                 );
+                let run_id = if fault_head { 11 } else { 31 };
+                let job_id = if fault_head { 12 } else { 32 };
                 assert_eq!(deferrals[0]["head_sha"], fx.candidate);
-                assert_eq!(deferrals[0]["run_id"], if fault_head { 11 } else { 31 });
-                assert_eq!(deferrals[0]["job_id"], if fault_head { 12 } else { 32 });
+                assert_eq!(deferrals[0]["run_id"], run_id);
+                assert_eq!(deferrals[0]["job_id"], job_id);
+                assert_produced_deferral(&deferral_entries[0]);
+                let typed = PrAutoFixReadDeferral::from_entry(&deferral_entries[0])
+                    .expect("typed moved-base deferral");
+                assert_eq!(typed.head_sha, fx.candidate);
+                assert_eq!(typed.run_id, run_id);
+                assert_eq!(typed.job_id, job_id);
+                assert_eq!(typed.run_attempt, None);
+                assert_eq!(typed.reset, PrAutoFixReadReset::Provider);
+                assert!(typed.effective_not_before_ms() < typed.deadline_ms);
                 assert!(
                     host.history(TASK_ID)
                         .iter()
